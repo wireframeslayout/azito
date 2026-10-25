@@ -459,12 +459,121 @@ describe('AgentInstaller on a Windows host', () => {
       await expect(installer.recoverAgent('user@win', '100.64.0.9', 'tok', { platform: 'win32', arch: 'x64' })).rejects.toThrow(/is not registered on the host: install the agent first/);
     });
 
-    it('update() of a Windows agent is still refused with unsupported_os (#372) and sends nothing', async () => {
-      const { installer, host } = make();
-      const result = await installer.update('user@win', '100.64.0.9', 'tok', { platform: 'win32', arch: 'x64' });
+  });
+
+  describe('updating an agent that is registered', () => {
+    const WIN = { platform: 'win32', arch: 'x64' } as const;
+    const OLD = '0123456789ab';
+    const OLD_XML = `<Task><Actions><Exec><Arguments>--headless "C:\\Program Files\\nodejs\\node.exe" --env-file=C:\\Users\\dev\\.azito\\agent\\agent.env C:\\Users\\dev\\.azito\\agent\\${OLD}\\azito-agent.cjs</Arguments></Exec></Actions></Task>`;
+    const makeRunning = (hostOptions: Partial<FakeWindowsHostOptions> = {}, misao?: AgentMisaoInstaller) => {
+      const made = make({ existingTask: 'running', ...hostOptions }, DEFAULT_WINDOWS_AGENT_OPTIONS, misao);
+      made.host.registeredXml = OLD_XML;
+      return made;
+    };
+    /** `fetch` answers with the version of the agent that is up at the time: `current()` is read at each call; undefined = it does not answer. */
+    const stubAgent = (current: () => string | undefined): void => {
+      vi.stubGlobal('fetch', vi.fn(async () => {
+        const version = current();
+        if (version === undefined) throw new Error('ECONNREFUSED');
+        return { ok: true, json: async () => ({ version }) };
+      }));
+    };
+    const withTimers = async <T,>(run: () => Promise<T>): Promise<T> => {
+      vi.useFakeTimers();
+      try {
+        const pending = run();
+        await vi.advanceTimersByTimeAsync(120_000);
+        return await pending;
+      } finally {
+        vi.useRealTimers();
+      }
+    };
+
+    it('runs the install transaction with the agent\'s current token, leaves the misao task alone, and removes the releases older than the previous one', async () => {
+      const misao = { install: vi.fn() };
+      const { installer, host } = makeRunning({ scriptOutput: { containing: 'REMOVED', stdout: 'REMOVED aaaaaaaaaaaa\r\n' } }, misao as unknown as AgentMisaoInstaller);
+      stubAgent(() => (host.uploaded.size > 0 ? VERSION : undefined));
+
+      const result = await withTimers(() => installer.update('user@win', '100.64.0.9', 'the-current-token', WIN));
+
+      expect(result).toEqual({ success: true, version: VERSION });
+      // The settings the new agent starts with carry the token the hub already holds, and the bind address it is reached at.
+      expect(host.uploaded.get('.azito/agent/agent.env.new')!.toString('utf8')).toBe(`AZITO_AGENT_TOKEN="the-current-token"\nAZITO_AGENT_BIND="100.64.0.9"\nPORT="3002"\nAZITO_AGENT_LOG_FILE="C:\\Users\\dev\\.azito\\agent\\agent.log"\nAZITO_AGENT_EXIT_WITH_PARENT="1"\n`);
+      // Only the agent's task is stopped / started; the misao daemon (task AzitoMisao) and its installer are not involved.
+      const schtasks = host.calls.filter((c) => c.kind === 'schtasks');
+      expect(schtasks.map((c) => c.schtasksArgs![0])).toEqual(expect.arrayContaining(['/Query', '/End', '/Create', '/Run']));
+      expect(schtasks.every((c) => !c.text.includes('AzitoMisao'))).toBe(true);
+      expect(misao.install).not.toHaveBeenCalled();
+      // The deploy came first, then the start, and the old releases were pruned last, keeping the new and the previous one.
+      const kinds = host.calls.map((c) => (c.kind === 'schtasks' ? c.schtasksArgs![0] : c.kind === 'script' && c.text.includes('REMOVED') ? 'prune' : c.kind));
+      expect(kinds.indexOf('/Create')).toBeLessThan(kinds.indexOf('/Run'));
+      expect(kinds.indexOf('/Run')).toBeLessThan(kinds.indexOf('prune'));
+      const prune = host.calls.find((c) => c.text.includes('REMOVED'))!.text;
+      expect(prune).toContain(`$keep = @('${VERSION}', '${OLD}')`);
+      expect(host.calls.some((c) => c.kind === 'firewall')).toBe(true); // checked as in the install, before anything is stopped
+    });
+
+    it('reports an old release that could not be removed as a warning of a successful update', async () => {
+      const { installer, host } = makeRunning({ scriptOutput: { containing: 'REMOVED', stdout: 'REMOVED bbbbbbbbbbbb\r\nFAILED aaaaaaaaaaaa The process cannot access the file because it is being used by another process.\r\n' } });
+      stubAgent(() => (host.uploaded.size > 0 ? VERSION : undefined));
+      vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+
+      const result = await withTimers(() => installer.update('user@win', '100.64.0.9', 'tok', WIN));
+
+      expect(result.success).toBe(true);
+      expect(result.warning).toContain('aaaaaaaaaaaa (The process cannot access the file because it is being used by another process.)');
+      expect(result.warning).toContain('tried again at the next update');
+    });
+
+    it('puts the previous version back, starts it and checks that it answers when the new agent does not', async () => {
+      const { installer, host } = makeRunning();
+      // The new agent never answers with its version; once the previous definition is registered and started again, the old version answers.
+      stubAgent(() => (host.registeredXml === OLD_XML && host.taskState === 'running' ? OLD : undefined));
+
+      const result = await withTimers(() => installer.update('user@win', '100.64.0.9', 'tok', WIN));
+
       expect(result.success).toBe(false);
-      expect(result.error).toMatch(/^unsupported_os:/);
-      expect(host.calls).toEqual([]);
+      expect(result.version).toBe(VERSION);
+      expect(result.error).toMatch(/^Health check failed: Health check timed out/);
+      expect(result.error).toContain('Rolled back:');
+      expect(result.error).toContain('restored the previous task definition');
+      expect(result.error).toContain('started the previous agent again');
+      expect(result.error).toContain('the previous agent answers again');
+      expect(host.registeredXml).toBe(OLD_XML);
+    });
+
+    it('says so when the previous agent cannot be brought back, in the error of the update', async () => {
+      const { installer } = makeRunning();
+      stubAgent(() => undefined);
+
+      const result = await withTimers(() => installer.update('user@win', '100.64.0.9', 'tok', WIN));
+
+      expect(result.success).toBe(false);
+      expect(result.error).toContain('the previous agent does NOT answer');
+    });
+
+    it('stops with the install\'s firewall error, before anything is stopped, when the node.exe found now has no rule', async () => {
+      const { installer, host } = makeRunning({ firewall: { ruleFound: false, elevated: false, created: false, problem: null } });
+      stubAgent(() => OLD);
+
+      const result = await installer.update('user@win', '100.64.0.9', 'tok', WIN);
+
+      expect(result.success).toBe(false);
+      expect(result.error).toMatch(/[Ff]irewall/);
+      expect(host.taskState).toBe('running');
+      expect(host.uploaded.size).toBe(0);
+    });
+
+    it('fails before anything is stopped when the bundle cannot be verified on the host (the previous agent keeps running)', async () => {
+      const { installer, host } = makeRunning({ sha256: 'f'.repeat(64) });
+      stubAgent(() => OLD);
+
+      const result = await installer.update('user@win', '100.64.0.9', 'tok', WIN);
+
+      expect(result.success).toBe(false);
+      expect(result.error).toMatch(/^Transfer failed: .*SHA256 mismatch/);
+      expect(host.taskState).toBe('running');
+      expect(host.calls.some((c) => c.kind === 'schtasks' && c.schtasksArgs![0] === '/End')).toBe(false);
     });
   });
 });

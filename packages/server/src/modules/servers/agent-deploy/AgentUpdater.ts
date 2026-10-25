@@ -1,6 +1,6 @@
 import type { AgentBundler } from './AgentBundler';
-import { HostProfileError } from '../../../shared/os/hostProfile';
-import type { AgentInstaller } from './AgentInstaller';
+import type { KeyedMutex } from '../../../shared/keyedMutex';
+import type { AgentInstaller, AgentUpdateResult } from './AgentInstaller';
 import type { AgentHostRecorder } from './AgentHostRecorder';
 import type { IServerRepository } from '../Server';
 import type { SqliteTaskRepository } from '../../tasks/SqliteTaskRepository';
@@ -16,7 +16,7 @@ const RECOVER_WAIT_MS = 5000;
 
 export interface UpdateCheckResult {
   name: string;
-  status: 'up_to_date' | 'updated' | 'deferred' | 'error';
+  status: 'up_to_date' | 'updated' | 'deferred' | 'skipped' | 'error';
   currentVersion?: string;
   message?: string;
   /** The agent's host (OS / architecture) could not be recorded after an update; the status above is unaffected. */
@@ -30,6 +30,13 @@ export class AgentUpdater {
     private serverRepo: IServerRepository,
     private taskRepo: SqliteTaskRepository,
     private hostRecorder: AgentHostRecorder,
+    /**
+     * The per-server lock that installs, edits, the harness updates and `AgentRecoveryWatchdog` take: an update holds it from its
+     * first command to its end, so none of them runs in the middle of it (the watchdog never sees the agent stopped for the update
+     * as one that died and starts it again).
+     */
+    private serverLock: Pick<KeyedMutex, 'withLock'>,
+    private logger: { warn(message: string): void },
   ) {}
 
   async checkAndUpdate(server: ServerConfig): Promise<UpdateCheckResult> {
@@ -51,11 +58,7 @@ export class AgentUpdater {
 
       try {
         await this.installer.recoverAgent(sshHost, server.host, server.agentToken, server.hostProfile, server.muxRuntime);
-      } catch (recoverErr) {
-        // The restart over SSH is the Unix bootstrap: for a Windows agent it is refused, and that is the reason to show.
-        if (recoverErr instanceof HostProfileError) {
-          return { name: server.name, status: 'error', message: `Agent unreachable: ${(err as Error).message}; ${recoverErr.code}: ${recoverErr.message}` };
-        }
+      } catch {
         // Best-effort: fall through to the health re-check below, which reports the
         // appropriate error status regardless of why recovery failed.
       }
@@ -106,14 +109,44 @@ export class AgentUpdater {
       return { name: server.name, status: 'error', message: 'Cannot determine SSH host for update' };
     }
 
-    const result = await this.installer.update(sshHost, server.host, server.agentToken, server.hostProfile, server.muxRuntime);
-    if (result.success) {
-      this.serverRepo.updateAgentVersion(server.name, result.version);
-      // The new agent may be the first to know how to report its host: ask again.
-      return this.withHostRecorded(server, { name: server.name, status: 'updated', currentVersion: result.version }, true);
+    // The server may have been reinstalled (a new token), edited or deleted while this waited for the lock: what is updated, with
+    // which token and where, is what is registered once the lock is held, never what was read before.
+    const outcome = await this.serverLock.withLock(server.name, () => this.updateRegistered(server, localBundleHash));
+    if (outcome.kind === 'result') {
+      if (outcome.result.status === 'skipped') this.logger.warn(`${outcome.result.name}: ${outcome.result.message}`);
+      return outcome.result;
     }
+    const { fresh, update } = outcome;
+    if (update.warning) this.logger.warn(`${fresh.name}: the agent was updated, but: ${update.warning}`);
+    if (update.success) {
+      // The new agent may be the first to know how to report its host: ask again.
+      return this.withHostRecorded(fresh, { name: fresh.name, status: 'updated', currentVersion: update.version, ...(update.warning ? { message: update.warning } : {}) }, true);
+    }
+    return { name: fresh.name, status: 'error', currentVersion: remoteVersion, message: update.error };
+  }
 
-    return { name: server.name, status: 'error', currentVersion: remoteVersion, message: result.error };
+  /** Runs inside the server's lock: re-reads the server and the agent's version, and updates with what is registered now. */
+  private async updateRegistered(seen: ServerConfig, localBundleHash: string): Promise<{ kind: 'result'; result: UpdateCheckResult } | { kind: 'updated'; fresh: ServerConfig; update: AgentUpdateResult }> {
+    const fresh = this.serverRepo.findByName(seen.name);
+    const skipped = (message: string): { kind: 'result'; result: UpdateCheckResult } => ({ kind: 'result', result: { name: seen.name, status: 'skipped', message: `Update skipped: ${message}` } });
+    const changed = describeChange(seen, fresh);
+    if (changed || !fresh) return skipped(changed ?? 'the server was deleted while the update waited');
+    if (!fresh.host || !fresh.agentToken) return skipped('the server has no agent address or token any more');
+    const sshHost = this.findSshHost(fresh);
+    if (!sshHost) return skipped('the server has no SSH host any more');
+    if (this.hasRunningTasks(fresh.name)) {
+      return { kind: 'result', result: { name: fresh.name, status: 'deferred', message: 'Update deferred: running tasks on this server' } };
+    }
+    let current: string;
+    try {
+      current = await this.fetchHealthVersion(fresh);
+    } catch (err) {
+      return skipped(`the agent stopped answering while the update waited (${(err as Error).message})`);
+    }
+    if (current === localBundleHash) return { kind: 'result', result: { name: fresh.name, status: 'up_to_date', currentVersion: current } };
+    const update = await this.installer.update(sshHost, fresh.host, fresh.agentToken, fresh.hostProfile, fresh.muxRuntime);
+    if (update.success) this.serverRepo.updateAgentVersion(fresh.name, update.version);
+    return { kind: 'updated', fresh, update };
   }
 
   /**
@@ -159,4 +192,13 @@ export class AgentUpdater {
     if (server.sshHost) return server.sshHost;
     return null;
   }
+}
+
+/** Why an update planned from `seen` must not run against `fresh` (what is registered under the lock); undefined when nothing it depends on changed. */
+function describeChange(seen: ServerConfig, fresh: ServerConfig | null): string | undefined {
+  if (!fresh) return 'the server was deleted while the update waited';
+  if (fresh.type !== 'agent') return 'the server is not an agent server any more';
+  const same = fresh.host === seen.host && fresh.agentPort === seen.agentPort && fresh.agentToken === seen.agentToken
+    && fresh.sshHost === seen.sshHost && fresh.hostProfile?.platform === seen.hostProfile?.platform && fresh.muxRuntime === seen.muxRuntime;
+  return same ? undefined : 'the server was edited or reinstalled while the update waited (address, token, SSH host or OS changed); it is looked at again at the next start';
 }

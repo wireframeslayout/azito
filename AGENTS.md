@@ -351,7 +351,7 @@ packages/
   logged on. A reinstall is transactional (`WindowsDeployment.commit/rollback`: the previous task XML, `agent.env`, same-version folder and
   running state are kept aside until the new agent answers). `windowsFirewall.ts` checks (and, when the
   SSH session is elevated, adds) the inbound rule first. `AZITO_WIN_AGENT_TASK_NAME` / `AZITO_WIN_AGENT_DIR` / `AZITO_WIN_AGENT_PORT`
-  (`windowsAgentConfig.ts`, resolved in `app/wiring.ts`) move the task, folder and port for a trial. The agent skips tmux hooks on win32, relays misao over its named pipe (A3, above) and writes `AZITO_AGENT_LOG_FILE`. Agent update / removal (#372) is not done: `update()` stays `unsupported_os`.
+  (`windowsAgentConfig.ts`, resolved in `app/wiring.ts`) move the task, folder and port for a trial. The agent skips tmux hooks on win32, relays misao over its named pipe (A3, above) and writes `AZITO_AGENT_LOG_FILE`. Agent update (#372) runs the install's transaction (`windowsAgentUpdate.ts`: deploy, start, health, commit / rollback) with the agent's current token, holds the per-server lock so `AgentRecoveryWatchdog` cannot restart the agent mid-update, and keeps only the current and previous release folders (`WindowsAgentDeployer.pruneOldVersions`; a folder in use stays and is retried at the next update). Agent removal (#372) is not done.
 
 ### Subagent Delegation
 - Worker delegation can route by worker type; per-task overrides are stored via `024_subagent_config`

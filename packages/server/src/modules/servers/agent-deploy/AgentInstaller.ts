@@ -5,7 +5,7 @@ import { Client as Ssh2Client } from 'ssh2';
 import type { SshClient } from '../ssh/SshClient';
 import type { AgentBundler } from './AgentBundler';
 import { AgentTransport } from '../transport/AgentTransport';
-import { HOST_PROBE_COMMAND, HostProfileError, assertPosixHost, parseHostProbe, type HostProfile } from '../../../shared/os/hostProfile';
+import { HOST_PROBE_COMMAND, HostProfileError, parseHostProbe, type HostProfile } from '../../../shared/os/hostProfile';
 import { HOST_OS_PROBE_COMMAND, parseHostOsProbe } from './hostOsProbe';
 import { buildWindowsPreflightCommand, checkWindowsPreflight, parseWindowsPreflight, type WindowsPreflightInfo } from './windowsPreflight';
 import { buildSha256VerifyCommand, buildSafeExtractCommand, readSha256FromSumsFile } from './integrityVerifier';
@@ -13,6 +13,7 @@ import { KeyedMutex } from '../../../shared/keyedMutex';
 import { CLEANUP_LOCK_DIR, CLEANUP_TIMEOUT_MS, INSTALL_ID_FILE, MANUAL_STEPS_ANY_START, SYSTEMD_MANUAL_STEPS, buildCleanupGuardScript, buildCleanupScript, buildNohupSightingScript, cleanupMarkMessage, parseCleanupGuard, nohupManualSteps, parseCleanupOutcome, parseNohupSighting, type NohupSighting } from './unixAgentCleanup';
 import { WindowsAgentDeployer, windowsAgentLayout, type WindowsDeployment } from './WindowsAgentDeployer';
 import { DEFAULT_WINDOWS_AGENT_OPTIONS, type WindowsAgentOptions } from './windowsAgentConfig';
+import { updateWindowsAgent, type AgentUpdateResult } from './windowsAgentUpdate';
 
 export type InstallStep = 'preflight' | 'transfer' | 'start' | 'health' | 'misao';
 
@@ -39,6 +40,8 @@ const MISAO_STEP_MESSAGES: Record<AgentMisaoInstallStep, string> = {
 export interface AgentMisaoInstaller {
   install(transport: AgentTransport, onProgress?: (step: AgentMisaoInstallStep) => void): Promise<{ version: string; startMethod: 'systemd' | 'nohup' | 'taskscheduler' | 'running'; updateAvailable: boolean }>;
 }
+
+export type { AgentUpdateResult };
 
 export interface InstallResult {
   success: boolean;
@@ -393,23 +396,19 @@ export class AgentInstaller {
   }
 
   /**
-   * Redeploys the agent over SSH with the Unix bootstrap (tar, nohup, systemd). A win32 agent (`hostProfile`; null = a Unix agent
-   * registered before the OS was recorded) is refused with the `unsupported_os` reason as the error, before anything is sent.
+   * Redeploys the agent over SSH: a Windows host (`hostProfile`) takes the install's transaction ({@link updateOnWindows}); any
+   * other host (null = a Unix agent registered before the OS was recorded) takes the Unix bootstrap (tar, nohup, systemd).
+   * `warning` is set when the update worked but left something on the host that a person should know about.
    */
-  update(sshHost: string, tailscaleIp: string, existingToken: string, hostProfile: HostProfile | null, muxRuntime?: string): Promise<{ success: boolean; version: string; error?: string }> {
+  update(sshHost: string, tailscaleIp: string, existingToken: string, hostProfile: HostProfile | null, muxRuntime?: string): Promise<AgentUpdateResult> {
     return this.hostLocks.withLock(this.lockKey(sshHost), () => this.updateLocked(sshHost, tailscaleIp, existingToken, hostProfile, muxRuntime));
   }
 
-  private async updateLocked(sshHost: string, tailscaleIp: string, existingToken: string, hostProfile: HostProfile | null, muxRuntime?: string): Promise<{ success: boolean; version: string; error?: string }> {
+  private async updateLocked(sshHost: string, tailscaleIp: string, existingToken: string, hostProfile: HostProfile | null, muxRuntime?: string): Promise<AgentUpdateResult> {
     await this.bundler.ensureBuild();
     const version = this.bundler.getBundleHash();
 
-    try {
-      assertPosixHost(hostProfile, 'this agent server', 'updating the agent over SSH');
-    } catch (err) {
-      if (!(err instanceof HostProfileError)) throw err;
-      return { success: false, version, error: `${err.code}: ${err.message}` };
-    }
+    if (hostProfile?.platform === 'win32') return this.updateOnWindows(sshHost, tailscaleIp, existingToken, version);
 
     try {
       await this.assertNoCleanupRunning(sshHost);
@@ -438,6 +437,35 @@ export class AgentInstaller {
     }
 
     return { success: true, version };
+  }
+
+  /**
+   * The Windows update: the install's transaction (deploy, start, health, commit / rollback) with the agent's current token, so that
+   * the hub's stored token and the host's settings stay the same. The firewall is checked as in the install, for the `node.exe`
+   * found now (it may not be the one the running agent uses), before anything is stopped. The misao task is not touched.
+   */
+  private async updateOnWindows(sshHost: string, tailscaleIp: string, token: string, version: string): Promise<AgentUpdateResult> {
+    let host: WindowsPreflightInfo;
+    let expectedSha256: string;
+    const tarballPath = this.bundler.getTarballPath();
+    try {
+      const probe = await this.sshClient.execIsolated(sshHost, buildWindowsPreflightCommand());
+      host = parseWindowsPreflight(probe.stdout, probe.stderr, probe.code);
+      const missing = checkWindowsPreflight(host);
+      if (missing.length > 0) throw new Error(`Preflight failed:\n${missing.map(m => `  - ${m}`).join('\n')}`);
+      await this.windowsDeployer().ensureFirewall(sshHost, host.nodePath!, tailscaleIp);
+      if (!fs.existsSync(tarballPath)) throw new Error('Agent tarball not found — run build first');
+      expectedSha256 = readSha256FromSumsFile(this.bundler.getSha256sumsPath(), 'azito-agent.tar.gz');
+    } catch (err) {
+      return { success: false, version, error: (err as Error).message };
+    }
+    const port = this.windowsAgent.port;
+    return updateWindowsAgent(
+      { deployer: this.windowsDeployer(), checkHealth: (expected) => this.healthCheck(tailscaleIp, port, expected) },
+      { sshHost, host, nodePath: host.nodePath!, version, tarballPath, expectedSha256, token, bindAddress: tailscaleIp },
+      port,
+      windowsAgentLayout(host.home, this.windowsAgent, version).logFile,
+    );
   }
 
   private async preflight(sshHost: string): Promise<PreflightInfo> {
@@ -499,8 +527,9 @@ export class AgentInstaller {
 
   /**
    * Reads the host's OS / architecture with node itself (the same text under sh, cmd and PowerShell). The hosts this installer
-   * accepts are unchanged: x64 only. Windows is a known OS that is not installable here yet (`unsupported_os`); an OS or
-   * architecture AZITO does not know is `unsupported_host`. A reason is added to `missing` for a host that is refused.
+   * accepts are unchanged: x64 only. A Windows host never gets here (`preflight` sends it to `preflightWindows` by the OS probe),
+   * so a win32 answer is refused as `unsupported_os`; an OS or architecture AZITO does not know is `unsupported_host`. A reason
+   * is added to `missing` for a host that is refused.
    */
   private async probeHostProfile(sshHost: string, missing: string[]): Promise<HostProfile | undefined> {
     const probe = await this.sshClient.execIsolated(sshHost, HOST_PROBE_COMMAND);
@@ -512,7 +541,7 @@ export class AgentInstaller {
       return undefined;
     }
     if (profile.platform === 'win32') {
-      missing.push('unsupported_os: installing the agent on a Windows host is not supported yet');
+      missing.push('unsupported_os: this host answered as Windows to the Unix preflight; a Windows host is installed through the Windows preflight');
     } else if (profile.arch !== 'x64') {
       missing.push(`x86_64 architecture required (found: ${profile.arch})`);
     }
@@ -689,7 +718,8 @@ export class AgentInstaller {
   private async healthCheck(
     host: string,
     port: number,
-    expectedVersion: string,
+    /** undefined: any answer counts (the check after a rollback, when the previous version is not known). */
+    expectedVersion: string | undefined,
   ): Promise<void> {
     const deadline = Date.now() + HEALTH_TIMEOUT_MS;
     let lastError = '';
@@ -701,7 +731,7 @@ export class AgentInstaller {
         });
         if (res.ok) {
           const body = await res.json() as { version: string };
-          if (body.version === expectedVersion) return;
+          if (expectedVersion === undefined || body.version === expectedVersion) return;
           lastError = `Version mismatch: expected ${expectedVersion}, got ${body.version}`;
         } else {
           lastError = `HTTP ${res.status}`;
