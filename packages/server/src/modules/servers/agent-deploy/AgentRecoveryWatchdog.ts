@@ -1,6 +1,6 @@
 import type { ServerConfig } from '../Server';
 import type { KeyedMutex } from '../../../shared/keyedMutex';
-import { DEFAULT_RECOVERY_TIMING, NOTHING_TO_DO_WARNED, QUIET_OUTCOMES, afterAttempt, firstBackoff, type Backoff, type RecoveryTiming } from '../../../shared/recoveryBackoff';
+import { DEFAULT_RECOVERY_TIMING, FOREIGN_LOCK_PREFIX, NOTHING_TO_DO_WARNED, QUIET_OUTCOMES, afterAttempt, firstBackoff, isForeignLock, type Backoff, type RecoveryTiming } from '../../../shared/recoveryBackoff';
 
 /** How the watchdog sees the world: everything it touches comes in here, so that it can be driven by a clock in a test. */
 export interface AgentRecoveryDeps {
@@ -181,6 +181,15 @@ export class AgentRecoveryWatchdog {
     }
     if (waits.get(server.name) !== wait) return; // reset while waiting for the lock
     if (outcome === 'busy') return; // another operation holds the misao folder: not an attempt, looked at again next tick
+    if (outcome !== undefined && isForeignLock(outcome)) {
+      // The lock of a folder shared with the hub is held by someone who is not this user: not an attempt, said once per state.
+      const key = `${server.name}\0${outcome}`;
+      if (!this.warned.has(key)) {
+        this.warned.add(key);
+        this.deps.logger.warn(`${server.name}: cannot bring the ${what} back: ${outcome.slice(FOREIGN_LOCK_PREFIX.length)}`);
+      }
+      return;
+    }
     if (outcome !== undefined) this.report(server.name, what, outcome, wait.attempts + 1);
     waits.set(server.name, afterAttempt(wait, this.deps.now(), this.timing));
   }

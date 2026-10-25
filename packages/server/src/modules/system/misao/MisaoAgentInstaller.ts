@@ -11,6 +11,7 @@ import { assertPosixHost, HostProfileError, pathDelimiterFor, type HostProfile }
 import { renderMisaoUnit } from './misaoUnit';
 import { MisaoWindowsInstaller } from './MisaoWindowsInstaller';
 import { underMisaoRootLock } from './misaoRootLock';
+import { FOREIGN_LOCK_PREFIX } from '../../../shared/recoveryBackoff';
 import type { ProcessLock } from '../../../shared/processLock';
 import type { MisaoAgentInstallResult, MisaoInstallStep, MisaoInstallTarget } from './misaoInstallTypes';
 
@@ -112,12 +113,13 @@ export class MisaoAgentInstaller {
   }
 
   /** A Windows agent's misao daemon died: see {@link MisaoWindowsInstaller.reviveDaemon}. Only Windows agents have this problem (a Unix daemon is a systemd unit with `Restart=`). */
-  async reviveWindowsDaemon(target: MisaoInstallTarget, force: boolean): Promise<Awaited<ReturnType<MisaoWindowsInstaller['reviveDaemon']>> | 'busy'> {
+  async reviveWindowsDaemon(target: MisaoInstallTarget, force: boolean): Promise<string> {
     if (target.hostProfile?.platform !== 'win32') throw new MisaoServiceError('unsupported_host', 'Only a Windows agent\'s misao daemon is started again by the hub.');
     try {
       return await this.underSharedRoot(target, () => this.windows().reviveDaemon(target, force));
     } catch (err) {
       if (err instanceof MisaoServiceError && err.code === 'busy') return 'busy';
+      if (err instanceof MisaoServiceError && err.code === 'lock_foreign') return `${FOREIGN_LOCK_PREFIX}${err.message}`;
       throw err;
     }
   }

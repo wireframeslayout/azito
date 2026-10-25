@@ -461,7 +461,7 @@ describe('MisaoAgentInstaller on a Windows agent', () => {
     const sharing = (lock: ProcessLock, root: string) => new MisaoAgentInstaller(bundle, { windowsTaskName: TASK, readyTimeoutMs: 400, pollIntervalMs: 10, taskIdleTimeoutMs: 60, localMisao: { root, lock } });
 
     it('install, update and revive give way to the hub\'s own operation (the watchdog\'s and the CLI\'s slot) and touch nothing', async () => {
-      const lock = new ProcessLock(endpoint(), 7);
+      const lock = new ProcessLock(endpoint());
       const agent = new FakeWindowsAgent(bundle);
       agent.seedInstalled(OLD_VERSION, true);
       await lock.run(async () => {
@@ -474,7 +474,7 @@ describe('MisaoAgentInstaller on a Windows agent', () => {
     });
 
     it('holds the slot while it runs, so the hub\'s watchdog cannot revive in the middle of an update', async () => {
-      const lock = new ProcessLock(endpoint(), 7);
+      const lock = new ProcessLock(endpoint());
       const agent = new FakeWindowsAgent(bundle);
       agent.seedInstalled(OLD_VERSION, true);
       const target = agent.asTarget();
@@ -484,7 +484,7 @@ describe('MisaoAgentInstaller on a Windows agent', () => {
       target.fetchMisaoStatus = async () => {
         calls += 1;
         // The 2nd look is the installer's own, inside the slot: the hub's watchdog asks for the slot now.
-        if (calls === 2) duringUpdate = await new ProcessLock((lock as unknown as { endpoint: string }).endpoint, 8).run(async () => 'revived').catch(() => 'busy');
+        if (calls === 2) duringUpdate = await new ProcessLock((lock as unknown as { endpoint: string }).endpoint).run(async () => 'revived').catch(() => 'busy');
         return original();
       };
       await sharing(lock, ROOT).update(target);
@@ -492,7 +492,7 @@ describe('MisaoAgentInstaller on a Windows agent', () => {
     });
 
     it('fails the operation, rather than run it unlocked, when the first read of the agent\'s status fails (the operation would read it again and could succeed)', async () => {
-      const lock = new ProcessLock(endpoint(), 7);
+      const lock = new ProcessLock(endpoint());
       const agent = new FakeWindowsAgent(bundle);
       agent.seedInstalled(OLD_VERSION, true);
       const target = agent.asTarget();
@@ -512,7 +512,7 @@ describe('MisaoAgentInstaller on a Windows agent', () => {
     });
 
     it('leaves an agent with another folder (another machine) to the per-server mutex alone', async () => {
-      const lock = new ProcessLock(endpoint(), 7);
+      const lock = new ProcessLock(endpoint());
       const agent = new FakeWindowsAgent(bundle);
       agent.seedInstalled(OLD_VERSION, true);
       await lock.run(async () => {

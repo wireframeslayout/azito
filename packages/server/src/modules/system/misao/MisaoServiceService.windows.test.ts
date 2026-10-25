@@ -9,7 +9,7 @@ import type { MisaoPaths } from './misaoPaths';
 import { MisaoServiceError } from './MisaoServiceError';
 import { MisaoServiceService } from './MisaoServiceService';
 import { readEnvValue } from '../../../shared/envFile';
-import { ProcessLock } from '../../../shared/processLock';
+import { ProcessLock, type HolderCheck } from '../../../shared/processLock';
 import { createSecretFileGuard } from '../../../shared/os/secretFileGuard';
 import type { ServiceManager } from '../serviceManager';
 
@@ -38,7 +38,7 @@ describe('MisaoServiceService on Windows (the hub\'s own misao)', () => {
   let controller: ServiceManager;
   let controllerInstall: ReturnType<typeof vi.fn>;
   /** The slot of this folder (a named pipe on Windows, a socket path elsewhere), as taken by this hub (pid 100) or by the CLI (pid 200). */
-  const lockFor = (pid: number): ProcessLock => new ProcessLock(process.platform === 'win32' ? `\\\\.\\pipe\\azito-lock-test-${path.basename(dir)}` : path.join(dir, 'l.sock'), pid);
+  const lockFor = (check?: HolderCheck): ProcessLock => new ProcessLock(process.platform === 'win32' ? `\\\\.\\pipe\\azito-lock-test-${path.basename(dir)}` : path.join(dir, 'l.sock'), check);
 
   beforeEach(() => {
     dir = fs.mkdtempSync(path.join(os.tmpdir(), 'azw-'));
@@ -58,7 +58,7 @@ describe('MisaoServiceService on Windows (the hub\'s own misao)', () => {
         exportXml: async () => exportedXml,
       } as unknown as LocalMisaoWindows['tasks'],
       taskName: 'AzitoMisao',
-      operationLock: lockFor(100),
+      operationLock: lockFor(async () => ({ state: 'same-user', pid: 200 })),
     };
     controllerInstall = vi.fn();
     controller = {
@@ -211,7 +211,7 @@ describe('MisaoServiceService on Windows (the hub\'s own misao)', () => {
     });
 
     it('does nothing while the CLI (another process) is installing / updating: busy, and the CLI\'s update is refused the other way round', async () => {
-      const cli = lockFor(200);
+      const cli = lockFor();
       let during: string | undefined;
       await cli.run(async () => {
         during = await service().reviveWindowsDaemon(true);
@@ -222,6 +222,24 @@ describe('MisaoServiceService on Windows (the hub\'s own misao)', () => {
       expect(update).not.toHaveBeenCalled();
       // The slot is free again once the other process is done.
       expect(await service().reviveWindowsDaemon(false)).toBe('started');
+    });
+
+    it('answers foreign_lock:<reason> (no attempt, nothing touched) when the lock is held by another user\'s process or one that cannot be identified', async () => {
+      const taken = lockFor();
+      for (const verdict of [{ state: 'other-user', pid: 9, ownerSid: 'S-1-5-21-9' }, { state: 'unknown', reason: 'no answer' }] as const) {
+        windows = { ...windows, operationLock: lockFor(async () => verdict) };
+        await taken.run(async () => {
+          const outcome = await service().reviveWindowsDaemon(true);
+          expect(outcome.startsWith('foreign_lock:')).toBe(true);
+          expect(outcome).toContain(verdict.state === 'other-user' ? 'another user' : 'could not be identified');
+        });
+      }
+      expect(revive).not.toHaveBeenCalled();
+      // a CLI / Setup operation is refused with the code, so that it says why instead of waiting
+      windows = { ...windows, operationLock: lockFor(async () => ({ state: 'other-user', pid: 9, ownerSid: 'S-1-5-21-9' })) };
+      await taken.run(async () => {
+        await expect(service().update()).rejects.toMatchObject({ code: 'lock_foreign' });
+      });
     });
 
     it('is only for a Windows hub with a managed misao', () => {

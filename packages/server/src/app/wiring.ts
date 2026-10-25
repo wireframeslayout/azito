@@ -266,7 +266,7 @@ export interface Wiring extends SharedInfra, Repositories, PushNotificationModul
 
 function buildSharedInfra(agentBundler: AgentBundler, publicUrl: string, localUrl: string, dataPaths: DataPaths, uiToken: string, webhookToken: string, scopedAuthEnabled: boolean, misaoRuntime: MisaoRuntime, hostEnv: HostEnv, secretFileGuard: SecretFileGuard, hubHost: HubHostProfile, windowsAgent: WindowsAgentOptions, findServer: (name: string) => ServerConfig | null, db?: SqliteDatabase, fingerprintStore?: FingerprintStore, auditLogService?: AuditLogService): SharedInfra {
   const sshClient = new SshClient(resolveSshClientEnv(hostEnv, process.env), fingerprintStore);
-  const misaoAgentInstaller = new MisaoAgentInstaller(readMisaoBundle(getBundleRoot()), { windowsTaskName: windowsAgent.misaoTaskName, ...optionalLocalMisao(localWindowsMisaoRoot(hostEnv), secretFileGuard) });
+  const misaoAgentInstaller = new MisaoAgentInstaller(readMisaoBundle(getBundleRoot()), { windowsTaskName: windowsAgent.misaoTaskName, ...optionalLocalMisao(localWindowsMisaoRoot(hostEnv), secretFileGuard, hostEnv.systemRoot) });
   // A hub with no bundled misao installs agents without it (instead of reporting a failed misao step on every install).
   const agentInstaller = new AgentInstaller(sshClient, agentBundler, windowsAgent, misaoAgentInstaller.bundledVersion !== undefined ? misaoAgentInstaller : undefined);
   const harnessInstaller = new HarnessInstaller(sshClient);
@@ -609,8 +609,10 @@ function localWindowsMisaoRoot(hostEnv: HostEnv): string | undefined {
   }
 }
 
-function optionalLocalMisao(root: string | undefined, guard: SecretFileGuard): { localMisao?: { root: string; lock: ProcessLock } } {
-  return root === undefined ? {} : { localMisao: { root, lock: createMisaoRootLock(root, guard) } };
+function optionalLocalMisao(root: string | undefined, guard: SecretFileGuard, systemRoot: string | undefined): { localMisao?: { root: string; lock: ProcessLock } } {
+  if (root === undefined) return {};
+  if (!systemRoot) throw new Error('%SystemRoot% is not set, so the lock holder check (PowerShell) cannot be located');
+  return { localMisao: { root, lock: createMisaoRootLock(root, guard, systemRoot) } };
 }
 
 function buildMisaoService(misao: MisaoHandle, hostEnv: HostEnv, secretFileGuard: SecretFileGuard): MisaoServiceService {

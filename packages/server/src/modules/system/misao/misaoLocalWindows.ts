@@ -69,7 +69,7 @@ export function createLocalMisaoWindows(hostEnv: LocalWindowsHostEnv, paths: Mis
     target,
     tasks: new SchtasksClient(rawRunnerOf((command) => runCommandSpec(command, { ...runHost, rawOutput: true })), hostEnv),
     taskName: MISAO_SERVICE.windowsTaskName,
-    operationLock: createMisaoRootLock(paths.root, secretFileGuard),
+    operationLock: createMisaoRootLock(paths.root, secretFileGuard, hostEnv.systemRoot!),
   };
 }
 

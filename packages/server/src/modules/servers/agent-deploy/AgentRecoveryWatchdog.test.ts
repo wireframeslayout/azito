@@ -339,6 +339,20 @@ describe('AgentRecoveryWatchdog: what a misao revive answers', () => {
     expect(h.logs.filter((l) => l.startsWith('WARN') && l.includes(result))).toHaveLength(1);
   });
 
+  it('does not count a lock held by someone who is not this user as an attempt, and warns once for the same reason', async () => {
+    const h = new Harness();
+    h.misaoDown = true;
+    h.reviveResult = 'foreign_lock:A process of another user (process 9) holds the lock';
+    await h.watchdog.tick();
+    for (let i = 0; i < 12; i += 1) await h.advance(15_000 * 4);
+    // looked at at every tick after the first wait, never backing off
+    expect(h.revived.length).toBeGreaterThan(8);
+    expect(h.logs.filter((l) => l.startsWith('WARN') && l.includes('another user (process 9)'))).toHaveLength(1);
+    h.reviveResult = 'foreign_lock:The process that holds the lock could not be identified';
+    await h.advance(15_000);
+    expect(h.logs.filter((l) => l.startsWith('WARN') && l.includes('could not be identified'))).toHaveLength(1);
+  });
+
   it.each(['disabled', 'custom_socket', 'running'])('says nothing for %s', async (result) => {
     const h = await afterAttempts(result, 3);
     expect(h.revived.length).toBeGreaterThan(1);

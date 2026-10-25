@@ -37,5 +37,9 @@ export function afterAttempt(wait: Backoff, now: number, timing: RecoveryTiming)
 
 /** What a revive answers when nothing was done and waiting will not change it: warned once per answer, not on every attempt. */
 export const NOTHING_TO_DO_WARNED: ReadonlySet<string> = new Set(['no_task', 'not_installed', 'other_task']);
+/** An outcome that means the misao folder's lock is held by someone who is not this user (or cannot be placed): `foreign_lock:<reason>`. Not an attempt; warned when it changes. */
+export const FOREIGN_LOCK_PREFIX = 'foreign_lock:';
+export const isForeignLock = (outcome: string): boolean => outcome.startsWith(FOREIGN_LOCK_PREFIX);
+
 /** Nothing to say: the daemon answers again, someone chose this (a custom pipe, a task disabled by hand). */
 export const QUIET_OUTCOMES: ReadonlySet<string> = new Set(['running', 'custom_socket', 'disabled']);

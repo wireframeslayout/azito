@@ -1,4 +1,4 @@
-import { DEFAULT_RECOVERY_TIMING, NOTHING_TO_DO_WARNED, QUIET_OUTCOMES, afterAttempt, firstBackoff, type Backoff, type RecoveryTiming } from '../../../shared/recoveryBackoff';
+import { DEFAULT_RECOVERY_TIMING, FOREIGN_LOCK_PREFIX, NOTHING_TO_DO_WARNED, QUIET_OUTCOMES, afterAttempt, firstBackoff, isForeignLock, type Backoff, type RecoveryTiming } from '../../../shared/recoveryBackoff';
 
 /** How the watchdog sees the hub's own misao: everything it touches comes in here, so that it can be driven by a clock in a test. */
 export interface LocalMisaoWatchdogDeps {
@@ -105,6 +105,14 @@ export class LocalMisaoWatchdog {
       this.deps.logger.warn(`could not bring the misao back: ${describe(err)}`);
     }
     if (outcome === 'busy') return; // an install / update holds it: not an attempt, look again next tick
+    if (outcome !== undefined && isForeignLock(outcome)) {
+      // Someone who is not this user holds the lock: not an attempt, and said once per state, not on every tick.
+      if (this.warned !== outcome) {
+        this.warned = outcome;
+        this.deps.logger.warn(`cannot bring the misao back: ${outcome.slice(FOREIGN_LOCK_PREFIX.length)}`);
+      }
+      return;
+    }
     if (outcome !== undefined) this.report(outcome, wait.attempts + 1);
     this.wait = afterAttempt(wait, this.deps.now(), this.timing);
   }

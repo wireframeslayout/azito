@@ -14,6 +14,7 @@ import { renderMisaoUnit } from './misaoUnit';
 import { taskStartsMisaoOf, type LocalMisaoWindows } from './misaoLocalWindows';
 import { isManagedMisaoDown } from './MisaoWindowsInstaller';
 import { underMisaoRootLock } from './misaoRootLock';
+import { FOREIGN_LOCK_PREFIX } from '../../../shared/recoveryBackoff';
 
 export interface MisaoServiceDeps {
   /** Null when this hub is not a release install (no prefix): a source checkout never installs a service. */
@@ -411,6 +412,7 @@ export class MisaoServiceService {
       });
     } catch (err) {
       if (err instanceof MisaoServiceError && err.code === 'busy') return 'busy';
+      if (err instanceof MisaoServiceError && err.code === 'lock_foreign') return `${FOREIGN_LOCK_PREFIX}${err.message}`;
       throw err;
     }
   }

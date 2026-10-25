@@ -49,14 +49,14 @@ describe('the misao folder\'s lock key', () => {
   });
 
   it('gives another endpoint for another key: a lock taken with one key is not held against a taker with the other', async () => {
-    const lockA = createMisaoRootLock(root, guard);
+    const lockA = createMisaoRootLock(root, guard, 'C:\\Windows');
     let other: string | undefined;
     await lockA.run(async () => {
       // A second taker with the SAME key is refused ...
-      await expect(createMisaoRootLock(root, guard).run(async () => 'in')).rejects.toThrow(/held/);
+      await expect(createMisaoRootLock(root, guard, 'C:\\Windows').run(async () => 'in')).rejects.toThrow(/azito-lock/);
       // ... and one that cannot read the key cannot even name the lock.
       const broken: SecretFileGuard = withOverrides(guard, { inspect: () => ({ ok: false, summary: 'x', fix: 'y' }) });
-      other = await createMisaoRootLock(root, broken).run(async () => 'in').catch((err: Error) => err.message);
+      other = await createMisaoRootLock(root, broken, 'C:\\Windows').run(async () => 'in').catch((err: Error) => err.message);
     });
     expect(other).toMatch(/not private to this user/);
   });
