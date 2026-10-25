@@ -1,19 +1,9 @@
 import { execFileSync } from 'child_process';
-import * as fs from 'fs';
-import * as path from 'path';
+import { hostTarOf } from '../src/shared/os/hostTar';
 
-/**
- * The `tar` the build scripts run. On a Windows build host that is the OS's own `System32\tar.exe` (bsdtar, which also
- * reads and writes zip), never whichever `tar` comes first on PATH: Git for Windows puts a GNU tar there, which cannot read
- * a zip and treats `C:\...` as a `host:path` remote. Elsewhere it is the `tar` on PATH.
- */
+/** The `tar` the build scripts run: see `hostTarOf` (Windows: System32's bsdtar by absolute path; elsewhere `tar` on PATH). */
 export function hostTar(): string {
-  if (process.platform !== 'win32') return 'tar';
-  const systemRoot = process.env.SystemRoot;
-  if (!systemRoot) throw new Error('SystemRoot is not set, so the Windows tar.exe cannot be located');
-  const tar = path.join(systemRoot, 'System32', 'tar.exe');
-  if (!fs.existsSync(tar)) throw new Error(`${tar} does not exist (Windows 10 1803 or later ships it)`);
-  return tar;
+  return hostTarOf({ platform: process.platform, systemRoot: process.env.SystemRoot });
 }
 
 /** Entry names of a `.tar.gz` or `.zip` (bsdtar reads both; GNU tar needs `-z` for the gzip one). */

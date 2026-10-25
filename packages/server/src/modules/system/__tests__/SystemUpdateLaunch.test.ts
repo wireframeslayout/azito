@@ -18,6 +18,7 @@ vi.mock('child_process', () => ({
 
 import { execFile, spawn } from 'child_process';
 import { getReleaseInfo } from '../../../shared/releaseInfo';
+import { hubAssetNames, type HubInstallHost } from '../hubInstall';
 import { SystemUpdateService } from '../SystemUpdateService';
 import { UpdateChannelResolver } from '../UpdateChannelResolver';
 import { UpdateStateManager } from '../UpdateStateManager';
@@ -49,6 +50,7 @@ describe('SystemUpdateService.launchUpdateScript', () => {
   let dataPaths: DataPaths;
   let channelResolver: UpdateChannelResolver;
   let stateManager: UpdateStateManager;
+  let host: HubInstallHost;
 
   beforeEach(() => {
     tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'azito-update-launch-test-'));
@@ -58,6 +60,8 @@ describe('SystemUpdateService.launchUpdateScript', () => {
       updateLog: path.join(tmpDir, 'update.log'),
       updateChannel: path.join(tmpDir, 'update-channel.json'),
     } as unknown as DataPaths;
+    // The prefix is NOT the data dir's parent: the hub folder comes from where the running bundle is.
+    host = { platform: 'linux', arch: 'x64', bundleRoot: path.join(tmpDir, 'custom-prefix', 'hub', 'v1.0.0') };
     channelResolver = new UpdateChannelResolver(dataPaths.updateChannel, secretFileGuard);
     channelResolver.updateChannel('acme/azito-hub');
     stateManager = new UpdateStateManager(dataPaths.updateState, dataPaths.updateLog, secretFileGuard);
@@ -66,8 +70,6 @@ describe('SystemUpdateService.launchUpdateScript', () => {
       version: 'v1.0.0', commit: 'abc1234', bundleHash: 'deadbeef', channel: { repo: 'acme/azito-hub' },
     });
 
-    const platform = process.platform === 'darwin' ? 'darwin' : 'linux';
-    const arch = process.arch === 'arm64' ? 'arm64' : 'x64';
     vi.stubGlobal('fetch', vi.fn(() => Promise.resolve({
       ok: true,
       json: () => Promise.resolve({
@@ -75,7 +77,7 @@ describe('SystemUpdateService.launchUpdateScript', () => {
         body: null,
         published_at: '2026-01-01T00:00:00Z',
         assets: [
-          { name: `azito-hub-v1.1.0-${platform}-${arch}.tar.gz`, browser_download_url: 'https://example.invalid/hub.tar.gz' },
+          { name: hubAssetNames('v1.1.0', host).archive, browser_download_url: 'https://example.invalid/hub.tar.gz' },
           { name: 'SHA256SUMS', browser_download_url: 'https://example.invalid/SHA256SUMS' },
         ],
       }),
@@ -89,7 +91,7 @@ describe('SystemUpdateService.launchUpdateScript', () => {
   });
 
   it('launches the update through systemd-run under systemd', async () => {
-    const service = new SystemUpdateService(channelResolver, stateManager, detectorFor('systemd'), dataPaths, taskRepoStub, null);
+    const service = new SystemUpdateService(channelResolver, stateManager, detectorFor('systemd'), dataPaths, taskRepoStub, null, host);
 
     await expect(service.startUpdate()).resolves.toEqual({ started: true });
 
@@ -98,11 +100,15 @@ describe('SystemUpdateService.launchUpdateScript', () => {
     expect(file).toBe('systemd-run');
     expect(args).toContain('--service-manager');
     expect(args).toContain('systemd');
+    // The hub folder and the bundle the update runs come from the running bundle's location (-Prefix), not from dirname(dataDir).
+    const hubDir = path.join(tmpDir, 'custom-prefix', 'hub');
+    expect(args![args!.indexOf('--hub-dir') + 1]).toBe(hubDir);
+    expect(args).toContain(path.join(hubDir, 'current', 'azito-hub.cjs'));
   });
 
   it('refuses to start an update when launchd has the hub loaded into both domains, before anything is switched', async () => {
     const hubService = { loadedDomain: async () => { throw new DuplicateLoadError('com.azito.hub', 501, 'Run `azito service stop`, then `azito service start`.'); } } as unknown as ServiceManager;
-    const service = new SystemUpdateService(channelResolver, stateManager, detectorFor('launchd'), dataPaths, taskRepoStub, hubService);
+    const service = new SystemUpdateService(channelResolver, stateManager, detectorFor('launchd'), dataPaths, taskRepoStub, hubService, host);
 
     const result = await service.startUpdate();
 
@@ -112,7 +118,7 @@ describe('SystemUpdateService.launchUpdateScript', () => {
   });
 
   it('detaches the update process directly under launchd, where systemd-run does not exist', async () => {
-    const service = new SystemUpdateService(channelResolver, stateManager, detectorFor('launchd'), dataPaths, taskRepoStub, null);
+    const service = new SystemUpdateService(channelResolver, stateManager, detectorFor('launchd'), dataPaths, taskRepoStub, null, host);
 
     await expect(service.startUpdate()).resolves.toEqual({ started: true });
 

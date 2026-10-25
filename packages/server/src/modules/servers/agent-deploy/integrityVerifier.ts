@@ -2,6 +2,7 @@ import * as fs from 'fs';
 import { createHash } from 'crypto';
 import { execFile } from 'child_process';
 import { promisify } from 'util';
+import { assertSafeEntryNames } from '../../../shared/fs/safeArchive';
 
 const execFileAsync = promisify(execFile);
 
@@ -79,14 +80,10 @@ export async function computeLocalSha256(filePath: string): Promise<string> {
  * Local-process counterpart to the traversal check embedded in
  * buildSafeExtractCommand — used ahead of extracting a downloaded tarball
  * in-process (no remote shell involved) for the system update flow.
+ * Refuses an absolute path, a drive path and a ".." segment (`assertSafeEntryNames`,
+ * the rule the Windows zip extraction uses too).
  */
 export async function assertNoTraversal(tarballPath: string): Promise<void> {
   const { stdout } = await execFileAsync('tar', ['tf', tarballPath]);
-  for (const line of stdout.split('\n')) {
-    const entry = line.trim();
-    if (!entry) continue;
-    if (/(^|\/)\.\.($|\/)/.test(entry)) {
-      throw new Error(`Path traversal detected in archive: ${entry}`);
-    }
-  }
+  assertSafeEntryNames(stdout.split('\n'));
 }

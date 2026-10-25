@@ -3,6 +3,7 @@ import { buildCommandSpec, type CommandResult, type CommandSpec } from '../../sh
 import { powershellDialect, powershellEncodedArgs } from '../../shared/os/shellDialect';
 import { buildTaskXml } from '../../shared/os/taskScheduler/taskDefinition';
 import { joinWindowsArgs } from '../../shared/os/taskScheduler/windowsCommandLine';
+import { HUB_POINTER_VERSION_PATTERN } from './hubVersion';
 
 /**
  * The hub as a Task Scheduler task on Windows (#380 B3a). The pieces that are specific to the hub: the task's definition, the
@@ -14,9 +15,6 @@ import { joinWindowsArgs } from '../../shared/os/taskScheduler/windowsCommandLin
  * pointer is the one thing an update switches (the Unix `current` symlink, and #381 after it), so no update has to register the
  * task again, and a rollback of the pointer is a rollback of what the task runs.
  */
-
-/** What `current.txt` may hold (the same rule as install.ps1 and azito.cmd): a release tag, which becomes a folder name. */
-const VERSION_PATTERN = '^v?[0-9]+\\.[0-9]+\\.[0-9]+([-+.][0-9A-Za-z.-]+)?$';
 
 const RESTART_INTERVAL_MINUTES = 1;
 const RESTART_COUNT = 999;
@@ -120,7 +118,7 @@ export function buildHubLauncherScript(layout: HubWindowsLayout, timing: HubRest
     '  $began = [DateTime]::UtcNow; $version = \'?\'; $code = $null',
     '  try {',
     '    $version = ([IO.File]::ReadAllText($pointer)).TrimStart([char]0xFEFF).Trim()',
-    `    if ($version -notmatch ${q(VERSION_PATTERN)}) { throw "$pointer is not a version (it holds '$version')" }`,
+    `    if ($version -notmatch ${q(HUB_POINTER_VERSION_PATTERN)}) { throw "$pointer is not a version (it holds '$version')" }`,
     "    $run = Join-Path (Join-Path $hubRoot $version) 'run.ps1'",
     '    if (-not (Test-Path -LiteralPath $run -PathType Leaf)) { throw "$run does not exist (not installed)" }',
     '    & $run -Service -LogFile $logFile -FollowPid $parentId -FollowStart $parentFt',
@@ -158,7 +156,7 @@ export function buildSingleRunLauncherScript(layout: HubWindowsLayout): string {
     '}',
     'try {',
     '  $version = ([System.IO.File]::ReadAllText($pointer)).TrimStart([char]0xFEFF).Trim()',
-    `  if ($version -notmatch ${q(VERSION_PATTERN)}) { throw "$pointer does not hold a version such as v0.12.0 (it holds '$version')" }`,
+    `  if ($version -notmatch ${q(HUB_POINTER_VERSION_PATTERN)}) { throw "$pointer does not hold a version such as v0.12.0 (it holds '$version')" }`,
     "  $run = Join-Path (Join-Path $hubRoot $version) 'run.ps1'",
     '  if (-not (Test-Path -LiteralPath $run -PathType Leaf)) { throw "$run does not exist (current.txt names a version that is not installed)" }',
     '  & $run -Service -LogFile $logFile',
