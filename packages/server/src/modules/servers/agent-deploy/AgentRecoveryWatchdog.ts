@@ -54,6 +54,8 @@ export class AgentRecoveryWatchdog {
   private stopped = false;
   /** The `cannot be started` answers already warned about: `<server>\0<answer>`. */
   private readonly warned = new Set<string>();
+  /** The last foreign-lock reason said for each server: a new reason is said, the same one again is not, and A, B, A says A twice. */
+  private readonly foreignReason = new Map<string, string>();
   private timer: ReturnType<typeof setInterval> | undefined;
 
   constructor(private readonly deps: AgentRecoveryDeps, private readonly timing: RecoveryTiming = DEFAULT_RECOVERY_TIMING) {}
@@ -95,6 +97,7 @@ export class AgentRecoveryWatchdog {
     const names = new Set(servers.map((s) => s.name));
     for (const map of [this.agents, this.misaos]) for (const name of map.keys()) if (!names.has(name)) map.delete(name);
     for (const key of this.warned) if (!names.has(key.split('\0')[0]!)) this.warned.delete(key);
+    for (const name of this.foreignReason.keys()) if (!names.has(name)) this.foreignReason.delete(name);
     const started: Array<Promise<void>> = [];
     const first = servers.length === 0 ? 0 : this.cursor % servers.length;
     let next = first;
@@ -120,6 +123,7 @@ export class AgentRecoveryWatchdog {
     this.agents.delete(name);
     this.misaos.delete(name);
     for (const key of this.warned) if (key.startsWith(`${name}\0`)) this.warned.delete(key);
+    this.foreignReason.delete(name);
   }
 
   private async look(server: ServerConfig): Promise<void> {
@@ -142,6 +146,7 @@ export class AgentRecoveryWatchdog {
     if (!down) {
       this.misaos.delete(server.name);
       for (const key of this.warned) if (key.startsWith(`${server.name}\0`)) this.warned.delete(key);
+      this.foreignReason.delete(server.name);
       return;
     }
     const force = (this.misaos.get(server.name)?.attempts ?? 0) > 0;
@@ -183,9 +188,8 @@ export class AgentRecoveryWatchdog {
     if (outcome === 'busy') return; // another operation holds the misao folder: not an attempt, looked at again next tick
     if (outcome !== undefined && isForeignLock(outcome)) {
       // The lock of a folder shared with the hub is held by someone who is not this user: not an attempt, said once per state.
-      const key = `${server.name}\0${outcome}`;
-      if (!this.warned.has(key)) {
-        this.warned.add(key);
+      if (this.foreignReason.get(server.name) !== outcome) {
+        this.foreignReason.set(server.name, outcome);
         this.deps.logger.warn(`${server.name}: cannot bring the ${what} back: ${outcome.slice(FOREIGN_LOCK_PREFIX.length)}`);
       }
       return;

@@ -353,6 +353,22 @@ describe('AgentRecoveryWatchdog: what a misao revive answers', () => {
     expect(h.logs.filter((l) => l.startsWith('WARN') && l.includes('could not be identified'))).toHaveLength(1);
   });
 
+  it('says a foreign-lock reason again when it comes back after another one (A, B, A is three warnings)', async () => {
+    const h = new Harness();
+    h.misaoDown = true;
+    await h.watchdog.tick();
+    const reasons = ['foreign_lock:reason A', 'foreign_lock:reason B', 'foreign_lock:reason A'];
+    h.reviveResult = reasons[0]!;
+    await h.advance(MIN);
+    await h.advance(15_000); // the same reason again: not said again
+    for (const reason of reasons.slice(1)) {
+      h.reviveResult = reason;
+      await h.advance(15_000);
+    }
+    const warned = h.logs.filter((l) => l.startsWith('WARN') && l.includes('cannot bring the misao back'));
+    expect(warned.map((l) => /reason ([AB])/.exec(l)?.[1])).toEqual(['A', 'B', 'A']);
+  });
+
   it.each(['disabled', 'custom_socket', 'running'])('says nothing for %s', async (result) => {
     const h = await afterAttempts(result, 3);
     expect(h.revived.length).toBeGreaterThan(1);
