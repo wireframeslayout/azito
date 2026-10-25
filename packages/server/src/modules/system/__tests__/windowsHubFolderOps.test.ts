@@ -41,13 +41,23 @@ describe('findHubVersionsInUse script: whose unreadable processes stop the tidyi
     return Buffer.from(spec.args[spec.args.indexOf('-EncodedCommand') + 1], 'base64').toString('utf16le');
   };
 
-  it('skips a process that is not this user\'s, or whose owner cannot be read, before it can be reported as unknown', async () => {
+  it('lets only this user\'s process, or an interpreter whose owner is unknown, be reported as unknown', async () => {
     const script = await scriptOf();
     expect(script).toContain('$me = [Security.Principal.WindowsIdentity]::GetCurrent().User.Value');
-    const ownerCheck = script.indexOf('-not $owner -or $owner.ReturnValue -ne 0 -or $owner.Sid -ne $me) { continue }');
-    expect(ownerCheck).toBeGreaterThan(-1);
-    expect(script.indexOf('GetOwnerSid')).toBeGreaterThan(-1);
-    expect(ownerCheck).toBeLessThan(script.indexOf('unknown $($p.ProcessId)'));
+    const at = (text: string): number => script.indexOf(text);
+    const nonInterpreter = at('$interpreters -notcontains');
+    const other = at('if ($ownerSid -and $ownerSid -ne $me) { continue }');
+    const noOwnerNoImage = at('if (-not $ownerSid -and -not $image) { continue }');
+    const unknown = at('unknown $($p.ProcessId)');
+    // A known non-interpreter is skipped first; then another account's (owner read and not ours); then an owner that cannot be read with no image to
+    // call an interpreter; what is left is this user's process, or an unreadable owner whose image is an interpreter: both are unknown.
+    expect(at('$ownerSid = if ($owner -and $owner.ReturnValue -eq 0)')).toBeGreaterThan(nonInterpreter);
+    expect(other).toBeGreaterThan(-1);
+    expect(noOwnerNoImage).toBeGreaterThan(other);
+    expect(unknown).toBeGreaterThan(noOwnerNoImage);
+    // Nothing between the last skip and the report: no further "continue" lets an interpreter of an unreadable owner (an external node.exe that read a
+    // version's script and loads another module from it later) or this user's process through.
+    expect(script.slice(noOwnerNoImage + 'if (-not $ownerSid -and -not $image) { continue }'.length, unknown)).not.toContain('continue');
   });
 
   it('still matches a version in the path or command line of any account before the owner is looked at', async () => {

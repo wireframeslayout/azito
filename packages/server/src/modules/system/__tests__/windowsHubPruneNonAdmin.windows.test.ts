@@ -17,19 +17,21 @@ import { windowsPowershell, type SpecRunner } from '../windowsHubService';
  * read the path of every process, so the test makes a local standard user and runs the look-up as that user: smss / csrss / svchost and the
  * runner's own processes are then unreadable, which is what a person on an ordinary Windows 11 has, and the tidying must still run.
  */
-const USER = 'azitoprune';
-
 describe.skipIf(process.platform !== 'win32')('tidying the old versions as a user who is not an administrator', () => {
   const host = process.platform === 'win32' ? resolveCurrentHostEnv() : undefined;
+  // A name of our own for each run: an account that already exists is never touched, and only the one this run made is removed.
+  const user = `azp${crypto.randomBytes(5).toString('hex')}`;
   const password = `Az1-${crypto.randomBytes(12).toString('hex')}`;
   const system32 = host ? path.join(host.systemRoot!, 'System32') : '';
   let root: string;
   let hub: string;
-  let userExists = false;
+  let userSid: string | undefined;
   let setupProblem: string | undefined;
   const children: ChildProcess[] = [];
 
   const net = (...args: string[]) => spawnSync(path.join(system32, 'net.exe'), args, { encoding: 'utf-8' });
+  const powershellOut = (script: string) => spawnSync(windowsPowershell(host!.systemRoot!), powershellEncodedArgs(script), { encoding: 'utf-8', env: outerEnv });
+  const sleep = (ms: number): void => { Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms); };
 
   beforeAll(() => {
     root = fs.realpathSync.native(fs.mkdtempSync(path.join(os.tmpdir(), 'azito-prune-na-')));
@@ -38,17 +40,32 @@ describe.skipIf(process.platform !== 'win32')('tidying the old versions as a use
     // The user reads the helper's output files and the (Everyone-readable) temp folder; only `out\` is written by it.
     fs.mkdirSync(path.join(root, 'out'));
     spawnSync(path.join(system32, 'icacls.exe'), [path.join(root, 'out'), '/grant', '*S-1-1-0:(OI)(CI)M'], { encoding: 'utf-8' });
-    net('user', USER, '/delete');
-    const added = net('user', USER, password, '/add', '/y');
-    if (added.status !== 0) { setupProblem = `net user could not make ${USER}: ${added.stdout}${added.stderr}`; return; }
-    userExists = true;
+    const added = net('user', user, password, '/add', '/y');
+    if (added.status !== 0) { setupProblem = `net user could not make ${user}: ${added.stdout}${added.stderr}`; return; }
+    const sid = /S-1-5-21-[0-9-]+/.exec(powershellOut(`Write-Output ((New-Object Security.Principal.NTAccount('${user}')).Translate([Security.Principal.SecurityIdentifier]).Value)`).stdout)?.[0];
+    if (sid === undefined) { setupProblem = `could not read the SID of ${user}`; net('user', user, '/delete'); return; }
+    userSid = sid;
   });
 
-  afterAll(() => {
-    for (const child of children.splice(0)) child.kill();
-    if (userExists) net('user', USER, '/delete');
+  afterAll(async () => {
+    const waiting = children.splice(0).map((child) => new Promise<void>((resolve) => { if (child.exitCode !== null || child.signalCode !== null) resolve(); else { child.once('exit', () => resolve()); child.kill(); } }));
+    await Promise.all(waiting);
     fs.rmSync(root, { recursive: true, force: true, maxRetries: 5, retryDelay: 300 });
-  });
+    if (userSid === undefined) return;
+    // The profile that `-LoadUserProfile` made (it can stay loaded for a moment after the user's last process ends), then the account; both must be gone.
+    const profileGone = (): boolean => powershellOut(`Write-Output ('profiles ' + @(Get-CimInstance Win32_UserProfile -Filter "SID='${userSid}'").Count)`).stdout.includes('profiles 0');
+    let removed = false;
+    for (let attempt = 0; attempt < 10 && !removed; attempt++) {
+      powershellOut(`Get-CimInstance Win32_UserProfile -Filter "SID='${userSid}'" | Remove-CimInstance -ErrorAction SilentlyContinue`);
+      removed = profileGone();
+      if (!removed) sleep(1000);
+    }
+    const deleted = net('user', user, '/delete');
+    const accountGone = net('user', user).status !== 0;
+    if (!removed || deleted.status !== 0 || !accountGone) {
+      throw new Error(`could not remove the test account ${user} (${userSid}): profile removed=${removed}, net user /delete exit ${deleted.status} ${deleted.stdout}${deleted.stderr}, account gone=${accountGone}`);
+    }
+  }, 120_000);
 
   /** Runs a spec as the standard user (PowerShell `Start-Process -Credential`, output through files the user can write). */
   const runAsUser: SpecRunner = async (spec: CommandSpec) => {
@@ -57,7 +74,7 @@ describe.skipIf(process.platform !== 'win32')('tidying the old versions as a use
     const err = path.join(root, 'out', `${tag}.err`);
     const q = (value: string): string => `'${value.replace(/'/g, "''")}'`;
     const script = [
-      `$cred = New-Object Management.Automation.PSCredential(".\\${USER}", (ConvertTo-SecureString ${q(password)} -AsPlainText -Force))`,
+      `$cred = New-Object Management.Automation.PSCredential(".\\${user}", (ConvertTo-SecureString ${q(password)} -AsPlainText -Force))`,
       `$p = Start-Process -FilePath ${q(spec.file)} -ArgumentList ${q(spec.args.join(' '))} -Credential $cred -LoadUserProfile -WorkingDirectory ${q(system32)} -RedirectStandardOutput ${q(out)} -RedirectStandardError ${q(err)} -Wait -PassThru`,
       'exit $p.ExitCode',
     ].join('\n');
@@ -118,10 +135,14 @@ describe.skipIf(process.platform !== 'win32')('tidying the old versions as a use
     children.push(child);
     await new Promise<void>((resolve, reject) => { child.once('spawn', () => resolve()); child.once('error', reject); });
 
-    const report = await prune(async () => new Set(await findHubVersionsInUse(runAsUser, host!.systemRoot!, [hub])));
+    // The look-up as the other user does not see this version (it cannot read the path of the runner's process) ...
+    const inUse = await findHubVersionsInUse(runAsUser, host!.systemRoot!, [hub]);
+    expect([...inUse]).not.toContain('v0.1.0');
+    // ... so with exactly that list it is the write check alone that keeps it.
+    const report = await prune(async () => inUse);
 
     expect(report.removed).toEqual(['v0.2.0']);
-    expect(report.failed).toEqual([{ name: 'v0.1.0', reason: expect.stringMatching(/node\.exe cannot be opened for writing|a running process uses it/) }]);
+    expect(report.failed).toEqual([{ name: 'v0.1.0', reason: expect.stringMatching(/node\.exe cannot be opened for writing/) }]);
     expect(fs.existsSync(exe)).toBe(true);
   }, 300_000);
 });
