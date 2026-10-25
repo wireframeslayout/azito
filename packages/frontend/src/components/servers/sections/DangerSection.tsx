@@ -4,6 +4,8 @@ import { api } from '../../../api/client';
 import type { Server } from '../../../hooks/useServerManagement';
 import { Button } from '../../ui';
 import { useToast } from '../../../hooks/useToast';
+import { useServerDeletion } from '../../../hooks/useServerDeletion';
+import { DeleteServerPanel } from './DeleteServerPanel';
 
 interface DangerSectionProps {
   server: Server;
@@ -12,28 +14,10 @@ interface DangerSectionProps {
 
 export default function DangerSection({ server, onDeleted }: DangerSectionProps) {
   const { t } = useTranslation('servers');
-  const [confirming, setConfirming] = useState(false);
-  const [deleting, setDeleting] = useState(false);
+  const deletion = useServerDeletion(server, onDeleted);
   const [confirmingFp, setConfirmingFp] = useState(false);
   const [resettingFp, setResettingFp] = useState(false);
   const { showToast } = useToast();
-
-  const handleDelete = useCallback(async () => {
-    setDeleting(true);
-    try {
-      const res = await api<{ error?: string }>(`/servers/${encodeURIComponent(server.name)}`, { method: 'DELETE' });
-      if (res.error) {
-        showToast(res.error);
-        return;
-      }
-      onDeleted();
-    } catch (err: unknown) {
-      showToast(`Delete failed: ${(err as Error).message}`);
-    } finally {
-      setDeleting(false);
-      setConfirming(false);
-    }
-  }, [server.name, onDeleted, showToast]);
 
   const handleResetFingerprint = useCallback(async () => {
     setResettingFp(true);
@@ -117,27 +101,20 @@ export default function DangerSection({ server, onDeleted }: DangerSectionProps)
               {t('danger.deleteServerDesc')}
             </div>
           </div>
-          {!confirming ? (
+          {deletion.phase === 'idle' && (
             <Button
               variant="danger"
-              onClick={() => setConfirming(true)}
+              onClick={deletion.open}
             >
               {t('common:actions.delete')}
             </Button>
-          ) : (
-            <div style={{ display: 'flex', gap: 'var(--space-2)' }}>
-              <Button onClick={() => setConfirming(false)}>{t('common:actions.cancel')}</Button>
-              <Button
-                variant="danger"
-                onClick={handleDelete}
-                loading={deleting}
-                loadingLabel={t('danger.deleting')}
-              >
-                {t('common:actions.confirm')}
-              </Button>
-            </div>
           )}
         </div>
+        {deletion.phase !== 'idle' && (
+          <div style={{ marginTop: 'var(--space-4)' }}>
+            <DeleteServerPanel deletion={deletion} />
+          </div>
+        )}
       </div>
     </div>
   );
