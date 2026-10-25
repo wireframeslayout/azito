@@ -138,10 +138,10 @@ zip と `SHA256SUMS` を取得し、チェックサムが合わなければ止�
 <prefix>\logs\hub.log         ハブの標準出力・標準エラーのすべて（journal に当たるもの）。ハブの起動時に 10 MB を超えていれば hub.log.1 に退避する
 ```
 
-`hub\.env` と `data\` は同梱のハブ自身（`node.exe azito-hub.cjs init-env`）が作ります。アクセス権（現在のユーザーだけ）は、実行時に守るのと同じコードが付けます。インストーラをもう一度実行すると、導入済みであることを表示して何も変えません。手で更新するときは、新しい zip を `hub\<tag>` に展開して `current.txt` にその tag を、BOM の無い ASCII の 1 行で書きます。Windows PowerShell 5.1 の `Set-Content -Encoding UTF8` や `>` は BOM 付き、または UTF-16 で書くため、`azito` は読み取りを拒否します。次のように書いてください:
+`hub\.env` と `data\` は同梱のハブ自身（`node.exe azito-hub.cjs init-env`）が作ります。アクセス権（現在のユーザーだけ）は、実行時に守るのと同じコードが付けます。インストーラをもう一度実行すると、導入済みであることを表示して何も変えません。手で更新するときは、新しい zip を `hub\<tag>` に展開して `current.txt` にその tag を、BOM なし・末尾 CRLF の 1 行で書きます。Windows PowerShell 5.1 の `Set-Content -Encoding UTF8` や `>` は BOM 付き、または UTF-16 で書くため、`azito` は読み取りを拒否します。末尾の CRLF がないと、次のアプリ内更新が `current.txt must end with a CRLF` で失敗します。次のように書いてください:
 
 ```powershell
-[System.IO.File]::WriteAllText("$env:USERPROFILE\.azito\hub\current.txt", 'v0.12.0')
+[System.IO.File]::WriteAllText("$env:USERPROFILE\.azito\hub\current.txt", "v0.12.0`r`n")
 ```
 
 `current.txt` は、CLI と PATH の登録がすべて終わってから最後に書かれます。途中で止まった導入（`hub\<tag>` はあるが `current.txt` が無い）は、インストーラをもう一度実行すると完了します。`hub\.env` とそのトークンは保たれます。
@@ -198,7 +198,7 @@ ssh-add -l                                    # 入っている鍵の確認
 - タスクと一緒に終わります。タスクスケジューラの「終了」（`azito stop`、`schtasks /End /TN AzitoHub`）が終わらせるのは `conhost.exe` だけなので、`run.ps1 -Service` がその ID をハブに伝え（`AZITO_HUB_EXIT_WITH_PID`）、いなくなって数秒でハブが自分で終了します（Windows の agent が親に付き従うのと同じ仕組み）。`azito stop|restart|reload` は、タスクを終わらせる前にハブの `node.exe`（`<prefix>\hub\` 配下のどの版のフォルダーでもよい。同じユーザー、コマンドライン引数の完全一致）を特定し、最大 20 秒ハブが自分で終了するのを待ち、そのあとも同じプロセス（ID と生成時刻）のままのものだけを強制終了します（強制したときは警告します）。そのため `current.txt` を切り替えてからの restart でも旧版の終了を待ち、新版が旧版とポートで衝突することはありません。ほかの prefix、ほかのユーザー、それ以外のプロセスには触れません
 - **異常終了から自動で戻ります。** `conhost.exe --headless` は子に何があっても終了コード 0 を返し、タスクスケジューラは非 0 の終了コードでもタスクを再起動しない（Windows CI での実測）ので、戻すのは**ランチャー**です。ハブが非 0 の終了コード（クラッシュ、`Stop-Process -Force`、メモリ不足による強制終了など）で終わると、ランチャーは 5 秒後に起動し直し、以降は 10・20・40 秒、上限 60 秒の間隔で試します。5 分動き続けたら 5 秒からやり直します。起動のたびに `current.txt` を読み直し、不正なら理由をログに書いて 60 秒おきに再試行します。launcher は自分の `conhost.exe`（ID と開始時刻）を `run.ps1 -Service -FollowPid -FollowStart` に渡し、`run.ps1` はそのプロセスがまだ動いているときだけハブを起動します。そのため、起動の直前に入った End が、何にも追従しないハブを残すことはありません（この版の `run.ps1` が要ります。この版が登録したタスクは `current.txt` の版を実行するので、`current.txt` もこの版のバンドルに切り替えてください）。意図して終了したハブ（終了コード 0。停止を指示された、または親の `conhost.exe` がいなくなった）は**起動し直さず**、`azito stop|restart|reload` はタスクと一緒にランチャーも終わらせるので、戻りを止める操作は要りません。再起動は 1 回ごとに `hub.log`（`launcher: run.ps1 (v0.12.0) exited with code 1`、`launcher: start 2 in 5s`）と `<prefix>\logs\hub-launcher.json` に記録し、`azito status` が `launcher:` として表示します（タスク自身の Last Result は何があっても 0 のままです）。**限界:** あなたがログオンしている間だけ働きます（ログオン時のタスクのため）。起動のたびにすぐ失敗するハブは、60 秒おきにいつまでも再試行します（`hub.log` を読んでください）。以前の 0.12 のビルドが登録した、ハブを 1 回しか起動しないランチャーのタスクも `azito stop`/`start` は受け付け、`azito service install`（ハブを止めてから）で置き換わります（導入済みのハブへの `install.ps1` は何もしないので、この操作が要ります）
 
-設定 › システムには、起動方式「Task Scheduler」が表示され、アプリ内の更新が使えます（[Windows のハブのアプリ内更新](#windows-のハブのアプリ内更新)）。手で更新するときは、新しい zip を `hub\<tag>` に展開し、tag を `current.txt` に（BOM の無い ASCII の 1 行で）書いて、`azito service restart` します。
+設定 › システムには、起動方式「Task Scheduler」が表示され、アプリ内の更新が使えます（[Windows のハブのアプリ内更新](#windows-のハブのアプリ内更新)）。手で更新するときは、新しい zip を `hub\<tag>` に展開し、tag を `current.txt` に（BOM なし・末尾 CRLF の 1 行で）書いて、`azito service restart` します。
 
 install.ps1 は `current.txt` を書く前にタスクを登録し、書いたあとに起動します。途中で失敗しても、もう一度実行すれば直ります。起動だけが失敗したときは、ファイルは導入済みなので `azito start` を実行してください。導入済みのハブにはインストーラは何もしません（`install.sh` と同じ）。タスク名は固定なので 1 ユーザーに 1 つです。別の prefix 用に登録されたタスクは、`azito start|stop|restart|reload` が操作を拒否し、`azito service install` は `--yes` があるときだけ置き換えます（install.ps1 は `-Yes` のときに渡します）。動いているタスクは置き換えません。手で削除されたタスクは `azito service install` が登録し直します。手で消すには `schtasks /Delete /TN AzitoHub /F`（アンインストーラーはまだありません。写し `%USERPROFILE%\.azito\service\AzitoHub.xml` だけが残ると `azito status` が警告します）。
 
@@ -219,19 +219,19 @@ install.ps1 は `current.txt` を書く前にタスクを登録し、書いた�
 2. **取得と照合。** zip と `SHA256SUMS` をダウンロード（1 回 10 分で打ち切り）し、zip の SHA-256 を照合します。合わなければここで失敗し、何も変わりません。
 3. **展開。** `hub\<版>` に展開します。フォルダーの外に出るエントリーやリンクを含む zip は拒否します。同じ名前のフォルダーが既にあるときは、書き込まず、zip の中身がすべてそこにある場合だけそれを使います。違えば、そのフォルダーを置き換えずに失敗します。
 4. **新しい版での確認。** 新しい版の `node.exe` で `azito-hub.cjs --version` を実行し（30 秒まで）、版が合うかを確かめます。壊れた版は、ここで止まります。
-5. **`current.txt` の切り替え。** BOM の無い ASCII の 1 行で、新しい版の名前に書き換えます。
+5. **`current.txt` の切り替え。** BOM なし・末尾 CRLF の 1 行で、新しい版の名前に書き換えます。
 6. **再起動。** `azito service restart` と同じ手順です。タスク `AzitoHub` を終わらせ、ハブの `node.exe` が自分で終了するのを待ち、起動し直します。ランチャーが `current.txt` を読み直すので、新しい版が動きます。
 7. **起動の確認。** 新しい版が `/api/health` に自分の版で答えるまで、最大 90 秒待ちます（Windows の初回の起動は、ウイルス対策の検査のぶん遅いので、Unix の 30 秒より長くしています）。
 
-更新の全体は 50 分で打ち切られます。タスクスケジューラ側の 1 時間の制限は、そのための保険です。
+更新の全体は 50 分で中止を求められ、実行中の段と、要るなら巻き戻しを終えてから終わります（その場で切られません）。タスクスケジューラ側の 1 時間の制限は、そのための保険です。
 
-**失敗したら前の版に戻ります。** 切り替えの前に失敗したときは何も変わっていません。切り替えのあとに失敗したときは、`current.txt` を前の版に書き戻して再起動し、前の版が応答するのを確かめます。この回で作った新しい版のフォルダーは消えます（もとからあったものは消しません）。戻すのにも失敗したときは、画面のエラーにそう書かれます。新しい版が応答した（起動の確認が済んだ）あとで更新の中止が届いたときは、更新は成功のままで、遅れて届いたことが状態の `note` に残ります。
+**失敗したら前の版に戻ります。** 切り替えの前に失敗したときは何も変わっていません。切り替えのあとに失敗したときは、`current.txt` を前の版に書き戻して再起動し、前の版が応答するのを確かめます。この回で作った新しい版のフォルダーは消えます（もとからあったものは消しません）。戻すのにも失敗したときは、画面のエラーにそう書かれます。起動の確認の最中に中止が届いても、新しい版が応答すれば更新は成功のままで、遅れて届いたことが状態の `note` に残ります。
 
 **更新の最中は `azito service` が断られます。** `azito service install|start|stop|restart|reload` と更新は、同じインストールで同時には動きません。更新の最中に実行すると、`Another AZITO hub operation (process N) is running on this install ... Nothing was changed` と出て終わります（何も変わりません）。更新を始めるときに `azito service` が動いていれば、更新のほうが理由つきで失敗します。
 
 **misao は止まりません。** misao は別のタスク `AzitoMisao` で、更新は触りません。misao の端末はハブが再起動する間だけ切れます。つなぎ直すと、同じ窓の続きが見えます。misao の更新は別の操作です（`azito misao update`、または Setup の行のボタン）。
 
-**GitHub のトークン（`AZITO_GITHUB_TOKEN`）はコマンドラインに載りません。** 非公開のリポジトリから配布するときに、ハブの環境に設定するトークンです。タスクは環境変数を持てず、コマンドラインは同じマシンのすべてのプロセスから読めるので、トークンは本人しか読めないファイル `<prefix>\data\update-token` に書いて渡します。更新は、これを最初に読んで消します（更新が始まらなかったときにも、ハブが消します。残った分は次の更新が消します）。ヘルスチェックの宛先（ハブの待ち受けアドレスとポート）だけが、タスクの引数で渡ります。
+**GitHub のトークン（`AZITO_GITHUB_TOKEN`）はコマンドラインに載りません。** 非公開のリポジトリから配布するときに、ハブの環境に設定するトークンです。タスクは環境変数を持てず、コマンドラインは同じマシンのすべてのプロセスから読めるので、トークンは本人しか読めないファイル `<prefix>\data\update-token` に書いて渡します。更新は、これを最初に読んで消します（更新が始まらなかったときにも、ハブが消します。残った分は次の更新が消します）。ハブの環境から渡す値のうち、引数に載るのはヘルスチェックの宛先（ハブの待ち受けアドレスとポート）だけです（版・ダウンロードの URL・フォルダーなど、環境によらない値も引数に載ります）。
 
 **古い版の片付け。** 更新が成功したあと（戻したときは行いません）、`hub\` の古い版のフォルダーを消します。Unix のハブは今までどおり古い版を残し、片付けません。
 
@@ -251,7 +251,7 @@ install.ps1 は `current.txt` を書く前にタスクを登録し、書いた�
 
 | ファイル | 中身 |
 |---|---|
-| `update.log` | 段階ごとの記録。更新のたびに追記されるので、今回の分は末尾です。失敗した段階は `[<段階>] ERROR: ...`、片付けの見送りは `Left ... alone` / `Could not remove ...` |
+| `update.log` | 段階ごとの記録。更新のたびに追記されるので、今回の分は末尾です。失敗した段階は `[<段階>] ERROR: ...`、片付けの見送りは `Left ... alone` / `Could not remove ...`、片付け全体の見送りは `Could not tidy the old versions: ...` |
 | `update-state.json` | 最後の更新の状態（`status`、`step`、段階ごとの結果、`error`、`note`）。画面の進捗はこれを読みます |
 | `update-run.out.log` | `update-run` の標準出力と標準エラー。状態を書く前に落ちたときの理由 |
 
@@ -260,8 +260,8 @@ install.ps1 は `current.txt` を書く前にタスクを登録し、書いた�
 | 更新が始まらない | 理由が画面に出ます。(1) 実行中のタスクがある: 完了を待ちます。(2) 「既に実行中」: 前の更新が動いています（状態が `running` のまま 15 分たつと、古いものと見なして始められます）。(3) `A task named AzitoHubUpdate exists that AZITO did not register`: AZITO が作ったと確かめられない同名のタスクがあります。中身を確かめて、`schtasks /Delete /TN AzitoHubUpdate /F` で消してから、やり直します。(4) `An update of another install ... is running`: 別のインストールの更新が動いています。終わるのを待ちます |
 | 更新が失敗した | 画面の理由と `update.log` の `ERROR` の行を読みます。切り替えの前なら何も変わっておらず、切り替えのあとなら前の版に戻っています（戻せなかったときはエラーに書かれます）。SHA256 が合わない、起動しない版、といった失敗でも、ハブは前の版で動き続けます |
 | 古い版が片付かない | `update.log` の `Left ... alone` / `Could not ...`、または状態の `note` を読みます。**`Cannot tell whether process ... uses an old version`**: たいていは、管理者として動いている同じユーザーの窓（昇格した PowerShell など）です。非昇格のハブは、その実行ファイルのパスを読めないので、使用中でないと言い切れず、安全のために片付けを見送ります。その窓を閉じれば、次の更新で片付きます。ハブがその窓を閉じることはありません。**`the hub folder can be changed by others`**: `hub\` の ACL に、本人・SYSTEM・Administrators 以外の書き込み権があります。権限を直すと、次の更新で片付きます。**`a running process uses it` / `cannot be opened for writing`**: その版を使うプロセスを終わらせると、次の更新で片付きます |
-| 前の更新のプロセスが残っている、ロックが取れない | `azito service ...` や更新が `Another AZITO hub operation (process N)` で断られ続けるときは、そのプロセス N を調べます。`update-run` を動かしている `node.exe` なら更新が続いています。50 分以内に自分で終わります。終わらないときは、タスクマネージャーでそのプロセスを終了します（ロックはプロセスと一緒に OS が解放します）。タスク `AzitoHubUpdate` が残っていても、AZITO が作ったものなら、次の更新が前の `update-run` を終わらせてから登録し直します |
-| 手で前の版に戻したい | 前の版のフォルダーが `hub\` に残っていることを確かめ（今の版と直前の版は、片付けで消えません）、`current.txt` をその版の名前に、BOM なしで書き換えて、`azito service restart` します: `[System.IO.File]::WriteAllText("$env:USERPROFILE\.azito\hub\current.txt", 'v0.12.0')`。`>` や `Set-Content -Encoding UTF8` は BOM 付きまたは UTF-16 で書くので、使えません |
+| 前の更新のプロセスが残っている、ロックが取れない | `azito service ...` や更新が `Another AZITO hub operation (process N)` で断られ続けるときは、そのプロセス N を調べます。`update-run` を動かしている `node.exe` なら更新が続いています。50 分で自分に中止を求め、実行中の段と、要るなら巻き戻しを終えてから終わります。それでも終わらないときは、タスクマネージャーでそのプロセスを終了します（ロックはプロセスと一緒に OS が解放します）。タスク `AzitoHubUpdate` が残っていても、AZITO が作ったものなら、次の更新が前の `update-run` を終わらせてから登録し直します |
+| 手で前の版に戻したい | 前の版のフォルダーが `hub\` に残っていることを確かめ（今の版と直前の版は、片付けで消えません）、`current.txt` をその版の名前に、BOM なし・末尾 CRLF の 1 行で書き換えて（`<prefix>\hub\current.txt`。既定の prefix は `%USERPROFILE%\.azito`）、`azito service restart` します: `` [System.IO.File]::WriteAllText("$env:USERPROFILE\.azito\hub\current.txt", "v0.12.0`r`n") ``。`>` や `Set-Content -Encoding UTF8` は BOM 付きまたは UTF-16 で書き、`WriteAllText` に CRLF を付けないと次のアプリ内更新が失敗するので、上の形で書いてください |
 | プレリリースに更新できない | 既定（stable）では、安定版だけが対象です。プレリリース（`-rc.N`）は、「開発中のバージョン」を有効にしたときだけ一覧に出て、選んで入れられます。Unix と同じです |
 
 ## 手動インストール（tarball）
