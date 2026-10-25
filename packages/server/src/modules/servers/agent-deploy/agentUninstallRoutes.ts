@@ -39,7 +39,7 @@ const agentUninstallRoutes: FastifyPluginCallback<AgentUninstallRoutesOptions> =
         if (!srv) return reply.status(404).send({ error: 'Server not found' });
         // `hostProfile` null is a Unix agent registered before the OS was kept.
         if (srv.type !== 'agent' || srv.hostProfile?.platform !== 'win32') {
-          throw new HostProfileError('unsupported_os', `Removing the agent from its host is only supported for Windows agents in this release; for a Linux or macOS host, remove it by hand (see docs/en/install-and-update.md) — tracked in #499.`);
+          throw new HostProfileError('unsupported_os', `Removing the agent from its host is only supported for Windows agents in this release; for a Linux or macOS host, remove it by hand — tracked in #499.`);
         }
         const sshHost = srv.sshHost || srv.host;
         if (!sshHost) return reply.status(400).send({ error: 'No SSH host configured for this server' });

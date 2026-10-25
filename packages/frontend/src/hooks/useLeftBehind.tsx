@@ -52,7 +52,7 @@ export function LeftBehindProvider({ children }: { children: ReactNode }) {
               {commands.map((command) => <CopyableCommand key={command} command={command} />)}
             </div>
           )}
-          <div style={{ fontSize: 'var(--font-xs)' }}><DocsLink page="install-and-update" label={t('danger.hostRemoval.manualSteps')} /></div>
+          <div style={{ fontSize: 'var(--font-xs)' }}><DocsLink page="windows-agent" label={t('danger.hostRemoval.manualSteps')} /></div>
         </div>
       </Modal>
     </LeftBehindContext.Provider>
