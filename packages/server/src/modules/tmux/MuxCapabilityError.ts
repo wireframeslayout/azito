@@ -33,6 +33,17 @@ export class MuxOperationUnsupportedError extends Error {
   }
 }
 
+/**
+ * `replacePaneWithProgram` was refused before anything changed: the window has several panes (their numbers would shift), or the pane is
+ * not an untouched shell (a program already runs in it, and replacing it would end that program).
+ */
+export class PaneReplaceRefusedError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = 'PaneReplaceRefusedError';
+  }
+}
+
 /** The reason code for a mux whose binary is not installed (a spawn ENOENT, or a remote shell's "command not found"). */
 export const MUX_BINARY_MISSING = 'binary_missing';
 

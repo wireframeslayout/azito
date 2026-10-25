@@ -2426,6 +2426,7 @@ describe('WindowRespawnService.respawn — a host that starts a worker as a prog
     ['a window with a saved pane layout (one pane)', { workerType: 'claude', paneLayout: onePane }],
     ['a window with a saved pane layout (several panes)', { workerType: 'claude', paneLayout: twoPanes }],
     ['a plain shell window with a directory to restore', { workerType: null, workingDirectory: 'C:\\work' }],
+    ['a window a task owns (task execution is closed on Windows)', { workerType: 'claude', taskId: 5 }],
   ])('refuses the respawn of %s as unsupported_os before the window, the rows or the pane are touched', async (_name, overrides) => {
     const { service, tmux, windowRepo, taskRepo, sentCommands } = buildService({
       window: makeWindow({ id: 7, ...overrides }),

@@ -1091,11 +1091,13 @@ export class WindowRespawnService {
   }
 
   /**
-   * A host that starts a worker as a program opens its pane with the program and its directory, so there is no shell to type a
+   * A task's window is refused on a host that cannot run tasks yet. A host that starts a worker as a program opens its pane with the program and its directory, so there is no shell to type a
    * directory change into: a window with a worker restarts in its directory; a window with a saved pane layout (several panes), or a
    * plain shell with a directory to restore, cannot be restored there yet. Refused before the window is touched.
    */
   private assertRespawnable(win: Window, server: ServerConfig): void {
+    // A window a task owns is part of running that task (the token generation is rotated, the worker is resumed): closed with it.
+    if (win.taskId !== null) assertHostFeature(this.transportFactory.hostProfileFor(server), 'taskExecution', 'Respawning a task window');
     if (!this.startsWorkerAsProgram(server)) return;
     if (win.paneLayout) {
       throw new HostProfileError('unsupported_os', 'Respawning a window with a saved pane layout is not available on Windows hosts yet.');
@@ -1255,6 +1257,6 @@ export class WindowRespawnService {
       sessionId = await this.sessionCaptureService.tryScanForWindow(win.id);
     }
     const launch = this.sessionStrategyFactory.create(win.workerType).buildRespawnLaunch(sessionId, win.workerModel, null, blockMcp);
-    if (launch) await launchProgramInPane(this.resolveDriver(server), server, handle, launch, { cwd, paneEnv });
+    if (launch) await launchProgramInPane(this.resolveDriver(server), server, handle, launch, { cwd, paneEnv, files: () => this.transportFactory.getFileOps(server) });
   }
 }

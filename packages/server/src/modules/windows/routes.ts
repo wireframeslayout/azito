@@ -3,6 +3,7 @@ import { workerStartsAsProgram } from '../../shared/os/hostFeature';
 import { shellDialectFor } from '../../shared/os/shellDialect';
 import { commandLineLaunch, launchArgv } from '../agents/WorkerLaunch';
 import { launchProgramInPane } from '../agents/launchProgramInPane';
+import { PaneReplaceRefusedError } from '../tmux/MuxCapabilityError';
 import { randomUUID } from 'node:crypto';
 import type { IWindowRepository, Window } from './Window';
 import type { IProjectRepository } from '../projects/Project';
@@ -43,7 +44,7 @@ export interface WindowsRouteOptions {
   muxDriverRegistry: MuxDriverRegistry;
   serverRepo: IServerRepository;
   /** Tells the OS of a server, hence the shell its panes run (the lines typed into them). */
-  transportFactory: Pick<TransportFactory, 'hostProfileFor'>;
+  transportFactory: Pick<TransportFactory, 'hostProfileFor' | 'getFileOps'>;
   respawnService: WindowRespawnService;
   sleepService: WindowSleepService;
   sessionStrategyFactory: ISessionStrategyFactory;
@@ -501,7 +502,13 @@ const windowsRoutes: FastifyPluginCallback<WindowsRouteOptions> = (fastify, opts
           if (!paneEnv.ok) return reply.status(paneEnv.status).send(paneEnv.body);
           const driver = driverFor(freshSrv);
           const shellPane = await driver.resolvePane(freshSrv, paneRef, 1);
-          await launchProgramInPane(driver, freshSrv, shellPane, launch, { cwd: freshWin.workingDirectory, paneEnv: paneEnv.extraEnv });
+          try {
+            await launchProgramInPane(driver, freshSrv, shellPane, launch, { cwd: freshWin.workingDirectory, paneEnv: paneEnv.extraEnv, files: () => opts.transportFactory.getFileOps(freshSrv) });
+          } catch (err) {
+            // Refused before anything was opened or closed (several panes, or a program already runs in the pane).
+            if (err instanceof PaneReplaceRefusedError) return reply.status(409).send({ error: 'pane_not_replaceable', message: err.message });
+            throw err;
+          }
           notifyWindowsChanged(freshWin.serverName);
           return { ok: true, supervised: false };
         });

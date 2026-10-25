@@ -7,6 +7,7 @@ import type { AgentTurn } from '../../turns/AgentTurn';
 import type { PhaseSignalCapability } from '../../../prompt/executionEnvelope';
 import type { TaskTempServer } from '../../../../shared/os/taskTempFiles';
 import type { ShellDialect } from '../../../../shared/os/shellDialect';
+import type { IFileOps } from '../../../../shared/fs/fileOps';
 import type { WorkerLaunch } from '../../../agents/WorkerLaunch';
 
 export interface WorkerLaunchContext {
@@ -31,6 +32,8 @@ export interface WorkerLaunchContext {
   cwd: string | null;
   /** The env the pane was created with, given again to the pane that replaces it; null when this call does not have it. */
   paneEnv: Readonly<Record<string, string>> | null;
+  /** The target host's file operations (expands a `~` working directory when the worker is started as a program). */
+  files: () => IFileOps;
 }
 
 /** The result of starting a worker: the line or command it was started with (for the log), and the pane it runs in (a different pane when it replaced the shell's). */

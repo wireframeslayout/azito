@@ -1,6 +1,6 @@
 import { shellQuote } from '../../../shared/shellQuote';
 import type { LaunchOptions } from '../AgentProvider';
-import { extraArgValues, flag, value, type ProgramLaunch } from '../WorkerLaunch';
+import { extraArgValues, flag, raw, value, type LaunchArg, type ProgramLaunch } from '../WorkerLaunch';
 
 /**
  * `--strict-mcp-config` (Issue #28 design v3 §3): a task worker's tmux pane
@@ -27,9 +27,14 @@ export function buildClaudeLaunch({ model, extraArgs, blockMcp = true }: LaunchO
       flag('--dangerously-skip-permissions'),
       ...(blockMcp ? [flag(STRICT_MCP_CONFIG_FLAG)] : []),
       ...(model ? [flag('--model'), value(model)] : []),
-      ...extraArgValues(extraArgs),
+      ...(agentSessionId ? resumeExtraArgs(extraArgs) : extraArgValues(extraArgs)),
     ],
   };
+}
+
+/** A resumed launch has always carried `extraArgs` in the line as the user wrote it (the fresh one quotes each word): kept as it was. */
+function resumeExtraArgs(extraArgs: string | null | undefined): LaunchArg[] {
+  return extraArgs?.trim() ? [raw(extraArgs.trim())] : [];
 }
 
 export function buildClaudeHeadlessCommand(model: string): string {

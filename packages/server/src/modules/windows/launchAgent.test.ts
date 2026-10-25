@@ -2,6 +2,7 @@ import { KeyedMutex } from '../../shared/keyedMutex';
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import Fastify, { type FastifyInstance } from 'fastify';
 import { mapAppError } from '../../app/mapAppError';
+import { PaneReplaceRefusedError } from '../tmux/MuxCapabilityError';
 import windowsRoutes, { type WindowsRouteOptions } from './routes';
 import type { Window, IWindowRepository } from './Window';
 import type { ServerConfig, IServerRepository } from '../servers/Server';
@@ -179,7 +180,7 @@ describe('POST /api/windows/:id/launch-agent — MCP blocking', () => {
       projectRepo: {} as IProjectRepository,
       taskRepo: { findById: (id: number) => taskStore.get(id) ?? null } as unknown as ITaskRepository,
       tmux: mux as unknown as TmuxClient,
-      transportFactory: { hostProfileFor: () => opts.hostProfile ?? null } as unknown as WindowsRouteOptions['transportFactory'],
+      transportFactory: { hostProfileFor: () => opts.hostProfile ?? null, getFileOps: () => ({ platform: opts.hostProfile?.platform ?? 'linux', realpath: async () => 'C:\\Users\\me' }) } as unknown as WindowsRouteOptions['transportFactory'],
       muxDriverRegistry: { resolve: () => mux } as any,
       serverRepo: serverRepo as IServerRepository,
       respawnService: respawnService as unknown as WindowRespawnService,
@@ -225,6 +226,32 @@ describe('POST /api/windows/:id/launch-agent — MCP blocking', () => {
         rows: 40,
       });
       expect(program.extraEnv).toMatchObject({ AZITO_UI_TOKEN: 'test-token' });
+      await app.close();
+    });
+
+    it("expands a ~ working directory against the target host's home before it reaches the mux (pane.open does not expand it)", async () => {
+      app = await buildApp({ win: misaoWindow({ workingDirectory: '~\\app' }), hostProfile: win32 });
+      const res = await app.inject({ method: 'POST', url: `/api/windows/${window.id}/launch-agent`, payload: { command: 'claude' } });
+      expect(res.statusCode).toBe(200);
+      expect(replacePaneWithProgram.mock.calls[0][2]).toMatchObject({ cwd: 'C:\\Users\\me\\app' });
+      await app.close();
+    });
+
+    it('answers 409 pane_not_replaceable when the mux refuses the replacement (several panes, or a program already runs there)', async () => {
+      app = await buildApp({ win: misaoWindow(), hostProfile: win32 });
+      replacePaneWithProgram.mockRejectedValue(new PaneReplaceRefusedError('The window has 2 panes'));
+      const res = await app.inject({ method: 'POST', url: `/api/windows/${window.id}/launch-agent`, payload: { command: 'claude' } });
+      expect(res.statusCode).toBe(409);
+      expect(res.json()).toEqual({ error: 'pane_not_replaceable', message: 'The window has 2 panes' });
+      await app.close();
+    });
+
+    it("refuses a word the Windows shell would read again (a .cmd shim): `claude --model 'a&b'` is unsupported_os, touching nothing", async () => {
+      app = await buildApp({ win: misaoWindow(), hostProfile: win32 });
+      const res = await app.inject({ method: 'POST', url: `/api/windows/${window.id}/launch-agent`, payload: { command: "claude --model 'a&b'" } });
+      expect(res.statusCode).toBe(501);
+      expect(res.json()).toMatchObject({ code: 'unsupported_os' });
+      expect(replacePaneWithProgram).not.toHaveBeenCalled();
       await app.close();
     });
 

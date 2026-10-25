@@ -9,21 +9,25 @@ import type { ShellDialect } from '../../shared/os/shellDialect';
  *    ({@link launchArgv}). Nothing is quoted, nothing is looked up by a shell, and misao names the pane's profile after the program.
  */
 
-/** One argument of a program. `flag`: written by this codebase (typed as it is); `value`: data (a model name, a user's extra argument), always quoted in a line. */
+/**
+ * One argument of a program. `flag`: written by this codebase (typed as it is); `value`: data (a model name, a user's extra argument),
+ * always quoted in a line; `raw`: text a user wrote that a line carries as it is (quotes and spacing included) and an argument list
+ * splits on whitespace — only for a launch whose line has always been written that way.
+ */
 export interface LaunchArg {
   readonly text: string;
-  readonly kind: 'flag' | 'value';
+  readonly kind: 'flag' | 'value' | 'raw';
 }
 
 export const flag = (text: string): LaunchArg => ({ text, kind: 'flag' });
 export const value = (text: string): LaunchArg => ({ text, kind: 'value' });
+export const raw = (text: string): LaunchArg => ({ text, kind: 'raw' });
 
-/** A known program (claude, codex) and its arguments. `env` is set for the program only (a line writes it before the program). */
+/** A known program (claude, codex) and its arguments. */
 export interface ProgramLaunch {
   readonly kind: 'program';
   readonly file: string;
   readonly args: readonly LaunchArg[];
-  readonly env?: Readonly<Record<string, string>>;
 }
 
 /** A command the user wrote as one line (a generic worker, a manually launched window): typed as it is on a POSIX host, split into arguments on a Windows one. */
@@ -53,27 +57,25 @@ export function withFlags(launch: WorkerLaunch, flags: readonly string[]): Worke
 /** The line that starts `launch` in a pane running `dialect`'s shell. */
 export function renderLaunchLine(launch: WorkerLaunch, dialect: ShellDialect): string {
   if (launch.kind === 'commandLine') return launch.line;
-  const line = [launch.file, ...launch.args.map((arg) => (arg.kind === 'flag' ? arg.text : dialect.quote(arg.text)))].join(' ');
-  return launch.env && Object.keys(launch.env).length > 0 ? dialect.withEnv(launch.env, line) : line;
+  return [launch.file, ...launch.args.map((arg) => (arg.kind === 'value' ? dialect.quote(arg.text) : arg.text))].join(' ');
 }
 
-/** The program and its arguments, for a host that starts it without a shell. A command line is split only when that is safe (see {@link splitCommandLine}). */
+/**
+ * The program and its arguments, for a host that starts it without a shell (Windows). A command line is split only when that is safe
+ * (see {@link splitCommandLine}). Every word must also be safe for `cmd.exe`: the program is usually an npm `.cmd` shim (`claude.cmd`),
+ * which Windows runs through cmd.exe, and cmd.exe reads `% ^ & | < > " ! ( )` in an argument again, whoever quoted it (a model name,
+ * an extra argument, a word inside single quotes). A word with one is refused rather than started as another command.
+ */
 export function launchArgv(launch: WorkerLaunch): string[] {
-  if (launch.kind === 'commandLine') return splitCommandLine(launch.line);
-  return [launch.file, ...launch.args.map((arg) => arg.text)];
+  const argv = launch.kind === 'commandLine' ? splitCommandLine(launch.line) : [launch.file, ...launch.args.flatMap((arg) => (arg.kind === 'raw' ? arg.text.split(/\s+/) : [arg.text]))];
+  for (const word of argv) {
+    const unsafe = CMD_SPECIAL.exec(word);
+    if (unsafe) throw refusal(argv.join(' '), `the word ${JSON.stringify(word)} contains ${JSON.stringify(unsafe[0])}, which cmd.exe (it runs .cmd programs such as claude.cmd) reads again`);
+  }
+  return argv;
 }
 
-/** The environment the program is started with, apart from the pane's own; empty for a command line (nothing in it can be told apart from its text). */
-export function launchEnv(launch: WorkerLaunch): Readonly<Record<string, string>> {
-  return launch.kind === 'program' ? launch.env ?? {} : {};
-}
-
-/** The name of the program that is started (`claude`, `codex`, the first word of a command line), without directory or extension. */
-export function launchProgramName(launch: WorkerLaunch): string {
-  const first = launch.kind === 'program' ? launch.file : (launch.line.trim().split(/\s+/)[0] ?? '');
-  const base = first.split(/[\\/]/).pop() ?? first;
-  return base.replace(/\.(exe|cmd|bat|ps1)$/i, '');
-}
+const CMD_SPECIAL = /[%^&|<>"!()]/;
 
 // Characters a shell reads as more than text. A line containing one outside single quotes is not split: on a POSIX host it means
 // something, so the same text cannot be given to a program as arguments without changing what it says.

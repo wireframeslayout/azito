@@ -6,7 +6,7 @@ import { TmuxClient } from '../TmuxClient';
 import type { TransportFactory } from '../../servers/transport/TransportFactory';
 import { splitPaneEnv } from '../../../shared/auth/paneSecretEnv';
 import type { MisaoAttachClient, MisaoEventSource, MisaoRpc } from './MisaoConnection';
-import { MuxDriverUnavailableError, MuxOperationUnsupportedError } from '../MuxCapabilityError';
+import { MuxDriverUnavailableError, MuxOperationUnsupportedError, PaneReplaceRefusedError } from '../MuxCapabilityError';
 import { MuxDriverRegistry } from '../MuxDriverRegistry';
 import { WindowInputService } from '../../transcripts/WindowInputService';
 import type { IWindowRepository, Window } from '../../windows/Window';
@@ -428,7 +428,7 @@ describe('MisaoMuxClient writes', () => {
 
       const replacement = await client.replacePaneWithProgram(server, handle(shell), program);
 
-      expect(daemon.calls.map((c) => c.method)).toEqual(['pane.info', 'pane.open', 'pane.close']);
+      expect(daemon.calls.map((c) => c.method)).toEqual(['pane.info', 'pane.list', 'pane.open', 'pane.close']);
       expect(daemon.callsTo('pane.open')).toEqual([{
         cmd: ['claude', '--model', 'sonnet'],
         cwd: 'C:\\work\\wt',
@@ -451,6 +451,31 @@ describe('MisaoMuxClient writes', () => {
       const shell = daemon.addPane(daemon.addWindow('proj', 'main'));
       await client.replacePaneWithProgram(server, handle(shell), { argv: ['codex'], cols: 120, rows: 40 });
       expect(daemon.callsTo('pane.open')[0]).not.toHaveProperty('cwd');
+    });
+
+    it('refuses a window with several panes (the new pane would shift their numbers) before anything is opened or closed', async () => {
+      const { daemon, client } = setup({ windowsHub: true });
+      const w = daemon.addWindow('proj', 'main');
+      const shell = daemon.addPane(w, { cmd: ['C:\\Windows\\System32\\cmd.exe'] });
+      daemon.addPane(w, { cmd: ['C:\\Windows\\System32\\cmd.exe'] });
+
+      await expect(client.replacePaneWithProgram(server, handle(shell), program)).rejects.toBeInstanceOf(PaneReplaceRefusedError);
+
+      expect(daemon.callsTo('pane.open')).toEqual([]);
+      expect(daemon.callsTo('pane.close')).toEqual([]);
+      expect(daemon.panes).toHaveLength(2);
+    });
+
+    it('refuses a pane that is not an untouched shell (a program runs in it), and one that has stopped', async () => {
+      const { daemon, client } = setup({ windowsHub: true });
+      const running = daemon.addPane(daemon.addWindow('proj', 'a'), { cmd: ['claude'], fgCommand: 'claude' });
+      const stopped = daemon.addPane(daemon.addWindow('proj', 'b'), { cmd: ['C:\\Windows\\System32\\cmd.exe'], processState: 'stopped', pid: null });
+
+      await expect(client.replacePaneWithProgram(server, handle(running), program)).rejects.toThrow(/not an untouched shell/);
+      await expect(client.replacePaneWithProgram(server, handle(stopped), program)).rejects.toBeInstanceOf(PaneReplaceRefusedError);
+
+      expect(daemon.callsTo('pane.open')).toEqual([]);
+      expect(daemon.callsTo('pane.close')).toEqual([]);
     });
 
     it('does not close the shell pane when the program cannot be started', async () => {

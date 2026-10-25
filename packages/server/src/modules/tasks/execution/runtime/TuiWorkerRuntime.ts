@@ -10,7 +10,7 @@ import { FOLLOW_UP_CAPABILITY, stateMachineEnvelope } from '../../../prompt/exec
 import { shouldSupervise, wrapWithSupervisor } from '../../../supervisors/SupervisorLaunch';
 import type { SupervisorRegistry } from '../../../supervisors/SupervisorRegistry';
 import { launchProgramInPane } from '../../../agents/launchProgramInPane';
-import { renderLaunchLine } from '../../../agents/WorkerLaunch';
+import { launchArgv, renderLaunchLine } from '../../../agents/WorkerLaunch';
 import type {
   IWorkerRuntime,
   WorkerLaunchContext,
@@ -76,7 +76,9 @@ export class TuiWorkerRuntime implements IWorkerRuntime {
     if (ctx.startsAsProgram) {
       // The mux starts the program itself; a supervisor wraps a typed line, so it has nothing to wrap here (and a windows host has no tmux pane to supervise).
       if (supervised) throw new Error(`A worker started as a program cannot run under a supervisor (${ctx.server.name}, window kind ${ctx.windowKind}).`);
-      handle = await launchProgramInPane(ctx.driver, ctx.server, ctx.handle, ctx.launch, { cwd: ctx.cwd, paneEnv: ctx.paneEnv });
+      handle = await launchProgramInPane(ctx.driver, ctx.server, ctx.handle, ctx.launch, { cwd: ctx.cwd, paneEnv: ctx.paneEnv, files: ctx.files });
+      // What was started is the argument list, not a line: the log says that.
+      command = JSON.stringify(launchArgv(ctx.launch));
     } else {
       command = supervised
         ? wrapWithSupervisor(line, {

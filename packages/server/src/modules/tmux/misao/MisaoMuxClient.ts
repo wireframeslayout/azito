@@ -3,7 +3,8 @@ import { type MuxCapabilities, type MuxDriverKind, type MuxPaneInfo, type MuxRef
 import type { ExecResult, ITerminalStream } from '../../servers/transport/ServerTransport';
 import type { ServerConfig } from '../../servers/Server';
 import type { IMuxClient, PaneLocation, PaneProgram, PaneWindowLabels } from '../IMuxClient';
-import { MuxDriverUnavailableError, MuxOperationUnsupportedError } from '../MuxCapabilityError';
+import { MuxDriverUnavailableError, MuxOperationUnsupportedError, PaneReplaceRefusedError } from '../MuxCapabilityError';
+import { isBareShellCommand } from '../../../shared/os/shellCommands';
 import { splitPaneEnv } from '../../../shared/auth/paneSecretEnv';
 import { generateWindowName } from '../windowNameUtils';
 import { composePaneEnv, type HubPaneEnvConfig } from '../hubPaneEnv';
@@ -16,6 +17,8 @@ import { requireCommandArgs, type PaneShellResolver } from './paneShell';
 import { type MisaoPane, type MisaoWorkspace, lastOutputEpochSeconds, misaoRef, paneCommand, panesOfWindow, toMuxPaneInfos, toMuxWorkspaces } from './misaoMapping';
 
 const LONG_TEXT_BYTES = 500;
+/** How long a replaced pane is remembered as replaced (long enough for the close events of its attached terminals). */
+const REPLACED_PANE_MEMORY_MS = 60_000;
 const LONG_TEXT_SUBMIT_DELAY_MS = 2000;
 /** Same settle time tmux's sendLongText waits after a paste, so a following Enter is not folded into it. */
 const LONG_TEXT_PASTE_SETTLE_MS = 3000;
@@ -172,6 +175,7 @@ export class MisaoMuxClient implements IMuxClient {
         rows,
         log: this.options.log,
         rpcErrorCode: (err) => this.rpc.rpcErrorCode(err),
+        wasReplaced: (paneId) => this.replacedPanes.has(paneId),
       });
     } catch (err) {
       client.close();
@@ -261,6 +265,13 @@ export class MisaoMuxClient implements IMuxClient {
    */
   async replacePaneWithProgram(server: ServerConfig, handle: PaneHandle, program: PaneProgram): Promise<PaneHandle> {
     const source = await this.rpc.request('pane.info', { paneId: handle });
+    // Before anything is opened: only the single, untouched shell pane of a window is replaced. With sibling panes the new pane would
+    // take another ordinal (they are numbered in creation order) and shift theirs; a pane with a program in it would lose that program.
+    const siblings = (await this.rpc.request('pane.list', {})).filter((p) => p.window.id === source.window.id);
+    if (siblings.length !== 1) throw new PaneReplaceRefusedError(`The window has ${siblings.length} panes: a program replaces the shell only in a window with a single pane (the other panes would change their numbers).`);
+    if (source.processState !== 'running' || !isBareShellCommand(paneCommand(source))) {
+      throw new PaneReplaceRefusedError(`The pane is not an untouched shell (it runs ${paneCommand(source)}, ${source.processState}): replacing it would end what runs in it.`);
+    }
     const { paneId } = await this.rpc.request('pane.open', {
       cmd: [...program.argv],
       ...(program.cwd !== undefined ? { cwd: program.cwd } : {}),
@@ -271,12 +282,23 @@ export class MisaoMuxClient implements IMuxClient {
       ...this.paneEnvParams(server, program.extraEnv),
     });
     const replacement = asPaneHandle(paneId);
+    // Said before the close: terminals attached to the old pane see its pane.closed and must tell the browser to reconnect, not "pane closed".
+    this.markReplaced(handle);
     const closed = await this.closePane(server, handle);
     if (closed.code !== 0 && !closed.alreadyGone) {
+      this.replacedPanes.delete(handle);
       await this.closePane(server, replacement);
       throw new Error(`could not close the pane ${handle} that the program replaces: ${closed.stderr}`);
     }
     return replacement;
+  }
+
+  /** Panes closed because a program took their place. Kept for a short while: the close events of attached terminals arrive just after. */
+  private readonly replacedPanes = new Set<string>();
+
+  private markReplaced(handle: PaneHandle): void {
+    this.replacedPanes.add(handle);
+    setTimeout(() => this.replacedPanes.delete(handle), REPLACED_PANE_MEMORY_MS).unref();
   }
 
   async closePane(_server: ServerConfig, handle: PaneHandle): Promise<ExecResult> {

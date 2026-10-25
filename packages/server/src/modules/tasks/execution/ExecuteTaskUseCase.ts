@@ -1489,6 +1489,7 @@ export class ExecuteTaskUseCase {
           startsAsProgram: this.startsWorkerAsProgram(server),
           cwd: effectiveDir || null,
           paneEnv: windowPaneEnv,
+          files: () => this.transportFactory.getFileOps(server),
         });
         handle = launched.handle;
         this.appendLog(taskId, unitId, 'command', { type: 'worker_launch', command: launched.command });
@@ -2021,6 +2022,7 @@ export class ExecuteTaskUseCase {
             startsAsProgram: this.startsWorkerAsProgram(server),
             cwd: followUpDir || null,
             paneEnv: followUpPaneEnv,
+            files: () => this.transportFactory.getFileOps(server),
           });
           handle = resumed.handle;
           this.appendLog(taskId, unitId, 'command', { type: 'worker_launch', command: resumed.command });

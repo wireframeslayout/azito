@@ -289,7 +289,7 @@ describe.skipIf(process.platform !== 'win32' || !fs.existsSync(MISAO_CLI))('misa
       await vi.waitFor(async () => expect(readFakeAgentReport(await screenOf(program))).not.toBeNull(), { timeout: 30_000, interval: 300 });
       const report = readFakeAgentReport(await screenOf(program))!;
       expect(report.cwd.toLowerCase()).toBe(work.toLowerCase());
-      expect(report).toMatchObject({ args: ['--model', 'claude-opus-4-6[1m]', '--flag'], env: 'from-the-window' });
+      expect(report).toMatchObject({ args: ['--model', 'claude-opus-4-6[1m]', '--flag'], env: 'from-the-window', cols: 120, rows: 40 });
       // The shell pane is gone; the program is the window's first (only) pane.
       expect(await driver().resolvePane(server, ref, 1)).toBe(program);
       expect(await driver().listPanesByRef(server, ref)).toHaveLength(1);

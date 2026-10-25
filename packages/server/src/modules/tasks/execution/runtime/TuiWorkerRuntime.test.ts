@@ -39,6 +39,7 @@ function makeLaunchCtx(tmux: any) {
     startsAsProgram: false,
     cwd: null,
     paneEnv: null,
+    files: () => { throw new Error('not expected'); },
   };
 }
 
@@ -95,7 +96,7 @@ describe('TuiWorkerRuntime.launch — a host that starts the worker as a program
     });
     expect(tmux.sendKeysToHandle).not.toHaveBeenCalled();
     expect(result.handle).toBe(newHandle);
-    expect(result.command).toBe('claude --dangerously-skip-permissions --session-id s-1');
+    expect(result.command).toBe('["claude","--dangerously-skip-permissions","--session-id","s-1"]');
     expect(tmux.captureScreen).toHaveBeenCalledWith(server, newHandle, -50);
   }, 15_000);
 

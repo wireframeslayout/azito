@@ -7,7 +7,7 @@ import type { TransportFactory } from '../../servers/transport/TransportFactory'
 import { LocalFileOps, localFileOpsHost } from '../../../shared/fs/LocalFileOps';
 import { ClaudeSessionStrategy } from './SessionStrategy';
 import { posixDialect } from '../../../shared/os/shellDialect';
-import { renderLaunchLine } from '../WorkerLaunch';
+import { launchArgv, renderLaunchLine } from '../WorkerLaunch';
 
 const server = { name: 'local', type: 'local' } as unknown as ServerConfig;
 
@@ -127,6 +127,19 @@ describe('ClaudeSessionStrategy', () => {
     const cmd = respawnLine(strategy, SESSION_ID, 'claude-opus-4-6[1m]', null);
     expect(cmd).toContain(`--resume ${SESSION_ID}`);
     expect(cmd).not.toContain('--session-id');
+  });
+
+  it('a resumed launch carries extraArgs in the line as the user wrote it (quotes and spacing kept), as it always has; a fresh one quotes each word', () => {
+    expect(respawnLine(strategy, SESSION_ID, 'sonnet', "--append-system-prompt 'a  b'")).toBe(
+      `claude --resume ${SESSION_ID} --dangerously-skip-permissions --strict-mcp-config --model 'sonnet' --append-system-prompt 'a  b'`,
+    );
+    expect(respawnLine(strategy, null, 'sonnet', '--verbose --x')).toBe(
+      "claude --dangerously-skip-permissions --strict-mcp-config --model 'sonnet' '--verbose' '--x'",
+    );
+    // For a host that starts the program itself, the same text is split into words.
+    expect(launchArgv(strategy.buildRespawnLaunch(SESSION_ID, null, '--verbose --x'))).toEqual(
+      ['claude', '--resume', SESSION_ID, '--dangerously-skip-permissions', '--strict-mcp-config', '--verbose', '--x'],
+    );
   });
 
   it('includes --strict-mcp-config by default', () => {

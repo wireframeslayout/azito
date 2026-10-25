@@ -2,7 +2,9 @@ import type { PaneHandle } from '@azito/shared';
 import type { ServerConfig } from '../servers/Server';
 import type { IMuxClient } from '../tmux/IMuxClient';
 import { DEFAULT_TERMINAL_COLS, DEFAULT_TERMINAL_ROWS } from '../tmux/terminalSize';
-import { launchArgv, launchEnv, type WorkerLaunch } from './WorkerLaunch';
+import type { IFileOps } from '../../shared/fs/fileOps';
+import { resolveShellDirectory } from '../../shared/os/changeDirectoryLine';
+import { launchArgv, type WorkerLaunch } from './WorkerLaunch';
 
 export interface ProgramLaunchPlace {
   /** Where the worker starts: the shell's directory a POSIX pane would have been `cd`'d to. Null: the mux's default. */
@@ -13,6 +15,8 @@ export interface ProgramLaunchPlace {
    * an empty env, which would start a worker that cannot reach the hub.
    */
   paneEnv: Readonly<Record<string, string>> | null;
+  /** The target host's file operations: a `~` form of `cwd` is expanded against that host's home (the mux does not expand it). */
+  files: () => IFileOps;
 }
 
 /**
@@ -30,11 +34,12 @@ export async function launchProgramInPane(
   if (place.paneEnv === null) {
     throw new Error(`Cannot start a worker in place of pane ${handle} on ${server.name}: the env the pane was created with is not known, and the replacement pane would not reach the hub without it.`);
   }
+  const cwd = place.cwd === null ? null : await resolveShellDirectory(place.files, place.cwd);
   return driver.replacePaneWithProgram(server, handle, {
     argv: launchArgv(launch),
-    ...(place.cwd !== null ? { cwd: place.cwd } : {}),
+    ...(cwd !== null ? { cwd } : {}),
     cols: DEFAULT_TERMINAL_COLS,
     rows: DEFAULT_TERMINAL_ROWS,
-    extraEnv: { ...place.paneEnv, ...launchEnv(launch) },
+    extraEnv: { ...place.paneEnv },
   });
 }

@@ -51,6 +51,25 @@ export function buildAgentPresets(agentDefs: AgentDefinition[], t: TFunction<'wo
  * モデル/追加引数なし起動コマンド。'none' / 'custom' はエージェント種別ではなく
  * UI 専用の仮想選択肢なので、ここでのみ特別扱いする。
  */
+/**
+ * 新しいウィンドウを開く順序。POSIX は、端末を開いてから `cd` を送り、エージェントを起動する（シェルに打ち込む）。
+ * ワーカーをプログラムとして起動するホスト（Windows）では、起動がシェルのペインを別のペインに置き換えるので、
+ * 先に起動してから端末を開く（開いてあった端末は閉じたペインに付いたままになる）。`cd` も送らない（作業ディレクトリは窓の登録から渡る）。
+ */
+export async function openAndLaunchNewWindow(
+  startsWorkerAsProgram: boolean,
+  steps: { open: () => void | Promise<void>; changeDirectory: (() => Promise<void>) | null; launch: (() => Promise<unknown>) | null },
+): Promise<void> {
+  if (startsWorkerAsProgram && steps.launch) {
+    await steps.launch();
+    await steps.open();
+    return;
+  }
+  await steps.open();
+  if (steps.changeDirectory) await steps.changeDirectory();
+  if (steps.launch) await steps.launch();
+}
+
 export function buildAgentCommand(
   agent: string,
   model: string,
@@ -381,29 +400,30 @@ export function useAddWindowModal(
         const extra = awAgent !== 'none'
           ? { windowType: 'agent' as const, workerType: awAgent === 'custom' ? 'generic' : awAgent, workerModel: awAgentModel || undefined, workingDirectory: awWorkDir.trim() || undefined }
           : undefined;
-        if (awTaskId != null) {
-          await onTaskWindowAdded?.(awTaskId, awServer, target, label, true, { ...extra, ref: newRef });
-        } else {
-          const termRef: TerminalRef = { kind: 'windowId', serverName: awServer, windowId: created.id, pane: 1 };
-          onConnect?.(termRef, numericProjectId);
-        }
-
-        if (awWorkDir.trim()) {
-          if (created.id) {
-            await api(`/windows/${created.id}/panes/1/send-keys`, { method: 'POST', body: JSON.stringify({ keys: [`cd ${awWorkDir.trim()}`, 'Enter'] }) });
-          } else {
-            await api(`/servers/${encodeURIComponent(awServer)}/mux/windows/${encodeURIComponent(newRef)}/panes/1/send-keys`, { method: 'POST', body: JSON.stringify({ keys: [`cd ${awWorkDir.trim()}`, 'Enter'] }) });
-          }
-          await new Promise((r) => setTimeout(r, 500));
-        }
-        if (awAgent !== 'none') {
-          const agentCmd = buildAgentCommand(awAgent, awAgentModel, agentPresets[awAgent]?.command || '', awNewCommand);
-          if (agentCmd) {
-            // ウィンドウ作成後の launch-agent が 409 になった場合はウィンドウ自体は残し、
-            // retry では launch-agent のみ force 再送する（ウィンドウを二重作成しない）
-            await launchAgent(created.id, agentCmd, force);
-          }
-        }
+        const agentCmd = awAgent !== 'none' ? buildAgentCommand(awAgent, awAgentModel, agentPresets[awAgent]?.command || '', awNewCommand) : '';
+        await openAndLaunchNewWindow(awServerInfo?.hostProfile?.platform === 'win32', {
+          open: async () => {
+            if (awTaskId != null) {
+              await onTaskWindowAdded?.(awTaskId, awServer, target, label, true, { ...extra, ref: newRef });
+            } else {
+              const termRef: TerminalRef = { kind: 'windowId', serverName: awServer, windowId: created.id, pane: 1 };
+              onConnect?.(termRef, numericProjectId);
+            }
+          },
+          changeDirectory: awWorkDir.trim()
+            ? async () => {
+              if (created.id) {
+                await api(`/windows/${created.id}/panes/1/send-keys`, { method: 'POST', body: JSON.stringify({ keys: [`cd ${awWorkDir.trim()}`, 'Enter'] }) });
+              } else {
+                await api(`/servers/${encodeURIComponent(awServer)}/mux/windows/${encodeURIComponent(newRef)}/panes/1/send-keys`, { method: 'POST', body: JSON.stringify({ keys: [`cd ${awWorkDir.trim()}`, 'Enter'] }) });
+              }
+              await new Promise((r) => setTimeout(r, 500));
+            }
+            : null,
+          // ウィンドウ作成後の launch-agent が 409 になった場合はウィンドウ自体は残し、
+          // retry では launch-agent のみ force 再送する（ウィンドウを二重作成しない）
+          launch: agentCmd ? () => launchAgent(created.id, agentCmd, force) : null,
+        });
       }
       setAddWindowOpen(false);
       closeQuickAddWindow();
@@ -412,7 +432,7 @@ export function useAddWindowModal(
     } finally {
       setAddWindowLoading(false);
     }
-  }, [projectId, awEffectiveProjectId, awMode, awServer, awTarget, awLabel, awSelectedSession, awNewSession, awNewWindowName, awNewCommand, awWorkDir, awAgent, awAgentModel, awSessionData, muxKindModel, agentPresets, project, refreshWorkspace, refreshSessions, addWindowLoading, awTaskId, onConnect, onTaskWindowAdded, launchAgent, showToast, t, closeQuickAddWindow, withMisaoInstall]);
+  }, [projectId, awEffectiveProjectId, awMode, awServer, awTarget, awLabel, awSelectedSession, awNewSession, awNewWindowName, awNewCommand, awWorkDir, awAgent, awAgentModel, awSessionData, muxKindModel, agentPresets, project, refreshWorkspace, refreshSessions, addWindowLoading, awTaskId, onConnect, onTaskWindowAdded, launchAgent, showToast, t, closeQuickAddWindow, withMisaoInstall, awServerInfo]);
 
   return {
     // State

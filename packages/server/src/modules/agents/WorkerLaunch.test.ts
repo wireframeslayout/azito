@@ -2,7 +2,7 @@ import { describe, it, expect } from 'vitest';
 import { HostProfileError } from '../../shared/os/hostProfile';
 import { posixDialect, powershellDialect } from '../../shared/os/shellDialect';
 import { buildWorkerLaunch } from './LaunchCommand';
-import { commandLineLaunch, flag, launchArgv, launchEnv, launchProgramName, renderLaunchLine, splitCommandLine, value, withFlags, type ProgramLaunch } from './WorkerLaunch';
+import { commandLineLaunch, flag, launchArgv, renderLaunchLine, splitCommandLine, value, withFlags, type ProgramLaunch } from './WorkerLaunch';
 
 describe('one launch, two ways to start it', () => {
   it('claude: a POSIX line and a Windows argv from the same definition', () => {
@@ -40,14 +40,6 @@ describe('one launch, two ways to start it', () => {
     expect(renderLaunchLine(launch, powershellDialect)).toBe("tool --model 'o''brien'");
   });
 
-  it('a program with an env writes it before the program in a line, and hands it to the mux separately', () => {
-    const launch: ProgramLaunch = { kind: 'program', file: 'tool', args: [flag('--x')], env: { A: '1' } };
-    expect(renderLaunchLine(launch, posixDialect)).toBe("A='1' tool --x");
-    expect(launchEnv(launch)).toEqual({ A: '1' });
-    expect(launchEnv(commandLineLaunch('tool'))).toEqual({});
-    expect(launchEnv({ kind: 'program', file: 'tool', args: [] })).toEqual({});
-  });
-
   it('a generic command is typed as written on POSIX and split into words for a program', () => {
     const launch = buildWorkerLaunch('generic', null, 'my-custom-tool --flag');
     expect(renderLaunchLine(launch!, posixDialect)).toBe('my-custom-tool --flag');
@@ -57,10 +49,26 @@ describe('one launch, two ways to start it', () => {
     expect(buildWorkerLaunch(null, null, 'some-cmd')).toEqual(commandLineLaunch('some-cmd'));
   });
 
-  it('names the program that is started', () => {
-    expect(launchProgramName(buildWorkerLaunch('claude', null, null)!)).toBe('claude');
-    expect(launchProgramName(commandLineLaunch('C:\\tools\\agent.cmd --x'))).toBe('agent');
-    expect(launchProgramName(commandLineLaunch('/usr/bin/some-generic-tool'))).toBe('some-generic-tool');
+});
+
+describe('launchArgv for cmd.exe (a .cmd shim reads its arguments again)', () => {
+  it.each(['%', '^', '&', '|', '<', '>', '"', '!', '(', ')'])('refuses a word with %s, whoever quoted it', (ch) => {
+    expect(() => launchArgv(buildWorkerLaunch('claude', `a${ch}b`, null)!)).toThrowError(expect.objectContaining({ code: 'unsupported_os' }));
+    expect(() => launchArgv(buildWorkerLaunch('codex', null, `--x a${ch}b`)!)).toThrow(HostProfileError);
+  });
+
+  it("refuses a launch-agent command whose single quoted word has one: `claude --model 'a&b'`", () => {
+    expect(() => launchArgv(commandLineLaunch("claude --model 'a&b'"))).toThrowError(expect.objectContaining({ code: 'unsupported_os' }));
+    expect(() => launchArgv(commandLineLaunch("claude --model '%PATH%'"))).toThrow(HostProfileError);
+  });
+
+  it("refuses a Unit's workerExtraArgs with a percent sign", () => {
+    expect(() => launchArgv(buildWorkerLaunch('claude', 'sonnet', '--append-system-prompt 100%')!)).toThrow(/cmd\.exe/);
+  });
+
+  it('accepts the words claude and codex are really started with', () => {
+    expect(launchArgv(buildWorkerLaunch('claude', 'claude-opus-4-6[1m]', '--verbose')!)).toContain('claude-opus-4-6[1m]');
+    expect(launchArgv(buildWorkerLaunch('codex', null, null)!)).toContain('mcp_servers.azt-mcp.enabled=false');
   });
 });
 
