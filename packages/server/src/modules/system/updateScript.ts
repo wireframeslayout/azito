@@ -80,9 +80,16 @@ async function downloadFile(url: string, destPath: string, runSignal: AbortSigna
   const headers: Record<string, string> = { 'User-Agent': 'azito-hub' };
   if (token) headers.Authorization = `Bearer ${token}`;
   const signal = AbortSignal.any([AbortSignal.timeout(DOWNLOAD_TIMEOUT_MS), runSignal]);
-  const res = await fetch(url, { headers, signal });
-  if (!res.ok || !res.body) throw new Error(`Download failed (${res.status}): ${url}`);
-  await pipeline(Readable.fromWeb(res.body as import('stream/web').ReadableStream), fs.createWriteStream(destPath), { signal });
+  try {
+    const res = await fetch(url, { headers, signal });
+    if (!res.ok || !res.body) throw new Error(`Download failed (${res.status}): ${url}`);
+    await pipeline(Readable.fromWeb(res.body as import('stream/web').ReadableStream), fs.createWriteStream(destPath), { signal });
+  } catch (err) {
+    // An abort surfaces as a bare "The operation was aborted"; the step's error says why instead.
+    if (runSignal.aborted) throw runSignal.reason;
+    if (signal.aborted) throw new Error(`Download did not finish within ${DOWNLOAD_TIMEOUT_MS / 60_000} minutes: ${url}`);
+    throw err;
+  }
 }
 
 /**

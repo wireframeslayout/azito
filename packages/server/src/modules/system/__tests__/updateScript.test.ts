@@ -214,7 +214,7 @@ describe('runUpdateSteps (the part of update-run that is the same on every OS)',
       await run(b, undefined, abort.signal);
       await new Promise((resolve) => setTimeout(resolve, 30));
       expect(state).toMatchObject({ status: 'failed', step: 'download' });
-      expect(state.error).toMatch(/ended|abort/i);
+      expect(state.error).toBe('The update task was ended');
       expect(b.rollback).toHaveBeenCalledWith('v1.0.0', false);
       expect(unhandled).not.toHaveBeenCalled();
     } finally {
