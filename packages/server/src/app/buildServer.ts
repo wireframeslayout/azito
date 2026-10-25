@@ -50,6 +50,7 @@ import supervisorsRoutes from '../modules/supervisors/routes';
 import healthRoutes from '../modules/health/routes';
 import systemRoutes from '../modules/system/routes';
 import agentMisaoRoutes from '../modules/system/misao/agentMisaoRoutes';
+import agentUninstallRoutes from '../modules/servers/agent-deploy/agentUninstallRoutes';
 import transcriptsRoutes from '../modules/transcripts/routes';
 import { TRANSCRIPT_SOURCES, claudeTranscriptSource } from '../modules/transcripts/sources/registry';
 import { TranscriptPaneService } from '../modules/transcripts/TranscriptPaneService';
@@ -698,6 +699,7 @@ export async function buildServer(app: FastifyInstance, wiring: Wiring, port: nu
     interactionMonitor,
   });
   await app.register(systemRoutes, { systemUpdateService, channelResolver, misaoService: wiring.misaoService });
+  await app.register(agentUninstallRoutes, { serverRepo, agentInstaller, serverIsolationMutex });
   await app.register(agentMisaoRoutes, {
     serverRepo,
     transportFactory,

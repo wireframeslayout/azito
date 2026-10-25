@@ -14,6 +14,7 @@ import { CLEANUP_LOCK_DIR, CLEANUP_TIMEOUT_MS, INSTALL_ID_FILE, MANUAL_STEPS_ANY
 import { WindowsAgentDeployer, windowsAgentLayout, type WindowsDeployment } from './WindowsAgentDeployer';
 import { DEFAULT_WINDOWS_AGENT_OPTIONS, type WindowsAgentOptions } from './windowsAgentConfig';
 import { updateWindowsAgent, type AgentUpdateResult } from './windowsAgentUpdate';
+import type { WindowsUninstallChoice, WindowsUninstallResult } from './windowsAgentUninstall';
 
 export type InstallStep = 'preflight' | 'transfer' | 'start' | 'health' | 'misao';
 
@@ -369,6 +370,19 @@ export class AgentInstaller {
     // A misao that could not be installed is reported beside the install, not as its failure: the agent stays installed and healthy.
     const misaoError = await this.installMisao(ip, port, token, preflight.hostProfile, report);
     return { success: true, host: ip, port, token, version, startMethod: 'taskscheduler', steps, tmuxFound: false, hostProfile: preflight.hostProfile, ...(misaoError ? { misaoError } : {}) };
+  }
+
+  /**
+   * Takes the agent of a Windows host off the host (task, processes, firewall rule, folder; the misao beside it when asked). Holds the
+   * host's lock like an install or an update, so none of them runs in the middle. Only the host is changed: the caller owns the server row.
+   * The host is asked who it is (home folder, SystemRoot), not checked for what an install needs (node, Tailscale): a half-installed agent is removable.
+   */
+  uninstallFromWindowsHost(sshHost: string, choice: WindowsUninstallChoice): Promise<WindowsUninstallResult> {
+    return this.hostLocks.withLock(this.lockKey(sshHost), async () => {
+      const probe = await this.sshClient.execIsolated(sshHost, buildWindowsPreflightCommand());
+      const host = parseWindowsPreflight(probe.stdout, probe.stderr, probe.code);
+      return this.windowsDeployer().uninstall(sshHost, host, choice);
+    });
   }
 
   private windowsDeployer(): WindowsAgentDeployer {

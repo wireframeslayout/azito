@@ -576,4 +576,16 @@ describe('AgentInstaller on a Windows host', () => {
       expect(host.calls.some((c) => c.kind === 'schtasks' && c.schtasksArgs![0] === '/End')).toBe(false);
     });
   });
+
+  describe('removing the agent from the host', () => {
+    it('asks the host who it is, takes the task off, and reports each step; no install check (node, Tailscale) is needed', async () => {
+      const { installer, host } = make({ existingTask: 'running', nodePath: '', tailscaleIp: '' });
+      host.registeredXml = '<Task><Arguments>--env-file=C:\\Users\\dev\\.azito\\agent\\agent.env</Arguments></Task>';
+      const result = await installer.uninstallFromWindowsHost('user@win', { removeMisao: false });
+      expect(result.steps.find((s) => s.id === 'task')).toEqual({ id: 'task', outcome: 'done' });
+      expect(host.taskState).toBe('absent');
+      expect(host.calls.some((c) => c.kind === 'preflight')).toBe(true);
+      expect(host.calls.map((c) => c.text).join('\n')).not.toMatch(/nohup|systemctl|pkill/);
+    });
+  });
 });

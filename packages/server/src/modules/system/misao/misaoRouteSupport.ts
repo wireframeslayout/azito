@@ -1,4 +1,4 @@
-import type { FastifyReply, FastifyRequest } from 'fastify';
+import type { FastifyReply } from 'fastify';
 import { MisaoServiceError, type MisaoServiceErrorCode } from './MisaoServiceError';
 
 /** The HTTP status of a refusal (`MisaoServiceError`): the operation did not happen, and the caller can show why. */
@@ -15,18 +15,6 @@ export const MISAO_ERROR_STATUS: Record<MisaoServiceErrorCode, number> = {
   unsupported_host: 409,
   transfer_failed: 502,
 };
-
-/**
- * Operations that can end every pane (or hand a host its pane server) need the operator principal in both auth modes:
- * the global hook only enforces operator-only routes when AZITO_SCOPED_AUTH is on, and in compat mode a task token passes it.
- */
-export function requireOperator(operation: string): (request: FastifyRequest, reply: FastifyReply) => Promise<void> {
-  return async (request, reply) => {
-    if (request.principal?.class !== 'operator') {
-      await reply.status(403).send({ error: 'operator_required', operation });
-    }
-  };
-}
 
 /** Runs a misao operation and answers its refusal as `{ error, code }`; anything else is not this route's to explain. */
 export async function runMisaoOperation(reply: FastifyReply, operation: () => Promise<unknown>): Promise<unknown> {
