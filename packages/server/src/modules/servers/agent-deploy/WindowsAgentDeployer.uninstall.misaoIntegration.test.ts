@@ -179,7 +179,7 @@ describe.skipIf(process.platform !== 'win32' || !fs.existsSync(MISAO_CLI))('remo
     expect((await daemonPids(misaoRoot)).length).toBeGreaterThan(0);
     expect(await pipeUp(pipeOf(misaoRoot))).toBe(true);
 
-    const result = await deployer.uninstall('ci', host, { removeMisao: true });
+    const result = await deployer.uninstall('ci', host, { removeMisao: true }, '127.0.0.1');
 
     const step = (id: string): string | undefined => result.steps.find((s) => s.id === id)?.outcome;
     expect([step('misaoTask'), step('misaoProcesses'), step('misaoFolder')], JSON.stringify(result.steps)).toEqual(['done', 'done', 'done']);

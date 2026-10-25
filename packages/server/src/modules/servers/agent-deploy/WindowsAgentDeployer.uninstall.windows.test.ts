@@ -12,6 +12,7 @@ import { readSha256FromSumsFile } from './integrityVerifier';
 import { AgentBundler } from './AgentBundler';
 import { WindowsAgentDeployer, windowsAgentLayout, type WindowsDeployInput, type WindowsFileTransfer, type WindowsSshExec } from './WindowsAgentDeployer';
 import { checkFirewall, firewallRuleName } from './windowsFirewall';
+import { windowsMisaoPipe } from '../transport/agentMisaoSocket';
 import { buildWindowsPreflightCommand, parseWindowsPreflight, type WindowsPreflightInfo } from './windowsPreflight';
 import type { UninstallStepId, WindowsUninstallResult } from './windowsAgentUninstall';
 import { misaoGuardScript, parseMisaoGuardOutput } from './windowsAgentOwnership';
@@ -94,19 +95,33 @@ describe.skipIf(process.platform !== 'win32')('removing the Windows agent from a
   const taskRegistered = async (name: string): Promise<boolean> => (await cmdExec('ci', `"${schtasksPath()}" /Query /TN ${name}`, 60_000)).code === 0;
   const ruleCount = async (): Promise<number> => Number((await ps(`@(Get-NetFirewallRule -DisplayName ${powershellDialect.quote(firewallRuleName(OPTIONS.port))} -ErrorAction SilentlyContinue).Count`)).trim());
 
-  /** The agent installed as the install does it (real bundle, real task), with a stand-in process that carries the install's --env-file argument. */
+  /**
+   * The agent installed as the install does it (real bundle, real task), and the real agent running from it with the very command line
+   * the task would give it (`node.exe --env-file=<settings> <release>\\azito-agent.cjs`): the process the uninstall has to end.
+   */
   async function installAgent(): Promise<ChildProcess> {
     const deployment = await deployer.deploy(input);
     await deployment.commit();
     const layout = windowsAgentLayout(host.home, OPTIONS, version);
-    const script = path.join(scratch, 'decoy.js');
+    const running = spawn(host.nodePath!, [`--env-file=${layout.envFile}`, layout.entry], { cwd: layout.versionDir, stdio: 'ignore', windowsHide: true });
+    decoys.push(running);
+    await new Promise((r) => setTimeout(r, 3000));
+    expect(alive(running)).toBe(true);
+    return running;
+  }
+
+  /** A process that has the install's settings file inside another argument, and a lookalike entry: it must be left alone. */
+  async function startLookalike(): Promise<ChildProcess> {
+    const layout = windowsAgentLayout(host.home, OPTIONS, version);
+    const script = path.join(scratch, 'lookalike.js');
     fs.mkdirSync(scratch, { recursive: true });
     fs.writeFileSync(script, 'setTimeout(() => {}, 120000);');
-    const decoy = spawn(host.nodePath!, [script, `--env-file=${layout.envFile}`], { stdio: 'ignore', windowsHide: true });
-    decoys.push(decoy);
+    // node reads --env-file even after the script name and exits when the file is missing: the lookalike's file has to exist.
+    fs.writeFileSync(`${layout.envFile} extra`, '');
+    const lookalike = spawn(host.nodePath!, [script, `--env-file=${layout.envFile} extra`], { stdio: 'ignore', windowsHide: true });
+    decoys.push(lookalike);
     await new Promise((r) => setTimeout(r, 1500));
-    expect(alive(decoy)).toBe(true);
-    return decoy;
+    return lookalike;
   }
 
   /** A misao task and folder of this run: the task starts nothing that exists (it runs at logon only), and the folder holds a file. */
@@ -115,7 +130,7 @@ describe.skipIf(process.platform !== 'win32')('removing the Windows agent from a
     fs.writeFileSync(path.join(misaoRoot(), 'misao.log'), 'log');
     const xml = buildMisaoTaskXml({
       userId: host.userId, systemRoot: host.systemRoot, homeDir: host.home,
-      layout: misaoWindowsLayout({ misaoRoot: misaoRoot() }, '0.3.0', OPTIONS.misaoTaskName), pipe: `\\\\.\\pipe\\misao-ci-${SUFFIX}`,
+      layout: misaoWindowsLayout({ misaoRoot: misaoRoot() }, '0.3.0', OPTIONS.misaoTaskName), pipe: windowsMisaoPipe(misaoRoot(), os.userInfo().username),
     });
     const file = path.join(scratch, 'misao.task.xml');
     fs.mkdirSync(scratch, { recursive: true });
@@ -166,6 +181,7 @@ describe.skipIf(process.platform !== 'win32')('removing the Windows agent from a
 
   it('removes the task, the install\'s processes, the firewall rule and the folder, and leaves the misao beside it', async () => {
     const decoy = await installAgent();
+    const lookalike = await startLookalike();
     await installMisao();
     expect(await taskRegistered(OPTIONS.taskName)).toBe(true);
     if (elevated) {
@@ -175,13 +191,15 @@ describe.skipIf(process.platform !== 'win32')('removing the Windows agent from a
       expect(await ruleCount()).toBe(1);
     }
 
-    const result = await deployer.uninstall('ci', host, { removeMisao: false });
+    const result = await deployer.uninstall('ci', host, { removeMisao: false }, '127.0.0.1');
 
     expect(result.ok, JSON.stringify(result.steps)).toBe(true);
     expect(stepsOf(result)).toEqual({ task: 'done', processes: 'done', firewall: elevated ? 'done' : 'absent', folder: 'done' });
     expect(await taskRegistered(OPTIONS.taskName)).toBe(false);
     for (let i = 0; i < 20 && alive(decoy); i++) await new Promise((r) => setTimeout(r, 250));
     expect(alive(decoy)).toBe(false);
+    // A process that only has the settings file inside another argument is not the agent: it is still running.
+    expect(alive(lookalike)).toBe(true);
     expect(fs.existsSync(agentRoot())).toBe(false);
     expect(await ruleCount()).toBe(0);
     // The misao was not asked for: its task and folder are still there.
@@ -190,11 +208,11 @@ describe.skipIf(process.platform !== 'win32')('removing the Windows agent from a
   }, 600_000);
 
   it('removing again finds nothing to remove (nothing fails), and with the misao asked for, removes its task and folder', async () => {
-    const again = await deployer.uninstall('ci', host, { removeMisao: false });
+    const again = await deployer.uninstall('ci', host, { removeMisao: false }, '127.0.0.1');
     expect(again.ok, JSON.stringify(again.steps)).toBe(true);
     expect(stepsOf(again)).toEqual({ task: 'absent', processes: 'absent', firewall: 'absent', folder: 'absent' });
 
-    const result = await deployer.uninstall('ci', host, { removeMisao: true });
+    const result = await deployer.uninstall('ci', host, { removeMisao: true }, '127.0.0.1');
     expect(result.ok, JSON.stringify(result.steps)).toBe(true);
     expect(stepsOf(result)).toMatchObject({ misaoTask: 'done', misaoProcesses: 'absent', misaoFolder: 'done' });
     expect(await taskRegistered(OPTIONS.misaoTaskName)).toBe(false);
@@ -215,7 +233,7 @@ describe.skipIf(process.platform !== 'win32')('removing the Windows agent from a
     const created = await cmdExec('ci', `"${schtasksPath()}" /Create /XML "${file}" /TN ${OPTIONS.taskName} /F`, 60_000);
     expect(created.code, created.stdout + created.stderr).toBe(0);
 
-    const result = await deployer.uninstall('ci', host, { removeMisao: false });
+    const result = await deployer.uninstall('ci', host, { removeMisao: false }, '127.0.0.1');
 
     expect(result.ok).toBe(false);
     expect(stepsOf(result)).toMatchObject({ task: 'failed', processes: 'skipped', firewall: 'skipped', folder: 'skipped' });
@@ -240,7 +258,7 @@ describe.skipIf(process.platform !== 'win32')('removing the Windows agent from a
     const created = await cmdExec('ci', `"${schtasksPath()}" /Create /XML "${file}" /TN ${OPTIONS.taskName} /F`, 60_000);
     expect(created.code, created.stdout + created.stderr).toBe(0);
 
-    const result = await deployer.uninstall('ci', host, { removeMisao: false });
+    const result = await deployer.uninstall('ci', host, { removeMisao: false }, '127.0.0.1');
 
     expect(stepsOf(result)).toMatchObject({ task: 'failed', processes: 'skipped', firewall: 'skipped', folder: 'skipped' });
     expect(await taskRegistered(OPTIONS.taskName)).toBe(true);
@@ -257,7 +275,7 @@ describe.skipIf(process.platform !== 'win32')('removing the Windows agent from a
     await ps(`Get-NetFirewallRule -DisplayName ${powershellDialect.quote(name)} -ErrorAction SilentlyContinue | Remove-NetFirewallRule`);
     await ps(`$null = New-NetFirewallRule -DisplayName ${powershellDialect.quote(name)} -Direction Inbound -Action Allow -Protocol TCP -LocalPort ${OPTIONS.port} -Program ${powershellDialect.quote(other)} -LocalAddress ${BIND} -RemoteAddress 100.64.0.0/10 -Profile Any`);
 
-    const result = await deployer.uninstall('ci', host, { removeMisao: false });
+    const result = await deployer.uninstall('ci', host, { removeMisao: false }, '127.0.0.1');
 
     expect(result.ok, JSON.stringify(result.steps)).toBe(true);
     expect(stepsOf(result).firewall).toBe('skipped');
@@ -296,7 +314,7 @@ describe.skipIf(process.platform !== 'win32')('removing the Windows agent from a
     await checkFirewall((command) => cmdExec('ci', command, 120_000), OPTIONS.port, fwNode, BIND);
     expect(await ruleCount()).toBe(1);
 
-    const result = await deployer.uninstall('ci', host, { removeMisao: false });
+    const result = await deployer.uninstall('ci', host, { removeMisao: false }, '127.0.0.1');
 
     expect(result.ok, JSON.stringify(result.steps)).toBe(true);
     expect(stepsOf(result)).toMatchObject({ task: 'done', firewall: 'done', folder: 'done' });
@@ -322,7 +340,7 @@ describe.skipIf(process.platform !== 'win32')('removing the Windows agent from a
       await checkFirewall((command) => cmdExec('ci', command, 120_000), OPTIONS.port, fwNode, BIND);
       expect(await ruleCount()).toBe(1);
 
-      const result = await deployer.uninstall('ci', host, { removeMisao: false });
+      const result = await deployer.uninstall('ci', host, { removeMisao: false }, '127.0.0.1');
 
       expect(stepsOf(result)).toMatchObject({ task: 'done', firewall: 'skipped' });
       expect(await ruleCount()).toBe(1);
@@ -369,7 +387,7 @@ describe.skipIf(process.platform !== 'win32')('removing the Windows agent from a
     const made = await cmdExec('ci', `mklink /J "${path.join(root, 'link')}" "${outside}"`, 60_000);
     expect(made.code, made.stdout + made.stderr).toBe(0);
 
-    const result = await deployer.uninstall('ci', host, { removeMisao: false });
+    const result = await deployer.uninstall('ci', host, { removeMisao: false }, '127.0.0.1');
 
     expect(result.ok, JSON.stringify(result.steps)).toBe(true);
     expect(stepsOf(result).folder).toBe('done');
@@ -385,7 +403,7 @@ describe.skipIf(process.platform !== 'win32')('removing the Windows agent from a
     const made = await cmdExec('ci', `mklink /J "${root}" "${outside}"`, 60_000);
     expect(made.code, made.stdout + made.stderr).toBe(0);
     try {
-      const result = await deployer.uninstall('ci', host, { removeMisao: false });
+      const result = await deployer.uninstall('ci', host, { removeMisao: false }, '127.0.0.1');
       expect(result.ok).toBe(false);
       expect(stepsOf(result).folder).toBe('failed');
       expect(result.steps.find((s) => s.id === 'folder')!.detail).toContain('is a link');

@@ -51,14 +51,14 @@ describe('POST /api/servers/:name/agent/uninstall', () => {
     const res = await post('w1', { removeMisao: false });
     expect(res.statusCode).toBe(200);
     expect(res.json()).toEqual(RESULT);
-    expect(uninstallFromWindowsHost).toHaveBeenCalledWith('dev@win', { removeMisao: false });
+    expect(uninstallFromWindowsHost).toHaveBeenCalledWith('dev@win', { removeMisao: false }, '100.64.0.7');
   });
 
   it('leaves the misao alone unless asked, and passes the choice when it is', async () => {
     await post('w1');
-    expect(uninstallFromWindowsHost).toHaveBeenLastCalledWith('dev@win', { removeMisao: false });
+    expect(uninstallFromWindowsHost).toHaveBeenLastCalledWith('dev@win', { removeMisao: false }, '100.64.0.7');
     await post('w1', { removeMisao: true });
-    expect(uninstallFromWindowsHost).toHaveBeenLastCalledWith('dev@win', { removeMisao: true });
+    expect(uninstallFromWindowsHost).toHaveBeenLastCalledWith('dev@win', { removeMisao: true }, '100.64.0.7');
   });
 
   it('answers a failed step as a result with ok: false (not an error), so the caller can show each step', async () => {

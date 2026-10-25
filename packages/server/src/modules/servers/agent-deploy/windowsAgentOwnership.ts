@@ -31,31 +31,40 @@ const RESOLVE_LONG = [
 const TAILNET_REMOTE = '^100\\.64\\.0\\.0/(10|255\\.192\\.0\\.0)$';
 
 /**
- * The rule the install adds (`New-NetFirewallRule -DisplayName "AZITO Agent (TCP <port>)" -Direction Inbound -Action Allow -Protocol TCP
- * -LocalPort <port> -Program <node.exe> -RemoteAddress 100.64.0.0/10`, see `firewallRuleCommand`; it has no name of its own, so Windows
- * gives it a GUID). The display name is not enough to know a rule is ours, since it is built from the port only: a rule is removed only
- * when it is also an inbound TCP Allow for exactly this port, from the tailnet, and its program is the same FILE as one of `programs`
- * (the node.exe the agent's task runs, and the one found on the host now; both sides are resolved on the host, see {@link RESOLVE_LONG}).
- * Any other rule of that name is left, and reported with its program.
+ * The rule the install adds: `New-NetFirewallRule -DisplayName "AZITO Agent (TCP <port>)" -Direction Inbound -Action Allow -Protocol TCP
+ * -LocalPort <port> -Program <node.exe> -LocalAddress <the address the agent listens on> -RemoteAddress 100.64.0.0/10 -Profile Any` (see
+ * `firewallRuleCommand`); it has no name of its own, so Windows gives it a GUID. The display name is built from the port only, so it
+ * is not enough to know a rule is ours: a rule is removed only when EVERY condition the install sets holds (direction, action, profile,
+ * protocol, local port, local address, remote address, and the program being the same FILE as one of `programs`, both sides resolved on
+ * the host, see {@link RESOLVE_LONG}) and every filter the install leaves open is open (any remote port, no package, no service, any
+ * interface type, edge traversal blocked). A condition that is different, or that cannot be read, leaves the rule. `localAddress`
+ * undefined (not known) leaves every rule. Any other rule of that name is left, and reported with its program.
  */
-export function firewallScript(displayName: string, port: number, programs: readonly string[]): string {
+export function firewallScript(displayName: string, port: number, programs: readonly string[], localAddress: string | undefined): string {
   const q = powershellDialect.quote;
   return [
     `$name = ${q(displayName)}`,
     `$port = ${q(String(port))}`,
+    `$localAddress = ${q(localAddress ?? '')}`,
     `$programs = @(${programs.map(q).join(', ')})`,
     ...RESOLVE_LONG,
     '$candidates = @($programs | ForEach-Object { Resolve-Long $_ } | Where-Object { $_ })',
+    'function Join-All($values) { (@($values) | ForEach-Object { "$_" }) -join \',\' }',
     '$elevated = ([Security.Principal.WindowsPrincipal][Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)',
     '$rules = @(Get-NetFirewallRule -Direction Inbound -ErrorAction Stop | Where-Object { $_.DisplayName -eq $name })',
     'if ($rules.Count -eq 0) { Write-Output \'ABSENT\'; exit 0 }',
     'foreach ($rule in $rules) {',
-    '  $program = "$(($rule | Get-NetFirewallApplicationFilter).Program)"',
-    '  $filter = $rule | Get-NetFirewallPortFilter',
-    '  $remote = (@(($rule | Get-NetFirewallAddressFilter).RemoteAddress) | ForEach-Object { "$_" }) -join \',\'',
-    '  $resolved = Resolve-Long $program',
-    '  $isOurs = ("$($rule.Action)" -eq \'Allow\') -and ("$($filter.Protocol)" -match \'^(TCP|6)$\') -and ("$($filter.LocalPort)" -eq $port) -and ($null -ne $resolved) -and (@($candidates | Where-Object { $_ -ieq $resolved }).Count -gt 0) -and ($remote -match \'' + TAILNET_REMOTE + '\')',
-    '  if (-not $isOurs) { Write-Output (\'KEPT \' + $program); continue }',
+    '  $app = $rule | Get-NetFirewallApplicationFilter; $service = $rule | Get-NetFirewallServiceFilter; $ports = $rule | Get-NetFirewallPortFilter',
+    '  $address = $rule | Get-NetFirewallAddressFilter; $interface = $rule | Get-NetFirewallInterfaceTypeFilter',
+    '  $program = "$($app.Program)"; $resolved = Resolve-Long $program',
+    '  $checks = @(',
+    '    ("$($rule.Action)" -eq \'Allow\'), ("$($rule.Profile)" -eq \'Any\'), ("$($rule.EdgeTraversalPolicy)" -eq \'Block\'),',
+    '    ("$($ports.Protocol)" -match \'^(TCP|6)$\'), ("$($ports.LocalPort)" -eq $port), ("$($ports.RemotePort)" -eq \'Any\'),',
+    '    ($localAddress -ne \'\' -and (Join-All $address.LocalAddress) -eq $localAddress), ((Join-All $address.RemoteAddress) -match \'' + TAILNET_REMOTE + '\'),',
+    '    (@(\'\', \'Any\') -contains "$($app.Package)"), (@(\'\', \'Any\') -contains "$($service.Service)"), ("$($interface.InterfaceType)" -eq \'Any\'),',
+    '    ($null -ne $resolved -and @($candidates | Where-Object { $_ -ieq $resolved }).Count -gt 0)',
+    '  )',
+    '  if ($checks -contains $false) { Write-Output (\'KEPT \' + $program); continue }',
     '  try { $rule | Remove-NetFirewallRule -ErrorAction Stop; Write-Output \'REMOVED\' }',
     '  catch { Write-Output (\'FAILED|\' + $rule.Name + \'|\' + [int]$elevated + \'|\' + ($_.Exception.Message -replace \'[\\r\\n|]+\', \' \')) }',
     '}',
@@ -85,7 +94,7 @@ export function parseFirewallOutput(output: string, displayName: string): Script
     if (removed === 0) throw unreadable(output);
     return { outcome: 'done' };
   }
-  const left = `${kept.length} other rule(s) named "${displayName}" were left in place because they are not known to be this install's (not an inbound TCP Allow for this port, from the tailnet, for the same node.exe file; their program: ${kept.map((k) => k || '(none)').join(', ')}). If one is yours to remove, delete it by hand (by its Name, not by the display name: Get-NetFirewallRule -DisplayName "${displayName}" lists them).`;
+  const left = `${kept.length} other rule(s) named "${displayName}" were left in place because they are not known to be this install's (not an inbound TCP Allow for this port, from the tailnet, for the same node.exe file, to this address and in every profile, with no other restriction; their program: ${kept.map((k) => k || '(none)').join(', ')}). If one is yours to remove, delete it by hand (by its Name, not by the display name: Get-NetFirewallRule -DisplayName "${displayName}" lists them).`;
   return removed > 0 ? { outcome: 'done', detail: left } : { outcome: 'skipped', detail: left };
 }
 

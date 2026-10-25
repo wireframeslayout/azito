@@ -17,7 +17,7 @@ export interface ProcessSweepInput {
 /**
  * A PowerShell script that ends the processes of ONE install and nothing else: an `image` process with `argument` exactly among
  * its arguments, owned by the user the script runs as (the SID is compared; an elevated session does not reach other users'
- * processes). It throws when one of them is still there after 10 s, and otherwise prints `ENDED <n>`: how many such processes there were (0: nothing to end).
+ * processes). It prints nothing and throws when one of them is still there after 10 s.
  *
  * With `endParentConhost`, the `conhost.exe` above such a process is ended with it, but a process id can be reused once its
  * process has ended, so a parent is taken only if it is a conhost.exe of the same user, created no later than the child, and has
@@ -35,8 +35,7 @@ export function buildEndProcessesScript(input: ProcessSweepInput): string {
     `function Get-AgentNodes { @(Get-CimInstance Win32_Process -Filter "Name = ${q(input.image)}" | Where-Object { (Test-Argument $_) -and (Test-Mine $_) }) }`,
     'function Get-Same($target) { $current = Get-CimInstance Win32_Process -Filter "ProcessId = $($target.Id)"; if ($current -and $current.CreationDate -eq $target.Created) { $current } }',
     '$targets = @()',
-    '$found = @(Get-AgentNodes)',
-    'foreach ($node in $found) {',
+    'foreach ($node in Get-AgentNodes) {',
     '  $targets += [pscustomobject]@{ Id = $node.ProcessId; Created = $node.CreationDate }',
     ...(input.endParentConhost ? [
       '  $parent = Get-CimInstance Win32_Process -Filter "ProcessId = $($node.ParentProcessId)"',
@@ -50,7 +49,5 @@ export function buildEndProcessesScript(input: ProcessSweepInput): string {
     'for ($i = 0; $i -lt 20 -and (Get-Alive).Count -gt 0; $i++) { Start-Sleep -Milliseconds 500 }',
     '$left = Get-Alive',
     `if ($left.Count -gt 0) { throw "An ${input.label} process did not end: $(($left | ForEach-Object { $_.Id }) -join ', ')" }`,
-    // How many of the install's processes there were (the parents the task runs them under are not counted): 0 = there was nothing to end.
-    '"ENDED $($found.Count)"',
   ].join('\n');
 }

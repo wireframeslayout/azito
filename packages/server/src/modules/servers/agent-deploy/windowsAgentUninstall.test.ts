@@ -8,11 +8,14 @@ import { DEFAULT_WINDOWS_AGENT_OPTIONS, MISAO_WINDOWS_TASK_NAME, type WindowsAge
 import { WindowsAgentDeployer, windowsAgentEnvFile, type WindowsSshExec } from './WindowsAgentDeployer';
 import { FakeWindowsHost } from './testing/fakeWindowsHost';
 import { WINDOWS_HUB_TASK_NAME, uninstallWindowsAgent, type UninstallStepId, type WindowsUninstallHost, type WindowsUninstallResult } from './windowsAgentUninstall';
-import { parseFolderOutput, parseProcessesOutput } from './windowsAgentUninstallScripts';
+import { exactProcessesScript, folderScript, parseFolderOutput, parseProcessesOutput } from './windowsAgentUninstallScripts';
+import { agentProcessShape, expandShape, misaoProcessShape } from './windowsAgentTask';
+import { windowsMisaoPipe } from '../transport/agentMisaoSocket';
 import { HUB_COMMAND_LINE_PATTERN, firewallScript, misaoGuardScript, parseFirewallOutput, parseMisaoGuardOutput } from './windowsAgentOwnership';
 
 const HOME = 'C:\\Users\\dev';
 const OPTIONS = DEFAULT_WINDOWS_AGENT_OPTIONS;
+const BIND = '100.64.0.7';
 const NODE = 'C:\\Program Files\\nodejs\\node.exe';
 
 /** The task definition the install registers (the same builder), for the settings file of `home`. */
@@ -29,7 +32,7 @@ const AGENT_XML = agentTaskXml();
 function misaoXml(root: string, taskName = MISAO_WINDOWS_TASK_NAME): string {
   return buildMisaoTaskXml({
     userId: 'PC\\dev', systemRoot: 'C:\\Windows', homeDir: HOME,
-    layout: misaoWindowsLayout({ misaoRoot: root }, '0.3.0', taskName), pipe: '\\\\.\\pipe\\misao-dev-0123456789ab',
+    layout: misaoWindowsLayout({ misaoRoot: root }, '0.3.0', taskName), pipe: windowsMisaoPipe(root, 'dev'),
   });
 }
 
@@ -109,9 +112,10 @@ class FakeUninstallHost {
   }
 }
 
+const factsOf = (home: string, nodePath: string | null, bindAddress: string | undefined = BIND) => ({ home, systemRoot: 'C:\\Windows', nodePath, userId: 'PC\\dev', bindAddress });
 const outcomes = (result: WindowsUninstallResult): Record<string, string> => Object.fromEntries(result.steps.map((s) => [s.id, s.outcome]));
 const detail = (result: WindowsUninstallResult, id: UninstallStepId): string => result.steps.find((s) => s.id === id)?.detail ?? '';
-const run = (host: FakeUninstallHost, removeMisao = false, options: WindowsAgentOptions = OPTIONS, hostNode: string | null = NODE): Promise<WindowsUninstallResult> => uninstallWindowsAgent(host.asHost(), { home: HOME, systemRoot: 'C:\\Windows', nodePath: hostNode }, options, { removeMisao });
+const run = (host: FakeUninstallHost, removeMisao = false, options: WindowsAgentOptions = OPTIONS, hostNode: string | null = NODE): Promise<WindowsUninstallResult> => uninstallWindowsAgent(host.asHost(), factsOf(HOME, hostNode), options, { removeMisao });
 
 describe('uninstallWindowsAgent', () => {
   it('stops the running task, unregisters it, ends its processes, removes the firewall rule and the folder, in that order', async () => {
@@ -127,11 +131,13 @@ describe('uninstallWindowsAgent', () => {
   });
 
   it('ends only the node.exe of this install\'s settings file', async () => {
-    const host = new FakeUninstallHost({});
+    const host = new FakeUninstallHost({ AzitoAgent: { xml: AGENT_XML } });
     await run(host);
     const sweep = host.bodyOf('Ending the agent processes');
-    expect(sweep).toContain(`'--env-file=${HOME}\\.azito\\agent\\agent.env'`);
     expect(sweep).toContain("Name = 'node.exe'");
+    expect(sweep).toContain('function Shaped');
+    // The release folder is the task's: the shape names it.
+    expect(sweep).toContain('abc123abc123');
   });
 
   it('reports "absent" for what is not there: no task, no process, no rule, no folder', async () => {
@@ -221,7 +227,7 @@ describe('uninstallWindowsAgent', () => {
         workingDirectory: spaced, restartOnFailure: { intervalMinutes: 1, count: 1 },
       });
       const host = new FakeUninstallHost({ AzitoAgent: { xml } });
-      const result = await uninstallWindowsAgent(host.asHost(), { home: spaced, systemRoot: 'C:\\Windows', nodePath: NODE }, OPTIONS, { removeMisao: false });
+      const result = await uninstallWindowsAgent(host.asHost(), factsOf(spaced, NODE), OPTIONS, { removeMisao: false });
       expect(outcomes(result).task).toBe('done');
     });
   });
@@ -291,6 +297,26 @@ describe('uninstallWindowsAgent', () => {
       expect(script).toContain('Get-NetFirewallPortFilter');
     });
 
+    it('checks every condition the install sets, and that every filter the install leaves open is open', async () => {
+      const host = new FakeUninstallHost({});
+      await run(host);
+      const script = host.bodyOf('Removing the Windows Firewall rule');
+      expect(script).toContain("$localAddress = '100.64.0.7'");
+      for (const condition of [
+        "$rule.Action)\" -eq 'Allow'", "$rule.Profile)\" -eq 'Any'", "$rule.EdgeTraversalPolicy)\" -eq 'Block'", "$ports.Protocol)\" -match '^(TCP|6)$'", '$ports.LocalPort)" -eq $port',
+        "$ports.RemotePort)\" -eq 'Any'", '(Join-All $address.LocalAddress) -eq $localAddress', '(Join-All $address.RemoteAddress) -match', '$app.Package)', '$service.Service)',
+        "$interface.InterfaceType)\" -eq 'Any'", '$resolved -and @($candidates', 'Get-NetFirewallRule -Direction Inbound',
+      ]) expect(script, condition).toContain(condition.replace('\\"', '"'));
+      // One that cannot be read is a false in the list, and a false anywhere leaves the rule.
+      expect(script).toContain('if ($checks -contains $false) { Write-Output (\'KEPT \'');
+    });
+
+    it('without the address the agent was installed to listen on, no rule can be shown to be ours', async () => {
+      const host = new FakeUninstallHost({});
+      await uninstallWindowsAgent(host.asHost(), { ...factsOf(HOME, NODE), bindAddress: undefined }, OPTIONS, { removeMisao: false });
+      expect(host.bodyOf('Removing the Windows Firewall rule')).toContain("$localAddress = ''");
+    });
+
     it('with no node.exe known (no task, none on the host), no rule can be shown to be ours', async () => {
       const host = new FakeUninstallHost({});
       await run(host, false, OPTIONS, null);
@@ -350,8 +376,8 @@ describe('uninstallWindowsAgent', () => {
       expect(outcomes(result)).toEqual({ task: 'done', processes: 'done', firewall: 'done', folder: 'done', misaoTask: 'done', misaoProcesses: 'done', misaoFolder: 'done' });
       expect(host.tasks.has('AzitoMisao')).toBe(false);
       const sweep = host.bodyOf('Ending the misao processes');
-      expect(sweep).toContain(`'${HOME}\\.azito\\misao'`);
       expect(sweep).toContain("Name = 'misao.exe'");
+      expect(sweep).toContain('0\\.3\\.0');
       expect(host.bodies.some((b) => b.what === `Removing ${HOME}\\.azito\\misao`)).toBe(true);
     });
 
@@ -474,6 +500,57 @@ describe('uninstallWindowsAgent', () => {
       expect(host.log).toContain('query AzitoHub');
     });
 
+    describe('whose misao task it is (only a task that is exactly what the install writes)', () => {
+      const root = `${HOME}\\.azito\\misao`;
+      const conhost = 'C:\\Windows\\System32\\conhost.exe';
+      const taskWith = (argumentsLine: string, executable = conhost): string => buildTaskXml({
+        userId: 'PC\\dev', description: 'x', executable, argumentsLine, workingDirectory: HOME, restartOnFailure: { intervalMinutes: 1, count: 1 },
+      });
+      const exact = buildMisaoTaskXml({
+        userId: 'PC\\dev', systemRoot: 'C:\\Windows', homeDir: HOME, layout: misaoWindowsLayout({ misaoRoot: root }, '0.3.0', MISAO_WINDOWS_TASK_NAME), pipe: windowsMisaoPipe(root, 'dev'),
+      });
+      const exactLine = /<Arguments>([^<]*)<\/Arguments>/.exec(exact)![1]!.replace(/&quot;/g, '"').replace(/&amp;/g, '&').replace(/&gt;/g, '>').replace(/&lt;/g, '<');
+
+      it('takes the task the install writes (the plain form, and the launcher form for a folder with a space), whatever release it runs', async () => {
+        expect(outcomes(await run(new FakeUninstallHost({ AzitoMisao: { xml: MISAO_XML } }), true)).misaoTask).toBe('done');
+        const spaced = 'C:\\Users\\Dev User';
+        const spacedRoot = `${spaced}\\.azito\\misao`;
+        const xml = buildMisaoTaskXml({ userId: 'PC\\dev', systemRoot: 'C:\\Windows', homeDir: spaced, layout: misaoWindowsLayout({ misaoRoot: spacedRoot }, '0.4.1', MISAO_WINDOWS_TASK_NAME), pipe: windowsMisaoPipe(spacedRoot, 'dev') });
+        const host = new FakeUninstallHost({ AzitoMisao: { xml } });
+        const result = await uninstallWindowsAgent(host.asHost(), factsOf(spaced, NODE), OPTIONS, { removeMisao: true });
+        expect(outcomes(result).misaoTask).toBe('done');
+        // The release folder of the task (0.4.1) is the one the processes are matched against.
+        expect(host.bodyOf('Ending the misao processes')).toContain('0\\.4\\.1');
+      });
+
+      it.each([
+        ['an unrelated program that has the --data folder inside one of its arguments', 'C:\\Tools\\backup.exe', `--note=--data "${root}" --keep`],
+        ['the plain line with something appended', conhost, `${exactLine} --extra`],
+        ['the plain line with another pipe', conhost, exactLine.replace(/\\\\\.\\pipe\\[^"]+/, '\\\\.\\pipe\\other')],
+        ['the plain line with another log', conhost, exactLine.replace('misao.log', 'other.log')],
+        ['the plain line run by another program', 'C:\\Windows\\System32\\cmd.exe', exactLine],
+        ['the plain line for another folder', conhost, exactLine.split(root).join('D:\\elsewhere\\misao')],
+        ['the plain line with the release folder replaced', conhost, exactLine.replace('\\0.3.0\\', '\\..\\x\\')],
+      ])('leaves %s', async (_label, executable, line) => {
+        const host = new FakeUninstallHost({ AzitoMisao: { xml: taskWith(line, executable) } });
+        const result = await run(host, true);
+        expect(outcomes(result)).toMatchObject({ misaoTask: 'failed', misaoProcesses: 'skipped', misaoFolder: 'skipped' });
+        expect(host.tasks.has('AzitoMisao')).toBe(true);
+      });
+
+      it('leaves a task with two actions', async () => {
+        const two = MISAO_XML.replace('</Exec>', '</Exec><Exec><Command>C:\\x.exe</Command></Exec>');
+        const host = new FakeUninstallHost({ AzitoMisao: { xml: two } });
+        expect(outcomes(await run(host, true)).misaoTask).toBe('failed');
+      });
+
+      it('leaves a task made for another account (the pipe is made from the account name)', async () => {
+        const other = buildMisaoTaskXml({ userId: 'PC\\dev', systemRoot: 'C:\\Windows', homeDir: HOME, layout: misaoWindowsLayout({ misaoRoot: root }, '0.3.0', MISAO_WINDOWS_TASK_NAME), pipe: windowsMisaoPipe(root, 'someone') });
+        const host = new FakeUninstallHost({ AzitoMisao: { xml: other } });
+        expect(outcomes(await run(host, true)).misaoTask).toBe('failed');
+      });
+    });
+
     it('leaves a task that starts another folder\'s misao, and its folder', async () => {
       const host = new FakeUninstallHost({ AzitoMisao: { xml: misaoXml('D:\\elsewhere\\misao') } });
       const result = await run(host, true);
@@ -531,6 +608,102 @@ describe('what the scripts answer', () => {
   });
 });
 
+describe('the processes it ends: the whole command line of what the install\'s task starts', () => {
+  const agentRoot = `${HOME}\\.azito\\agent`;
+  const envFile = `${agentRoot}\\agent.env`;
+  const entry = `${agentRoot}\\abc123abc123\\azito-agent.cjs`;
+  /** What the host matches: the command line with its quotes taken out and its own executable path taken off the front. */
+  const matches = (shape: ReturnType<typeof agentProcessShape>, exe: string, line: string): boolean => {
+    const { exe: exePattern, tail } = expandShape(shape);
+    const stripped = line.replace(/"/g, '');
+    return new RegExp(exePattern, 'i').test(exe) && stripped.toLowerCase().startsWith(`${exe.toLowerCase()} `) && new RegExp(`^(?:${tail})$`, 'i').test(stripped.slice(exe.length + 1));
+  };
+  const agent = agentProcessShape(agentRoot, 'abc123abc123');
+
+  it('the agent started by the task, and by hand with the same line', () => {
+    expect(matches(agent, NODE, `"${NODE}" --env-file=${envFile} ${entry}`)).toBe(true);
+    expect(matches(agent, 'C:\\nodejs\\node.exe', `C:\\nodejs\\node.exe --env-file=${envFile} ${entry}`)).toBe(true);
+  });
+
+  it.each([
+    ['another program that has the install\'s file inside one argument (the input that once matched)', `"${NODE}" other.cjs "--env-file=${envFile} extra"`],
+    ['an extra argument', `"${NODE}" --env-file=${envFile} ${entry} --extra`],
+    ['an extra argument first', `"${NODE}" --inspect --env-file=${envFile} ${entry}`],
+    ['another script', `"${NODE}" --env-file=${envFile} ${agentRoot}\\abc123abc123\\other.cjs`],
+    ['another release folder than the task\'s', `"${NODE}" --env-file=${envFile} ${agentRoot}\\ffffffffffff\\azito-agent.cjs`],
+    ['another settings file', `"${NODE}" --env-file=${envFile}.other ${entry}`],
+    ['another install', `"${NODE}" --env-file=D:\\x\\agent.env D:\\x\\abc123abc123\\azito-agent.cjs`],
+  ])('does not take %s for the agent', (_label, line) => {
+    expect(matches(agent, NODE, line)).toBe(false);
+  });
+
+  it('does not take a command line whose first word is not the program itself', () => {
+    expect(matches(agent, NODE, `evil.exe "${NODE}" --env-file=${envFile} ${entry}`)).toBe(false);
+  });
+
+  it('without a task to learn the release from, any release folder of the install, and nothing else', () => {
+    const any = agentProcessShape(agentRoot, undefined);
+    expect(matches(any, NODE, `"${NODE}" --env-file=${envFile} ${agentRoot}\\0123456789ab\\azito-agent.cjs`)).toBe(true);
+    expect(matches(any, NODE, `"${NODE}" --env-file=${envFile} ${agentRoot}\\a\\b\\azito-agent.cjs`)).toBe(false);
+  });
+
+  describe('the misao', () => {
+    const root = `${HOME}\\.azito\\misao`;
+    const exe = `${root}\\0.3.0\\misao.exe`;
+    const pipe = windowsMisaoPipe(root, 'dev');
+    const shape = misaoProcessShape(root, 'dev', '0.3.0');
+    const matchesMisao = (path: string, line: string, which = shape): boolean => matches(which, path, line);
+
+    it('takes the daemon the task starts (cmd.exe expands the line; its redirects are not part of it)', () => {
+      expect(matchesMisao(exe, `"${exe}" serve --socket "${pipe}" --data "${root}"`)).toBe(true);
+    });
+
+    it.each([
+      ['the folder only as the value of another argument', `"${exe}" serve --socket "${pipe}" --note --data "${root}"`],
+      ['the folder inside another argument', `"${exe}" serve --socket "${pipe}" "--data ${root}" --keep`],
+      ['another pipe', `"${exe}" serve --socket "\\\\.\\pipe\\other" --data "${root}"`],
+      ['another command', `"${exe}" stop --socket "${pipe}" --data "${root}"`],
+      ['an extra argument', `"${exe}" serve --socket "${pipe}" --data "${root}" --extra`],
+    ])('does not take %s', (_label, line) => {
+      expect(matchesMisao(exe, line)).toBe(false);
+    });
+
+    it('does not take a misao.exe from another folder or another release', () => {
+      const other = 'D:\\x\\0.3.0\\misao.exe';
+      expect(matchesMisao(other, `"${other}" serve --socket "${pipe}" --data "${root}"`)).toBe(false);
+      const old = `${root}\\0.2.0\\misao.exe`;
+      expect(matchesMisao(old, `"${old}" serve --socket "${pipe}" --data "${root}"`)).toBe(false);
+      expect(matchesMisao(old, `"${old}" serve --socket "${pipe}" --data "${root}"`, misaoProcessShape(root, 'dev', undefined))).toBe(true);
+    });
+  });
+
+  it('a process whose owner cannot be read stops the step instead of being passed over', () => {
+    const script = exactProcessesScript({ image: 'node.exe', shape: agent, label: 'agent', endParentConhost: true });
+    expect(script.match(/if \(\$o -eq 'unknown'\) \{[^}]*throw/g)?.length).toBe(2);
+    // Not "mine" and not "someone else's": the unreadable case is its own answer and never falls into the branch that is skipped.
+    expect(script).not.toContain('catch { $false }');
+    expect(script).toContain("catch { return 'unknown' }");
+  });
+
+  it('the parent conhost is taken only when its command line ends with the child\'s line after --headless', () => {
+    const script = exactProcessesScript({ image: 'node.exe', shape: agent, label: 'agent', endParentConhost: true });
+    expect(script).toContain("EndsWith(' --headless ' + (Line $p)");
+    expect(script).toContain('$c.CreationDate -le $p.CreationDate');
+  });
+});
+
+describe('the folder script', () => {
+  it('checks every folder from the one to remove up to the drive\'s root, and refuses one that is a link or cannot be looked at', () => {
+    const script = folderScript(HOME, `${HOME}\\.azito\\agent`);
+    expect(script).toContain('[System.IO.Path]::GetPathRoot($root)');
+    expect(script).toContain('$walk.TrimEnd([char]92) -ne $driveRoot.TrimEnd([char]92)');
+    expect(script).toContain('cannot be looked at');
+    expect(script).toContain('is a link (junction or symbolic link)');
+    // It no longer stops at the home folder: the home folder is only a bound the folder must lie below.
+    expect(script).not.toContain('-ne $homeDir');
+  });
+});
+
 describe('what looks like a hub process', () => {
   const hub = new RegExp(HUB_COMMAND_LINE_PATTERN, 'i');
 
@@ -568,7 +741,7 @@ describe('the scripts it sends', () => {
   it('each fits one command line (8191 characters once encoded) for a long user folder', async () => {
     const home = `C:\\Users\\${'a-very-long-user-name-'.repeat(4)}`;
     const long = new FakeUninstallHost({});
-    await uninstallWindowsAgent(long.asHost(), { home, systemRoot: 'C:\\Windows', nodePath: `${home}\\a\\very\\long\\path\\to\\node.exe` }, OPTIONS, { removeMisao: true });
+    await uninstallWindowsAgent(long.asHost(), factsOf(home, `${home}\\a\\very\\long\\path\\to\\node.exe`), OPTIONS, { removeMisao: true });
     expect(long.bodies.length).toBeGreaterThanOrEqual(6);
     for (const { what, body } of long.bodies) {
       expect(() => powershellDialect.wrapScript(`$ProgressPreference = 'SilentlyContinue'\n${body}`), what).not.toThrow();
@@ -579,7 +752,9 @@ describe('the scripts it sends', () => {
     const long = `C:\\Users\\${'a-very-long-user-name-'.repeat(4)}`;
     const scripts = [
       misaoGuardScript({ root: `${long}\\.azito\\misao`, hubRoot: `${long}\\.azito\\misao`, looksForHub: true }),
-      firewallScript('AZITO Agent (TCP 3002)', 3002, [`${long}\\a\\b\\node.exe`, `${long}\\c\\d\\node.exe`]),
+      firewallScript('AZITO Agent (TCP 3002)', 3002, [`${long}\\a\\b\\node.exe`, `${long}\\c\\d\\node.exe`], '100.64.0.7'),
+      exactProcessesScript({ image: 'node.exe', shape: agentProcessShape(`${long}\\.azito\\agent`, undefined), label: 'agent', endParentConhost: true }),
+      exactProcessesScript({ image: 'misao.exe', shape: misaoProcessShape(`${long}\\.azito\\misao`, 'a-very-long-user-name', undefined), label: 'misao', endParentConhost: false }),
     ];
     for (const body of scripts) expect(() => powershellDialect.wrapScript(`$ProgressPreference = 'SilentlyContinue'\n${body}`)).not.toThrow();
   });
@@ -601,7 +776,7 @@ describe('the scripts it sends', () => {
     expect(guard).toContain('[System.IO.FileAttributes]::ReparsePoint');
     expect(guard).toContain('Test-Path -LiteralPath $root');
     expect(guard).toContain("Write-Output 'MAYBEHUB'");
-    expect(firewallScript('R', 1, ['C:\\n.exe'])).toContain('[System.IO.FileAttributes]::ReparsePoint');
+    expect(firewallScript('R', 1, ['C:\\n.exe'], '100.64.0.7')).toContain('[System.IO.FileAttributes]::ReparsePoint');
   });
 
   it('the firewall script lists the rules without hiding a failure (an error stops it)', async () => {
@@ -614,7 +789,7 @@ describe('the scripts it sends', () => {
 });
 
 describe('WindowsAgentDeployer.uninstall', () => {
-  const info = { home: HOME, systemRoot: 'C:\\Windows', nodePath: NODE };
+  const info = { home: HOME, systemRoot: 'C:\\Windows', nodePath: NODE, userId: 'PC\\dev' };
 
   it('runs the steps through the SSH session, the task through schtasks, and leaves the other task alone', async () => {
     const fake = new FakeWindowsHost({ sha256: 'a'.repeat(64), existingTask: 'running' });
@@ -624,12 +799,12 @@ describe('WindowsAgentDeployer.uninstall', () => {
       const last = fake.calls[fake.calls.length - 1];
       if (last?.kind === 'script' && last.text.includes('Remove-Tree')) return { ...result, stdout: 'DONE\r\n' };
       if (last?.kind === 'script' && last.text.includes('Remove-NetFirewallRule')) return { ...result, stdout: 'ABSENT\r\n' };
-      if (last?.kind === 'script' && last.text.includes('Get-AgentNodes')) return { ...result, stdout: 'ENDED 0\r\n' };
+      if (last?.kind === 'script' && last.text.includes('function Shaped')) return { ...result, stdout: 'ENDED 0\r\n' };
       void timeoutMs;
       return result;
     };
     const deployer = new WindowsAgentDeployer(exec, { putFile: async () => undefined, putBuffer: async () => undefined }, OPTIONS);
-    const result = await deployer.uninstall('h', info, { removeMisao: false });
+    const result = await deployer.uninstall('h', info, { removeMisao: false }, BIND);
     expect(outcomes(result)).toEqual({ task: 'done', processes: 'absent', firewall: 'absent', folder: 'done' });
     expect(fake.taskState).toBe('absent');
     const verbs = fake.calls.filter((c) => c.kind === 'schtasks').map((c) => c.schtasksArgs![0]);

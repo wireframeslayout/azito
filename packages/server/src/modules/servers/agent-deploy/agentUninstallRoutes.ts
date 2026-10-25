@@ -43,7 +43,7 @@ const agentUninstallRoutes: FastifyPluginCallback<AgentUninstallRoutesOptions> =
         }
         const sshHost = srv.sshHost || srv.host;
         if (!sshHost) return reply.status(400).send({ error: 'No SSH host configured for this server' });
-        return agentInstaller.uninstallFromWindowsHost(sshHost, { removeMisao: body.data.removeMisao });
+        return agentInstaller.uninstallFromWindowsHost(sshHost, { removeMisao: body.data.removeMisao }, srv.host ?? undefined);
       });
     },
   );
