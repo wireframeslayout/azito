@@ -323,7 +323,15 @@ describe('SystemUpdateService', () => {
       stubRelease(['azito-hub-v1.1.0-win32-x64.zip', 'SHA256SUMS']);
       const service = new SystemUpdateService(channelResolver, stateManager, deployModeDetector, dataPaths, makeTaskRepoStub(0), null, { platform: 'win32', arch: 'arm64', bundleRoot: host.bundleRoot });
       await expect(service.checkForUpdate()).rejects.toThrow(/no AZITO hub release for Windows on arm64/);
-      await expect(service.fetchAvailableVersions()).rejects.toThrow(/arm64/);
+    });
+
+    it('lists no versions, without asking GitHub or failing, where an update is not possible (a Windows arm64 hub today)', async () => {
+      const fetchMock = vi.fn();
+      vi.stubGlobal('fetch', fetchMock);
+      const disabled = { detect: () => 'taskscheduler', canUpdate: () => false, getDisabledReason: () => 'off' } as unknown as DeployModeDetector;
+      const service = new SystemUpdateService(channelResolver, stateManager, disabled, dataPaths, makeTaskRepoStub(0), null, { platform: 'win32', arch: 'arm64', bundleRoot: host.bundleRoot });
+      await expect(service.fetchAvailableVersions()).resolves.toEqual([]);
+      expect(fetchMock).not.toHaveBeenCalled();
     });
   });
 });

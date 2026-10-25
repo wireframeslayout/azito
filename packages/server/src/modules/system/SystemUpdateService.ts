@@ -355,12 +355,12 @@ export class SystemUpdateService {
   }
 
   async fetchAvailableVersions(): Promise<VersionEntry[]> {
+    if (!this.deployModeDetector.canUpdate()) return [];
     if (this.cachedVersions && Date.now() - this.cachedVersions.fetchedAt < CHECK_CACHE_TTL_MS) {
       return this.cachedVersions.versions;
     }
     const repo = this.channelResolver.resolve();
     if (!repo) return [];
-    assertSupportedHubHost(this.host);
     try {
       const res = await fetch(`https://api.github.com/repos/${repo}/releases?per_page=30`, { headers: this.buildGithubHeaders() });
       if (!res.ok) return [];

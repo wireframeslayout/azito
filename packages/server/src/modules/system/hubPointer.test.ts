@@ -1,7 +1,7 @@
 import fs from 'fs';
 import os from 'os';
 import path from 'path';
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { formatHubPointer, HubPointerError, parseHubPointer, readHubPointer, writeHubPointer } from './hubPointer';
 import { isHubPointerVersion, isReleaseTag } from './hubVersion';
 
@@ -103,6 +103,18 @@ describe('writeHubPointer / readHubPointer', () => {
     expect(() => writeHubPointer(file, 'v0.12.0')).toThrow();
     expect(fs.existsSync(`${file}.tmp`)).toBe(false);
     expect(fs.statSync(file).isDirectory()).toBe(true);
+  });
+
+  it('removes its temporary file when the flush fails, and keeps the old pointer', () => {
+    writeHubPointer(file, 'v0.12.0');
+    const spy = vi.spyOn(fs, 'fsyncSync').mockImplementation(() => { throw new Error('EIO: simulated'); });
+    try {
+      expect(() => writeHubPointer(file, 'v0.12.1')).toThrow(/simulated/);
+    } finally {
+      spy.mockRestore();
+    }
+    expect(fs.readdirSync(dir)).toEqual(['current.txt']);
+    expect(readHubPointer(file)).toBe('v0.12.0');
   });
 
   it('reports a missing pointer as ENOENT, and a malformed one with the reason', () => {

@@ -46,19 +46,19 @@ export function readHubPointer(pointerFile: string): string {
  * Writes the pointer so a reader never sees a half-written or missing file: the content goes to a file beside it (flushed to disk),
  * which then replaces the pointer in one rename. On Windows Node's rename replaces an existing file (MoveFileEx with
  * MOVEFILE_REPLACE_EXISTING), the counterpart of install.ps1's `File.Replace`. If a reader holds the pointer open without sharing
- * delete the rename fails and the error propagates: the temporary file is removed and the old pointer stays.
+ * delete the rename fails. Whatever fails (write, flush or rename), the error propagates, the temporary file is removed and the old pointer stays.
  */
 export function writeHubPointer(pointerFile: string, version: string): void {
   const content = formatHubPointer(version);
   const tmp = `${pointerFile}.tmp`;
-  const fd = fs.openSync(tmp, 'w');
   try {
-    fs.writeSync(fd, Buffer.from(content, 'utf8'));
-    fs.fsyncSync(fd);
-  } finally {
-    fs.closeSync(fd);
-  }
-  try {
+    const fd = fs.openSync(tmp, 'w');
+    try {
+      fs.writeSync(fd, Buffer.from(content, 'utf8'));
+      fs.fsyncSync(fd);
+    } finally {
+      fs.closeSync(fd);
+    }
     fs.renameSync(tmp, pointerFile);
   } catch (err) {
     fs.rmSync(tmp, { force: true });
