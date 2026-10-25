@@ -19,7 +19,7 @@ export function ToggleField({ checked, onChange, label, description, disabled = 
   const descriptionId = `${id}-description`;
   return (
     <div style={{ display: 'flex', alignItems: 'flex-start', gap: 'var(--space-3)' }}>
-      <label className="toggle" style={{ flexShrink: 0, marginTop: 1 }}>
+      <label className="toggle" style={{ flexShrink: 0, marginTop: 'var(--space-1)' }}>
         <input
           id={id}
           type="checkbox"
@@ -38,7 +38,7 @@ export function ToggleField({ checked, onChange, label, description, disabled = 
           {label}
         </label>
         {description != null && (
-          <div id={descriptionId} style={{ fontSize: 'var(--font-xs)', color: 'var(--text-dim)', marginTop: 2, lineHeight: 1.5 }}>
+          <div id={descriptionId} style={{ fontSize: 'var(--font-xs)', color: 'var(--text-dim)', marginTop: 'var(--space-1)', lineHeight: 'var(--leading-body)' }}>
             {description}
           </div>
         )}

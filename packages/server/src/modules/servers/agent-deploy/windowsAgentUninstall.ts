@@ -1,24 +1,21 @@
 import * as path from 'path';
-import { powershellDialect } from '../../../shared/os/shellDialect';
-import { redactSecretText } from '../../../shared/redactSecretText';
-import { unescapeTaskXml, taskMisaoRoot } from '../../../shared/os/taskScheduler/taskXmlRead';
 import type { SchtasksClient } from '../../../shared/os/taskScheduler/schtasks';
+import { misaoRootOfCommandLine, taskExecActions } from '../../../shared/os/taskScheduler/taskXmlRead';
+import { splitWindowsCommandLine } from '../../../shared/os/taskScheduler/windowsCommandLine';
 import { buildEndProcessesScript } from '../../../shared/os/windowsProcessSweep';
 import { firewallRuleName } from './windowsFirewall';
-import { MISAO_WINDOWS_DIR, MISAO_WINDOWS_TASK_NAME, type WindowsAgentOptions } from './windowsAgentConfig';
+import type { WindowsAgentOptions } from './windowsAgentConfig';
+import {
+  firewallScript, folderScript, misaoGuardScript, parseFirewallOutput, parseFolderOutput, parseMisaoGuardOutput, parseProcessesOutput,
+  type ScriptOutcome, type UninstallOutcome,
+} from './windowsAgentUninstallScripts';
 
-/** The Task Scheduler task of a Windows hub (`HUB_SERVICE.windowsTaskName`; a test keeps the two in step). */
+/** The Task Scheduler task of a Windows hub (`HUB_SERVICE.windowsTaskName`, fixed: there is no setting for it; a test keeps the two in step). */
 export const WINDOWS_HUB_TASK_NAME = 'AzitoHub';
 
 export type UninstallStepId = 'task' | 'processes' | 'firewall' | 'folder' | 'misaoTask' | 'misaoProcesses' | 'misaoFolder';
 
-/**
- * - `done`: it was there and is gone now (for the processes: none is left).
- * - `absent`: there was nothing to remove.
- * - `failed`: it could not be removed; `detail` says why and what to do.
- * - `skipped`: not attempted; `detail` says why.
- */
-export type UninstallOutcome = 'done' | 'absent' | 'failed' | 'skipped';
+export type { UninstallOutcome };
 
 export interface UninstallStep {
   id: UninstallStepId;
@@ -27,7 +24,7 @@ export interface UninstallStep {
 }
 
 export interface WindowsUninstallResult {
-  /** No step failed. A skipped step (misao not asked for, a hub on the host) is not a failure. */
+  /** No step failed. A skipped step (misao not asked for, a hub owns it, a rule that is not this install's) is not a failure. */
   ok: boolean;
   steps: UninstallStep[];
 }
@@ -52,38 +49,7 @@ const FOLDER_MS = 300_000;
 const failed = (id: UninstallStepId, err: unknown): UninstallStep => ({ id, outcome: 'failed', detail: err instanceof Error ? err.message : String(err) });
 const skipped = (id: UninstallStepId, detail: string): UninstallStep => ({ id, outcome: 'skipped', detail });
 
-/**
- * Takes the Windows agent off its host: the task, the agent's processes, the firewall rule and the agent folder; with
- * `removeMisao`, also the misao task, its processes and its folder. It never stops at a failure: each step reports what it did, and a step
- * that depends on an earlier one (the folder needs the task gone and the processes ended; otherwise something would start the agent
- * again, or hold files open) is skipped with the reason. The steps that do not depend on each other (the firewall rule, misao) still run.
- * The hub's server row is not touched: that is `DELETE /api/servers/:name`.
- *
- * Everything is looked up by what AZITO created: the task is removed only if its definition runs this install's settings file
- * (`--env-file=<home>\<dir>\agent.env`), the processes are the ones that have that exact argument, the folders are not entered through
- * a link. Harness files and hooks are not touched.
- */
-export async function uninstallWindowsAgent(host: WindowsUninstallHost, home: string, options: WindowsAgentOptions, choice: WindowsUninstallChoice): Promise<WindowsUninstallResult> {
-  const steps: UninstallStep[] = [];
-  const agentRoot = path.win32.join(home, options.dir);
-  const envFile = path.win32.join(agentRoot, 'agent.env');
-
-  const task = await step('task', () => removeTask(host, options.taskName, (xml) => unescapeTaskXml(xml).toLowerCase().includes(`--env-file=${envFile}`.toLowerCase()), `runs the agent of ${agentRoot}`));
-  steps.push(task);
-  steps.push(task.outcome === 'failed'
-    ? skipped('processes', 'the task is still registered, so it would start the agent again')
-    : await step('processes', () => run(host, 'Ending the agent processes', buildEndProcessesScript({ image: 'node.exe', argument: `--env-file=${envFile}`, label: 'agent', endParentConhost: true }), QUICK_MS, 'done')));
-  steps.push(await step('firewall', () => removeFirewallRule(host, options.port)));
-  const stopped = steps.every((s) => s.id === 'firewall' || s.outcome !== 'failed');
-  steps.push(stopped
-    ? await step('folder', () => removeFolder(host, home, agentRoot))
-    : skipped('folder', 'the agent may still be running or registered: the folder is left so that nothing breaks underneath it'));
-
-  if (choice.removeMisao) steps.push(...await removeMisao(host, home, options));
-  return { ok: steps.every((s) => s.outcome !== 'failed'), steps };
-}
-
-async function step(id: UninstallStepId, action: () => Promise<Omit<UninstallStep, 'id'>>): Promise<UninstallStep> {
+async function step(id: UninstallStepId, action: () => Promise<ScriptOutcome>): Promise<UninstallStep> {
   try {
     return { id, ...(await action()) };
   } catch (err) {
@@ -91,145 +57,160 @@ async function step(id: UninstallStepId, action: () => Promise<Omit<UninstallSte
   }
 }
 
-async function run(host: WindowsUninstallHost, what: string, body: string, timeoutMs: number, outcome: UninstallOutcome): Promise<Omit<UninstallStep, 'id'>> {
-  await host.script(what, body, timeoutMs);
-  return { outcome };
+/** The node.exe that precedes `--env-file=<envFile>` in the arguments of a program action of the task (null: the argument is there but no program before it); undefined = no action passes that argument. */
+function agentTaskNode(xml: string, envFile: string): string | null | undefined {
+  const wanted = `--env-file=${envFile}`.toLowerCase();
+  for (const action of taskExecActions(xml)) {
+    const args = splitWindowsCommandLine(action.argumentsLine);
+    const at = args.findIndex((a) => a.toLowerCase() === wanted);
+    if (at < 0) continue;
+    const before = args[at - 1];
+    return at > 0 && before !== undefined && !before.startsWith('--') ? before : null;
+  }
+  return undefined;
 }
 
-/** Ends and unregisters a task, if it is one of ours (`isOurs` reads its definition). Another definition under the same name is left alone and reported. */
-async function removeTask(host: WindowsUninstallHost, taskName: string, isOurs: (xml: string) => boolean, whose: string): Promise<Omit<UninstallStep, 'id'>> {
+function taskMisaoRootOf(xml: string): string | undefined {
+  for (const action of taskExecActions(xml)) {
+    const root = misaoRootOfCommandLine(action.argumentsLine);
+    if (root !== undefined) return root;
+  }
+  return undefined;
+}
+
+type TaskRemoval = { step: ScriptOutcome; foreign: boolean };
+
+/** Ends and unregisters a task, if `isOurs` says its definition is the install's. Another definition under the same name is left alone and reported (`foreign`). */
+async function removeTask(host: WindowsUninstallHost, taskName: string, isOurs: (xml: string) => boolean, whose: string): Promise<TaskRemoval> {
   const state = await host.tasks.query(taskName);
-  if (!state.exists) return { outcome: 'absent' };
+  if (!state.exists) return { step: { outcome: 'absent' }, foreign: false };
   const xml = await host.tasks.exportXml(taskName);
   if (!isOurs(xml)) {
-    return { outcome: 'failed', detail: `The task "${taskName}" does not look like the one AZITO registered (it does not ${whose}), so it was left alone. If it is not needed, delete it by hand: schtasks /Delete /TN ${taskName} /F` };
+    return {
+      foreign: true,
+      step: { outcome: 'failed', detail: `The task "${taskName}" does not look like the one AZITO registered (its action does not ${whose}), so it was left alone. If it is not needed, delete it by hand: schtasks /Delete /TN ${taskName} /F` },
+    };
   }
   await host.endTask(taskName);
   await host.tasks.delete(taskName);
   if ((await host.tasks.query(taskName)).exists) throw new Error(`The task "${taskName}" is still registered after it was deleted`);
-  return { outcome: 'done' };
-}
-
-/** One line of a script's output: `DONE`, `ABSENT` or `FAILED <reason>`. */
-function parseOutcome(output: string): Omit<UninstallStep, 'id'> {
-  const line = output.replace(/\r/g, '').split('\n').map((l) => l.trim()).filter((l) => l !== '').pop() ?? '';
-  if (line === 'DONE') return { outcome: 'done' };
-  if (line === 'ABSENT') return { outcome: 'absent' };
-  const reason = /^FAILED (.*)$/.exec(line)?.[1];
-  if (reason !== undefined) return { outcome: 'failed', detail: redactSecretText(reason).slice(0, 600) };
-  throw new Error(`The host's answer could not be read: ${redactSecretText(output.trim()).slice(0, 300) || 'nothing'}`);
+  return { step: { outcome: 'done' }, foreign: false };
 }
 
 /**
- * Deletes the folder tree below `root` without following a link: the folder and every folder up to the home must be real folders, and
- * a link inside is removed as a link (its target is not entered). A file that cannot be deleted (in use) is reported; the rest goes.
- * The same race as the old-version prune remains and is accepted: a folder can be swapped for a link between the check and the delete,
- * which only the owner of the owner-only folder or an administrator can do, and either can already delete what the link reaches.
+ * Takes the Windows agent off its host: the task, the agent's processes, the firewall rule and the agent folder; with
+ * `removeMisao`, also the misao task, its processes and its folder. It never stops at a failure: each step reports what it did, and a step
+ * that depends on an earlier one (the folder needs the task gone and the processes ended; otherwise something would start the agent
+ * again, or hold files open) is skipped with the reason. The steps that do not depend on each other (the firewall rule, misao) still run.
+ * The hub's server row is not touched: that is `DELETE /api/servers/:name`.
+ *
+ * Everything is found by what AZITO created: the task is removed only if its program action passes this install's settings file as the
+ * whole argument `--env-file=<home>\<dir>\agent.env`; a task of another install is left, and so is its firewall rule; the processes are
+ * the ones that have that exact argument; the firewall rule must match what the install adds, not only its name; the folders are not
+ * entered through a link. Harness files and hooks are not touched.
+ *
+ * `hostNodePath` is the node.exe found on the host now: with the one the task runs, it is what the firewall rule's program is compared with.
  */
-function folderScript(home: string, root: string): string {
-  const q = powershellDialect.quote;
-  return [
-    `$homeDir = ${q(home)}`,
-    `$root = ${q(root)}`,
-    'function Test-Link($path) { return [bool]((Get-Item -LiteralPath $path -Force).Attributes -band [System.IO.FileAttributes]::ReparsePoint) }',
-    'if ($null -eq (Get-Item -LiteralPath $root -Force -ErrorAction SilentlyContinue)) { Write-Output \'ABSENT\'; exit 0 }',
-    '$walk = $root',
-    'while ($walk.TrimEnd([char]92) -ne $homeDir.TrimEnd([char]92)) {',
-    '  if (Test-Link $walk) { throw ("Refusing to remove anything: " + $walk + " is a link (junction or symbolic link), and removing below it could delete files outside the home folder") }',
-    '  $parent = [System.IO.Path]::GetDirectoryName($walk)',
-    '  if ($null -eq $parent -or $parent -eq $walk) { throw ("The folder " + $root + " is not below the home folder " + $homeDir) }',
-    '  $walk = $parent',
-    '}',
-    '$problems = New-Object System.Collections.ArrayList',
-    'function Remove-Tree([string]$dir) {',
-    '  foreach ($entry in [System.IO.Directory]::GetFileSystemEntries($dir)) {',
-    '    try {',
-    '      $attributes = [System.IO.File]::GetAttributes($entry)',
-    '      $isDirectory = [bool]($attributes -band [System.IO.FileAttributes]::Directory)',
-    '      if ([bool]($attributes -band [System.IO.FileAttributes]::ReparsePoint)) {',
-    '        if ($isDirectory) { [System.IO.Directory]::Delete($entry) } else { [System.IO.File]::Delete($entry) }',
-    '      } elseif ($isDirectory) {',
-    '        Remove-Tree $entry',
-    '      } else {',
-    '        [System.IO.File]::SetAttributes($entry, [System.IO.FileAttributes]::Normal)',
-    '        [System.IO.File]::Delete($entry)',
-    '      }',
-    '    } catch { [void]$problems.Add($entry + ": " + $_.Exception.Message) }',
-    '  }',
-    '  try { [System.IO.File]::SetAttributes($dir, [System.IO.FileAttributes]::Directory); [System.IO.Directory]::Delete($dir) } catch { [void]$problems.Add($dir + ": " + $_.Exception.Message) }',
-    '}',
-    'Remove-Tree $root',
-    'if ($problems.Count -gt 0) { Write-Output (\'FAILED \' + $problems.Count + \' item(s) could not be removed (a file in use? end the program that holds it, then delete the folder by hand): \' + ((@($problems | Select-Object -First 3) -join \'; \') -replace \'[\\r\\n]+\', \' \')) } else { Write-Output \'DONE\' }',
-  ].join('\n');
+export async function uninstallWindowsAgent(host: WindowsUninstallHost, home: string, options: WindowsAgentOptions, choice: WindowsUninstallChoice, hostNodePath: string | null): Promise<WindowsUninstallResult> {
+  const steps: UninstallStep[] = [];
+  const agentRoot = path.win32.join(home, options.dir);
+  const envFile = path.win32.join(agentRoot, 'agent.env');
+
+  let taskNode: string | null | undefined;
+  let removal: TaskRemoval;
+  try {
+    removal = await removeTask(host, options.taskName, (xml) => {
+      taskNode = agentTaskNode(xml, envFile);
+      return taskNode !== undefined;
+    }, `run ${envFile} as its --env-file argument`);
+  } catch (err) {
+    removal = { step: { outcome: 'failed', detail: err instanceof Error ? err.message : String(err) }, foreign: false };
+  }
+  steps.push({ id: 'task', ...removal.step });
+
+  steps.push(removal.step.outcome === 'failed'
+    ? skipped('processes', 'the task is still registered, so it would start the agent again')
+    : await step('processes', async () => parseProcessesOutput(await host.script('Ending the agent processes', buildEndProcessesScript({ image: 'node.exe', argument: `--env-file=${envFile}`, label: 'agent', endParentConhost: true }), QUICK_MS))));
+
+  if (removal.foreign) {
+    steps.push(skipped('firewall', 'the task belongs to another install, so its firewall rule was not looked at'));
+  } else {
+    const programs = [...new Set([taskNode, hostNodePath].filter((p): p is string => typeof p === 'string' && p !== ''))];
+    const name = firewallRuleName(options.port);
+    steps.push(await step('firewall', async () => parseFirewallOutput(await host.script('Removing the Windows Firewall rule', firewallScript(name, options.port, programs), QUICK_MS), name)));
+  }
+
+  const stopped = steps.every((s) => s.id === 'firewall' || s.outcome !== 'failed');
+  steps.push(stopped
+    ? await step('folder', async () => parseFolderOutput(await host.script(`Removing ${agentRoot}`, folderScript(home, agentRoot), FOLDER_MS)))
+    : skipped('folder', 'the agent may still be running or registered: the folder is left so that nothing breaks underneath it'));
+
+  if (choice.removeMisao) steps.push(...await removeMisao(host, home, options));
+  return { ok: steps.every((s) => s.outcome !== 'failed'), steps };
 }
 
-async function removeFolder(host: WindowsUninstallHost, home: string, root: string): Promise<Omit<UninstallStep, 'id'>> {
-  return parseOutcome(await host.script(`Removing ${root}`, folderScript(home, root), FOLDER_MS));
-}
-
-/**
- * The inbound rule the install added (`firewallRuleName(port)`). Windows lets only an administrator remove it: a session that is not
- * elevated gets the command to run instead, and the step is a failure (the rule stays open for a program that is gone).
- */
-async function removeFirewallRule(host: WindowsUninstallHost, port: number): Promise<Omit<UninstallStep, 'id'>> {
-  const q = powershellDialect.quote;
-  const name = firewallRuleName(port);
-  const out = await host.script('Removing the Windows Firewall rule', [
-    `$name = ${q(name)}`,
-    '$elevated = ([Security.Principal.WindowsPrincipal][Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)',
-    '$rules = @(Get-NetFirewallRule -DisplayName $name -ErrorAction SilentlyContinue | Where-Object { $_.Direction -eq \'Inbound\' })',
-    'if ($rules.Count -eq 0) { Write-Output \'ABSENT\'; exit 0 }',
-    'try {',
-    '  $rules | Remove-NetFirewallRule -ErrorAction Stop',
-    '  Write-Output \'DONE\'',
-    '} catch {',
-    '  $reason = ($_.Exception.Message -replace \'[\\r\\n]+\', \' \')',
-    '  if ($elevated) { Write-Output (\'FAILED \' + $reason) } else { Write-Output (\'FAILED NOTELEVATED \' + $reason) }',
-    '}',
-  ].join('\n'), QUICK_MS);
-  const result = parseOutcome(out);
-  if (result.outcome !== 'failed') return result;
-  const reason = (result.detail ?? '').replace(/^NOTELEVATED /, '');
-  const how = (result.detail ?? '').startsWith('NOTELEVATED ')
-    ? 'This SSH session is not elevated (the user is not an administrator, or the session has a filtered token), so AZITO cannot remove it.'
-    : 'The host refused.';
-  return { outcome: 'failed', detail: `The Windows Firewall rule "${name}" was not removed (${reason}). ${how} Run this once in an Administrator PowerShell on the host: Remove-NetFirewallRule -DisplayName "${name}"` };
-}
-
-/** The misao beside the agent: its task, its processes, its folder. A misao that belongs to a Windows hub on the same host is not ours to remove. */
+/** The misao beside the agent: its task, its processes, its folder. A misao that belongs to a hub of this host, or that cannot be shown to be the agent's, is left in place. */
 async function removeMisao(host: WindowsUninstallHost, home: string, options: WindowsAgentOptions): Promise<UninstallStep[]> {
   const root = path.win32.join(home, options.misaoDir);
-  const hub = await step('misaoTask', () => hubOwnsMisao(host, options));
-  if (hub.outcome === 'failed') {
-    const detail = `Could not tell whether a Windows hub on this host owns this misao, so it was left alone (${hub.detail})`;
-    return [{ ...hub, detail }, skipped('misaoProcesses', 'misao was left alone'), skipped('misaoFolder', 'misao was left alone')];
+  const guard = await step('misaoTask', () => misaoOwner(host, root));
+  if (guard.outcome !== 'absent') {
+    const why = guard.outcome === 'failed' ? 'the owner of the misao could not be determined' : 'misao was left in place';
+    return [guard, skipped('misaoProcesses', why), skipped('misaoFolder', why)];
   }
-  if (hub.outcome === 'skipped') return [hub, skipped('misaoProcesses', 'the hub owns this misao'), skipped('misaoFolder', 'the hub owns this misao')];
-  const task = await step('misaoTask', () => removeTask(host, options.misaoTaskName, (xml) => {
-    const taskRoot = taskMisaoRoot(xml);
-    return taskRoot !== undefined && path.win32.normalize(taskRoot).toLowerCase() === path.win32.normalize(root).toLowerCase();
-  }, `start the misao of ${root}`));
+  const task = await step('misaoTask', async () => {
+    const removal = await removeTask(host, options.misaoTaskName, (xml) => {
+      const taskRoot = taskMisaoRootOf(xml);
+      return taskRoot !== undefined && path.win32.normalize(taskRoot).toLowerCase() === path.win32.normalize(root).toLowerCase();
+    }, `start the misao of ${root}`);
+    return removal.step;
+  });
   if (task.outcome === 'failed') {
     const why = 'the misao task is still registered, so it would start the daemon again';
     return [task, skipped('misaoProcesses', why), skipped('misaoFolder', why)];
   }
   // The daemon is found by its `--data <root>` argument, which is how the task starts it.
-  const processes = await step('misaoProcesses', () => run(host, 'Ending the misao processes', buildEndProcessesScript({ image: 'misao.exe', argument: root, label: 'misao', endParentConhost: false }), QUICK_MS, 'done'));
+  const processes = await step('misaoProcesses', async () => parseProcessesOutput(await host.script('Ending the misao processes', buildEndProcessesScript({ image: 'misao.exe', argument: root, label: 'misao', endParentConhost: false }), QUICK_MS)));
   const folder = processes.outcome === 'failed'
     ? skipped('misaoFolder', 'the misao daemon may still be running: its folder is left so that nothing breaks underneath it')
-    : await step('misaoFolder', () => removeFolder(host, home, root));
+    : await step('misaoFolder', async () => parseFolderOutput(await host.script(`Removing ${root}`, folderScript(home, root), FOLDER_MS)));
   return [task, processes, folder];
 }
 
+/** The hub's misao folder, from the hub task's launcher script (`$hubRoot = '<prefix>\hub'`; the hub keeps its misao in `<prefix>\misao`). */
+function hubMisaoRootOf(xml: string): string | undefined {
+  for (const action of taskExecActions(xml)) {
+    const encoded = /-EncodedCommand ([A-Za-z0-9+/=]+)/.exec(action.argumentsLine)?.[1];
+    if (!encoded) continue;
+    const hubRoot = /^\$hubRoot = '((?:[^'‘’‚‛]|(['‘’‚‛])\2)*)'\r?$/m.exec(Buffer.from(encoded, 'base64').toString('utf16le'))?.[1];
+    if (hubRoot !== undefined) return path.win32.join(path.win32.dirname(hubRoot.replace(/(['‘’‚‛])\1/g, '$1')), 'misao');
+  }
+  return undefined;
+}
+
 /**
- * `absent` = this misao is not a hub's and may be removed. The Windows hub (task `AzitoHub`) runs its misao as the task `AzitoMisao`
- * in `~\.azito\misao`, the same names an agent's misao has by default: with a hub registered on the host the two cannot be told apart
- * by name, and removing it would close the hub's windows. A misao with names of its own (a trial) cannot be the hub's.
+ * `absent` = nothing says this misao is someone else's, so it may be removed. A misao is left (`skipped`, with the reason) when
+ * - the hub's task `AzitoHub` is registered and keeps its misao in this very folder (the hub's own misao; a hub of another prefix has another folder), or its folder cannot be read;
+ * - no hub task is registered but a hub process runs on the host (a hub started from a source checkout or by hand has no task to ask), since its misao cannot be told from the agent's;
+ * - a `misao.exe` of this folder is running that no task started.
+ * A hub that is started in a way none of these can see is not recognised; that is the limit of what can be known from outside.
  */
-async function hubOwnsMisao(host: WindowsUninstallHost, options: WindowsAgentOptions): Promise<Omit<UninstallStep, 'id'>> {
-  const sharesNames = options.misaoTaskName.toLowerCase() === MISAO_WINDOWS_TASK_NAME.toLowerCase() || options.misaoDir.toLowerCase() === MISAO_WINDOWS_DIR.toLowerCase();
-  if (!sharesNames) return { outcome: 'absent' };
+async function misaoOwner(host: WindowsUninstallHost, root: string): Promise<ScriptOutcome> {
   const hub = await host.tasks.query(WINDOWS_HUB_TASK_NAME);
-  if (!hub.exists) return { outcome: 'absent' };
-  return { outcome: 'skipped', detail: `A Windows hub is registered on this host (the task "${WINDOWS_HUB_TASK_NAME}"), and this misao is the hub's: it was left in place. Remove it with the hub, or stop the hub and delete the task "${options.misaoTaskName}" and the folder ~\\${options.misaoDir} by hand.` };
+  if (hub.exists) {
+    const hubRoot = hubMisaoRootOf(await host.tasks.exportXml(WINDOWS_HUB_TASK_NAME));
+    if (hubRoot === undefined) {
+      return { outcome: 'skipped', detail: `A Windows hub is registered on this host (the task "${WINDOWS_HUB_TASK_NAME}") but the folder of its misao cannot be read from the task, so this misao was left in place. Remove it by hand if it is not the hub's.` };
+    }
+    if (path.win32.normalize(hubRoot).toLowerCase() === path.win32.normalize(root).toLowerCase()) {
+      return { outcome: 'skipped', detail: `This misao (${root}) is the one of the Windows hub registered on this host (the task "${WINDOWS_HUB_TASK_NAME}"), so it was left in place. Remove it with the hub.` };
+    }
+  }
+  const answer = parseMisaoGuardOutput(await host.script('Checking who runs the misao', misaoGuardScript(root, !hub.exists), QUICK_MS));
+  if (answer.kind === 'hub') {
+    return { outcome: 'skipped', detail: `An AZITO hub is running on this host without the task "${WINDOWS_HUB_TASK_NAME}" (process ${answer.pid}), and its misao cannot be told from the agent's, so this misao was left in place.` };
+  }
+  if (answer.kind === 'foreign') {
+    return { outcome: 'skipped', detail: `A misao of ${root} is running (process ${answer.pid}) that no scheduled task started, so it is not known to be the agent's and was left in place.` };
+  }
+  return { outcome: 'absent' };
 }

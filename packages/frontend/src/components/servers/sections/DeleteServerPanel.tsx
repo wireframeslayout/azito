@@ -1,3 +1,4 @@
+import { useEffect, useRef } from 'react';
 import { useTranslation } from 'react-i18next';
 import { Button, Chip, DocsLink, Notice, ToggleField } from '../../ui';
 import type { ChipTone } from '../../ui';
@@ -10,7 +11,7 @@ interface DeleteServerPanelProps {
   deletion: ServerDeletion;
 }
 
-/** The result of each step on the host, failures first in meaning (the chip says it, the reason is under the step). */
+/** The result of each step on the host: the chip says what happened, the reason is under the step. */
 function StepList({ steps }: { steps: readonly UninstallStep[] }) {
   const { t } = useTranslation('servers');
   return (
@@ -22,7 +23,7 @@ function StepList({ steps }: { steps: readonly UninstallStep[] }) {
             <Chip tone={OUTCOME_TONE[step.outcome]}>{t(`danger.hostRemoval.outcomes.${step.outcome}`)}</Chip>
           </div>
           {step.detail !== undefined && (
-            <div style={{ fontSize: 'var(--font-xs)', color: 'var(--text-dim)', marginTop: 2, lineHeight: 1.5, overflowWrap: 'anywhere', whiteSpace: 'pre-wrap' }}>{step.detail}</div>
+            <div style={{ fontSize: 'var(--font-xs)', color: 'var(--text-dim)', marginTop: 'var(--space-1)', lineHeight: 'var(--leading-body)', overflowWrap: 'anywhere', whiteSpace: 'pre-wrap' }}>{step.detail}</div>
           )}
         </li>
       ))}
@@ -30,28 +31,46 @@ function StepList({ steps }: { steps: readonly UninstallStep[] }) {
   );
 }
 
-/** The host removal went wrong: what happened, and the three things the person can do. The row is still registered. */
+/** Why the row could not be deleted: visible text, read out by the live region of the panel (so it is hidden from the reader here, not said twice). */
+function RowError({ reason }: { reason: string }) {
+  const { t } = useTranslation('servers');
+  return (
+    <div aria-hidden="true" style={{ fontSize: 'var(--font-sm)', color: 'var(--danger)', overflowWrap: 'anywhere' }}>
+      {t('danger.hostRemoval.rowFailed', { reason })}
+    </div>
+  );
+}
+
+/**
+ * The host removal went wrong: what happened, and the three things the person can do. The row is still registered, and this screen
+ * stays (with the result it shows) while a retry or the deletion of the entry runs, and when that fails too. Focus moves to the
+ * heading when it appears, so a keyboard or screen reader user lands on the result instead of on nothing.
+ */
 function HostFailure({ deletion }: DeleteServerPanelProps) {
   const { t } = useTranslation('servers');
-  const { failure, busy, rowError } = deletion;
+  const { failure, busy, rowError, deletingRow } = deletion;
+  const heading = useRef<HTMLDivElement>(null);
+  useEffect(() => { heading.current?.focus(); }, []);
   if (failure === null) return null;
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 'var(--space-3)' }}>
-      <Notice tone="danger" sub={t('danger.hostRemoval.failedKeepsServer')}>
-        {t('danger.hostRemoval.failedTitle')}
-      </Notice>
+      <div ref={heading} tabIndex={-1} style={{ outline: 'none' }}>
+        <Notice tone="danger" sub={t('danger.hostRemoval.failedKeepsServer')}>
+          {t('danger.hostRemoval.failedTitle')}
+        </Notice>
+      </div>
       {failure.kind === 'steps'
         ? <StepList steps={failure.steps} />
         : (
-          <div role="status" style={{ fontSize: 'var(--font-sm)', color: 'var(--text-dim)', overflowWrap: 'anywhere' }}>
+          <div style={{ fontSize: 'var(--font-sm)', color: 'var(--text-dim)', overflowWrap: 'anywhere' }}>
             {failure.message === '' ? t('danger.hostRemoval.failedUnknown') : t('danger.hostRemoval.failedNoAnswer', { reason: failure.message })}
           </div>
         )}
-      {rowError !== null && <Notice tone="danger">{t('danger.hostRemoval.rowFailed', { reason: rowError })}</Notice>}
+      {rowError !== null && <RowError reason={rowError} />}
       <div style={{ display: 'flex', gap: 'var(--space-2)', flexWrap: 'wrap', justifyContent: 'flex-end' }}>
         <Button onClick={deletion.cancel} disabled={busy}>{t('common:actions.cancel')}</Button>
         <Button onClick={() => void deletion.confirm()} disabled={busy}>{t('danger.hostRemoval.retry')}</Button>
-        <Button variant="danger" onClick={() => void deletion.deleteEntryOnly()} loading={busy} loadingLabel={t('danger.deleting')}>
+        <Button variant="danger" onClick={() => void deletion.deleteEntryOnly()} loading={deletingRow} disabled={busy} loadingLabel={t('danger.deleting')}>
           {t('danger.hostRemoval.deleteEntryOnly')}
         </Button>
       </div>
@@ -59,22 +78,14 @@ function HostFailure({ deletion }: DeleteServerPanelProps) {
   );
 }
 
-/**
- * The confirmation of deleting a server. For a Windows agent it offers to remove the agent from the host first (default on) and,
- * as a separate choice that closes every window of the host, the misao beside it (default off, only with the first). Other agents
- * say why the host is not touched (#499). With the host removal off (or not available) it says what stays on the host and links the
- * manual steps. A failed host removal shows every step's result and lets the person try again, delete only the entry, or cancel.
- */
-export function DeleteServerPanel({ deletion }: DeleteServerPanelProps) {
+/** The choices (and, for a host that is not touched, what stays on it), with the buttons that start or abandon the deletion. */
+function Choices({ deletion }: DeleteServerPanelProps) {
   const { t } = useTranslation('servers');
   const { phase, support, choice, busy, rowError } = deletion;
-  if (phase === 'idle') return null;
-  if (phase === 'hostFailed') return <HostFailure deletion={deletion} />;
-
   const touchesHost = support === 'windows' && choice.removeFromHost;
   const showStays = support !== 'none' && !touchesHost;
   return (
-    <div style={{ display: 'flex', flexDirection: 'column', gap: 'var(--space-3)' }}>
+    <>
       {support === 'windows' && (
         <div role="group" aria-label={t('danger.hostRemoval.groupLabel')} style={{ display: 'flex', flexDirection: 'column', gap: 'var(--space-3)' }}>
           <ToggleField
@@ -108,10 +119,7 @@ export function DeleteServerPanel({ deletion }: DeleteServerPanelProps) {
           {support === 'windows' ? t('danger.hostRemoval.staysWindows') : t('danger.hostRemoval.staysUnix')}
         </Notice>
       )}
-      <div aria-live="polite" style={{ fontSize: 'var(--font-sm)', color: 'var(--text-dim)', minHeight: 0 }}>
-        {phase === 'removingHost' && t('danger.hostRemoval.removingHost')}
-      </div>
-      {rowError !== null && <Notice tone="danger">{t('danger.hostRemoval.rowFailed', { reason: rowError })}</Notice>}
+      {rowError !== null && <RowError reason={rowError} />}
       <div style={{ display: 'flex', gap: 'var(--space-2)', justifyContent: 'flex-end' }}>
         <Button onClick={deletion.cancel} disabled={busy}>{t('common:actions.cancel')}</Button>
         <Button
@@ -123,6 +131,29 @@ export function DeleteServerPanel({ deletion }: DeleteServerPanelProps) {
           {t('common:actions.confirm')}
         </Button>
       </div>
+    </>
+  );
+}
+
+/**
+ * The confirmation of deleting a server. For a Windows agent it offers to remove the agent from the host first (default on) and,
+ * as a separate choice that closes every window of the host, the misao beside it (default off, only with the first). Other agents
+ * say why the host is not touched (#499). With the host removal off (or not available) it says what stays on the host and links the
+ * manual steps. A failed host removal shows every step's result and lets the person try again, delete only the entry, or cancel.
+ * It is always rendered, so its one live region exists before it has something to say and is read out when it does (the progress, and a
+ * failure to delete the row).
+ */
+export function DeleteServerPanel({ deletion }: DeleteServerPanelProps) {
+  const { t } = useTranslation('servers');
+  const { phase, rowError } = deletion;
+  const announcement = phase === 'removingHost'
+    ? t('danger.hostRemoval.removingHost')
+    : rowError !== null ? t('danger.hostRemoval.rowFailed', { reason: rowError }) : '';
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 'var(--space-3)', marginTop: phase === 'idle' ? 0 : 'var(--space-4)' }}>
+      <div className="sr-only" role="status" aria-live="polite" aria-atomic="true">{announcement}</div>
+      {phase === 'hostFailed' && <HostFailure deletion={deletion} />}
+      {(phase === 'confirming' || phase === 'removingHost') && <Choices deletion={deletion} />}
     </div>
   );
 }

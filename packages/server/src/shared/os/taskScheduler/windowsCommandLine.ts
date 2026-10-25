@@ -29,3 +29,40 @@ export function quoteWindowsArg(arg: string): string {
 export function joinWindowsArgs(args: readonly string[]): string {
   return args.map(quoteWindowsArg).join(' ');
 }
+
+/**
+ * The inverse of {@link joinWindowsArgs}: a command line split into arguments with the CommandLineToArgvW rules (2n backslashes
+ * before a quote are n backslashes and the quote toggles quoting, 2n+1 are n backslashes and a literal quote; backslashes elsewhere
+ * are literal). Used to read what a task definition runs, so that an argument is compared as a whole, never as part of a longer text.
+ */
+export function splitWindowsCommandLine(line: string): string[] {
+  const args: string[] = [];
+  let current = '';
+  let started = false;
+  let quoted = false;
+  for (let i = 0; i < line.length; i++) {
+    const ch = line[i]!;
+    if (ch === '\\') {
+      let count = 0;
+      while (line[i] === '\\') { count++; i++; }
+      if (line[i] === '"') {
+        current += '\\'.repeat(Math.floor(count / 2));
+        if (count % 2 === 1) current += '"'; else quoted = !quoted;
+      } else {
+        current += '\\'.repeat(count);
+        i--;
+      }
+      started = true;
+    } else if (ch === '"') {
+      quoted = !quoted;
+      started = true;
+    } else if (!quoted && /[ \t\n\v]/.test(ch)) {
+      if (started) { args.push(current); current = ''; started = false; }
+    } else {
+      current += ch;
+      started = true;
+    }
+  }
+  if (started) args.push(current);
+  return args;
+}

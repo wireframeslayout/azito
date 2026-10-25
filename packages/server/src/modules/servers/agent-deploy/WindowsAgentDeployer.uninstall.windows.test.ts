@@ -5,6 +5,7 @@ import net from 'net';
 import os from 'os';
 import path from 'path';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { buildTaskXml } from '../../../shared/os/taskScheduler/taskDefinition';
 import { powershellDialect } from '../../../shared/os/shellDialect';
 import { encodeTaskXml } from '../../../shared/os/taskScheduler/taskDefinition';
 import { buildMisaoTaskXml, misaoWindowsLayout } from '../../system/misao/misaoWindowsTask';
@@ -135,7 +136,7 @@ describe.skipIf(process.platform !== 'win32')('removing the Windows agent from a
     host = parseWindowsPreflight(pre.stdout, pre.stderr, pre.code);
     deployer = new WindowsAgentDeployer(cmdExec, homeTransfer, OPTIONS);
     input = {
-      sshHost: 'ci', host, nodePath: host.nodePath!, version, tarballPath: bundler.getTarballPath(),
+      sshHost: 'ci', host, nodePath: fwNode, version, tarballPath: bundler.getTarballPath(),
       expectedSha256: readSha256FromSumsFile(bundler.getSha256sumsPath(), 'azito-agent.tar.gz'), token: crypto.randomBytes(32).toString('hex'), bindAddress: BIND,
     };
     // The firewall rule the install adds, when this session may add it (an elevated one): for a rule to remove.
@@ -191,11 +192,11 @@ describe.skipIf(process.platform !== 'win32')('removing the Windows agent from a
   it('removing again finds nothing to remove (nothing fails), and with the misao asked for, removes its task and folder', async () => {
     const again = await deployer.uninstall('ci', host, { removeMisao: false });
     expect(again.ok, JSON.stringify(again.steps)).toBe(true);
-    expect(stepsOf(again)).toEqual({ task: 'absent', processes: 'done', firewall: 'absent', folder: 'absent' });
+    expect(stepsOf(again)).toEqual({ task: 'absent', processes: 'absent', firewall: 'absent', folder: 'absent' });
 
     const result = await deployer.uninstall('ci', host, { removeMisao: true });
     expect(result.ok, JSON.stringify(result.steps)).toBe(true);
-    expect(stepsOf(result)).toMatchObject({ misaoTask: 'done', misaoProcesses: 'done', misaoFolder: 'done' });
+    expect(stepsOf(result)).toMatchObject({ misaoTask: 'done', misaoProcesses: 'absent', misaoFolder: 'done' });
     expect(await taskRegistered(OPTIONS.misaoTaskName)).toBe(false);
     expect(fs.existsSync(misaoRoot())).toBe(false);
   }, 600_000);
@@ -217,11 +218,51 @@ describe.skipIf(process.platform !== 'win32')('removing the Windows agent from a
     const result = await deployer.uninstall('ci', host, { removeMisao: false });
 
     expect(result.ok).toBe(false);
-    expect(stepsOf(result)).toMatchObject({ task: 'failed', processes: 'skipped', folder: 'skipped' });
+    expect(stepsOf(result)).toMatchObject({ task: 'failed', processes: 'skipped', firewall: 'skipped', folder: 'skipped' });
     expect(await taskRegistered(OPTIONS.taskName)).toBe(true);
     expect(fs.existsSync(path.join(root, 'agent.log'))).toBe(true);
     await cmdExec('ci', `"${schtasksPath()}" /Delete /TN ${OPTIONS.taskName} /F`, 60_000);
     fs.rmSync(root, { recursive: true, force: true });
+  }, 120_000);
+
+  it('leaves a task that only has a settings file of a similar name (agent.env.other), and the folder with it', async () => {
+    const root = agentRoot();
+    fs.mkdirSync(root, { recursive: true });
+    fs.writeFileSync(path.join(root, 'agent.log'), 'x');
+    const similar = buildTaskXml({
+      userId: host.userId, description: 'AZITO Agent: started at logon by the AZITO hub', executable: path.win32.join(host.systemRoot, 'System32', 'conhost.exe'),
+      args: ['--headless', host.nodePath!, `--env-file=${path.win32.join(root, 'agent.env')}.other`, path.win32.join(root, 'x.cjs')], workingDirectory: root,
+      restartOnFailure: { intervalMinutes: 1, count: 1 },
+    });
+    const file = path.join(scratch, 'similar.task.xml');
+    fs.mkdirSync(scratch, { recursive: true });
+    fs.writeFileSync(file, encodeTaskXml(similar));
+    const created = await cmdExec('ci', `"${schtasksPath()}" /Create /XML "${file}" /TN ${OPTIONS.taskName} /F`, 60_000);
+    expect(created.code, created.stdout + created.stderr).toBe(0);
+
+    const result = await deployer.uninstall('ci', host, { removeMisao: false });
+
+    expect(stepsOf(result)).toMatchObject({ task: 'failed', processes: 'skipped', firewall: 'skipped', folder: 'skipped' });
+    expect(await taskRegistered(OPTIONS.taskName)).toBe(true);
+    expect(fs.existsSync(path.join(root, 'agent.log'))).toBe(true);
+    await cmdExec('ci', `"${schtasksPath()}" /Delete /TN ${OPTIONS.taskName} /F`, 60_000);
+    fs.rmSync(root, { recursive: true, force: true });
+  }, 120_000);
+
+  it('leaves a firewall rule of the same name that is for another program (only an elevated session can make one)', async (ctx) => {
+    if (!elevated) ctx.skip('this session is not elevated: a rule cannot be added here');
+    const other = path.join(fwDir, 'other-node.exe');
+    fs.copyFileSync(process.execPath, other);
+    const name = firewallRuleName(OPTIONS.port);
+    await ps(`Get-NetFirewallRule -DisplayName ${powershellDialect.quote(name)} -ErrorAction SilentlyContinue | Remove-NetFirewallRule`);
+    await ps(`$null = New-NetFirewallRule -DisplayName ${powershellDialect.quote(name)} -Direction Inbound -Action Allow -Protocol TCP -LocalPort ${OPTIONS.port} -Program ${powershellDialect.quote(other)} -LocalAddress ${BIND} -RemoteAddress 100.64.0.0/10 -Profile Any`);
+
+    const result = await deployer.uninstall('ci', host, { removeMisao: false });
+
+    expect(result.ok, JSON.stringify(result.steps)).toBe(true);
+    expect(stepsOf(result).firewall).toBe('skipped');
+    expect(await ruleCount()).toBe(1);
+    await ps(`Remove-NetFirewallRule -DisplayName ${powershellDialect.quote(name)}`);
   }, 120_000);
 
   it('does not follow a link: a junction inside the folder is removed as a link, and what it points to is untouched', async () => {

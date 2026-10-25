@@ -89,6 +89,69 @@ export type DeletionResult =
   /** The row could not be deleted (the host removal, when one was asked for, had worked). */
   | { kind: 'rowFailed'; message: string };
 
+// ─── The state of the confirmation ───
+
+/**
+ * - `idle`: nothing asked yet.
+ * - `confirming`: the choices are shown (also while the row is being deleted).
+ * - `removingHost`: the agent is being taken off the host; the row is still there.
+ * - `hostFailed`: the host removal did not work; the row is still there and the person decides (try again, delete only the entry, cancel).
+ */
+export type DeletionPhase = 'idle' | 'confirming' | 'removingHost' | 'hostFailed';
+
+export interface DeletionState {
+  phase: DeletionPhase;
+  choice: HostRemovalChoice;
+  /** The result of the host removal that failed. Kept while the person tries again or deletes the entry only, so it never disappears from the screen. */
+  failure: HostRemovalFailure | null;
+  /** Why the row itself could not be deleted: a state of its own, beside `failure`. */
+  rowError: string | null;
+  /** The row is being deleted. */
+  deletingRow: boolean;
+}
+
+export const IDLE_DELETION: DeletionState = { phase: 'idle', choice: DEFAULT_HOST_REMOVAL, failure: null, rowError: null, deletingRow: false };
+
+export type DeletionEvent =
+  | { type: 'open' }
+  | { type: 'cancel' }
+  | { type: 'chooseRemoveFromHost'; value: boolean }
+  | { type: 'chooseRemoveMisao'; value: boolean }
+  | { type: 'removingHost' }
+  | { type: 'deletingRow' }
+  | { type: 'result'; result: DeletionResult };
+
+/** Something is in flight (the host removal or the row's deletion): the choices and cancel are off. */
+export function isDeletionBusy(state: DeletionState): boolean {
+  return state.phase === 'removingHost' || state.deletingRow;
+}
+
+export function deletionReducer(state: DeletionState, event: DeletionEvent): DeletionState {
+  switch (event.type) {
+    case 'open':
+      return state.phase === 'idle' ? { ...IDLE_DELETION, phase: 'confirming' } : state;
+    case 'cancel':
+      return isDeletionBusy(state) ? state : IDLE_DELETION;
+    case 'chooseRemoveFromHost':
+      return state.phase === 'confirming' && !isDeletionBusy(state) ? { ...state, choice: setRemoveFromHost(state.choice, event.value) } : state;
+    case 'chooseRemoveMisao':
+      return state.phase === 'confirming' && !isDeletionBusy(state) ? { ...state, choice: setRemoveMisao(state.choice, event.value) } : state;
+    case 'removingHost':
+      return { ...state, phase: 'removingHost', failure: null, rowError: null };
+    case 'deletingRow':
+      // The host part is over (it worked, or was not asked for): back to the choices, unless the person is on the failure screen, which stays.
+      return { ...state, phase: state.phase === 'removingHost' ? 'confirming' : state.phase, rowError: null, deletingRow: true };
+    case 'result': {
+      const { result } = event;
+      if (result.kind === 'deleted') return IDLE_DELETION;
+      if (result.kind === 'hostFailed') return { ...state, phase: 'hostFailed', failure: result.failure, deletingRow: false };
+      return { ...state, phase: state.phase === 'removingHost' ? 'confirming' : state.phase, rowError: result.message, deletingRow: false };
+    }
+  }
+}
+
+// ─── The calls ───
+
 export interface DeletionCalls {
   /** `POST /api/servers/:name/agent/uninstall`: resolves with the body, rejects when the call itself failed. */
   uninstallHost(request: { removeMisao: boolean }): Promise<unknown>;
@@ -106,21 +169,30 @@ export async function deleteEntryOnly(calls: DeletionCalls): Promise<DeletionRes
   }
 }
 
+/** "Delete the entry only": the row is deleted, the host is not asked, and a failure of the row is reported as its own state. */
+export async function runEntryOnly(calls: DeletionCalls, dispatch: (event: DeletionEvent) => void): Promise<void> {
+  dispatch({ type: 'deletingRow' });
+  dispatch({ type: 'result', result: await deleteEntryOnly(calls) });
+}
+
 /**
  * The deletion the person confirmed: when the host is to be touched (a Windows agent, the choice on), the agent is taken off it
- * FIRST, and the row is deleted only if that worked. A failed host removal never deletes the row; the caller shows the steps and the
- * person chooses {@link deleteEntryOnly}. `onRemovingHost` is called once the (slow) host removal starts.
+ * FIRST, and the row is deleted only if that worked. A failed host removal never deletes the row; the screen shows the steps and the
+ * person chooses {@link runEntryOnly}. Every step is an event, so the screen follows what is happening.
  */
-export async function runDeletion(calls: DeletionCalls, support: HostRemovalSupport, choice: HostRemovalChoice, onRemovingHost: () => void): Promise<DeletionResult> {
+export async function runDeletion(calls: DeletionCalls, support: HostRemovalSupport, choice: HostRemovalChoice, dispatch: (event: DeletionEvent) => void): Promise<void> {
   const request = uninstallRequestFor(support, choice);
-  if (request === null) return deleteEntryOnly(calls);
-  onRemovingHost();
+  if (request === null) return runEntryOnly(calls, dispatch);
+  dispatch({ type: 'removingHost' });
   let failure: HostRemovalFailure | null;
   try {
     failure = readUninstallAnswer(await calls.uninstallHost(request));
   } catch (err: unknown) {
     failure = { kind: 'error', message: (err as Error).message };
   }
-  if (failure !== null) return { kind: 'hostFailed', failure };
-  return deleteEntryOnly(calls);
+  if (failure !== null) {
+    dispatch({ type: 'result', result: { kind: 'hostFailed', failure } });
+    return;
+  }
+  return runEntryOnly(calls, dispatch);
 }

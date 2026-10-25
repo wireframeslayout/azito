@@ -1,6 +1,8 @@
 import { describe, expect, it, vi } from 'vitest';
 import {
-  DEFAULT_HOST_REMOVAL, deleteEntryOnly, runDeletion, type DeletionCalls, failedSteps, hostRemovalSupport, readUninstallAnswer, setRemoveFromHost, setRemoveMisao, uninstallRequestFor,
+  DEFAULT_HOST_REMOVAL, deleteEntryOnly, deletionReducer, failedSteps, hostRemovalSupport, IDLE_DELETION, isDeletionBusy, readUninstallAnswer,
+  runDeletion, runEntryOnly, setRemoveFromHost, setRemoveMisao, uninstallRequestFor,
+  type DeletionCalls, type DeletionEvent, type DeletionState,
 } from './serverDeletion';
 
 describe('hostRemovalSupport', () => {
@@ -61,7 +63,7 @@ describe('readUninstallAnswer', () => {
     expect(readUninstallAnswer({ ok: true, steps: okSteps })).toBeNull();
   });
 
-  it('a skipped step (misao not asked for, a hub on the host) is not a failure', () => {
+  it('a skipped step (misao not asked for, a hub owns it) is not a failure', () => {
     expect(readUninstallAnswer({ ok: true, steps: [{ id: 'misaoTask', outcome: 'skipped', detail: 'a hub owns it' }] })).toBeNull();
   });
 
@@ -89,25 +91,76 @@ describe('readUninstallAnswer', () => {
   });
 });
 
-describe('runDeletion', () => {
-  const OK = { ok: true, steps: [{ id: 'task', outcome: 'done' }] };
-  function calls(over: Partial<DeletionCalls> = {}): DeletionCalls & { order: string[] } {
-    const order: string[] = [];
-    return {
-      order,
-      uninstallHost: vi.fn(async () => { order.push('uninstall'); return OK; }),
-      deleteRow: vi.fn(async () => { order.push('delete'); return { ok: true }; }),
-      ...over,
-    };
-  }
+/** The screen's state, driven by the events the flow sends (what the hook does with `useReducer`). */
+function screen(initial: DeletionState = IDLE_DELETION) {
+  const history: DeletionState[] = [];
+  let state = initial;
+  const events: DeletionEvent[] = [];
+  const dispatch = (event: DeletionEvent): void => {
+    events.push(event);
+    state = deletionReducer(state, event);
+    history.push(state);
+  };
+  return { dispatch, get state() { return state; }, history, events };
+}
 
-  it('on by default for a Windows agent: removes the agent from the host first, then deletes the row', async () => {
+const OK = { ok: true, steps: [{ id: 'task', outcome: 'done' }] };
+const FAILED_STEPS = [{ id: 'task', outcome: 'done' }, { id: 'firewall', outcome: 'failed', detail: 'not elevated' }];
+function calls(over: Partial<DeletionCalls> = {}): DeletionCalls {
+  return {
+    uninstallHost: vi.fn(async () => OK),
+    deleteRow: vi.fn(async () => ({ ok: true })),
+    ...over,
+  };
+}
+
+describe('the state of the confirmation', () => {
+  it('opens with the defaults, and cancel goes back to idle', () => {
+    const s = screen();
+    s.dispatch({ type: 'open' });
+    expect(s.state).toMatchObject({ phase: 'confirming', choice: DEFAULT_HOST_REMOVAL, failure: null, rowError: null, deletingRow: false });
+    s.dispatch({ type: 'cancel' });
+    expect(s.state).toEqual(IDLE_DELETION);
+  });
+
+  it('the choices follow the rules (the misao needs the host removal) and are fixed while something is in flight', () => {
+    const s = screen();
+    s.dispatch({ type: 'open' });
+    s.dispatch({ type: 'chooseRemoveMisao', value: true });
+    expect(s.state.choice).toEqual({ removeFromHost: true, removeMisao: true });
+    s.dispatch({ type: 'chooseRemoveFromHost', value: false });
+    expect(s.state.choice).toEqual({ removeFromHost: false, removeMisao: false });
+    s.dispatch({ type: 'chooseRemoveMisao', value: true });
+    expect(s.state.choice.removeMisao).toBe(false);
+    s.dispatch({ type: 'chooseRemoveFromHost', value: true });
+    s.dispatch({ type: 'removingHost' });
+    expect(isDeletionBusy(s.state)).toBe(true);
+    s.dispatch({ type: 'chooseRemoveMisao', value: true });
+    expect(s.state.choice.removeMisao).toBe(false);
+    s.dispatch({ type: 'cancel' });
+    expect(s.state.phase).toBe('removingHost');
+  });
+
+  it('opening again while it is open changes nothing', () => {
+    const s = screen();
+    s.dispatch({ type: 'open' });
+    s.dispatch({ type: 'chooseRemoveMisao', value: true });
+    s.dispatch({ type: 'open' });
+    expect(s.state.choice.removeMisao).toBe(true);
+  });
+});
+
+describe('runDeletion', () => {
+  it('on by default for a Windows agent: removes the agent from the host first, then deletes the row, and the screen ends idle', async () => {
     const c = calls();
-    const started = vi.fn();
-    expect(await runDeletion(c, 'windows', DEFAULT_HOST_REMOVAL, started)).toEqual({ kind: 'deleted' });
-    expect(c.order).toEqual(['uninstall', 'delete']);
+    const s = screen(deletionReducer(IDLE_DELETION, { type: 'open' }));
+    await runDeletion(c, 'windows', DEFAULT_HOST_REMOVAL, s.dispatch);
+    expect(s.events.map((e) => e.type)).toEqual(['removingHost', 'deletingRow', 'result']);
+    expect(s.history[0]).toMatchObject({ phase: 'removingHost' });
+    expect(s.history[1]).toMatchObject({ phase: 'confirming', deletingRow: true });
+    expect(s.state).toEqual(IDLE_DELETION);
     expect(c.uninstallHost).toHaveBeenCalledWith({ removeMisao: false });
-    expect(started).toHaveBeenCalledOnce();
+    expect(c.deleteRow).toHaveBeenCalledOnce();
   });
 
   it('passes the misao choice', async () => {
@@ -118,41 +171,109 @@ describe('runDeletion', () => {
 
   it('off: only the row is deleted, the host is not asked (an offline host can still be forgotten)', async () => {
     const c = calls({ uninstallHost: vi.fn(async () => { throw new Error('connect ETIMEDOUT'); }) });
-    const started = vi.fn();
-    expect(await runDeletion(c, 'windows', { removeFromHost: false, removeMisao: false }, started)).toEqual({ kind: 'deleted' });
+    const s = screen(deletionReducer(IDLE_DELETION, { type: 'open' }));
+    await runDeletion(c, 'windows', { removeFromHost: false, removeMisao: false }, s.dispatch);
     expect(c.uninstallHost).not.toHaveBeenCalled();
-    expect(started).not.toHaveBeenCalled();
+    expect(s.events.map((e) => e.type)).toEqual(['deletingRow', 'result']);
+    expect(s.state).toEqual(IDLE_DELETION);
   });
 
   it.each(['unsupported', 'none'] as const)('%s: only the row is deleted', async (support) => {
     const c = calls();
-    expect(await runDeletion(c, support, DEFAULT_HOST_REMOVAL, () => undefined)).toEqual({ kind: 'deleted' });
+    await runDeletion(c, support, DEFAULT_HOST_REMOVAL, () => undefined);
     expect(c.uninstallHost).not.toHaveBeenCalled();
+    expect(c.deleteRow).toHaveBeenCalledOnce();
   });
 
-  it('a failed step keeps the row and hands back every step', async () => {
-    const steps = [{ id: 'task', outcome: 'done' }, { id: 'firewall', outcome: 'failed', detail: 'not elevated' }];
-    const c = calls({ uninstallHost: vi.fn(async () => ({ ok: false, steps })) });
-    expect(await runDeletion(c, 'windows', DEFAULT_HOST_REMOVAL, () => undefined)).toEqual({ kind: 'hostFailed', failure: { kind: 'steps', steps } });
+  it('a failed step keeps the row and keeps every step on the screen', async () => {
+    const c = calls({ uninstallHost: vi.fn(async () => ({ ok: false, steps: FAILED_STEPS })) });
+    const s = screen(deletionReducer(IDLE_DELETION, { type: 'open' }));
+    await runDeletion(c, 'windows', DEFAULT_HOST_REMOVAL, s.dispatch);
     expect(c.deleteRow).not.toHaveBeenCalled();
+    expect(s.state).toMatchObject({ phase: 'hostFailed', failure: { kind: 'steps', steps: FAILED_STEPS }, rowError: null, deletingRow: false });
   });
 
   it('an unreachable host (the call throws) keeps the row, with the reason', async () => {
     const c = calls({ uninstallHost: vi.fn(async () => { throw new Error('Unauthorized'); }) });
-    expect(await runDeletion(c, 'windows', DEFAULT_HOST_REMOVAL, () => undefined)).toEqual({ kind: 'hostFailed', failure: { kind: 'error', message: 'Unauthorized' } });
+    const s = screen(deletionReducer(IDLE_DELETION, { type: 'open' }));
+    await runDeletion(c, 'windows', DEFAULT_HOST_REMOVAL, s.dispatch);
     expect(c.deleteRow).not.toHaveBeenCalled();
+    expect(s.state).toMatchObject({ phase: 'hostFailed', failure: { kind: 'error', message: 'Unauthorized' } });
   });
 
   it('a refused request (an error body) keeps the row', async () => {
     const c = calls({ uninstallHost: vi.fn(async () => ({ error: 'ssh: connect to host failed' })) });
-    const result = await runDeletion(c, 'windows', DEFAULT_HOST_REMOVAL, () => undefined);
-    expect(result).toEqual({ kind: 'hostFailed', failure: { kind: 'error', message: 'ssh: connect to host failed' } });
+    const s = screen(deletionReducer(IDLE_DELETION, { type: 'open' }));
+    await runDeletion(c, 'windows', DEFAULT_HOST_REMOVAL, s.dispatch);
     expect(c.deleteRow).not.toHaveBeenCalled();
+    expect(s.state).toMatchObject({ phase: 'hostFailed', failure: { kind: 'error', message: 'ssh: connect to host failed' } });
   });
 
-  it('a row that cannot be deleted after the host was cleaned is reported, not hidden', async () => {
+  it('a row that cannot be deleted after the host was cleaned is reported on the choices screen, not hidden', async () => {
     const c = calls({ deleteRow: vi.fn(async () => ({ error: 'database is locked' })) });
-    expect(await runDeletion(c, 'windows', DEFAULT_HOST_REMOVAL, () => undefined)).toEqual({ kind: 'rowFailed', message: 'database is locked' });
+    const s = screen(deletionReducer(IDLE_DELETION, { type: 'open' }));
+    await runDeletion(c, 'windows', DEFAULT_HOST_REMOVAL, s.dispatch);
+    expect(s.state).toMatchObject({ phase: 'confirming', rowError: 'database is locked', deletingRow: false, failure: null });
+  });
+});
+
+describe('the failure screen across the steps that follow it', () => {
+  it('host removal fails, then "delete the entry only" fails too: the failure and the row\'s reason are both there, with the three choices still possible', async () => {
+    const c = calls({
+      uninstallHost: vi.fn(async () => ({ ok: false, steps: FAILED_STEPS })),
+      deleteRow: vi.fn(async () => ({ error: 'database is locked' })),
+    });
+    const s = screen(deletionReducer(IDLE_DELETION, { type: 'open' }));
+    await runDeletion(c, 'windows', DEFAULT_HOST_REMOVAL, s.dispatch);
+    const afterHost = s.state;
+    expect(afterHost).toMatchObject({ phase: 'hostFailed', failure: { kind: 'steps' } });
+
+    const pending = runEntryOnly(c, s.dispatch);
+    // While the entry is being deleted the host failure is still there (it used to be cleared, which left an empty screen).
+    expect(s.state).toMatchObject({ phase: 'hostFailed', failure: afterHost.failure, deletingRow: true, rowError: null });
+    expect(isDeletionBusy(s.state)).toBe(true);
+    await pending;
+
+    expect(s.state).toMatchObject({ phase: 'hostFailed', failure: afterHost.failure, deletingRow: false, rowError: 'database is locked' });
+    expect(isDeletionBusy(s.state)).toBe(false);
+    // The person can still cancel, and try again.
+    const retry = vi.fn(async () => OK);
+    c.uninstallHost = retry;
+    c.deleteRow = vi.fn(async () => ({ ok: true }));
+    await runDeletion(c, 'windows', DEFAULT_HOST_REMOVAL, s.dispatch);
+    expect(retry).toHaveBeenCalledOnce();
+    expect(s.state).toEqual(IDLE_DELETION);
+  });
+
+  it('a retry that fails again replaces the failure with the new one', async () => {
+    const c = calls({ uninstallHost: vi.fn(async () => ({ ok: false, steps: FAILED_STEPS })) });
+    const s = screen(deletionReducer(IDLE_DELETION, { type: 'open' }));
+    await runDeletion(c, 'windows', DEFAULT_HOST_REMOVAL, s.dispatch);
+    const second = [{ id: 'folder', outcome: 'failed', detail: 'in use' }];
+    c.uninstallHost = vi.fn(async () => ({ ok: false, steps: second }));
+    await runDeletion(c, 'windows', DEFAULT_HOST_REMOVAL, s.dispatch);
+    expect(s.state).toMatchObject({ phase: 'hostFailed', failure: { kind: 'steps', steps: second } });
+  });
+
+  it('cancel on the failure screen goes back to idle; it is refused while a deletion is in flight', async () => {
+    const c = calls({ uninstallHost: vi.fn(async () => ({ ok: false, steps: FAILED_STEPS })) });
+    const s = screen(deletionReducer(IDLE_DELETION, { type: 'open' }));
+    await runDeletion(c, 'windows', DEFAULT_HOST_REMOVAL, s.dispatch);
+    s.dispatch({ type: 'deletingRow' });
+    s.dispatch({ type: 'cancel' });
+    expect(s.state.phase).toBe('hostFailed');
+    s.dispatch({ type: 'result', result: { kind: 'rowFailed', message: 'x' } });
+    s.dispatch({ type: 'cancel' });
+    expect(s.state).toEqual(IDLE_DELETION);
+  });
+
+  it('deleting the entry only, after the failure, ends idle when it works', async () => {
+    const c = calls({ uninstallHost: vi.fn(async () => ({ ok: false, steps: FAILED_STEPS })) });
+    const s = screen(deletionReducer(IDLE_DELETION, { type: 'open' }));
+    await runDeletion(c, 'windows', DEFAULT_HOST_REMOVAL, s.dispatch);
+    await runEntryOnly(c, s.dispatch);
+    expect(s.state).toEqual(IDLE_DELETION);
+    expect(c.deleteRow).toHaveBeenCalledOnce();
   });
 });
 

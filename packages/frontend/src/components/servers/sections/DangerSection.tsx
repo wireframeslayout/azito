@@ -110,11 +110,7 @@ export default function DangerSection({ server, onDeleted }: DangerSectionProps)
             </Button>
           )}
         </div>
-        {deletion.phase !== 'idle' && (
-          <div style={{ marginTop: 'var(--space-4)' }}>
-            <DeleteServerPanel deletion={deletion} />
-          </div>
-        )}
+        <DeleteServerPanel deletion={deletion} />
       </div>
     </div>
   );
