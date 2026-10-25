@@ -460,7 +460,7 @@ export class PhaseLoopRunner {
       const vars = resolveTaskPromptVars(this.taskRepo, this.projectRepo, this.unitRepo, this.projectServerRepo, task.id, distributionRepoEntry?.provider);
       const expandedPrompt = renderSidekickBody(sidekick, {
         ...vars,
-        host: { node: await resolveSidekickNodeOnHost(server, this.transportFactory) },
+        host: { node: await resolveSidekickNodeOnHost(sidekick, server, this.transportFactory) },
         selfReview: {
           attempt: String(selfReviewCount + 1),
           maxAttempts: String(maxSelfReview),

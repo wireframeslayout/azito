@@ -195,3 +195,22 @@ describe('TaskPromptVarsResolver.resolveDir', () => {
     await expect(resolver.resolveDir(1, pkg)).rejects.toThrow('boom');
   });
 });
+
+describe('TaskPromptVarsResolver.resolveNode ({{host.node}})', () => {
+  const windowsAgent = () => makeResolver({
+    task: { findById: vi.fn(() => makeTask({ serverName: 'win' })) },
+    serverRepo: { findByName: vi.fn(() => makeServer({ name: 'win', type: 'agent' })) },
+    transportFactory: {
+      hostProfileFor: vi.fn(() => ({ platform: 'win32', arch: 'x64' })) as never,
+      getAgentTransport: vi.fn(() => ({ fetchNodeExecPath: vi.fn(async () => { throw new Error('did not report its node executable; update the agent'); }) })) as never,
+    },
+  });
+
+  it('a sidekick that does not use {{host.node}} renders on a Windows agent that cannot report its node', async () => {
+    expect(await windowsAgent().resolver.resolveNode(1, { body: 'plain body' })).toBe('node');
+  });
+
+  it('one that uses it fails with the explicit reason', async () => {
+    await expect(windowsAgent().resolver.resolveNode(1, { body: 'run {{host.node}} x' })).rejects.toThrow(/update the agent/);
+  });
+});

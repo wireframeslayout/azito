@@ -65,7 +65,7 @@ export class RenderSkillPromptUseCase {
     const dir = await this.resolveDirForTask(task, sidekick);
 
     const vars = resolveTaskPromptVars(this.taskRepo, this.projectRepo, this.unitRepo, this.projectServerRepo, taskId);
-    const expandedBody = renderSidekickBody(sidekick, { ...vars, host: { node: await this.resolveNodeForTask(task) } }, false, dir);
+    const expandedBody = renderSidekickBody(sidekick, { ...vars, host: { node: await this.resolveNodeForTask(task, sidekick) } }, false, dir);
     const nextPhase = resolveNextPhase(phaseConfig, phase, unitType.phases);
 
     const nextPhaseDef = nextPhase ? unitType.phases.find((p) => p.name === nextPhase) : null;
@@ -78,10 +78,10 @@ export class RenderSkillPromptUseCase {
   }
 
   /** `{{host.node}}` for the task's execution server (best-effort `node` when the server cannot be resolved: a read-only render). */
-  private async resolveNodeForTask(task: Pick<Task, 'projectId' | 'serverName'>): Promise<string> {
+  private async resolveNodeForTask(task: Pick<Task, 'projectId' | 'serverName'>, sidekick: SidekickPackage): Promise<string> {
     const serverName = resolveTaskServerName(task, this.projectServerRepo);
     const server = serverName ? this.serverRepo.findByName(serverName) : null;
-    return server ? resolveSidekickNodeOnHost(server, this.transportFactory) : 'node';
+    return server ? resolveSidekickNodeOnHost(sidekick, server, this.transportFactory) : 'node';
   }
 
   private async resolveDirForTask(task: Pick<Task, 'projectId' | 'serverName'>, sidekick: SidekickPackage): Promise<string> {

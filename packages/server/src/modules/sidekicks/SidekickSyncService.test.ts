@@ -197,23 +197,31 @@ describe('resolveSidekickDirOnHost', () => {
 });
 
 describe('resolveSidekickNodeOnHost ({{host.node}})', () => {
+  const usesNode = { body: 'run {{host.node}} "x.mjs"' };
+  const noNode = { body: 'no scripts here' };
   const factory = (platform: 'linux' | 'win32' | null, nodePath = 'C:\\Program Files\\nodejs\\node.exe') => ({
     hostProfileFor: () => (platform ? { platform, arch: 'x64' } : null),
     getAgentTransport: () => ({ fetchNodeExecPath: async () => nodePath }),
   }) as never;
 
+  it('is not asked of an agent that cannot report it when the body does not use it, and is an explicit error when the body does', async () => {
+    const old = { hostProfileFor: () => ({ platform: 'win32', arch: 'x64' }), getAgentTransport: () => ({ fetchNodeExecPath: async () => { throw new Error('did not report its node executable; update the agent'); } }) } as never;
+    expect(await resolveSidekickNodeOnHost(noNode, { type: 'agent' }, old)).toBe('node');
+    await expect(resolveSidekickNodeOnHost(usesNode, { type: 'agent' }, old)).rejects.toThrow(/update the agent/);
+  });
+
   it('is a bare node on a POSIX host (and one whose OS is not recorded)', async () => {
-    expect(await resolveSidekickNodeOnHost({ type: 'agent' }, factory('linux'))).toBe('node');
-    expect(await resolveSidekickNodeOnHost({ type: 'agent' }, factory(null))).toBe('node');
+    expect(await resolveSidekickNodeOnHost(usesNode, { type: 'agent' }, factory('linux'))).toBe('node');
+    expect(await resolveSidekickNodeOnHost(usesNode, { type: 'agent' }, factory(null))).toBe('node');
   });
 
   it("is the Windows agent's own node.exe by full path in double quotes", async () => {
-    expect(await resolveSidekickNodeOnHost({ type: 'agent' }, factory('win32'))).toBe('"C:/Program Files/nodejs/node.exe"');
+    expect(await resolveSidekickNodeOnHost(usesNode, { type: 'agent' }, factory('win32'))).toBe('"C:/Program Files/nodejs/node.exe"');
   });
 
   it("is the hub's own node for a Windows hub's local server, and refuses a path the shell would read inside quotes", async () => {
-    expect(await resolveSidekickNodeOnHost({ type: 'local' }, factory('win32'))).toBe(`"${process.execPath.replace(/\\/g, '/')}"`);
-    await expect(resolveSidekickNodeOnHost({ type: 'agent' }, factory('win32', 'C:\\no$de\\node.exe'))).rejects.toThrow(/node executable/);
+    expect(await resolveSidekickNodeOnHost(usesNode, { type: 'local' }, factory('win32'))).toBe(`"${process.execPath.replace(/\\/g, '/')}"`);
+    await expect(resolveSidekickNodeOnHost(usesNode, { type: 'agent' }, factory('win32', 'C:\\no$de\\node.exe'))).rejects.toThrow(/node executable/);
   });
 });
 

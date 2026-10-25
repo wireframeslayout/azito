@@ -37,14 +37,14 @@ export class TaskPromptVarsResolver implements ITaskPromptVarsResolver {
     return resolveTaskPromptVars(this.taskRepo, this.projectRepo, this.unitRepo, this.projectServerRepo, taskId);
   }
 
-  async resolveNode(taskId: number): Promise<string> {
+  async resolveNode(taskId: number, pkg: Pick<SidekickPackage, 'body'>): Promise<string> {
     const task = this.taskRepo.findById(taskId);
     if (!task) {
       throw new Error(`Task not found: ${taskId}`);
     }
     const serverName = resolveTaskServerName(task, this.projectServerRepo);
     const server = serverName ? this.serverRepo.findByName(serverName) : null;
-    return server ? resolveSidekickNodeOnHost(server, this.transportFactory) : 'node';
+    return server ? resolveSidekickNodeOnHost(pkg, server, this.transportFactory) : 'node';
   }
 
   async resolveDir(taskId: number, pkg: Pick<SidekickPackage, 'name' | 'dir'>): Promise<string> {

@@ -93,10 +93,13 @@ export async function resolveSidekickDirOnHost(
  * worker's PATH may not have `node` (a Windows host with only the native Claude Code). In PowerShell it is run with `& ` in front.
  */
 export async function resolveSidekickNodeOnHost(
+  pkg: Pick<SidekickPackage, 'body'>,
   server: Pick<ServerConfig, 'type'>,
   transportFactory: Pick<TransportFactory, 'hostProfileFor' | 'getAgentTransport'>,
 ): Promise<string> {
   if (transportFactory.hostProfileFor(server as ServerConfig)?.platform !== 'win32') return 'node';
+  // Only a body that runs a Node script needs it: a Windows agent that cannot report its node (an older one) still renders every other sidekick.
+  if (!pkg.body.includes('{{host.node}}')) return 'node';
   const node = server.type === 'local' ? process.execPath : await transportFactory.getAgentTransport(server as ServerConfig).fetchNodeExecPath();
   return `"${checkedWindowsPromptPath(node, 'The node executable')}"`;
 }

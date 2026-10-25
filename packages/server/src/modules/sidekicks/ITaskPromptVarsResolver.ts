@@ -32,6 +32,6 @@ export interface ITaskPromptVarsResolver {
    */
   resolveDir(taskId: number, pkg: Pick<SidekickPackage, 'name' | 'dir'>): Promise<string>;
 
-  /** `{{host.node}}`: how a body runs a Node script on the task's execution server (`node`; a Windows host's own node.exe by full path). */
-  resolveNode(taskId: number): Promise<string>;
+  /** `{{host.node}}` (resolved only for a body that uses it): how a body runs a Node script on the task's execution server (`node`; a Windows host's own node.exe by full path). */
+  resolveNode(taskId: number, pkg: Pick<SidekickPackage, 'body'>): Promise<string>;
 }
