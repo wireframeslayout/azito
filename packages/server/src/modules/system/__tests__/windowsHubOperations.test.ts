@@ -1,16 +1,16 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import type { ServiceManager } from '../modules/system/serviceManager';
-import { powershellEncodedArgs } from '../shared/os/shellDialect';
-import { buildHubTaskXml, buildSingleRunLauncherScript, hubWindowsLayout } from '../modules/system/windowsHubService';
-import { installWindowsTask, requireOwnTask, type WindowsHub } from './serviceCommandWindows';
-import type { ServiceCommandContext } from './serviceCommandContext';
+import type { ServiceManager } from '../serviceManager';
+import { powershellEncodedArgs } from '../../../shared/os/shellDialect';
+import { buildHubTaskXml, buildSingleRunLauncherScript, hubWindowsLayout } from '../windowsHubService';
+import { UnixSecretFileGuard } from '../../../shared/os/secretFileGuard';
+import { installWindowsTask, requireOwnTask, type ServiceCommandContext, type WindowsHub } from '../windowsHubOperations';
 
 const MINE = 'C:\\Users\\me\\.azito';
 const OTHER = 'C:\\Users\\other\\.azito';
 const xmlFor = (prefix: string): string => buildHubTaskXml({ userId: 'PC\\me', systemRoot: 'C:\\Windows', layout: hubWindowsLayout(prefix) });
 /** The task as the first 0.12 builds registered it: the launcher that ran the hub once. */
 const singleRunXmlFor = (prefix: string): string => xmlFor(prefix).replace(/-EncodedCommand [A-Za-z0-9+/=]+/, `-EncodedCommand ${powershellEncodedArgs(buildSingleRunLauncherScript(hubWindowsLayout(prefix))).at(-1)}`);
-const context: ServiceCommandContext = { env: { USERDOMAIN: 'PC', USERNAME: 'me' }, bundleRoot: `${MINE}\\hub\\v1.0.0`, pid: 1 };
+const context: ServiceCommandContext = { env: { USERDOMAIN: 'PC', USERNAME: 'me' }, bundleRoot: `${MINE}\\hub\\v1.0.0`, pid: 1, secretFileGuard: new UnixSecretFileGuard() };
 
 /** `registered` is what the Task Scheduler holds (undefined: no task); `copy` is our definition copy; they may disagree. */
 function setup(registered: string | undefined, copy: string | undefined, running = false) {

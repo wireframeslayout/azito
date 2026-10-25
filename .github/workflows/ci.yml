@@ -274,6 +274,14 @@ jobs:
         timeout-minutes: 12
         run: npx -w packages/server tsx scripts/smoke-recovery-win32.ts "$(cd packages/server && ls dist-hub/azito-hub-*.zip)" dist-hub/SHA256SUMS ../../install.ps1
 
+      # The in-app update of a Windows hub (#381): a fake release server on the loopback (AZITO_UPDATE_API_BASE) serves two builds of this very
+      # bundle as releases; the hub (task AzitoHub) updates itself through the one-shot task AzitoHubUpdate. A zip whose SHA256 does not match, a
+      # build whose --version is wrong and a build that never serves each leave (or put) the hub back on the old version; a held hub lock stops
+      # both the update and `azito service restart`; misao.exe is never restarted and its window stays; the Setup row's misao update runs once.
+      - name: Update the Windows hub from the app (AzitoHubUpdate task, fake release server, rollback)
+        timeout-minutes: 20
+        run: npx -w packages/server tsx scripts/smoke-update-win32.ts "$(cd packages/server && ls dist-hub/azito-hub-*.zip)" dist-hub/SHA256SUMS ../../install.ps1
+
       # install.ps1 run as text, the way `irm | iex` and `& ([scriptblock]::Create((irm <url>))) <args>` run it: the options by AZITO_INSTALL_*
       # variables or arguments (-Port), the caller's session left clean, a failure that stops with a reason, a missing git, `azito restart`.
       # Runs last: it registers the same Task Scheduler tasks as the two smoke tests above and removes them again.

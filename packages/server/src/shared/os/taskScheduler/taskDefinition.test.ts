@@ -73,6 +73,18 @@ describe('buildTaskXml', () => {
     expect(buildTaskXml(INPUT)).toBe(EXPECTED);
   });
 
+  it('an on-demand task has no trigger at all, so it runs only when something calls /Run', () => {
+    const xml = buildTaskXml({ ...INPUT, trigger: 'on-demand' });
+    expect(xml).not.toMatch(/<Triggers>|<LogonTrigger>/);
+    expect(xml).toContain('<Principals>');
+  });
+
+  it('writes the execution time limit it is given and refuses what is not a duration', () => {
+    expect(buildTaskXml({ ...INPUT, executionTimeLimit: 'PT1H' })).toContain('<ExecutionTimeLimit>PT1H</ExecutionTimeLimit>');
+    expect(buildTaskXml(INPUT)).toContain('<ExecutionTimeLimit>PT0S</ExecutionTimeLimit>');
+    for (const bad of ['1H', 'PT', 'PT1D', '<x/>']) expect(() => buildTaskXml({ ...INPUT, executionTimeLimit: bad })).toThrow(/executionTimeLimit/);
+  });
+
   it('asks for no admin rights and stores no password', () => {
     const xml = buildTaskXml(INPUT);
     expect(xml).toContain('<LogonType>InteractiveToken</LogonType>');

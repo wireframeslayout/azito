@@ -22,6 +22,13 @@ export interface TaskDefinitionInput {
   /** Absolute Windows path. */
   workingDirectory: string;
   restartOnFailure: { intervalMinutes: number; count: number };
+  /**
+   * What starts the task: `logon` (default) runs it when `userId` logs on; `on-demand` has no trigger at all, so it runs only when
+   * something calls `/Run` (a one-shot task such as the hub update must not start again at the next logon if it is left behind).
+   */
+  trigger?: 'logon' | 'on-demand';
+  /** ISO 8601 duration after which the Task Scheduler ends the task (default `PT0S`: never). */
+  executionTimeLimit?: string;
 }
 
 // There is deliberately no environment input: a Task Scheduler action cannot carry environment variables. The launcher the
@@ -82,18 +89,25 @@ export function buildTaskXml(input: TaskDefinitionInput): string {
   const argumentsLine = input.args !== undefined ? joinWindowsArgs(input.args) : input.argumentsLine!;
   assertNoEnvExpansion(argumentsLine, 'args');
   const user = escapeXml(input.userId);
+  const executionTimeLimit = input.executionTimeLimit ?? 'PT0S';
+  if (!/^PT(\d+H)?(\d+M)?(\d+S)?$/.test(executionTimeLimit) || executionTimeLimit === 'PT') throw new Error(`executionTimeLimit must be a time duration such as PT30M (got "${executionTimeLimit}")`);
+  const triggers = (input.trigger ?? 'logon') === 'logon'
+    ? [
+        '  <Triggers>',
+        '    <LogonTrigger>',
+        '      <Enabled>true</Enabled>',
+        `      <UserId>${user}</UserId>`,
+        '    </LogonTrigger>',
+        '  </Triggers>',
+      ]
+    : [];
   const lines = [
     '<?xml version="1.0" encoding="UTF-16"?>',
     '<Task version="1.2" xmlns="http://schemas.microsoft.com/windows/2004/02/mit/task">',
     '  <RegistrationInfo>',
     `    <Description>${escapeXml(input.description)}</Description>`,
     '  </RegistrationInfo>',
-    '  <Triggers>',
-    '    <LogonTrigger>',
-    '      <Enabled>true</Enabled>',
-    `      <UserId>${user}</UserId>`,
-    '    </LogonTrigger>',
-    '  </Triggers>',
+    ...triggers,
     '  <Principals>',
     '    <Principal id="Author">',
     `      <UserId>${user}</UserId>`,
@@ -117,7 +131,7 @@ export function buildTaskXml(input: TaskDefinitionInput): string {
     '    <Hidden>false</Hidden>',
     '    <RunOnlyIfIdle>false</RunOnlyIfIdle>',
     '    <WakeToRun>false</WakeToRun>',
-    '    <ExecutionTimeLimit>PT0S</ExecutionTimeLimit>',
+    `    <ExecutionTimeLimit>${executionTimeLimit}</ExecutionTimeLimit>`,
     // 4-6 is NORMAL. 7 (the Task Scheduler default) is BELOW_NORMAL, and the class is inherited: the service's children (pane shells, agents, builds) would all run below the user's foreground apps.
     '    <Priority>5</Priority>',
     '    <RestartOnFailure>',

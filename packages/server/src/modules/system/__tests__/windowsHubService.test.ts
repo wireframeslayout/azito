@@ -210,6 +210,21 @@ describe('findHubProcesses', () => {
     expect(script.indexOf('$cim.CommandLine -notmatch $pattern')).toBeLessThan(script.indexOf('Get-Owner $cim'));
   });
 
+  it('can be limited to processes whose argument right after azito-hub.cjs is exactly the given word, split by the OS\'s own rule', async () => {
+    const run = vi.fn(async (_spec: CommandSpec) => result(0, ''));
+    await findHubProcesses(run, 'C:\\Windows', [`${PREFIX}\\hub`], 1, 'update-run');
+    await findHubProcesses(run, 'C:\\Windows', [`${PREFIX}\\hub`], 1);
+    const limited = scriptOf(run.mock.calls[0][0]);
+    expect(limited).toContain('CommandLineToArgvW');
+    expect(limited).toContain('$argv = [AzitoArgv]::Split($cim.CommandLine)');
+    expect(limited).toContain("$argv[$i].EndsWith('\\azito-hub.cjs', [StringComparison]::OrdinalIgnoreCase) -and $argv[$i + 1] -ceq 'update-run'");
+    // The bundle's path, the owner and the creation time are still checked, and the extra test comes before the owner is looked at.
+    expect(limited).toContain('$cim.CommandLine -notmatch $pattern');
+    expect(limited.indexOf('[AzitoArgv]::Split')).toBeLessThan(limited.indexOf('Get-Owner $cim'));
+    expect(scriptOf(run.mock.calls[1][0])).not.toContain('AzitoArgv');
+    await expect(findHubProcesses(run, 'C:\\Windows', [`${PREFIX}\\hub`], 1, "x'; calc")).rejects.toThrow(/Not a plain word/);
+  });
+
   it('fails with the script\'s own message', async () => {
     await expect(findHubProcesses(async () => result(1, '', 'boom'), 'C:\\Windows', [`${PREFIX}\\hub`], 1)).rejects.toThrow(/Looking for the hub processes failed.*boom/);
   });

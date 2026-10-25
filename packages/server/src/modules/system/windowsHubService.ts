@@ -12,7 +12,7 @@ import { HUB_POINTER_VERSION_PATTERN } from './hubVersion';
  *
  * Why the definition does not change when the hub is updated: the task runs a launcher (an inline PowerShell script, see
  * {@link buildHubLauncherScript}) that reads `<prefix>\hub\current.txt` each time it starts and runs that version's `run.ps1`. The
- * pointer is the one thing an update switches (the Unix `current` symlink, and #381 after it), so no update has to register the
+ * pointer is the one thing an update switches (the Unix `current` symlink's counterpart; the in-app update, `windowsUpdateBackend.ts`, writes it), so no update has to register the
  * task again, and a rollback of the pointer is a rollback of what the task runs.
  */
 
@@ -55,7 +55,7 @@ export interface HubRestartTiming {
 export const HUB_RESTART_TIMING: HubRestartTiming = { baseSeconds: 5, maxSeconds: 60, stableSeconds: 300 };
 
 /** The launcher is in the task's command line; 8191 characters is cmd.exe's limit, the smallest on the way. */
-const MAX_COMMAND_LINE = 8191;
+export const MAX_COMMAND_LINE = 8191;
 
 /**
  * The script the task runs: a loop around "read the pointer, check that it names an installed version, run that version's `run.ps1`
@@ -181,7 +181,7 @@ const QUOTE_CHARS = "'‘’‚‛";
 const HUB_ROOT_LINE = new RegExp(`^\\$hubRoot = '((?:[^${QUOTE_CHARS}]|([${QUOTE_CHARS}])\\2)*)'\\r?$`, 'm');
 
 /** What a task's action runs: the program and its arguments as one command line. */
-interface TaskExec {
+export interface TaskExec {
   command: string;
   argumentsLine: string;
 }
@@ -201,7 +201,7 @@ function hubTaskExec(systemRoot: string, launcher: string): TaskExec {
  * (no second Exec, no ComHandler, SendEmail, ShowMessage or any other element, no text). A task with more actions than the one this
  * code generates would run more than the hub, so it is not ours.
  */
-function singleExec(xml: string): TaskExec | undefined {
+export function singleExec(xml: string): TaskExec | undefined {
   const withoutComments = xml.replace(/<!--[\s\S]*?-->/g, '');
   const actions = [...withoutComments.matchAll(/<Actions\b[^>]*>([\s\S]*?)<\/Actions>/g)];
   if (actions.length !== 1) return undefined;
@@ -284,7 +284,7 @@ export function buildHubTaskXml(input: HubTaskInput): string {
   });
 }
 
-function windowsPowershell(systemRoot: string): string {
+export function windowsPowershell(systemRoot: string): string {
   return path.win32.join(systemRoot, 'System32', 'WindowsPowerShell', 'v1.0', 'powershell.exe');
 }
 
@@ -324,14 +324,42 @@ const PROCESS_PREAMBLE = [
 ];
 
 /**
+ * Splits a command line with Windows' own `CommandLineToArgvW`, called from PowerShell, rather than a re-implementation of its rules in
+ * TypeScript or PowerShell: the rule is the one `quoteWindowsArg` is written against, and what the OS gives back is what any program (node.exe
+ * included) sees as its arguments. Compiled in the PowerShell session; nothing is installed.
+ */
+export const ARGV_HELPER = `Add-Type -TypeDefinition @'
+using System;
+using System.Runtime.InteropServices;
+public static class AzitoArgv {
+  [DllImport("shell32.dll", SetLastError = true)]
+  static extern IntPtr CommandLineToArgvW([MarshalAs(UnmanagedType.LPWStr)] string commandLine, out int argc);
+  [DllImport("kernel32.dll")]
+  static extern IntPtr LocalFree(IntPtr handle);
+  public static string[] Split(string commandLine) {
+    int count;
+    IntPtr argv = CommandLineToArgvW(commandLine, out count);
+    if (argv == IntPtr.Zero) throw new System.ComponentModel.Win32Exception(Marshal.GetLastWin32Error());
+    try {
+      var result = new string[count];
+      for (int i = 0; i < count; i++) result[i] = Marshal.PtrToStringUni(Marshal.ReadIntPtr(argv, i * IntPtr.Size));
+      return result;
+    } finally { LocalFree(argv); }
+  }
+}
+'@`;
+
+/**
  * The hub processes of this install, to be found BEFORE the task is ended: a `node.exe` of this user whose command line has an
  * `azito-hub.cjs` of ANY version folder under `<prefix>\hub\` as one whole argument. Any version, because a restart after `current.txt`
  * was switched must still wait for the version that is running. `hubRoots` are the spellings of `<prefix>\hub` to match (the given
  * one and its real path: a junction or an 8.3 name makes them differ); another prefix or another user's hub is not matched.
+ * `onlyWithArgument`: when given, only a process that also has it as one whole argument (`update-run`: the update process and not `azito misao ...` or the hub itself).
  * `excludePid` is the caller itself: `azito service stop` is a `node.exe` that names the same file.
  */
-export async function findHubProcesses(run: SpecRunner, systemRoot: string, hubRoots: readonly string[], excludePid: number): Promise<HubProcess[]> {
+export async function findHubProcesses(run: SpecRunner, systemRoot: string, hubRoots: readonly string[], excludePid: number, onlyWithArgument?: string): Promise<HubProcess[]> {
   const q = powershellDialect.quote;
+  if (onlyWithArgument !== undefined && !/^[A-Za-z0-9-]+$/.test(onlyWithArgument)) throw new Error(`Not a plain word: ${onlyWithArgument}`);
   const alternatives = hubRoots.map((root) => `[regex]::Escape(${q(`${root.replace(/[\\/]+$/, '')}\\`)})`).join(" + '|' + ");
   // Per candidate: the Process is opened FIRST (the handle keeps its id from being handed to another process), THEN the command line,
   // owner and creation date of that id are read, and the creation date must agree with the opened process's start time (WMI keeps
@@ -341,6 +369,7 @@ export async function findHubProcesses(run: SpecRunner, systemRoot: string, hubR
   // something is wrong (a protected process, a changed security setup) and the stop must not claim success.
   const script = [
     ...PROCESS_PREAMBLE,
+    ...(onlyWithArgument === undefined ? [] : [ARGV_HELPER]),
     `$roots = ${alternatives}`,
     "$pattern = '(^|[\\s\"])(' + $roots + ')[^\\\\\"\\s]+\\\\azito-hub\\.cjs([\\s\"]|$)'",
     `foreach ($p in @(Get-Process -Name node -ErrorAction SilentlyContinue)) {`,
@@ -349,6 +378,14 @@ export async function findHubProcesses(run: SpecRunner, systemRoot: string, hubR
     '  try { $null = $p.Handle; $started = $p.StartTime } catch { $openError = $_.Exception.Message }',
     '  $cim = Get-CimInstance Win32_Process -Filter "ProcessId = $($p.Id)"',
     '  if (-not $cim -or -not $cim.CommandLine -or $cim.CommandLine -notmatch $pattern) { continue }',
+    ...(onlyWithArgument === undefined ? [] : [
+      // The command line is split by the OS's own rule (CommandLineToArgvW, the inverse of `quoteWindowsArg`), and the argument right after the
+      // bundle's azito-hub.cjs must be exactly this word: a path or another argument that merely contains it is not a match.
+      '  $argv = [AzitoArgv]::Split($cim.CommandLine)',
+      '  $given = $false',
+      `  for ($i = 0; $i -lt $argv.Count - 1; $i++) { if ($argv[$i].EndsWith('\\azito-hub.cjs', [StringComparison]::OrdinalIgnoreCase) -and $argv[$i + 1] -ceq ${q(onlyWithArgument)}) { $given = $true } }`,
+      '  if (-not $given) { continue }',
+    ]),
     // Only a process whose command line is this hub's gets its owner looked at: an unrelated node.exe of another user is skipped above.
     '  $owner = Get-Owner $cim',
     '  if ($null -eq $owner.Mine) { throw "Cannot tell whose hub process $($p.Id) is (GetOwnerSid: $($owner.Reason))" }',

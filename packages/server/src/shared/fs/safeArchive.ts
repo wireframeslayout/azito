@@ -79,9 +79,32 @@ export async function extractZipSafely(options: ExtractZipOptions): Promise<void
       throw new Error(`Could not extract ${archive}: ${(err as Error).message}`);
     }
     if (fs.existsSync(destination)) throw new Error(`${destination} appeared while extracting; it is not overwritten`);
-    fs.renameSync(work, destination);
+    await renameFolder(work, destination);
   } finally {
     fs.rmSync(work, { recursive: true, force: true });
+  }
+}
+
+/** Windows reports these when something (Defender scanning what was just written, the search indexer) still has a file of the folder open. */
+const TRANSIENT_RENAME_CODES = new Set(['EPERM', 'EBUSY', 'EACCES']);
+const RENAME_ATTEMPTS = 10;
+const RENAME_RETRY_MS = 300;
+
+/**
+ * Renames the finished work folder into place. On Windows the rename of a folder that was written a moment ago can fail while a
+ * scanner holds one of its files, and succeeds a moment later, so those codes (and only those, only on Windows) are tried again for a few
+ * seconds; any other failure, or the last one, is thrown as it is.
+ */
+async function renameFolder(from: string, to: string): Promise<void> {
+  for (let attempt = 1; ; attempt++) {
+    try {
+      fs.renameSync(from, to);
+      return;
+    } catch (err) {
+      const code = (err as NodeJS.ErrnoException).code;
+      if (process.platform !== 'win32' || code === undefined || !TRANSIENT_RENAME_CODES.has(code) || attempt >= RENAME_ATTEMPTS) throw err;
+      await new Promise((resolve) => setTimeout(resolve, RENAME_RETRY_MS));
+    }
   }
 }
 
