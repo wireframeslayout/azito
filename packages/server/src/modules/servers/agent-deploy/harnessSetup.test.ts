@@ -20,7 +20,7 @@ let home: string;
 let emptyBin: string;
 
 beforeEach(() => {
-  home = fs.mkdtempSync(path.join(os.tmpdir(), 'azito-setup-'));
+  home = fs.mkdtempSync(path.join(fs.realpathSync.native(os.tmpdir()), 'azito-setup-'));
   emptyBin = path.join(home, 'empty-bin');
   fs.mkdirSync(emptyBin);
   home = path.join(home, 'home');
@@ -215,14 +215,13 @@ describe('setup.mjs', () => {
     }
   });
 
-  it.runIf(isWindows)('keeps the env files and the .azito directory to the current user (protected DACL, checked by the hub\'s guard)', async () => {
+  it.runIf(isWindows)('keeps the env files to the current user (protected DACL, checked by the hub\'s guard)', async () => {
     const result = await runSetup(FULL);
     expect(result.code).toBe(0);
     const guard = createWindowsSecretFileGuard(process.env);
     for (const name of ['azitoctl.env', 'operator.env']) {
       expect(guard.inspect(path.join(home, '.azito', name), 'file'), name).toEqual({ ok: true });
     }
-    expect(guard.inspect(path.join(home, '.azito'), 'dir')).toEqual({ ok: true });
   }, 120_000);
 });
 

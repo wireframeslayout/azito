@@ -19,7 +19,7 @@ let home: string;
 let files: IFileOps;
 
 beforeEach(() => {
-  home = fs.mkdtempSync(path.join(os.tmpdir(), 'harness-win-'));
+  home = fs.mkdtempSync(path.join(fs.realpathSync.native(os.tmpdir()), 'harness-win-'));
   files = new LocalFileOps(localFileOpsHost({ platform: process.platform === 'win32' ? 'win32' : 'linux', homeDir: home }));
 });
 
