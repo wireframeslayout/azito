@@ -60,10 +60,13 @@ describe.skipIf(process.platform !== 'win32')('tidying the old versions as a use
       `$p = Start-Process -FilePath ${q(spec.file)} -ArgumentList ${q(spec.args.join(' '))} -Credential $cred -LoadUserProfile -WorkingDirectory ${q(system32)} -RedirectStandardOutput ${q(out)} -RedirectStandardError ${q(err)} -Wait -PassThru`,
       'exit $p.ExitCode',
     ].join('\n');
-    const r = spawnSync(windowsPowershell(host!.systemRoot!), ['-NoProfile', '-NonInteractive', '-Command', script], { encoding: 'utf-8', timeout: 240_000 });
+    const r = spawnSync(windowsPowershell(host!.systemRoot!), ['-NoProfile', '-NonInteractive', '-Command', script], { encoding: 'utf-8', timeout: 240_000, env: outerEnv });
     const read = (file: string): string => (fs.existsSync(file) ? fs.readFileSync(file, 'utf-8') : '');
     return { exitCode: r.status ?? 1, stdout: read(out), stderr: `${read(err)}${r.stderr}`, signal: null };
   };
+
+  // The runner's PSModulePath may name PowerShell 7 modules that Windows PowerShell 5.1 cannot load (ConvertTo-SecureString then is not found).
+  const outerEnv = (() => { const env = { ...process.env }; for (const key of Object.keys(env)) if (key.toLowerCase() === 'psmodulepath') delete env[key]; return env; })();
 
   const asAdmin: SpecRunner = (spec) => runCommandSpec(spec, runHostOf(host!));
 
