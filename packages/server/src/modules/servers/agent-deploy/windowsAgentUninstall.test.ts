@@ -9,8 +9,8 @@ import { DEFAULT_WINDOWS_AGENT_OPTIONS, MISAO_WINDOWS_TASK_NAME, type WindowsAge
 import { WindowsAgentDeployer, windowsAgentEnvFile, type WindowsSshExec } from './WindowsAgentDeployer';
 import { FakeWindowsHost } from './testing/fakeWindowsHost';
 import { WINDOWS_HUB_TASK_NAME, uninstallWindowsAgent, type UninstallStepId, type WindowsUninstallHost, type WindowsUninstallResult } from './windowsAgentUninstall';
-import { folderScript, leftoverProcessesScript, misaoStopScript, parseFolderOutput, parseLeftoverOutput } from './windowsAgentUninstallScripts';
-import { HUB_COMMAND_LINE_PATTERN, firewallInspectScript, misaoGuardScript, parseFirewallOutput, parseMisaoGuardOutput, parseSameFileOutput, sameFileScript } from './windowsAgentOwnership';
+import { folderScript, leftoverProcessesScript, parseFolderOutput, parseLeftoverOutput, tailBelow } from './windowsAgentUninstallScripts';
+import { HUB_COMMAND_LINE_PATTERN, firewallInspectScript, misaoDaemonScript, misaoHubScript, parseFirewallOutput, parseMisaoGuardOutput, parseSameFileOutput, sameFileScript } from './windowsAgentOwnership';
 
 const HOME = 'C:\\Users\\dev';
 const OPTIONS = DEFAULT_WINDOWS_AGENT_OPTIONS;
@@ -62,8 +62,8 @@ class FakeUninstallHost {
     'Comparing the node.exe': 'SAME',
     'Looking for processes still running from the agent folder': 'CLEAR',
     'Looking for the Windows Firewall rule': 'ABSENT',
+    'Checking the hub of the misao': 'CLEAR',
     'Checking who runs the misao': 'CLEAR',
-    'Asking the misao daemon to stop': 'DONE',
     'Looking for processes still running from the misao folder': 'CLEAR',
     'Removing C:': 'DONE',
   };
@@ -148,9 +148,12 @@ describe('uninstallWindowsAgent', () => {
       expect(body, what).not.toMatch(/Stop-Process|taskkill|Remove-NetFirewallRule|\.Kill\(/i);
     }
     const left = host.bodyOf('Looking for processes still running from the agent folder');
-    expect(left).toContain(`'${AGENT_ROOT}'`);
-    expect(left).toContain('ExecutablePath.StartsWith($prefix');
-    expect(left).toContain('CommandLine.IndexOf($prefix');
+    expect(left).toContain(`$root = '${AGENT_ROOT}'; $tail = '\\.azito\\agent'`);
+    // A path in the executable or the command line, in any case, with / read as \\, in the long form, the 8.3 form and the part below the home.
+    expect(left).toContain("($t -replace '/', '\\').ToLowerInvariant()");
+    expect(left).toContain('Add-Needle $root; Add-Needle (Resolve-Long $root); Add-Needle $tail');
+    expect(left).toContain('GetFolder($root).ShortPath');
+    expect(left).toContain('(Norm $p.ExecutablePath) + "`n" + (Norm $p.CommandLine)');
   });
 
   it('reports "absent" for what is not there: no task, nothing running, no rule, no folder', async () => {
@@ -400,26 +403,23 @@ describe('uninstallWindowsAgent', () => {
   });
 
   describe('with the misao', () => {
-    it('ends its task, asks the daemon to stop through its own pipe, looks for what is left, and removes its folder', async () => {
+    it('ends its task and only looks for what is left (it stops no daemon, asks none to stop), then removes its folder', async () => {
       const host = new FakeUninstallHost({ AzitoAgent: { xml: AGENT_XML }, AzitoMisao: { xml: MISAO_XML, running: true } });
       const result = await run(host, true);
       expect(result.ok).toBe(true);
       expect(outcomes(result)).toEqual({ task: 'done', processes: 'absent', firewall: 'absent', folder: 'done', misaoTask: 'done', misaoProcesses: 'absent', misaoFolder: 'done' });
       expect(host.tasks.has('AzitoMisao')).toBe(false);
       const order = host.log.filter((l) => /AzitoMisao|misao/.test(l));
-      expect(order.indexOf('end AzitoMisao')).toBeLessThan(order.indexOf('script Asking the misao daemon to stop'));
-      expect(order.indexOf('script Asking the misao daemon to stop')).toBeLessThan(order.indexOf('script Looking for processes still running from the misao folder'));
-      const stop = host.bodyOf('Asking the misao daemon to stop');
-      expect(stop).toContain(`'${MISAO_ROOT}\\0.3.0\\misao.exe'`);
-      expect(stop).toContain(windowsMisaoPipe(MISAO_ROOT, 'dev'));
-      expect(host.bodyOf('Looking for processes still running from the misao folder')).toContain(`'${MISAO_ROOT}'`);
+      expect(order.indexOf('end AzitoMisao')).toBeLessThan(order.indexOf('script Looking for processes still running from the misao folder'));
+      expect(order.indexOf('delete AzitoMisao')).toBeLessThan(order.indexOf('script Looking for processes still running from the misao folder'));
+      expect(host.bodyOf('Looking for processes still running from the misao folder')).toContain(`$root = '${MISAO_ROOT}'`);
+      for (const { what, body } of host.bodies) expect(body, what).not.toMatch(/misao\.exe' -ArgumentList|Start-Process|MISAO_SOCKET|Stop-Process/);
     });
 
-    it('does not ask for a stop when the task is not there to say which misao.exe it runs, but still looks', async () => {
+    it('looks even when the task is not there', async () => {
       const host = new FakeUninstallHost({});
       const result = await run(host, true);
       expect(outcomes(result)).toMatchObject({ misaoTask: 'absent', misaoProcesses: 'absent', misaoFolder: 'done' });
-      expect(host.ran('Asking the misao daemon to stop')).toBe(false);
       expect(host.ran('Looking for processes still running from the misao folder')).toBe(true);
     });
 
@@ -437,13 +437,13 @@ describe('uninstallWindowsAgent', () => {
         const host = new FakeUninstallHost({
           AzitoAgent: { xml: AGENT_XML }, AzitoHub: { xml: hubTaskXml(`${HOME}\\w851`) }, 'w806-Misao': { xml: misaoXml(`${HOME}\\w851\\misao`, 'w806-Misao'), running: true },
         });
-        host.answers['Checking who runs the misao'] = 'SAMEHUB';
+        host.answers['Checking the hub of the misao'] = 'SAMEHUB';
         const result = await run(host, true, trial);
         expect(outcomes(result)).toMatchObject({ task: 'done', misaoTask: 'skipped', misaoProcesses: 'skipped', misaoFolder: 'skipped' });
         expect(detail(result, 'misaoTask')).toContain('AzitoHub');
         expect(host.tasks.has('w806-Misao')).toBe(true);
         expect(host.log).not.toContain('end w806-Misao');
-        const guard = host.bodyOf('Checking who runs the misao');
+        const guard = host.bodyOf('Checking the hub of the misao');
         expect(guard).toContain(`$hubRoot = '${HOME}\\w851\\misao'`);
         expect(guard).toContain(`$root = '${HOME}\\w851\\misao'`);
         expect(guard).toContain('function Resolve-Long');
@@ -452,7 +452,7 @@ describe('uninstallWindowsAgent', () => {
 
       it('leaves the default misao when the hub has the default prefix', async () => {
         const host = new FakeUninstallHost({ AzitoHub: { xml: hubTaskXml(`${HOME}\\.azito`) }, AzitoMisao: { xml: MISAO_XML, running: true } });
-        host.answers['Checking who runs the misao'] = 'SAMEHUB';
+        host.answers['Checking the hub of the misao'] = 'SAMEHUB';
         const result = await run(host, true);
         expect(outcomes(result)).toMatchObject({ misaoTask: 'skipped', misaoProcesses: 'skipped', misaoFolder: 'skipped' });
         expect(host.tasks.has('AzitoMisao')).toBe(true);
@@ -460,7 +460,7 @@ describe('uninstallWindowsAgent', () => {
 
       it('leaves the misao when the host cannot resolve the hub\'s folder (the two may be one)', async () => {
         const host = new FakeUninstallHost({ AzitoHub: { xml: hubTaskXml(`${HOME}\\.azito`) }, AzitoMisao: { xml: MISAO_XML, running: true } });
-        host.answers['Checking who runs the misao'] = 'MAYBEHUB';
+        host.answers['Checking the hub of the misao'] = 'MAYBEHUB';
         const result = await run(host, true);
         expect(outcomes(result)).toMatchObject({ misaoTask: 'skipped', misaoProcesses: 'skipped', misaoFolder: 'skipped' });
         expect(detail(result, 'misaoTask')).toContain('may be the same');
@@ -472,7 +472,7 @@ describe('uninstallWindowsAgent', () => {
         const result = await run(host, true);
         expect(outcomes(result)).toMatchObject({ misaoTask: 'done', misaoProcesses: 'absent', misaoFolder: 'done' });
         // The hub is a task here, so its process is not looked for as a taskless hub.
-        expect(host.bodyOf('Checking who runs the misao')).not.toContain('$hubPattern');
+        expect(host.bodyOf('Checking the hub of the misao')).not.toContain('$hubPattern');
       });
 
       it('leaves the misao when the hub task is registered but its folder cannot be read', async () => {
@@ -480,7 +480,7 @@ describe('uninstallWindowsAgent', () => {
         const result = await run(host, true);
         expect(outcomes(result)).toMatchObject({ misaoTask: 'skipped', misaoProcesses: 'skipped', misaoFolder: 'skipped' });
         expect(host.tasks.has('AzitoMisao')).toBe(true);
-        expect(host.log).not.toContain('script Checking who runs the misao');
+        expect(host.log).not.toContain('script Checking the hub of the misao');
       });
 
       it('leaves the misao when it cannot tell whether a hub is registered', async () => {
@@ -495,22 +495,25 @@ describe('uninstallWindowsAgent', () => {
     });
 
     describe('no hub task (a hub started from source runs without one)', () => {
-      it('looks for a hub process and for a misao that no task started', async () => {
+      it('looks for a hub process, and then for a misao that no task started', async () => {
         const host = new FakeUninstallHost({ AzitoMisao: { xml: MISAO_XML } });
         await run(host, true);
-        const guard = host.bodyOf('Checking who runs the misao');
-        expect(guard).toContain('$hubPattern');
-        expect(guard).toContain("Name = 'misao.exe'");
-        expect(guard).toContain('--headless');
+        expect(host.bodyOf('Checking the hub of the misao')).toContain('$hubPattern');
+        const daemons = host.bodyOf('Checking who runs the misao');
+        expect(daemons).toContain("$_.Name -eq 'misao.exe' -and (Uses $_)");
+        expect(daemons).toContain('--headless');
+        // The same "uses the folder" test as the look for what is left.
+        expect(daemons).toContain('function Uses');
       });
 
       it.each([
-        ['a hub process is running', 'HUB 4321', '4321'],
-        ['one of its processes was not started by a task', 'FOREIGN 77', '77'],
-        ['the owner of a process cannot be read (it is neither mine nor someone else\'s)', 'UNKNOWN 88', '88'],
-      ])('leaves the misao when %s', async (_label, answer, pid) => {
+        ['a hub process is running', 'Checking the hub of the misao', 'HUB 4321', '4321'],
+        ['the owner of a hub candidate cannot be read', 'Checking the hub of the misao', 'UNKNOWN 5', '5'],
+        ['one of its processes was not started by a task', 'Checking who runs the misao', 'FOREIGN 77', '77'],
+        ['the owner of a process cannot be read (it is neither mine nor someone else\'s)', 'Checking who runs the misao', 'UNKNOWN 88', '88'],
+      ])('leaves the misao when %s', async (_label, which, answer, pid) => {
         const host = new FakeUninstallHost({ AzitoMisao: { xml: MISAO_XML, running: true } });
-        host.answers['Checking who runs the misao'] = answer;
+        host.answers[which] = answer;
         const result = await run(host, true);
         expect(result.ok).toBe(true);
         expect(outcomes(result)).toMatchObject({ misaoTask: 'skipped', misaoProcesses: 'skipped', misaoFolder: 'skipped' });
@@ -518,9 +521,16 @@ describe('uninstallWindowsAgent', () => {
         expect(host.tasks.has('AzitoMisao')).toBe(true);
       });
 
-      it('leaves the misao when the check cannot be read', async () => {
+      it('does not look at the daemons when the hub question already says to leave it', async () => {
         const host = new FakeUninstallHost({ AzitoMisao: { xml: MISAO_XML } });
-        host.answers['Checking who runs the misao'] = new Error('Checking who runs the misao failed on the Windows host (exit 1): boom');
+        host.answers['Checking the hub of the misao'] = 'HUB 1';
+        await run(host, true);
+        expect(host.ran('Checking who runs the misao')).toBe(false);
+      });
+
+      it.each(['Checking the hub of the misao', 'Checking who runs the misao'])('leaves the misao when %s cannot be read', async (which) => {
+        const host = new FakeUninstallHost({ AzitoMisao: { xml: MISAO_XML } });
+        host.answers[which] = new Error(`${which} failed on the Windows host (exit 1): boom`);
         const result = await run(host, true);
         expect(outcomes(result)).toMatchObject({ misaoTask: 'failed', misaoProcesses: 'skipped', misaoFolder: 'skipped' });
         expect(host.tasks.has('AzitoMisao')).toBe(true);
@@ -542,8 +552,6 @@ describe('uninstallWindowsAgent', () => {
         const host = new FakeUninstallHost({ AzitoMisao: { xml } });
         const result = await uninstallWindowsAgent(host.asHost(), factsOf(spaced, NODE), OPTIONS, { removeMisao: true });
         expect(outcomes(result).misaoTask).toBe('done');
-        // The release folder of the task (0.4.1) is the misao.exe that is asked to stop.
-        expect(host.bodyOf('Asking the misao daemon to stop')).toContain('\\0.4.1\\misao.exe');
       });
 
       it.each([
@@ -559,7 +567,6 @@ describe('uninstallWindowsAgent', () => {
         const result = await run(host, true);
         expect(outcomes(result)).toMatchObject({ misaoTask: 'failed', misaoProcesses: 'skipped', misaoFolder: 'skipped' });
         expect(host.tasks.has('AzitoMisao')).toBe(true);
-        expect(host.ran('Asking the misao daemon to stop')).toBe(false);
       });
 
       it('leaves a task with another action beside the right one, and a task with two Exec actions', async () => {
@@ -602,6 +609,23 @@ describe('what the scripts answer', () => {
     expect(() => parseFolderOutput('')).toThrow(/could not be read/);
   });
 
+  it('the part of a folder below the home', () => {
+    expect(tailBelow('C:\\Users\\dev', 'C:\\Users\\dev\\.azito\\agent')).toBe('\\.azito\\agent');
+    expect(tailBelow('C:\\Users\\dev\\', 'c:\\users\\DEV\\.azito\\agent')).toBe('\\.azito\\agent');
+    expect(tailBelow('C:\\Users\\dev', 'D:\\elsewhere\\agent')).toBe('D:\\elsewhere\\agent');
+  });
+
+  it('a process of the user\'s own whose program or command line the host did not give stops the deletion too, and the limit is said', () => {
+    const blind = parseLeftoverOutput('BLIND|12|svchost.exe', 'C:\\r');
+    expect(blind.outcome).toBe('failed');
+    expect(blind.detail).toContain('did not give the program or the command line');
+    expect(blind.detail).toContain('process 12');
+    expect(blind.detail).toContain('Processes of other users cannot be seen');
+    const both = parseLeftoverOutput('LEFT|10|node.exe|C:\\n\\node.exe\nBLIND|12|x.exe', 'C:\\r');
+    expect(both.detail).toContain('process 10');
+    expect(both.detail).toContain('process 12');
+  });
+
   it('what is left running: CLEAR is "absent", LEFT lines are a failure with the pids and paths, anything else is an error', () => {
     expect(parseLeftoverOutput('CLEAR\r\n', 'C:\\r')).toEqual({ outcome: 'absent' });
     const left = parseLeftoverOutput('LEFT|10|node.exe|C:\\n\\node.exe\nLEFT|11|misao.exe|', 'C:\\r');
@@ -609,6 +633,7 @@ describe('what the scripts answer', () => {
     expect(left.detail).toContain('process 10, C:\\n\\node.exe');
     expect(left.detail).toContain('process 11');
     expect(left.detail).toContain('2 processes are');
+    expect(left.detail).toContain('Stop-Process -Id <pid>');
     expect(() => parseLeftoverOutput('', 'C:\\r')).toThrow(/could not be read/);
     expect(() => parseLeftoverOutput('CLEAR\nLEFT', 'C:\\r')).toThrow(/could not be read/);
   });
@@ -693,9 +718,9 @@ describe('the scripts it sends', () => {
   it('the largest forms fit too (a hub folder and a hub process check; the stop; the leftover look; the firewall list; the comparison)', () => {
     const long = `C:\\Users\\${'a-very-long-user-name-'.repeat(4)}`;
     const scripts = [
-      misaoGuardScript({ root: `${long}\\.azito\\misao`, hubRoot: `${long}\\.azito\\misao`, looksForHub: true }),
-      misaoStopScript(`${long}\\.azito\\misao\\0.3.0\\misao.exe`, '\\\\.\\pipe\\misao-a-very-long-user-name-0123456789abcdef'),
-      leftoverProcessesScript(`${long}\\.azito\\misao`),
+      misaoHubScript({ root: `${long}\\.azito\\misao`, hubRoot: `${long}\\.azito\\misao`, looksForHub: true }),
+      misaoDaemonScript(`${long}\\.azito\\misao`, long),
+      leftoverProcessesScript(`${long}\\.azito\\misao`, long),
       firewallInspectScript('AZITO Agent (TCP 3002)'),
       sameFileScript(`${long}\\a\\b\\node.exe`, `${long}\\c\\d\\node.exe`),
     ];
@@ -703,7 +728,7 @@ describe('the scripts it sends', () => {
   });
 
   it('a path with a junction or symbolic link on the way is not resolved, and a folder that is there but cannot be resolved may be the hub\'s', () => {
-    const guard = misaoGuardScript({ root: 'C:\\h\\m', hubRoot: 'C:\\h\\m', looksForHub: false });
+    const guard = misaoHubScript({ root: 'C:\\h\\m', hubRoot: 'C:\\h\\m', looksForHub: false });
     expect(guard).toContain('[System.IO.FileAttributes]::ReparsePoint');
     expect(guard).toContain('Test-Path -LiteralPath $root');
     expect(guard).toContain("Write-Output 'MAYBEHUB'");
@@ -728,7 +753,7 @@ describe('the scripts it sends', () => {
   });
 
   it('the leftover look touches nothing and fails on a list it cannot read', () => {
-    const script = leftoverProcessesScript(AGENT_ROOT);
+    const script = leftoverProcessesScript(AGENT_ROOT, HOME);
     expect(script).not.toMatch(/Stop-Process|Kill|taskkill/i);
     expect(script).toContain('Get-CimInstance Win32_Process -ErrorAction Stop');
   });

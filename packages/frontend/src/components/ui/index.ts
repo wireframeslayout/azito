@@ -37,6 +37,7 @@ export { GlassPopover } from './GlassPopover';
 export type { GlassPopoverItem, GlassPopoverProps } from './GlassPopover';
 export { Chip } from './Chip';
 export { ToggleField } from './ToggleField';
+export { CopyableCommand } from './CopyableCommand';
 export { PaneStateChip } from './PaneStateChip';
 export type { ChipTone } from './Chip';
 export { ListRow, ListRowGroup } from './ListRow';

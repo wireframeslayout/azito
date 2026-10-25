@@ -1,30 +1,6 @@
 import { powershellDialect } from '../../../shared/os/shellDialect';
 import { redactSecretText } from '../../../shared/redactSecretText';
-import { lines, unreadable, type ScriptOutcome } from './windowsAgentUninstallScripts';
-
-/**
- * Looks at what is on the HOST to decide whether something is this install's, so that it is never decided by how a path happens to be
- * spelled (`C:\Users\RUNNER~1\...` and `C:\Users\runneradmin\...` are one folder). A path is put in its long form, with the case it has
- * on disk, component by component. A path with a junction or symbolic link anywhere on the way is NOT resolved either (where it leads is
- * not what its name says, and following it here would be a guess): it is `$null` like one that does not exist or cannot be read, and every
- * caller treats "cannot resolve" as "may be the same", never as "different".
- */
-const RESOLVE_LONG = [
-  'function Resolve-Long([string]$p) {',
-  '  try {',
-  '    $full = [System.IO.Path]::GetFullPath([Environment]::ExpandEnvironmentVariables($p))',
-  '    $cur = [System.IO.Path]::GetPathRoot($full)',
-  '    foreach ($part in $full.Substring($cur.Length).Split([char]92)) {',
-  '      if ($part -eq \'\') { continue }',
-  '      $hit = @([System.IO.Directory]::GetFileSystemEntries($cur, $part))',
-  '      if ($hit.Count -ne 1) { return $null }',
-  '      $cur = $hit[0]',
-  '      if ([bool]([System.IO.File]::GetAttributes($cur) -band [System.IO.FileAttributes]::ReparsePoint)) { return $null }',
-  '    }',
-  '    return $cur',
-  '  } catch { return $null }',
-  '}',
-];
+import { RESOLVE_LONG, USES_FOLDER, lines, tailBelow, unreadable, type ScriptOutcome } from './windowsAgentUninstallScripts';
 
 // ─── The firewall rule ───
 
@@ -99,7 +75,7 @@ export function parseSameFileOutput(output: string): 'same' | 'different' | 'unk
  */
 export const HUB_COMMAND_LINE_PATTERN = 'azito-hub\\.cjs|(?<=[\\s"\'\\\\/])(?<!agent[\\\\/])main\\.(ts|js)(?=[\\s"\']|$)';
 
-export interface MisaoGuardInput {
+export interface MisaoHubInput {
   /** The misao folder to remove. */
   root: string;
   /** The folder of the misao the hub registered as `AzitoHub` keeps, when there is such a task; compared with `root` on the host. */
@@ -110,12 +86,11 @@ export interface MisaoGuardInput {
 
 /**
  * Before the misao of `root` is touched, on the host: whether the hub's folder is this folder (`SAMEHUB`; `MAYBEHUB` when the hub's folder
- * cannot be resolved, so the two may be the same), whether a hub runs without the `AzitoHub` task (`HUB <pid>`), and whether a `misao.exe`
- * of this folder was started by something other than a task (`FOREIGN <pid>`: none of its parents, up to four levels, is a
- * `conhost.exe --headless`, which is what every task of AZITO runs under). A process whose owner cannot be read is `UNKNOWN <pid>`:
- * not mine and not someone else's, so it is never taken as "not mine". Otherwise `CLEAR`.
+ * cannot be resolved, so the two may be the same), and whether a hub runs without the `AzitoHub` task (`HUB <pid>`). A process whose owner
+ * cannot be read is `UNKNOWN <pid>`: not mine and not someone else's, so it is never taken as "not mine". Otherwise `CLEAR`. The misao
+ * daemons themselves are looked at by {@link misaoDaemonScript}.
  */
-export function misaoGuardScript(input: MisaoGuardInput): string {
+export function misaoHubScript(input: MisaoHubInput): string {
   const q = powershellDialect.quote;
   return [
     `$root = ${q(input.root)}`,
@@ -143,20 +118,36 @@ export function misaoGuardScript(input: MisaoGuardInput): string {
       '  if ($owner -eq \'mine\') { Write-Output ("HUB " + $candidate.ProcessId); exit 0 }',
       '}',
     ] : []),
-    '$pattern = \'(^|[\\s"])\' + [regex]::Escape($root) + \'([\\s"]|$)\'',
-    'foreach ($daemon in @(Get-CimInstance Win32_Process -Filter "Name = \'misao.exe\'" | Where-Object { $_.CommandLine -and ($_.CommandLine -match $pattern) })) {',
-    '  $owner = Get-Owner $daemon',
-    '  if ($owner -eq \'unknown\') { Write-Output ("UNKNOWN " + $daemon.ProcessId); exit 0 }',
-    '  if ($owner -ne \'mine\') { continue }',
-    '  $id = $daemon.ParentProcessId; $byTask = $false',
+    'Write-Output \'CLEAR\'',
+  ].join('\n');
+}
+
+/**
+ * The misao daemons of the folder, looked for with the same "uses the folder" test as the leftover look (see `USES_FOLDER`): a `misao.exe`
+ * that uses `root` and is the user's own must have been started by a task (one of its parents, up to four levels, is a `conhost.exe
+ * --headless`, which is what every task of AZITO runs under), else `FOREIGN <pid>`; its owner not readable is `UNKNOWN <pid>`, and so is
+ * a process of the user's own whose path or command line the host did not give (it might be one). Otherwise `CLEAR`.
+ */
+export function misaoDaemonScript(root: string, home: string): string {
+  const q = powershellDialect.quote;
+  return [
+    `$root = ${q(root)}; $tail = ${q(tailBelow(home, root))}`,
+    ...USES_FOLDER,
+    'function All { @(Get-CimInstance Win32_Process -ErrorAction Stop | Where-Object { $_.ProcessId -ne $PID }) }',
+    'foreach ($d in @(All | Where-Object { $_.Name -eq \'misao.exe\' -and (Uses $_) })) {',
+    '  $o = Owner $d',
+    '  if ($o -eq \'unknown\') { Write-Output ("UNKNOWN " + $d.ProcessId); exit 0 }',
+    '  if ($o -ne \'mine\') { continue }',
+    '  $id = $d.ParentProcessId; $byTask = $false',
     '  for ($i = 0; $i -lt 4 -and $id; $i++) {',
     '    $parent = Get-CimInstance Win32_Process -Filter "ProcessId = $id"',
     '    if (-not $parent) { break }',
     '    if ($parent.Name -eq \'conhost.exe\' -and $parent.CommandLine -match \'--headless\') { $byTask = $true; break }',
     '    $id = $parent.ParentProcessId',
     '  }',
-    '  if (-not $byTask) { Write-Output ("FOREIGN " + $daemon.ProcessId); exit 0 }',
+    '  if (-not $byTask) { Write-Output ("FOREIGN " + $d.ProcessId); exit 0 }',
     '}',
+    'foreach ($b in @(All | Where-Object { (Blind $_) -and (Owner $_) -eq \'mine\' })) { Write-Output ("UNKNOWN " + $b.ProcessId); exit 0 }',
     'Write-Output \'CLEAR\'',
   ].join('\n');
 }

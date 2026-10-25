@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
 import {
-  DEFAULT_HOST_REMOVAL, deleteEntryOnly, deletionReducer, failedSteps, hostRemovalSupport, IDLE_DELETION, isDeletionBusy, readUninstallAnswer,
+  commandsOf, DEFAULT_HOST_REMOVAL, deleteEntryOnly, deletionReducer, hostRemovalSupport, IDLE_DELETION, isDeletionBusy, leftBehindOf, readUninstallAnswer,
   runDeletion, runEntryOnly, setRemoveFromHost, setRemoveMisao, uninstallRequestFor,
   type DeletionCalls, type DeletionEvent, type DeletionState,
 } from './serverDeletion';
@@ -59,19 +59,19 @@ describe('the misao choice depends on the host choice', () => {
 describe('readUninstallAnswer', () => {
   const okSteps = [{ id: 'task', outcome: 'done' }, { id: 'folder', outcome: 'absent' }];
 
-  it('is null (the agent is off the host) only for ok: true with well-formed steps', () => {
-    expect(readUninstallAnswer({ ok: true, steps: okSteps })).toBeNull();
+  it('is done (with its steps) only for ok: true with well-formed steps', () => {
+    expect(readUninstallAnswer({ ok: true, steps: okSteps })).toEqual({ kind: 'ok', steps: okSteps });
   });
 
-  it('a skipped step (misao not asked for, a hub owns it) is not a failure', () => {
-    expect(readUninstallAnswer({ ok: true, steps: [{ id: 'misaoTask', outcome: 'skipped', detail: 'a hub owns it' }] })).toBeNull();
+  it('a skipped step (a firewall rule left in place, a hub owns the misao) is not a failure, and its step is kept', () => {
+    const steps = [{ id: 'misaoTask', outcome: 'skipped', detail: 'a hub owns it' }];
+    expect(readUninstallAnswer({ ok: true, steps })).toEqual({ kind: 'ok', steps });
   });
 
   it('gives the steps back when one failed', () => {
     const steps = [{ id: 'task', outcome: 'done' }, { id: 'firewall', outcome: 'failed', detail: 'not elevated' }];
     const failure = readUninstallAnswer({ ok: false, steps });
     expect(failure).toEqual({ kind: 'steps', steps });
-    if (failure?.kind === 'steps') expect(failedSteps(failure.steps)).toEqual([steps[1]]);
   });
 
   it.each([
@@ -81,7 +81,7 @@ describe('readUninstallAnswer', () => {
     ['an empty object', {}],
     ['nothing', null],
   ])('does not take %s for a success', (_label, body) => {
-    expect(readUninstallAnswer(body)).not.toBeNull();
+    expect(readUninstallAnswer(body).kind).not.toBe('ok');
   });
 
   it('carries the hub\'s reason for an answer that is an error (host unreachable, refused for its OS)', () => {
@@ -277,10 +277,49 @@ describe('the failure screen across the steps that follow it', () => {
   });
 });
 
+describe('what the removal left on the host', () => {
+  const FIREWALL = { id: 'firewall', outcome: 'skipped', detail: "1 inbound rule(s) were found and left in place:\n- Name {G}\nThen remove it in an Administrator PowerShell:\nRemove-NetFirewallRule -Name '{G}'" } as const;
+  const MISAO = { id: 'misaoTask', outcome: 'skipped', detail: 'This misao is the hub\'s.' } as const;
+
+  it('are the skipped steps that say why; steps that were done, absent or skipped without a reason are not', () => {
+    const steps = [{ id: 'task', outcome: 'done' }, FIREWALL, { id: 'processes', outcome: 'absent' }, MISAO, { id: 'folder', outcome: 'skipped' }] as const;
+    expect(leftBehindOf(steps)).toEqual([FIREWALL, MISAO]);
+  });
+
+  it('the commands to run are the lines that start with Remove-NetFirewallRule -Name, once each', () => {
+    expect(commandsOf([FIREWALL, MISAO, { ...FIREWALL, id: 'misaoTask' }])).toEqual(["Remove-NetFirewallRule -Name '{G}'"]);
+    expect(commandsOf([MISAO])).toEqual([]);
+  });
+
+  it('are handed to the screen when the row is deleted after a host removal that left something, and not when it left nothing or the host was not touched', async () => {
+    const withRule = calls({ uninstallHost: vi.fn(async () => ({ ok: true, steps: [{ id: 'task', outcome: 'done' }, FIREWALL] })) });
+    const a = screen(deletionReducer(IDLE_DELETION, { type: 'open' }));
+    await runDeletion(withRule, 'windows', DEFAULT_HOST_REMOVAL, a.dispatch);
+    const last = a.events[a.events.length - 1]!;
+    expect(last).toEqual({ type: 'result', result: { kind: 'deleted', left: [FIREWALL] } });
+    expect(a.state).toEqual(IDLE_DELETION);
+
+    const clean = screen(deletionReducer(IDLE_DELETION, { type: 'open' }));
+    await runDeletion(calls(), 'windows', DEFAULT_HOST_REMOVAL, clean.dispatch);
+    expect(clean.events[clean.events.length - 1]).toEqual({ type: 'result', result: { kind: 'deleted', left: [] } });
+
+    const rowOnly = screen(deletionReducer(IDLE_DELETION, { type: 'open' }));
+    await runDeletion(withRule, 'windows', { removeFromHost: false, removeMisao: false }, rowOnly.dispatch);
+    expect(rowOnly.events[rowOnly.events.length - 1]).toEqual({ type: 'result', result: { kind: 'deleted', left: [] } });
+  });
+
+  it('are not handed over when the row could not be deleted (nothing is gone yet, the failure screen is what shows)', async () => {
+    const c = calls({ uninstallHost: vi.fn(async () => ({ ok: true, steps: [FIREWALL] })), deleteRow: vi.fn(async () => ({ error: 'locked' })) });
+    const s = screen(deletionReducer(IDLE_DELETION, { type: 'open' }));
+    await runDeletion(c, 'windows', DEFAULT_HOST_REMOVAL, s.dispatch);
+    expect(s.events[s.events.length - 1]).toEqual({ type: 'result', result: { kind: 'rowFailed', message: 'locked' } });
+  });
+});
+
 describe('deleteEntryOnly', () => {
   it('deletes the row without asking the host', async () => {
     const uninstallHost = vi.fn();
-    expect(await deleteEntryOnly({ uninstallHost, deleteRow: async () => ({ ok: true }) })).toEqual({ kind: 'deleted' });
+    expect(await deleteEntryOnly({ uninstallHost, deleteRow: async () => ({ ok: true }) })).toEqual({ kind: 'deleted', left: [] });
     expect(uninstallHost).not.toHaveBeenCalled();
   });
 

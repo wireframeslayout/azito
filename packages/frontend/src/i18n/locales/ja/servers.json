@@ -215,6 +215,11 @@
     "deleteServerDesc": "このサーバーを AZITO から完全に削除します。リモート側のデータは影響を受けません。",
     "deleteServerConfirm": "サーバー \"{{name}}\" を削除してもよいですか？",
     "deleting": "削除中…",
+    "leftBehind": {
+      "title": "サーバー \"{{name}}\" を削除しました",
+      "intro": "サーバーの登録は消えましたが、次のものは意図してホストに残してあります。ひとつずつ確かめて、導入が作ったものなら手で消してください。",
+      "commands": "確かめたあとにホストで実行するコマンド（管理者の PowerShell）"
+    },
     "hostRemoval": {
       "groupLabel": "ホスト上のエージェント",
       "removeFromHost": "ホストからもエージェントを消す",

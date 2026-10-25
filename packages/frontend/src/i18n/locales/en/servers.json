@@ -215,6 +215,11 @@
     "deleteServerDesc": "Permanently removes this server from AZITO. Data on the remote server is not affected.",
     "deleteServerConfirm": "Delete server \"{{name}}\"?",
     "deleting": "Deleting…",
+    "leftBehind": {
+      "title": "Server \"{{name}}\" was deleted",
+      "intro": "The server entry is gone, but the removal left the following on the host on purpose. Check each one and remove it yourself if it is the install's.",
+      "commands": "Commands to run on the host (Administrator PowerShell), after checking"
+    },
     "hostRemoval": {
       "groupLabel": "Agent on the host",
       "removeFromHost": "Also remove the agent from the host",

@@ -1,34 +1,11 @@
 import { useEffect, useRef } from 'react';
 import { useTranslation } from 'react-i18next';
-import { Button, Chip, DocsLink, Notice, ToggleField } from '../../ui';
-import type { ChipTone } from '../../ui';
+import { Button, DocsLink, Notice, ToggleField } from '../../ui';
+import { UninstallStepList } from '../UninstallStepList';
 import type { ServerDeletion } from '../../../hooks/useServerDeletion';
-import type { UninstallOutcome, UninstallStep } from '../../../lib/serverDeletion';
-
-const OUTCOME_TONE: Record<UninstallOutcome, ChipTone> = { done: 'green', absent: 'default', failed: 'red', skipped: 'orange' };
 
 interface DeleteServerPanelProps {
   deletion: ServerDeletion;
-}
-
-/** The result of each step on the host: the chip says what happened, the reason is under the step. */
-function StepList({ steps }: { steps: readonly UninstallStep[] }) {
-  const { t } = useTranslation('servers');
-  return (
-    <ul aria-label={t('danger.hostRemoval.stepsLabel')} style={{ listStyle: 'none', margin: 0, padding: 0, display: 'flex', flexDirection: 'column', gap: 'var(--space-2)' }}>
-      {steps.map((step) => (
-        <li key={step.id} style={{ fontSize: 'var(--font-sm)' }}>
-          <div style={{ display: 'flex', alignItems: 'center', gap: 'var(--space-2)', flexWrap: 'wrap' }}>
-            <span style={{ color: 'var(--text)' }}>{t(`danger.hostRemoval.steps.${step.id}`)}</span>
-            <Chip tone={OUTCOME_TONE[step.outcome]}>{t(`danger.hostRemoval.outcomes.${step.outcome}`)}</Chip>
-          </div>
-          {step.detail !== undefined && (
-            <div style={{ fontSize: 'var(--font-xs)', color: 'var(--text-dim)', marginTop: 'var(--space-1)', lineHeight: 'var(--leading-body)', overflowWrap: 'anywhere', whiteSpace: 'pre-wrap' }}>{step.detail}</div>
-          )}
-        </li>
-      ))}
-    </ul>
-  );
 }
 
 /** Why the row could not be deleted: visible text, read out by the live region of the panel (so it is hidden from the reader here, not said twice). */
@@ -60,7 +37,7 @@ function HostFailure({ deletion }: DeleteServerPanelProps) {
         </Notice>
       </div>
       {failure.kind === 'steps'
-        ? <StepList steps={failure.steps} />
+        ? <UninstallStepList steps={failure.steps} />
         : (
           <div style={{ fontSize: 'var(--font-sm)', color: 'var(--text-dim)', overflowWrap: 'anywhere' }}>
             {failure.message === '' ? t('danger.hostRemoval.failedUnknown') : t('danger.hostRemoval.failedNoAnswer', { reason: failure.message })}

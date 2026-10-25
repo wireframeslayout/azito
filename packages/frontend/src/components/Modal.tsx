@@ -12,9 +12,11 @@ interface ModalProps {
   children: ReactNode;
   maxWidth?: number | string;
   maxHeight?: string;
+  /** The dialog has a button of its own that closes it (in `actions`): no second "Cancel" beside it. */
+  hideCancel?: boolean;
 }
 
-export default function Modal({ title, open, onClose, actions, children, maxWidth = 500, maxHeight = '90vh' }: ModalProps) {
+export default function Modal({ title, open, onClose, actions, children, maxWidth = 500, maxHeight = '90vh', hideCancel = false }: ModalProps) {
   const { t } = useTranslation('common');
   useEffect(() => {
     if (!open) return;
@@ -66,9 +68,11 @@ export default function Modal({ title, open, onClose, actions, children, maxWidt
             marginTop: 16,
           }}
         >
-          <Button onClick={onClose}>
-            {t('actions.cancel')}
-          </Button>
+          {!hideCancel && (
+            <Button onClick={onClose}>
+              {t('actions.cancel')}
+            </Button>
+          )}
           {actions}
         </div>
       </div>

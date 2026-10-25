@@ -38,23 +38,38 @@ function parseSteps(value: unknown): UninstallStep[] | null {
   return steps;
 }
 
+/** The agent is off the host (`ok: true`), with the result of each step (some may have left something in place on purpose). */
+export interface HostRemovalDone {
+  kind: 'ok';
+  steps: UninstallStep[];
+}
+
 /**
- * Reads the answer of `POST /api/servers/:name/agent/uninstall`. `null` = the agent is off the host (`ok: true`); otherwise why not.
+ * Reads the answer of `POST /api/servers/:name/agent/uninstall`: done (with its steps), or why not.
  * Anything that is not a well-formed result is a failure, never a success: the row is only deleted for a body that says `ok: true` with its steps.
  */
-export function readUninstallAnswer(body: unknown): HostRemovalFailure | null {
+export function readUninstallAnswer(body: unknown): HostRemovalDone | HostRemovalFailure {
   if (typeof body === 'object' && body !== null && 'ok' in body && 'steps' in body) {
     const steps = parseSteps((body as { steps: unknown }).steps);
     const ok = (body as { ok: unknown }).ok;
-    if (steps !== null && ok === true) return null;
+    if (steps !== null && ok === true) return { kind: 'ok', steps };
     if (steps !== null && ok === false) return { kind: 'steps', steps };
   }
   return { kind: 'error', message: errorMessageOf(body) ?? '' };
 }
 
-/** The steps that did not work: what the person has to look at. */
-export function failedSteps(steps: readonly UninstallStep[]): UninstallStep[] {
-  return steps.filter((s) => s.outcome === 'failed');
+/**
+ * What the removal left on the host on purpose, with the reason (a firewall rule, a misao that is a hub's, ...): the steps that were
+ * `skipped` and say why. They are shown after the row is deleted, since nothing else tells the person what is still there.
+ */
+export function leftBehindOf(steps: readonly UninstallStep[]): UninstallStep[] {
+  return steps.filter((s) => s.outcome === 'skipped' && s.detail !== undefined && s.detail !== '');
+}
+
+/** The commands a step's text asks the person to run (one per line), to be shown where they can be copied. */
+export function commandsOf(steps: readonly UninstallStep[]): string[] {
+  const commands = steps.flatMap((s) => (s.detail ?? '').split('\n').map((l) => l.trim()).filter((l) => /^Remove-NetFirewallRule -Name '/.test(l)));
+  return [...new Set(commands)];
 }
 
 export interface HostRemovalChoice {
@@ -83,7 +98,8 @@ export function setRemoveMisao(choice: HostRemovalChoice, removeMisao: boolean):
 }
 
 export type DeletionResult =
-  | { kind: 'deleted' }
+  /** `left`: what the host removal left in place on purpose (see {@link leftBehindOf}); empty when the host was not touched. */
+  | { kind: 'deleted'; left: UninstallStep[] }
   /** The host removal did not work: the row was NOT deleted. */
   | { kind: 'hostFailed'; failure: HostRemovalFailure }
   /** The row could not be deleted (the host removal, when one was asked for, had worked). */
@@ -160,19 +176,19 @@ export interface DeletionCalls {
 }
 
 /** Deletes the row alone. An answer that is an error, or a call that throws, is a failure: the row is only gone for a clean answer. */
-export async function deleteEntryOnly(calls: DeletionCalls): Promise<DeletionResult> {
+export async function deleteEntryOnly(calls: DeletionCalls, hostSteps: readonly UninstallStep[] = []): Promise<DeletionResult> {
   try {
     const message = errorMessageOf(await calls.deleteRow());
-    return message === null ? { kind: 'deleted' } : { kind: 'rowFailed', message };
+    return message === null ? { kind: 'deleted', left: leftBehindOf(hostSteps) } : { kind: 'rowFailed', message };
   } catch (err: unknown) {
     return { kind: 'rowFailed', message: (err as Error).message };
   }
 }
 
 /** "Delete the entry only": the row is deleted, the host is not asked, and a failure of the row is reported as its own state. */
-export async function runEntryOnly(calls: DeletionCalls, dispatch: (event: DeletionEvent) => void): Promise<void> {
+export async function runEntryOnly(calls: DeletionCalls, dispatch: (event: DeletionEvent) => void, hostSteps: readonly UninstallStep[] = []): Promise<void> {
   dispatch({ type: 'deletingRow' });
-  dispatch({ type: 'result', result: await deleteEntryOnly(calls) });
+  dispatch({ type: 'result', result: await deleteEntryOnly(calls, hostSteps) });
 }
 
 /**
@@ -184,15 +200,15 @@ export async function runDeletion(calls: DeletionCalls, support: HostRemovalSupp
   const request = uninstallRequestFor(support, choice);
   if (request === null) return runEntryOnly(calls, dispatch);
   dispatch({ type: 'removingHost' });
-  let failure: HostRemovalFailure | null;
+  let answer: HostRemovalDone | HostRemovalFailure;
   try {
-    failure = readUninstallAnswer(await calls.uninstallHost(request));
+    answer = readUninstallAnswer(await calls.uninstallHost(request));
   } catch (err: unknown) {
-    failure = { kind: 'error', message: (err as Error).message };
+    answer = { kind: 'error', message: (err as Error).message };
   }
-  if (failure !== null) {
-    dispatch({ type: 'result', result: { kind: 'hostFailed', failure } });
+  if (answer.kind !== 'ok') {
+    dispatch({ type: 'result', result: { kind: 'hostFailed', failure: answer } });
     return;
   }
-  return runEntryOnly(calls, dispatch);
+  return runEntryOnly(calls, dispatch, answer.steps);
 }

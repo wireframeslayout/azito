@@ -15,7 +15,7 @@ import { checkFirewall, firewallRuleName } from './windowsFirewall';
 import { windowsMisaoPipe } from '../transport/agentMisaoSocket';
 import { buildWindowsPreflightCommand, parseWindowsPreflight, type WindowsPreflightInfo } from './windowsPreflight';
 import type { UninstallStepId, WindowsUninstallResult } from './windowsAgentUninstall';
-import { misaoGuardScript, parseMisaoGuardOutput } from './windowsAgentOwnership';
+import { misaoHubScript, parseMisaoGuardOutput } from './windowsAgentOwnership';
 import type { WindowsAgentOptions } from './windowsAgentConfig';
 
 /**
@@ -350,9 +350,39 @@ describe.skipIf(process.platform !== 'win32')('removing the Windows agent from a
     await removeAgentTaskAndFolder();
   }, 120_000);
 
+  it('a process that uses the folder under another spelling (forward slashes, the 8.3 name) still keeps the folder, and is named', async (ctx) => {
+    const root = agentRoot();
+    fs.mkdirSync(root, { recursive: true });
+    const script = path.join(root, 'idle.js');
+    fs.writeFileSync(script, 'setTimeout(() => {}, 120000);');
+    const short = await shortFormOf(script);
+    if (short === undefined) ctx.skip('this volume makes no 8.3 names');
+    const spellings = [script.replace(/\\/g, '/'), short!, script.toUpperCase()];
+    for (const spelling of spellings) {
+      // node resolves the script it is given, so it needs the real file under the spelling; the command line keeps the spelling.
+      const child = spawn(host.nodePath!, [spelling], { stdio: 'ignore', windowsHide: true });
+      decoys.push(child);
+      try {
+        await new Promise((r) => setTimeout(r, 1500));
+        expect(alive(child), spelling).toBe(true);
+        const result = await deployer.uninstall('ci', host, { removeMisao: false });
+        expect(stepsOf(result), `${spelling}: ${JSON.stringify(result.steps)}`).toMatchObject({ processes: 'failed', folder: 'skipped' });
+        expect(result.steps.find((step) => step.id === 'processes')!.detail, spelling).toContain(`process ${child.pid}`);
+        expect(fs.existsSync(script), spelling).toBe(true);
+      } finally {
+        child.kill();
+        for (let i = 0; i < 40 && alive(child); i++) await new Promise((r) => setTimeout(r, 250));
+      }
+    }
+    // Nothing runs from it now: the removal goes through.
+    const result = await deployer.uninstall('ci', host, { removeMisao: false });
+    expect(stepsOf(result)).toMatchObject({ processes: 'absent', folder: 'done' });
+    expect(fs.existsSync(root)).toBe(false);
+  }, 180_000);
+
   describe('who owns the misao folder, on the real host', () => {
     const ask = async (hubRoot: string | undefined): Promise<string> =>
-      parseMisaoGuardOutput(await ps(misaoGuardScript({ root: misaoRoot(), hubRoot, looksForHub: false }))).kind;
+      parseMisaoGuardOutput(await ps(misaoHubScript({ root: misaoRoot(), hubRoot, looksForHub: false }))).kind;
 
     it('knows a hub folder named by its 8.3 name or in another case is the same folder, and one that does not exist may be', async (ctx) => {
       fs.mkdirSync(misaoRoot(), { recursive: true });

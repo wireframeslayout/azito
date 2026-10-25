@@ -80,24 +80,89 @@ export function parseFolderOutput(output: string): ScriptOutcome {
   throw unreadable(output);
 }
 
+// ─── Looking at the host ───
+
+/**
+ * Looks at what is on the HOST to decide whether something is this install's, so that it is never decided by how a path happens to be
+ * spelled (`C:\Users\RUNNER~1\...` and `C:\Users\runneradmin\...` are one folder). A path is put in its long form, with the case it has
+ * on disk, component by component. A path with a junction or symbolic link anywhere on the way is NOT resolved either (where it leads is
+ * not what its name says, and following it here would be a guess): it is `$null` like one that does not exist or cannot be read, and every
+ * caller treats "cannot resolve" as "may be the same", never as "different".
+ */
+export const RESOLVE_LONG = [
+  'function Resolve-Long([string]$p) {',
+  '  try {',
+  '    $full = [System.IO.Path]::GetFullPath([Environment]::ExpandEnvironmentVariables($p))',
+  '    $cur = [System.IO.Path]::GetPathRoot($full)',
+  '    foreach ($part in $full.Substring($cur.Length).Split([char]92)) {',
+  '      if ($part -eq \'\') { continue }',
+  '      $hit = @([System.IO.Directory]::GetFileSystemEntries($cur, $part))',
+  '      if ($hit.Count -ne 1) { return $null }',
+  '      $cur = $hit[0]',
+  '      if ([bool]([System.IO.File]::GetAttributes($cur) -band [System.IO.FileAttributes]::ReparsePoint)) { return $null }',
+  '    }',
+  '    return $cur',
+  '  } catch { return $null }',
+  '}',
+];
+
+/**
+ * Whether a process USES a folder, and the owner of a process, on the host (for scripts that set `$root` to the folder and `$tail` to the
+ * part of it below the user's home, e.g. `\.azito\agent`). It errs on the side of finding too many: a false find only keeps a folder.
+ * - A process uses the folder when its `ExecutablePath` or its `CommandLine` contains the folder as a path: with `/` read as `\`, in any
+ *   case, in the folder's own spelling, in its long form and in its 8.3 form (both as the host resolves them), or just its part below the
+ *   home (so that a home spelled another way still counts). A name mixing long and short parts of the folder itself is not found.
+ * - `Owner` is `mine`, `other` or `unknown` (the query failed or said nothing); a process of someone else is mostly `unknown` to a user
+ *   who is not an administrator, so those are out of reach and are left out: the limit of what a user's session can see.
+ * - `Blind` is a process whose `ExecutablePath` or `CommandLine` the host did not give. One that is `mine` is a process that might use the
+ *   folder and cannot be told.
+ */
+export const USES_FOLDER = [
+  ...RESOLVE_LONG,
+  '$me = [Security.Principal.WindowsIdentity]::GetCurrent().User.Value',
+  'function Norm($t) { if ($t) { ($t -replace \'/\', \'\\\').ToLowerInvariant() } else { \'\' } }',
+  '$needles = New-Object System.Collections.ArrayList',
+  'function Add-Needle($path) { if ($path) { $n = (Norm $path).TrimEnd([char]92) + [char]92; if (-not $needles.Contains($n)) { [void]$needles.Add($n) } } }',
+  'Add-Needle $root; Add-Needle (Resolve-Long $root); Add-Needle $tail',
+  'Add-Needle $(try { (New-Object -ComObject Scripting.FileSystemObject).GetFolder($root).ShortPath } catch { $null })',
+  'function Uses($p) { $text = (Norm $p.ExecutablePath) + "`n" + (Norm $p.CommandLine); foreach ($n in $needles) { if ($text.Contains($n)) { return $true } }; return $false }',
+  'function Blind($p) { (-not $p.ExecutablePath) -or (-not $p.CommandLine) }',
+  'function Owner($p) {',
+  '  try { $r = Invoke-CimMethod -InputObject $p -MethodName GetOwnerSid -ErrorAction Stop } catch { return \'unknown\' }',
+  '  if ($r.ReturnValue -ne 0 -or -not $r.Sid) { return \'unknown\' }',
+  '  if ($r.Sid -eq $me) { \'mine\' } else { \'other\' }',
+  '}',
+];
+
+/** The part of `root` below the user's home, with a leading `\` (`\.azito\agent`); the root itself when it is not below `home`. */
+export function tailBelow(home: string, root: string): string {
+  const prefix = home.replace(/[\\/]+$/, '');
+  return root.toLowerCase().startsWith(`${prefix.toLowerCase()}\\`) ? root.slice(prefix.length) : root;
+}
+
 // ─── The processes ───
 
 /**
  * AZITO ends no process itself. The task is ended (`/End`: the Task Scheduler ends what it started), and this only LOOKS, afterwards, for
- * what would be in the way of deleting the folder: any process whose program is a file under `root`, or whose command line names a path
- * under `root` (the agent's node.exe runs a script there). It waits up to 10 s for them to go (the agent leaves with its parent; a misao
- * stopped through its pipe leaves with it). What is still there is printed as `LEFT|pid|name|path` and nothing is touched; no leftover is
- * `CLEAR`. A process list that cannot be read is an error, never `CLEAR`.
+ * what would be in the way of deleting the folder (see {@link USES_FOLDER} for what "uses the folder" means, and for its limits): it waits up
+ * to 10 s for them to go (the agent leaves with its parent), then prints `LEFT|pid|name|path` for each process that uses the folder and
+ * `BLIND|pid|name` for each process of the user's own whose path or command line the host did not give (it cannot be told whether it uses
+ * the folder); nothing is touched. Nothing at all is `CLEAR`. A process list that cannot be read is an error, never `CLEAR`.
  */
-export function leftoverProcessesScript(root: string): string {
+export function leftoverProcessesScript(root: string, home: string): string {
   const q = powershellDialect.quote;
   return [
-    `$prefix = ${q(root)}.TrimEnd([char]92) + [char]92`,
-    'function Find-Left { @(Get-CimInstance Win32_Process -ErrorAction Stop | Where-Object { $_.ProcessId -ne $PID -and (($_.ExecutablePath -and $_.ExecutablePath.StartsWith($prefix, [System.StringComparison]::OrdinalIgnoreCase)) -or ($_.CommandLine -and $_.CommandLine.IndexOf($prefix, [System.StringComparison]::OrdinalIgnoreCase) -ge 0)) }) }',
+    `$root = ${q(root)}; $tail = ${q(tailBelow(home, root))}`,
+    ...USES_FOLDER,
+    'function All { @(Get-CimInstance Win32_Process -ErrorAction Stop | Where-Object { $_.ProcessId -ne $PID }) }',
+    'function Find-Left { @(All | Where-Object { Uses $_ }) }',
     '$left = Find-Left',
     'for ($i = 0; $i -lt 20 -and $left.Count -gt 0; $i++) { Start-Sleep -Milliseconds 500; $left = Find-Left }',
-    'foreach ($p in $left) { Write-Output (\'LEFT|\' + $p.ProcessId + \'|\' + ($p.Name -replace \'[\\r\\n|]+\', \' \') + \'|\' + ($p.ExecutablePath -replace \'[\\r\\n|]+\', \' \')) }',
-    'if ($left.Count -eq 0) { Write-Output \'CLEAR\' }',
+    '$blind = @(All | Where-Object { (Blind $_) -and -not (Uses $_) -and (Owner $_) -eq \'mine\' })',
+    'function Clean($t) { "$t" -replace \'[\\r\\n|]+\', \' \' }',
+    'foreach ($p in $left) { Write-Output (\'LEFT|\' + $p.ProcessId + \'|\' + (Clean $p.Name) + \'|\' + (Clean $p.ExecutablePath)) }',
+    'foreach ($p in $blind) { Write-Output (\'BLIND|\' + $p.ProcessId + \'|\' + (Clean $p.Name)) }',
+    'if ($left.Count -eq 0 -and $blind.Count -eq 0) { Write-Output \'CLEAR\' }',
   ].join('\n');
 }
 
@@ -108,30 +173,19 @@ export function parseLeftoverOutput(output: string, root: string): ScriptOutcome
     const [, pid = '', name = '', exe = ''] = l.split('|');
     return { pid, name: redactSecretText(name).slice(0, 100), exe: redactSecretText(exe).slice(0, 300) };
   });
-  if (left.length === 0) throw unreadable(output);
-  const listed = left.map((p) => `${p.name} (process ${p.pid}${p.exe ? `, ${p.exe}` : ''})`).join('; ');
-  return {
-    outcome: 'failed',
-    detail: `The task was ended, but ${left.length === 1 ? 'a process is' : `${left.length} processes are`} still running from ${root}: ${listed}. AZITO does not stop it, and the folder was left. Check what it is, stop it yourself (Stop-Process -Id <pid>), then delete the folder or remove the server again.`,
-  };
-}
-
-/**
- * `misao stop` through the daemon's own pipe: what the misao installer does before it switches a release, and the one stop AZITO asks of a
- * misao daemon (its panes close). Only the `misao.exe` the recognised task runs is started, with the pipe of the task; it is given 30 s. A
- * daemon that is not there (the task's end took it down) makes it fail, which is fine: {@link leftoverProcessesScript} is what decides.
- */
-export function misaoStopScript(exe: string, pipe: string): string {
-  const q = powershellDialect.quote;
-  return [
-    `$exe = ${q(exe)}`,
-    'if (Test-Path -LiteralPath $exe -PathType Leaf) {',
-    `  $env:MISAO_SOCKET = ${q(pipe)}`,
-    '  try {',
-    '    $stop = Start-Process -FilePath $exe -ArgumentList \'stop\' -WindowStyle Hidden -PassThru',
-    '    if (-not $stop.WaitForExit(30000)) { Stop-Process -Id $stop.Id -Force -ErrorAction SilentlyContinue }',
-    '  } catch { }',
-    '}',
-    'Write-Output \'DONE\'',
-  ].join('\n');
+  const blind = all.filter((l) => l.startsWith('BLIND|')).map((l) => {
+    const [, pid = '', name = ''] = l.split('|');
+    return { pid, name: redactSecretText(name).slice(0, 100) };
+  });
+  if (left.length === 0 && blind.length === 0) throw unreadable(output);
+  const parts: string[] = [];
+  if (left.length > 0) {
+    const listed = left.map((p) => `${p.name} (process ${p.pid}${p.exe ? `, ${p.exe}` : ''})`).join('; ');
+    parts.push(`The task was ended, but ${left.length === 1 ? 'a process is' : `${left.length} processes are`} still running from ${root}: ${listed}. AZITO does not stop ${left.length === 1 ? 'it' : 'them'}: check what ${left.length === 1 ? 'it is' : 'they are'} and stop ${left.length === 1 ? 'it' : 'them'} yourself (Stop-Process -Id <pid>).`);
+  }
+  if (blind.length > 0) {
+    const listed = blind.map((p) => `${p.name} (process ${p.pid})`).join('; ');
+    parts.push(`The host did not give the program or the command line of ${blind.length === 1 ? 'a process of yours' : `${blind.length} processes of yours`}, so it cannot be told whether ${blind.length === 1 ? 'it uses' : 'they use'} ${root}: ${listed}. Check ${blind.length === 1 ? 'it' : 'them'}.`);
+  }
+  return { outcome: 'failed', detail: `${parts.join(' ')} The folder was left; delete it, or remove the server again, once that is settled. (Processes of other users cannot be seen from this session.)` };
 }

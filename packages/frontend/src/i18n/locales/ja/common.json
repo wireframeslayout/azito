@@ -1,4 +1,9 @@
 {
+  "copyCommand": {
+    "copy": "コピー",
+    "copied": "コピーしました",
+    "copyLabel": "コマンドをコピー: {{command}}"
+  },
   "actions": {
     "confirm": "確認",
     "cancel": "キャンセル",

@@ -4,9 +4,8 @@ import { hubRootOfScript, soleExecAction, taskExecActions } from '../../../share
 import { firewallRuleName } from './windowsFirewall';
 import { agentTaskIdentity, misaoTaskVersion, type AgentTaskIdentity } from './windowsAgentTask';
 import type { WindowsAgentOptions } from './windowsAgentConfig';
-import { folderScript, leftoverProcessesScript, misaoStopScript, parseFolderOutput, parseLeftoverOutput, type ScriptOutcome, type UninstallOutcome } from './windowsAgentUninstallScripts';
-import { firewallInspectScript, misaoGuardScript, parseFirewallOutput, parseMisaoGuardOutput, parseSameFileOutput, sameFileScript } from './windowsAgentOwnership';
-import { windowsMisaoPipe } from '../transport/agentMisaoSocket';
+import { folderScript, leftoverProcessesScript, parseFolderOutput, parseLeftoverOutput, type ScriptOutcome, type UninstallOutcome } from './windowsAgentUninstallScripts';
+import { firewallInspectScript, misaoDaemonScript, misaoHubScript, parseFirewallOutput, parseMisaoGuardOutput, parseSameFileOutput, sameFileScript } from './windowsAgentOwnership';
 
 /** The Task Scheduler task of a Windows hub (`HUB_SERVICE.windowsTaskName`, fixed: there is no setting for it; a test keeps the two in step). */
 export const WINDOWS_HUB_TASK_NAME = 'AzitoHub';
@@ -135,7 +134,7 @@ export async function uninstallWindowsAgent(host: WindowsUninstallHost, facts: H
 
   steps.push(removal.step.outcome === 'failed'
     ? skipped('processes', 'the task is still registered, so it would start the agent again')
-    : await step('processes', async () => parseLeftoverOutput(await host.script('Looking for processes still running from the agent folder', leftoverProcessesScript(agentRoot), QUICK_MS), agentRoot)));
+    : await step('processes', async () => parseLeftoverOutput(await host.script('Looking for processes still running from the agent folder', leftoverProcessesScript(agentRoot, home), QUICK_MS), agentRoot)));
 
   if (removal.foreign) {
     steps.push(skipped('firewall', 'the task belongs to another install, so its firewall rule was not looked at'));
@@ -166,30 +165,21 @@ async function isHostNode(host: WindowsUninstallHost, taskNode: string, hostNode
 async function removeMisao(host: WindowsUninstallHost, facts: HostFacts, options: WindowsAgentOptions): Promise<UninstallStep[]> {
   const { home } = facts;
   const root = path.win32.join(home, options.misaoDir);
-  const guard = await step('misaoTask', () => misaoOwner(host, root));
+  const guard = await step('misaoTask', () => misaoOwner(host, root, home));
   if (guard.outcome !== 'absent') {
     const why = guard.outcome === 'failed' ? 'the owner of the misao could not be determined' : 'misao was left in place';
     return [guard, skipped('misaoProcesses', why), skipped('misaoFolder', why)];
   }
-  let version: string | undefined;
   const task = await step('misaoTask', async () => {
-    const removal = await removeTask(host, options.misaoTaskName, (xml) => {
-      version = misaoTaskOf(xml, facts, root);
-      return version !== undefined;
-    }, `have the form the AZITO install writes for the misao of ${root}`);
+    const removal = await removeTask(host, options.misaoTaskName, (xml) => misaoTaskOf(xml, facts, root) !== undefined, `have the form the AZITO install writes for the misao of ${root}`);
     return removal.step;
   });
   if (task.outcome === 'failed') {
     const why = 'the misao task is still registered, so it would start the daemon again';
     return [task, skipped('misaoProcesses', why), skipped('misaoFolder', why)];
   }
-  // The task is ended; the daemon is asked to stop through its own pipe (the one stop AZITO asks of it), and then only a look at what is left.
-  const processes = await step('misaoProcesses', async () => {
-    if (version !== undefined) {
-      await host.script('Asking the misao daemon to stop', misaoStopScript(path.win32.join(root, version as string, 'misao.exe'), windowsMisaoPipe(root, userNameOf(facts.userId))), 60_000);
-    }
-    return parseLeftoverOutput(await host.script('Looking for processes still running from the misao folder', leftoverProcessesScript(root), QUICK_MS), root);
-  });
+  // The task is ended and that is all AZITO does to the daemon (a daemon of another folder, or one started by hand, is not touched); then only a look.
+  const processes = await step('misaoProcesses', async () => parseLeftoverOutput(await host.script('Looking for processes still running from the misao folder', leftoverProcessesScript(root, home), QUICK_MS), root));
   const folder = processes.outcome === 'failed'
     ? skipped('misaoFolder', 'the misao daemon may still be running: its folder is left so that nothing breaks underneath it')
     : await step('misaoFolder', async () => parseFolderOutput(await host.script(`Removing ${root}`, folderScript(home, root), FOLDER_MS)));
@@ -214,7 +204,7 @@ function hubMisaoRootOf(xml: string): string | undefined {
  * - the owner of a process that matters cannot be read (it is then neither "mine" nor "someone else's").
  * A hub that is started in a way none of these can see is not recognised; that is the limit of what can be known from outside.
  */
-async function misaoOwner(host: WindowsUninstallHost, root: string): Promise<ScriptOutcome> {
+async function misaoOwner(host: WindowsUninstallHost, root: string, home: string): Promise<ScriptOutcome> {
   const hub = await host.tasks.query(WINDOWS_HUB_TASK_NAME);
   let hubRoot: string | undefined;
   if (hub.exists) {
@@ -223,7 +213,9 @@ async function misaoOwner(host: WindowsUninstallHost, root: string): Promise<Scr
       return { outcome: 'skipped', detail: `A Windows hub is registered on this host (the task "${WINDOWS_HUB_TASK_NAME}") but the folder of its misao cannot be read from the task, so this misao was left in place. Remove it by hand if it is not the hub's.` };
     }
   }
-  const answer = parseMisaoGuardOutput(await host.script('Checking who runs the misao', misaoGuardScript({ root, hubRoot, looksForHub: !hub.exists }), QUICK_MS));
+  let answer = parseMisaoGuardOutput(await host.script('Checking the hub of the misao', misaoHubScript({ root, hubRoot, looksForHub: !hub.exists }), QUICK_MS));
+  // Nothing says it is a hub's: look at the daemons of the folder themselves.
+  if (answer.kind === 'clear') answer = parseMisaoGuardOutput(await host.script('Checking who runs the misao', misaoDaemonScript(root, home), QUICK_MS));
   switch (answer.kind) {
     case 'sameHub':
       return { outcome: 'skipped', detail: `This misao (${root}) is the one of the Windows hub registered on this host (the task "${WINDOWS_HUB_TASK_NAME}"; the folders are the same once their names are resolved on the host), so it was left in place. Remove it with the hub.` };
