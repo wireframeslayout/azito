@@ -35,12 +35,12 @@ describe('getSetupSummary', () => {
 describe('getSetupSummary on a Windows host', () => {
   const win32 = { platform: 'win32' as const };
 
-  it('does not count the rows a Windows host cannot use (tmux, the harness, the browser runtime)', () => {
+  it('does not count the rows a Windows host cannot use (tmux, the browser runtime)', () => {
     const status: InstallStatusResponse = {
       node: { installed: true },
       misao: { installed: true },
       tmux: { installed: false },
-      aztHarness: { installed: false, detail: 'unsupported_os: installing the harness is a POSIX shell script' },
+      aztHarness: { installed: true },
       chromium: { installed: false },
     };
     expect(getSetupSummary(status, null, win32)).toEqual({ text: 'servers:setup.allInstalled', tone: 'green' });
@@ -48,7 +48,7 @@ describe('getSetupSummary on a Windows host', () => {
 
   it('still counts what Windows does use', () => {
     const status: InstallStatusResponse = { node: { installed: false }, misao: { installed: true }, aztHarness: { installed: false } };
-    expect(getSetupSummary(status, null, win32).textParams).toEqual({ count: 1 });
+    expect(getSetupSummary(status, null, win32).textParams).toEqual({ count: 2 });
   });
 
   it('counts the same rows on Linux / macOS and on an unrecorded host', () => {
@@ -60,7 +60,7 @@ describe('getSetupSummary on a Windows host', () => {
 
 describe('closedSetupRows', () => {
   it('closes tmux, the harness and the browser runtime on Windows only', () => {
-    expect([...closedSetupRows({ platform: 'win32' })].sort()).toEqual(['aztHarness', 'chromium', 'tmux']);
+    expect([...closedSetupRows({ platform: 'win32' })].sort()).toEqual(['chromium', 'tmux']);
     expect(closedSetupRows({ platform: 'darwin' }).size).toBe(0);
     expect(closedSetupRows(undefined).size).toBe(0);
   });

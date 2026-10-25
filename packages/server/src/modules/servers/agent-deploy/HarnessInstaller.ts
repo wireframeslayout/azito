@@ -4,6 +4,10 @@ import { Readable } from 'stream';
 import { Client as Ssh2Client } from 'ssh2';
 import type { SshClient } from '../ssh/SshClient';
 import { assertPosixHost, type HostProfile } from '../../../shared/os/hostProfile';
+import type { IServerTransport } from '../transport/ServerTransport';
+import { harnessLocation, homeDirOf } from './harnessLocation';
+import { buildNodeSetupInvocation, sendHarnessDirectory } from './harnessNodeSetup';
+import { pathApiFor } from '../../../shared/os/hostPath';
 import { shellQuote } from '../../../shared/shellQuote';
 import { collectTreeEntries, modeByShebang, packTarGz } from '../../../shared/fs/tarGz';
 
@@ -27,8 +31,9 @@ const HARNESS_DIR = path.join(resolveRoot(), 'harness');
 
 export interface HarnessInstallOptions {
   /**
-   * The target server's OS (`TransportFactory.hostProfileFor`; null = a Unix agent registered before the OS was recorded). The
-   * harness is installed with `setup.sh`, so a win32 target is refused with `unsupported_os` before anything is sent.
+   * The target server's OS (`TransportFactory.hostProfileFor`; null = a Unix agent registered before the OS was recorded). A Unix
+   * host is set up with `setup.sh` (over SSH, or locally); a win32 one with `setup.mjs` (`installOnAgent` / `installLocal`), and the
+   * SSH route refuses it with `unsupported_os` before anything is sent.
    */
   hostProfile: HostProfile | null;
   azitoUrl?: string;
@@ -51,6 +56,8 @@ export interface HarnessInstallOptions {
   version?: string;
 }
 
+const SETUP_TIMEOUT_MS = 120_000;
+const SETUP_MAX_OUTPUT_BYTES = 1024 * 1024;
 const VALID_PREFIX = /^[a-z0-9]([a-z0-9-]*[a-z0-9])?$/;
 
 function validatePrefix(prefix: string): void {
@@ -122,7 +129,6 @@ export class HarnessInstaller {
       steps.push(p);
     };
 
-    assertPosixHost(options.hostProfile, 'this hub', 'installing the harness (setup.sh)');
     if (options.prefix) validatePrefix(options.prefix);
 
     report('transfer', 'ok', 'Local install — harness already at ' + HARNESS_DIR);
@@ -137,6 +143,68 @@ export class HarnessInstaller {
       return { success: false, steps, error: msg };
     }
 
+    return { success: true, steps };
+  }
+
+  /**
+   * Installs the harness on a Windows agent: the files go through the agent's IFileOps, `node setup.mjs` runs through its
+   * `run` (a program with arguments, no shell). The home directory is the agent's own (`~`); no SSH is involved.
+   */
+  async installOnAgent(
+    transport: Pick<IServerTransport, 'files' | 'run'>,
+    options: HarnessInstallOptions,
+    onProgress?: (p: HarnessInstallProgress) => void,
+  ): Promise<HarnessInstallResult> {
+    const steps: HarnessInstallProgress[] = [];
+    const report = (step: HarnessInstallStep, status: HarnessInstallProgress['status'], message: string) => {
+      const p: HarnessInstallProgress = { step, status, message };
+      steps.push(p);
+      onProgress?.(p);
+    };
+    if (options.hostProfile?.platform !== 'win32') {
+      throw new Error('installOnAgent is the Windows route; a Unix agent is installed over SSH (install)');
+    }
+    if (options.prefix) validatePrefix(options.prefix);
+
+    const files = transport.files();
+    let location: ReturnType<typeof harnessLocation>;
+    report('transfer', 'running', 'Transferring harness to the agent...');
+    try {
+      location = harnessLocation(files.platform, await homeDirOf(files), options.prefix);
+      if (!fs.existsSync(HARNESS_DIR)) throw new Error(`Harness directory not found: ${HARNESS_DIR}`);
+      await sendHarnessDirectory(files, HARNESS_DIR, location, Date.now());
+      report('transfer', 'ok', `Harness transferred to ${location.harnessDir}`);
+    } catch (err) {
+      const msg = (err as Error).message;
+      report('transfer', 'error', msg);
+      return { success: false, steps, error: msg };
+    }
+
+    report('setup', 'running', 'Running harness setup on the agent...');
+    try {
+      const { args, env } = buildNodeSetupInvocation(options);
+      const result = await transport.run({
+        file: 'node',
+        args: [pathApiFor(files.platform).join(location.harnessDir, 'setup.mjs'), ...args],
+        env,
+        timeoutMs: SETUP_TIMEOUT_MS,
+        maxOutputBytes: SETUP_MAX_OUTPUT_BYTES,
+      });
+      if (result.exitCode !== 0) throw new Error(`setup.mjs failed (exit ${result.exitCode}): ${result.stderr}`);
+      report('setup', 'ok', 'Harness setup complete');
+    } catch (err) {
+      const msg = (err as Error).message;
+      report('setup', 'error', msg);
+      return { success: false, steps, error: msg };
+    }
+
+    if (options.version) {
+      try {
+        await files.write(location.versionFile, Buffer.from(`${options.version}\n`));
+      } catch {
+        // VERSION write failure is non-fatal; the next auto-update cycle will retry.
+      }
+    }
     return { success: true, steps };
   }
 
@@ -204,6 +272,7 @@ export class HarnessInstaller {
   }
 
   private async runSetupLocal(options: HarnessInstallOptions): Promise<void> {
+    if (options.hostProfile?.platform === 'win32') return this.runNodeSetupLocal(options);
     const setupScript = path.join(HARNESS_DIR, 'setup.sh');
     if (!fs.existsSync(setupScript)) {
       throw new Error(`setup.sh not found: ${setupScript}`);
@@ -247,6 +316,22 @@ export class HarnessInstaller {
     if (stderr) {
       // setup.sh may write warnings to stderr; not fatal
     }
+  }
+
+  /** The hub's own Windows host: `setup.mjs` run by the hub's node, the tokens in its environment (not in the argument list). */
+  private async runNodeSetupLocal(options: HarnessInstallOptions): Promise<void> {
+    const setupScript = path.join(HARNESS_DIR, 'setup.mjs');
+    if (!fs.existsSync(setupScript)) throw new Error(`setup.mjs not found: ${setupScript}`);
+    const { args, env } = buildNodeSetupInvocation(options);
+    const { execFile } = await import('child_process');
+    const { promisify } = await import('util');
+    await promisify(execFile)(process.execPath, [setupScript, ...args], {
+      env: { ...process.env, ...env },
+      timeout: SETUP_TIMEOUT_MS,
+      windowsHide: true,
+    }).catch((err: { message: string; stderr?: string }) => {
+      throw new Error(`setup.mjs failed: ${err.stderr || err.message}`);
+    });
   }
 
   private sftpWrite(sshHost: string, data: Buffer, remotePath: string): Promise<void> {

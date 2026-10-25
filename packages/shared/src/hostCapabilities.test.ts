@@ -19,7 +19,6 @@ describe('hostFeatureSupport', () => {
     const win32 = { platform: 'win32' as const };
     expect(hostFeatureSupport(win32, 'taskExecution')).toEqual({ available: false, issue: 371 });
     expect(hostFeatureSupport(win32, 'workerLaunch')).toEqual({ available: false, issue: 371 });
-    expect(hostFeatureSupport(win32, 'harness')).toEqual({ available: false, issue: 371 });
     expect(hostFeatureSupport(win32, 'browserRuntime')).toEqual({ available: false, issue: 372 });
   });
 

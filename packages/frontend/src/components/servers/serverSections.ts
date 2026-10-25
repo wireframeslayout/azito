@@ -95,15 +95,14 @@ export function getOverviewSummary(status: ServerStatus | null): SectionSummary 
 }
 
 /** The install-status rows that depend on a host feature: they are closed (shown with the reason, no action, not counted) where the feature is. */
-export type SetupRowKey = 'tmux' | 'aztHarness' | 'chromium';
+export type SetupRowKey = 'tmux' | 'chromium';
 
 const SETUP_ROW_FEATURE: Record<SetupRowKey, HostFeature> = {
   tmux: 'tmux',
-  aztHarness: 'harness',
   chromium: 'browserRuntime',
 };
 
-/** Which Setup rows this host cannot use at all (a Windows agent: no tmux, no setup.sh harness, no sh-script browser runtime). */
+/** Which Setup rows this host cannot use at all (a Windows agent: no tmux, no sh-script browser runtime). */
 export function closedSetupRows(hostProfile: HostPlatformInfo | null | undefined): ReadonlySet<SetupRowKey> {
   const closed = (Object.keys(SETUP_ROW_FEATURE) as SetupRowKey[]).filter((key) => !hostFeatureSupport(hostProfile, SETUP_ROW_FEATURE[key]).available);
   return new Set(closed);
@@ -122,7 +121,7 @@ export function getSetupSummary(
     closed.has('tmux') ? undefined : installStatus.tmux,
     installStatus.misao,
     installStatus.node,
-    closed.has('aztHarness') ? undefined : installStatus.aztHarness,
+    installStatus.aztHarness,
     installStatus.tailscale,
     installStatus.agent,
     closed.has('chromium') ? undefined : installStatus.chromium,

@@ -24,7 +24,8 @@ import { buildHarnessInstallOptions } from './agent-deploy/harnessInstallOptions
 import type { IProjectRepository } from '../projects/Project';
 import type { IProjectServerRepository } from '../projects/ProjectServer';
 import type { IWindowRepository } from '../windows/SqliteWindowRepository';
-import { parseTmuxVersion, parseNodeVersion, parseHarnessCheck, parseTailscaleCheck, parseChromiumInstall, buildHarnessCheckCommand } from './installStatusParsers';
+import { parseTmuxVersion, parseNodeVersion, parseHarnessCheck, parseTailscaleCheck, parseChromiumInstall } from './installStatusParsers';
+import { readHarnessCheck } from './harnessCheck';
 import { buildBaseUrlCandidates } from './baseUrlCandidates';
 import { findChromiumBinaryCommand } from './agent-deploy/BrowserRuntimeInstaller';
 import { stripTerminalArtifacts } from '../../shared/utils/stripTerminalArtifacts';
@@ -933,6 +934,9 @@ const serversRoutes: FastifyPluginCallback<ServersRouteOptions> = (fastify, opts
 
       if (srv.type === 'local') {
         result = await harnessInstaller.installLocal(installOptions);
+      } else if (installOptions.hostProfile?.platform === 'win32') {
+        // A Windows agent: the files and `node setup.mjs` go through the agent itself (no SSH, no setup.sh).
+        result = await harnessInstaller.installOnAgent(transportFactory.getAgentTransport(srv), installOptions, (p) => steps.push(p));
       } else {
         const sshHost = srv.sshHost || srv.host;
         if (!sshHost) return reply.status(400).send({ error: 'No SSH host configured for this server' });
@@ -1201,9 +1205,8 @@ const serversRoutes: FastifyPluginCallback<ServersRouteOptions> = (fastify, opts
 
       const checkHarness = async () => {
         try {
-          const r = await transport.exec(buildHarnessCheckCommand(harnessPrefix));
           const autoUpdate = harnessUpdater.getLastResult(srv.name);
-          return parseHarnessCheck(stripTerminalArtifacts(r.stdout), harnessHash, autoUpdate);
+          return parseHarnessCheck(await readHarnessCheck(transport.files(), harnessPrefix), harnessHash, autoUpdate);
         } catch (err: unknown) {
           return { installed: false, detail: (err as Error).message };
         }

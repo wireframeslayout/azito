@@ -4,7 +4,9 @@ import * as crypto from 'crypto';
 import type { HarnessInstaller } from './HarnessInstaller';
 import type { IServerRepository, ServerConfig } from '../Server';
 import type { KeyedMutex } from '../../../shared/keyedMutex';
-import type { SshClient } from '../ssh/SshClient';
+import type { TransportFactory } from '../transport/TransportFactory';
+import type { IFileOps } from '../../../shared/fs/fileOps';
+import { harnessLocation, homeDirOf, readTextIfPresent } from './harnessLocation';
 import { buildHarnessInstallOptions } from './harnessInstallOptions';
 import { resolveRoot } from '../../../shared/releaseInfo';
 
@@ -36,7 +38,7 @@ export class HarnessUpdater {
 
   constructor(
     private harnessInstaller: HarnessInstaller,
-    private sshClient: SshClient,
+    private transportFactory: Pick<TransportFactory, 'getAgentTransport'>,
     private serverRepo: IServerRepository,
     private options: HarnessUpdaterOptions,
     private serverIsolationMutex: KeyedMutex,
@@ -57,21 +59,7 @@ export class HarnessUpdater {
   async checkAllServers(): Promise<HarnessUpdateResult[]> {
     const servers = this.serverRepo.findAll().filter((s) => s.type === 'agent');
     const results: HarnessUpdateResult[] = [];
-    for (const server of servers) {
-      // The update reads and installs the harness with POSIX shell strings; a Windows agent cannot run them.
-      if (server.hostProfile?.platform === 'win32') {
-        this.logger.info(`${server.name}: skipped (Windows agent; the harness auto-update runs POSIX commands)`);
-        const r: HarnessUpdateResult = {
-          name: server.name, status: 'skipped',
-          message: 'Windows agent: harness auto-update runs POSIX commands',
-          at: new Date().toISOString(),
-        };
-        this.lastResults.set(server.name, r);
-        results.push(r);
-        continue;
-      }
-      results.push(await this.checkAndUpdate(server));
-    }
+    for (const server of servers) results.push(await this.checkAndUpdate(server));
     return results;
   }
 
@@ -80,8 +68,10 @@ export class HarnessUpdater {
       return { name: server.name, status: 'up_to_date' };
     }
 
+    // A Unix agent is updated over SSH (setup.sh); a Windows one through the agent itself (setup.mjs), which needs no SSH.
+    const isWindows = server.hostProfile?.platform === 'win32';
     const sshHost = server.sshHost || null;
-    if (!sshHost) {
+    if (!isWindows && !sshHost) {
       const r: HarnessUpdateResult = {
         name: server.name, status: 'skipped',
         message: 'No SSH host configured', at: new Date().toISOString(),
@@ -94,10 +84,20 @@ export class HarnessUpdater {
     const localHash = this.getHarnessHash();
 
     let azitoUrl: string | undefined;
+    let remoteVersion: string | undefined;
     try {
-      azitoUrl = await this.readRemoteAzitoUrl(sshHost, prefix);
-    } catch {
-      // SSH failure reading env — treat as no URL
+      const files = this.transportFactory.getAgentTransport(server).files();
+      const location = harnessLocation(files.platform, await homeDirOf(files), prefix);
+      azitoUrl = await readRemoteAzitoUrl(files, location.envFile);
+      remoteVersion = (await readTextIfPresent(files, location.versionFile))?.trim() || undefined;
+    } catch (err) {
+      const r: HarnessUpdateResult = {
+        name: server.name, status: 'skipped',
+        message: `Could not read the installed harness: ${(err as Error).message}`,
+        at: new Date().toISOString(),
+      };
+      this.lastResults.set(server.name, r);
+      return r;
     }
     if (!azitoUrl) {
       const r: HarnessUpdateResult = {
@@ -107,13 +107,6 @@ export class HarnessUpdater {
       };
       this.lastResults.set(server.name, r);
       return r;
-    }
-
-    let remoteVersion: string | undefined;
-    try {
-      remoteVersion = await this.readRemoteVersion(sshHost, prefix);
-    } catch {
-      // VERSION file missing or unreadable — treat as outdated
     }
 
     if (remoteVersion === localHash) {
@@ -140,7 +133,9 @@ export class HarnessUpdater {
       });
 
       try {
-        const result = await this.harnessInstaller.install(sshHost, installOptions);
+        const result = installOptions.hostProfile?.platform === 'win32'
+          ? await this.harnessInstaller.installOnAgent(this.transportFactory.getAgentTransport(srv), installOptions)
+          : await this.harnessInstaller.install(sshHost!, installOptions);
         if (!result.success) {
           const r: HarnessUpdateResult = {
             name: server.name, status: 'error',
@@ -164,24 +159,31 @@ export class HarnessUpdater {
       }
     });
   }
+}
 
-  private async readRemoteAzitoUrl(sshHost: string, prefix?: string): Promise<string | undefined> {
-    const envFile = `~/.azito/azitoctl${prefix ? `-${prefix}` : ''}.env`;
-    const result = await this.sshClient.execIsolated(sshHost, `grep '^AZITO_URL=' ${envFile} 2>/dev/null | head -1`);
-    const line = result.stdout.trim();
-    if (!line) return undefined;
-    const match = line.match(/^AZITO_URL=(.+)$/);
-    if (!match) return undefined;
-    // Remove shell quoting ($'...' or unquoted)
-    return match[1].replace(/^\$?'(.*)'$/, '$1').replace(/^"(.*)"$/, '$1');
+/**
+ * The hub URL a harness install wrote into `azitoctl*.env`. setup.sh writes `AZITO_URL=<shell-quoted value>`, setup.mjs (Windows)
+ * `AZITO_URL="<JSON string>"`. A value in neither form is not guessed at: it reads as absent.
+ */
+export function parseAzitoUrl(envText: string): string | undefined {
+  const match = envText.match(/^AZITO_URL=(.+?)\r?$/m);
+  if (!match) return undefined;
+  const raw = match[1];
+  if (raw.startsWith('"')) {
+    try {
+      const parsed: unknown = JSON.parse(raw);
+      return typeof parsed === 'string' && parsed ? parsed : undefined;
+    } catch {
+      return undefined;
+    }
   }
+  // Remove shell quoting ($'...' or unquoted)
+  return raw.replace(/^\$?'(.*)'$/, '$1');
+}
 
-  private async readRemoteVersion(sshHost: string, prefix?: string): Promise<string | undefined> {
-    const harnessDir = `~/.azito/harness${prefix ? `-${prefix}` : ''}`;
-    const result = await this.sshClient.execIsolated(sshHost, `cat ${harnessDir}/VERSION 2>/dev/null`);
-    const version = result.stdout.trim();
-    return version || undefined;
-  }
+async function readRemoteAzitoUrl(files: IFileOps, envFile: string): Promise<string | undefined> {
+  const text = await readTextIfPresent(files, envFile);
+  return text === null ? undefined : parseAzitoUrl(text);
 }
 
 export function computeHarnessHash(harnessDir: string): string {

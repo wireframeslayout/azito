@@ -27,6 +27,8 @@ async function buildApp(hostProfile: HostProfile | null, run: (spec: unknown) =>
   const server = makeServer(hostProfile);
   const exec = vi.fn(async () => ({ stdout: '', stderr: '', code: 0 }));
   const serverRepo = { findAll: () => [server], findByName: (name: string) => (name === server.name ? server : null) } as unknown as IServerRepository;
+  const harnessInstaller = new HarnessInstaller({} as SshClient);
+  const agentTransport = { hostProfile, exec, run, files: () => ({ platform: hostProfile?.platform ?? 'linux', stat: async () => ({ kind: 'directory' }) }) };
   const muxDriverRegistry = new MuxDriverRegistry();
   muxDriverRegistry.register('tmux', { kind: 'tmux', caps: TMUX_CAPS } as unknown as IMuxClient);
   const opts = {
@@ -37,10 +39,11 @@ async function buildApp(hostProfile: HostProfile | null, run: (spec: unknown) =>
     transportFactory: {
       invalidate: vi.fn(),
       hostProfileFor: (s: Pick<ServerConfig, 'hostProfile'>) => s.hostProfile,
-      getTransport: () => ({ hostProfile, exec, run, files: () => ({ platform: hostProfile?.platform ?? 'linux', stat: async () => ({ kind: 'directory' }) }) }),
+      getTransport: () => agentTransport,
+      getAgentTransport: () => agentTransport,
     },
     tmuxInstaller: new TmuxInstaller(),
-    harnessInstaller: new HarnessInstaller({} as SshClient),
+    harnessInstaller,
     windowRepo: { findByServer: vi.fn(() => []) },
     webhookToken: 'wh',
     uiToken: 'ui',
@@ -58,7 +61,7 @@ async function buildApp(hostProfile: HostProfile | null, run: (spec: unknown) =>
     return defaultHandler.call(app, err, request, reply);
   });
   await app.register(serversRoutes, opts);
-  return { app, exec };
+  return { app, exec, harnessInstaller, agentTransport };
 }
 
 describe('Unix-only install operations on a Windows server answer unsupported_os with the reason', () => {
@@ -68,7 +71,6 @@ describe('Unix-only install operations on a Windows server answer unsupported_os
     ['install-tmux', 'Installing tmux'],
     ['install-browser-runtime', 'installing the browser runtime'],
     ['apply-tmux-config', 'applying the tmux config'],
-    ['harness/install', 'installing the harness'],
   ])('POST /api/servers/:name/%s is 501 with the reason in error and the code', async (route, operation) => {
     const { app, exec } = await buildApp(win32);
     const res = await app.inject({ method: 'POST', url: `/api/servers/srv/${route}`, payload: {} });
@@ -77,6 +79,16 @@ describe('Unix-only install operations on a Windows server answer unsupported_os
     // install-tmux is answered by the host-feature table ("... on Windows hosts"), the others by assertPosixHost.
     expect(res.json().error).toMatch(route === 'install-tmux' ? /Windows hosts/ : /win32/);
     expect(exec).not.toHaveBeenCalled();
+  });
+
+  it('POST /api/servers/:name/harness/install on a Windows agent installs through the agent (no SSH, no setup.sh)', async () => {
+    const { app, harnessInstaller, agentTransport } = await buildApp(win32);
+    const installOnAgent = vi.spyOn(harnessInstaller, 'installOnAgent').mockResolvedValue({ success: true, steps: [] });
+    const install = vi.spyOn(harnessInstaller, 'install');
+    const res = await app.inject({ method: 'POST', url: '/api/servers/srv/harness/install', payload: {} });
+    expect(res.statusCode).toBe(200);
+    expect(installOnAgent).toHaveBeenCalledWith(agentTransport, expect.objectContaining({ hostProfile: win32, serverName: 'srv' }), expect.any(Function));
+    expect(install).not.toHaveBeenCalled();
   });
 
   it('a server with no recorded OS (a Unix agent from before it was kept) still applies the tmux config', async () => {

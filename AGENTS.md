@@ -282,7 +282,11 @@ packages/
   (`shellDialectFor(transportFactory.hostProfileFor(server))`). PowerShell `wrapScript` is the fixed `powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -EncodedCommand <UTF-16LE base64>`
   (≤ 8191 characters, cmd.exe's limit); a native program with arbitrary arguments is `invoke`d through a fixed `node -e` launcher given `{ file, args }` as base64 JSON (nothing is placed on the host; `node` must be on PATH).
   A Windows agent's bare cmd.exe pane works (`paneShell.ts`); a pane that launches a command is `unsupported_os` until #371.
-- Unix-only install scripts (tmux / browser runtime / harness `setup.sh` / misao on an agent / hub-transfer `RemoteBundleOps` / isolation doctor / agent redeploy over SSH) stay sh; each entry point starts with
+- The harness on Windows (#371 T5) is Node, not bash: `harness/setup.mjs` (+ `harness/lib/`) and `harness/hooks/azito-hook.mjs` (skills = directory junctions, rules = copies,
+  `azitoctl*.env` in the JSON-string form, owner-only ACL). `HarnessInstaller.installOnAgent` sends the files through the agent's `IFileOps` and runs `node setup.mjs` through `run` (tokens in `env`, not argv);
+  the status row and `HarnessUpdater` read through `IFileOps` for every agent. POSIX keeps `setup.sh` and the bash hooks; `hookParity.test.ts` runs both hooks against one HTTP server and compares the bodies,
+  `harnessNodeParts.test.ts` fails when `harness/lib/winAclScripts.mjs` drifts from `windowsSecretFileGuard.ts`. Docs: `docs/{en,ja}/harness.md` (Windows).
+- Unix-only install scripts (tmux / browser runtime / harness `setup.sh` on a Unix host / misao on an agent / hub-transfer `RemoteBundleOps` / isolation doctor / agent redeploy over SSH) stay sh; each entry point starts with
   `assertPosixHost(transport.hostProfile, label, operation)` and a win32 server gets `HostProfileError('unsupported_os')`, which `mapAppError` answers as 501 `{ error: <reason>, code }` (the UI shows `error`).
   A host with no recorded OS is a Unix one. Their Windows versions are separate functions (#369 / #380).
 

@@ -9,7 +9,7 @@ describe('hostFeatureBlockReason', () => {
   it('is null on Linux, macOS and an unrecorded host', () => {
     expect(hostFeatureBlockReason({ platform: 'linux' }, 'taskExecution', t)).toBeNull();
     expect(hostFeatureBlockReason({ platform: 'darwin' }, 'workerLaunch', t)).toBeNull();
-    expect(hostFeatureBlockReason(null, 'harness', t)).toBeNull();
+    expect(hostFeatureBlockReason(null, 'browserRuntime', t)).toBeNull();
   });
 
   it('says the feature is pending, with its issue, on Windows', () => {
@@ -36,7 +36,7 @@ describe('git_not_found answers', () => {
 
 describe('unsupported_os answers', () => {
   it('recognises the hub answer and keeps its reason', () => {
-    const body = { error: 'installing the harness (setup.sh) is a POSIX shell script', code: 'unsupported_os' };
+    const body = { error: 'installing the browser runtime is a POSIX shell script', code: 'unsupported_os' };
     expect(isUnsupportedOsAnswer(body)).toBe(true);
     expect(describeUnsupportedOs(body, t)).toContain('POSIX shell script');
   });

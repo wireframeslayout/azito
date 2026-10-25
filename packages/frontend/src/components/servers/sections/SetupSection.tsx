@@ -173,7 +173,6 @@ export default function SetupSection({ server, installStatus, installStatusError
   const isRemote = server.type === 'agent';
   const canInstallAgent = isRemote && server.sshHost;
   const closedRows = closedSetupRows(server.hostProfile);
-  const harnessBlockReason = hostFeatureBlockReason(server.hostProfile, 'harness', t);
   const chromiumBlockReason = hostFeatureBlockReason(server.hostProfile, 'browserRuntime', t);
   const tmuxBlockReason = hostFeatureBlockReason(server.hostProfile, 'tmux', t);
 
@@ -229,7 +228,7 @@ export default function SetupSection({ server, installStatus, installStatusError
     ...(installStatus.misao && !installStatus.misao.optional ? [{ installed: installStatus.misao.installed }] : []),
     { installed: installStatus.node.installed },
     ...(showTailscale ? [{ installed: installStatus.tailscale!.installed }] : []),
-    ...(closedRows.has('aztHarness') ? [] : [{ installed: installStatus.aztHarness.installed }]),
+    { installed: installStatus.aztHarness.installed },
     ...(showAgent ? [{ installed: installStatus.agent?.installed ?? false }] : []),
     ...(showChromium && !closedRows.has('chromium') ? [{ installed: installStatus.chromium!.installed }] : []),
   ];
@@ -339,12 +338,11 @@ export default function SetupSection({ server, installStatus, installStatusError
 
       <StepRow
         label="AZITO Harness"
-        item={harnessBlockReason ? { installed: false } : harnessItem}
-        optional={!!harnessBlockReason}
+        item={harnessItem}
         running={installingHarness}
-        stateOverride={harnessBlockReason ? { label: t('setup.stateUnavailable'), tone: 'default' } : harnessStateOverride}
-        description={harnessBlockReason ?? harnessItem.autoUpdate?.message}
-        action={harnessBlockReason ? undefined : (
+        stateOverride={harnessStateOverride}
+        description={harnessItem.autoUpdate?.message}
+        action={(
           <InstallActionButton
             installed={harnessItem.installed}
             installing={installingHarness}
