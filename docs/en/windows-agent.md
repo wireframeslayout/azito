@@ -27,7 +27,7 @@ Claude Code and Codex are needed to run tasks. Files, git and the terminal work 
 
 Installing, updating and removing work when the SSH user is **not an administrator** (the Task Scheduler task is registered with that user's own rights). Three things differ:
 
-- **AZITO cannot add the firewall rule itself.** An elevated (administrator) SSH session lets the install add it; otherwise the install **stops before transferring anything** and prints the command to run once in an Administrator PowerShell. Run it, then install again.
+- **AZITO cannot add the firewall rule itself.** An elevated (administrator) SSH session lets the install add it. Without elevation, if **a covering enabled Allow rule already exists**, the install goes on without creating a rule (the firewall step of a removal is then `was not there`). Only when there is no Allow rule and none can be added does the install **stop before transferring anything** and print the command to run once in an Administrator PowerShell. Run it, then install again.
 - **Some processes cannot be seen.** Removal and cleanup look for processes running from the folder, but system and other users' processes cannot be read from an ordinary user's SSH session. AZITO has a rule for your own unreadable processes ([Remove](#remove)); other users' processes are out of reach.
 - **Protected processes such as Defender** cannot always be read even by an administrator ([Limits](#limits)).
 
@@ -99,7 +99,7 @@ When the hub starts, it checks the version of every registered agent server (the
 
 The sequence:
 
-1. Before anything is stopped, the firewall rule is checked the way the install checks it (if it is missing the update stops here and the old agent keeps running).
+1. Before anything is stopped, the firewall rule is checked the way the install checks it (if the allowance is missing, an elevated session adds the rule and goes on; otherwise the update stops here and the old agent keeps running).
 2. The new version is deployed, started, and the health check awaited. **The agent's current token is reused**, so nothing changes in the hub's settings.
 3. When the new agent answers, the update is committed and the previous version, settings and task that were kept aside are removed. When it does not, the previous version, settings and task are **put back** and the previous agent is started again. If the deploy fails halfway and the old agent was running, the update also checks that the old agent answers and puts the result in the error.
 4. Under the lock, the server's address, token, type, OS and running state are read again; if any changed, the update is not run (`skipped`). An update that overlaps a manual reinstall never writes back an old token.
@@ -135,7 +135,7 @@ What happens on the host (each step answers `removed` / `was not there` / `faile
 
 - **Try again**: fix the cause (a process still running, for instance), then run it again.
 - **Delete the entry only**: remove what is left on the host by hand.
-- **Cancel**: nothing changes.
+- **Cancel**: closes the screen and keeps the server's row. Host-side removal that already succeeded (an ended task, for example) is not undone.
 
 **An offline host.** If the host cannot be reached, the removal changes nothing on it. Turn "Also remove the agent from the host" off and delete the server's entry only; then remove what is left with the manual steps below.
 
@@ -145,7 +145,7 @@ By hand (when you did not use the UI, or the host was offline):
 2. `schtasks /Delete /TN AzitoAgent /F`
 3. Delete `%USERPROFILE%\.azito\agent`
 4. The firewall rule as above (check it, then remove it)
-5. For misao too: `schtasks /Delete /TN AzitoMisao /F` and delete `%USERPROFILE%\.azito\misao` (every window closes; if the daemon is running, run `misao.exe stop` or stop the process first)
+5. For misao too: `schtasks /Delete /TN AzitoMisao /F` and delete `%USERPROFILE%\.azito\misao` (every window closes; if the daemon is running, **before you unregister the task** read the target `misao.exe` and the `--socket` pipe from the task definition (`schtasks /Query /TN AzitoMisao /XML`) and run, in PowerShell, `$env:MISAO_SOCKET = '<the target pipe>'; & '<the target misao.exe>' stop`. Without the pipe, the stop may not reach it or may stop another daemon)
 
 ## Limits
 
