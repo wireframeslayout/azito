@@ -48,6 +48,7 @@ export function LeftBehindProvider({ children }: { children: ReactNode }) {
           {shown !== null && <UninstallStepList steps={shown.steps} />}
           {commands.length > 0 && (
             <div style={{ display: 'flex', flexDirection: 'column', gap: 'var(--space-2)' }}>
+              <p style={{ margin: 0, fontSize: 'var(--font-sm)', color: 'var(--text-dim)', lineHeight: 'var(--leading-body)' }}>{t('danger.leftBehind.harmless')}</p>
               <div style={{ fontSize: 'var(--font-sm)', fontWeight: 600 }}>{t('danger.leftBehind.commands')}</div>
               {commands.map((command) => <CopyableCommand key={command} command={command} />)}
             </div>
