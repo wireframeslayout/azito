@@ -2,7 +2,7 @@ import fs from 'fs';
 import path from 'path';
 import os from 'os';
 import { Readable } from 'stream';
-import { finished } from 'stream/promises';
+import { pipeline } from 'stream/promises';
 import type { SecretFileGuard } from '../../shared/os/secretFileGuard';
 import type { HostEnv } from '../../shared/os/hostEnv';
 import { hostTarOf } from '../../shared/os/hostTar';
@@ -71,14 +71,18 @@ const DOWNLOAD_TIMEOUT_MS = 10 * 60_000;
  */
 const RUN_DEADLINE_MS = 50 * 60_000;
 
-async function downloadFile(url: string, destPath: string, token?: string): Promise<void> {
+/**
+ * Saves `url` to `destPath`. The request and the body share one signal: the download's own time limit, and the run being told to end (the
+ * only step that is cut short by that; the others finish and the run stops at the next step). `pipeline` carries an error or an abort of
+ * either end to the other and closes both, so a body that stops in the middle is a rejected promise, never an uncaught stream error.
+ */
+async function downloadFile(url: string, destPath: string, runSignal: AbortSignal, token?: string): Promise<void> {
   const headers: Record<string, string> = { 'User-Agent': 'azito-hub' };
   if (token) headers.Authorization = `Bearer ${token}`;
-  const signal = AbortSignal.timeout(DOWNLOAD_TIMEOUT_MS);
+  const signal = AbortSignal.any([AbortSignal.timeout(DOWNLOAD_TIMEOUT_MS), runSignal]);
   const res = await fetch(url, { headers, signal });
   if (!res.ok || !res.body) throw new Error(`Download failed (${res.status}): ${url}`);
-  const writeStream = fs.createWriteStream(destPath);
-  await finished(Readable.fromWeb(res.body as import('stream/web').ReadableStream).pipe(writeStream));
+  await pipeline(Readable.fromWeb(res.body as import('stream/web').ReadableStream), fs.createWriteStream(destPath), { signal });
 }
 
 /**
@@ -200,19 +204,17 @@ export async function runUpdateSteps(
   stateManager: UpdateStateManager,
   signal: AbortSignal,
 ): Promise<void> {
-  /** Rejects when the run is told to end (the deadline, or the task being ended); a step that is still working is left behind and the run goes on to put the old version back. */
-  const aborted = new Promise<never>((_, reject) => {
-    if (signal.aborted) reject(signal.reason);
-    signal.addEventListener('abort', () => reject(signal.reason), { once: true });
-  });
-  aborted.catch(() => undefined);
+  // A run that is told to end (the deadline, or its task being ended) stops at the NEXT step: a step that is working is waited for, each one
+  // having a limit of its own (the download, the tool runs, the restart's grace, the health wait). The switch and the restart are never cut
+  // in the middle, and the rollback starts only when nothing else is running.
   const runStep = async (step: UpdateStep, message: string, fn: () => Promise<void>): Promise<void> => {
     state.step = step;
     state.steps.push({ step, status: 'running', message });
     stateManager.write(state);
     stateManager.appendLog(`[${step}] ${message}`);
     try {
-      await Promise.race([fn(), aborted]);
+      signal.throwIfAborted();
+      await fn();
       state.steps[state.steps.length - 1] = { step, status: 'ok', message };
       stateManager.write(state);
     } catch (err) {
@@ -235,8 +237,8 @@ export async function runUpdateSteps(
     const sumsPath = path.join(tmpDir, 'SHA256SUMS');
 
     await runStep('download', `Downloading ${args.version}`, async () => {
-      await downloadFile(args.tarballUrl, archivePath, token);
-      await downloadFile(args.sha256sumsUrl, sumsPath, token);
+      await downloadFile(args.tarballUrl, archivePath, signal, token);
+      await downloadFile(args.sha256sumsUrl, sumsPath, signal, token);
     });
 
     await runStep('verify', 'Verifying SHA256', async () => {

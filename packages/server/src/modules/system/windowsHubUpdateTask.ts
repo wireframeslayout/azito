@@ -161,7 +161,7 @@ async function clearLeftover(launcher: HubUpdateLauncher, launch: HubUpdateLaunc
   await client.delete(HUB_UPDATE_TASK);
   // `/End` ended the task's conhost.exe only. The previous update's node.exe follows it and ends within seconds; it is waited for, and ended if it
   // does not, BEFORE a new one is registered: two updates must not meet, and one that stays holds the hub lock. One that cannot be ended stops this with the reason.
-  const previous = await findHubProcesses(launcher.run, launch.task.systemRoot, hubRoots, process.pid);
+  const previous = await findHubProcesses(launcher.run, launch.task.systemRoot, hubRoots, process.pid, 'update-run');
   await endHubProcesses(launcher.run, launch.task.systemRoot, previous, PREVIOUS_RUN_GRACE_MS);
 }
 

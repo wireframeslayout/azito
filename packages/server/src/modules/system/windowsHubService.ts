@@ -328,9 +328,10 @@ const PROCESS_PREAMBLE = [
  * `azito-hub.cjs` of ANY version folder under `<prefix>\hub\` as one whole argument. Any version, because a restart after `current.txt`
  * was switched must still wait for the version that is running. `hubRoots` are the spellings of `<prefix>\hub` to match (the given
  * one and its real path: a junction or an 8.3 name makes them differ); another prefix or another user's hub is not matched.
+ * `onlyWithArgument`: when given, only a process that also has it as one whole argument (`update-run`: the update process and not `azito misao ...` or the hub itself).
  * `excludePid` is the caller itself: `azito service stop` is a `node.exe` that names the same file.
  */
-export async function findHubProcesses(run: SpecRunner, systemRoot: string, hubRoots: readonly string[], excludePid: number): Promise<HubProcess[]> {
+export async function findHubProcesses(run: SpecRunner, systemRoot: string, hubRoots: readonly string[], excludePid: number, onlyWithArgument?: string): Promise<HubProcess[]> {
   const q = powershellDialect.quote;
   const alternatives = hubRoots.map((root) => `[regex]::Escape(${q(`${root.replace(/[\\/]+$/, '')}\\`)})`).join(" + '|' + ");
   // Per candidate: the Process is opened FIRST (the handle keeps its id from being handed to another process), THEN the command line,
@@ -349,6 +350,7 @@ export async function findHubProcesses(run: SpecRunner, systemRoot: string, hubR
     '  try { $null = $p.Handle; $started = $p.StartTime } catch { $openError = $_.Exception.Message }',
     '  $cim = Get-CimInstance Win32_Process -Filter "ProcessId = $($p.Id)"',
     '  if (-not $cim -or -not $cim.CommandLine -or $cim.CommandLine -notmatch $pattern) { continue }',
+    ...(onlyWithArgument === undefined ? [] : [`  if ($cim.CommandLine -notmatch ${q(`(^|[\\s"])${onlyWithArgument.replace(/[^A-Za-z0-9-]/g, '')}([\\s"]|$)`)}) { continue }`]),
     // Only a process whose command line is this hub's gets its owner looked at: an unrelated node.exe of another user is skipped above.
     '  $owner = Get-Owner $cim',
     '  if ($null -eq $owner.Mine) { throw "Cannot tell whose hub process $($p.Id) is (GetOwnerSid: $($owner.Reason))" }',

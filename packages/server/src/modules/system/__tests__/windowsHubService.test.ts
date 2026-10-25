@@ -210,6 +210,23 @@ describe('findHubProcesses', () => {
     expect(script.indexOf('$cim.CommandLine -notmatch $pattern')).toBeLessThan(script.indexOf('Get-Owner $cim'));
   });
 
+  it('can be limited to processes that have a given whole argument (the update process, not `azito misao install` or the hub), and says nothing about it otherwise', async () => {
+    const run = vi.fn(async (_spec: CommandSpec) => result(0, ''));
+    await findHubProcesses(run, 'C:\\Windows', [`${PREFIX}\\hub`], 1, 'update-run');
+    await findHubProcesses(run, 'C:\\Windows', [`${PREFIX}\\hub`], 1);
+    const limited = scriptOf(run.mock.calls[0][0]);
+    expect(limited).toContain(String.raw`if ($cim.CommandLine -notmatch '(^|[\s"])update-run([\s"]|$)') { continue }`);
+    // The bundle's path, the owner and the creation time are still checked, and the extra test comes before the owner is looked at.
+    expect(limited.indexOf('update-run')).toBeLessThan(limited.indexOf('Get-Owner $cim'));
+    expect(limited).toContain('$cim.CommandLine -notmatch $pattern');
+    expect(scriptOf(run.mock.calls[1][0])).not.toContain('update-run');
+    // The argument must be one whole word: a command line that only contains the text does not match.
+    const re = /(^|[\s"])update-run([\s"]|$)/;
+    expect(re.test('node.exe "C:\\x\\azito-hub.cjs" update-run --version v1')).toBe(true);
+    expect(re.test('node.exe "C:\\x\\azito-hub.cjs" misao install')).toBe(false);
+    expect(re.test('node.exe azito-hub.cjs service restart --note=update-run')).toBe(false);
+  });
+
   it('fails with the script\'s own message', async () => {
     await expect(findHubProcesses(async () => result(1, '', 'boom'), 'C:\\Windows', [`${PREFIX}\\hub`], 1)).rejects.toThrow(/Looking for the hub processes failed.*boom/);
   });

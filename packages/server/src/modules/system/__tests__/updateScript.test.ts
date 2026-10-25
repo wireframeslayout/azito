@@ -164,20 +164,62 @@ describe('runUpdateSteps (the part of update-run that is the same on every OS)',
     expect(state).toMatchObject({ status: 'failed', step: 'switch' });
   });
 
-  it('ends as a failed run when it is told to (the deadline, or its task ended), and puts the old version back if it had switched', async () => {
+  it('a run told to end during the restart lets the restart finish, stops at the next step, and only then puts the old version back', async () => {
     const abort = new AbortController();
-    const b = backend({ restart: vi.fn(async () => { abort.abort(new Error('The update did not finish within 50 minutes')); await new Promise(() => undefined); }) });
+    const events: string[] = [];
+    const b = backend({
+      restart: vi.fn(async () => {
+        events.push('restart-start');
+        abort.abort(new Error('The update did not finish within 50 minutes'));
+        await new Promise((resolve) => setTimeout(resolve, 20));
+        events.push('restart-end');
+      }),
+      rollback: vi.fn(async () => { events.push('rollback'); }),
+    });
     await run(b, undefined, abort.signal);
-    expect(state).toMatchObject({ status: 'failed', step: 'restart', error: 'The update did not finish within 50 minutes' });
+    expect(events).toEqual(['restart-start', 'restart-end', 'rollback']);
+    expect(state).toMatchObject({ status: 'failed', step: 'health-check', error: 'The update did not finish within 50 minutes' });
     expect(b.rollback).toHaveBeenCalledWith('v1.0.0', true);
+    expect(waitForHealthyVersion).not.toHaveBeenCalled();
   });
 
-  it('a download that is stopped by the abort before anything was switched leaves the hub alone', async () => {
+  it('a run told to end while the pointer is being written (with its retries) rolls back only after the write is settled', async () => {
     const abort = new AbortController();
-    vi.stubGlobal('fetch', vi.fn(() => { abort.abort(new Error('The update task was ended')); return new Promise(() => undefined); }));
-    const b = backend();
+    const events: string[] = [];
+    const b = backend({
+      switchTo: vi.fn(async () => {
+        abort.abort(new Error('The update task was ended'));
+        await new Promise((resolve) => setTimeout(resolve, 20)); // the retries of a busy current.txt
+        events.push('pointer-written');
+      }),
+      rollback: vi.fn(async (_ref: string, switched: boolean) => { events.push(`rollback(${switched})`); }),
+    });
     await run(b, undefined, abort.signal);
-    expect(state).toMatchObject({ status: 'failed', step: 'download', error: 'The update task was ended' });
-    expect(b.rollback).toHaveBeenCalledWith('v1.0.0', false);
+    expect(events).toEqual(['pointer-written', 'rollback(true)']);
+    expect(b.restart).not.toHaveBeenCalled();
+    expect(state).toMatchObject({ status: 'failed', step: 'restart' });
+  });
+
+  it('a download cut short by the abort is a failed step, nothing was switched, and no stream error escapes', async () => {
+    const abort = new AbortController();
+    vi.stubGlobal('fetch', vi.fn(async () => new Response(new ReadableStream({
+      start(controller) { controller.enqueue(new Uint8Array([1, 2, 3])); setTimeout(() => abort.abort(new Error('The update task was ended')), 10); },
+      // never closes: a server that stopped answering in the middle of the body
+    }))));
+    const unhandled = vi.fn();
+    process.on('unhandledRejection', unhandled);
+    process.on('uncaughtException', unhandled);
+    try {
+      const b = backend();
+      await run(b, undefined, abort.signal);
+      await new Promise((resolve) => setTimeout(resolve, 30));
+      expect(state).toMatchObject({ status: 'failed', step: 'download' });
+      expect(state.error).toMatch(/ended|abort/i);
+      expect(b.rollback).toHaveBeenCalledWith('v1.0.0', false);
+      expect(unhandled).not.toHaveBeenCalled();
+    } finally {
+      process.off('unhandledRejection', unhandled);
+      process.off('uncaughtException', unhandled);
+    }
   });
 });
