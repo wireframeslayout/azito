@@ -88,6 +88,20 @@ export async function resolveSidekickDirOnHost(
 }
 
 /**
+ * `{{host.node}}`: the command a sidekick body runs a Node script with. `node` on a POSIX host; on a Windows host the host's own node.exe by its
+ * full path, in double quotes with forward slashes (the hub's node for its local server, the node the agent reports for an agent), because the
+ * worker's PATH may not have `node` (a Windows host with only the native Claude Code). In PowerShell it is run with `& ` in front.
+ */
+export async function resolveSidekickNodeOnHost(
+  server: Pick<ServerConfig, 'type'>,
+  transportFactory: Pick<TransportFactory, 'hostProfileFor' | 'getAgentTransport'>,
+): Promise<string> {
+  if (transportFactory.hostProfileFor(server as ServerConfig)?.platform !== 'win32') return 'node';
+  const node = server.type === 'local' ? process.execPath : await transportFactory.getAgentTransport(server as ServerConfig).fetchNodeExecPath();
+  return `"${checkedWindowsPromptPath(node, 'The node executable')}"`;
+}
+
+/**
  * Syncs the full merged Sidekick package tree to a remote server's
  * `~/.azito/sidekicks/` so `{{sidekick.dir}}/scripts/*` is runnable from the
  * tmux pane the task executes in (Issue #263 Phase 6). Diffing follows the

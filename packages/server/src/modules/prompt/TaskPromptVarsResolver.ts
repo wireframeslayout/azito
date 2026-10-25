@@ -8,7 +8,7 @@ import type { ITaskPromptVarsResolver, TaskPromptVars } from '../sidekicks/ITask
 import type { SidekickPackage } from '../sidekicks/SidekickPackage';
 import type { SidekickPackageLoader } from '../sidekicks/SidekickPackageLoader';
 import type { SidekickSyncService } from '../sidekicks/SidekickSyncService';
-import { resolveSidekickDirOnHost } from '../sidekicks/SidekickSyncService';
+import { resolveSidekickDirOnHost, resolveSidekickNodeOnHost } from '../sidekicks/SidekickSyncService';
 import { resolveTaskPromptVars } from './resolveTaskPromptVars';
 import { resolveTaskServerName } from '../tasks/execution/TaskExecutionEnv';
 
@@ -35,6 +35,16 @@ export class TaskPromptVarsResolver implements ITaskPromptVarsResolver {
 
   resolve(taskId: number): TaskPromptVars {
     return resolveTaskPromptVars(this.taskRepo, this.projectRepo, this.unitRepo, this.projectServerRepo, taskId);
+  }
+
+  async resolveNode(taskId: number): Promise<string> {
+    const task = this.taskRepo.findById(taskId);
+    if (!task) {
+      throw new Error(`Task not found: ${taskId}`);
+    }
+    const serverName = resolveTaskServerName(task, this.projectServerRepo);
+    const server = serverName ? this.serverRepo.findByName(serverName) : null;
+    return server ? resolveSidekickNodeOnHost(server, this.transportFactory) : 'node';
   }
 
   async resolveDir(taskId: number, pkg: Pick<SidekickPackage, 'name' | 'dir'>): Promise<string> {

@@ -57,7 +57,7 @@ $env:AZITO_WORK_BRANCH = "{{task.branchName}}"
 $env:AZITO_PR_BASE = "<base branch (only if specified in rules)>"   # 指定が無ければこの行は書かない
 $env:AZITO_SKIP_PR = "0"
 $env:AZITO_PR_TITLE = "<title>"
-node "{{sidekick.dir}}/scripts/push.mjs"
+& {{host.node}} "{{sidekick.dir}}/scripts/push.mjs"
 ```
 
 Git Bash:
@@ -68,7 +68,7 @@ AZITO_WORK_BRANCH="{{task.branchName}}" \
 AZITO_PR_BASE="<base branch (only if specified in rules)>" \
 AZITO_SKIP_PR="0" \
 AZITO_PR_TITLE="<title>" \
-node "{{sidekick.dir}}/scripts/push.mjs"
+{{host.node}} "{{sidekick.dir}}/scripts/push.mjs"
 ```
 
 スクリプトは変更を conventional commit でコミットし、現在の作業ブランチを push する。

@@ -31,4 +31,7 @@ export interface ITaskPromptVarsResolver {
    * "best-effort miss for prompt rendering" contract.
    */
   resolveDir(taskId: number, pkg: Pick<SidekickPackage, 'name' | 'dir'>): Promise<string>;
+
+  /** `{{host.node}}`: how a body runs a Node script on the task's execution server (`node`; a Windows host's own node.exe by full path). */
+  resolveNode(taskId: number): Promise<string>;
 }

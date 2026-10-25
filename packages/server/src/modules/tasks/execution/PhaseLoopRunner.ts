@@ -18,7 +18,7 @@ import type { SidekickPackageLoader } from '../../sidekicks/SidekickPackageLoade
 import { resolvePhaseSidekick, resolveEnabledPhases, resolveCurrentPhaseIndex } from '../../sidekicks/resolvePhaseSidekick';
 import { renderSidekickBody } from '../../sidekicks/renderSidekickBody';
 import type { SidekickSyncService } from '../../sidekicks/SidekickSyncService';
-import { resolveSidekickDirOnHost } from '../../sidekicks/SidekickSyncService';
+import { resolveSidekickDirOnHost, resolveSidekickNodeOnHost } from '../../sidekicks/SidekickSyncService';
 import { resolveEnvelopeHost } from './AzitoctlPath';
 import { windowsPromptPath } from '../../../shared/os/windowsPromptPath';
 import type { UnitTypeLoader } from '../../sidekicks/UnitTypeLoader';
@@ -460,6 +460,7 @@ export class PhaseLoopRunner {
       const vars = resolveTaskPromptVars(this.taskRepo, this.projectRepo, this.unitRepo, this.projectServerRepo, task.id, distributionRepoEntry?.provider);
       const expandedPrompt = renderSidekickBody(sidekick, {
         ...vars,
+        host: { node: await resolveSidekickNodeOnHost(server, this.transportFactory) },
         selfReview: {
           attempt: String(selfReviewCount + 1),
           maxAttempts: String(maxSelfReview),

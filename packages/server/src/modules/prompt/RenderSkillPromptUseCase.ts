@@ -10,7 +10,7 @@ import type { SidekickPackageLoader } from '../sidekicks/SidekickPackageLoader';
 import { resolvePhaseSidekick, resolveNextPhase } from '../sidekicks/resolvePhaseSidekick';
 import { renderSidekickBody } from '../sidekicks/renderSidekickBody';
 import type { SidekickSyncService } from '../sidekicks/SidekickSyncService';
-import { resolveSidekickDirOnHost } from '../sidekicks/SidekickSyncService';
+import { resolveSidekickDirOnHost, resolveSidekickNodeOnHost } from '../sidekicks/SidekickSyncService';
 import type { UnitTypeLoader } from '../sidekicks/UnitTypeLoader';
 import { resolveTaskPromptVars } from './resolveTaskPromptVars';
 import { resolveTaskServerName } from '../tasks/execution/TaskExecutionEnv';
@@ -65,7 +65,7 @@ export class RenderSkillPromptUseCase {
     const dir = await this.resolveDirForTask(task, sidekick);
 
     const vars = resolveTaskPromptVars(this.taskRepo, this.projectRepo, this.unitRepo, this.projectServerRepo, taskId);
-    const expandedBody = renderSidekickBody(sidekick, vars, false, dir);
+    const expandedBody = renderSidekickBody(sidekick, { ...vars, host: { node: await this.resolveNodeForTask(task) } }, false, dir);
     const nextPhase = resolveNextPhase(phaseConfig, phase, unitType.phases);
 
     const nextPhaseDef = nextPhase ? unitType.phases.find((p) => p.name === nextPhase) : null;
@@ -75,6 +75,13 @@ export class RenderSkillPromptUseCase {
     });
 
     return { phase, prompt, nextPhase };
+  }
+
+  /** `{{host.node}}` for the task's execution server (best-effort `node` when the server cannot be resolved: a read-only render). */
+  private async resolveNodeForTask(task: Pick<Task, 'projectId' | 'serverName'>): Promise<string> {
+    const serverName = resolveTaskServerName(task, this.projectServerRepo);
+    const server = serverName ? this.serverRepo.findByName(serverName) : null;
+    return server ? resolveSidekickNodeOnHost(server, this.transportFactory) : 'node';
   }
 
   private async resolveDirForTask(task: Pick<Task, 'projectId' | 'serverName'>, sidekick: SidekickPackage): Promise<string> {
