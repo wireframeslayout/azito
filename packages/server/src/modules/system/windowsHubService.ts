@@ -109,7 +109,7 @@ export function buildHubLauncherScript(layout: HubWindowsLayout, timing: HubRest
     '    New-Item -ItemType Directory -Force -Path $logDir | Out-Null',
     // Written beside and swapped in (Replace is one operation; Move for the first one, in the same folder), so `azito status` never reads half a file or none.
     '    [IO.File]::WriteAllText("$stateFile.tmp", $json, (New-Object Text.UTF8Encoding($false)))',
-    '    if (Test-Path -LiteralPath $stateFile) { [IO.File]::Replace("$stateFile.tmp", $stateFile, $null) } else { [IO.File]::Move("$stateFile.tmp", $stateFile) }',
+    '    if (Test-Path -LiteralPath $stateFile) { [IO.File]::Replace("$stateFile.tmp", $stateFile, [NullString]::Value) } else { [IO.File]::Move("$stateFile.tmp", $stateFile) }',
     '  } catch { Log "cannot write ${stateFile}: $($_.Exception.Message)" }',
     '}',
     'Save-State $null $null 0',
