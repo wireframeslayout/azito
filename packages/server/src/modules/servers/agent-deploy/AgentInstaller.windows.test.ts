@@ -22,7 +22,7 @@ type SftpFake = { sftpUpload: (host: string, local: string, remote: string) => P
 function make(hostOptions: Partial<FakeWindowsHostOptions> = {}, windowsAgent: WindowsAgentOptions = DEFAULT_WINDOWS_AGENT_OPTIONS, misao?: AgentMisaoInstaller) {
   const host = new FakeWindowsHost({ sha256: SHA, taskName: windowsAgent.taskName, ...hostOptions });
   const execIsolated = vi.fn(async (sshHost: string, command: string) => host.exec(sshHost, command));
-  const installer = new AgentInstaller({ execIsolated } as never, makeBundler() as never, windowsAgent, misao);
+  const installer = new AgentInstaller({ execIsolated, resolveHost: (h: string) => ({ username: 'user', host: h.replace(/^.*@/, '').replace(/:\d+$/, ''), port: 22 }) } as never, makeBundler() as never, windowsAgent, misao);
   const sftp = installer as unknown as SftpFake;
   const uploads: string[] = [];
   sftp.sftpUpload = async (_h, _local, remote) => { uploads.push(remote); host.uploaded.set(remote, Buffer.from('tarball')); };

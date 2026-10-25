@@ -1,83 +1,115 @@
-import { spawn, spawnSync, type ChildProcess } from 'child_process';
+import { spawn, spawnSync } from 'child_process';
 import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { buildCleanupScript, buildRecordProcessScript, parseCleanupOutcome, parseRecordedProcess } from './unixAgentCleanup';
+import { buildCleanupScript, buildNohupSightingScript, nohupManualSteps, parseCleanupOutcome, parseNohupSighting } from './unixAgentCleanup';
 
-// The scripts are run for real, with sh, against real processes in a temporary HOME (Linux: they read /proc).
-describe.skipIf(process.platform !== 'linux')('unix agent cleanup scripts', () => {
+// The script is run for real, with `sh -e` (the strictest a login shell can be), in a temporary HOME, against a `systemctl` that answers
+// like the real one: `is-active` prints the state and exits 3 for anything but active.
+describe.skipIf(process.platform === 'win32')('systemd agent cleanup script', () => {
   let home: string;
-  let entry: string;
-  const children: ChildProcess[] = [];
+  let bin: string;
 
   beforeEach(() => {
     home = fs.mkdtempSync(path.join(os.tmpdir(), 'azito-cleanup-'));
-    fs.mkdirSync(path.join(home, '.azito', 'agent', 'current'), { recursive: true });
-    entry = path.join(home, '.azito', 'agent', 'current', 'azito-agent.cjs');
-    fs.writeFileSync(entry, 'setInterval(() => {}, 1000);\n');
+    bin = path.join(home, 'bin');
+    fs.mkdirSync(bin);
+    fs.mkdirSync(path.join(home, '.azito', 'agent'), { recursive: true });
+    fs.mkdirSync(path.join(home, '.config', 'systemd', 'user'), { recursive: true });
     fs.writeFileSync(path.join(home, '.azito', 'agent', 'install.id'), 'abc123');
+    fs.writeFileSync(path.join(home, '.config', 'systemd', 'user', 'azito-agent.service'), '[Unit]\n');
   });
 
-  afterEach(() => {
-    for (const c of children.splice(0)) if (c.pid && isAlive(c.pid)) process.kill(c.pid, 'SIGKILL');
-    fs.rmSync(home, { recursive: true, force: true });
+  afterEach(() => fs.rmSync(home, { recursive: true, force: true }));
+
+  /** A systemctl whose `stop` exits `stopCode` and whose `is-active` prints `state` (exit 0 for active, 3 otherwise). */
+  const fakeSystemctl = (state: string, stopCode = 0): void => {
+    const file = path.join(bin, 'systemctl');
+    fs.writeFileSync(file, [
+      '#!/bin/sh',
+      'shift # --user',
+      'case "$1" in',
+      `  stop) exit ${stopCode};;`,
+      `  is-active) echo ${state}; [ "${state}" = active ] && exit 0; exit 3;;`,
+      '  *) exit 0;;',
+      'esac',
+    ].join('\n'));
+    fs.chmodSync(file, 0o755);
+  };
+  const run = (installId = 'abc123') => {
+    const out = spawnSync('sh', ['-e', '-c', buildCleanupScript(installId)], { env: { PATH: `${bin}:${process.env.PATH}`, HOME: home }, encoding: 'utf8' });
+    return parseCleanupOutcome(out.stdout);
+  };
+  const folder = (): boolean => fs.existsSync(path.join(home, '.azito', 'agent'));
+  const unit = (): boolean => fs.existsSync(path.join(home, '.config', 'systemd', 'user', 'azito-agent.service'));
+
+  it('removes the unit file and the folder when the unit is inactive (is-active exits 3, which sh -e must not mistake for a failure)', () => {
+    fakeSystemctl('inactive');
+    expect(run()).toEqual({ kind: 'removed' });
+    expect(folder()).toBe(false);
+    expect(unit()).toBe(false);
   });
 
-  const isAlive = (pid: number): boolean => { try { process.kill(pid, 0); return true; } catch { return false; } };
-  const run = (script: string): string => spawnSync('sh', ['-c', script], { env: { PATH: process.env.PATH, HOME: home }, encoding: 'utf8' }).stdout;
-  const startOf = (pid: number): string => { const stat = fs.readFileSync(`/proc/${pid}/stat`, 'utf8'); return stat.slice(stat.lastIndexOf(') ') + 2).split(' ')[19]!; };
-  const launch = (args: string[]): ChildProcess => { const c = spawn(process.execPath, args, { stdio: 'ignore' }); children.push(c); return c; };
-  const writePid = (pid: number): void => fs.writeFileSync(path.join(home, '.azito', 'agent', 'agent.pid'), String(pid));
-  const cleanup = (process?: { pid: number; startedAt: string }): ReturnType<typeof parseCleanupOutcome> =>
-    parseCleanupOutcome(run(buildCleanupScript({ installId: 'abc123', startMethod: 'nohup', process })));
-  const waitGone = async (pid: number): Promise<void> => { for (let i = 0; i < 50 && isAlive(pid); i += 1) await new Promise((r) => setTimeout(r, 100)); };
-
-  it('records the agent process (entry path as a whole argument) and stops exactly it, then removes the folder', async () => {
-    const agent = launch([entry]);
-    writePid(agent.pid!);
-    await new Promise((r) => setTimeout(r, 300));
-    const recorded = parseRecordedProcess(run(buildRecordProcessScript()));
-    expect(recorded).toEqual({ pid: agent.pid, startedAt: startOf(agent.pid!) });
-    expect(cleanup(recorded as { pid: number; startedAt: string })).toEqual({ kind: 'removed' });
-    await waitGone(agent.pid!);
-    expect(isAlive(agent.pid!)).toBe(false);
-    expect(fs.existsSync(path.join(home, '.azito', 'agent'))).toBe(false);
+  it('treats a failed unit as stopped', () => {
+    fakeSystemctl('failed');
+    expect(run()).toEqual({ kind: 'removed' });
   });
 
-  it('does not record, and does not stop, a process that only contains the entry path inside a longer argument', async () => {
-    const decoy = launch(['-e', 'setInterval(() => {}, 1000)', `${entry}.bak`]);
-    writePid(decoy.pid!);
-    await new Promise((r) => setTimeout(r, 300));
-    expect(parseRecordedProcess(run(buildRecordProcessScript()))).toHaveProperty('error');
-    // Even with the right pid and start time (a reused pid), the arguments do not match: it is left alone.
-    expect(cleanup({ pid: decoy.pid!, startedAt: startOf(decoy.pid!) })).toEqual({ kind: 'removed' });
-    expect(isAlive(decoy.pid!)).toBe(true);
+  it.each(['active', 'activating', 'deactivating'])('keeps everything when the unit is still %s', (state) => {
+    fakeSystemctl(state);
+    expect(run()).toEqual({ kind: 'not_stopped', reason: `the unit is still ${state} after it was stopped` });
+    expect(folder()).toBe(true);
+    expect(unit()).toBe(true);
   });
 
-  it('does not stop a process with the recorded pid but another start time (the pid was reused)', async () => {
-    const agent = launch([entry]);
-    await new Promise((r) => setTimeout(r, 300));
-    expect(cleanup({ pid: agent.pid!, startedAt: '1' })).toEqual({ kind: 'removed' });
-    expect(isAlive(agent.pid!)).toBe(true);
+  it('keeps everything when the stop itself fails', () => {
+    fakeSystemctl('inactive', 1);
+    expect(run()).toMatchObject({ kind: 'not_stopped' });
+    expect(folder()).toBe(true);
   });
 
-  it('treats a process that no longer exists as the end of the agent, and removes the folder', () => {
-    const gone = spawnSync(process.execPath, ['-e', '']).pid!;
-    expect(cleanup({ pid: gone, startedAt: '1' })).toEqual({ kind: 'removed' });
+  it('touches nothing when the folder holds another install\'s id', () => {
+    fakeSystemctl('inactive');
+    expect(run('mine')).toEqual({ kind: 'not_owner', found: 'abc123' });
+    expect(folder()).toBe(true);
+    expect(unit()).toBe(true);
   });
 
-  it('touches nothing when the folder holds another install\'s id', async () => {
-    const agent = launch([entry]);
-    await new Promise((r) => setTimeout(r, 300));
-    fs.writeFileSync(path.join(home, '.azito', 'agent', 'install.id'), 'other');
-    expect(cleanup({ pid: agent.pid!, startedAt: startOf(agent.pid!) })).toEqual({ kind: 'not_owner', found: 'other' });
-    expect(isAlive(agent.pid!)).toBe(true);
-    expect(fs.existsSync(entry)).toBe(true);
+  it('touches nothing when there is no id file', () => {
+    fakeSystemctl('inactive');
+    fs.rmSync(path.join(home, '.azito', 'agent', 'install.id'));
+    expect(run()).toEqual({ kind: 'not_owner', found: '' });
+    expect(unit()).toBe(true);
+  });
+});
+
+describe('nohup agent: reported, not stopped', () => {
+  it('reads the pid and the start time the host prints', () => {
+    expect(parseNohupSighting('4242|Sat Oct 25 11:00:00 2026\n')).toEqual({ pid: '4242', startedAt: 'Sat Oct 25 11:00:00 2026' });
+    expect(parseNohupSighting('')).toBeUndefined();
   });
 
-  it('stops nothing and keeps the folder when no process was recorded', () => {
-    expect(cleanup(undefined)).toMatchObject({ kind: 'not_stopped' });
-    expect(fs.existsSync(entry)).toBe(true);
+  it('gives the steps to stop it by hand, with what was seen', () => {
+    const text = nohupManualSteps({ pid: '4242', startedAt: 'Sat Oct 25 11:00:00 2026' });
+    expect(text).toContain('the pid was 4242');
+    expect(text).toContain('started at "Sat Oct 25 11:00:00 2026"');
+    expect(text).toContain('$HOME/.azito/agent/current/azito-agent.cjs as an argument');
+    expect(text).toContain('kill <pid>');
+    expect(text).toContain('rm -rf ~/.azito/agent');
+  });
+
+  it.skipIf(process.platform === 'win32')('the sighting script prints "pid|start" for the process the pid file names', async () => {
+    const home = fs.mkdtempSync(path.join(os.tmpdir(), 'azito-sight-'));
+    try {
+      fs.mkdirSync(path.join(home, '.azito', 'agent'), { recursive: true });
+      const child = spawn('sleep', ['5'], { stdio: 'ignore' });
+      fs.writeFileSync(path.join(home, '.azito', 'agent', 'agent.pid'), String(child.pid));
+      const out = spawnSync('sh', ['-c', buildNohupSightingScript()], { env: { PATH: process.env.PATH, HOME: home }, encoding: 'utf8' });
+      expect(parseNohupSighting(out.stdout)?.pid).toBe(String(child.pid));
+      child.kill();
+    } finally {
+      fs.rmSync(home, { recursive: true, force: true });
+    }
   });
 });

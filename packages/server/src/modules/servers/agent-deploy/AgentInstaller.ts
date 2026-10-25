@@ -10,7 +10,7 @@ import { HOST_OS_PROBE_COMMAND, parseHostOsProbe } from './hostOsProbe';
 import { buildWindowsPreflightCommand, checkWindowsPreflight, parseWindowsPreflight, type WindowsPreflightInfo } from './windowsPreflight';
 import { buildSha256VerifyCommand, buildSafeExtractCommand, readSha256FromSumsFile } from './integrityVerifier';
 import { KeyedMutex } from '../../../shared/keyedMutex';
-import { INSTALL_ID_FILE, MANUAL_STEPS_ANY_START, buildCleanupScript, buildRecordProcessScript, manualCleanupSteps, parseCleanupOutcome, parseRecordedProcess, type NohupProcess } from './unixAgentCleanup';
+import { CLEANUP_TIMEOUT_MS, INSTALL_ID_FILE, MANUAL_STEPS_ANY_START, SYSTEMD_MANUAL_STEPS, buildCleanupScript, buildNohupSightingScript, nohupManualSteps, parseCleanupOutcome, parseNohupSighting, type NohupSighting } from './unixAgentCleanup';
 import { WindowsAgentDeployer, windowsAgentLayout, type WindowsDeployment } from './WindowsAgentDeployer';
 import { DEFAULT_WINDOWS_AGENT_OPTIONS, type WindowsAgentOptions } from './windowsAgentConfig';
 
@@ -78,16 +78,6 @@ const HEALTH_RETRY_INTERVAL_MS = 1000;
 /** Answers whether the host already has an agent of this hub's kind (its unit or its folder), before this install touches anything. */
 export const AGENT_PRESENCE_COMMAND = 'if [ -e ~/.config/systemd/user/azito-agent.service ] || [ -e ~/.azito/agent ]; then echo AZITO_AGENT_PRESENT; else echo AZITO_AGENT_ABSENT; fi';
 
-/**
- * The key two installs on the same host share, whatever the spelling: `User@Host` and `user@host:22` are one. (A host reached under
- * two different names is not recognised; the install id on the host still protects it from a cleanup by the wrong install.)
- */
-export function hostLockKey(sshHost: string): string {
-  const m = /^(?:([^@]+)@)?([^:@]+)(?::(\d+))?$/.exec(sshHost.trim());
-  if (!m) return sshHost.trim().toLowerCase();
-  return `${m[1] ? `${m[1]}@` : ''}${m[2]!.toLowerCase()}:${m[3] ?? '22'}`;
-}
-
 /** The error for a host that has no tmux and no misao: the same text is the API's `error` and what the UI shows. */
 function noMuxMessage(host: string, misaoError: string | undefined): string {
   return `no mux is available on ${host}: tmux is not installed and misao could not be installed (${misaoError ?? 'this hub has no misao to install'}).`;
@@ -97,10 +87,20 @@ export class AgentInstaller {
   /**
    * One install (or update) at a time per host, from its start to the end of its start-up / cleanup, so that no other install of this hub
    * runs between "this folder is mine" and the removal. Keyed by the SSH target, not the server name: two names can reach one host.
-   * (Another hub installing on the same host at the same time is not covered; the install id only keeps a cleanup from removing what
+   * Updates and recoveries (`AgentUpdater`) take the same lock. (Another hub installing on the same host at the same time is not covered; the install id only keeps a cleanup from removing what
    * is not its own.)
    */
   private readonly hostLocks = new KeyedMutex();
+
+  /**
+   * The key two installs of one host share, whatever the spelling: the SSH target as the client resolves it (`user`, address and port,
+   * so an alias of ~/.ssh/config, an omitted user and `host:22` are one). Two names for one machine (two addresses) are not recognised;
+   * the install id on the host still keeps a cleanup from removing what is not its own.
+   */
+  private lockKey(sshHost: string): string {
+    const { username, host, port } = this.sshClient.resolveHost(sshHost);
+    return `${username}@${host.toLowerCase()}:${port}`;
+  }
 
   constructor(
     private sshClient: SshClient,
@@ -118,7 +118,7 @@ export class AgentInstaller {
   }
 
   install(sshHost: string, onProgress?: (p: InstallProgress) => void, muxRuntime?: string): Promise<InstallResult> {
-    return this.hostLocks.withLock(hostLockKey(sshHost), () => this.installLocked(sshHost, onProgress, muxRuntime));
+    return this.hostLocks.withLock(this.lockKey(sshHost), () => this.installLocked(sshHost, onProgress, muxRuntime));
   }
 
   private async installLocked(
@@ -199,15 +199,15 @@ export class AgentInstaller {
       report('health', 'error', msg);
       return { success: false, host: preflight.tailscaleIp, port: AGENT_PORT, token, version, startMethod, steps, error: msg };
     }
-    // The agent is up, so its process is the one the pid file names: take its identity now, for a cleanup that may come after misao.
-    const nohupProcess = startMethod === 'nohup' ? await this.readNohupProcess(sshHost) : undefined;
+    // A nohup agent is not stopped by a cleanup (see unixAgentCleanup.ts): what it looked like now goes into the error if it has to be stopped by hand.
+    const nohupSighting = startMethod === 'nohup' ? await this.sightNohupAgent(sshHost) : undefined;
 
     // ── misao ──
     const misaoError = await this.installMisao(preflight.tailscaleIp, AGENT_PORT, token, preflight.hostProfile, report);
     const tmuxFound = preflight.tmuxVersion !== '';
     // A host with neither tmux nor an installed misao has no mux at all: fail instead of registering a server nothing can run on.
     if (!tmuxFound && (!this.misaoInstaller || misaoError)) {
-      const cleanup = await this.discardUnregisteredAgent(sshHost, { hadAgent, installId, startMethod, nohupProcess });
+      const cleanup = await this.discardUnregisteredAgent(sshHost, { hadAgent, installId, startMethod, nohupSighting });
       const msg = `${noMuxMessage(sshHost, misaoError)} ${cleanup}`;
       report('misao', 'error', msg);
       return { success: false, host: preflight.tailscaleIp, port: AGENT_PORT, token, version, startMethod, steps, tmuxFound, error: msg };
@@ -217,26 +217,31 @@ export class AgentInstaller {
   }
 
   /**
-   * The agent this install started is not going to be registered (the host has no mux), so it is stopped and removed rather than
-   * left listening with a token nobody holds. Returns the sentence for the error. Nothing is removed unless the host says, over SSH,
-   * that it is this install's: the folder holds this install's id, and the process (checked just before it is stopped) is the one that
-   * was started, by start time and command line.
+   * The agent this install started is not going to be registered (the host has no mux), so it is taken off the host rather than left
+   * listening with a token nobody holds. Returns the sentence for the error.
+   *
+   * Only a systemd agent is stopped and removed here, by unit name, in one remote script that first checks the folder still holds this
+   * install's id. A nohup agent is left in place, and the error says how to stop and check it by hand: its only handle is a pid file,
+   * and telling the agent from another program that reuses the pid would need per-OS process inspection (/proc on Linux, `ps` output
+   * elsewhere) that is not worth its risk for a rare path. Its children (a tmux server) are not touched either way: they outlive it.
    *
    * An agent that was on the host before this install is left alone. Putting it back would take the previous token and the previous
    * release, and there is no way to hand them to this install yet (it overwrites the unit, the settings and the `current` link in
    * place, where the Windows install sets them aside for its commit / rollback): that is outside this change. Removing it would take
    * away an agent the hub may still be using.
-   *
-   * The nohup process is the agent itself (run.sh `exec`s node), so no child is stopped: what it started (a tmux server) is meant to
-   * outlive it. A systemd agent is stopped as a unit, never by pid.
    */
-  private async discardUnregisteredAgent(sshHost: string, install: { hadAgent: boolean; installId: string; startMethod: 'systemd' | 'nohup'; nohupProcess: NohupProcess | undefined }): Promise<string> {
+  private async discardUnregisteredAgent(sshHost: string, install: { hadAgent: boolean; installId: string; startMethod: 'systemd' | 'nohup'; nohupSighting: NohupSighting | undefined }): Promise<string> {
     if (install.hadAgent) {
       return `An agent was already installed on this host before this install; it was replaced by the new one and left running, nothing was removed. The new agent holds a new token that the hub does not store: run the install again once a mux is available. To remove it by hand: ${MANUAL_STEPS_ANY_START}`;
     }
-    const result = await this.runOnHost(sshHost, buildCleanupScript({ installId: install.installId, startMethod: install.startMethod, process: install.nohupProcess }));
+    if (install.startMethod === 'nohup') {
+      return `The agent this install started runs as a plain process (nohup), which is not stopped automatically, so it and ~/.azito/agent were left in place on ${sshHost}. To stop it and remove it: ${nohupManualSteps(install.nohupSighting)}`;
+    }
+    const result = await this.runOnHost(sshHost, buildCleanupScript(install.installId), CLEANUP_TIMEOUT_MS);
     if (!result.ok) {
-      return `The agent this install started could not be checked or removed (${result.error}); it may still be running on ${sshHost}. Remove it by hand: ${manualCleanupSteps(install.startMethod, install.nohupProcess)}`;
+      // A timeout or a lost connection does not say whether the script finished (it may still be running on the host), and this hub has no
+      // second way to ask while it holds the install lock: nothing is assumed.
+      return `The agent this install started could not be checked or removed (${result.error}); it may still be running on ${sshHost}, and the removal script may still be running there. Check systemctl --user is-active azito-agent and whether ~/.azito/agent exists before doing anything, then: ${SYSTEMD_MANUAL_STEPS}`;
     }
     const outcome = parseCleanupOutcome(result.stdout);
     switch (outcome.kind) {
@@ -245,18 +250,16 @@ export class AgentInstaller {
       case 'not_owner':
         return `Nothing was removed: ~/.azito/agent on ${sshHost} does not hold this install's id${outcome.found ? ' (another install is using it)' : ' (it is gone or has no id)'}. Whatever agent is there is not this install's to remove.`;
       case 'not_stopped':
-        return `The agent this install started could not be stopped (${outcome.reason}), so it and ~/.azito/agent were left in place. Stop and remove it by hand: ${manualCleanupSteps(install.startMethod, install.nohupProcess)}`;
+        return `The agent this install started could not be stopped (${outcome.reason}), so it and ~/.azito/agent were left in place. Stop and remove it by hand: ${SYSTEMD_MANUAL_STEPS}`;
       case 'not_removed':
-        return `The agent this install started was stopped, but not fully removed (could not remove ${outcome.reason}). Remove what is left on ${sshHost} by hand: ${install.startMethod === 'systemd' ? 'rm -f ~/.config/systemd/user/azito-agent.service; ' : ''}rm -rf ~/.azito/agent`;
+        return `The agent this install started was stopped, but not fully removed (could not remove ${outcome.reason}). Remove what is left on ${sshHost} by hand: rm -f ~/.config/systemd/user/azito-agent.service; rm -rf ~/.azito/agent`;
     }
   }
 
-  /** The agent's process, as the pid file names it, with its start time; undefined when it is not the agent's entry (nothing is stopped later on a guess). */
-  private async readNohupProcess(sshHost: string): Promise<NohupProcess | undefined> {
-    const result = await this.runOnHost(sshHost, buildRecordProcessScript());
-    if (!result.ok) return undefined;
-    const recorded = parseRecordedProcess(result.stdout);
-    return 'error' in recorded ? undefined : recorded;
+  /** What the nohup agent looks like (pid and start time as `ps` prints them), for the operator; undefined when the host does not say. */
+  private async sightNohupAgent(sshHost: string): Promise<NohupSighting | undefined> {
+    const result = await this.runOnHost(sshHost, buildNohupSightingScript());
+    return result.ok ? parseNohupSighting(result.stdout) : undefined;
   }
 
   private async writeInstallId(sshHost: string, installId: string): Promise<void> {
@@ -265,9 +268,9 @@ export class AgentInstaller {
   }
 
   /** One command over SSH as a value: a failed command or connection is `ok: false` with the reason (the caller reports it, never hides it). */
-  private async runOnHost(sshHost: string, command: string): Promise<{ ok: true; stdout: string } | { ok: false; error: string }> {
+  private async runOnHost(sshHost: string, command: string, timeoutMs?: number): Promise<{ ok: true; stdout: string } | { ok: false; error: string }> {
     try {
-      const result = await this.sshClient.execIsolated(sshHost, command);
+      const result = await this.sshClient.execIsolated(sshHost, command, timeoutMs);
       return result.code === 0 ? { ok: true, stdout: result.stdout } : { ok: false, error: result.stderr.trim() || `exit ${result.code}` };
     } catch (err) {
       return { ok: false, error: (err as Error).message };
@@ -373,7 +376,7 @@ export class AgentInstaller {
    * registered before the OS was recorded) is refused with the `unsupported_os` reason as the error, before anything is sent.
    */
   update(sshHost: string, tailscaleIp: string, existingToken: string, hostProfile: HostProfile | null, muxRuntime?: string): Promise<{ success: boolean; version: string; error?: string }> {
-    return this.hostLocks.withLock(hostLockKey(sshHost), () => this.updateLocked(sshHost, tailscaleIp, existingToken, hostProfile, muxRuntime));
+    return this.hostLocks.withLock(this.lockKey(sshHost), () => this.updateLocked(sshHost, tailscaleIp, existingToken, hostProfile, muxRuntime));
   }
 
   private async updateLocked(sshHost: string, tailscaleIp: string, existingToken: string, hostProfile: HostProfile | null, muxRuntime?: string): Promise<{ success: boolean; version: string; error?: string }> {
@@ -634,7 +637,11 @@ export class AgentInstaller {
    * (e.g. SSH connection failure) — the caller is expected to catch and re-check health
    * afterward regardless of outcome.
    */
-  async recoverAgent(sshHost: string, tailscaleIp: string, token: string, hostProfile: HostProfile | null, muxRuntime?: string): Promise<'systemd' | 'nohup' | 'taskscheduler' | 'disabled'> {
+  recoverAgent(sshHost: string, tailscaleIp: string, token: string, hostProfile: HostProfile | null, muxRuntime?: string): Promise<'systemd' | 'nohup' | 'taskscheduler' | 'disabled'> {
+    return this.hostLocks.withLock(this.lockKey(sshHost), () => this.recoverAgentLocked(sshHost, tailscaleIp, token, hostProfile, muxRuntime));
+  }
+
+  private async recoverAgentLocked(sshHost: string, tailscaleIp: string, token: string, hostProfile: HostProfile | null, muxRuntime?: string): Promise<'systemd' | 'nohup' | 'taskscheduler' | 'disabled'> {
     if (hostProfile?.platform === 'win32') {
       // The settings and the task are already on the host: ask it who it is, then restart the logon task.
       const probe = await this.sshClient.execIsolated(sshHost, buildWindowsPreflightCommand());
