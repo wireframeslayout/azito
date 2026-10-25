@@ -239,6 +239,7 @@ export function CodeStep({
   // only for what delivery needs.
   const clonesNow = variant === 'local';
   const isolated = variant === 'isolated';
+  const undistributable = variant === 'undistributable';
   const mode = effectiveCodeMode(variant, codeMode);
   const modeOptions = codeModeOptionsForVariant(variant);
   const parsedClone = cloneUrl.trim() ? resolveRepositoryRegistration(cloneUrl.trim()) : null;
@@ -268,6 +269,13 @@ export function CodeStep({
         >
           <strong style={{ fontWeight: 600 }}>{t('wizard.code.isolatedTitle')}</strong>
           <div style={{ color: 'var(--text-dim)', marginTop: 2 }}>{t('wizard.code.isolatedBundle')}</div>
+        </Notice>
+      )}
+
+      {undistributable && (
+        <Notice tone="info" style={{ marginBottom: 14 }}>
+          <strong style={{ fontWeight: 600 }}>{t('wizard.code.undistributableTitle')}</strong>
+          <div style={{ color: 'var(--text-dim)', marginTop: 2 }}>{t('wizard.code.undistributableBody')}</div>
         </Notice>
       )}
 

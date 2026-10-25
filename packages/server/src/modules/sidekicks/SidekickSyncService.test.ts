@@ -9,6 +9,8 @@ import {
   computeSidekicksHash,
   buildTarball,
   resolveSidekickDir,
+  resolveSidekickDirOnHost,
+  resolveSidekickNodeOnHost,
   REMOTE_SIDEKICKS_BASE,
   PAYLOAD_CHUNK_SIZE,
 } from './SidekickSyncService';
@@ -169,6 +171,57 @@ describe('resolveSidekickDir', () => {
 
   it('returns the remote flat path for an agent server', () => {
     expect(resolveSidekickDir(pkg, { type: 'agent' })).toBe(`${REMOTE_SIDEKICKS_BASE}/azt-implement`);
+  });
+});
+
+describe('resolveSidekickDirOnHost', () => {
+  const pkg = makePackage({ name: 'pushing-default', dir: 'C:\\hub\\harness\\sidekicks\\pushing-default' });
+  const factory = (platform: 'linux' | 'win32' | null, home = '/home/me') => ({
+    hostProfileFor: () => (platform ? { platform, arch: 'x64' } : null),
+    getFileOps: () => ({ realpath: async () => home }),
+  }) as never;
+
+  it('a POSIX host keeps ~ for its shell to expand, a local one its own directory', async () => {
+    expect(await resolveSidekickDirOnHost(pkg, { type: 'agent' }, factory('linux'))).toBe(`${REMOTE_SIDEKICKS_BASE}/pushing-default`);
+    expect(await resolveSidekickDirOnHost(pkg, { type: 'agent' }, factory(null))).toBe(`${REMOTE_SIDEKICKS_BASE}/pushing-default`);
+    expect(await resolveSidekickDirOnHost(pkg, { type: 'local' }, factory('linux'))).toBe(pkg.dir);
+  });
+
+  it("a Windows agent's directory is written out under its home, with forward slashes", async () => {
+    expect(await resolveSidekickDirOnHost(pkg, { type: 'agent' }, factory('win32', 'C:\\Users\\me'))).toBe('C:/Users/me/.azito/sidekicks/pushing-default');
+  });
+
+  it("a Windows hub's own server uses the hub's package directory with forward slashes", async () => {
+    expect(await resolveSidekickDirOnHost(pkg, { type: 'local' }, factory('win32'))).toBe('C:/hub/harness/sidekicks/pushing-default');
+  });
+});
+
+describe('resolveSidekickNodeOnHost ({{host.node}})', () => {
+  const usesNode = { body: 'run {{host.node}} "x.mjs"' };
+  const noNode = { body: 'no scripts here' };
+  const factory = (platform: 'linux' | 'win32' | null, nodePath = 'C:\\Program Files\\nodejs\\node.exe') => ({
+    hostProfileFor: () => (platform ? { platform, arch: 'x64' } : null),
+    getAgentTransport: () => ({ fetchNodeExecPath: async () => nodePath }),
+  }) as never;
+
+  it('is not asked of an agent that cannot report it when the body does not use it, and is an explicit error when the body does', async () => {
+    const old = { hostProfileFor: () => ({ platform: 'win32', arch: 'x64' }), getAgentTransport: () => ({ fetchNodeExecPath: async () => { throw new Error('did not report its node executable; update the agent'); } }) } as never;
+    expect(await resolveSidekickNodeOnHost(noNode, { type: 'agent' }, old)).toBe('node');
+    await expect(resolveSidekickNodeOnHost(usesNode, { type: 'agent' }, old)).rejects.toThrow(/update the agent/);
+  });
+
+  it('is a bare node on a POSIX host (and one whose OS is not recorded)', async () => {
+    expect(await resolveSidekickNodeOnHost(usesNode, { type: 'agent' }, factory('linux'))).toBe('node');
+    expect(await resolveSidekickNodeOnHost(usesNode, { type: 'agent' }, factory(null))).toBe('node');
+  });
+
+  it("is the Windows agent's own node.exe by full path in double quotes", async () => {
+    expect(await resolveSidekickNodeOnHost(usesNode, { type: 'agent' }, factory('win32'))).toBe('"C:/Program Files/nodejs/node.exe"');
+  });
+
+  it("is the hub's own node for a Windows hub's local server, and refuses a path the shell would read inside quotes", async () => {
+    expect(await resolveSidekickNodeOnHost(usesNode, { type: 'local' }, factory('win32'))).toBe(`"${process.execPath.replace(/\\/g, '/')}"`);
+    await expect(resolveSidekickNodeOnHost(usesNode, { type: 'agent' }, factory('win32', 'C:\\no$de\\node.exe'))).rejects.toThrow(/node executable/);
   });
 });
 

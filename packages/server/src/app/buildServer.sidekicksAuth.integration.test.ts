@@ -137,6 +137,7 @@ function buildApp(scopedAuthEnabled = true): {
   const taskPromptVarsResolver: ITaskPromptVarsResolver = {
     resolve: () => FAKE_VARS,
     resolveDir: async (_taskId, pkg) => pkg.dir,
+    resolveNode: async () => 'node',
   };
 
   app.register(sidekicksRoutes, {

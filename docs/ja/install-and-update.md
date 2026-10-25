@@ -490,10 +490,11 @@ Windows のエージェントで使える機能と、まだ使えない機能は
 | シェルだけの新しいウィンドウ | 使える（cmd.exe） | — |
 | ファイル（一覧・読み・書き・作成・削除・名前の変更。`IFileOps`）、ファイル名の検索、ファイルの中身の検索（`rg` があれば `rg`、無ければ内蔵の検索。結果のパスは相対の `/` 区切り）、ディレクトリの補完。詳しくは `files.md` | 使える | — |
 | git の diff・履歴・ワークツリーの切り替え・ブランチの検索・リポジトリの検出（Git for Windows が必要。無ければ API は `git_not_found`（501）で、理由を各画面のエラーに出す） | 使える | — |
-| タスク・Unit の実行 | UI で無効 | #371 |
+| タスク・Unit の実行（実行・follow-up・復元・承認後の再開・セッションの復旧） | 使える。タスクの worktree を先に作り、窓は worktree の中でワーカーを最初のペインとして作る（`cd` も起動行も打たない）。プロンプトは、出力と signal を `harness/bin/azitoctl.mjs`（Node）で行うよう指示し、pushing フェーズは `pushing-default/scripts/push.mjs`（Git for Windows の `git.exe`。`gh` / `glab` は任意）を使う。Claude Code はネイティブ版の `claude.exe` も npm 版の `claude.cmd` も PATHEXT で起動でき、Codex は npm 版の `codex.cmd` | — |
+| コード配信（プロジェクトのサーバー環境のオプション） | 使えない。Windows の agent ではオンにできず（API は 501 `unsupported_os`、フォームは理由を出す）、すでにオンの行での実行も断る。Windows のハブから Linux / macOS の agent への配信は、今までどおり使える | #464 |
 | 新しいウィンドウでの claude / codex（や、単語だけでできたコマンド）の起動と、その窓の respawn | 使える（窓をエージェントを最初のペインとして作る。misao がプログラムを直接起動し、シェルには何も打ち込まない。`claude` は PATHEXT で `claude.cmd` として見つかる）。すでにある窓にエージェントを起動することはできない（新しい窓を作る）。シェルの構文を含むコマンドと、cmd.exe の `% ^ & \| < > " ! ( )` を含む引数は `unsupported_os` で断る。ペインの配置を保存した窓、作業ディレクトリのあるシェルだけの窓、カスタムコマンドの窓（コマンドを保存していない）の respawn はまだ使えない。エージェントの窓の respawn は古い窓を消してから新しい窓を作るので、プログラムが見つからない（PATH / PATHEXT）と窓は残らず、エラーにその旨が出る | — |
 | tmux（既定の mux の選択・tmux の実行方式・tmux 設定の適用・tmux の導入） | 出さない（Windows には tmux が無く、ペインサーバーは misao だけ） | — |
-| AZITO ハーネス（setup.sh）と、その install-status の行 | UI で無効 | #371 |
+| AZITO ハーネス（`setup.mjs`）と、その install-status の行 | 使える | — |
 | ブラウザ実行環境（Chromium）の導入 | UI で無効 | #372 |
 | ホスト上の agent の更新・削除 | 使えない（Setup からの再導入でその場で置き換わる） | #372 |
 

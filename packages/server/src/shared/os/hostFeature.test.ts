@@ -4,10 +4,10 @@ import { HostProfileError } from './hostProfile';
 
 describe('assertHostFeature', () => {
   it('refuses a feature a Windows host does not have yet, as unsupported_os that names the tracking issue', () => {
-    expect(() => assertHostFeature({ platform: 'win32' }, 'taskExecution', 'Running a task')).toThrowError(HostProfileError);
-    expect(() => assertHostFeature({ platform: 'win32' }, 'taskExecution', 'Running a task')).toThrowError(expect.objectContaining({
+    expect(() => assertHostFeature({ platform: 'win32' }, 'codeDistribution', 'Distributing code')).toThrowError(HostProfileError);
+    expect(() => assertHostFeature({ platform: 'win32' }, 'codeDistribution', 'Distributing code')).toThrowError(expect.objectContaining({
       code: 'unsupported_os',
-      message: 'Running a task is not available on Windows hosts yet (tracked in #371).',
+      message: 'Distributing code is not available on Windows hosts yet (tracked in #464).',
     }));
   });
 
@@ -16,10 +16,10 @@ describe('assertHostFeature', () => {
   });
 
   it('passes on Unix hosts and on a host whose OS is not recorded', () => {
-    expect(() => assertHostFeature({ platform: 'linux' }, 'taskExecution', 'Running a task')).not.toThrow();
+    expect(() => assertHostFeature({ platform: 'linux' }, 'codeDistribution', 'Distributing code')).not.toThrow();
     expect(() => assertHostFeature({ platform: 'darwin' }, 'isolation', 'Isolating a server')).not.toThrow();
-    expect(() => assertHostFeature(null, 'taskExecution', 'Running a task')).not.toThrow();
-    expect(() => assertHostFeature(undefined, 'taskExecution', 'Running a task')).not.toThrow();
+    expect(() => assertHostFeature(null, 'codeDistribution', 'Distributing code')).not.toThrow();
+    expect(() => assertHostFeature(undefined, 'codeDistribution', 'Distributing code')).not.toThrow();
   });
 });
 

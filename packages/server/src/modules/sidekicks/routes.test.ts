@@ -27,6 +27,7 @@ function makeTaskPromptVarsResolver(overrides: Partial<ITaskPromptVarsResolver> 
       if (taskId === 999) throw new Error('Task not found: 999');
       return pkg.dir; // default: behaves like a local-server task (no remote sync involved)
     },
+    resolveNode: async () => 'node',
     ...overrides,
   };
 }

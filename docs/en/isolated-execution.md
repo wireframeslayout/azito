@@ -517,6 +517,10 @@ including isolated ones. The decision, and why it does not weaken isolation:
 If you would rather not surface an isolated server's conversation in the hub UI, leave the window in
 Terminal mode; there is no per-server switch for this today.
 
+## 9. Windows hosts (out of scope in v0.12.0, #464)
+
+A Windows agent cannot be an isolated server: declaring `isolationIntent` is refused (501 `unsupported_os`), and since an isolated server always uses the code distribution, which a Windows agent cannot take either (see [Code distribution](./code-distribution.md#5-windows-hosts-out-of-scope-in-v0120-464)), the two limits are the same limit. Both are tracked in #464.
+
 ## Related documents
 
 - [Security Configuration & Environment Setup Guide](./security-setup.md) -- Principal separation (operator/task), enabling scoped auth

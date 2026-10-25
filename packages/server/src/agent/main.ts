@@ -191,7 +191,7 @@ async function main(): Promise<void> {
   // Registered after the auth hook above, so it is covered by it like every other /api route.
   await app.register(misaoRoutes, { socket: misaoSocket, host: misaoHost });
   // The host's own report (OS, architecture, default shell) for the hub, behind the same token check. A Windows host's default shell is its command interpreter (%ComSpec%), the one misao itself starts without a setting.
-  await app.register(hostRoutes, { host: { platform: hostEnv.platform, arch: hostEnv.arch, shell: hostEnv.platform === 'win32' ? process.env.ComSpec || null : resolveLoginShell(process.env), homeDir: hostEnv.homeDir, tmpDir: hostEnv.tmpDir } });
+  await app.register(hostRoutes, { host: { platform: hostEnv.platform, arch: hostEnv.arch, shell: hostEnv.platform === 'win32' ? process.env.ComSpec || null : resolveLoginShell(process.env), homeDir: hostEnv.homeDir, tmpDir: hostEnv.tmpDir, execPath: process.execPath } });
   // The processes of this host, for the hub's agent detection and resource measurement (one list for every OS).
   const processRunHost = runHostOf(hostEnv);
   await app.register(processRoutes, { listProcesses: () => listProcessesWith(hostEnv.platform, (spec) => runCommandSpec(spec, processRunHost)) });

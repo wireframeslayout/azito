@@ -1,23 +1,23 @@
 import { describe, it, expect } from 'vitest';
 import type { TFunction } from 'i18next';
-import { pickTaskExecutionServer } from '@azito/shared';
 import { hostFeatureBlockReason, isUnsupportedOsAnswer, describeUnsupportedOs, isGitNotFoundAnswer } from './hostFeature';
 
 const t = ((key: string, opts?: Record<string, unknown>) => `${key}${opts ? JSON.stringify(opts) : ''}`) as unknown as TFunction;
 
 describe('hostFeatureBlockReason', () => {
   it('is null on Linux, macOS and an unrecorded host', () => {
-    expect(hostFeatureBlockReason({ platform: 'linux' }, 'taskExecution', t)).toBeNull();
+    expect(hostFeatureBlockReason({ platform: 'linux' }, 'codeDistribution', t)).toBeNull();
     expect(hostFeatureBlockReason({ platform: 'darwin' }, 'isolation', t)).toBeNull();
     expect(hostFeatureBlockReason(null, 'browserRuntime', t)).toBeNull();
   });
 
   it('says the feature is pending, with its issue, on Windows', () => {
-    expect(hostFeatureBlockReason({ platform: 'win32' }, 'taskExecution', t)).toBe('common:hostFeature.windowsPending{"issue":371}');
+    expect(hostFeatureBlockReason({ platform: 'win32' }, 'browserRuntime', t)).toBe('common:hostFeature.windowsPending{"issue":372}');
   });
 
   it('says isolation is deferred, not planned for v0.12.x, on Windows', () => {
     expect(hostFeatureBlockReason({ platform: 'win32' }, 'isolation', t)).toBe('common:hostFeature.windowsDeferred{"issue":464}');
+    expect(hostFeatureBlockReason({ platform: 'win32' }, 'codeDistribution', t)).toBe('common:hostFeature.windowsDeferred{"issue":464}');
     expect(hostFeatureBlockReason({ platform: 'linux' }, 'isolation', t)).toBeNull();
   });
 
@@ -50,22 +50,5 @@ describe('unsupported_os answers', () => {
     expect(isUnsupportedOsAnswer({ error: 'boom' })).toBe(false);
     expect(isUnsupportedOsAnswer({ error: 'x', code: 'unsupported_host' })).toBe(false);
     expect(isUnsupportedOsAnswer(null)).toBe(false);
-  });
-});
-
-describe('a task without its own server runs where the project\'s only server is', () => {
-  const profiles: Record<string, { platform: 'win32' | 'linux' }> = { win: { platform: 'win32' }, lin: { platform: 'linux' } };
-  const reasonFor = (taskServer: string | null, projectServers: string[]): string | null => {
-    const server = pickTaskExecutionServer(taskServer, projectServers);
-    return server ? hostFeatureBlockReason(profiles[server], 'taskExecution', t) : null;
-  };
-
-  it('serverName = null with one Windows server: Execute is closed', () => {
-    expect(reasonFor(null, ['win'])).toBe('common:hostFeature.windowsPending{"issue":371}');
-  });
-
-  it('serverName = null with one Linux server, or an ambiguous project: not closed here', () => {
-    expect(reasonFor(null, ['lin'])).toBeNull();
-    expect(reasonFor(null, ['win', 'lin'])).toBeNull();
   });
 });

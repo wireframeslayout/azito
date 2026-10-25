@@ -14,6 +14,7 @@ const SM_OPTS = {
   questionsMarker: 'AZITO_QUESTIONS_42_abc123',
   testFailedMarker: 'AZITO_TEST_FAILED_42_abc123',
   signalFilePath: '/tmp/azito-signal-42.txt',
+  host: { os: 'posix' as const, azitoctl: '/usr/local/bin/azitoctl' },
   outputFilePath: '/tmp/azito-output-42-abc123.md',
 };
 

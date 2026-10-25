@@ -147,6 +147,10 @@ firewall rules when using this on an isolated server, see the [Isolated Executio
 network isolation section](./isolated-execution.md#6-network-isolation-defense-against-lateral-movement)
 — inbound must allow the SSH port in addition to `agentPort`.
 
+## 5. Windows hosts (out of scope in v0.12.0, #464)
+
+The distribution bundles and unpacks the repository with POSIX tools (`RemoteBundleOps`), so a **Windows agent cannot be a distribution target**: turning `distribute_code` on for it is refused (`PUT /api/projects/:id/servers/:serverName` answers 501 `unsupported_os`; the environment form disables the toggle and shows the reason and #464), and a task run or restore on a row that already has it on is refused before anything is created. The decision is the target's OS (`hostFeatureSupport(profile, 'codeDistribution')`), not the hub's: a Windows hub distributes to a Linux / macOS agent as before.
+
 ## Related documents
 
 - [Isolated Execution Profile](./isolated-execution.md) -- Application on isolated servers (always distributed), network isolation, how the pushing phase behaves

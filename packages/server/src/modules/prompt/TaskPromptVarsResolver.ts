@@ -8,7 +8,7 @@ import type { ITaskPromptVarsResolver, TaskPromptVars } from '../sidekicks/ITask
 import type { SidekickPackage } from '../sidekicks/SidekickPackage';
 import type { SidekickPackageLoader } from '../sidekicks/SidekickPackageLoader';
 import type { SidekickSyncService } from '../sidekicks/SidekickSyncService';
-import { resolveSidekickDir } from '../sidekicks/SidekickSyncService';
+import { resolveSidekickDirOnHost, resolveSidekickNodeOnHost } from '../sidekicks/SidekickSyncService';
 import { resolveTaskPromptVars } from './resolveTaskPromptVars';
 import { resolveTaskServerName } from '../tasks/execution/TaskExecutionEnv';
 
@@ -37,6 +37,16 @@ export class TaskPromptVarsResolver implements ITaskPromptVarsResolver {
     return resolveTaskPromptVars(this.taskRepo, this.projectRepo, this.unitRepo, this.projectServerRepo, taskId);
   }
 
+  async resolveNode(taskId: number, pkg: Pick<SidekickPackage, 'body'>): Promise<string> {
+    const task = this.taskRepo.findById(taskId);
+    if (!task) {
+      throw new Error(`Task not found: ${taskId}`);
+    }
+    const serverName = resolveTaskServerName(task, this.projectServerRepo);
+    const server = serverName ? this.serverRepo.findByName(serverName) : null;
+    return server ? resolveSidekickNodeOnHost(pkg, server, this.transportFactory) : 'node';
+  }
+
   async resolveDir(taskId: number, pkg: Pick<SidekickPackage, 'name' | 'dir'>): Promise<string> {
     const task = this.taskRepo.findById(taskId);
     if (!task) {
@@ -47,10 +57,11 @@ export class TaskPromptVarsResolver implements ITaskPromptVarsResolver {
     if (!serverName) return pkg.dir; // best-effort miss (read-only render), same contract as resolveTaskServerName
 
     const server = this.serverRepo.findByName(serverName);
-    if (!server || server.type === 'local') return pkg.dir;
-
-    const transport = this.transportFactory.getTransport(server);
-    await this.sidekickSyncService.sync(server.name, transport, this.sidekickLoader.list());
-    return resolveSidekickDir(pkg, server);
+    if (!server) return pkg.dir;
+    if (server.type !== 'local') {
+      const transport = this.transportFactory.getTransport(server);
+      await this.sidekickSyncService.sync(server.name, transport, this.sidekickLoader.list());
+    }
+    return resolveSidekickDirOnHost(pkg, server, this.transportFactory);
   }
 }

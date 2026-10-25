@@ -142,7 +142,7 @@ const sidekicksRoutes: FastifyPluginCallback<SidekicksRouteOptions> = (fastify, 
         try {
           const vars = taskPromptVarsResolver.resolve(taskId);
           const dir = await taskPromptVarsResolver.resolveDir(taskId, pkg);
-          const prompt = renderSidekickBody(pkg, vars, false, dir);
+          const prompt = renderSidekickBody(pkg, { ...vars, host: { node: await taskPromptVarsResolver.resolveNode(taskId, pkg) } }, false, dir);
           return { name: pkg.name, tags: pkg.tags, prompt };
         } catch (err: unknown) {
           const message = (err as Error).message;

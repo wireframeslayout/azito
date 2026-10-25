@@ -17,12 +17,17 @@ import type { TransportFactory } from '../servers/transport/TransportFactory';
 import type { IContentExtractor } from '../llm/ContentExtractor';
 import type { IExecutionLogRepository } from './ExecutionLog';
 import { resolveTaskServerName, resolveMuxWorkspace, resolveBaseBranch, resolveAndDetectBaseBranch, resolveWorktreeCreateBaseBranch } from './execution/TaskExecutionEnv';
-import { performDistribution, shouldClearRecordedDistributionRepository, type DistributionOutcome } from './execution/DistributionHelper';
+import { isDistributionRequired, performDistribution, shouldClearRecordedDistributionRepository, type DistributionOutcome } from './execution/DistributionHelper';
 import type { IDistributionStateRepository } from '../git/hub-transfer/types';
 import { normalizeBranchRef } from '../git/assertSafeGitArgs';
 import { ensureGitIdentity, type GitIdentity } from '../git/ensureGitIdentity';
 import { buildWorkerLaunchCommand } from '../agents/LaunchCommand';
-import { assertHostFeature, workerLineDialect } from '../../shared/os/hostFeature';
+import { assertHostFeature, workerStartsAsProgram } from '../../shared/os/hostFeature';
+import { shellDialectFor } from '../../shared/os/shellDialect';
+import { programFor } from '../agents/workerProgram';
+import type { PaneProgram } from '../tmux/IMuxClient';
+import type { ISessionStrategyFactory } from '../agents/SessionStrategy';
+import { planResumeWorkerLaunch } from './execution/WorkerLaunchPlan';
 import { changeDirectoryLine } from '../../shared/os/changeDirectoryLine';
 import { checkExecutionGate, ExecutionGateDeniedError, ExecutionGatePendingApprovalError, reverifyExecutionGateInLock } from './execution/ExecutionGate';
 import { resolveExecutionManifest, hashExecutionManifest } from './execution/ExecutionManifest';
@@ -53,6 +58,8 @@ export interface TaskRestoreDeps {
   muxDriverRegistry: MuxDriverRegistry;
   worktreeServiceFactory: WorktreeServiceFactory;
   transportFactory: TransportFactory;
+  /** Resumes the saved agent session when a Windows host starts the worker as the restored window's first pane. */
+  sessionStrategyFactory: ISessionStrategyFactory;
   contentExtractor: IContentExtractor;
   logRepo: IExecutionLogRepository;
   // Needed by resolveExecutionManifest() to resolve the `sidekick` manifest
@@ -138,10 +145,12 @@ export class TaskRestoreService {
     // `findByName`'s nullable return) so TS control-flow narrowing isn't
     // lost the moment this variable is captured by a nested closure below.
     let server: ServerConfig = serverAtStart;
-    // Before the worktree, the window or any row: a host that cannot run a worker in a pane (Windows, #371) restores nothing.
-    assertHostFeature(transportFactory.hostProfileFor(serverAtStart), 'taskExecution', 'Restoring a task');
+    // A Windows host starts the worker as the first pane of the restored window, in the worktree: the worktree is made before the window.
+    const startsAsProgram = workerStartsAsProgram(transportFactory.hostProfileFor(serverAtStart));
 
     const tmuxSession = resolveMuxWorkspace(task.projectId, serverName, projectServerRepo);
+    // The branch name's slug comes from an LLM call: a Windows host makes the worktree under the server lock, so it is made before the lock.
+    const windowsSlug = startsAsProgram && !(task.branch || task.worktreeBranch) ? await contentExtractor.generateSlug(task.title) : null;
 
     // Untrusted-input execution gate (Issue #328), same
     // resolveExecutionManifest()+checkExecutionGate() pairing as
@@ -168,6 +177,10 @@ export class TaskRestoreService {
     // matches the approval screen's own resolution (resolvePendingApprovalManifest).
     const restoreProjectServer = projectServerRepo.find(task.projectId, serverName);
     const restoreProject = projectRepo.findById(task.projectId);
+    // The code distribution is closed on a Windows agent (#464): refused before the gate, the session or the worktree.
+    if (startsAsProgram && isDistributionRequired(serverAtStart, restoreProjectServer)) {
+      assertHostFeature(transportFactory.hostProfileFor(serverAtStart), 'codeDistribution', 'Restoring a task on a server that needs the code distribution');
+    }
     const restoreBaseBranch = await resolveAndDetectBaseBranch(
       task, restoreProjectServer, restoreProject,
       transportFactory.getTransport(serverAtStart), restoreProjectServer?.workingDirectory || null,
@@ -334,6 +347,251 @@ export class TaskRestoreService {
     // generation before restore() finishes persisting it.
     return await runExclusiveForTask(task.id, async () => {
     try {
+      // The directory, the base branch, the distribution and the worktree of the restored task: a host that types the worker into a shell pane
+      // runs this after its window exists (and then changes into the worktree); a host that starts the worker as a program runs it while
+      // the window is created, after the gate was verified again, because the window starts in the worktree.
+      let workingDir: string | null = null;
+      let effectiveDir: string | null = null;
+      let worktreeBranch: string | null = null;
+      let baseBranch: string | null = null;
+      const prepareEnvironment = async (): Promise<void> => {
+        // `lockedProjectServer` (Issue #87 16th-round review, Important finding
+        // 2), not the pre-lock `projectServer` — this line runs AFTER
+        // createRotatedWindow's preCheck has already re-resolved and captured
+        // it (see the `lockedProject`/`lockedProjectServer` declaration
+        // above), so using the fresher snapshot here costs nothing extra.
+        // allowedRoot mirrors ExecuteTaskUseCase.execute()'s containment boundary
+        // (Issue #27): this restore path also launches a worker into
+        // task.workingDirectory, which is settable via PUT /api/tasks/:id, so
+        // it needs the same verification a fresh execute() would apply — without
+        // it, startup task recovery was a way to bypass the boundary entirely
+        // (Issue #27 review finding 1). No configured working directory means
+        // no boundary to enforce, so containment is skipped (legacy behavior).
+        const allowedRoot = lockedProjectServer?.workingDirectory || null;
+        workingDir = task.workingDirectory || allowedRoot;
+        effectiveDir = workingDir;
+
+        if (task.workingDirectory && allowedRoot) {
+          // Resolved (symlink-free) path is what gets used below, not the
+          // original task.workingDirectory — closes the same TOCTOU window
+          // ExecuteTaskUseCase closes (Issue #27 review finding 2).
+          workingDir = await assertDirectoryContained(
+            transportFactory.getFileOps(server), { target: task.workingDirectory, allowedRoot }, 'task working directory',
+          );
+          effectiveDir = workingDir;
+        }
+
+        // Resolved via `resolveAndDetectBaseBranch` — the same auto-detection
+        // path ExecuteTaskUseCase.execute() uses (Issue #63). Already
+        // canonicalized by the helper. Resolved from `lockedProjectServer`/
+        // `lockedProject` (Issue #87 16th-round review, Important finding 2),
+        // not the pre-lock `projectServer`/`project`.
+        const transport = transportFactory.getTransport(server);
+        const detectedBaseBranch = await resolveAndDetectBaseBranch(task, lockedProjectServer, lockedProject, transport, workingDir);
+        if (!detectedBaseBranch) {
+          throw new Error('ベースブランチを自動検出できません。プロジェクトまたはタスクの既定ブランチを設定してください');
+        }
+        baseBranch = detectedBaseBranch;
+        // Persist auto-detected baseBranch so subsequent phases use the same value.
+        if (!resolveBaseBranch(task, lockedProjectServer, lockedProject)) {
+          taskRepo.update(task.id, { baseBranch } as Partial<Task>);
+          task.baseBranch = baseBranch;
+        }
+
+        // Fetch distribution (Issue #87 13th-round review, Important finding 1;
+        // 14th-round review, Important finding 1): restoring an archived task
+        // recreates its worktree from `workingDir` exactly like execute() does,
+        // so it needs the SAME pre-worktree-creation distribution check — and,
+        // like ExecuteTaskUseCase.execute(), that check must run
+        // UNCONDITIONALLY, not only when `workingDir` happens to be set.
+        // performDistribution() itself fails fast with stage `no_working_dir`
+        // when distribution is required (isolated server / distribute_code)
+        // but no working directory is configured — nesting this call inside
+        // `if (workingDir)` skipped that fail-fast entirely and opened the
+        // task window anyway on a server/project that should never run a task
+        // without distributing code first. Rollback here follows this
+        // function's own existing convention (the outer try/catch below
+        // already rolls back the tmux window/token; `worktreePath`+`repoDir`
+        // are not set yet at this point, so throwing is sufficient).
+        // Resolved ONCE, here, and reused for both this guard's `taskBranch`
+        // and the worktree-creation call below (Issue #87 16th-round review,
+        // Important finding 1): performDistribution's stale-local-branch guard
+        // used to see only `task.branch`, while worktree creation resolves
+        // `task.branch || task.worktreeBranch` — a task with an empty
+        // `task.branch` and a `worktreeBranch` naming the SAME branch fetch
+        // distribution just tried to advance could sail past the guard (which
+        // saw no `taskBranch` to compare against `baseBranch`) and still hit
+        // `git worktree add --force` against that stale local ref below.
+        // Normalized the same way the worktree-creation call already did
+        // (Issue #87 third-party review, 12th round, Important finding 2) — a
+        // persisted `task.branch`/`task.worktreeBranch` can still be a
+        // fully-qualified ref from before the API boundary rejected new ones.
+        const rawRestoreBranch = task.branch || task.worktreeBranch || undefined;
+        const restoreBranch = rawRestoreBranch ? normalizeBranchRef(rawRestoreBranch) : undefined;
+
+        // Issue #87 review follow-up (Important finding 1): persist the
+        // distribution TARGET before performDistribution() may mutate the
+        // remote working directory, not only after it returns successfully.
+        // Writing only on success left a window — a crash, or a thrown error,
+        // between a successful distribute() and the old post-hoc write below —
+        // where `distributionRepositoryId` still held whatever a PRIOR
+        // execute()/restore() recorded (or null). A later resume/restore that
+        // trusts this column (resolveRecordedDistributionRepositoryEntry) could
+        // then validate/push a working tree THIS run actually populated from
+        // target B against a stale recorded target A.
+        //
+        // Issue #87 review follow-up (second round, Important finding 1): that
+        // first fix wrote this record BEFORE `performDistribution()` even
+        // ran — too early. `performDistribution()` itself starts with several
+        // prerequisite checks (`service_not_wired`/`no_working_dir`/
+        // `no_distribution_repository`/`distribution_repository_not_found`/
+        // `no_token`/`identity_unresolvable`, DistributionHelper.ts) that
+        // never touch the remote. If a re-restore targets a DIFFERENT
+        // repository than the one a prior execute()/restore() actually
+        // distributed, and this run then fails one of those checks, the
+        // working directory is left exactly as the prior run left it
+        // (repository A) while the record above would already have been
+        // overwritten to name the new target (repository B) — the record
+        // would point at a repository the working directory was never
+        // populated from, and a later resume/push could validate/push A's
+        // content against B. So the write is now done via
+        // `onBeforeDistribute`, a callback `performDistribution()` invokes
+        // itself, exactly once, immediately before the one call that can
+        // actually mutate the remote — i.e. only after every prerequisite
+        // check has passed. A prerequisite failure therefore leaves the
+        // previous record untouched. See `onBeforeDistribute`'s doc comment
+        // in DistributionHelper.ts. `ExecuteTaskUseCase.execute()` mirrors
+        // this same ordering.
+        const distOutcome: DistributionOutcome = await performDistribution({
+          server,
+          projectServer: lockedProjectServer,
+          project: lockedProject,
+          workingDir,
+          baseBranch,
+          taskBranch: restoreBranch ?? null,
+          transportFactory,
+          projectRepo,
+          fetchDistributionService,
+          onBeforeDistribute: (repositoryId) => {
+            taskRepo.update(task.id, { distributionRepositoryId: repositoryId } as Partial<Task>);
+          },
+        });
+        if (distOutcome.required && !distOutcome.ok) {
+          if (unitId !== null) {
+            appendLogAndEmit(logRepo, events, task.id, unitId, 'command', { type: 'fetch_distribution_failed', error: distOutcome.message });
+          }
+          // No write here — and whether one already happened depends on
+          // which stage failed. `onBeforeDistribute` (passed to
+          // `performDistribution` above) only fires once every prerequisite
+          // check has passed, right before the actual `distribute()` call:
+          // - A pure prerequisite failure (`service_not_wired`/
+          //   `no_working_dir`/`no_distribution_repository`/
+          //   `distribution_repository_not_found`/`no_token`/
+          //   `identity_unresolvable`) never reached that point —
+          //   `onBeforeDistribute` did NOT fire, so whatever a PRIOR run
+          //   recorded is still there, untouched, correctly describing the
+          //   working directory's actual (unchanged-by-this-run) content.
+          // - `distribute_failed`/`stale_local_branch` fail AFTER
+          //   `onBeforeDistribute` already fired — the record already names
+          //   what THIS run attempted to distribute, which is either what's
+          //   actually on disk now or a broken worktree that must be
+          //   re-validated/failed-closed against that SAME repository.
+          throw new Error(`Fetch distribution failed: ${distOutcome.message}`);
+        }
+        if (distOutcome.required) {
+          if (unitId !== null) {
+            appendLogAndEmit(logRepo, events, task.id, unitId, 'command', { type: 'fetch_distributed', sha: distOutcome.sha, bundleType: distOutcome.bundleType });
+          }
+          // Already persisted via `onBeforeDistribute` inside
+          // `performDistribution()` (see above) — `distOutcome.repositoryId`
+          // is always the same id resolved there, so writing it again here
+          // would only be a redundant, idempotent duplicate of the SAME
+          // record. Not repeated, to keep this a single source of truth
+          // rather than two write sites that could drift.
+        } else {
+          // Issue #87 review follow-up, Important finding 4, superseded by
+          // Issue #87 review (forge/87-mirror follow-up), Important finding 3:
+          // a restore that did NOT distribute this run must NOT unconditionally
+          // clear a prior recording — `required: false` says nothing about
+          // whether the working directory this restore is about to recreate a
+          // worktree from still holds a PAST distribution's content (e.g.
+          // `distributeCode` was toggled off on the SAME server). Only clear
+          // when `shouldClearRecordedDistributionRepository` finds positive
+          // evidence the CURRENT server does not hold the recorded repository's
+          // content; when it cannot tell (`distributionStateRepo` not wired),
+          // the record is left untouched. See execute()'s matching branch and
+          // `shouldClearRecordedDistributionRepository`'s own doc comment
+          // (DistributionHelper.ts) for the full rationale.
+          if (distributionStateRepo && shouldClearRecordedDistributionRepository(distributionStateRepo, server.name, task.distributionRepositoryId)) {
+            taskRepo.update(task.id, { distributionRepositoryId: null } as Partial<Task>);
+          }
+        }
+        const distStatus: 'distributed' | 'already_current' | null = distOutcome.required ? distOutcome.distStatus : null;
+
+        if (workingDir) {
+          repoDir = workingDir;
+          const worktreeCreateBaseBranch = resolveWorktreeCreateBaseBranch(baseBranch, distStatus);
+
+          // task.branch first (Issue #328 review round, fix 1): the approval
+          // manifest's `branches.work` field (ExecutionManifest.ts) hashes
+          // `task.branch` — the client-specified value — not `worktreeBranch`.
+          // Preferring worktreeBranch here (as an earlier round of this fix
+          // did) meant an edit to an archived task's branch, followed by
+          // approval of a manifest that displays and fingerprints the NEW
+          // task.branch, would still restore into the OLD worktreeBranch a
+          // prior run had created: the branch a human approved and the branch
+          // actually used would diverge. task.branch is preferred, with
+          // worktreeBranch only as a fallback for a task that has never had a
+          // client-specified branch (e.g. an auto-generated one from a prior
+          // run) — matching ExecuteTaskUseCase.execute's own worktree-creation
+          // call, which uses `task.branch || undefined` with no worktreeBranch
+          // fallback at all. The resolved result is still written ONLY to
+          // `worktreeBranch` below (never back to `task.branch`), so this
+          // change does not reintroduce the fingerprint self-invalidation bug
+          // the removed comment described.
+          // Same resolved-and-normalized value the stale-local-branch guard
+          // above already checked against `baseBranch` (Issue #87 16th-round
+          // review, Important finding 1) — recomputing a second, potentially
+          // divergent value here is exactly what let a stale local ref slip
+          // past that guard and into `git worktree add --force`. See
+          // `restoreBranch`'s own comment above for the resolution precedence
+          // (task.branch first, worktreeBranch fallback) and normalization.
+          const branch = restoreBranch;
+          const slug = branch ? `task-${task.id}` : (windowsSlug ?? await contentExtractor.generateSlug(task.title));
+
+          const transport = transportFactory.getTransport(server);
+          const worktreeService = worktreeServiceFactory.create(transport);
+          const wt = await worktreeService.create(workingDir, task.id, slug, worktreeCreateBaseBranch, branch);
+          worktreePath = wt.path;
+          worktreeBranch = wt.branch;
+          effectiveDir = wt.path;
+
+          if (allowedRoot) {
+            const resolvedWtPath = await assertDirectoryContained(
+              transportFactory.getFileOps(server), { target: worktreePath, allowedRoot }, 'worktree path',
+            );
+            worktreePath = resolvedWtPath;
+            effectiveDir = resolvedWtPath;
+          }
+
+          try {
+            const identityResult = await ensureGitIdentity(transport, worktreePath, hubGitIdentity);
+            if (unitId !== null && identityResult.action === 'applied') {
+              appendLogAndEmit(logRepo, events, task.id, unitId, 'command', { type: 'git_identity_applied', fields: identityResult.fields });
+            } else if (unitId !== null && identityResult.action === 'hub_missing') {
+              appendLogAndEmit(logRepo, events, task.id, unitId, 'command', { type: 'git_identity_missing' });
+            }
+          } catch (err) {
+            if (unitId !== null) {
+              appendLogAndEmit(logRepo, events, task.id, unitId, 'command', { type: 'git_identity_failed', message: err instanceof Error ? err.message : String(err) });
+            }
+          }
+        }
+      };
+
+      let program: PaneProgram | undefined;
+      let programSessionId: string | null = null;
+
       // Window generation point — rotates the task token (design v3 §2/§6:
       // restore() always (re)creates the task's window from scratch, so it
       // always rotates, same as execute()). Routed through
@@ -349,7 +607,20 @@ export class TaskRestoreService {
       // on failure is correct — there is nothing left for the outer catch to
       // roll back.
       const created = await createRotatedWindow(paneEnvService, this.serverIsolationLock, server, task, 'restore_create_failed', async (freshServer, env) => {
-        const opened = await this.resolveDriver(freshServer).openWindow(freshServer, tmuxSession, `task-${task.id}`, { extraEnv: env });
+        // A host that starts the worker as a program (Windows) creates the window with the worker as its first pane, in the worktree: the
+        // worktree is made here, after the gate was verified again (`preCheck` below) and the project snapshot it locked in is in place.
+        if (startsAsProgram) {
+          server = freshServer;
+          await prepareEnvironment();
+          const launch = unit ? planResumeWorkerLaunch(unit, task.agentSessionId, this.deps.sessionStrategyFactory) : null;
+          if (launch) {
+            program = await programFor(launch, effectiveDir, () => transportFactory.getFileOps(freshServer));
+            programSessionId = task.agentSessionId;
+          } else {
+            log.warn(`[task-restore] task ${task.id} has no worker to start: its window is opened with the shell's default directory`);
+          }
+        }
+        const opened = await this.resolveDriver(freshServer).openWindow(freshServer, tmuxSession, `task-${task.id}`, { extraEnv: env, ...(program ? { program } : {}) });
         return { result: opened.result, windowName: opened.ref.window, ref: opened.ref, label: opened.windowName ?? opened.ref.window };
       },
         true,
@@ -400,247 +671,17 @@ export class TaskRestoreService {
       const windowTarget = muxWindowTarget(ref);
       const handle = await this.resolveDriver(server).resolvePane(server, ref, 1);
       const dbTarget = windowTarget;
-      // `lockedProjectServer` (Issue #87 16th-round review, Important finding
-      // 2), not the pre-lock `projectServer` — this line runs AFTER
-      // createRotatedWindow's preCheck has already re-resolved and captured
-      // it (see the `lockedProject`/`lockedProjectServer` declaration
-      // above), so using the fresher snapshot here costs nothing extra.
-      // allowedRoot mirrors ExecuteTaskUseCase.execute()'s containment boundary
-      // (Issue #27): this restore path also launches a worker into
-      // task.workingDirectory, which is settable via PUT /api/tasks/:id, so
-      // it needs the same verification a fresh execute() would apply — without
-      // it, startup task recovery was a way to bypass the boundary entirely
-      // (Issue #27 review finding 1). No configured working directory means
-      // no boundary to enforce, so containment is skipped (legacy behavior).
-      const allowedRoot = lockedProjectServer?.workingDirectory || null;
-      let workingDir = task.workingDirectory || allowedRoot;
-      let effectiveDir = workingDir;
-
-      let worktreeBranch: string | null = null;
-
-      if (task.workingDirectory && allowedRoot) {
-        // Resolved (symlink-free) path is what gets used below, not the
-        // original task.workingDirectory — closes the same TOCTOU window
-        // ExecuteTaskUseCase closes (Issue #27 review finding 2).
-        workingDir = await assertDirectoryContained(
-          transportFactory.getFileOps(server), { target: task.workingDirectory, allowedRoot }, 'task working directory',
-        );
-        effectiveDir = workingDir;
-      }
-
-      // Resolved via `resolveAndDetectBaseBranch` — the same auto-detection
-      // path ExecuteTaskUseCase.execute() uses (Issue #63). Already
-      // canonicalized by the helper. Resolved from `lockedProjectServer`/
-      // `lockedProject` (Issue #87 16th-round review, Important finding 2),
-      // not the pre-lock `projectServer`/`project`.
-      const transport = transportFactory.getTransport(server);
-      const baseBranch = await resolveAndDetectBaseBranch(task, lockedProjectServer, lockedProject, transport, workingDir);
-      if (!baseBranch) {
-        throw new Error('ベースブランチを自動検出できません。プロジェクトまたはタスクの既定ブランチを設定してください');
-      }
-      // Persist auto-detected baseBranch so subsequent phases use the same value.
-      if (!resolveBaseBranch(task, lockedProjectServer, lockedProject)) {
-        taskRepo.update(task.id, { baseBranch } as Partial<Task>);
-        task.baseBranch = baseBranch;
-      }
-
-      // Fetch distribution (Issue #87 13th-round review, Important finding 1;
-      // 14th-round review, Important finding 1): restoring an archived task
-      // recreates its worktree from `workingDir` exactly like execute() does,
-      // so it needs the SAME pre-worktree-creation distribution check — and,
-      // like ExecuteTaskUseCase.execute(), that check must run
-      // UNCONDITIONALLY, not only when `workingDir` happens to be set.
-      // performDistribution() itself fails fast with stage `no_working_dir`
-      // when distribution is required (isolated server / distribute_code)
-      // but no working directory is configured — nesting this call inside
-      // `if (workingDir)` skipped that fail-fast entirely and opened the
-      // task window anyway on a server/project that should never run a task
-      // without distributing code first. Rollback here follows this
-      // function's own existing convention (the outer try/catch below
-      // already rolls back the tmux window/token; `worktreePath`+`repoDir`
-      // are not set yet at this point, so throwing is sufficient).
-      // Resolved ONCE, here, and reused for both this guard's `taskBranch`
-      // and the worktree-creation call below (Issue #87 16th-round review,
-      // Important finding 1): performDistribution's stale-local-branch guard
-      // used to see only `task.branch`, while worktree creation resolves
-      // `task.branch || task.worktreeBranch` — a task with an empty
-      // `task.branch` and a `worktreeBranch` naming the SAME branch fetch
-      // distribution just tried to advance could sail past the guard (which
-      // saw no `taskBranch` to compare against `baseBranch`) and still hit
-      // `git worktree add --force` against that stale local ref below.
-      // Normalized the same way the worktree-creation call already did
-      // (Issue #87 third-party review, 12th round, Important finding 2) — a
-      // persisted `task.branch`/`task.worktreeBranch` can still be a
-      // fully-qualified ref from before the API boundary rejected new ones.
-      const rawRestoreBranch = task.branch || task.worktreeBranch || undefined;
-      const restoreBranch = rawRestoreBranch ? normalizeBranchRef(rawRestoreBranch) : undefined;
-
-      // Issue #87 review follow-up (Important finding 1): persist the
-      // distribution TARGET before performDistribution() may mutate the
-      // remote working directory, not only after it returns successfully.
-      // Writing only on success left a window — a crash, or a thrown error,
-      // between a successful distribute() and the old post-hoc write below —
-      // where `distributionRepositoryId` still held whatever a PRIOR
-      // execute()/restore() recorded (or null). A later resume/restore that
-      // trusts this column (resolveRecordedDistributionRepositoryEntry) could
-      // then validate/push a working tree THIS run actually populated from
-      // target B against a stale recorded target A.
-      //
-      // Issue #87 review follow-up (second round, Important finding 1): that
-      // first fix wrote this record BEFORE `performDistribution()` even
-      // ran — too early. `performDistribution()` itself starts with several
-      // prerequisite checks (`service_not_wired`/`no_working_dir`/
-      // `no_distribution_repository`/`distribution_repository_not_found`/
-      // `no_token`/`identity_unresolvable`, DistributionHelper.ts) that
-      // never touch the remote. If a re-restore targets a DIFFERENT
-      // repository than the one a prior execute()/restore() actually
-      // distributed, and this run then fails one of those checks, the
-      // working directory is left exactly as the prior run left it
-      // (repository A) while the record above would already have been
-      // overwritten to name the new target (repository B) — the record
-      // would point at a repository the working directory was never
-      // populated from, and a later resume/push could validate/push A's
-      // content against B. So the write is now done via
-      // `onBeforeDistribute`, a callback `performDistribution()` invokes
-      // itself, exactly once, immediately before the one call that can
-      // actually mutate the remote — i.e. only after every prerequisite
-      // check has passed. A prerequisite failure therefore leaves the
-      // previous record untouched. See `onBeforeDistribute`'s doc comment
-      // in DistributionHelper.ts. `ExecuteTaskUseCase.execute()` mirrors
-      // this same ordering.
-      const distOutcome: DistributionOutcome = await performDistribution({
-        server,
-        projectServer: lockedProjectServer,
-        project: lockedProject,
-        workingDir,
-        baseBranch,
-        taskBranch: restoreBranch ?? null,
-        transportFactory,
-        projectRepo,
-        fetchDistributionService,
-        onBeforeDistribute: (repositoryId) => {
-          taskRepo.update(task.id, { distributionRepositoryId: repositoryId } as Partial<Task>);
-        },
-      });
-      if (distOutcome.required && !distOutcome.ok) {
-        if (unitId !== null) {
-          appendLogAndEmit(logRepo, events, task.id, unitId, 'command', { type: 'fetch_distribution_failed', error: distOutcome.message });
-        }
-        // No write here — and whether one already happened depends on
-        // which stage failed. `onBeforeDistribute` (passed to
-        // `performDistribution` above) only fires once every prerequisite
-        // check has passed, right before the actual `distribute()` call:
-        // - A pure prerequisite failure (`service_not_wired`/
-        //   `no_working_dir`/`no_distribution_repository`/
-        //   `distribution_repository_not_found`/`no_token`/
-        //   `identity_unresolvable`) never reached that point —
-        //   `onBeforeDistribute` did NOT fire, so whatever a PRIOR run
-        //   recorded is still there, untouched, correctly describing the
-        //   working directory's actual (unchanged-by-this-run) content.
-        // - `distribute_failed`/`stale_local_branch` fail AFTER
-        //   `onBeforeDistribute` already fired — the record already names
-        //   what THIS run attempted to distribute, which is either what's
-        //   actually on disk now or a broken worktree that must be
-        //   re-validated/failed-closed against that SAME repository.
-        throw new Error(`Fetch distribution failed: ${distOutcome.message}`);
-      }
-      if (distOutcome.required) {
-        if (unitId !== null) {
-          appendLogAndEmit(logRepo, events, task.id, unitId, 'command', { type: 'fetch_distributed', sha: distOutcome.sha, bundleType: distOutcome.bundleType });
-        }
-        // Already persisted via `onBeforeDistribute` inside
-        // `performDistribution()` (see above) — `distOutcome.repositoryId`
-        // is always the same id resolved there, so writing it again here
-        // would only be a redundant, idempotent duplicate of the SAME
-        // record. Not repeated, to keep this a single source of truth
-        // rather than two write sites that could drift.
-      } else {
-        // Issue #87 review follow-up, Important finding 4, superseded by
-        // Issue #87 review (forge/87-mirror follow-up), Important finding 3:
-        // a restore that did NOT distribute this run must NOT unconditionally
-        // clear a prior recording — `required: false` says nothing about
-        // whether the working directory this restore is about to recreate a
-        // worktree from still holds a PAST distribution's content (e.g.
-        // `distributeCode` was toggled off on the SAME server). Only clear
-        // when `shouldClearRecordedDistributionRepository` finds positive
-        // evidence the CURRENT server does not hold the recorded repository's
-        // content; when it cannot tell (`distributionStateRepo` not wired),
-        // the record is left untouched. See execute()'s matching branch and
-        // `shouldClearRecordedDistributionRepository`'s own doc comment
-        // (DistributionHelper.ts) for the full rationale.
-        if (distributionStateRepo && shouldClearRecordedDistributionRepository(distributionStateRepo, server.name, task.distributionRepositoryId)) {
-          taskRepo.update(task.id, { distributionRepositoryId: null } as Partial<Task>);
-        }
-      }
-      const distStatus: 'distributed' | 'already_current' | null = distOutcome.required ? distOutcome.distStatus : null;
-
-      if (workingDir) {
-        repoDir = workingDir;
-        const worktreeCreateBaseBranch = resolveWorktreeCreateBaseBranch(baseBranch, distStatus);
-
-        // task.branch first (Issue #328 review round, fix 1): the approval
-        // manifest's `branches.work` field (ExecutionManifest.ts) hashes
-        // `task.branch` — the client-specified value — not `worktreeBranch`.
-        // Preferring worktreeBranch here (as an earlier round of this fix
-        // did) meant an edit to an archived task's branch, followed by
-        // approval of a manifest that displays and fingerprints the NEW
-        // task.branch, would still restore into the OLD worktreeBranch a
-        // prior run had created: the branch a human approved and the branch
-        // actually used would diverge. task.branch is preferred, with
-        // worktreeBranch only as a fallback for a task that has never had a
-        // client-specified branch (e.g. an auto-generated one from a prior
-        // run) — matching ExecuteTaskUseCase.execute's own worktree-creation
-        // call, which uses `task.branch || undefined` with no worktreeBranch
-        // fallback at all. The resolved result is still written ONLY to
-        // `worktreeBranch` below (never back to `task.branch`), so this
-        // change does not reintroduce the fingerprint self-invalidation bug
-        // the removed comment described.
-        // Same resolved-and-normalized value the stale-local-branch guard
-        // above already checked against `baseBranch` (Issue #87 16th-round
-        // review, Important finding 1) — recomputing a second, potentially
-        // divergent value here is exactly what let a stale local ref slip
-        // past that guard and into `git worktree add --force`. See
-        // `restoreBranch`'s own comment above for the resolution precedence
-        // (task.branch first, worktreeBranch fallback) and normalization.
-        const branch = restoreBranch;
-        const slug = branch ? `task-${task.id}` : await contentExtractor.generateSlug(task.title);
-
-        const transport = transportFactory.getTransport(server);
-        const worktreeService = worktreeServiceFactory.create(transport);
-        const wt = await worktreeService.create(workingDir, task.id, slug, worktreeCreateBaseBranch, branch);
-        worktreePath = wt.path;
-        worktreeBranch = wt.branch;
-        effectiveDir = wt.path;
-
-        if (allowedRoot) {
-          const resolvedWtPath = await assertDirectoryContained(
-            transportFactory.getFileOps(server), { target: worktreePath, allowedRoot }, 'worktree path',
-          );
-          worktreePath = resolvedWtPath;
-          effectiveDir = resolvedWtPath;
-        }
-
-        try {
-          const identityResult = await ensureGitIdentity(transport, worktreePath, hubGitIdentity);
-          if (unitId !== null && identityResult.action === 'applied') {
-            appendLogAndEmit(logRepo, events, task.id, unitId, 'command', { type: 'git_identity_applied', fields: identityResult.fields });
-          } else if (unitId !== null && identityResult.action === 'hub_missing') {
-            appendLogAndEmit(logRepo, events, task.id, unitId, 'command', { type: 'git_identity_missing' });
+      if (!startsAsProgram) {
+        await prepareEnvironment();
+        if (worktreePath !== null) {
+          try {
+            // effectiveDir is a resolved (symlink-free) real path — must be shell-quoted before being typed into the
+            // pane; see the matching fix/comment in ExecuteTaskUseCase (Issue #27 cd injection).
+            await this.resolveDriver(server).sendKeysToHandle(server, handle, [await changeDirectoryLine(() => transportFactory.getFileOps(server), shellDialectFor(transportFactory.hostProfileFor(server)), effectiveDir!), 'Enter']);
+            await sleep(500);
+          } catch (e) {
+            log.warn(`[task-restore] Failed to cd into ${effectiveDir}: ${(e as Error).message}`);
           }
-        } catch (err) {
-          if (unitId !== null) {
-            appendLogAndEmit(logRepo, events, task.id, unitId, 'command', { type: 'git_identity_failed', message: err instanceof Error ? err.message : String(err) });
-          }
-        }
-
-        try {
-          // effectiveDir is a resolved (symlink-free) real path — must be
-          // shell-quoted before being typed into the pane; see the matching
-          // fix/comment in ExecuteTaskUseCase (Issue #27 cd injection).
-          await this.resolveDriver(server).sendKeysToHandle(server, handle, [await changeDirectoryLine(() => transportFactory.getFileOps(server), workerLineDialect(transportFactory.hostProfileFor(server), 'Restoring a task'), effectiveDir), 'Enter']);
-          await sleep(500);
-        } catch (e) {
-          log.warn(`[task-restore] Failed to cd into ${effectiveDir}: ${(e as Error).message}`);
         }
       }
 
@@ -662,8 +703,8 @@ export class TaskRestoreService {
         windowType: unit?.workerType ? 'agent' : 'terminal',
         workerType: unit?.workerType ?? null,
         workerModel: unit?.workerModel ?? null,
-        agentSessionId: null,
-        launchCommand: unit ? buildWorkerLaunchCommand(unit.workerType, unit.workerModel, unit.workerExtraArgs, workerLineDialect(transportFactory.hostProfileFor(server), 'Restoring a task')) : null,
+        agentSessionId: programSessionId,
+        launchCommand: unit ? buildWorkerLaunchCommand(unit.workerType, unit.workerModel, unit.workerExtraArgs, shellDialectFor(transportFactory.hostProfileFor(server))) : null,
         workingDirectory: effectiveDir || null,
         paneLayout: null,
         sleeping: false,

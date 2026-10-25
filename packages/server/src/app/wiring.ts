@@ -499,6 +499,7 @@ function buildApplicationServices(infra: SharedInfra, repos: Repositories, uiTok
     unitRepo: repos.unitRepo,
     windowRepo: repos.windowRepo,
     muxDriverRegistry: infra.muxDriverRegistry,
+    sessionStrategyFactory,
     worktreeServiceFactory: infra.worktreeServiceFactory,
     transportFactory: infra.transportFactory,
     contentExtractor: infra.contentExtractor,

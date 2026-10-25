@@ -27,6 +27,8 @@
  * (e.g. wrapping the LLM orchestrator loop) means adding a third
  * `xxxEnvelope()` factory to this file, not extending its public surface.
  */
+import { checkedWindowsPromptPath } from '../../shared/os/windowsPromptPath';
+
 export interface ExecutionEnvelope {
   /** Returns `body` with the execution protocol for this context appended. */
   wrap(body: string): string;
@@ -49,6 +51,39 @@ export const FOLLOW_UP_CAPABILITY: PhaseSignalCapability = { questions: true, te
 type PhaseLabel = string | 'follow_up';
 
 /**
+ * How the worker's shell is addressed, decided by the OS of the host it runs on (#371):
+ *  - `posix`: the commands are written for sh / bash (a here-document, `echo ... >> file`), which a POSIX pane's shell runs. `azitoctl` is the
+ *    path of the bash `azitoctl` (used by the http-signal mode only).
+ *  - `windows`: the worker runs under Git Bash or PowerShell (Claude Code) or PowerShell (Codex), whose quoting, redirection and
+ *    encodings differ, so no shell syntax is written at all: the output and the signals go through `azitoctl.mjs` (`harness/bin`), and every path is
+ *    a forward-slash path in double quotes. `azitoctl` is the command that runs it (`node "C:/.../azitoctl.mjs"`).
+ */
+export type EnvelopeHost =
+  | { readonly os: 'posix'; readonly azitoctl: string }
+  | { readonly os: 'windows'; readonly azitoctl: string };
+
+function quotedWindowsPath(filePath: string): string {
+  return `"${checkedWindowsPromptPath(filePath)}"`;
+}
+
+/** The file the worker writes questions to, next to the phase's output file (task files of one task share a name prefix, so cleanup finds it). */
+export function questionsFileFor(outputFilePath: string): string {
+  return `${outputFilePath}.questions.json`;
+}
+
+function buildWindowsStep1Block(host: EnvelopeHost, outputFilePath: string, phase: PhaseLabel): string {
+  const output = quotedWindowsPath(outputFilePath);
+  return `STEP 1 — Write your complete final output for this phase (the deliverable described in the <output> section, e.g. the full implementation plan in markdown) to the file ${output} as UTF-8 text. Use your file-writing tool. The file must contain:
+
+  ...your complete output here...
+
+AZITO_PHASE_SUMMARY: {"phase":"${phase}","status":"completed","summary":"<1-2 sentence summary of what was done in this phase>","tokensUsed":{"input":<estimated_input_tokens>,"output":<estimated_output_tokens>},"durationSeconds":<estimated_seconds>}
+
+Important: The AZITO_PHASE_SUMMARY line must be the LAST line in the file, after all your output. Replace the placeholder values with your best estimates.
+If you have no file-writing tool, write the same content by running ${host.azitoctl} output --file ${output} with the content on standard input (Git Bash: a here-document; PowerShell: do not pipe non-ASCII text, use Set-Content -Encoding utf8 instead).`;
+}
+
+/**
  * Renders STEP 1 of the completion_signal block: writing the phase's full output
  * (plus the machine-parseable AZITO_PHASE_SUMMARY trailer) to outputFilePath.
  * Shared verbatim between stateMachineEnvelope and httpSignalEnvelope — both
@@ -69,6 +104,7 @@ Important: The AZITO_PHASE_SUMMARY line must be the LAST line in the file, after
 export interface StateMachineEnvelopeOpts {
   /** `'follow_up'` for the follow-up execution context, which has no phase of its own. */
   phase: PhaseLabel;
+  host: EnvelopeHost;
   capability: PhaseSignalCapability;
   doneMarker: string;
   questionsMarker: string;
@@ -88,7 +124,8 @@ export interface StateMachineEnvelopeOpts {
  * completion/question/test-failure instructions from this block.
  */
 export function stateMachineEnvelope(opts: StateMachineEnvelopeOpts): ExecutionEnvelope {
-  const { phase, capability, doneMarker, questionsMarker, testFailedMarker, signalFilePath, outputFilePath } = opts;
+  const { phase, capability, doneMarker, questionsMarker, testFailedMarker, signalFilePath, outputFilePath, host } = opts;
+  if (host.os === 'windows') return windowsStateMachineEnvelope({ ...opts, host });
 
   const questionsSection = capability.questions
     ? `
@@ -124,8 +161,8 @@ export interface HttpSignalEnvelopeOpts {
   phase: string | null;
   capability: PhaseSignalCapability;
   turnToken: string;
-  /** Absolute path to the azitoctl CLI on the target environment. */
-  azitoctlPath: string;
+  /** The target environment's shell and where its azitoctl is (`azitoctl` is the absolute path of the bash CLI on a POSIX host). */
+  host: EnvelopeHost;
   outputFilePath: string;
 }
 
@@ -137,8 +174,10 @@ export interface HttpSignalEnvelopeOpts {
  * — only STEP 2 and the questions/test-failed commands differ.
  */
 export function httpSignalEnvelope(opts: HttpSignalEnvelopeOpts): ExecutionEnvelope {
-  const { phase, capability, turnToken, azitoctlPath, outputFilePath } = opts;
+  const { phase, capability, turnToken, host, outputFilePath } = opts;
   const phaseLabel: PhaseLabel = phase ?? 'follow_up';
+  if (host.os === 'windows') return windowsHttpSignalEnvelope({ phaseLabel, capability, turnToken, host, outputFilePath });
+  const azitoctlPath = host.azitoctl;
 
   const questionsSection = capability.questions
     ? `
@@ -166,6 +205,95 @@ STEP 2 — Then, as the VERY LAST action, run:
   ${azitoctlPath} complete --turn ${turnToken} --output-file ${outputFilePath}${questionsSection}${testFailedSection}
 </completion_signal>`;
       return body + completionSignalBlock;
+    },
+  };
+}
+
+interface WindowsStateMachineOpts extends StateMachineEnvelopeOpts {
+  host: Extract<EnvelopeHost, { os: 'windows' }>;
+}
+
+/**
+ * The state-machine envelope for a Windows host: the same protocol (the output file with its AZITO_PHASE_SUMMARY trailer, then a marker
+ * line in the signal file the hub watches), written with `azitoctl.mjs` calls instead of a here-document and `echo >>`.
+ * Questions are a JSON file written by the worker, which `signal` turns into the one-line marker the hub parses.
+ */
+function windowsStateMachineEnvelope(opts: WindowsStateMachineOpts): ExecutionEnvelope {
+  const { phase, capability, doneMarker, questionsMarker, testFailedMarker, signalFilePath, outputFilePath, host } = opts;
+  const signalFile = quotedWindowsPath(signalFilePath);
+  const questionsFile = quotedWindowsPath(questionsFileFor(outputFilePath));
+
+  const questionsSection = capability.questions
+    ? `
+
+If instead you need to ask the user questions, skip both steps above: write all the questions as one JSON array to the file ${questionsFile} (UTF-8, use your file-writing tool; use "select" type with options when choices are enumerable, "text" otherwise), for example
+  [{"text":"...","type":"select","options":["A","B"]}]
+and then run:
+  ${host.azitoctl} signal --file ${signalFile} --marker ${questionsMarker} --json-file ${questionsFile}
+Output ALL questions at once in that single file. Do NOT use interactive prompts or selection UIs — run the command above and then stop.`
+    : '';
+
+  const testFailedSection = capability.testFailed
+    ? `
+
+If tests fail, report the failures prefixed with "${testFailedMarker}:" in your output for STEP 1 above, then continue with STEP 2 as usual.`
+    : '';
+
+  return {
+    wrap(body: string): string {
+      return `${body}\n\n<completion_signal>
+When you finish this phase, do BOTH steps in order (a command below starts with a quoted program path: in PowerShell write \`& \` in front of it, in Git Bash run it as it is):
+
+${buildWindowsStep1Block(host, outputFilePath, phase)}
+
+STEP 2 — Then, as the VERY LAST action, run:
+  ${host.azitoctl} signal --file ${signalFile} --marker ${doneMarker}${questionsSection}${testFailedSection}
+</completion_signal>`;
+    },
+  };
+}
+
+interface WindowsHttpSignalOpts {
+  phaseLabel: PhaseLabel;
+  capability: PhaseSignalCapability;
+  turnToken: string;
+  host: Extract<EnvelopeHost, { os: 'windows' }>;
+  outputFilePath: string;
+}
+
+/** The http-signal envelope for a Windows host: the same commands as the POSIX one, with quoted paths and the questions in a JSON file. */
+function windowsHttpSignalEnvelope(opts: WindowsHttpSignalOpts): ExecutionEnvelope {
+  const { phaseLabel, capability, turnToken, host, outputFilePath } = opts;
+  const output = quotedWindowsPath(outputFilePath);
+  const questionsFile = quotedWindowsPath(questionsFileFor(outputFilePath));
+
+  const questionsSection = capability.questions
+    ? `
+
+If instead you need to ask the user questions, skip both steps above: write all the questions as one JSON array to the file ${questionsFile} (UTF-8, use your file-writing tool; use "select" type with options when choices are enumerable, "text" otherwise), for example
+  [{"text":"...","type":"select","options":["A","B"]}]
+and then run:
+  ${host.azitoctl} questions --turn ${turnToken} --json-file ${questionsFile}
+Output ALL questions at once in that single file. Do NOT use interactive prompts or selection UIs — run the command above and then stop.`
+    : '';
+
+  const testFailedSection = capability.testFailed
+    ? `
+
+If tests fail, report the failures in your output for STEP 1 above, then instead of the STEP 2 command, run:
+  ${host.azitoctl} complete --turn ${turnToken} --test-failed --output-file ${output}`
+    : '';
+
+  return {
+    wrap(body: string): string {
+      return `${body}\n\n<completion_signal>
+When you finish this phase, do BOTH steps in order (a command below starts with a quoted program path: in PowerShell write \`& \` in front of it, in Git Bash run it as it is):
+
+${buildWindowsStep1Block(host, outputFilePath, phaseLabel)}
+
+STEP 2 — Then, as the VERY LAST action, run:
+  ${host.azitoctl} complete --turn ${turnToken} --output-file ${output}${questionsSection}${testFailedSection}
+</completion_signal>`;
     },
   };
 }

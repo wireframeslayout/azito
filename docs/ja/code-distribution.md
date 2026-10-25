@@ -138,6 +138,10 @@ mirror への取り込みが終わったら、タスクの作業ディレクト�
 節](./isolated-execution.md#6-ネットワーク隔離横移動対策)を参照してください — inbound で
 `agentPort` に加えて SSH ポートを許可する必要があります。
 
+## 5. Windows ホスト（v0.12.0 の範囲外、#464）
+
+配信は POSIX のツール（`RemoteBundleOps`）でリポジトリをまとめて展開するため、**Windows の agent は配信先にできません**。`distribute_code` をオンにする操作は断られ（`PUT /api/projects/:id/servers/:serverName` は 501 `unsupported_os`。環境のフォームはトグルを無効にし、理由と #464 を出します）、すでにオンの行でのタスクの実行・復元も、何かを作る前に断ります。判定は配信先の OS（`hostFeatureSupport(profile, 'codeDistribution')`）で、ハブの OS ではありません。Windows のハブから Linux / macOS の agent への配信は、今までどおり使えます。
+
 ## 関連ドキュメント
 
 - [隔離実行プロファイル](./isolated-execution.md) -- 隔離サーバーでの適用（常時配信）、ネットワーク隔離、pushing フェーズの扱い

@@ -46,7 +46,7 @@ describe('HttpSignalTurnCoordinator.start', () => {
 
     const result = coordinator.start({
       taskId: 1, unitId: 1, kind: 'phase', phase: 'implementing', capability: { questions: true, testFailed: false }, nonce: 'abc123',
-      server, target: 'sess:1.1', prompt: 'Implement the feature.', outputFilePath: '/tmp/out.md',
+      server, host: { os: 'posix', azitoctl: '/h/harness/bin/azitoctl' }, target: 'sess:1.1', prompt: 'Implement the feature.', outputFilePath: '/tmp/out.md',
     });
 
     expect(turnRepo.supersedeRunning).toHaveBeenCalledWith(1);

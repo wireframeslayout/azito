@@ -1,5 +1,5 @@
 import { isPrimaryTaskWindow, type IWindowRepository, type PaneLayout, type Window } from './Window';
-import { assertHostFeature, workerStartsAsProgram } from '../../shared/os/hostFeature';
+import { workerStartsAsProgram } from '../../shared/os/hostFeature';
 import { HostProfileError } from '../../shared/os/hostProfile';
 import { programFor } from '../agents/workerProgram';
 import type { PaneProgram } from '../tmux/IMuxClient';
@@ -863,7 +863,10 @@ export class WindowRespawnService {
    * caller for the bug this pattern avoids.
    */
   async resumeLegacySession(taskId: number, server: ServerConfig): Promise<{ windowName: string }> {
-    assertHostFeature(this.transportFactory.hostProfileFor(server), 'taskExecution', 'Resuming a session');
+    // A task without a window record predates Windows support: there is no such task to recover on a host that starts a worker as a program.
+    if (this.startsWorkerAsProgram(server)) {
+      throw new HostProfileError('unsupported_os', 'Resuming a session of a task that has no window record is not available on Windows hosts: such tasks predate Windows support.');
+    }
     const task = this.taskRepo.findById(taskId);
     if (!task) throw new Error(`Task ${taskId} not found`);
     if (!task.agentSessionId) throw new Error(`Task ${taskId} has no agent session ID`);
@@ -1120,8 +1123,6 @@ export class WindowRespawnService {
    * plain shell with a directory to restore, cannot be restored there yet. Refused before the window is touched.
    */
   private assertRespawnable(win: Window, server: ServerConfig): void {
-    // A window a task owns is part of running that task (the token generation is rotated, the worker is resumed): closed with it.
-    if (win.taskId !== null) assertHostFeature(this.transportFactory.hostProfileFor(server), 'taskExecution', 'Respawning a task window');
     if (!this.startsWorkerAsProgram(server)) return;
     if (win.paneLayout) {
       throw new HostProfileError('unsupported_os', 'Respawning a window with a saved pane layout is not available on Windows hosts yet.');

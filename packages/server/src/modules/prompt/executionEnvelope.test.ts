@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { stateMachineEnvelope, skillEnvelope, httpSignalEnvelope, FOLLOW_UP_CAPABILITY } from './executionEnvelope';
+import { stateMachineEnvelope, skillEnvelope, httpSignalEnvelope, questionsFileFor, FOLLOW_UP_CAPABILITY } from './executionEnvelope';
 import type { PhaseSignalCapability } from './executionEnvelope';
 import type { TaskPhase } from '../sidekicks/TaskPhase';
 
@@ -8,12 +8,13 @@ const SM_BASE = {
   questionsMarker: 'AZITO_QUESTIONS_1_abc',
   testFailedMarker: 'AZITO_TEST_FAILED_1_abc',
   signalFilePath: '/tmp/azito-signal-1.txt',
+  host: { os: 'posix' as const, azitoctl: '/usr/local/bin/azitoctl' },
   outputFilePath: '/tmp/azito-output-1-abc.md',
 };
 
 const HTTP_BASE = {
   turnToken: 'turn-abc123',
-  azitoctlPath: '/usr/local/bin/azitoctl',
+  host: { os: 'posix' as const, azitoctl: '/usr/local/bin/azitoctl' },
   outputFilePath: '/tmp/azito-output-1-abc.md',
 };
 
@@ -87,14 +88,14 @@ describe('httpSignalEnvelope', () => {
   it('STEP 2 runs azitoctl complete with the turn token and output file', () => {
     const result = httpSignalEnvelope({ phase: 'reviewing', capability: { questions: false, testFailed: false }, ...HTTP_BASE }).wrap('body');
     expect(result).toContain(
-      `${HTTP_BASE.azitoctlPath} complete --turn ${HTTP_BASE.turnToken} --output-file ${HTTP_BASE.outputFilePath}`,
+      `${HTTP_BASE.host.azitoctl} complete --turn ${HTTP_BASE.turnToken} --output-file ${HTTP_BASE.outputFilePath}`,
     );
   });
 
   it('includes the questions command for a questions-capable phase (planning/implementing) and null (follow-up)', () => {
     for (const phase of ['planning', 'implementing', null] as (TaskPhase | null)[]) {
       const result = httpSignalEnvelope({ phase, capability: { questions: true, testFailed: false }, ...HTTP_BASE }).wrap('body');
-      expect(result).toContain(`${HTTP_BASE.azitoctlPath} questions --turn ${HTTP_BASE.turnToken}`);
+      expect(result).toContain(`${HTTP_BASE.host.azitoctl} questions --turn ${HTTP_BASE.turnToken}`);
       expect(result).toContain(phase === null ? '"phase":"follow_up"' : `"phase":"${phase}"`);
     }
   });
@@ -112,7 +113,7 @@ describe('httpSignalEnvelope', () => {
   it('includes the --test-failed complete command only for testing', () => {
     const result = httpSignalEnvelope({ phase: 'testing', capability: { questions: false, testFailed: true }, ...HTTP_BASE }).wrap('body');
     expect(result).toContain(
-      `${HTTP_BASE.azitoctlPath} complete --turn ${HTTP_BASE.turnToken} --test-failed --output-file ${HTTP_BASE.outputFilePath}`,
+      `${HTTP_BASE.host.azitoctl} complete --turn ${HTTP_BASE.turnToken} --test-failed --output-file ${HTTP_BASE.outputFilePath}`,
     );
   });
 
@@ -162,5 +163,67 @@ describe('skillEnvelope', () => {
     const result = skillEnvelope({ capability: { questions: true, testFailed: false }, nextPhaseSkillCommand: 'azt-review' }).wrap('body');
     expect(result).not.toMatch(/AZITO_DONE|AZITO_QUESTIONS|AZITO_TEST_FAILED/);
     expect(result).not.toContain('completion_signal');
+  });
+});
+
+describe('envelopes for a Windows host (#371): no shell syntax, azitoctl.mjs and quoted forward-slash paths', () => {
+  const host = { os: 'windows' as const, azitoctl: 'node "C:/Users/me/.azito/harness/bin/azitoctl.mjs"' };
+  const WIN_SM = {
+    doneMarker: 'AZITO_DONE_1_abc',
+    questionsMarker: 'AZITO_QUESTIONS_1_abc',
+    testFailedMarker: 'AZITO_TEST_FAILED_1_abc',
+    signalFilePath: 'C:\\Users\\me\\AppData\\Local\\Temp\\azito-pipe-1-sig-9.log',
+    outputFilePath: 'C:\\Users\\me\\AppData\\Local\\Temp\\azito-output-1-abc.md',
+    host,
+  };
+  // Nothing a shell has to interpret: no here-document, no redirection, no echo, no backslash path.
+  const expectNoShellSyntax = (text: string): void => {
+    expect(text).not.toMatch(/<<|>>|^\s*cat\s|\becho\b/m);
+    expect(text).not.toContain('\\Users');
+  };
+
+  it('state machine: writes the output with the file-writing tool and signals with azitoctl.mjs signal', () => {
+    const result = stateMachineEnvelope({ phase: 'planning', capability: { questions: false, testFailed: false }, ...WIN_SM }).wrap('body');
+    expectNoShellSyntax(result);
+    expect(result).toContain('to the file "C:/Users/me/AppData/Local/Temp/azito-output-1-abc.md" as UTF-8 text');
+    expect(result).toContain('"phase":"planning"');
+    expect(result).toContain(`${host.azitoctl} signal --file "C:/Users/me/AppData/Local/Temp/azito-pipe-1-sig-9.log" --marker AZITO_DONE_1_abc`);
+    expect(result).toContain(`${host.azitoctl} output --file "C:/Users/me/AppData/Local/Temp/azito-output-1-abc.md"`);
+    expect(result).not.toContain('--json-file');
+  });
+
+  it('state machine: questions go through a JSON file next to the output file', () => {
+    const result = stateMachineEnvelope({ phase: 'implementing', capability: { questions: true, testFailed: false }, ...WIN_SM }).wrap('body');
+    expectNoShellSyntax(result);
+    expect(result).toContain('"C:/Users/me/AppData/Local/Temp/azito-output-1-abc.md.questions.json"');
+    expect(result).toContain(`${host.azitoctl} signal --file "C:/Users/me/AppData/Local/Temp/azito-pipe-1-sig-9.log" --marker AZITO_QUESTIONS_1_abc --json-file "C:/Users/me/AppData/Local/Temp/azito-output-1-abc.md.questions.json"`);
+    expect(questionsFileFor(WIN_SM.outputFilePath)).toBe(`${WIN_SM.outputFilePath}.questions.json`);
+  });
+
+  it('state machine: the test-failed section is the same text as on POSIX', () => {
+    const result = stateMachineEnvelope({ phase: 'testing', capability: { questions: false, testFailed: true }, ...WIN_SM }).wrap('body');
+    expect(result).toContain('prefixed with "AZITO_TEST_FAILED_1_abc:"');
+  });
+
+  it('http-signal: complete / questions / test-failed through azitoctl.mjs with quoted paths', () => {
+    const base = { turnToken: 'turn-abc123', outputFilePath: WIN_SM.outputFilePath, host };
+    const planning = httpSignalEnvelope({ phase: 'planning', capability: { questions: true, testFailed: false }, ...base }).wrap('body');
+    expectNoShellSyntax(planning);
+    expect(planning).toContain(`${host.azitoctl} complete --turn turn-abc123 --output-file "C:/Users/me/AppData/Local/Temp/azito-output-1-abc.md"`);
+    expect(planning).toContain(`${host.azitoctl} questions --turn turn-abc123 --json-file "C:/Users/me/AppData/Local/Temp/azito-output-1-abc.md.questions.json"`);
+    const testing = httpSignalEnvelope({ phase: 'testing', capability: { questions: false, testFailed: true }, ...base }).wrap('body');
+    expect(testing).toContain(`${host.azitoctl} complete --turn turn-abc123 --test-failed --output-file "C:/Users/me/AppData/Local/Temp/azito-output-1-abc.md"`);
+    expect(httpSignalEnvelope({ phase: null, capability: { questions: false, testFailed: false }, ...base }).wrap('')).toContain('"phase":"follow_up"');
+  });
+
+  it('refuses a path a double-quoted word would read as more than text', () => {
+    for (const bad of ['C:\\Users\\jo$e\\Temp\\out.md', 'C:\\Users\\a`b\\Temp\\out.md', 'C:\\Users\\a"b\\Temp\\out.md']) {
+      expect(() => stateMachineEnvelope({ phase: 'planning', capability: { questions: false, testFailed: false }, ...WIN_SM, outputFilePath: bad }).wrap('x')).toThrow(/double quote, \$ or a backtick/);
+    }
+  });
+
+  it('keeps a space and non-ASCII characters in a path (they are inside the quotes)', () => {
+    const result = httpSignalEnvelope({ phase: 'planning', capability: { questions: false, testFailed: false }, turnToken: 't', host, outputFilePath: 'C:\\Users\\山田 太郎\\Temp\\out.md' }).wrap('');
+    expect(result).toContain('--output-file "C:/Users/山田 太郎/Temp/out.md"');
   });
 });

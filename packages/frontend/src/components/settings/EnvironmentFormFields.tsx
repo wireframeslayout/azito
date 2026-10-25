@@ -4,6 +4,7 @@ import DirectoryInput from '../DirectoryInput';
 import { FormInput, FormSelect, baseInputStyle } from '../ui';
 import { DocsLink } from '../ui/DocsLink';
 import { isDistributeCodeLocked } from '../../lib/distributeCodePolicy';
+import { hostFeatureBlockReason } from '../../lib/hostFeature';
 import type { Server } from '../../pages/workspace/types';
 
 /** 配信対象リポジトリ select が必要とする Repository の部分集合。 */
@@ -63,6 +64,9 @@ export default function EnvironmentFormFields({
   // outlives isolation being turned back off.
   const isolated = isDistributeCodeLocked(targetServer);
   const distributeEffective = isolated || distributeCode;
+  // A Windows agent cannot be a distribution target (#464): the toggle cannot be turned on there (a saved opt-in can still be turned off).
+  const hostBlockReason = hostFeatureBlockReason(targetServer?.hostProfile, 'codeDistribution', t);
+  const distributeHostBlocked = !!hostBlockReason && !distributeEffective;
 
   return (
     <>
@@ -90,20 +94,24 @@ export default function EnvironmentFormFields({
             label={t('settings.servers.distributeCodeLabel')}
             hint={isolated ? t('settings.servers.distributeCodeIsolatedHint') : t('settings.servers.distributeCodeHint')}
           >
-            <label style={{ display: 'flex', alignItems: 'center', gap: 8, cursor: isolated ? 'default' : 'pointer' }}>
+            <label style={{ display: 'flex', alignItems: 'center', gap: 8, cursor: isolated || distributeHostBlocked ? 'default' : 'pointer' }}>
               {/* CSS-only wrapper for the `.toggle`/`.toggle-slider` sibling
                   selector — deliberately a <span>, not a nested <label>. */}
               <span className="toggle">
                 <input
                   type="checkbox"
                   checked={distributeEffective}
-                  disabled={isolated}
+                  disabled={isolated || distributeHostBlocked}
+                  aria-describedby={distributeHostBlocked ? 'environment-distribute-code-host-reason' : undefined}
                   onChange={(e) => onDistributeCodeChange(e.target.checked)}
                 />
                 <span className="toggle-slider" />
               </span>
               <span style={{ fontSize: 'var(--font-md)', color: 'var(--text)' }}>{t('settings.servers.distributeCode')}</span>
             </label>
+            {distributeHostBlocked && (
+              <div id="environment-distribute-code-host-reason" style={{ fontSize: 'var(--font-xs)', color: 'var(--text-dim)', marginTop: 6 }}>{hostBlockReason}</div>
+            )}
           </FormField>
           {/* Shown only while distribution is effectively on for this server —
               hidden (not merely disabled) when off, matching the toggle

@@ -4,7 +4,7 @@ import type { ServerConfig } from '../../../servers/Server';
 import type { WorkerExecutionMode } from '../../../units/Unit';
 import type { IPaneStream } from '../../../tmux/PaneStream';
 import type { AgentTurn } from '../../turns/AgentTurn';
-import type { PhaseSignalCapability } from '../../../prompt/executionEnvelope';
+import type { EnvelopeHost, PhaseSignalCapability } from '../../../prompt/executionEnvelope';
 import type { TaskTempServer } from '../../../../shared/os/taskTempFiles';
 import type { ShellDialect } from '../../../../shared/os/shellDialect';
 
@@ -23,6 +23,11 @@ export interface WorkerLaunchContext {
   effectiveLaunchCommand: string;
   /** The shell of the launched pane (the target host's), for the supervisor wrapper. */
   dialect: ShellDialect;
+  /**
+   * The worker is already the pane's program (a Windows host creates the window with it, #371): nothing is typed and no supervisor wraps
+   * it. `effectiveLaunchCommand` only names it.
+   */
+  startedAsProgram: boolean;
 }
 
 export interface WorkerContext {
@@ -42,6 +47,8 @@ export interface EnvelopeBuildContext {
   unitId: number;
   workerExecutionMode: WorkerExecutionMode;
   server: ServerConfig;
+  /** The shell and azitoctl the prompt is written for: decided by the server's OS, resolved once by the caller (`resolveEnvelopeHost`). */
+  host: EnvelopeHost;
   /** Where this server keeps the task's files, resolved once by the caller (see `TransportFactory.taskTempServer`). */
   tempServer: TaskTempServer;
   handle: PaneHandle;
@@ -62,7 +69,7 @@ export interface EnvelopeBuildResult {
 export type FollowUpEnvelopeBuildContext = Omit<EnvelopeBuildContext, 'phase' | 'capability'>;
 
 export interface IWorkerRuntime {
-  /** Returns the actual command sent to the pane (may include supervisor wrap). */
+  /** Returns the actual command sent to the pane (may include supervisor wrap); for a worker started as a program, the launch line it was started with. */
   launch(ctx: WorkerLaunchContext): Promise<string>;
   sendPrompt(ctx: WorkerContext, prompt: string): Promise<void>;
   buildEnvelope(ctx: EnvelopeBuildContext): EnvelopeBuildResult;

@@ -9,6 +9,9 @@ import { syncThroughFileOps } from './fileOpsSidekickSync';
 import { syncThroughShell } from './shellSidekickSync';
 import { REMOTE_SIDEKICKS_BASE, type SidekickSyncContext } from './sidekickSyncShared';
 import { collectTreeEntries, packTarGz } from '../../shared/fs/tarGz';
+import type { TransportFactory } from '../servers/transport/TransportFactory';
+import { homeDirOf } from '../servers/agent-deploy/harnessLocation';
+import { checkedWindowsPromptPath } from '../../shared/os/windowsPromptPath';
 
 export { REMOTE_SIDEKICKS_BASE } from './sidekickSyncShared';
 export { PAYLOAD_CHUNK_SIZE } from './shellSidekickSync';
@@ -66,6 +69,39 @@ export function resolveSidekickDir(
   server: Pick<ServerConfig, 'type'>,
 ): string {
   return server.type === 'local' ? pkg.dir : `${REMOTE_SIDEKICKS_BASE}/${pkg.name}`;
+}
+
+/**
+ * {@link resolveSidekickDir} for the host the worker runs on. A Windows host's shell expands no `~`, so the path is written out in full: the
+ * hub's own package directory for its local server, `<agent home>/.azito/sidekicks/<name>` for an agent, with forward slashes (Git Bash and
+ * PowerShell both read them) so the SKILL.md can put it in double quotes. A POSIX host keeps `~` for its shell to expand.
+ */
+export async function resolveSidekickDirOnHost(
+  pkg: Pick<SidekickPackage, 'name' | 'dir'>,
+  server: Pick<ServerConfig, 'type'>,
+  transportFactory: Pick<TransportFactory, 'hostProfileFor' | 'getFileOps'>,
+): Promise<string> {
+  if (transportFactory.hostProfileFor(server as ServerConfig)?.platform !== 'win32') return resolveSidekickDir(pkg, server);
+  if (server.type === 'local') return checkedWindowsPromptPath(pkg.dir, 'The sidekick directory');
+  const home = await homeDirOf(transportFactory.getFileOps(server as ServerConfig));
+  return checkedWindowsPromptPath(`${home}/${REMOTE_SIDEKICKS_BASE.slice(2)}/${pkg.name}`, 'The sidekick directory');
+}
+
+/**
+ * `{{host.node}}`: the command a sidekick body runs a Node script with. `node` on a POSIX host; on a Windows host the host's own node.exe by its
+ * full path, in double quotes with forward slashes (the hub's node for its local server, the node the agent reports for an agent), because the
+ * worker's PATH may not have `node` (a Windows host with only the native Claude Code). In PowerShell it is run with `& ` in front.
+ */
+export async function resolveSidekickNodeOnHost(
+  pkg: Pick<SidekickPackage, 'body'>,
+  server: Pick<ServerConfig, 'type'>,
+  transportFactory: Pick<TransportFactory, 'hostProfileFor' | 'getAgentTransport'>,
+): Promise<string> {
+  if (transportFactory.hostProfileFor(server as ServerConfig)?.platform !== 'win32') return 'node';
+  // Only a body that runs a Node script needs it: a Windows agent that cannot report its node (an older one) still renders every other sidekick.
+  if (!pkg.body.includes('{{host.node}}')) return 'node';
+  const node = server.type === 'local' ? process.execPath : await transportFactory.getAgentTransport(server as ServerConfig).fetchNodeExecPath();
+  return `"${checkedWindowsPromptPath(node, 'The node executable')}"`;
 }
 
 /**

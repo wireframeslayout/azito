@@ -36,7 +36,7 @@ push されるのは worktree の**現在の作業ブランチ**（スクリプ�
 自動取得する）。作業ブランチを環境変数で渡す必要はなく、スクリプトは checkout を一切行わない。
 実行前に正しい作業ブランチにいることだけ確認すること。
 
-実行例:
+実行例（Linux / macOS。Windows の場合は下の「Windows の場合」を使う）:
 ```bash
 AZITO_GIT_PROVIDER="{{task.gitProvider}}" \
 AZITO_COMMIT_MESSAGE="<message>" \
@@ -45,6 +45,30 @@ AZITO_PR_BASE="<base branch (only if specified in rules)>" \
 AZITO_SKIP_PR="0" \
 AZITO_PR_TITLE="<title>" \
 {{sidekick.dir}}/scripts/push.sh
+```
+
+Windows の場合（実行環境が Windows のとき。`push.sh` ではなく同じ契約の Node 版 `{{sidekick.dir}}/scripts/push.mjs` を使う。環境変数の意味は上と同じ）:
+
+PowerShell:
+```powershell
+$env:AZITO_GIT_PROVIDER = "{{task.gitProvider}}"
+$env:AZITO_COMMIT_MESSAGE = "<message>"
+$env:AZITO_WORK_BRANCH = "{{task.branchName}}"
+$env:AZITO_PR_BASE = "<base branch (only if specified in rules)>"   # 指定が無ければこの行は書かない
+$env:AZITO_SKIP_PR = "0"
+$env:AZITO_PR_TITLE = "<title>"
+& {{host.node}} "{{sidekick.dir}}/scripts/push.mjs"
+```
+
+Git Bash:
+```bash
+AZITO_GIT_PROVIDER="{{task.gitProvider}}" \
+AZITO_COMMIT_MESSAGE="<message>" \
+AZITO_WORK_BRANCH="{{task.branchName}}" \
+AZITO_PR_BASE="<base branch (only if specified in rules)>" \
+AZITO_SKIP_PR="0" \
+AZITO_PR_TITLE="<title>" \
+{{host.node}} "{{sidekick.dir}}/scripts/push.mjs"
 ```
 
 スクリプトは変更を conventional commit でコミットし、現在の作業ブランチを push する。

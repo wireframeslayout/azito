@@ -293,6 +293,16 @@ Retry ボタンをクリックすると、タスクログの WebSocket 接続を
 - ブランチ検索もタスクの作業ディレクトリに連動（BranchInput コンポーネントが `working_directory` パラメータを API に送信）
 - 未指定の場合はプロジェクトサーバーの設定値にフォールバック
 
+## Windows の agent でのタスクの実行（#371）
+
+Windows の agent でも、タスクは同じように動きます。違いは次のとおりです。
+
+- ワーカーは**タスクの窓の最初のペイン**で、misao がプログラムと引数から起動します（シェルの行も `cd` も打ちません）。そのため worktree は窓より先（古い窓を閉じたあと）に作ります。実行・follow-up（眠っている窓や失われた窓は作り直し、セッションを再開）・復元（保存したセッションを再開するワーカーで窓を作る）・respawn は、すべてこの形です。大きさは 120x40 で始まります。
+- プロンプトの完了ブロックにはシェルの構文がありません。ワーカーは出力ファイルを UTF-8 で書き、`"<node.exe>" "<ホーム>/.azito/harness/bin/azitoctl.mjs" signal --file "<signal ファイル>" --marker <マーカー>`（file-signal）または `... complete --turn <トークン> --output-file "<ファイル>"`（http-signal）で知らせます。質問は JSON ファイルにして `--json-file` で渡します。パスは `/` 区切りで二重引用符で囲みます。
+- pushing フェーズは `scripts/push.mjs` を実行します（`push.sh` と同じ契約・変数）。
+- Claude Code の信頼の登録は、プロジェクトのディレクトリと worktree の両方に、Claude Code が使う 2 つの綴り（2.1.x 以降は `C:/Users/me/repo`、それ以前は `C:\Users\me\repo`）で行います。コマンドの node はホスト自身の実行ファイルです（agent は `GET /api/host` の `execPath` で報告し、ハブの local は自身の node）。そのためワーカーの PATH に `node` が無くても動きます。PowerShell では、引用符付きのパスで始まるコマンドの前に `& ` が要ります。
+- コード配信は Windows の agent では使えません（#464）。
+
 ## タスクログ
 
 タスクの実行中に発生したすべてのイベントが実行ログとして記録されます。

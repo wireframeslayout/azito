@@ -18,7 +18,9 @@ import type { SidekickPackageLoader } from '../../sidekicks/SidekickPackageLoade
 import { resolvePhaseSidekick, resolveEnabledPhases, resolveCurrentPhaseIndex } from '../../sidekicks/resolvePhaseSidekick';
 import { renderSidekickBody } from '../../sidekicks/renderSidekickBody';
 import type { SidekickSyncService } from '../../sidekicks/SidekickSyncService';
-import { resolveSidekickDir } from '../../sidekicks/SidekickSyncService';
+import { resolveSidekickDirOnHost, resolveSidekickNodeOnHost } from '../../sidekicks/SidekickSyncService';
+import { resolveEnvelopeHost } from './AzitoctlPath';
+import { windowsPromptPath } from '../../../shared/os/windowsPromptPath';
 import type { UnitTypeLoader } from '../../sidekicks/UnitTypeLoader';
 import type { UnitTypePhase } from '../../sidekicks/UnitType';
 import type { IWorktreeService } from '../../git/IWorktreeService';
@@ -444,7 +446,7 @@ export class PhaseLoopRunner {
       this.appendLog(task.id, unit.id, 'status_change', { status: 'phase_started', phase });
 
       const sidekick = resolvePhaseSidekick(this.sidekickLoader, phase, unit.phaseConfig, phaseDef);
-      const sidekickDir = resolveSidekickDir(sidekick, server);
+      const sidekickDir = await resolveSidekickDirOnHost(sidekick, server, this.transportFactory);
       const promptModules = loadPromptModules();
       // Issue #87 review (14th round), Minor finding: pass the SAME
       // distribution-aware repository this phase's own push/PR/notary
@@ -458,6 +460,7 @@ export class PhaseLoopRunner {
       const vars = resolveTaskPromptVars(this.taskRepo, this.projectRepo, this.unitRepo, this.projectServerRepo, task.id, distributionRepoEntry?.provider);
       const expandedPrompt = renderSidekickBody(sidekick, {
         ...vars,
+        host: { node: await resolveSidekickNodeOnHost(sidekick, server, this.transportFactory) },
         selfReview: {
           attempt: String(selfReviewCount + 1),
           maxAttempts: String(maxSelfReview),
@@ -476,6 +479,7 @@ export class PhaseLoopRunner {
       const nonce = randomBytes(16).toString('hex');
 
       const effectiveWorkerType = unit.workerType ?? 'generic';
+      const envelopeHost = await resolveEnvelopeHost(this.transportFactory, server);
       let prompt: string;
       let rulesFilePath: string | null = null;
       if (resolvedSubagentConfig?.enabled === true && phaseDef.subagentRole) {
@@ -496,7 +500,8 @@ export class PhaseLoopRunner {
           role,
           resolvedSubagentConfig,
           effectiveWorkerType,
-          rulesFilePath,
+          // The path the worker is told: forward slashes on a Windows host (the file itself is written under its own spelling above).
+          envelopeHost.os === 'windows' ? windowsPromptPath(rulesFilePath) : rulesFilePath,
         );
       } else {
         prompt = expandedPrompt;
@@ -523,7 +528,7 @@ export class PhaseLoopRunner {
         const envelopeResult = runtime.buildEnvelope({
           phase, capability, nonce,
           taskId: task.id, unitId: unit.id, workerExecutionMode: unit.workerExecutionMode,
-          server, tempServer, handle, supervisorTarget: supervisorTarget, prompt, outputFilePath,
+          server, host: envelopeHost, tempServer, handle, supervisorTarget: supervisorTarget, prompt, outputFilePath,
           doneMarker, questionsMarker, testFailedMarker,
         });
         const phaseSignalStream = envelopeResult.signalStream;

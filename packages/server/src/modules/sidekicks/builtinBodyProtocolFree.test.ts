@@ -27,3 +27,12 @@ describe('builtin Sidekick bodies contain no execution-protocol tokens', () => {
     expect(content).not.toContain('TEST_FAILED');
   });
 });
+
+describe('pushing-default SKILL.md on Windows', () => {
+  it('runs push.mjs through {{host.node}} (the host\'s node by full path), never a bare node, with & in PowerShell', () => {
+    const body = fs.readFileSync(path.resolve(__dirname, '..', '..', '..', '..', '..', 'harness', 'sidekicks', 'pushing-default', 'SKILL.md'), 'utf-8');
+    expect(body).toContain('& {{host.node}} "{{sidekick.dir}}/scripts/push.mjs"');
+    expect(body).toContain('\n{{host.node}} "{{sidekick.dir}}/scripts/push.mjs"');
+    expect(body).not.toMatch(/^node /m);
+  });
+});
