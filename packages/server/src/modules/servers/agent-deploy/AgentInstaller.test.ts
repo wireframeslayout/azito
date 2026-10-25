@@ -27,6 +27,8 @@ interface HostOptions {
   presenceThrows?: boolean;
   /** What the single cleanup script answers once the id matches (a line of its protocol; default REMOVED). */
   cleanupResult?: string;
+  /** A cleanup is still running on the host (its mark holds this pid and the pid is alive). */
+  cleanupRunning?: string;
   /** The unit cannot be started, so the agent is started with nohup. */
   nohup?: boolean;
   /** What the sighting of the nohup agent prints (default: pid 4242 with a start time). */
@@ -43,6 +45,8 @@ function makeSsh(opts: HostOptions = {}, host: FakeHost = { folderId: '', folder
   const commands: string[] = [];
   const execIsolated = vi.fn(async (_host: string, command: string) => {
     commands.push(command);
+    if (opts.cleanupRunning && (command === AGENT_PRESENCE_COMMAND || command.includes('echo AZITO_CLEANUP_IDLE'))) return { stdout: `AZITO_CLEANUP_RUNNING:${opts.cleanupRunning}\n`, stderr: '', code: 0 };
+    if (command.includes('echo AZITO_CLEANUP_IDLE')) return { stdout: 'AZITO_CLEANUP_IDLE\n', stderr: '', code: 0 };
     if (opts.presenceThrows && command === AGENT_PRESENCE_COMMAND) throw new Error('connection reset');
     const written = /printf %s (\w+) > ~\/\.azito\/agent\/install\.id/.exec(command);
     if (written) { host.folderId = written[1]!; host.folderExists = true; }
@@ -121,8 +125,9 @@ describe('AgentInstaller', () => {
     // The id check, the stop (as a unit, no pid) and the removal are one call.
     expect(script).toContain("systemctl --user stop azito-agent");
     expect(script).not.toContain('kill "$p"');
-    expect(script.indexOf("!= '")).toBeLessThan(script.indexOf('systemctl --user stop'));
-    expect(script.indexOf('systemctl --user stop')).toBeLessThan(script.indexOf('rm -rf ~/.azito/agent'));
+    expect(script.indexOf('mkdir ~/.azito/agent-cleanup.lock')).toBeLessThan(script.indexOf('"$id" != '));
+    expect(script.indexOf('"$id" != ')).toBeLessThan(script.indexOf('systemctl --user stop'));
+    expect(script.indexOf('systemctl --user stop')).toBeLessThan(script.indexOf('rm -rf ~/.azito/agent ||'));
     expect(steps.at(-1)).toEqual({ step: 'misao', status: 'error', message: result.error });
   });
 
@@ -158,6 +163,36 @@ describe('AgentInstaller', () => {
     const { installer } = make(NO_MISAO, { tmux: '', nohup: true, sighting: '\n' });
     const result = await installer.install('user@host');
     expect(result.error).toContain('its pid could not be read when it started');
+  });
+
+  it('stops before changing anything while an earlier cleanup is still running on the host (install, update and recovery)', async () => {
+    const { installer, commands } = make(NO_MISAO, { tmux: '', cleanupRunning: '777' });
+    const install = await installer.install('user@host');
+    expect(install.success).toBe(false);
+    expect(install.error).toContain('A previous cleanup of the agent on user@host is still running (pid 777), so nothing was changed.');
+    expect(commands.some((c) => c.includes('systemctl --user enable') || c.includes('printf %s'))).toBe(false);
+
+    const update = await installer.update('user@host', '100.64.0.9', 'tok', null, 'system');
+    expect(update).toMatchObject({ success: false });
+    expect(update.error).toContain('still running (pid 777)');
+    await expect(installer.recoverAgent('user@host', '100.64.0.9', 'tok', null)).rejects.toThrow(/still running \(pid 777\)/);
+    expect(commands.some((c) => c.includes('systemctl --user enable'))).toBe(false);
+  });
+
+  it('asks about the running cleanup in the first Unix command of the install (the presence question), not in a call of its own', async () => {
+    const { installer, commands } = make(NO_MISAO, { tmux: '' });
+    await installer.install('user@host');
+    const presence = commands.indexOf(AGENT_PRESENCE_COMMAND);
+    expect(presence).toBeGreaterThan(-1);
+    expect(AGENT_PRESENCE_COMMAND).toContain('agent-cleanup.lock');
+    expect(AGENT_PRESENCE_COMMAND).toContain('AZITO_AGENT_PRESENT');
+    expect(commands.filter((c) => c.includes('agent-cleanup.lock') && !c.includes('cleanup() {'))).toEqual([AGENT_PRESENCE_COMMAND]);
+  });
+
+  it('reports a cleanup that found the mark taken (BUSY) as not done, and keeps the agent', async () => {
+    const { installer } = make(NO_MISAO, { tmux: '', cleanupResult: 'BUSY' });
+    const result = await installer.install('user@host');
+    expect(result.error).toContain('Nothing was removed: another cleanup holds ~/.azito/agent-cleanup.lock');
   });
 
   it('gives the systemd steps when the unit does not stop', async () => {

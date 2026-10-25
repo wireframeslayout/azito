@@ -16,8 +16,17 @@ export const AGENT_ENTRY_PATH = '$HOME/.azito/agent/current/azito-agent.cjs';
 /** Longest the cleanup script may take: `systemctl --user stop` waits for the unit's own stop timeout (90s by default). */
 export const CLEANUP_TIMEOUT_MS = 120_000;
 
+/**
+ * The mark a running cleanup keeps on the host: a directory holding the script's pid. It lives outside `~/.azito/agent` (which the
+ * cleanup removes) and is the exclusion that outlasts the SSH connection: when a call times out or drops, the script may still be
+ * running on the host, and the hub, which has lost sight of it, must not let another install start until the mark is gone.
+ */
+export const CLEANUP_LOCK_DIR = '~/.azito/agent-cleanup.lock';
+
 export type CleanupOutcome =
   | { kind: 'removed' }
+  /** Another cleanup holds the mark (or the mark could not be made): nothing was touched. */
+  | { kind: 'busy' }
   /** Another install's id is in the folder: nothing was touched. */
   | { kind: 'not_owner'; found: string }
   /** The unit could not be stopped: it and the folder are left in place. */
@@ -33,6 +42,11 @@ export type CleanupOutcome =
 export function buildCleanupScript(installId: string): string {
   return [
     'cleanup() {',
+    // The mark first: if it cannot be made, nothing else is done. It is removed however the script ends (a signal included).
+    `  if ! mkdir ${CLEANUP_LOCK_DIR} 2>/dev/null; then echo BUSY; return 0; fi`,
+    `  trap 'rm -rf ${CLEANUP_LOCK_DIR}' EXIT`,
+    "  trap 'exit 1' HUP INT TERM",
+    `  echo $$ > ${CLEANUP_LOCK_DIR}/pid`,
     `  id=$(cat ${INSTALL_ID_FILE} 2>/dev/null || true)`,
     `  if [ "$id" != '${installId}' ]; then echo "NOT_OWNER:$id"; return 0; fi`,
     '  if ! systemctl --user stop azito-agent; then echo "NOT_STOPPED:systemctl --user stop azito-agent failed"; return 0; fi',
@@ -53,10 +67,43 @@ export function buildCleanupScript(installId: string): string {
 export function parseCleanupOutcome(stdout: string): CleanupOutcome {
   const line = stdout.trim().split('\n').pop() ?? '';
   if (line === 'REMOVED') return { kind: 'removed' };
+  if (line === 'BUSY') return { kind: 'busy' };
   if (line.startsWith('NOT_OWNER:')) return { kind: 'not_owner', found: line.slice('NOT_OWNER:'.length) };
   if (line.startsWith('NOT_STOPPED:')) return { kind: 'not_stopped', reason: line.slice('NOT_STOPPED:'.length) };
   if (line.startsWith('NOT_REMOVED:')) return { kind: 'not_removed', reason: line.slice('NOT_REMOVED:'.length) };
   return { kind: 'not_stopped', reason: `the host gave an unexpected answer "${line}"` };
+}
+
+/**
+ * Looks at the cleanup mark, and prints one line: `AZITO_CLEANUP_RUNNING:<pid>` when a cleanup is still running on the host (the pid in
+ * the mark is alive; a mark with no pid yet counts as running: `unknown`), otherwise it removes a stale mark (its pid is dead) and, with
+ * `thenPrint`, the shell that follows prints its own answer; without it the line is `AZITO_CLEANUP_IDLE`. A pid that was reused looks
+ * alive: that errs on the side of stopping.
+ */
+export function buildCleanupGuardScript(thenPrint?: string): string {
+  return [
+    `l=${CLEANUP_LOCK_DIR}`,
+    'if [ -d "$l" ]; then',
+    '  p=$(cat "$l/pid" 2>/dev/null || true)',
+    '  if [ -n "$p" ] && ! kill -0 "$p" 2>/dev/null; then rm -rf "$l"; fi',
+    'fi',
+    'if [ -d "$l" ]; then echo "AZITO_CLEANUP_RUNNING:${p:-unknown}"',
+    thenPrint ? `else ${thenPrint}` : 'else echo AZITO_CLEANUP_IDLE',
+    'fi',
+  ].join('\n');
+}
+
+/** Parses the guard's line: the pid of the cleanup that is still running, or undefined when the host is idle; an unexpected answer throws. */
+export function parseCleanupGuard(stdout: string, idle: (line: string) => boolean): { running: string } | undefined {
+  const line = stdout.trim().split('\n').pop() ?? '';
+  const m = /^AZITO_CLEANUP_RUNNING:(\S+)$/.exec(line);
+  if (m) return { running: m[1]! };
+  if (idle(line)) return undefined;
+  throw new Error(`the host gave an unexpected answer "${line}" when asked whether a cleanup is running`);
+}
+
+export function cleanupRunningMessage(host: string, pid: string): string {
+  return `A previous cleanup of the agent on ${host} is still running (pid ${pid}), so nothing was changed. Wait for it to finish, then try again. If it is not running (the mark ~/.azito/agent-cleanup.lock stays after its pid was reused), check with ps -p ${pid} and remove ${CLEANUP_LOCK_DIR} by hand.`;
 }
 
 /** What a nohup agent looked like right after it started. Information for the operator: nothing is decided on it. */
