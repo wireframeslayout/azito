@@ -483,8 +483,9 @@ export class WindowRespawnService {
         const doCreate = async (fs: ServerConfig, env: Record<string, string>) => {
           const createDriver = this.resolveDriver(fs);
           // The gate was verified for `fs` just before this: a Claude worker is about to be started in the new window (as its program, or
-          // typed into its shell below), so the host's Claude Code settings are prepared before the window exists.
-          if (!opts?.skipAgentLaunch && this.launchesClaude(win)) await this.prepareClaudeLaunchFor(fs, task?.id ?? null, unitId);
+          // typed into its shell below), so the host's Claude Code settings are prepared before the window exists. Only for a task's window:
+          // a window that is not a task's (Add Window) is looked at by a person, who can accept the dialog.
+          if (!opts?.skipAgentLaunch && task && this.launchesClaude(win)) await this.prepareClaudeLaunchFor(fs, task.id, unitId);
           const freshWorkspaces = await createDriver.listWorkspaces(fs);
           const freshWorkspaceExists = freshWorkspaces.some((s) => s.name === sessionName && (s.kind ?? windowKind) === windowKind);
           createdViaNewSession = !freshWorkspaceExists;
@@ -856,9 +857,9 @@ export class WindowRespawnService {
   }
 
   /** Before a Claude worker is started on `server` (see {@link prepareClaudeLaunch}); reported in the execution log of the task's unit when there is one. */
-  private async prepareClaudeLaunchFor(server: ServerConfig, taskId: number | null, unitId: number | null): Promise<void> {
+  private async prepareClaudeLaunchFor(server: ServerConfig, taskId: number, unitId: number | null): Promise<void> {
     await prepareClaudeLaunch(this.transportFactory.getTransport(server), (entry) => {
-      if (taskId !== null && unitId !== null) appendLogAndEmit(this.logRepo, this.events, taskId, unitId, 'command', entry);
+      if (unitId !== null) appendLogAndEmit(this.logRepo, this.events, taskId, unitId, 'command', entry);
     });
   }
 

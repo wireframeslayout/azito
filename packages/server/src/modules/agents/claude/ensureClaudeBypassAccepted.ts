@@ -16,8 +16,9 @@ const SKIP_DIALOG_KEY = 'skipDangerousModePermissionPrompt';
 
 /**
  * What Claude Code 2.0.x keeps in the global config `~/.claude.json` instead (`cli.js` 2.0.50 sets it on accept and shows the dialog while it is
- * unset; it does not read the key above). 2.1.x moves it on start (`tengu_migrate_bypass_permissions_accepted`: it writes
- * `skipDangerousModePermissionPrompt` to the user settings, then removes this key), so setting it is harmless there.
+ * unset; it does not read the key above). 2.1.310 reads both: its dialog check takes the old key as an acceptance too, and a one-time
+ * migration (guarded by `migrationVersion`; `tengu_migrate_bypass_permissions_accepted`) copies it to `skipDangerousModePermissionPrompt` and
+ * removes it, so setting it is harmless there whether or not that migration has run yet.
  */
 const LEGACY_ACCEPTED_KEY = 'bypassPermissionsModeAccepted';
 
@@ -26,14 +27,19 @@ const EMPTY_SHA256 = createHash('sha256').update('').digest('hex');
 export type EnsureClaudeBypassAcceptedResult =
   | { action: 'accepted' }
   | { action: 'already_accepted' }
-  | { action: 'skipped'; reason: string };
+  | { action: 'skipped'; reason: string }
+  /** The file is not there and is not made (`~/.claude.json`, which Claude Code makes itself): nothing to report. */
+  | { action: 'absent' };
 
 /**
  * Accepts, in the server host's `~/.claude/settings.json`, the "Bypass Permissions mode" dialog that `claude --dangerously-skip-permissions`
  * shows on a host where it has not run before; otherwise the first task stops at the dialog. Other keys are kept.
- * A missing file (or `~/.claude` directory) is created, exclusively, with only this key: a file that appears meanwhile is never overwritten
- * (the write is refused if it is no longer the empty file just created; the failure is thrown for the caller to log). An existing file is
- * read and replaced guarded by the hash of what was read, through its real path (a symbolic link is written through to its target).
+ * A missing file (or `~/.claude` directory) is created, exclusively, with only this key: a file that appears meanwhile is read again and kept, and one
+ * that is filled between the creation and the write is not overwritten (the guarded write is refused; the failure is thrown for the caller to
+ * log, and the file is left as it is, never removed). An existing file is read and replaced guarded by the hash of what was read, through its
+ * real path (a symbolic link is written through to its target). The hash guards against a change between the read and the write as far as the
+ * host's file operations can see it; it does not close the window of a writer outside AZITO (Claude Code itself) saving at the very moment of
+ * the replace.
  * Where the host's file operations replace atomically and keep permission bits (POSIX) so does this; on Windows an existing file is written in
  * place (the ACL is kept), which is not atomic. A file that is not a JSON object is left untouched.
  */
@@ -49,7 +55,7 @@ export async function ensureClaudeBypassAccepted(transport: IServerTransport): P
 
 /**
  * The same acceptance for Claude Code 2.0.x: `bypassPermissionsModeAccepted: true` in `~/.claude.json`. That file is `ensureClaudeTrust`'s, so
- * it takes the same lock on the same path, and a missing file is skipped (Claude Code creates it itself).
+ * it takes the same lock on the same path, and a missing file is `absent` (Claude Code creates it itself).
  */
 export async function ensureClaudeLegacyBypassAccepted(transport: IServerTransport): Promise<EnsureClaudeBypassAcceptedResult> {
   const ops = transport.files();
@@ -80,10 +86,12 @@ async function setTrueKey(
     raw = (await ops.read(filePath)).data;
   } catch (err) {
     if (!(err instanceof FileOpsError) || err.code !== 'NOT_FOUND') throw err;
-    if (!create) return { action: 'skipped', reason: `${label} not found` };
+    if (!create) return { action: 'absent' };
     const created = await createWithKey(ops, filePath, key, create.createDirectory);
     // Somebody made the file after it was read: it is read again and its content kept (a file that still cannot be read is skipped).
-    return created ?? setTrueKey(ops, filePath, key, label, null);
+    if (created) return created;
+    const again = await setTrueKey(ops, filePath, key, label, null);
+    return again.action === 'absent' ? { action: 'skipped', reason: `${label} could not be read after another process created it` } : again;
   }
 
   let parsed: unknown;
@@ -103,8 +111,9 @@ async function setTrueKey(
 
 /**
  * Makes the file as an empty one that must not exist yet, then fills it, guarded by the empty content's hash. A writer that got there
- * first is never overwritten: null when the file exists already (the caller reads it again); an error is thrown when it was filled meanwhile,
- * with the file left as that writer made it.
+ * first is never overwritten: null when the file exists already (the caller reads it again); an error is thrown when it was filled meanwhile.
+ * Nothing is removed on a failure: whatever is at the path then may be somebody else's (a refused or lost write says nothing about who wrote
+ * last), so at worst the empty file made here stays, for the caller to report.
  */
 async function createWithKey(ops: IFileOps, filePath: string, key: string, directory: string): Promise<EnsureClaudeBypassAcceptedResult | null> {
   await ops.create(directory, 'directory', { recursive: true });
@@ -114,13 +123,7 @@ async function createWithKey(ops: IFileOps, filePath: string, key: string, direc
     if (err instanceof FileOpsError && err.code === 'ALREADY_EXISTS') return null;
     throw err;
   }
-  try {
-    await writeJson(ops, filePath, { [key]: true }, EMPTY_SHA256);
-  } catch (err) {
-    // An empty settings file is not a valid one: take back what was just made, unless somebody else's content is there now.
-    if (!(err instanceof FileOpsError && err.code === 'CONFLICT')) await ops.remove(filePath).catch(() => undefined);
-    throw err;
-  }
+  await writeJson(ops, filePath, { [key]: true }, EMPTY_SHA256);
   return { action: 'accepted' };
 }
 

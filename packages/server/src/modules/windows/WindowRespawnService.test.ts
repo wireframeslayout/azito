@@ -390,22 +390,25 @@ describe('WindowRespawnService — prepares the host for a Claude worker (Bypass
 
   it('respawn() of a multi-pane window with a Claude pane prepares it', async () => {
     const win = makeWindow({
+      taskId: 5,
       windowType: 'terminal',
       workerType: null,
       paneLayout: { panes: [{ index: 1, workerType: null, workingDirectory: null }, { index: 2, workerType: 'claude', workingDirectory: null }] } as never,
     });
-    const { service } = buildService({ window: win });
+    const { service } = buildService({ window: win, task: makeTask({ id: 5, unitId: 10 }), unit: makeUnit({ id: 10 }) });
 
     await service.respawn(1, makeServer());
 
     expect(prepareClaudeLaunch).toHaveBeenCalledTimes(1);
   });
 
-  it('respawn() prepares nothing for a terminal window, a worker that is not Claude, or a respawn that does not launch the agent', async () => {
+  it('respawn() prepares nothing for a terminal window, a worker that is not Claude, a window of no task (Add Window), or a respawn that does not launch the agent', async () => {
     const terminal = buildService({ window: makeWindow({ windowType: 'terminal', workerType: null }) });
     await terminal.service.respawn(1, makeServer());
     const codex = buildService({ window: makeWindow({ windowType: 'agent', workerType: 'codex' }) });
     await codex.service.respawn(1, makeServer());
+    const manual = buildService({ window: makeWindow({ taskId: null, windowType: 'agent', workerType: 'claude' }) });
+    await manual.service.respawn(1, makeServer());
     const skipped = buildService({ window: makeWindow({ windowType: 'agent', workerType: 'claude' }) });
     await skipped.service.respawn(1, makeServer(), { skipAgentLaunch: true });
 

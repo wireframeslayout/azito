@@ -149,6 +149,25 @@ describe('ensureClaudeBypassAccepted', () => {
     expect(readSettings()).toEqual({ permissions: { allow: ['Bash(ls)'] }, skipDangerousModePermissionPrompt: true });
   });
 
+  it('removes nothing when the write fails for another reason after somebody else saved the file', async () => {
+    const real = transportWithHome(fakeHome).files();
+    const failing = {
+      files: () => ({
+        ...real,
+        platform: real.platform,
+        realpath: real.realpath.bind(real),
+        read: real.read.bind(real),
+        create: real.create.bind(real),
+        write: async () => {
+          writeFileSync(settingsPath(), '{"theirs":1}');
+          throw new FileOpsError('PERMISSION_DENIED', 'cannot write');
+        },
+      }),
+    } as unknown as IServerTransport;
+    await expect(ensureClaudeBypassAccepted(failing)).rejects.toMatchObject({ code: 'PERMISSION_DENIED' });
+    expect(readSettings()).toEqual({ theirs: 1 });
+  });
+
   it('never overwrites a file that was filled by somebody else between the creation and the write', async () => {
     const transport = transportRacing({ write: () => writeFileSync(settingsPath(), '{"theirs":1}') });
     await expect(ensureClaudeBypassAccepted(transport)).rejects.toMatchObject({ code: 'CONFLICT' });
@@ -165,8 +184,8 @@ describe('ensureClaudeLegacyBypassAccepted (Claude Code 2.0.x keeps the acceptan
   });
   const configPath = (): string => join(fakeHome, '.claude.json');
 
-  it('skips a host without ~/.claude.json (Claude Code makes it itself)', async () => {
-    expect(await ensureClaudeLegacyBypassAccepted(transportWithHome(fakeHome))).toEqual({ action: 'skipped', reason: '~/.claude.json not found' });
+  it('leaves a host without ~/.claude.json alone (Claude Code makes it itself)', async () => {
+    expect(await ensureClaudeLegacyBypassAccepted(transportWithHome(fakeHome))).toEqual({ action: 'absent' });
     expect(existsSync(configPath())).toBe(false);
   });
 
@@ -220,7 +239,6 @@ describe('prepareClaudeLaunch', () => {
     await prepareClaudeLaunch(broken, (entry) => reports.push(entry));
     expect(reports).toEqual([
       { type: 'claude_bypass_skipped', file: 'settings.json', reason: expect.stringContaining('not valid JSON') },
-      { type: 'claude_bypass_skipped', file: '.claude.json', reason: '~/.claude.json not found' },
       { type: 'claude_bypass_failed', file: 'settings.json', reason: 'host unreachable' },
       { type: 'claude_bypass_failed', file: '.claude.json', reason: 'host unreachable' },
     ]);

@@ -8,7 +8,7 @@ import { ensureClaudeBypassAccepted, ensureClaudeLegacyBypassAccepted, type Ensu
  *
  * Call it from every task boundary that starts a Claude worker, after the execution gate was verified and with the transport of the server
  * the worker will actually run on; for a worker started as a program (Windows) that is before the window is opened.
- * It never throws: a step that fails or is skipped is reported through `report` (the launch goes on, and the dialog, if it still appears, is
+ * A file that is expected to be missing (`~/.claude.json` on a host where Claude Code has not made it yet) is not reported. It never throws: a step that fails or is skipped is reported through `report` (the launch goes on, and the dialog, if it still appears, is
  * detected and fails the task with a reason).
  */
 export async function prepareClaudeLaunch(transport: IServerTransport, report: (entry: Record<string, unknown>) => void): Promise<void> {

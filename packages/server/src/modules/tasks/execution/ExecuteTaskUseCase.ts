@@ -591,12 +591,6 @@ export class ExecuteTaskUseCase {
    * for the clobber this closes.
    */
   /** Saves the primary window row of a window just created for the task, replacing any earlier primary row. */
-  /** Before a Claude worker is started on `server`: the host's Claude Code settings (see {@link prepareClaudeLaunch}); anything else is left alone. */
-  private async prepareClaudeLaunchFor(server: ServerConfig, unit: Pick<Unit, 'workerType'>, taskId: number, unitId: number): Promise<void> {
-    if (unit.workerType !== 'claude') return;
-    await prepareClaudeLaunch(this.transportFactory.getTransport(server), (entry) => this.appendLog(taskId, unitId, 'command', entry));
-  }
-
   private registerCreatedPrimaryWindow(taskId: number, serverName: string, ref: MuxRef, label: string, unit: Pick<Unit, 'workerType' | 'workerModel'>): void {
     for (const w of this.windowRepo.findByTask(taskId)) {
       if (w.ownerType === 'task' && w.isPrimary) this.windowRepo.remove(w.id);
@@ -619,6 +613,12 @@ export class ExecuteTaskUseCase {
       paneLayout: null,
       sleeping: false,
     });
+  }
+
+  /** Before a Claude worker is started on `server`: the host's Claude Code settings (see {@link prepareClaudeLaunch}); anything else is left alone. */
+  private async prepareClaudeLaunchFor(server: ServerConfig, unit: Pick<Unit, 'workerType'>, taskId: number, unitId: number): Promise<void> {
+    if (unit.workerType !== 'claude') return;
+    await prepareClaudeLaunch(this.transportFactory.getTransport(server), (entry) => this.appendLog(taskId, unitId, 'command', entry));
   }
 
   /**
