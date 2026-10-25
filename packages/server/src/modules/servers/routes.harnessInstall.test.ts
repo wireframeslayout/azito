@@ -71,7 +71,7 @@ describe('POST /api/servers/:name/harness/install — azito_url is required (#49
       const { app, harnessInstaller } = await buildApp(server);
       const res = await app.inject({ method: 'POST', url: '/api/servers/srv/harness/install', payload: { azito_url: 'not a url; rm -rf /' } });
       expect(res.statusCode).toBe(400);
-      expect(res.json()).toEqual({ error: 'Invalid azito_url format' });
+      expect(res.json()).toEqual({ error: 'Invalid azito_url format', code: 'azito_url_invalid' });
       expect(harnessInstaller[method]).not.toHaveBeenCalled();
     });
 

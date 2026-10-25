@@ -129,7 +129,7 @@ AZITO's server detail panel visualizes each server's dependency install status (
 
 ### Installing from the UI
 
-You can also install the harness without the CLI by clicking "Install Harness" in the server detail panel → Setup tab (`POST /api/servers/:name/harness/install`). For local servers the install runs directly; for Agent servers it runs over SSH. The `azito_url` field of the request body (the URL the agents and hooks use to reach the hub, e.g. `http://100.64.0.1:3001`) is required: when it is missing or empty the API answers 400 `{ error: 'azito_url is required', code: 'azito_url_required' }` and nothing is installed (a malformed value is a 400 too).
+You can also install the harness without the CLI by clicking "Install Harness" in the server detail panel → Setup tab (`POST /api/servers/:name/harness/install`). For local servers the install runs directly; for Agent servers it runs over SSH. The `azito_url` field of the request body (the URL the agents and hooks use to reach the hub, e.g. `http://100.64.0.1:3001`) is required: when it is missing or empty the API answers 400 `{ error: 'azito_url is required', code: 'azito_url_required' }` and nothing is installed (a malformed value is a 400 `azito_url_invalid`).
 
 ## Windows
 

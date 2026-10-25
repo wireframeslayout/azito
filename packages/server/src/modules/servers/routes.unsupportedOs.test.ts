@@ -46,7 +46,6 @@ async function buildApp(hostProfile: HostProfile | null, run: (spec: unknown) =>
     harnessInstaller,
     windowRepo: { findByServer: vi.fn(() => []) },
     webhookToken: 'wh',
-    publicUrl: 'http://hub.test:3001',
     uiToken: 'ui',
     serverIsolationMutex: new KeyedMutex(),
     scopedAuthEnabled: true,

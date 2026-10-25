@@ -35,7 +35,6 @@ function makeOpts(stored: ServerConfig | null, registerMisao = false): ServersRo
     transportFactory: { invalidate: vi.fn(), hostProfileFor: (server: { hostProfile: unknown }) => server.hostProfile } as unknown as ServersRouteOptions['transportFactory'],
     windowRepo: { findByServer: vi.fn(() => []) } as unknown as ServersRouteOptions['windowRepo'],
     webhookToken: 'wh',
-    publicUrl: 'http://hub.test:3001',
     uiToken: 'ui',
     serverIsolationMutex: new KeyedMutex(),
     harnessHash: 'testhash',

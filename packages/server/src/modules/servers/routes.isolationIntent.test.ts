@@ -4,6 +4,8 @@ import serversRoutes from './routes';
 import type { ServersRouteOptions } from './routes';
 import type { IServerRepository, ServerConfig } from './Server';
 import { KeyedMutex } from '../../shared/keyedMutex';
+import { HarnessInstaller } from './agent-deploy/HarnessInstaller';
+import type { SshClient } from './ssh/SshClient';
 
 // Review round (isolation doctor, Critical finding 1 / review round Important
 // finding 2): the FS-boundary check reads a canary via
@@ -94,7 +96,6 @@ function makeOpts(overrides: Partial<ServersRouteOptions> = {}): ServersRouteOpt
     // findByServer to return risky rows.
     windowRepo: { findByServer: vi.fn(() => []) } as unknown as ServersRouteOptions['windowRepo'],
     webhookToken: 'wh',
-    publicUrl: 'http://hub.test:3001',
     uiToken: 'ui',
     // Issue #29 review (6th pass), Important finding 3: a fresh instance per
     // test is fine here (this file never exercises cross-route serialization
@@ -256,6 +257,24 @@ describe('PUT /api/servers/:name — isolation cleanup on false->true (Issue #29
     return { install: installImpl, installLocal: vi.fn() } as unknown as ServersRouteOptions['harnessInstaller'];
   }
 
+  it('the cleanup runs setup.sh without --azito-url, so it neither rewrites nor creates azitoctl\'s env (#498)', async () => {
+    const sshClient = { execIsolated: vi.fn(async () => ({ stdout: '', stderr: '', code: 0 })) } as unknown as SshClient;
+    const harnessInstaller = new HarnessInstaller(sshClient);
+    vi.spyOn(harnessInstaller as unknown as { transferHarness: () => Promise<void> }, 'transferHarness').mockResolvedValue(undefined);
+    const opts = makeOpts({ harnessInstaller });
+    (opts.serverRepo.findByName as ReturnType<typeof vi.fn>).mockReturnValue(
+      makeServer({ type: 'agent', isolationIntent: false, sshHost: 'user@host' }),
+    );
+    const app = await buildApp(opts);
+
+    const res = await app.inject({ method: 'PUT', url: '/api/servers/srv', payload: { isolationIntent: true } });
+
+    expect(res.statusCode).toBe(200);
+    const [, cmd] = (sshClient.execIsolated as ReturnType<typeof vi.fn>).mock.calls[0];
+    expect(cmd).toContain('--purge-operator-token');
+    expect(cmd).not.toContain('--azito-url');
+  });
+
   it('calls harnessInstaller.install with isolationIntent:true and records a "done" report on success', async () => {
     const install = vi.fn(async () => ({ success: true, steps: [] }));
     const opts = makeOpts({ harnessInstaller: makeHarnessInstaller(install) });
@@ -378,8 +397,7 @@ describe('PUT /api/servers/:name — isolation cleanup on false->true (Issue #29
 
       expect(res.statusCode).toBe(200);
       expect(install).toHaveBeenCalledTimes(1);
-      // The cleanup also rewrites azitoctl's env, so it is handed the hub URL (#498).
-      expect(install).toHaveBeenCalledWith('user@host', expect.objectContaining({ azitoUrl: 'http://hub.test:3001', isolationIntent: true }));
+      expect(install).toHaveBeenCalledWith('user@host', expect.not.objectContaining({ azitoUrl: expect.anything() }));
       expect(res.json().isolationCleanup).toBe('done');
       // Retrying must not re-flip isolation_intent (it was already true) —
       // only attemptIsolationCleanup's own updateIsolationCleanupReport() write runs.

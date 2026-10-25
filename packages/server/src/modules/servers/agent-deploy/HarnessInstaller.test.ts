@@ -92,7 +92,6 @@ describe('HarnessInstaller.install — --ui-token withholding for isolation_inte
 
     await installer.install('test-host', {
       hostProfile: null,
-      azitoUrl: 'http://hub.test:3001',
       webhookToken: 'wh-token',
       serverName: 'srv-agent',
       isolationIntent: true,
@@ -100,6 +99,7 @@ describe('HarnessInstaller.install — --ui-token withholding for isolation_inte
 
     const [, cmd] = (sshClient.execIsolated as ReturnType<typeof vi.fn>).mock.calls[0];
     expect(cmd).toContain('--purge-operator-token');
+    expect(cmd).not.toContain('--azito-url');
   });
 
   it('does not pass --purge-operator-token to setup.sh for a normal (non-isolated) server', async () => {
@@ -171,6 +171,7 @@ describe('HarnessInstaller.installLocal — isolationIntent handling (local setu
     expect(args).toContain('--ui-token');
     expect(args).toContain('ui-token-secret');
     expect(args).not.toContain('--purge-operator-token');
+    expect(args).toEqual(expect.arrayContaining(['--azito-url', 'http://hub.test:3001']));
   });
 
   it('withholds --ui-token and passes --purge-operator-token for an isolationIntent=true local install', async () => {

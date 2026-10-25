@@ -51,7 +51,6 @@ function makeOpts(servers: ServerConfig[] = []): ServersRouteOptions {
     agentHostRecorder: { recordIfUnknown: vi.fn(async () => null), record: vi.fn(async () => null), forget: vi.fn() } as unknown as ServersRouteOptions['agentHostRecorder'],
     windowRepo: { findByServer: vi.fn(() => []) } as unknown as ServersRouteOptions['windowRepo'],
     webhookToken: 'wh',
-    publicUrl: 'http://hub.test:3001',
     uiToken: 'ui',
     serverIsolationMutex: new KeyedMutex(),
     harnessHash: 'testhash',

@@ -29,15 +29,13 @@ import { resolveRoot } from '../../../shared/releaseInfo';
 
 const HARNESS_DIR = path.join(resolveRoot(), 'harness');
 
-export interface HarnessInstallOptions {
+interface HarnessSetupBase {
   /**
    * The target server's OS (`TransportFactory.hostProfileFor`; null = a Unix agent registered before the OS was recorded). A Unix
    * host is set up with `setup.sh` (over SSH, or locally); a win32 one with `setup.mjs` (`installOnAgent` / `installLocal`), and the
    * SSH route refuses it with `unsupported_os` before anything is sent.
    */
   hostProfile: HostProfile | null;
-  /** The hub URL the server's azitoctl / hooks reach it by. Required: without it setup.sh / setup.mjs skip writing azitoctl's env. */
-  azitoUrl: string;
   webhookToken?: string;
   uiToken?: string;
   serverName?: string;
@@ -55,6 +53,21 @@ export interface HarnessInstallOptions {
   isolationIntent?: boolean;
   /** Written to the remote VERSION file after a successful install for staleness detection. */
   version?: string;
+}
+
+/** An install: `azitoUrl` is required, since without it setup.sh / setup.mjs skip writing azitoctl's env without saying so (#498). */
+export interface HarnessInstallOptions extends HarnessSetupBase {
+  /** The hub URL the server's azitoctl / hooks reach it by. */
+  azitoUrl: string;
+}
+
+/**
+ * Removing the operator token from a server just declared isolated (`attemptIsolationCleanup`). It carries no hub URL and
+ * passes no `--azito-url`: it must not rewrite the azitoctl env an earlier install wrote, nor create one where there was none.
+ */
+export interface HarnessOperatorTokenPurgeOptions extends HarnessSetupBase {
+  isolationIntent: true;
+  azitoUrl?: undefined;
 }
 
 const SETUP_TIMEOUT_MS = 120_000;
@@ -76,7 +89,7 @@ export class HarnessInstaller {
 
   async install(
     sshHost: string,
-    options: HarnessInstallOptions,
+    options: HarnessInstallOptions | HarnessOperatorTokenPurgeOptions,
     onProgress?: (p: HarnessInstallProgress) => void,
   ): Promise<HarnessInstallResult> {
     const steps: HarnessInstallProgress[] = [];
@@ -243,11 +256,11 @@ export class HarnessInstaller {
     }
   }
 
-  private async runSetup(sshHost: string, options: HarnessInstallOptions): Promise<void> {
+  private async runSetup(sshHost: string, options: HarnessInstallOptions | HarnessOperatorTokenPurgeOptions): Promise<void> {
     const { azitoUrl, webhookToken, uiToken, serverName, prefix, isolationIntent } = options;
     const harnessDir = remoteHarnessDir(prefix);
     let cmd = `bash ${harnessDir}/setup.sh`;
-    cmd += ` --azito-url ${shellQuote(azitoUrl)}`;
+    if (azitoUrl) cmd += ` --azito-url ${shellQuote(azitoUrl)}`;
     if (webhookToken) cmd += ` --webhook-token ${shellQuote(webhookToken)}`;
     // Withhold --ui-token for an isolation-intent server (see this option's
     // doc comment on HarnessInstallOptions.isolationIntent) — the one place
