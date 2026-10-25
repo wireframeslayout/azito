@@ -109,7 +109,12 @@ export function cleanupMarkMessage(host: string, mark: CleanupMark): string {
   const seen = mark.state === 'alive' ? `its pid ${mark.pid} is alive: a cleanup is still running`
     : mark.state === 'ended' ? `its pid ${mark.pid} has ended: the cleanup stopped, but may not have finished its work`
       : 'it holds no pid yet';
-  return `The mark ${CLEANUP_LOCK_DIR} of a previous cleanup of the agent on ${host} is still there (${seen}), so nothing was changed. Check on ${host}${mark.pid === 'none' ? '' : ` with kill -0 ${mark.pid} that it has ended`}, look at ~/.azito/agent and the azito-agent unit if you need to, then remove the mark: rm -rf ${CLEANUP_LOCK_DIR}`;
+  // Without a pid the cleanup may be paused between making the mark and writing its pid: removing the mark then lets it resume
+  // over a newer install. So the operator first makes sure no cleanup script is left on the host, whatever the pid says.
+  const check = mark.state === 'unknown'
+    ? `read ${CLEANUP_LOCK_DIR}/pid again (the cleanup writes it right after making the mark) and check it with kill -0; if there is still no pid, make sure no cleanup script of the agent is left running on ${host} (for example: pgrep -u "$(id -u)" -f agent-cleanup.lock prints nothing) before going on`
+    : `check with kill -0 ${mark.pid} that it has ended`;
+  return `The mark ${CLEANUP_LOCK_DIR} of a previous cleanup of the agent on ${host} is still there (${seen}), so nothing was changed. Do not remove the mark or retry until that cleanup has ended: on ${host}, ${check}, look at ~/.azito/agent and the azito-agent unit if you need to, then remove the mark: rm -rf ${CLEANUP_LOCK_DIR}`;
 }
 
 /** What a nohup agent looked like right after it started. Information for the operator: nothing is decided on it. */

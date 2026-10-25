@@ -3,7 +3,7 @@ import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { buildCleanupGuardScript, buildCleanupScript, buildNohupSightingScript, nohupManualSteps, parseCleanupOutcome, parseNohupSighting } from './unixAgentCleanup';
+import { buildCleanupGuardScript, buildCleanupScript, cleanupMarkMessage, buildNohupSightingScript, nohupManualSteps, parseCleanupOutcome, parseNohupSighting } from './unixAgentCleanup';
 
 // The script is run for real, with `sh -e` (the strictest a login shell can be), in a temporary HOME, against a `systemctl` that answers
 // like the real one: `is-active` prints the state and exits 3 for anything but active.
@@ -198,5 +198,21 @@ describe('nohup agent: reported, not stopped', () => {
     } finally {
       fs.rmSync(home, { recursive: true, force: true });
     }
+  });
+});
+
+describe('cleanupMarkMessage', () => {
+  it('tells the operator, when the mark holds no pid, to make sure no cleanup is left before removing it', () => {
+    const message = cleanupMarkMessage('u@h', { pid: 'none', state: 'unknown' });
+    expect(message).toContain('Do not remove the mark or retry until that cleanup has ended');
+    expect(message).toContain('read ~/.azito/agent-cleanup.lock/pid again');
+    expect(message).toContain('pgrep -u "$(id -u)" -f agent-cleanup.lock');
+    expect(message).toMatch(/before going on, look at .* then remove the mark: rm -rf ~\/\.azito\/agent-cleanup\.lock$/);
+  });
+
+  it('asks for kill -0 on a known pid', () => {
+    const message = cleanupMarkMessage('u@h', { pid: '777', state: 'ended' });
+    expect(message).toContain('check with kill -0 777 that it has ended');
+    expect(message).toContain('Do not remove the mark or retry until that cleanup has ended');
   });
 });
