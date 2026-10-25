@@ -278,6 +278,8 @@ export async function runUpdateSteps(
       state.note = late;
       stateManager.appendLog(late);
     }
+    const tidied = await pruneAfterSuccess(backend, args.version, oldRef, stateManager);
+    if (tidied !== undefined) state.note = state.note === undefined ? tidied : `${state.note} ${tidied}`;
     state.status = 'success';
     state.completedAt = new Date().toISOString();
     stateManager.write(state);
@@ -312,5 +314,26 @@ export async function runUpdateSteps(
     stateManager.write(state);
   } finally {
     fs.rmSync(tmpDir, { recursive: true, force: true });
+  }
+}
+
+/**
+ * After the new version answered: the backend's tidying of the old versions, if it has one. It is an extra of a finished update, so whatever it
+ * does or fails to do never changes the outcome; what it could not remove is returned (for the state's `note`) and logged, and the next
+ * update tries again.
+ */
+async function pruneAfterSuccess(backend: UpdateBackend, current: string, previous: string, stateManager: UpdateStateManager): Promise<string | undefined> {
+  if (backend.pruneOldVersions === undefined) return undefined;
+  try {
+    const report = await backend.pruneOldVersions({ current, previous });
+    if (report.removed.length > 0) stateManager.appendLog(`Removed old versions: ${report.removed.join(', ')}`);
+    for (const s of report.skipped) stateManager.appendLog(`Left ${s.name} alone: ${s.reason}`);
+    for (const f of report.failed) stateManager.appendLog(`Could not remove ${f.name}: ${f.reason}. The next update tries again`);
+    if (report.failed.length === 0) return undefined;
+    return `Old versions that could not be removed yet (the next update tries again): ${report.failed.map((f) => `${f.name} (${f.reason})`).join('; ')}.`;
+  } catch (err) {
+    const message = `Could not tidy the old versions: ${(err as Error).message}. The next update tries again.`;
+    stateManager.appendLog(message);
+    return message;
   }
 }

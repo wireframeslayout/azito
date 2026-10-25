@@ -23,6 +23,8 @@ import { extractZipSafely } from '../src/shared/fs/safeArchive';
  *      hub is untouched, and the next update runs.
  *   6. update to b: the hub is b (health, current.txt), the update task and the token file are gone, the token never was on a command line,
  *      misao.exe was not restarted and the window is still there.
+ *   6b. update to c: a is removed (the hub folder is tidied), b (the way back) and c (current) stay, a junction under hub\ named like an old
+ *      version is left alone with its target untouched, and a folder that is not a version is not touched.
  *   7. the Setup row's misao update (`POST /api/system/misao/update`) runs once.
  *   8. a real release zip passes `extractZipSafely` (the update used it for b; this runs it once more on the zip itself).
  * The tasks are deleted at the end whatever happened. A skipped step is a failure, never a pass.
@@ -48,6 +50,7 @@ const TAG_CORRUPT = 'v0.0.0-ci.c';
 const TAG_UNBOOTABLE = 'v0.0.0-ci.d';
 const TAG_BADVERSION = 'v0.0.0-ci.e';
 const TAG_STALLED = 'v0.0.0-ci.f';
+const TAG_C = 'v0.0.0-ci.g';
 
 interface Result { status: number | null; output: string }
 
@@ -262,7 +265,7 @@ async function startFakeReleaseServer(releases: FakeRelease[], watchTag: string)
 
 // ── polling the update ────────────────────────────────────────────────────
 
-interface UpdateState { status: string; step: string; toVersion: string; startedAt: string; error?: string; steps: Array<{ step: string; status: string; message: string }> }
+interface UpdateState { status: string; step: string; toVersion: string; startedAt: string; error?: string; note?: string; steps: Array<{ step: string; status: string; message: string }> }
 
 /** Waits until the update to `toVersion` that started after `since` has ended; the hub may be down for a while in between. */
 async function waitForUpdateEnd(token: string, toVersion: string, since: number, timeoutMs: number, detail: () => string): Promise<UpdateState> {
@@ -326,6 +329,8 @@ async function main(): Promise<void> {
     const zipBadVersion = path.join(work, `azito-hub-${TAG_BADVERSION}-win32-x64.zip`);
     repackWithVersion(baseZip, TAG_A, zipA, work);
     repackWithVersion(baseZip, TAG_B, zipB, work);
+    const zipC = path.join(work, `azito-hub-${TAG_C}-win32-x64.zip`);
+    repackWithVersion(baseZip, TAG_C, zipC, work);
     buildStubZip(baseZip, TAG_UNBOOTABLE, zipUnbootable, work);
     buildStubZip(baseZip, 'v9.9.9-not-the-tag', zipBadVersion, work);
     const sumsA = path.join(work, 'SHA256SUMS-a');
@@ -347,6 +352,7 @@ async function main(): Promise<void> {
       releaseOf(TAG_UNBOOTABLE, zipUnbootable, undefined),
       releaseOf(TAG_BADVERSION, zipBadVersion, undefined),
       releaseOf(TAG_STALLED, zipUnbootable, undefined),
+      releaseOf(TAG_C, zipC, undefined),
     ], TAG_B);
 
     step(`step 1: install.ps1 installs ${TAG_A} (hub task and misao) into ${prefix}`);
@@ -469,6 +475,28 @@ async function main(): Promise<void> {
     assert((await listWindows()).includes('w851upd'), 'the window must still be listed after the update');
     const sessions = await api(token, 'GET', '/api/servers/local/sessions?detail=1');
     assert(sessions.status === 200 && !((sessions.json as { unavailable?: Array<{ kind: string }> } | null)?.unavailable ?? []).some((e) => e.kind === 'misao'), 'the new hub must reach misao', sessions.text);
+
+    step(`step 6b: ${TAG_C}: ${TAG_A} is removed, ${TAG_B} (the way back) and ${TAG_C} stay, a link and a non-version folder are not touched`);
+    // A junction named like an old version, and a folder that is not a version, are put under hub\ first: neither may be followed or removed.
+    const linkTarget = path.join(work, 'link-target');
+    fs.mkdirSync(linkTarget);
+    fs.writeFileSync(path.join(linkTarget, 'precious.txt'), 'keep me');
+    const linkName = path.join(hubDir, 'v0.0.0-ci.0');
+    fs.symlinkSync(linkTarget, linkName, 'junction');
+    const stagingDir = path.join(hubDir, '.staging-smoke');
+    fs.mkdirSync(stagingDir);
+    fs.writeFileSync(path.join(stagingDir, 'keep.txt'), 'keep me too');
+    since = await startUpdate(token, TAG_C);
+    ended = await waitForUpdateEnd(token, TAG_C, since, 420_000, updateLog);
+    assert(ended.status === 'success', 'the update to c must succeed', `${JSON.stringify(ended)}\n${updateLog()}`);
+    assert(pointerValue() === TAG_C && (await health())?.version === TAG_C, 'the hub must be c (current.txt and /api/health)');
+    assert(!fs.existsSync(path.join(hubDir, TAG_A)), 'the version before the way back (a) must have been removed', updateLog());
+    assert(fs.existsSync(path.join(hubDir, TAG_B, 'azito-hub.cjs')) && fs.existsSync(path.join(hubDir, TAG_C, 'azito-hub.cjs')), 'b (the way back) and c (current) must stay');
+    assert(fs.lstatSync(linkName).isSymbolicLink() && fs.readFileSync(path.join(linkTarget, 'precious.txt'), 'utf-8') === 'keep me', 'a junction named like a version must be left alone, its target untouched');
+    assert(fs.readFileSync(path.join(stagingDir, 'keep.txt'), 'utf-8') === 'keep me too', 'a folder that is not a version must not be touched');
+    assert(/Removed old versions: v0\.0\.0-ci\.a/.test(readText(path.join(dataDir, 'update.log'))), 'the log must say what was removed', updateLog());
+    assert(!ended.note, 'nothing was left over, so there is no note', JSON.stringify(ended));
+    await waitFor('the update task to be deleted', () => schtasks(['/Query', '/TN', UPDATE_TASK]).status !== 0, 60_000, updateLog);
 
     step('step 7: the Setup row\'s misao update (POST /api/system/misao/update) runs once, on the updated hub');
     const misaoUpdate = await api(token, 'POST', '/api/system/misao/update', { closeAllPanes: true });

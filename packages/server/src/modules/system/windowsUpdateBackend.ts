@@ -3,12 +3,14 @@ import crypto from 'crypto';
 import fs from 'fs';
 import path from 'path';
 import { promisify } from 'util';
+import { runCommandSpec } from '../../shared/exec/runCommandSpec';
 import { directoryContains } from '../../shared/fs/directoryContains';
 import { extractZipSafely } from '../../shared/fs/safeArchive';
 import { readHubPointer, writeHubPointer } from './hubPointer';
 import type { ServiceManager } from './serviceManager';
-import type { UpdateBackend } from './updateBackend';
+import type { PruneReport, UpdateBackend } from './updateBackend';
 import { waitForHealthyVersion } from './updateHealth';
+import { pruneHubVersions, findHubVersionsInUse } from './windowsHubPrune';
 import { runOnWindows, type ServiceCommandContext, type WindowsHub } from './windowsHubOperations';
 
 const execFileAsync = promisify(execFile);
@@ -96,6 +98,12 @@ export function createWindowsUpdateBackend(input: WindowsUpdateInput): UpdateBac
         return true;
       }
     },
+
+    pruneOldVersions: (versions): Promise<PruneReport> => pruneHubVersions({
+      hubDir: input.hubDir,
+      ...versions,
+      versionsInUse: () => findHubVersionsInUse((spec) => runCommandSpec(spec, input.hub.runHost), input.hub.systemRoot, input.hub.hubRoots),
+    }),
 
     removeInstallDir: (installDir) => fs.rmSync(installDir, { recursive: true, force: true, maxRetries: 5, retryDelay: 300 }),
   };

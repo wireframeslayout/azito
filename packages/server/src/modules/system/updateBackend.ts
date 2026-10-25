@@ -3,6 +3,15 @@
  * runs (a symlink on Unix, `current.txt` on Windows), how the hub is restarted, and what putting the old version back takes. The steps
  * around them (download, verify, state, the order, the rollback decision) are the same everywhere and live in `runUpdate`.
  */
+export interface PruneReport {
+  /** Version folders that were removed. */
+  removed: string[];
+  /** Version folders that should go but could not (in use, a file held open): kept, tried again by the next update. */
+  failed: Array<{ name: string; reason: string }>;
+  /** Version-named entries that were deliberately left alone (a link). */
+  skipped: Array<{ name: string; reason: string }>;
+}
+
 export interface UpdateBackend {
   /** The file name the downloaded archive is saved as. */
   readonly archiveName: string;
@@ -27,4 +36,10 @@ export interface UpdateBackend {
   isCurrent(installDir: string): boolean;
   /** Removes a folder this run created. Whatever cannot be removed is reported by throwing. */
   removeInstallDir(installDir: string): void;
+  /**
+   * Optional: tidies the old versions after a SUCCESSFUL update (never after a rollback). `current` is the version just switched to,
+   * `previous` what `current.txt` named before. Only the Windows backend has it; the Unix hub keeps its old versions as it always did.
+   * A throw is the tidying failing, never the update.
+   */
+  pruneOldVersions?(versions: { current: string; previous: string }): Promise<PruneReport>;
 }
