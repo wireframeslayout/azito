@@ -1,8 +1,8 @@
 import { HUB_SERVICE, runCommand, type ServiceManager } from '../modules/system/serviceManager';
 import { createServiceManager, type ServiceHost } from '../modules/system/createServiceManager';
+import { createHubLock, underHubLock } from '../modules/system/hubLock';
 import { describeHubLauncherState, readHubLauncherState } from '../modules/system/hubLauncherState';
-import type { ServiceCommandContext } from './serviceCommandContext';
-import { installWindowsTask, resolveWindowsHub, runOnWindows, taskExists, type WindowsHub } from './serviceCommandWindows';
+import { installWindowsTask, resolveWindowsHub, runOnWindows, taskExists, type ServiceCommandContext, type WindowsHub } from '../modules/system/windowsHubOperations';
 
 const USAGE = `Usage: azito service <command>
 
@@ -79,13 +79,16 @@ export async function serviceCommand(argv: string[], host: ServiceHost, context:
       await printStatus(manager, windowsHub);
       return;
     }
-    if (command === 'install') {
-      if (!windowsHub) throw new Error('`azito service install` is for Windows. On Linux and macOS install.sh sets the service up.');
-      await installWindowsTask(manager, windowsHub, context, yes);
+    if (command === 'install' && !windowsHub) {
+      throw new Error('`azito service install` is for Windows. On Linux and macOS install.sh sets the service up.');
+    }
+    if (windowsHub) {
+      // One at a time with the in-app update, which stops and starts the same task.
+      const lock = createHubLock(windowsHub.layout.hubRoot, context.secretFileGuard, windowsHub.systemRoot);
+      await underHubLock(lock, () => (command === 'install' ? installWindowsTask(manager, windowsHub, context, yes) : runOnWindows(command, manager, windowsHub, context)));
     } else {
-      if (windowsHub) await runOnWindows(command, manager, windowsHub, context);
-      else if (!manager.isInstalled()) throw new Error(notInstalledMessage(manager));
-      else if (command === 'start') await manager.start();
+      if (!manager.isInstalled()) throw new Error(notInstalledMessage(manager));
+      if (command === 'start') await manager.start();
       else if (command === 'stop') await manager.stop();
       else if (command === 'restart') await manager.restart();
       else await manager.reload();

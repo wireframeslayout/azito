@@ -1,15 +1,31 @@
 import * as fs from 'fs';
-import type { ServiceManager } from '../modules/system/serviceManager';
-import type { ServiceHost } from '../modules/system/createServiceManager';
+import type { ServiceManager } from './serviceManager';
+import type { ServiceHost } from './createServiceManager';
 import {
   HUB_GRACE_MS, buildHubTaskXml, endHubProcesses, findHubProcesses, hubWindowsLayout, inspectRegisteredHub, resolveWindowsUserId, samePrefix,
   type HubWindowsLayout, type SpecRunner,
-} from '../modules/system/windowsHubService';
-import { resolveInstallPrefix } from '../modules/system/misao/misaoPaths';
-import { runCommandSpec, runHostOf, type RunCommandOptions } from '../shared/exec/runCommandSpec';
-import { SchtasksClient, rawRunnerOf } from '../shared/os/taskScheduler/schtasks';
-import { HUB_SERVICE } from '../modules/system/serviceManager';
-import type { ServiceCommandContext } from './serviceCommandContext';
+} from './windowsHubService';
+import { resolveInstallPrefix } from './misao/misaoPaths';
+import { runCommandSpec, runHostOf, type RunCommandOptions } from '../../shared/exec/runCommandSpec';
+import { SchtasksClient, rawRunnerOf } from '../../shared/os/taskScheduler/schtasks';
+import { HUB_SERVICE } from './serviceManager';
+import type { SecretFileGuard } from '../../shared/os/secretFileGuard';
+
+/**
+ * Operations on the Windows hub's Task Scheduler task (`azito service ...`, and the restart the in-app update does). They live here, not
+ * in `cli/`, because the update (`updateScript.ts`) runs the very same stop / start sequence: the CLI depends on this module, never the reverse.
+ */
+
+/** What the operations need from the process that runs them, resolved at the entry point (`main.ts`). */
+export interface ServiceCommandContext {
+  env: NodeJS.ProcessEnv;
+  /** The release bundle this process runs from, or null for a source checkout. */
+  bundleRoot: string | null;
+  /** This process's id (the Windows stop must not end the process that runs it). */
+  pid: number;
+  /** Writes the hub lock's key file (owner-only). */
+  secretFileGuard: SecretFileGuard;
+}
 
 /** Where the Windows hub of this bundle lives, and everything its operations need, resolved once. */
 export interface WindowsHub {

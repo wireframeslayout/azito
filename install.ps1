@@ -376,9 +376,10 @@ function Invoke-Install {
         Write-Host "AZITO is already installed at $hubRoot"
         Write-Host "  Version: $installed"
         Write-Host ''
-        Write-Host 'This installer only handles first-time setup. To update by hand, extract the new'
-        Write-Host "azito-hub-<tag>-win32-x64.zip into $hubRoot\<tag> and write that tag into"
-        Write-Host "$pointer. See docs/install-and-update.md ('Windows')."
+        Write-Host 'This installer only handles first-time setup. Update from Settings > System in the app.'
+        Write-Host 'To update by hand, extract the new azito-hub-<tag>-win32-x64.zip into'
+        Write-Host "$hubRoot\<tag>, write that tag into $pointer"
+        Write-Host "and run: azito service restart. See docs/install-and-update.md ('Windows')."
         return
     }
 

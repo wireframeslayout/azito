@@ -12,7 +12,7 @@ import { HUB_POINTER_VERSION_PATTERN } from './hubVersion';
  *
  * Why the definition does not change when the hub is updated: the task runs a launcher (an inline PowerShell script, see
  * {@link buildHubLauncherScript}) that reads `<prefix>\hub\current.txt` each time it starts and runs that version's `run.ps1`. The
- * pointer is the one thing an update switches (the Unix `current` symlink, and #381 after it), so no update has to register the
+ * pointer is the one thing an update switches (the Unix `current` symlink's counterpart; the in-app update, `windowsUpdateBackend.ts`, writes it), so no update has to register the
  * task again, and a rollback of the pointer is a rollback of what the task runs.
  */
 
@@ -55,7 +55,7 @@ export interface HubRestartTiming {
 export const HUB_RESTART_TIMING: HubRestartTiming = { baseSeconds: 5, maxSeconds: 60, stableSeconds: 300 };
 
 /** The launcher is in the task's command line; 8191 characters is cmd.exe's limit, the smallest on the way. */
-const MAX_COMMAND_LINE = 8191;
+export const MAX_COMMAND_LINE = 8191;
 
 /**
  * The script the task runs: a loop around "read the pointer, check that it names an installed version, run that version's `run.ps1`
@@ -181,7 +181,7 @@ const QUOTE_CHARS = "'‘’‚‛";
 const HUB_ROOT_LINE = new RegExp(`^\\$hubRoot = '((?:[^${QUOTE_CHARS}]|([${QUOTE_CHARS}])\\2)*)'\\r?$`, 'm');
 
 /** What a task's action runs: the program and its arguments as one command line. */
-interface TaskExec {
+export interface TaskExec {
   command: string;
   argumentsLine: string;
 }
@@ -201,7 +201,7 @@ function hubTaskExec(systemRoot: string, launcher: string): TaskExec {
  * (no second Exec, no ComHandler, SendEmail, ShowMessage or any other element, no text). A task with more actions than the one this
  * code generates would run more than the hub, so it is not ours.
  */
-function singleExec(xml: string): TaskExec | undefined {
+export function singleExec(xml: string): TaskExec | undefined {
   const withoutComments = xml.replace(/<!--[\s\S]*?-->/g, '');
   const actions = [...withoutComments.matchAll(/<Actions\b[^>]*>([\s\S]*?)<\/Actions>/g)];
   if (actions.length !== 1) return undefined;
@@ -284,7 +284,7 @@ export function buildHubTaskXml(input: HubTaskInput): string {
   });
 }
 
-function windowsPowershell(systemRoot: string): string {
+export function windowsPowershell(systemRoot: string): string {
   return path.win32.join(systemRoot, 'System32', 'WindowsPowerShell', 'v1.0', 'powershell.exe');
 }
 

@@ -124,7 +124,9 @@ import { UsageService } from '../modules/usage/UsageService';
 import { UpdateChannelResolver } from '../modules/system/UpdateChannelResolver';
 import { UpdateStateManager } from '../modules/system/UpdateStateManager';
 import { DeployModeDetector } from '../modules/system/DeployModeDetector';
-import { SystemUpdateService } from '../modules/system/SystemUpdateService';
+import { SystemUpdateService, resolveGithubApiBase, type WindowsUpdateHost } from '../modules/system/SystemUpdateService';
+import { runCommandSpec, runHostOf } from '../shared/exec/runCommandSpec';
+import { SchtasksClient, rawRunnerOf } from '../shared/os/taskScheduler/schtasks';
 
 // ─── Module return types ───
 
@@ -647,9 +649,17 @@ function buildMisaoService(misao: MisaoHandle, hostEnv: HostEnv, secretFileGuard
 function buildSystemUpdateModule(dataPaths: DataPaths, repos: Repositories, misao: MisaoHandle, hostEnv: HostEnv, secretFileGuard: SecretFileGuard, launchedByTaskScheduler: boolean): SystemUpdateModule {
   const channelResolver = new UpdateChannelResolver(dataPaths.updateChannel, secretFileGuard);
   const stateManager = new UpdateStateManager(dataPaths.updateState, dataPaths.updateLog, secretFileGuard);
-  const deployModeDetector = new DeployModeDetector(hostEnv.homeDir, launchedByTaskScheduler);
+  const deployModeDetector = new DeployModeDetector(hostEnv.homeDir, launchedByTaskScheduler, hostEnv.arch);
   const hubService = createServiceManager(hostEnv, HUB_SERVICE, runCommand);
-  const systemUpdateService = new SystemUpdateService(channelResolver, stateManager, deployModeDetector, dataPaths, repos.taskRepo, 'manager' in hubService ? hubService.manager : null, { platform: hostEnv.platform, arch: hostEnv.arch, bundleRoot: getBundleRoot() });
+  // Windows updates through a one-shot task of their own: the means to register and start it, resolved here once.
+  const windowsUpdate: WindowsUpdateHost | null = hostEnv.platform === 'win32' && hostEnv.systemRoot
+    ? { launcher: { client: new SchtasksClient(rawRunnerOf((spec) => runCommandSpec(spec, { ...runHostOf(hostEnv), rawOutput: true })), hostEnv), guard: secretFileGuard }, systemRoot: hostEnv.systemRoot, env: process.env }
+    : null;
+  const systemUpdateService = new SystemUpdateService(
+    channelResolver, stateManager, deployModeDetector, dataPaths, repos.taskRepo, 'manager' in hubService ? hubService.manager : null,
+    { platform: hostEnv.platform, arch: hostEnv.arch, bundleRoot: getBundleRoot() },
+    { githubApiBase: resolveGithubApiBase(process.env), windowsUpdate },
+  );
   return { deployModeDetector, systemUpdateService, channelResolver, misaoService: buildMisaoService(misao, hostEnv, secretFileGuard) };
 }
 

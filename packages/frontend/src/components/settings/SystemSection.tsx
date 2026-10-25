@@ -65,7 +65,9 @@ export default function SystemSection() {
     if (!res.started) setStartError(res.error ?? t('system.couldNotStart'));
   };
 
-  const canInstall = (status?.deployMode === 'systemd' || status?.deployMode === 'launchd') && (status?.runningTasks ?? 0) === 0;
+  // A release install that a service manager (systemd, launchd, the Windows Task Scheduler) restarts: the only ones the hub can update itself.
+  const isServiceInstall = status?.deployMode === 'systemd' || status?.deployMode === 'launchd' || status?.deployMode === 'taskscheduler';
+  const canInstall = isServiceInstall && (status?.runningTasks ?? 0) === 0;
 
   const handleInstallVersion = async (v: VersionEntry): Promise<void> => {
     if (v.relation === 'older') {
@@ -122,7 +124,7 @@ export default function SystemSection() {
         <SectionRow label={t('system.status')}>
           <Chip tone={statusTone(status.status)}>{STATUS_KEYS[status.status] ? t(STATUS_KEYS[status.status]) : status.status}</Chip>
         </SectionRow>
-        {(status.deployMode === 'systemd' || status.deployMode === 'launchd') && (
+        {isServiceInstall && (
           <SectionRow label={t('system.devChannel')}>
             <label className="toggle">
               <input

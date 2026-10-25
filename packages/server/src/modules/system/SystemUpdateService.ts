@@ -1,4 +1,5 @@
 import { execFile, spawn } from 'child_process';
+import path from 'path';
 import { promisify } from 'util';
 import type { DataPaths } from '../../shared/dataDir';
 import { getReleaseInfo } from '../../shared/releaseInfo';
@@ -12,6 +13,9 @@ import { isDiagnosticsEnabled } from './diagnosticsEligibility';
 import { DuplicateLoadError, type ServiceManager } from './serviceManager';
 import { assertSupportedHubHost, hubAssetNames, resolveHubInstallPaths, type HubInstallHost } from './hubInstall';
 import { isReleaseTag } from './hubVersion';
+import { healthUrlOf } from './updateHealth';
+import { launchHubUpdateTask, type HubUpdateLauncher } from './windowsHubUpdateTask';
+import { resolveWindowsUserId } from './windowsHubService';
 
 const execFileAsync = promisify(execFile);
 
@@ -90,6 +94,39 @@ interface CachedCheck {
 // agent running) are excluded.
 const NON_TERMINAL_TASK_STATUSES: TaskStatus[] = ['running', 'in_progress', 'phase_review', 'waiting_input'];
 
+/** Where the release API is. */
+export const GITHUB_API_BASE = 'https://api.github.com';
+
+/** A loopback address with an optional port: the only other place the release API may be (see {@link resolveGithubApiBase}). */
+const LOOPBACK_API_BASE = /^http:\/\/(127\.0\.0\.1|localhost|\[::1\])(:\d{1,5})?$/;
+
+/**
+ * `AZITO_UPDATE_API_BASE` points the release API at a local server, FOR TESTS ONLY (the Windows CI smoke test serves a fake `releases` API
+ * and its assets from the machine itself). Only an `http://` loopback address is accepted; anything else, which would send a release lookup
+ * (and the GitHub token) to a host of somebody's choosing, stops the hub from starting with the reason. Unset: GitHub.
+ */
+export function resolveGithubApiBase(env: NodeJS.ProcessEnv): string {
+  const value = env.AZITO_UPDATE_API_BASE;
+  if (value === undefined || value === '') return GITHUB_API_BASE;
+  if (!LOOPBACK_API_BASE.test(value)) throw new Error(`AZITO_UPDATE_API_BASE must be an http:// loopback address (127.0.0.1, localhost or [::1]) and is for tests only: got "${value}"`);
+  return value;
+}
+
+/** What only a Windows hub needs to launch its update: the Task Scheduler client and the guard that writes the token file, and the user and `%SystemRoot%` the task is built with. */
+export interface WindowsUpdateHost {
+  launcher: HubUpdateLauncher;
+  systemRoot: string;
+  env: NodeJS.ProcessEnv;
+}
+
+/** What the environment decides, resolved at the entry point. Omitted (tests): GitHub's API and no Windows launcher. */
+export interface SystemUpdateOptions {
+  githubApiBase: string;
+  windowsUpdate: WindowsUpdateHost | null;
+}
+
+const PRODUCTION_OPTIONS: SystemUpdateOptions = { githubApiBase: GITHUB_API_BASE, windowsUpdate: null };
+
 const CHECK_CACHE_TTL_MS = 60 * 60 * 1000;
 
 // A `running` state older than this is assumed to belong to a detached
@@ -148,6 +185,7 @@ export class SystemUpdateService {
     private hubService: ServiceManager | null,
     /** The OS / architecture and bundle location of this hub, resolved at the entry point: which release asset to take and where the hub folder is. */
     private host: HubInstallHost,
+    private options: SystemUpdateOptions = PRODUCTION_OPTIONS,
   ) {}
 
   async getStatus(): Promise<UpdateStatusResponse> {
@@ -312,7 +350,7 @@ export class SystemUpdateService {
 
   private async fetchLatestRelease(repo: string): Promise<UpdateTarget | null> {
     try {
-      const res = await fetch(`https://api.github.com/repos/${repo}/releases/latest`, { headers: this.buildGithubHeaders() });
+      const res = await fetch(`${this.options.githubApiBase}/repos/${repo}/releases/latest`, { headers: this.buildGithubHeaders() });
       if (!res.ok) return null;
       const release = await res.json() as GithubRelease;
 
@@ -324,7 +362,7 @@ export class SystemUpdateService {
 
   private async fetchLatestPrerelease(repo: string): Promise<UpdateTarget | null> {
     try {
-      const res = await fetch(`https://api.github.com/repos/${repo}/releases?per_page=30`, { headers: this.buildGithubHeaders() });
+      const res = await fetch(`${this.options.githubApiBase}/repos/${repo}/releases?per_page=30`, { headers: this.buildGithubHeaders() });
       if (!res.ok) return null;
       const releases = await res.json() as GithubRelease[];
       if (!Array.isArray(releases)) return null;
@@ -345,7 +383,7 @@ export class SystemUpdateService {
     assertSupportedHubHost(this.host);
     try {
       const tag = version.startsWith('v') ? version : `v${version}`;
-      const res = await fetch(`https://api.github.com/repos/${repo}/releases/tags/${encodeURIComponent(tag)}`, { headers: this.buildGithubHeaders() });
+      const res = await fetch(`${this.options.githubApiBase}/repos/${repo}/releases/tags/${encodeURIComponent(tag)}`, { headers: this.buildGithubHeaders() });
       if (!res.ok) return null;
       const release = await res.json() as GithubRelease;
       return this.resolveReleaseAssets(release);
@@ -362,7 +400,7 @@ export class SystemUpdateService {
     const repo = this.channelResolver.resolve();
     if (!repo) return [];
     try {
-      const res = await fetch(`https://api.github.com/repos/${repo}/releases?per_page=30`, { headers: this.buildGithubHeaders() });
+      const res = await fetch(`${this.options.githubApiBase}/repos/${repo}/releases?per_page=30`, { headers: this.buildGithubHeaders() });
       if (!res.ok) return [];
       const releases = await res.json() as GithubRelease[];
       if (!Array.isArray(releases)) return [];
@@ -410,6 +448,10 @@ export class SystemUpdateService {
   }
 
   private async launchUpdateScript(target: UpdateTarget, oldVersion: string): Promise<void> {
+    if (this.deployModeDetector.detect() === 'taskscheduler') {
+      await this.launchWindowsUpdate(target, oldVersion);
+      return;
+    }
     const manager = this.deployModeDetector.serviceManager();
     if (!manager) throw new Error('no service manager to restart through');
 
@@ -455,6 +497,43 @@ export class SystemUpdateService {
     systemdArgs.push('--', process.execPath, bundlePath, ...scriptArgs);
 
     await execFileAsync('systemd-run', systemdArgs);
+  }
+
+  /**
+   * Windows: the update is its own one-shot task (`AzitoHubUpdate`, see windowsHubUpdateTask.ts), because a process this hub spawns would end
+   * with the hub's task when the update stops it. It runs the CURRENT version's node.exe and bundle (the new one is not extracted yet), gets
+   * the bind address and port as the health URL (a task has no environment), and the token in an owner-only file.
+   */
+  private async launchWindowsUpdate(target: UpdateTarget, oldVersion: string): Promise<void> {
+    const windows = this.options.windowsUpdate;
+    if (!windows) throw new Error('this hub was started without the means to launch a Windows update');
+    const { hubDir, bundlePath } = resolveHubInstallPaths(this.host);
+    const tokenFile = path.join(this.dataPaths.dir, 'update-token');
+    const token = process.env.AZITO_GITHUB_TOKEN || undefined;
+    const updateArgs = [
+      '--data-dir', this.dataPaths.dir,
+      '--hub-dir', hubDir,
+      '--version', target.version,
+      '--tarball-url', target.tarballUrl,
+      '--sha256sums-url', target.sha256sumsUrl,
+      '--old-version', oldVersion,
+      '--service-manager', 'taskscheduler',
+      '--health-url', healthUrlOf(process.env.AZITO_BIND || '127.0.0.1', process.env.PORT || '3001'),
+      ...(token !== undefined ? ['--token-file', tokenFile] : []),
+    ];
+    await launchHubUpdateTask(windows.launcher, {
+      task: {
+        userId: resolveWindowsUserId(windows.env),
+        systemRoot: windows.systemRoot,
+        hubDir,
+        nodePath: process.execPath,
+        bundlePath,
+        updateArgs,
+        outputLog: path.join(this.dataPaths.dir, 'update-run.out.log'),
+      },
+      tokenFile,
+      token,
+    });
   }
 
   private buildResponse(

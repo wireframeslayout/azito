@@ -3,15 +3,23 @@ import path from 'path';
 import os from 'os';
 import { Readable } from 'stream';
 import { finished } from 'stream/promises';
-import { execFile } from 'child_process';
-import { promisify } from 'util';
 import type { SecretFileGuard } from '../../shared/os/secretFileGuard';
 import type { HostEnv } from '../../shared/os/hostEnv';
+import { hostTarOf } from '../../shared/os/hostTar';
+import { runCommandSpec, runHostOf } from '../../shared/exec/runCommandSpec';
+import { SchtasksClient, rawRunnerOf } from '../../shared/os/taskScheduler/schtasks';
+import { getBundleRoot } from '../../shared/releaseInfo';
 import { UpdateStateManager, type UpdateState, type UpdateStep } from './UpdateStateManager';
-import { computeLocalSha256, assertNoTraversal, readSha256FromSumsFile } from '../servers/agent-deploy/integrityVerifier';
-import { HUB_SERVICE, isServiceManagerKind, runCommand, serviceManagerOfKind, type ServiceManager, type ServiceManagerKind } from './serviceManager';
-
-const execFileAsync = promisify(execFile);
+import { computeLocalSha256, readSha256FromSumsFile } from '../servers/agent-deploy/integrityVerifier';
+import { HUB_SERVICE, runCommand, serviceManagerOfKind, type AnyServiceManagerKind } from './serviceManager';
+import { createServiceManager } from './createServiceManager';
+import type { UpdateBackend } from './updateBackend';
+import { createUnixUpdateBackend } from './unixUpdateBackend';
+import { healthUrlOf, waitForHealthyVersion } from './updateHealth';
+import { createWindowsUpdateBackend } from './windowsUpdateBackend';
+import { HUB_UPDATE_TASK } from './windowsHubUpdateTask';
+import { resolveWindowsHub } from './windowsHubOperations';
+import { createHubLock, underHubLock } from './hubLock';
 
 interface UpdateArgs {
   dataDir: string;
@@ -20,12 +28,17 @@ interface UpdateArgs {
   tarballUrl: string;
   sha256sumsUrl: string;
   oldVersion: string;
-  serviceManager: ServiceManagerKind;
+  serviceManager: AnyServiceManagerKind;
+  /** A file holding the GitHub token (Windows: a task cannot carry an environment variable, and a command line is no place for a secret). Read, then deleted. */
+  tokenFile?: string;
+  /** Where the restarted hub answers. Windows passes the hub's own bind address and port; Unix reads `AZITO_BIND` / `PORT` from its environment. */
+  healthUrl?: string;
 }
 
-const HEALTH_CHECK_TIMEOUT_MS = 30_000;
-const HEALTH_CHECK_INTERVAL_MS = 1_000;
-const SMOKE_TEST_TIMEOUT_MS = 10_000;
+function parseServiceManager(value: string | undefined): AnyServiceManagerKind {
+  if (value === 'systemd' || value === 'launchd' || value === 'taskscheduler') return value;
+  throw new Error(`Unknown --service-manager: ${value}`);
+}
 
 function parseArgs(argv: string[]): UpdateArgs {
   const args: Partial<UpdateArgs> = {};
@@ -37,12 +50,9 @@ function parseArgs(argv: string[]): UpdateArgs {
       case '--tarball-url': args.tarballUrl = argv[++i]; break;
       case '--sha256sums-url': args.sha256sumsUrl = argv[++i]; break;
       case '--old-version': args.oldVersion = argv[++i]; break;
-      case '--service-manager': {
-        const value = argv[++i];
-        if (!isServiceManagerKind(value)) throw new Error(`Unknown --service-manager: ${value}`);
-        args.serviceManager = value;
-        break;
-      }
+      case '--token-file': args.tokenFile = argv[++i]; break;
+      case '--health-url': args.healthUrl = argv[++i]; break;
+      case '--service-manager': args.serviceManager = parseServiceManager(argv[++i]); break;
     }
   }
   const required: (keyof UpdateArgs)[] = ['dataDir', 'hubDir', 'version', 'tarballUrl', 'sha256sumsUrl', 'oldVersion', 'serviceManager'];
@@ -62,20 +72,49 @@ async function downloadFile(url: string, destPath: string, token?: string): Prom
 }
 
 /**
- * Runs the hub's own self-update out-of-process (see SystemUpdateService.launchUpdateScript,
- * which detaches it — via `systemd-run` on Linux, a detached session on macOS —
- * so it survives the hub's own restart partway through). Every step's outcome is
- * persisted via UpdateStateManager so GET /api/system/update/progress can report
- * on it even across the restart.
+ * The token the caller handed over. Windows: in a file, read and deleted right away (the file does not outlive this read, whatever happens
+ * after). Unix: in the environment (systemd `--setenv`, or launchd's inherited one).
  */
-export async function runUpdate(argv: string[], host: Pick<HostEnv, 'homeDir' | 'uid'>, secretFileGuard: SecretFileGuard): Promise<void> {
+function takeToken(tokenFile: string | undefined): string | undefined {
+  if (tokenFile === undefined) return process.env.AZITO_GITHUB_TOKEN;
+  try {
+    return fs.readFileSync(tokenFile, 'utf-8').trim() || undefined;
+  } finally {
+    fs.rmSync(tokenFile, { force: true });
+  }
+}
+
+/** The backend of this OS. Windows also needs what `azito service restart` needs: the task, the hub's layout and the bundle's location. */
+function createBackend(args: UpdateArgs, host: HostEnv, secretFileGuard: SecretFileGuard, healthUrl: string): UpdateBackend {
+  if (args.serviceManager !== 'taskscheduler') {
+    return createUnixUpdateBackend(args.hubDir, serviceManagerOfKind(args.serviceManager, HUB_SERVICE, runCommand, host), host.platform);
+  }
+  const created = createServiceManager(host, HUB_SERVICE, runCommand);
+  if ('error' in created) throw created.error;
+  const context = { env: process.env, bundleRoot: getBundleRoot(), pid: process.pid, secretFileGuard };
+  return createWindowsUpdateBackend({
+    hubDir: args.hubDir,
+    healthUrl,
+    tar: hostTarOf(host),
+    hub: resolveWindowsHub(host, context),
+    manager: created.manager,
+    context,
+  });
+}
+
+/**
+ * Runs the hub's own self-update out-of-process (see SystemUpdateService.launchUpdateScript,
+ * which detaches it — via `systemd-run` on Linux, a detached session on macOS, a one-shot
+ * Task Scheduler task on Windows — so it survives the hub's own restart partway through).
+ * Every step's outcome is persisted via UpdateStateManager so GET /api/system/update/progress can
+ * report on it even across the restart.
+ */
+export async function runUpdate(argv: string[], host: HostEnv, secretFileGuard: SecretFileGuard): Promise<void> {
   const args = parseArgs(argv);
-  const service = serviceManagerOfKind(args.serviceManager, HUB_SERVICE, runCommand, host);
   // Under systemd the transient unit does not inherit the launching process's
   // environment, so the caller (SystemUpdateService) passes this via --setenv
   // rather than an argv flag — see launchUpdateScript for why. Under launchd
-  // the detached child inherits the hub's env directly.
-  const token = process.env.AZITO_GITHUB_TOKEN;
+  // the detached child inherits the hub's env directly. On Windows it comes in a file.
   const stateManager = new UpdateStateManager(
     path.join(args.dataDir, 'update-state.json'),
     path.join(args.dataDir, 'update.log'),
@@ -91,6 +130,48 @@ export async function runUpdate(argv: string[], host: Pick<HostEnv, 'homeDir' | 
     steps: [],
   };
 
+  try {
+    const token = takeToken(args.tokenFile);
+    const healthUrl = args.healthUrl ?? healthUrlOf(process.env.AZITO_BIND || '127.0.0.1', process.env.PORT || '3001');
+    const backend = createBackend(args, host, secretFileGuard, healthUrl);
+    if (args.serviceManager !== 'taskscheduler') {
+      await runUpdateSteps(args, backend, healthUrl, token, state, stateManager);
+      return;
+    }
+    // One at a time with `azito service ...` on the same install. A taken lock is a failed run with the reason, and nothing was changed.
+    const lock = createHubLock(args.hubDir, secretFileGuard, host.systemRoot!);
+    await underHubLock(lock, () => runUpdateSteps(args, backend, healthUrl, token, state, stateManager));
+  } catch (err) {
+    // Everything a step throws is recorded inside runUpdateSteps; what gets here is a run that could not even start.
+    const message = (err as Error).message;
+    stateManager.appendLog(`Update could not start: ${message}`);
+    state.status = 'failed';
+    state.error = message;
+    state.completedAt = new Date().toISOString();
+    stateManager.write(state);
+  } finally {
+    if (args.serviceManager === 'taskscheduler') await deleteOwnTask(host, stateManager);
+  }
+}
+
+/** The one-shot task is over with this run: it is deleted (a task left behind is found, and replaced, by the next update). */
+async function deleteOwnTask(host: HostEnv, stateManager: UpdateStateManager): Promise<void> {
+  try {
+    const client = new SchtasksClient(rawRunnerOf((spec) => runCommandSpec(spec, { ...runHostOf(host), rawOutput: true })), host);
+    if ((await client.query(HUB_UPDATE_TASK)).exists) await client.delete(HUB_UPDATE_TASK);
+  } catch (err) {
+    stateManager.appendLog(`Could not delete the task ${HUB_UPDATE_TASK}: ${(err as Error).message}. The next update replaces it`);
+  }
+}
+
+export async function runUpdateSteps(
+  args: UpdateArgs,
+  backend: UpdateBackend,
+  healthUrl: string,
+  token: string | undefined,
+  state: UpdateState,
+  stateManager: UpdateStateManager,
+): Promise<void> {
   const runStep = async (step: UpdateStep, message: string, fn: () => Promise<void>): Promise<void> => {
     state.step = step;
     state.steps.push({ step, status: 'running', message });
@@ -109,57 +190,37 @@ export async function runUpdate(argv: string[], host: Pick<HostEnv, 'homeDir' | 
     }
   };
 
-  const currentLink = path.join(args.hubDir, 'current');
-  const oldTarget = fs.readlinkSync(currentLink);
+  const oldRef = backend.currentRef();
   const newInstallDir = path.join(args.hubDir, args.version);
   const dirExistedBefore = fs.existsSync(newInstallDir);
   const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'azito-update-'));
+  let switched = false;
 
   try {
-    const tarballPath = path.join(tmpDir, 'azito-hub.tar.gz');
+    const archivePath = path.join(tmpDir, backend.archiveName);
     const sumsPath = path.join(tmpDir, 'SHA256SUMS');
 
     await runStep('download', `Downloading ${args.version}`, async () => {
-      await downloadFile(args.tarballUrl, tarballPath, token);
+      await downloadFile(args.tarballUrl, archivePath, token);
       await downloadFile(args.sha256sumsUrl, sumsPath, token);
     });
 
     await runStep('verify', 'Verifying SHA256', async () => {
       const expected = readSha256FromSumsFile(sumsPath, path.basename(new URL(args.tarballUrl).pathname));
-      const actual = await computeLocalSha256(tarballPath);
+      const actual = await computeLocalSha256(archivePath);
       if (actual !== expected) throw new Error(`SHA256 mismatch: expected ${expected}, got ${actual}`);
     });
 
-    await runStep('extract', `Extracting to ${newInstallDir}`, async () => {
-      await assertNoTraversal(tarballPath);
-      fs.mkdirSync(newInstallDir, { recursive: true });
-      await execFileAsync('tar', ['xzf', tarballPath, '-C', newInstallDir, '--no-same-owner', '--no-same-permissions']);
-      if (process.platform === 'darwin') {
-        // Mirror what install.sh does: Gatekeeper refuses to exec a quarantined
-        // binary, and the bundled `node` is the first thing the smoke test runs.
-        // Best-effort — a missing xattr is not an error worth failing on.
-        await execFileAsync('xattr', ['-dr', 'com.apple.quarantine', newInstallDir]).catch(() => {});
-      }
-    });
+    await runStep('extract', `Extracting to ${newInstallDir}`, () => backend.extract(archivePath, newInstallDir));
 
-    await runStep('smoke-test', 'Running smoke test', async () => {
-      const bundlePath = path.join(newInstallDir, 'azito-hub.cjs');
-      const { stdout } = await execFileAsync(process.execPath, [bundlePath, '--version'], { timeout: SMOKE_TEST_TIMEOUT_MS });
-      if (!stdout.includes(args.version)) throw new Error(`Smoke test version mismatch: got "${stdout.trim()}"`);
-    });
+    await runStep('smoke-test', 'Running smoke test', () => backend.smokeTest(newInstallDir, args.version));
 
-    await runStep('switch', `Switching current -> ${args.version}`, async () => {
-      fs.symlinkSync(newInstallDir, `${currentLink}.tmp`);
-      fs.renameSync(`${currentLink}.tmp`, currentLink);
-    });
+    await runStep('switch', `Switching current -> ${args.version}`, () => backend.switchTo(newInstallDir, args.version));
+    switched = true;
 
-    await runStep('restart', 'Restarting azito service', async () => {
-      await service.restart();
-    });
+    await runStep('restart', 'Restarting azito service', () => backend.restart());
 
-    await runStep('health-check', 'Waiting for healthy restart', async () => {
-      await waitForHealthyVersion(args.version);
-    });
+    await runStep('health-check', 'Waiting for healthy restart', () => waitForHealthyVersion(healthUrl, args.version, backend.healthTimeoutMs));
 
     state.status = 'success';
     state.completedAt = new Date().toISOString();
@@ -168,67 +229,32 @@ export async function runUpdate(argv: string[], host: Pick<HostEnv, 'homeDir' | 
   } catch (err) {
     const message = (err as Error).message;
     stateManager.appendLog(`Update failed at step "${state.step}": ${message}. Rolling back to ${args.oldVersion}`);
-    await rollback(currentLink, oldTarget, service);
-    // Only clean up the partially-extracted new version if `current` no
-    // longer points at it — rollback() swallows its own errors, and if it
-    // failed to re-point the symlink, newInstallDir may still be live.
-    if (safeReadlink(currentLink) !== newInstallDir) {
+    let rollbackFailure: string | undefined;
+    try {
+      await backend.rollback(oldRef, switched);
+    } catch (rollbackErr) {
+      rollbackFailure = (rollbackErr as Error).message;
+      stateManager.appendLog(`Rollback to ${args.oldVersion} failed: ${rollbackFailure}`);
+    }
+    // Only clean up the partially-extracted new version if the old one is
+    // what runs again — a rollback that failed to switch back may have left
+    // the new folder live.
+    if (!backend.isCurrent(newInstallDir)) {
       if (!dirExistedBefore) {
-        fs.rmSync(newInstallDir, { recursive: true, force: true });
+        try {
+          backend.removeInstallDir(newInstallDir);
+        } catch (removeErr) {
+          stateManager.appendLog(`Could not remove ${newInstallDir}: ${(removeErr as Error).message}`);
+        }
       } else {
         stateManager.appendLog(`Keeping existing directory: ${newInstallDir}`);
       }
     }
     state.status = 'failed';
-    state.error = message;
+    state.error = rollbackFailure === undefined ? message : `${message} (going back to ${args.oldVersion} also failed: ${rollbackFailure})`;
     state.completedAt = new Date().toISOString();
     stateManager.write(state);
   } finally {
     fs.rmSync(tmpDir, { recursive: true, force: true });
   }
-}
-
-function safeReadlink(linkPath: string): string | null {
-  try {
-    return fs.readlinkSync(linkPath);
-  } catch {
-    return null;
-  }
-}
-
-async function rollback(currentLink: string, oldTarget: string, service: ServiceManager): Promise<void> {
-  try {
-    fs.symlinkSync(oldTarget, `${currentLink}.tmp`);
-    fs.renameSync(`${currentLink}.tmp`, currentLink);
-    await service.restart();
-  } catch {
-    // Best-effort: the state file already records the original failure; a
-    // rollback failure here would only obscure it, so it's swallowed rather
-    // than propagated (there is no further recovery step to hand it to).
-  }
-}
-
-async function waitForHealthyVersion(expectedVersion: string): Promise<void> {
-  const host = process.env.AZITO_BIND || '127.0.0.1';
-  const port = process.env.PORT || '3001';
-  const deadline = Date.now() + HEALTH_CHECK_TIMEOUT_MS;
-  let lastError = '';
-
-  while (Date.now() < deadline) {
-    try {
-      const res = await fetch(`http://${host}:${port}/api/health`, { signal: AbortSignal.timeout(3000) });
-      if (res.ok) {
-        const body = await res.json() as { version: string };
-        if (body.version === expectedVersion) return;
-        lastError = `Version mismatch: expected ${expectedVersion}, got ${body.version}`;
-      } else {
-        lastError = `HTTP ${res.status}`;
-      }
-    } catch (err) {
-      lastError = (err as Error).message;
-    }
-    await new Promise((r) => setTimeout(r, HEALTH_CHECK_INTERVAL_MS));
-  }
-
-  throw new Error(`Health check timed out: ${lastError}`);
 }
