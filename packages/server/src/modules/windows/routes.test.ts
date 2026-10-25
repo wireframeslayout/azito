@@ -110,7 +110,7 @@ describe('POST /api/windows/:id/launch-agent', () => {
       tmux: tmux as TmuxClient,
       muxDriverRegistry: { resolve: () => tmux } as any,
       serverRepo: serverRepo as IServerRepository,
-      transportFactory: { hostProfileFor: () => null, getFileOps: () => { throw new Error('not expected'); } },
+      transportFactory: { hostProfileFor: () => null },
       respawnService: {} as WindowRespawnService,
       sleepService: { canSleep: vi.fn(() => false), sleep: vi.fn() } as unknown as WindowSleepService,
       sessionStrategyFactory: {
@@ -251,7 +251,7 @@ describe('POST /api/windows/:id/launch-agent', () => {
       serverRepo: {
         findByName: (name: string) => (name === server.name ? server : null),
       } as unknown as IServerRepository,
-      transportFactory: { hostProfileFor: () => null, getFileOps: () => { throw new Error('not expected'); } },
+      transportFactory: { hostProfileFor: () => null },
       respawnService: {} as WindowRespawnService,
       sleepService: { canSleep: vi.fn(() => false), sleep: vi.fn() } as unknown as WindowSleepService,
       sessionStrategyFactory: {
@@ -306,7 +306,7 @@ describe('GET /api/windows/pane-loading-state', () => {
       tmux: {} as TmuxClient,
       muxDriverRegistry: { resolve: () => ({}) } as any,
       serverRepo: { findByName: () => makeServer() } as unknown as IServerRepository,
-      transportFactory: { hostProfileFor: () => null, getFileOps: () => { throw new Error('not expected'); } },
+      transportFactory: { hostProfileFor: () => null },
       respawnService: {} as WindowRespawnService,
       sleepService: { canSleep: vi.fn(() => false), sleep: vi.fn() } as unknown as WindowSleepService,
       sessionStrategyFactory: {} as ISessionStrategyFactory,
@@ -430,7 +430,7 @@ describe('POST /api/windows/:id/respawn — execution gate (Issue #328 second-ro
       tmux: {} as TmuxClient,
       muxDriverRegistry: { resolve: () => ({}) } as any,
       serverRepo: serverRepo as IServerRepository,
-      transportFactory: { hostProfileFor: () => null, getFileOps: () => { throw new Error('not expected'); } },
+      transportFactory: { hostProfileFor: () => null },
       respawnService: { respawn } as unknown as WindowRespawnService,
       sleepService: { canSleep: vi.fn(() => false), sleep: vi.fn() } as unknown as WindowSleepService,
       sessionStrategyFactory: {} as ISessionStrategyFactory,
@@ -521,7 +521,7 @@ describe('GET /api/windows/activity-status (Issue #338 フォロー: process-bas
       tmux: {} as TmuxClient,
       muxDriverRegistry: { resolve: () => ({}) } as any,
       serverRepo: {} as IServerRepository,
-      transportFactory: { hostProfileFor: () => null, getFileOps: () => { throw new Error('not expected'); } },
+      transportFactory: { hostProfileFor: () => null },
       respawnService: {} as WindowRespawnService,
       sleepService: { canSleep: vi.fn(() => false), sleep: vi.fn() } as unknown as WindowSleepService,
       sessionStrategyFactory: {} as ISessionStrategyFactory,
@@ -556,7 +556,7 @@ describe('POST /api/windows/:id/sleep', () => {
       serverRepo: {
         findByName: () => ({ name: 'local-server', type: 'local' }),
       } as unknown as IServerRepository,
-      transportFactory: { hostProfileFor: () => null, getFileOps: () => { throw new Error('not expected'); } },
+      transportFactory: { hostProfileFor: () => null },
       respawnService: {} as WindowRespawnService,
       sleepService: { canSleep: canSleepFn, sleep: sleepFn } as unknown as WindowSleepService,
       sessionStrategyFactory: {} as ISessionStrategyFactory,

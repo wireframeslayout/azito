@@ -1,5 +1,6 @@
 import { hostFeatureSupport, type HostFeature, type HostPlatformInfo } from '@azito/shared';
 import { HostProfileError } from './hostProfile';
+import { shellDialectFor, type ShellDialect } from './shellDialect';
 
 /**
  * Refuses an operation whose feature the server's host does not support yet (`hostFeatureSupport`, the one table the UI
@@ -14,6 +15,17 @@ export function assertHostFeature(profile: HostPlatformInfo | null | undefined, 
     ? `${operation} is not available on Windows hosts.`
     : `${operation} is not available on Windows hosts yet (tracked in #${support.issue}).`;
   throw new HostProfileError('unsupported_os', message);
+}
+
+/**
+ * The dialect for a line that is typed into a pane to start or resume a task's worker (the launch line, a respawn line, the
+ * supervisor wrap, the `cd` before them). A task's worker is typed into a POSIX pane only: a Windows host starts a worker as a
+ * program with its window (`workerStartsAsProgram`), which the task path does not do yet (T6 of #371), so it is refused here even by
+ * a path that reached the pane without the entry's own check.
+ */
+export function workerLineDialect(profile: HostPlatformInfo | null | undefined, operation: string): ShellDialect {
+  assertHostFeature(profile, 'taskExecution', operation);
+  return shellDialectFor(profile ?? null);
 }
 
 /**

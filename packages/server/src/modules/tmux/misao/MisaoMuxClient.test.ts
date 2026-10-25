@@ -6,7 +6,7 @@ import { TmuxClient } from '../TmuxClient';
 import type { TransportFactory } from '../../servers/transport/TransportFactory';
 import { splitPaneEnv } from '../../../shared/auth/paneSecretEnv';
 import type { MisaoAttachClient, MisaoEventSource, MisaoRpc } from './MisaoConnection';
-import { MuxDriverUnavailableError, MuxOperationUnsupportedError, PaneReplaceRefusedError } from '../MuxCapabilityError';
+import { MuxDriverUnavailableError, MuxOperationUnsupportedError } from '../MuxCapabilityError';
 import { MuxDriverRegistry } from '../MuxDriverRegistry';
 import { WindowInputService } from '../../transcripts/WindowInputService';
 import type { IWindowRepository, Window } from '../../windows/Window';
@@ -418,101 +418,58 @@ describe('MisaoMuxClient writes', () => {
     });
   });
 
-  describe('replacePaneWithProgram (a worker started as a program, no shell: #371)', () => {
-    const program = { argv: ['claude', '--model', 'sonnet'], cwd: 'C:\\work\\wt', cols: 120, rows: 40, extraEnv: { AZITO_TASK_TOKEN: 'secret' } };
+  describe('a window whose first pane is a program (a worker started with no shell: #371)', () => {
+    const program = { argv: ['claude', '--model', 'sonnet'], cwd: 'C:\\work\\wt', cols: 120, rows: 40 };
 
-    it('opens the program beside the shell pane (same window, same labels, argv, cwd and size as given, the window env) and only then closes the shell pane', async () => {
+    it('openWorkspace opens the program as the first pane: its argv, cwd and size as given, the window env, the hub labels; no shell is resolved or typed into', async () => {
       const { daemon, client } = setup({ windowsHub: true });
-      const w = daemon.addWindow('proj', 'main');
-      const shell = daemon.addPane(w, { cmd: ['C:\\Windows\\System32\\cmd.exe'], labels: { origin: 'hub', name: 'main', windowId: '5', task: '42' } });
 
-      const replacement = await client.replacePaneWithProgram(server, handle(shell), program);
+      const opened = await client.openWorkspace(server, 'proj', { windowName: 'agent', exactName: true, extraEnv: { AZITO_UI_TOKEN: 'secret' }, program });
 
-      expect(daemon.calls.map((c) => c.method)).toEqual(['pane.info', 'pane.list', 'pane.open', 'pane.close']);
+      expect(daemon.calls.map((c) => c.method)).toEqual(['workspace.create', 'window.create', 'pane.open']);
       expect(daemon.callsTo('pane.open')).toEqual([{
         cmd: ['claude', '--model', 'sonnet'],
         cwd: 'C:\\work\\wt',
         cols: 120,
         rows: 40,
-        windowId: w,
-        labels: { origin: 'hub', name: 'main', windowId: '5', task: '42' },
-        ephemeralEnv: { ...HUB_PANE_ENV, AZITO_TASK_TOKEN: 'secret' },
+        windowId: opened.ref.window,
+        labels: { origin: 'hub', name: 'agent' },
+        ephemeralEnv: { ...HUB_PANE_ENV, AZITO_UI_TOKEN: 'secret' },
       }]);
-      expect(daemon.callsTo('pane.close')).toEqual([{ paneId: shell.paneId }]);
-      expect(replacement).toBe(daemon.panes[0].paneId);
-      expect(replacement).not.toBe(shell.paneId);
       expect(daemon.panes.map((p) => p.cmd)).toEqual([['claude', '--model', 'sonnet']]);
-      // Nothing is typed: the program is the pane's command.
       expect(daemon.callsTo('pane.write')).toEqual([]);
     });
 
-    it('leaves out the directory when none is given', async () => {
+    it('openWindow adds a window to an existing workspace the same way, and leaves out an unset directory', async () => {
       const { daemon, client } = setup({ windowsHub: true });
-      const shell = daemon.addPane(daemon.addWindow('proj', 'main'));
-      await client.replacePaneWithProgram(server, handle(shell), { argv: ['codex'], cols: 120, rows: 40 });
+      daemon.workspaces.set('proj', []);
+
+      await client.openWindow(server, 'proj', 'agent', { exactName: true, program: { argv: ['codex'], cols: 120, rows: 40 } });
+
+      expect(daemon.callsTo('pane.open')[0]).toMatchObject({ cmd: ['codex'], cols: 120, rows: 40 });
       expect(daemon.callsTo('pane.open')[0]).not.toHaveProperty('cwd');
     });
 
-    it('refuses a window with several panes (the new pane would shift their numbers) before anything is opened or closed', async () => {
+    it('closes the window (and the workspace this call created) when the program cannot be found', async () => {
       const { daemon, client } = setup({ windowsHub: true });
-      const w = daemon.addWindow('proj', 'main');
-      const shell = daemon.addPane(w, { cmd: ['C:\\Windows\\System32\\cmd.exe'] });
-      daemon.addPane(w, { cmd: ['C:\\Windows\\System32\\cmd.exe'] });
-
-      await expect(client.replacePaneWithProgram(server, handle(shell), program)).rejects.toBeInstanceOf(PaneReplaceRefusedError);
-
-      expect(daemon.callsTo('pane.open')).toEqual([]);
-      expect(daemon.callsTo('pane.close')).toEqual([]);
-      expect(daemon.panes).toHaveLength(2);
-    });
-
-    it('refuses a pane that is not an untouched shell (a program runs in it), and one that has stopped', async () => {
-      const { daemon, client } = setup({ windowsHub: true });
-      const running = daemon.addPane(daemon.addWindow('proj', 'a'), { cmd: ['claude'], fgCommand: 'claude' });
-      const stopped = daemon.addPane(daemon.addWindow('proj', 'b'), { cmd: ['C:\\Windows\\System32\\cmd.exe'], processState: 'stopped', pid: null });
-
-      await expect(client.replacePaneWithProgram(server, handle(running), program)).rejects.toThrow(/not an untouched shell/);
-      await expect(client.replacePaneWithProgram(server, handle(stopped), program)).rejects.toBeInstanceOf(PaneReplaceRefusedError);
-
-      expect(daemon.callsTo('pane.open')).toEqual([]);
-      expect(daemon.callsTo('pane.close')).toEqual([]);
-    });
-
-    it('does not close the shell pane when the program cannot be started', async () => {
-      const { daemon, client } = setup({ windowsHub: true });
-      const shell = daemon.addPane(daemon.addWindow('proj', 'main'));
       daemon.failures.set('pane.open', new FakeRpcError(1007, 'command not found: claude'));
 
-      await expect(client.replacePaneWithProgram(server, handle(shell), program)).rejects.toThrow('command not found: claude');
+      await expect(client.openWorkspace(server, 'proj', { windowName: 'agent', program })).rejects.toThrow('command not found: claude');
 
-      expect(daemon.callsTo('pane.close')).toEqual([]);
-      expect(daemon.panes).toEqual([shell]);
+      expect(daemon.calls.map((c) => c.method)).toEqual(['workspace.create', 'window.create', 'pane.open', 'window.close', 'workspace.close']);
+      expect(daemon.workspaces.size).toBe(0);
     });
 
-    it('closes the program pane again and fails when the shell pane cannot be closed, so the window is not left with two panes', async () => {
-      const { daemon, client } = setup({ windowsHub: true });
-      const shell = daemon.addPane(daemon.addWindow('proj', 'main'));
-      let closes = 0;
-      const dispatch = daemon.request.bind(daemon);
-      daemon.request = (async (method: string, params: Record<string, unknown>) => {
-        if (method === 'pane.close' && closes++ === 0) throw new FakeRpcError(1099, 'cannot close');
-        return dispatch(method, params);
-      }) as typeof daemon.request;
-
-      await expect(client.replacePaneWithProgram(server, handle(shell), program)).rejects.toThrow(/could not close the pane/);
-
-      expect(daemon.panes).toEqual([shell]);
-    });
-
-    it('fails when the pane to replace does not exist, opening nothing', async () => {
-      const { daemon, client } = setup({ windowsHub: true });
-      await expect(client.replacePaneWithProgram(server, asPaneHandle('p_missing'), program)).rejects.toThrow('not found');
+    it('is not combined with a command line', async () => {
+      const { daemon, client } = setup();
+      await expect(client.openWorkspace(server, 'proj', { command: 'claude', program })).rejects.toThrow(/not both/);
       expect(daemon.callsTo('pane.open')).toEqual([]);
     });
 
-    it('is not a tmux operation', async () => {
+    it('is not a tmux operation: a window is never silently opened bare', async () => {
       const tmux = new TmuxClient({} as TransportFactory, HUB_ENV.publicUrl, 'ui-secret', HUB_ENV.localUrl, HUB_ENV.webhookToken);
-      await expect(tmux.replacePaneWithProgram(server, asPaneHandle('%0'), program)).rejects.toBeInstanceOf(MuxOperationUnsupportedError);
+      await expect(tmux.openWorkspace(server, 'proj', { program })).rejects.toBeInstanceOf(MuxOperationUnsupportedError);
+      await expect(tmux.openWindow(server, 'proj', 'win', { program })).rejects.toBeInstanceOf(MuxOperationUnsupportedError);
     });
   });
 

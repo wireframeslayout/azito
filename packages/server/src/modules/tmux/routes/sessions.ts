@@ -12,7 +12,7 @@ import type { KeyedMutex } from '../../../shared/keyedMutex';
 import { formatMuxRef, parseMuxRef, muxRefFromTmuxTarget, tmuxTargetFromMuxRef, asPaneHandle, type MuxDriverKind, type MuxRef, type MuxUnavailableKind, type PaneOrdinal } from '@azito/shared';
 import { resolveRefForServer, resolvePaneHandle, closePaneInWindow, resolvePaneAddEnv, killWindowCore, execResultError, type KillWindowDeps } from '../../windows/windowPaneOps';
 import type { MuxDriverRegistry } from '../MuxDriverRegistry';
-import type { IMuxClient } from '../IMuxClient';
+import type { IMuxClient, PaneProgram } from '../IMuxClient';
 import { WindowExistsError } from '../WindowExistsError';
 import { MuxDriverUnavailableError, MUX_BINARY_MISSING, isMissingBinaryError, isMissingBinaryResult } from '../MuxCapabilityError';
 import { AgentUnreachableError } from '../../servers/transport/AgentUnreachableError';
@@ -28,11 +28,43 @@ function replyRouteError(reply: FastifyReply, err: unknown): FastifyReply {
 
 // ─── Types ───
 
+const LAUNCH_NOT_SUPPORTED = { error: 'launch_not_supported', message: "This host types the agent command into the new window's shell: create the window, then launch the agent in it." };
+
+/** What the Add Window form asks a new window to start (a Windows host starts it as the window's first pane). */
+export interface NewWindowLaunchRequest {
+  command: string;
+  workerType: string | null;
+  workingDirectory: string | null;
+}
+
+export interface PlannedNewWindowProgram {
+  program: PaneProgram;
+  /** The session id the agent was given at launch, to record on the window's row. */
+  agentSessionId: string | null;
+}
+
+/** Reads the `launch` of a create-window body: undefined when absent, null when it is not `{ command: string, ... }`. */
+function parseNewWindowLaunch(body: unknown): NewWindowLaunchRequest | undefined | null {
+  if (body === undefined) return undefined;
+  if (typeof body !== 'object' || body === null) return null;
+  const { command, workerType, workingDirectory } = body as Record<string, unknown>;
+  if (typeof command !== 'string' || command.trim() === '') return null;
+  if (workerType !== undefined && workerType !== null && typeof workerType !== 'string') return null;
+  if (workingDirectory !== undefined && workingDirectory !== null && typeof workingDirectory !== 'string') return null;
+  return { command, workerType: workerType ?? null, workingDirectory: workingDirectory || null };
+}
+
 export interface SessionsRouteOptions {
   serverRepo: IServerRepository;
   tmux: TmuxClient;
   uiToken: string;
   muxDriverRegistry?: MuxDriverRegistry;
+  /**
+   * Plans the program a new window starts with, for a host that starts a worker as a program (Windows, #371): null for a host that
+   * types the command into a shell instead. A plain callback (like `destroyPrimaryTaskWindow`): the session strategies and the host's
+   * file operations belong to upper layers `tmux` must not import.
+   */
+  planNewWindowProgram?: (server: ServerConfig, request: NewWindowLaunchRequest) => Promise<PlannedNewWindowProgram | null>;
   windowRepo?: SqliteWindowRepository;
   notificationBus?: NotificationBus;
   resourceGuard?: ResourceGuard;
@@ -277,6 +309,13 @@ const sessionsRoutes: FastifyPluginCallback<SessionsRouteOptions> = (fastify, op
   // refresh immediately after a hub-initiated mutation. Remote (ssh/agent) servers have
   // no reliable tmux-hook path back to the hub, so relying on hooks alone leaves the UI
   // stale for up to SESSION_CACHE_TTL.
+  /** The program a new window starts with: undefined without a `launch`, `'unsupported'` for a host that types the command into a shell. */
+  async function planLaunch(launch: NewWindowLaunchRequest | undefined, server: ServerConfig): Promise<PlannedNewWindowProgram | 'unsupported' | undefined> {
+    if (launch === undefined) return undefined;
+    if (!opts.planNewWindowProgram) throw new Error('planNewWindowProgram is not wired');
+    return (await opts.planNewWindowProgram(server, launch)) ?? 'unsupported';
+  }
+
   function notifySessionsChanged(serverName: string): void {
     sessionCache.delete(serverName);
     opts.notificationBus?.emit({ type: 'sessions:updated', payload: { serverName } });
@@ -1112,8 +1151,10 @@ const sessionsRoutes: FastifyPluginCallback<SessionsRouteOptions> = (fastify, op
   fastify.post<{ Params: { name: string } }>(
     '/api/servers/:name/mux/workspaces',
     async (request, reply) => {
-      const { name, windowName, force, kind: kindParam } = request.body as { name?: string; windowName?: string; force?: boolean; kind?: unknown };
+      const { name, windowName, force, kind: kindParam, launch: launchParam } = request.body as { name?: string; windowName?: string; force?: boolean; kind?: unknown; launch?: unknown };
       if (!name) return reply.status(400).send({ error: 'Workspace name required' });
+      const launch = parseNewWindowLaunch(launchParam);
+      if (launch === null) return reply.status(400).send({ error: 'launch must be { command: string, workerType?: string, workingDirectory?: string }' });
       return serverIsolationMutex.withLock(request.params.name, async () => {
         const freshSrv = serverRepo.findByName(request.params.name);
         if (!freshSrv) return reply.status(404).send({ error: 'Server not found' });
@@ -1127,14 +1168,16 @@ const sessionsRoutes: FastifyPluginCallback<SessionsRouteOptions> = (fastify, op
             return reply.status(409).send({ error: 'insufficient_resources', resources: status });
         }
         try {
-          const { ref, result, windowName: createdName } = await driver.openWorkspace(freshSrv, name, { windowName, extraEnv: uiTokenEnvForServer(opts.uiToken, freshSrv), ...(kind ? { kind } : {}) });
+          const planned = await planLaunch(launch, freshSrv);
+          if (planned === 'unsupported') return reply.status(400).send(LAUNCH_NOT_SUPPORTED);
+          const { ref, result, windowName: createdName } = await driver.openWorkspace(freshSrv, name, { windowName, extraEnv: uiTokenEnvForServer(opts.uiToken, freshSrv), ...(kind ? { kind } : {}), ...(planned ? { program: planned.program } : {}) });
           if (result.code !== 0) {
             const failure = createResultFailure(kind ?? freshSrv.defaultMux, result);
             return reply.status(failure.status).send(failure.body);
           }
           notifySessionsChanged(request.params.name);
           // `target` is the canonical window target; `windowName` is the display name only (a misao ref.window is an id).
-          return { ok: true, ref: formatMuxRef(ref), workspaceName: name, target: muxWindowTarget(ref), windowName: createdName ?? ref.window };
+          return { ok: true, ref: formatMuxRef(ref), workspaceName: name, target: muxWindowTarget(ref), windowName: createdName ?? ref.window, ...(planned ? { agentSessionId: planned.agentSessionId } : {}) };
         } catch (err: unknown) {
           if (err instanceof WindowExistsError) return reply.status(409).send({ error: 'window_exists', windowName: err.windowName });
           return replyCreateError(reply, kind ?? freshSrv.defaultMux, err);
@@ -1147,7 +1190,9 @@ const sessionsRoutes: FastifyPluginCallback<SessionsRouteOptions> = (fastify, op
   fastify.post<{ Params: { name: string; workspace: string } }>(
     '/api/servers/:name/mux/workspaces/:workspace/windows',
     async (request, reply) => {
-      const { name, force, kind: kindParam } = (request.body as { name?: string; force?: boolean; kind?: unknown } | null) || {};
+      const { name, force, kind: kindParam, launch: launchParam } = (request.body as { name?: string; force?: boolean; kind?: unknown; launch?: unknown } | null) || {};
+      const launch = parseNewWindowLaunch(launchParam);
+      if (launch === null) return reply.status(400).send({ error: 'launch must be { command: string, workerType?: string, workingDirectory?: string }' });
       return serverIsolationMutex.withLock(request.params.name, async () => {
         const freshSrv = serverRepo.findByName(request.params.name);
         if (!freshSrv) return reply.status(404).send({ error: 'Server not found' });
@@ -1162,13 +1207,15 @@ const sessionsRoutes: FastifyPluginCallback<SessionsRouteOptions> = (fastify, op
         }
         try {
           const workspace = decodeURIComponent(request.params.workspace);
-          const created = await driver.openWindow(freshSrv, workspace, name, { extraEnv: uiTokenEnvForServer(opts.uiToken, freshSrv), ...(kind ? { kind } : {}) });
+          const planned = await planLaunch(launch, freshSrv);
+          if (planned === 'unsupported') return reply.status(400).send(LAUNCH_NOT_SUPPORTED);
+          const created = await driver.openWindow(freshSrv, workspace, name, { extraEnv: uiTokenEnvForServer(opts.uiToken, freshSrv), ...(kind ? { kind } : {}), ...(planned ? { program: planned.program } : {}) });
           if (created.result.code !== 0) {
             const failure = createResultFailure(kind ?? freshSrv.defaultMux, created.result);
             return reply.status(failure.status).send(failure.body);
           }
           notifySessionsChanged(request.params.name);
-          return { ok: true, ref: formatMuxRef(created.ref), target: muxWindowTarget(created.ref), windowName: created.windowName ?? created.ref.window };
+          return { ok: true, ref: formatMuxRef(created.ref), target: muxWindowTarget(created.ref), windowName: created.windowName ?? created.ref.window, ...(planned ? { agentSessionId: planned.agentSessionId } : {}) };
         } catch (err: unknown) {
           if (err instanceof WindowExistsError) return reply.status(409).send({ error: 'window_exists', windowName: err.windowName });
           return replyCreateError(reply, kind ?? freshSrv.defaultMux, err);

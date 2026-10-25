@@ -1,9 +1,7 @@
 import type { FastifyPluginCallback } from 'fastify';
 import { workerStartsAsProgram } from '../../shared/os/hostFeature';
+import { HostProfileError } from '../../shared/os/hostProfile';
 import { shellDialectFor } from '../../shared/os/shellDialect';
-import { commandLineLaunch, launchArgv } from '../agents/WorkerLaunch';
-import { launchProgramInPane } from '../agents/launchProgramInPane';
-import { PaneReplaceRefusedError } from '../tmux/MuxCapabilityError';
 import { randomUUID } from 'node:crypto';
 import type { IWindowRepository, Window } from './Window';
 import type { IProjectRepository } from '../projects/Project';
@@ -44,7 +42,7 @@ export interface WindowsRouteOptions {
   muxDriverRegistry: MuxDriverRegistry;
   serverRepo: IServerRepository;
   /** Tells the OS of a server, hence the shell its panes run (the lines typed into them). */
-  transportFactory: Pick<TransportFactory, 'hostProfileFor' | 'getFileOps'>;
+  transportFactory: Pick<TransportFactory, 'hostProfileFor'>;
   respawnService: WindowRespawnService;
   sleepService: WindowSleepService;
   sessionStrategyFactory: ISessionStrategyFactory;
@@ -192,6 +190,11 @@ const windowsRoutes: FastifyPluginCallback<WindowsRouteOptions> = (fastify, opts
         return reply.code(400).send({ error: 'Invalid worker_model format' });
       }
       const workingDirectory = (body['working_directory'] as string) || null;
+      // The session id a Windows host's agent was started with (it is the window's first pane, so no launch-agent call records it).
+      const agentSessionId = (body['agent_session_id'] as string | undefined) || null;
+      if (agentSessionId !== null && !/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(agentSessionId)) {
+        return reply.code(400).send({ error: 'Invalid agent_session_id format' });
+      }
       const winId = windowRepo.add({
         ownerType: 'project',
         projectId: id,
@@ -204,7 +207,7 @@ const windowsRoutes: FastifyPluginCallback<WindowsRouteOptions> = (fastify, opts
         windowType: (body['window_type'] as string) === 'agent' ? 'agent' : 'terminal',
         workerType,
         workerModel,
-        agentSessionId: null,
+        agentSessionId,
         launchCommand: (body['launch_command'] as string) || null,
         workingDirectory,
         paneLayout: null,
@@ -440,6 +443,12 @@ const windowsRoutes: FastifyPluginCallback<WindowsRouteOptions> = (fastify, opts
 
       const srv = serverRepo.findByName(win.serverName);
       if (!srv) return reply.status(404).send({ error: 'Server not found' });
+      // A Windows host starts an agent as the first pane of its window, not by typing into a shell pane (POST /mux/workspaces with `launch`),
+      // so an agent cannot be started in a window that already exists: its shell pane would have to be replaced, and what runs in it could be lost.
+      if (workerStartsAsProgram(opts.transportFactory.hostProfileFor(srv))) {
+        throw new HostProfileError('unsupported_os', 'Launching an agent in an existing window is not available on Windows hosts: an agent is started in a new window (the window is created with the agent as its first pane).');
+      }
+
       const body = request.body as Record<string, unknown>;
       const command = (body['command'] as string | undefined)?.trim();
       if (!command)
@@ -487,32 +496,6 @@ const windowsRoutes: FastifyPluginCallback<WindowsRouteOptions> = (fastify, opts
 
       const supervised = shouldSupervise(srv.type, win.windowType, windowKindOf(win));
       const paneRef = win.muxRef ?? muxRefFromTmuxTarget(win.tmuxTarget);
-      if (workerStartsAsProgram(opts.transportFactory.hostProfileFor(srv))) {
-        // The mux starts the program itself, in place of the window's shell pane (a Windows host). The line is split into arguments
-        // only if that is safe; a supervisor wraps a typed line and a Windows host has none.
-        if (supervised) return reply.status(409).send({ error: 'supervised_program_launch_unsupported', message: 'A window under a supervisor cannot start its agent as a program.' });
-        const launch = commandLineLaunch(effectiveCommand);
-        launchArgv(launch); // refuses a command that cannot be split safely (501 unsupported_os) before anything is touched
-        return opts.serverIsolationMutex.withLock(win.serverName, async () => {
-          // The window, the server and the env are decided inside the per-server lock, like every route that adds a pane (see serverIsolationMutex).
-          const freshWin = windowRepo.findById(id);
-          const freshSrv = serverRepo.findByName(win.serverName);
-          if (!freshWin || !freshSrv) return reply.status(404).send({ error: 'Window not found' });
-          const paneEnv = resolvePaneAddEnv(freshWin, freshSrv, { uiToken: opts.uiToken, buildSecondaryWindowEnv: opts.buildSecondaryWindowEnv });
-          if (!paneEnv.ok) return reply.status(paneEnv.status).send(paneEnv.body);
-          const driver = driverFor(freshSrv);
-          const shellPane = await driver.resolvePane(freshSrv, paneRef, 1);
-          try {
-            await launchProgramInPane(driver, freshSrv, shellPane, launch, { cwd: freshWin.workingDirectory, paneEnv: paneEnv.extraEnv, files: () => opts.transportFactory.getFileOps(freshSrv) });
-          } catch (err) {
-            // Refused before anything was opened or closed (several panes, or a program already runs in the pane).
-            if (err instanceof PaneReplaceRefusedError) return reply.status(409).send({ error: 'pane_not_replaceable', message: err.message });
-            throw err;
-          }
-          notifyWindowsChanged(freshWin.serverName);
-          return { ok: true, supervised: false };
-        });
-      }
       const paneHandle = await driverFor(srv).resolvePane(srv, paneRef, 1);
       const cmd = supervised
         ? wrapWithSupervisor(effectiveCommand, {

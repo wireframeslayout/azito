@@ -15,8 +15,6 @@ export interface MisaoTerminalStreamOptions {
   log: { warn(message: string): void };
   /** The daemon's error code when `err` is an RPC error response, otherwise undefined. */
   rpcErrorCode(err: unknown): number | undefined;
-  /** Whether the pane was closed because another pane took its place (a worker started as a program): the browser must reconnect then. */
-  wasReplaced(paneId: string): boolean;
 }
 
 /**
@@ -114,11 +112,8 @@ export class MisaoTerminalStream extends EventEmitter implements ITerminalStream
 
   private finishPaneClosed(): void {
     if (this.finished) return;
-    // A replaced pane is closed with no code of its own: the browser reconnects, and the same ordinal now names the replacement.
-    if (!this.options.wasReplaced(this.options.paneId)) {
-      this.closeCode = TERMINAL_CLOSE.paneClosed.code;
-      this.closeReason = TERMINAL_CLOSE.paneClosed.reason;
-    }
+    this.closeCode = TERMINAL_CLOSE.paneClosed.code;
+    this.closeReason = TERMINAL_CLOSE.paneClosed.reason;
     this.finish(true);
   }
 

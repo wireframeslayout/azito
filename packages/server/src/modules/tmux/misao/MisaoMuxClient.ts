@@ -3,8 +3,7 @@ import { type MuxCapabilities, type MuxDriverKind, type MuxPaneInfo, type MuxRef
 import type { ExecResult, ITerminalStream } from '../../servers/transport/ServerTransport';
 import type { ServerConfig } from '../../servers/Server';
 import type { IMuxClient, PaneLocation, PaneProgram, PaneWindowLabels } from '../IMuxClient';
-import { MuxDriverUnavailableError, MuxOperationUnsupportedError, PaneReplaceRefusedError } from '../MuxCapabilityError';
-import { isBareShellCommand } from '../../../shared/os/shellCommands';
+import { MuxDriverUnavailableError, MuxOperationUnsupportedError } from '../MuxCapabilityError';
 import { splitPaneEnv } from '../../../shared/auth/paneSecretEnv';
 import { generateWindowName } from '../windowNameUtils';
 import { composePaneEnv, type HubPaneEnvConfig } from '../hubPaneEnv';
@@ -17,8 +16,6 @@ import { requireCommandArgs, type PaneShellResolver } from './paneShell';
 import { type MisaoPane, type MisaoWorkspace, lastOutputEpochSeconds, misaoRef, paneCommand, panesOfWindow, toMuxPaneInfos, toMuxWorkspaces } from './misaoMapping';
 
 const LONG_TEXT_BYTES = 500;
-/** How long a replaced pane is remembered as replaced (long enough for the close events of its attached terminals). */
-const REPLACED_PANE_MEMORY_MS = 60_000;
 const LONG_TEXT_SUBMIT_DELAY_MS = 2000;
 /** Same settle time tmux's sendLongText waits after a paste, so a following Enter is not folded into it. */
 const LONG_TEXT_PASTE_SETTLE_MS = 3000;
@@ -72,11 +69,11 @@ export class MisaoMuxClient implements IMuxClient {
     return this.listWorkspaces(server);
   }
 
-  async openWorkspace(server: ServerConfig, name: string, opts?: { command?: string; windowName?: string; exactName?: boolean; extraEnv?: Record<string, string> }): Promise<{ ref: MuxRef; result: ExecResult; windowName?: string }> {
+  async openWorkspace(server: ServerConfig, name: string, opts?: { command?: string; windowName?: string; exactName?: boolean; extraEnv?: Record<string, string>; program?: PaneProgram }): Promise<{ ref: MuxRef; result: ExecResult; windowName?: string }> {
     await this.rpc.request('workspace.create', { name });
     const windowName = opts?.exactName && opts.windowName ? opts.windowName : generateWindowName(opts?.windowName || 'win');
     try {
-      const windowId = await this.createWindowWithPane(server, name, windowName, opts?.command, opts?.extraEnv);
+      const windowId = await this.createWindowWithPane(server, name, windowName, opts?.command, opts?.extraEnv, opts?.program);
       return { ref: misaoRef(name, windowId), result: OK, windowName };
     } catch (err) {
       // Best-effort rollback of the workspace this call created; the original failure is what the caller sees.
@@ -85,9 +82,9 @@ export class MisaoMuxClient implements IMuxClient {
     }
   }
 
-  async openWindow(server: ServerConfig, workspace: string, baseName?: string, opts?: { exactName?: boolean; extraEnv?: Record<string, string> }): Promise<{ ref: MuxRef; result: ExecResult; windowName?: string }> {
+  async openWindow(server: ServerConfig, workspace: string, baseName?: string, opts?: { exactName?: boolean; extraEnv?: Record<string, string>; program?: PaneProgram }): Promise<{ ref: MuxRef; result: ExecResult; windowName?: string }> {
     const windowName = opts?.exactName && baseName ? baseName : generateWindowName(baseName || 'win');
-    const windowId = await this.createWindowWithPane(server, workspace, windowName, undefined, opts?.extraEnv);
+    const windowId = await this.createWindowWithPane(server, workspace, windowName, undefined, opts?.extraEnv, opts?.program);
     return { ref: misaoRef(workspace, windowId), result: OK, windowName };
   }
 
@@ -175,7 +172,6 @@ export class MisaoMuxClient implements IMuxClient {
         rows,
         log: this.options.log,
         rpcErrorCode: (err) => this.rpc.rpcErrorCode(err),
-        wasReplaced: (paneId) => this.replacedPanes.has(paneId),
       });
     } catch (err) {
       client.close();
@@ -256,49 +252,6 @@ export class MisaoMuxClient implements IMuxClient {
     const handle = asPaneHandle(paneId);
     if (opts?.command) await this.sendKeysToHandle(server, handle, [opts.command, 'Enter']);
     return handle;
-  }
-
-  /**
-   * A program is started by `pane.open`'s own argv and cwd, with no shell: misao looks the program up by the host's rules
-   * (PATH and PATHEXT on Windows, so `claude` is `claude.cmd`) and names the pane's profile after it. The new pane is opened beside the
-   * old one (same window, the old pane's labels), and only then is the old one closed, so a failure to start leaves the window as it was.
-   */
-  async replacePaneWithProgram(server: ServerConfig, handle: PaneHandle, program: PaneProgram): Promise<PaneHandle> {
-    const source = await this.rpc.request('pane.info', { paneId: handle });
-    // Before anything is opened: only the single, untouched shell pane of a window is replaced. With sibling panes the new pane would
-    // take another ordinal (they are numbered in creation order) and shift theirs; a pane with a program in it would lose that program.
-    const siblings = (await this.rpc.request('pane.list', {})).filter((p) => p.window.id === source.window.id);
-    if (siblings.length !== 1) throw new PaneReplaceRefusedError(`The window has ${siblings.length} panes: a program replaces the shell only in a window with a single pane (the other panes would change their numbers).`);
-    if (source.processState !== 'running' || !isBareShellCommand(paneCommand(source))) {
-      throw new PaneReplaceRefusedError(`The pane is not an untouched shell (it runs ${paneCommand(source)}, ${source.processState}): replacing it would end what runs in it.`);
-    }
-    const { paneId } = await this.rpc.request('pane.open', {
-      cmd: [...program.argv],
-      ...(program.cwd !== undefined ? { cwd: program.cwd } : {}),
-      cols: program.cols,
-      rows: program.rows,
-      windowId: source.window.id,
-      labels: inheritedLabels(source),
-      ...this.paneEnvParams(server, program.extraEnv),
-    });
-    const replacement = asPaneHandle(paneId);
-    // Said before the close: terminals attached to the old pane see its pane.closed and must tell the browser to reconnect, not "pane closed".
-    this.markReplaced(handle);
-    const closed = await this.closePane(server, handle);
-    if (closed.code !== 0 && !closed.alreadyGone) {
-      this.replacedPanes.delete(handle);
-      await this.closePane(server, replacement);
-      throw new Error(`could not close the pane ${handle} that the program replaces: ${closed.stderr}`);
-    }
-    return replacement;
-  }
-
-  /** Panes closed because a program took their place. Kept for a short while: the close events of attached terminals arrive just after. */
-  private readonly replacedPanes = new Set<string>();
-
-  private markReplaced(handle: PaneHandle): void {
-    this.replacedPanes.add(handle);
-    setTimeout(() => this.replacedPanes.delete(handle), REPLACED_PANE_MEMORY_MS).unref();
   }
 
   async closePane(_server: ServerConfig, handle: PaneHandle): Promise<ExecResult> {
@@ -409,15 +362,26 @@ export class MisaoMuxClient implements IMuxClient {
     await this.rpc.request('pane.write', { paneId: handle, data, source: 'hub' });
   }
 
-  private async createWindowWithPane(server: ServerConfig, workspace: string, windowName: string, command: string | undefined, extraEnv: Record<string, string> | undefined): Promise<string> {
+  /**
+   * A new window with its first pane: a shell (with `command` typed as its command line when given), or, with `program`, that program
+   * started directly by `pane.open` (its argv, cwd and size; misao resolves `claude` to `claude.cmd` by the child's PATH / PATHEXT and
+   * names the pane's profile after it). The program is the pane from the start: no shell pane is opened and replaced.
+   */
+  private async createWindowWithPane(server: ServerConfig, workspace: string, windowName: string, command: string | undefined, extraEnv: Record<string, string> | undefined, program?: PaneProgram): Promise<string> {
+    if (program && command) throw new Error('A window is started with a command line or as a program, not both.');
     // Resolved before the window exists: a host whose shell is unknown or unsupported must not leave an empty window behind.
-    const paneShell = await this.options.paneShell();
-    const { shell } = paneShell;
-    const commandArgs = command ? requireCommandArgs(paneShell, 'Starting a command in a new pane') : [];
+    let cmd: string[];
+    if (program) {
+      cmd = [...program.argv];
+    } else {
+      const paneShell = await this.options.paneShell();
+      cmd = command ? [paneShell.shell, ...requireCommandArgs(paneShell, 'Starting a command in a new pane'), command] : [paneShell.shell];
+    }
     const { windowId } = await this.rpc.request('window.create', { workspace, name: windowName });
     try {
       await this.rpc.request('pane.open', {
-        cmd: command ? [shell, ...commandArgs, command] : [shell],
+        cmd,
+        ...(program ? { ...(program.cwd !== undefined ? { cwd: program.cwd } : {}), cols: program.cols, rows: program.rows } : {}),
         windowId,
         labels: { origin: 'hub', name: windowName },
         ...this.paneEnvParams(server, extraEnv),

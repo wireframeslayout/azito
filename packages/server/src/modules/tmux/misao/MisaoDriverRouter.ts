@@ -1,7 +1,7 @@
 import type { MuxCapabilities, MuxDriverKind, MuxPaneInfo, MuxRef, MuxWorkspace, PaneHandle, PaneOrdinal } from '@azito/shared';
 import type { ExecResult, ITerminalStream } from '../../servers/transport/ServerTransport';
 import type { ServerConfig } from '../../servers/Server';
-import type { IMuxClient, PaneLocation, PaneProgram, PaneWindowLabels } from '../IMuxClient';
+import type { IMuxClient, PaneLocation, PaneWindowLabels } from '../IMuxClient';
 import type { MisaoMuxClient } from './MisaoMuxClient';
 import { MISAO_CAPS } from './MisaoMuxClient';
 import type { MisaoServers } from './MisaoServers';
@@ -45,7 +45,6 @@ export class MisaoDriverRouter implements IMuxClient {
   async probePane(server: ServerConfig, handle: PaneHandle): ReturnType<IMuxClient['probePane']> { return this.to(server).probePane(server, handle); }
   async splitPaneByHandle(server: ServerConfig, handle: PaneHandle, dir: 'h' | 'v', env?: Record<string, string>): ReturnType<IMuxClient['splitPaneByHandle']> { return this.to(server).splitPaneByHandle(server, handle, dir, env); }
   async openPaneInWindow(server: ServerConfig, ref: MuxRef, opts?: Parameters<IMuxClient['openPaneInWindow']>[2]): Promise<PaneHandle> { return this.to(server).openPaneInWindow(server, ref, opts); }
-  async replacePaneWithProgram(server: ServerConfig, handle: PaneHandle, program: PaneProgram): Promise<PaneHandle> { return this.to(server).replacePaneWithProgram(server, handle, program); }
   async closePane(server: ServerConfig, handle: PaneHandle): Promise<ExecResult> { return this.to(server).closePane(server, handle); }
   async captureScreen(server: ServerConfig, handle: PaneHandle, start?: number, end?: number): Promise<ExecResult> { return this.to(server).captureScreen(server, handle, start, end); }
   async sendKeysToHandle(server: ServerConfig, handle: PaneHandle, keys: string[]): Promise<void> { return this.to(server).sendKeysToHandle(server, handle, keys); }

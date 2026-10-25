@@ -1,7 +1,8 @@
 import { isPrimaryTaskWindow, type IWindowRepository, type PaneLayout, type Window } from './Window';
 import { assertHostFeature, workerStartsAsProgram } from '../../shared/os/hostFeature';
 import { HostProfileError } from '../../shared/os/hostProfile';
-import { launchProgramInPane } from '../agents/launchProgramInPane';
+import { programFor } from '../agents/workerProgram';
+import type { PaneProgram } from '../tmux/IMuxClient';
 import { changeDirectoryLine } from '../../shared/os/changeDirectoryLine';
 import { DuplicateAgentSessionError } from './DuplicateAgentSessionError';
 import type { ServerConfig } from '../servers/Server';
@@ -292,6 +293,17 @@ export class WindowRespawnService {
     // here instead of re-querying the repositories a second time.
     const supervision: SupervisionContext = { supervise, taskId: win.taskId, unitId, windowId };
 
+    // A host that starts a worker as a program (Windows) gets it as the first pane of the window created below: argv and directory are
+    // decided here, before anything is destroyed, and nothing is typed into a shell or replaced afterwards.
+    let respawnProgram: PaneProgram | undefined;
+    if (this.startsWorkerAsProgram(server) && win.workerType && !opts?.skipAgentLaunch) {
+      if (supervise) throw new Error(`A worker started as a program cannot run under a supervisor (${server.name}).`);
+      let sessionId = win.agentSessionId;
+      if (!sessionId && this.sessionCaptureService) sessionId = await this.sessionCaptureService.tryScanForWindow(windowId);
+      const launch = this.sessionStrategyFactory.create(win.workerType).buildRespawnLaunch(sessionId, win.workerModel, null, blockMcp);
+      if (launch) respawnProgram = await programFor(launch, resolvedCwds.singleCwd, () => this.transportFactory.getFileOps(server));
+    }
+
     // Window-generation point for this window: EITHER branch below actually
     // (re)creates the window that becomes the respawned pane (unlike
     // ExecuteTaskUseCase's throwaway-session-then-real-window split, respawn
@@ -468,10 +480,10 @@ export class WindowRespawnService {
           const freshWorkspaceExists = freshWorkspaces.some((s) => s.name === sessionName && (s.kind ?? windowKind) === windowKind);
           createdViaNewSession = !freshWorkspaceExists;
           if (!freshWorkspaceExists) {
-            const opened = await createDriver.openWorkspace(fs, sessionName, { windowName: openName, exactName: true, extraEnv: env, kind: windowKind });
+            const opened = await createDriver.openWorkspace(fs, sessionName, { windowName: openName, exactName: true, extraEnv: env, kind: windowKind, ...(respawnProgram ? { program: respawnProgram } : {}) });
             return { result: opened.result, windowName: opened.ref.window, ref: opened.ref };
           }
-          const opened = await createDriver.openWindow(fs, sessionName, openName, { exactName: true, extraEnv: env, kind: windowKind });
+          const opened = await createDriver.openWindow(fs, sessionName, openName, { exactName: true, extraEnv: env, kind: windowKind, ...(respawnProgram ? { program: respawnProgram } : {}) });
           return { result: opened.result, windowName: opened.ref.window, ref: opened.ref };
         };
 
@@ -549,9 +561,10 @@ export class WindowRespawnService {
           }
         } else if (win.paneLayout) {
           await this.restorePaneLayout(respawnServer, newRef, baseTarget, win.paneLayout, win, supervision, resolvedCwds.paneCwds, windowEnv, false, blockMcp);
-        } else {
+        } else if (!respawnProgram) {
+          // (A worker started as a program is already the window's pane: there is nothing to type.)
           const paneId = await restoreDriver.resolvePane(respawnServer, newRef, 1);
-          await this.setupSinglePane(respawnServer, paneId, baseTarget, win, supervision, resolvedCwds.singleCwd, windowEnv, blockMcp);
+          await this.setupSinglePane(respawnServer, paneId, baseTarget, win, supervision, resolvedCwds.singleCwd, blockMcp);
         }
       } catch (err) {
         try {
@@ -1213,14 +1226,9 @@ export class WindowRespawnService {
     win: { id?: number; workerType: string | null; agentSessionId: string | null; workerModel: string | null; workingDirectory: string | null },
     supervision: SupervisionContext,
     singleCwd: string | null,
-    paneEnv: Record<string, string>,
     blockMcp = true,
   ): Promise<void> {
     const driver = this.resolveDriver(server);
-    if (this.startsWorkerAsProgram(server)) {
-      await this.launchWorkerAsProgram(server, handle, win, supervision, singleCwd, paneEnv, blockMcp);
-      return;
-    }
     if (singleCwd) {
       await driver.sendKeysToHandle(server, handle, [await changeDirectoryLine(() => this.transportFactory.getFileOps(server), this.dialectOf(server), singleCwd), 'Enter']);
       await sleep(300);
@@ -1238,25 +1246,5 @@ export class WindowRespawnService {
         await driver.sendKeysToHandle(server, handle, [sendCmd, 'Enter']);
       }
     }
-  }
-
-  /** The window's worker started as a program in place of the new window's shell pane (a Windows host): the directory and the window's env go to the mux. */
-  private async launchWorkerAsProgram(
-    server: ServerConfig,
-    handle: PaneHandle,
-    win: { id?: number; workerType: string | null; agentSessionId: string | null; workerModel: string | null },
-    supervision: SupervisionContext,
-    cwd: string | null,
-    paneEnv: Record<string, string>,
-    blockMcp: boolean,
-  ): Promise<void> {
-    if (!win.workerType) return;
-    if (supervision.supervise) throw new Error(`A worker started as a program cannot run under a supervisor (${server.name}).`);
-    let sessionId = win.agentSessionId;
-    if (!sessionId && win.id != null && this.sessionCaptureService) {
-      sessionId = await this.sessionCaptureService.tryScanForWindow(win.id);
-    }
-    const launch = this.sessionStrategyFactory.create(win.workerType).buildRespawnLaunch(sessionId, win.workerModel, null, blockMcp);
-    if (launch) await launchProgramInPane(this.resolveDriver(server), server, handle, launch, { cwd, paneEnv, files: () => this.transportFactory.getFileOps(server) });
   }
 }

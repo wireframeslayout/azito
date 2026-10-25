@@ -620,12 +620,14 @@ export class TmuxClient implements IMuxClient {
   async listWorkspaces(server: ServerConfig) { return this.listSessions(server); }
   async listWorkspacesStrict(server: ServerConfig) { return this.listSessionsForSecurityGate(server); }
 
-  async openWorkspace(server: ServerConfig, name: string, opts?: { command?: string; windowName?: string; exactName?: boolean; extraEnv?: Record<string, string> }) {
+  async openWorkspace(server: ServerConfig, name: string, opts?: { command?: string; windowName?: string; exactName?: boolean; extraEnv?: Record<string, string>; program?: PaneProgram }) {
+    if (opts?.program) throw new MuxOperationUnsupportedError('tmux', 'a window started as a program');
     const { result, windowName } = await this.createSession(server, name, opts);
     return { ref: { kind: 'tmux' as const, workspace: name, window: windowName }, result };
   }
 
-  async openWindow(server: ServerConfig, workspace: string, baseName?: string, opts?: { exactName?: boolean; extraEnv?: Record<string, string> }) {
+  async openWindow(server: ServerConfig, workspace: string, baseName?: string, opts?: { exactName?: boolean; extraEnv?: Record<string, string>; program?: PaneProgram }) {
+    if (opts?.program) throw new MuxOperationUnsupportedError('tmux', 'a window started as a program');
     const { result, windowName } = await this.createWindow(server, workspace, baseName, opts);
     return { ref: { kind: 'tmux' as const, workspace, window: windowName }, result };
   }
@@ -725,10 +727,6 @@ export class TmuxClient implements IMuxClient {
 
   async openPaneInWindow(_server: ServerConfig, _ref: MuxRef, _opts?: { command?: string; extraEnv?: Record<string, string>; labels?: PaneWindowLabels }): Promise<PaneHandle> {
     throw new MuxOperationUnsupportedError('tmux', 'openPaneInWindow');
-  }
-
-  async replacePaneWithProgram(_server: ServerConfig, _handle: PaneHandle, _program: PaneProgram): Promise<PaneHandle> {
-    throw new MuxOperationUnsupportedError('tmux', 'replacePaneWithProgram');
   }
 
   async closePane(server: ServerConfig, handle: PaneHandle) { return this.killPane(server, handle as string); }

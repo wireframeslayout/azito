@@ -271,35 +271,32 @@ describe.skipIf(process.platform !== 'win32' || !fs.existsSync(MISAO_CLI))('misa
       stream.close();
     }, 90_000);
 
-    it('starts a program in place of the shell pane, as a worker is started (#371): a .cmd found through PATHEXT, its arguments, directory, size and env as given', async () => {
+    it('creates a window whose first pane is the worker program (#371): a .cmd found through PATHEXT, its arguments, directory, size and env as given, no shell pane first', async () => {
       const fake = writeFakeAgent(tmp);
       const work = fs.realpathSync.native(fs.mkdtempSync(path.join(tmp, 'work-')));
-      const { ref, pane } = await openWindow();
+      const name = `w${Math.random().toString(36).slice(2, 7)}`;
 
-      const program = await driver().replacePaneWithProgram(server, pane, {
+      const opened = await driver().openWorkspace(server, `azw-${name}`, {
+        windowName: name,
+        exactName: true,
         // `fake-agent` is `fake-agent.cmd` in the shim directory on the pane's PATH: misao resolves it with PATH and PATHEXT, no shell is typed into.
-        argv: ['fake-agent', '--model', 'claude-opus-4-6[1m]', '--flag'],
-        cwd: work,
-        cols: 120,
-        rows: 40,
+        program: { argv: ['fake-agent', '--model', 'claude-opus-4-6[1m]', '--flag'], cwd: work, cols: 120, rows: 40 },
         extraEnv: { PATH: `${fake.shimDir};${process.env.PATH ?? ''}`, AZITO_FAKE_ENV: 'from-the-window' },
       });
 
-      expect(program).not.toBe(pane);
+      const panes = await driver().listPanesByRef(server, opened.ref);
+      expect(panes).toHaveLength(1);
+      const program = panes[0].handle;
       await vi.waitFor(async () => expect(readFakeAgentReport(await screenOf(program))).not.toBeNull(), { timeout: 30_000, interval: 300 });
       const report = readFakeAgentReport(await screenOf(program))!;
       expect(report.cwd.toLowerCase()).toBe(work.toLowerCase());
       expect(report).toMatchObject({ args: ['--model', 'claude-opus-4-6[1m]', '--flag'], env: 'from-the-window', cols: 120, rows: 40 });
-      // The shell pane is gone; the program is the window's first (only) pane.
-      expect(await driver().resolvePane(server, ref, 1)).toBe(program);
-      expect(await driver().listPanesByRef(server, ref)).toHaveLength(1);
     }, 90_000);
 
-    it('leaves the shell pane as it was when the program cannot be found (command not found), and the window stays', async () => {
-      const { ref, pane } = await openWindow();
-      await expect(driver().replacePaneWithProgram(server, pane, { argv: ['azito-no-such-program-xyz'], cols: 120, rows: 40 })).rejects.toThrow();
-      expect(await driver().probePane(server, pane)).toEqual({ alive: true, verified: true });
-      expect(await driver().listPanesByRef(server, ref)).toHaveLength(1);
+    it('leaves no window behind when the program cannot be found (command not found)', async () => {
+      const before = (await driver().listWorkspaces(server)).flatMap((w) => w.windows).length;
+      await expect(driver().openWorkspace(server, 'azw-noprog', { windowName: 'noprog', exactName: true, program: { argv: ['azito-no-such-program-xyz'], cols: 120, rows: 40 } })).rejects.toThrow();
+      expect((await driver().listWorkspaces(server)).flatMap((w) => w.windows).length).toBe(before);
     }, 60_000);
 
     it('refuses to run a command line in a pane (a worker is started as a program instead), leaving no window behind', async () => {

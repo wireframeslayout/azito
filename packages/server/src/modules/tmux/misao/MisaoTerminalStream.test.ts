@@ -24,7 +24,7 @@ function fakeClient() {
   return { client, request, output, state: (s: unknown) => { for (const l of states) l(s); }, event: (e: unknown) => { for (const l of events) l(e); } };
 }
 
-async function open(fake = fakeClient(), replaced = false) {
+async function open(fake = fakeClient()) {
   const warn = vi.fn();
   const stream = await MisaoTerminalStream.open({
     client: fake.client as unknown as MisaoAttachClient,
@@ -34,7 +34,6 @@ async function open(fake = fakeClient(), replaced = false) {
     rows: 30,
     log: { warn },
     rpcErrorCode: (err) => (err instanceof FakeRpcError ? err.code : undefined),
-    wasReplaced: () => replaced,
   });
   const data: string[] = [];
   const closed = vi.fn();
@@ -57,14 +56,6 @@ describe('MisaoTerminalStream', () => {
     });
     const { data } = await open(fake);
     await vi.waitFor(() => expect(data).toEqual(['snap']));
-  });
-
-  it('a pane closed because a program replaced it ends without the pane-closed code, so the browser reconnects to the replacement', async () => {
-    const { fake, stream, closed } = await open(fakeClient(), true);
-    fake.event({ type: 'pane.closed', paneId: 'p_1' });
-    await vi.waitFor(() => expect(closed).toHaveBeenCalled());
-    expect(stream.closeCode).toBeUndefined();
-    expect(stream.closeReason).toBeUndefined();
   });
 
   it('does not lose a pane.closed that arrives with the attach reply, before anyone listens', async () => {

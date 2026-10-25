@@ -28,7 +28,7 @@ export function isWindowExists(res: unknown): res is { error: string; windowName
 }
 
 /** The 201 body of `POST /mux/workspaces[/:ws/windows]`. */
-interface MuxCreateResponse { ok: boolean; ref: string; target: string; windowName: string }
+interface MuxCreateResponse { ok: boolean; ref: string; target: string; windowName: string; agentSessionId?: string | null }
 
 export type AgentPreset = { command: string; label: string };
 
@@ -52,22 +52,17 @@ export function buildAgentPresets(agentDefs: AgentDefinition[], t: TFunction<'wo
  * UI 専用の仮想選択肢なので、ここでのみ特別扱いする。
  */
 /**
- * 新しいウィンドウを開く順序。POSIX は、端末を開いてから `cd` を送り、エージェントを起動する（シェルに打ち込む）。
- * ワーカーをプログラムとして起動するホスト（Windows）では、起動がシェルのペインを別のペインに置き換えるので、
- * 先に起動してから端末を開く（開いてあった端末は閉じたペインに付いたままになる）。`cd` も送らない（作業ディレクトリは窓の登録から渡る）。
+ * 新しいウィンドウの作成 API に渡す `launch`。ワーカーをプログラムとして起動するホスト（Windows）は、エージェントをその窓の最初のペインとして
+ * 1 回の作成で起動する（シェルのペインを作ってから launch-agent で置き換えない）。それ以外は undefined で、窓を作ってからシェルに打ち込む。
  */
-export async function openAndLaunchNewWindow(
-  startsWorkerAsProgram: boolean,
-  steps: { open: () => void | Promise<void>; changeDirectory: (() => Promise<void>) | null; launch: (() => Promise<unknown>) | null },
-): Promise<void> {
-  if (startsWorkerAsProgram && steps.launch) {
-    await steps.launch();
-    await steps.open();
-    return;
-  }
-  await steps.open();
-  if (steps.changeDirectory) await steps.changeDirectory();
-  if (steps.launch) await steps.launch();
+export function buildNewWindowLaunch(
+  hostPlatform: string | undefined,
+  agent: string,
+  agentCommand: string,
+  workDir: string,
+): { command: string; workerType: string; workingDirectory?: string } | undefined {
+  if (hostPlatform !== 'win32' || agent === 'none' || !agentCommand) return undefined;
+  return { command: agentCommand, workerType: agent === 'custom' ? 'generic' : agent, ...(workDir.trim() ? { workingDirectory: workDir.trim() } : {}) };
 }
 
 export function buildAgentCommand(
@@ -358,6 +353,9 @@ export function useAddWindowModal(
             return;
           }
         }
+        // A host that starts the agent as a program (Windows) makes it the window's first pane in this one call; any other types it into the new shell afterwards.
+        const agentCmd = awAgent !== 'none' ? buildAgentCommand(awAgent, awAgentModel, agentPresets[awAgent]?.command || '', awNewCommand) : '';
+        const newWindowLaunch = buildNewWindowLaunch(awServerInfo?.hostProfile?.platform, awAgent, agentCmd, awWorkDir);
         const sessionName = awNewSession.trim();
         const beforeSessions = awSessionData[awServer] || [];
         // Only a session of the mux the window is created in counts (a same-named session of the other mux does not).
@@ -370,8 +368,8 @@ export function useAddWindowModal(
           {
             method: 'POST',
             body: JSON.stringify(sessionExists
-              ? { name: windowName, kind: newKind, force }
-              : { name: sessionName, windowName, kind: newKind, force }),
+              ? { name: windowName, kind: newKind, force, launch: newWindowLaunch }
+              : { name: sessionName, windowName, kind: newKind, force, launch: newWindowLaunch }),
           },
         ));
         if (isInsufficientResources(res)) {
@@ -389,7 +387,7 @@ export function useAddWindowModal(
         const label = awLabel.trim() || awNewWindowName.trim() || '';
         const newRef = createdRef;
         // tmux keeps its target on the registered row; a misao window is identified by its ref alone.
-        const windowBody: Record<string, unknown> = { server_name: awServer, ...(newKind === 'tmux' ? { tmux_target: target } : {}), ref: newRef, label };
+        const windowBody: Record<string, unknown> = { server_name: awServer, ...(newKind === 'tmux' ? { tmux_target: target } : {}), ref: newRef, label, ...(createdWindow.agentSessionId ? { agent_session_id: createdWindow.agentSessionId } : {}) };
         if (awAgent !== 'none') {
           windowBody['window_type'] = 'agent';
           windowBody['worker_type'] = awAgent === 'custom' ? 'generic' : awAgent;
@@ -400,30 +398,28 @@ export function useAddWindowModal(
         const extra = awAgent !== 'none'
           ? { windowType: 'agent' as const, workerType: awAgent === 'custom' ? 'generic' : awAgent, workerModel: awAgentModel || undefined, workingDirectory: awWorkDir.trim() || undefined }
           : undefined;
-        const agentCmd = awAgent !== 'none' ? buildAgentCommand(awAgent, awAgentModel, agentPresets[awAgent]?.command || '', awNewCommand) : '';
-        await openAndLaunchNewWindow(awServerInfo?.hostProfile?.platform === 'win32', {
-          open: async () => {
-            if (awTaskId != null) {
-              await onTaskWindowAdded?.(awTaskId, awServer, target, label, true, { ...extra, ref: newRef });
+        if (awTaskId != null) {
+          await onTaskWindowAdded?.(awTaskId, awServer, target, label, true, { ...extra, ref: newRef });
+        } else {
+          const termRef: TerminalRef = { kind: 'windowId', serverName: awServer, windowId: created.id, pane: 1 };
+          onConnect?.(termRef, numericProjectId);
+        }
+
+        if (!newWindowLaunch) {
+          if (awWorkDir.trim()) {
+            if (created.id) {
+              await api(`/windows/${created.id}/panes/1/send-keys`, { method: 'POST', body: JSON.stringify({ keys: [`cd ${awWorkDir.trim()}`, 'Enter'] }) });
             } else {
-              const termRef: TerminalRef = { kind: 'windowId', serverName: awServer, windowId: created.id, pane: 1 };
-              onConnect?.(termRef, numericProjectId);
+              await api(`/servers/${encodeURIComponent(awServer)}/mux/windows/${encodeURIComponent(newRef)}/panes/1/send-keys`, { method: 'POST', body: JSON.stringify({ keys: [`cd ${awWorkDir.trim()}`, 'Enter'] }) });
             }
-          },
-          changeDirectory: awWorkDir.trim()
-            ? async () => {
-              if (created.id) {
-                await api(`/windows/${created.id}/panes/1/send-keys`, { method: 'POST', body: JSON.stringify({ keys: [`cd ${awWorkDir.trim()}`, 'Enter'] }) });
-              } else {
-                await api(`/servers/${encodeURIComponent(awServer)}/mux/windows/${encodeURIComponent(newRef)}/panes/1/send-keys`, { method: 'POST', body: JSON.stringify({ keys: [`cd ${awWorkDir.trim()}`, 'Enter'] }) });
-              }
-              await new Promise((r) => setTimeout(r, 500));
-            }
-            : null,
-          // ウィンドウ作成後の launch-agent が 409 になった場合はウィンドウ自体は残し、
-          // retry では launch-agent のみ force 再送する（ウィンドウを二重作成しない）
-          launch: agentCmd ? () => launchAgent(created.id, agentCmd, force) : null,
-        });
+            await new Promise((r) => setTimeout(r, 500));
+          }
+          if (agentCmd) {
+            // ウィンドウ作成後の launch-agent が 409 になった場合はウィンドウ自体は残し、
+            // retry では launch-agent のみ force 再送する（ウィンドウを二重作成しない）
+            await launchAgent(created.id, agentCmd, force);
+          }
+        }
       }
       setAddWindowOpen(false);
       closeQuickAddWindow();

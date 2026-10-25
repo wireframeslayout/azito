@@ -23,7 +23,7 @@ vi.mock('./useMisaoInstallOffer', () => ({
   useMisaoInstallOffer: () => <T,>(_serverName: string, create: () => Promise<T>) => create(),
 }));
 
-import { buildAgentCommand, isInsufficientResources, openAndLaunchNewWindow } from './useAddWindowModal';
+import { buildAgentCommand, buildNewWindowLaunch, isInsufficientResources } from './useAddWindowModal';
 
 describe('buildAgentCommand', () => {
   it('returns empty for "none"', () => {
@@ -59,30 +59,15 @@ describe('isInsufficientResources', () => {
   });
 });
 
-describe('openAndLaunchNewWindow', () => {
-  function steps(log: string[], over: { changeDirectory?: boolean; launch?: boolean } = {}) {
-    return {
-      open: async () => { log.push('open'); },
-      changeDirectory: over.changeDirectory === false ? null : async () => { log.push('cd'); },
-      launch: over.launch === false ? null : async () => { log.push('launch'); },
-    };
-  }
-
-  it('POSIX: opens the terminal, changes directory, then types the agent in', async () => {
-    const log: string[] = [];
-    await openAndLaunchNewWindow(false, steps(log));
-    expect(log).toEqual(['open', 'cd', 'launch']);
+describe('buildNewWindowLaunch', () => {
+  it("a Windows host starts the agent as the window's first pane in the one create call", () => {
+    expect(buildNewWindowLaunch('win32', 'claude', "claude --model 'opus'", ' C:\\work ')).toEqual({ command: "claude --model 'opus'", workerType: 'claude', workingDirectory: 'C:\\work' });
+    expect(buildNewWindowLaunch('win32', 'custom', 'my-tool --x', '')).toEqual({ command: 'my-tool --x', workerType: 'generic' });
   });
 
-  it('a host that starts the worker as a program launches first and opens the terminal after, so it attaches to the new pane; no cd is sent', async () => {
-    const log: string[] = [];
-    await openAndLaunchNewWindow(true, steps(log));
-    expect(log).toEqual(['launch', 'open']);
-  });
-
-  it('a plain shell window on such a host is opened as before (nothing replaces its pane)', async () => {
-    const log: string[] = [];
-    await openAndLaunchNewWindow(true, steps(log, { launch: false }));
-    expect(log).toEqual(['open', 'cd']);
+  it('other hosts, and a window with no agent, send no launch: the command is typed into the new shell afterwards', () => {
+    expect(buildNewWindowLaunch('linux', 'claude', 'claude', '/work')).toBeUndefined();
+    expect(buildNewWindowLaunch(undefined, 'claude', 'claude', '/work')).toBeUndefined();
+    expect(buildNewWindowLaunch('win32', 'none', '', '')).toBeUndefined();
   });
 });

@@ -8,7 +8,7 @@ export interface PaneShell {
   /**
    * Put between the shell and the command: `[shell, ...commandArgs, command]`. Null for a shell that cannot be handed a command
    * line safely (a Windows host's cmd.exe): a pane with that shell is opened bare. A Windows host's worker is not a command line
-   * either: it is started as a program (`MisaoMuxClient.replacePaneWithProgram`, #371), which does not go through the shell.
+   * either: it is started as a program (the window is created with the program as its first pane, `PaneProgram`, #371), which does not go through the shell.
    */
   commandArgs: readonly string[] | null;
 }

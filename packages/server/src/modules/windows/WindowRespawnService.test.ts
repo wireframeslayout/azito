@@ -211,7 +211,6 @@ function buildService(opts: {
     }),
     splitPaneByHandle: vi.fn(async (_server: unknown, _handle: unknown, _dir: 'h' | 'v', _env?: Record<string, string>) => ({ handle: '%1', result: { stdout: '', stderr: '', code: 0 } })),
     resolvePane: vi.fn(async () => '%0'),
-    replacePaneWithProgram: vi.fn(async () => '%9'),
     supportsPaneLabels: false,
     labelWindowPanes: vi.fn(async () => undefined),
     listPanesByRef: vi.fn(async () => [{ ordinal: 1, handle: '%0', title: '', command: 'bash', active: true }]),
@@ -2390,7 +2389,7 @@ describe('WindowRespawnService.respawn — a host that starts a worker as a prog
     ],
   };
 
-  it("starts the window's worker as a program in place of the new window's shell pane, with its directory and the window's env, and types nothing", async () => {
+  it("creates the window with the worker as its first pane (argv, directory, size, the window's env), and types nothing", async () => {
     const { service, tmux, sentCommands } = buildService({
       window: makeWindow({ id: 7, workerType: 'claude', workerModel: 'opus', agentSessionId: 'abc', workingDirectory: 'C:\\work\\app', muxRef: { kind: 'misao', workspace: 'azito', window: 'w_01' } }),
       transportFactory: win32Factory(),
@@ -2399,14 +2398,11 @@ describe('WindowRespawnService.respawn — a host that starts a worker as a prog
 
     await service.respawn(7, makeServer());
 
-    expect(tmux.replacePaneWithProgram).toHaveBeenCalledTimes(1);
-    const [, handle, program] = (tmux.replacePaneWithProgram.mock.calls[0] as unknown) as [unknown, string, { argv: string[]; cwd: string; cols: number; rows: number; extraEnv: Record<string, string> }];
-    expect(handle).toBe('%0');
-    expect(program.argv).toEqual(['claude', '--resume', 'abc', '--dangerously-skip-permissions']);
-    expect(program.cwd).toBe('C:\\work\\app');
-    expect(program).toMatchObject({ cols: 120, rows: 40 });
-    expect(program.extraEnv).toEqual({ AZITO_UI_TOKEN: 'ui-token-fixture' });
+    const created = tmux.openWindow.mock.calls[0] as unknown as [unknown, string, string, { program: { argv: string[]; cwd: string; cols: number; rows: number }; extraEnv: Record<string, string> }];
+    expect(created[3].program).toEqual({ argv: ['claude', '--resume', 'abc', '--dangerously-skip-permissions'], cwd: 'C:\\work\\app', cols: 120, rows: 40 });
+    expect(created[3].extraEnv).toEqual({ AZITO_UI_TOKEN: 'ui-token-fixture' });
     expect(sentCommands).toEqual([]);
+    expect(tmux.resolvePane).not.toHaveBeenCalled();
   });
 
   it('a plain shell window without a directory is respawned as a bare window: nothing is started', async () => {
@@ -2418,7 +2414,7 @@ describe('WindowRespawnService.respawn — a host that starts a worker as a prog
     await service.respawn(7, makeServer());
 
     expect(tmux.openWindow).toHaveBeenCalled();
-    expect(tmux.replacePaneWithProgram).not.toHaveBeenCalled();
+    expect((tmux.openWindow.mock.calls[0] as unknown[])[3]).not.toHaveProperty('program');
     expect(sentCommands).toEqual([]);
   });
 
@@ -2438,7 +2434,6 @@ describe('WindowRespawnService.respawn — a host that starts a worker as a prog
     expect(tmux.closeWindow).not.toHaveBeenCalled();
     expect(tmux.openWindow).not.toHaveBeenCalled();
     expect(tmux.splitPaneByHandle).not.toHaveBeenCalled();
-    expect(tmux.replacePaneWithProgram).not.toHaveBeenCalled();
     expect(windowRepo.update).not.toHaveBeenCalled();
     expect(taskRepo.update).not.toHaveBeenCalled();
     expect(sentCommands).toEqual([]);

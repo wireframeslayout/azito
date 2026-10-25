@@ -40,6 +40,8 @@ import { MuxDriverUnavailableError } from '../modules/tmux/MuxCapabilityError';
 import { resolveTerminalTarget, terminalPaneOrdinal } from './resolveTerminalTarget';
 import hooksRoutes from '../modules/tmux/routes/hooks';
 import sessionsRoutes, { invalidateSessionCache } from '../modules/tmux/routes/sessions';
+import { planNewWindowProgram } from '../modules/agents/workerProgram';
+import { workerStartsAsProgram } from '../shared/os/hostFeature';
 import resourceGuardRoutes from '../modules/servers/resources/routes';
 import gitRoutes from '../modules/git/routes';
 import sidekicksRoutes from '../modules/sidekicks/routes';
@@ -542,6 +544,12 @@ export async function buildServer(app: FastifyInstance, wiring: Wiring, port: nu
   };
   await app.register(sessionsRoutes, {
     serverRepo, tmux: tmuxClient, uiToken: wiring.uiToken, muxDriverRegistry, windowRepo, notificationBus, resourceGuard, serverIsolationMutex,
+    // A host that starts a worker as a program (Windows) gets the agent as its new window's first pane; any other types it into a shell.
+    planNewWindowProgram: async (server, request) => (
+      workerStartsAsProgram(transportFactory.hostProfileFor(server))
+        ? planNewWindowProgram(sessionStrategyFactory, () => transportFactory.getFileOps(server), request)
+        : null
+    ),
     destroyPrimaryTaskWindow: (taskId, windowName, serverName, target, reason, kill, onDestroyed) => {
       // Issue #28 third-party review, D-track fix 2: resolve (and hold) the
       // launch BEFORE the kill runs — not a live-connection lookup at
