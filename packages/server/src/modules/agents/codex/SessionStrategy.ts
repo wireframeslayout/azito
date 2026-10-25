@@ -5,9 +5,9 @@ import { FileOpsError, type IFileOps } from '../../../shared/fs/fileOps';
 import { raceDeadline } from '../../../shared/fs/deadline';
 import { pathApiFor } from '../../../shared/os/hostPath';
 import { findFilesByMtime, firstLineOf, normalizeCwd, parseRolloutMeta, ROLLOUT_HEAD_BYTES, SESSION_SCAN_BUDGET_MS, type RolloutCandidate } from '../sessionScanUtils';
-import type { ShellDialect } from '../../../shared/os/shellDialect';
 import { codexHomeOf, type LocalAgentHomes } from '../agentHomes';
-import { buildCodexLaunchCommand, buildCodexRespawnCommand } from './launchCommand';
+import type { WorkerLaunch } from '../WorkerLaunch';
+import { buildCodexLaunch, buildCodexRespawnLaunch } from './launchCommand';
 
 export class CodexSessionStrategy implements ISessionStrategy {
   readonly supportsSession = true;
@@ -20,19 +20,19 @@ export class CodexSessionStrategy implements ISessionStrategy {
     this.excludedIds.add(id);
   }
 
-  buildNewSessionFlags(_sessionId: string): string {
-    return '';
+  buildNewSessionArgs(_sessionId: string): string[] {
+    return [];
   }
 
-  buildResumeFlags(sessionId: string): string {
-    return `resume ${sessionId}`;
+  buildResumeArgs(sessionId: string): string[] {
+    return ['resume', sessionId];
   }
 
-  buildRespawnCommand(agentSessionId: string | null, model: string | null, extraArgs: string | null, dialect: ShellDialect, blockMcp = true): string | null {
+  buildRespawnLaunch(agentSessionId: string | null, model: string | null, extraArgs: string | null, blockMcp = true): WorkerLaunch {
     if (agentSessionId) {
-      return buildCodexRespawnCommand(agentSessionId, { model, extraArgs, blockMcp, dialect });
+      return buildCodexRespawnLaunch(agentSessionId, { model, extraArgs, blockMcp });
     }
-    return buildCodexLaunchCommand({ model, extraArgs, blockMcp, dialect });
+    return buildCodexLaunch({ model, extraArgs, blockMcp });
   }
 
   async scanSessionId(server: ServerConfig, workingDirectory: string | null, afterTimestamp?: Date): Promise<string | null> {

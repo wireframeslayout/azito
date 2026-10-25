@@ -1,6 +1,7 @@
 import type { AgentDefinition, IAgentProvider, LaunchOptions, SessionStrategyDeps } from '../AgentProvider';
 import type { ISessionStrategy } from '../SessionStrategy';
-import { buildCodexLaunchCommand, buildCodexHeadlessCommand } from './launchCommand';
+import type { WorkerLaunch } from '../WorkerLaunch';
+import { buildCodexLaunch, buildCodexHeadlessCommand } from './launchCommand';
 import { CodexSessionStrategy } from './SessionStrategy';
 import { collectCodexUsage } from './UsageCollector';
 
@@ -23,8 +24,8 @@ const definition: AgentDefinition = {
   ],
 };
 
-function buildLaunchCommand(opts: LaunchOptions): string {
-  return buildCodexLaunchCommand(opts);
+function buildLaunch(opts: LaunchOptions): WorkerLaunch {
+  return buildCodexLaunch(opts);
 }
 
 function buildHeadlessCommand(model: string): string {
@@ -37,7 +38,7 @@ function createSessionStrategy(deps: SessionStrategyDeps): ISessionStrategy {
 
 export const codexProvider: IAgentProvider = {
   definition,
-  buildLaunchCommand,
+  buildLaunch,
   buildHeadlessCommand,
   createSessionStrategy,
   collectUsage: async () => collectCodexUsage(),

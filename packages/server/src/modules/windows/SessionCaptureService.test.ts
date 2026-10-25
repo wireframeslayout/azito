@@ -65,9 +65,9 @@ describe('SessionCaptureService', () => {
       create: () => ({
         supportsSession: true,
         needsPostLaunchScan: true,
-        buildNewSessionFlags: () => '',
-        buildResumeFlags: () => '',
-        buildRespawnCommand: () => null,
+        buildNewSessionArgs: () => [],
+        buildResumeArgs: () => [],
+        buildRespawnLaunch: () => null,
         scanSessionId: scanSessionId as ISessionStrategy['scanSessionId'],
         excludeSessionId: excludeSessionId as ISessionStrategy['excludeSessionId'],
       }),
@@ -109,9 +109,9 @@ describe('SessionCaptureService', () => {
         create: () => ({
           supportsSession: true,
           needsPostLaunchScan: false,
-          buildNewSessionFlags: () => '',
-          buildResumeFlags: () => '',
-          buildRespawnCommand: () => null,
+          buildNewSessionArgs: () => [],
+          buildResumeArgs: () => [],
+          buildRespawnLaunch: () => null,
           scanSessionId: scanSessionId as ISessionStrategy['scanSessionId'],
         }),
       };

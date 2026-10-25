@@ -139,7 +139,7 @@ export class TaskRestoreService {
     // lost the moment this variable is captured by a nested closure below.
     let server: ServerConfig = serverAtStart;
     // Before the worktree, the window or any row: a host that cannot run a worker in a pane (Windows, #371) restores nothing.
-    assertHostFeature(transportFactory.hostProfileFor(serverAtStart), 'workerLaunch', 'Restoring a task');
+    assertHostFeature(transportFactory.hostProfileFor(serverAtStart), 'taskExecution', 'Restoring a task');
 
     const tmuxSession = resolveMuxWorkspace(task.projectId, serverName, projectServerRepo);
 

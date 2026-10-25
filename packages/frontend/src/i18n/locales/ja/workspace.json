@@ -72,7 +72,6 @@
     "pinTab": "タブをピン留め",
     "unpinTab": "ピン解除",
     "closeTab": "タブを閉じる",
-    "addAgentBlocked": "{{label}} を {{serverName}} に追加（使えません: {{reason}}）",
     "addAgentToServer": "{{serverName}} に {{label}} を追加",
     "addAgent": "{{label}} を追加",
     "failedLoadAgents": "エージェントの読み込みに失敗しました: {{error}}",
@@ -88,7 +87,6 @@
     "quickAddTitle": "{{label}} を追加 — {{serverName}}"
   },
   "addWindow": {
-    "workerBlockedHint": "シェルのみ（エージェントなし）を選ぶと、ウィンドウだけを作れます。",
     "title": "ウィンドウを追加",
     "createAndAdd": "作成して追加",
     "addAllWindows": "すべてのウィンドウを追加",

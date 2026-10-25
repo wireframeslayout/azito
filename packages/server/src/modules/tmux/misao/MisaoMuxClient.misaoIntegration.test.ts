@@ -14,6 +14,7 @@ import { MisaoConnection, connectDedicatedMisaoClient } from './MisaoConnection'
 import { MisaoMuxClient } from './MisaoMuxClient';
 import { CHANGE_COALESCE_MS } from './misaoChangeEvents';
 import { MISAO_CLI } from '../../../shared/misaoTestBinary';
+import { readFakeAgentReport, writeFakeAgent } from '../../../shared/misaoFakeAgent';
 import { hubPaneShell } from './paneShell';
 
 // Drives a real misao daemon started in a throwaway directory (never the resident ~/.misao one).
@@ -242,6 +243,45 @@ describe.skipIf(!fs.existsSync(MISAO_CLI))('MisaoMuxClient against a real misao 
     await client.openWindow(server, 'azm-ws2', 'third', { exactName: true });
     await vi.waitFor(() => expect(onChange).toHaveBeenCalledWith('local'), { timeout: CHANGE_COALESCE_MS * 10 + 2000, interval: 50 });
     client.uninstallChangeHooks(server);
+  });
+
+  it('creates a window whose first pane is the program: its arguments, directory, size and env arrive as given, with no shell pane made first', async () => {
+    const agentDir = fs.mkdtempSync(path.join(os.tmpdir(), 'azm-agent-'));
+    const workDir = fs.realpathSync(fs.mkdtempSync(path.join(agentDir, 'work-')));
+    try {
+      const fake = writeFakeAgent(agentDir);
+      const { ref } = await client.openWorkspace(server, 'azm-ws-prog', {
+        windowName: 'prog',
+        exactName: true,
+        extraEnv: { AZITO_FAKE_ENV: 'from-the-window' },
+        program: { argv: [process.execPath, fake.script, '--flag', 'a b', "it's"], cwd: workDir, cols: 120, rows: 40 },
+      });
+
+      const panes = await client.listPanesByRef(server, ref);
+      expect(panes).toHaveLength(1);
+      const program = panes[0].handle;
+      await vi.waitFor(async () => expect(readFakeAgentReport((await client.captureScreen(server, program)).stdout)).not.toBeNull(), { timeout: 15000, interval: 100 });
+      const report = readFakeAgentReport((await client.captureScreen(server, program)).stdout);
+      expect(report).toEqual({ cwd: workDir, args: ['--flag', 'a b', "it's"], env: 'from-the-window', cols: 120, rows: 40 });
+      const info = await connection.request('pane.info', { paneId: program });
+      expect(info.labels).toMatchObject({ origin: 'hub', name: 'prog' });
+
+      // A second window of the workspace is made the same way.
+      const second = await client.openWindow(server, 'azm-ws-prog', 'prog2', { exactName: true, program: { argv: [process.execPath, fake.script], cols: 100, rows: 30 } });
+      expect(await client.listPanesByRef(server, second.ref)).toHaveLength(1);
+
+      await client.closeWorkspace(server, 'azm-ws-prog');
+    } finally {
+      fs.rmSync(agentDir, { recursive: true, force: true });
+    }
+  });
+
+  it('leaves no window or workspace behind when the program cannot be started', async () => {
+    const before = await client.listWorkspaces(server);
+
+    await expect(client.openWorkspace(server, 'azm-ws-noprog', { windowName: 'noprog', exactName: true, program: { argv: ['azito-no-such-program-xyz'], cols: 120, rows: 40 } })).rejects.toThrow();
+
+    expect((await client.listWorkspaces(server)).map((w) => w.name)).toEqual(before.map((w) => w.name));
   });
 
   it('closes a pane, a window and a workspace', async () => {

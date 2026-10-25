@@ -3,8 +3,8 @@ import type { ServerConfig } from '../../servers/Server';
 import type { TransportFactory } from '../../servers/transport/TransportFactory';
 import { findFilesByMtime, SESSION_SCAN_BUDGET_MS } from '../sessionScanUtils';
 import { pathApiFor } from '../../../shared/os/hostPath';
-import type { ShellDialect } from '../../../shared/os/shellDialect';
-import { buildClaudeLaunchCommand } from './launchCommand';
+import type { WorkerLaunch } from '../WorkerLaunch';
+import { buildClaudeLaunch } from './launchCommand';
 import { claudeProjectDirNames } from './projectDirName';
 import { claudeConfigDirOf, type LocalAgentHomes } from '../agentHomes';
 
@@ -14,26 +14,20 @@ export class ClaudeSessionStrategy implements ISessionStrategy {
 
   constructor(private transportFactory: TransportFactory, private localHomes: LocalAgentHomes) {}
 
-  buildNewSessionFlags(sessionId: string): string {
-    return `--session-id ${sessionId}`;
+  buildNewSessionArgs(sessionId: string): string[] {
+    return ['--session-id', sessionId];
   }
 
-  buildResumeFlags(sessionId: string): string {
+  buildResumeArgs(sessionId: string): string[] {
     // `--resume <id>` resumes that session. Combining `--session-id` with
     // `--resume` is rejected by current Claude Code ("--session-id can only be
     // used with --continue or --resume if --fork-session is also specified"),
     // which made every follow-up into a closed/sleeping window exit at launch.
-    return `--resume ${sessionId}`;
+    return ['--resume', sessionId];
   }
 
-  buildRespawnCommand(agentSessionId: string | null, model: string | null, extraArgs: string | null, dialect: ShellDialect, blockMcp = true): string | null {
-    if (agentSessionId) {
-      const mcpFlag = blockMcp ? ' --strict-mcp-config' : '';
-      const modelFlag = model ? ` --model ${dialect.quote(model)}` : '';
-      const extra = extraArgs?.trim() ? ` ${extraArgs.trim()}` : '';
-      return `claude --resume ${agentSessionId} --dangerously-skip-permissions${mcpFlag}${modelFlag}${extra}`;
-    }
-    return buildClaudeLaunchCommand({ model, extraArgs, blockMcp, dialect });
+  buildRespawnLaunch(agentSessionId: string | null, model: string | null, extraArgs: string | null, blockMcp = true): WorkerLaunch {
+    return buildClaudeLaunch({ model, extraArgs, blockMcp }, agentSessionId);
   }
 
   async scanSessionId(server: ServerConfig, workingDirectory: string | null, afterTimestamp?: Date): Promise<string | null> {

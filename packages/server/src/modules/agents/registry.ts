@@ -3,11 +3,12 @@ import { claudeProvider } from './claude';
 import { codexProvider } from './codex';
 import { genericProvider } from './generic';
 import { posixDialect } from '../../shared/os/shellDialect';
+import { renderLaunchLine } from './WorkerLaunch';
 
 // ─── API-facing definition (definition + derived launch command) ───
 //
 // フロントは対話起動のプリセット表示・プレビュー生成のため、モデル/追加引数なしの
-// 基本起動コマンドを必要とする。IAgentProvider.buildLaunchCommand から導出し、
+// 基本起動コマンドを必要とする。IAgentProvider.buildLaunch から導出し、
 // definition 側に二重定義しない。
 
 export interface AgentApiDefinition extends AgentDefinition {
@@ -63,15 +64,19 @@ export const defaultRegistry = createDefaultRegistry();
 
 // ─── Derived helpers(旧 AgentCatalog の free function 群と同じ形) ───
 
+/** The bare launch line of a launchable agent (nothing in it is quoted, so the dialect does not change it). */
+function catalogLine(provider: IAgentProvider): string | null {
+  if (!provider.definition.launchable) return null;
+  const launch = provider.buildLaunch({ model: null, extraArgs: null, blockMcp: false });
+  return launch ? renderLaunchLine(launch, posixDialect) : null;
+}
+
 export function listAgentDefinitions(): AgentApiDefinition[] {
   return defaultRegistry.list().map((p) => ({
     ...p.definition,
     // Issue #471: launchCommand is used for the "Add Window" UI preset
     // (user-added windows), so it should not include MCP blocking flags.
-    launchCommand: p.definition.launchable
-      // The catalog shows the bare command (nothing in it is quoted), so the dialect does not change it.
-      ? p.buildLaunchCommand({ model: null, extraArgs: null, blockMcp: false, dialect: posixDialect })
-      : null,
+    launchCommand: catalogLine(p),
   }));
 }
 

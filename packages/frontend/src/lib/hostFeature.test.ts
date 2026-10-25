@@ -8,7 +8,7 @@ const t = ((key: string, opts?: Record<string, unknown>) => `${key}${opts ? JSON
 describe('hostFeatureBlockReason', () => {
   it('is null on Linux, macOS and an unrecorded host', () => {
     expect(hostFeatureBlockReason({ platform: 'linux' }, 'taskExecution', t)).toBeNull();
-    expect(hostFeatureBlockReason({ platform: 'darwin' }, 'workerLaunch', t)).toBeNull();
+    expect(hostFeatureBlockReason({ platform: 'darwin' }, 'isolation', t)).toBeNull();
     expect(hostFeatureBlockReason(null, 'browserRuntime', t)).toBeNull();
   });
 

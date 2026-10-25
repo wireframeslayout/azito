@@ -23,7 +23,7 @@ vi.mock('./useMisaoInstallOffer', () => ({
   useMisaoInstallOffer: () => <T,>(_serverName: string, create: () => Promise<T>) => create(),
 }));
 
-import { buildAgentCommand, isInsufficientResources } from './useAddWindowModal';
+import { buildAgentCommand, buildNewWindowLaunch, isInsufficientResources } from './useAddWindowModal';
 
 describe('buildAgentCommand', () => {
   it('returns empty for "none"', () => {
@@ -56,5 +56,18 @@ describe('isInsufficientResources', () => {
     expect(isInsufficientResources({ error: 'not_found' })).toBe(false);
     expect(isInsufficientResources(null)).toBe(false);
     expect(isInsufficientResources(42)).toBe(false);
+  });
+});
+
+describe('buildNewWindowLaunch', () => {
+  it("a Windows host starts the agent as the window's first pane in the one create call", () => {
+    expect(buildNewWindowLaunch('win32', 'claude', "claude --model 'opus'", ' C:\\work ')).toEqual({ command: "claude --model 'opus'", workerType: 'claude', workingDirectory: 'C:\\work' });
+    expect(buildNewWindowLaunch('win32', 'custom', 'my-tool --x', '')).toEqual({ command: 'my-tool --x', workerType: 'generic' });
+  });
+
+  it('other hosts, and a window with no agent, send no launch: the command is typed into the new shell afterwards', () => {
+    expect(buildNewWindowLaunch('linux', 'claude', 'claude', '/work')).toBeUndefined();
+    expect(buildNewWindowLaunch(undefined, 'claude', 'claude', '/work')).toBeUndefined();
+    expect(buildNewWindowLaunch('win32', 'none', '', '')).toBeUndefined();
   });
 });

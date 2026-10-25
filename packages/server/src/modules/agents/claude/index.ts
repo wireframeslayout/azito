@@ -1,6 +1,7 @@
 import type { AgentDefinition, IAgentProvider, LaunchOptions, SessionStrategyDeps } from '../AgentProvider';
 import type { ISessionStrategy } from '../SessionStrategy';
-import { buildClaudeLaunchCommand, buildClaudeHeadlessCommand } from './launchCommand';
+import type { WorkerLaunch } from '../WorkerLaunch';
+import { buildClaudeLaunch, buildClaudeHeadlessCommand } from './launchCommand';
 import { ClaudeSessionStrategy } from './SessionStrategy';
 import { collectClaudeUsage } from './UsageCollector';
 
@@ -41,8 +42,8 @@ const definition: AgentDefinition = {
   ],
 };
 
-function buildLaunchCommand(opts: LaunchOptions): string {
-  return buildClaudeLaunchCommand(opts);
+function buildLaunch(opts: LaunchOptions): WorkerLaunch {
+  return buildClaudeLaunch(opts);
 }
 
 function buildHeadlessCommand(model: string): string {
@@ -55,7 +56,7 @@ function createSessionStrategy(deps: SessionStrategyDeps): ISessionStrategy {
 
 export const claudeProvider: IAgentProvider = {
   definition,
-  buildLaunchCommand,
+  buildLaunch,
   buildHeadlessCommand,
   createSessionStrategy,
   collectUsage: async () => collectClaudeUsage(),

@@ -1,7 +1,7 @@
 import type { ISessionStrategy } from './SessionStrategy';
 import type { ServerConfig } from '../servers/Server';
-import { buildWorkerLaunchCommand } from './LaunchCommand';
-import type { ShellDialect } from '../../shared/os/shellDialect';
+import { buildWorkerLaunch } from './LaunchCommand';
+import type { WorkerLaunch } from './WorkerLaunch';
 
 export class NullSessionStrategy implements ISessionStrategy {
   readonly supportsSession = false;
@@ -9,16 +9,16 @@ export class NullSessionStrategy implements ISessionStrategy {
 
   constructor(private workerType: string | null) {}
 
-  buildNewSessionFlags(_sessionId: string): string {
-    return '';
+  buildNewSessionArgs(_sessionId: string): string[] {
+    return [];
   }
 
-  buildResumeFlags(_sessionId: string): string {
-    return '';
+  buildResumeArgs(_sessionId: string): string[] {
+    return [];
   }
 
-  buildRespawnCommand(_agentSessionId: string | null, model: string | null, extraArgs: string | null, dialect: ShellDialect, _blockMcp?: boolean): string | null {
-    return buildWorkerLaunchCommand(this.workerType, model, extraArgs, dialect);
+  buildRespawnLaunch(_agentSessionId: string | null, model: string | null, extraArgs: string | null, _blockMcp?: boolean): WorkerLaunch | null {
+    return buildWorkerLaunch(this.workerType, model, extraArgs);
   }
 
   async scanSessionId(_server: ServerConfig, _workingDirectory: string | null, _afterTimestamp?: Date): Promise<string | null> {

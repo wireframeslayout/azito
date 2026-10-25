@@ -2,7 +2,7 @@ import { randomUUID } from 'node:crypto';
 import { type MuxCapabilities, type MuxDriverKind, type MuxPaneInfo, type MuxRef, type MuxWorkspace, type PaneHandle, type PaneOrdinal, asPaneHandle, isMisaoWindowId } from '@azito/shared';
 import type { ExecResult, ITerminalStream } from '../../servers/transport/ServerTransport';
 import type { ServerConfig } from '../../servers/Server';
-import type { IMuxClient, PaneLocation, PaneWindowLabels } from '../IMuxClient';
+import type { IMuxClient, PaneLocation, PaneProgram, PaneWindowLabels } from '../IMuxClient';
 import { MuxDriverUnavailableError, MuxOperationUnsupportedError } from '../MuxCapabilityError';
 import { splitPaneEnv } from '../../../shared/auth/paneSecretEnv';
 import { generateWindowName } from '../windowNameUtils';
@@ -69,11 +69,11 @@ export class MisaoMuxClient implements IMuxClient {
     return this.listWorkspaces(server);
   }
 
-  async openWorkspace(server: ServerConfig, name: string, opts?: { command?: string; windowName?: string; exactName?: boolean; extraEnv?: Record<string, string> }): Promise<{ ref: MuxRef; result: ExecResult; windowName?: string }> {
+  async openWorkspace(server: ServerConfig, name: string, opts?: { command?: string; windowName?: string; exactName?: boolean; extraEnv?: Record<string, string>; program?: PaneProgram }): Promise<{ ref: MuxRef; result: ExecResult; windowName?: string }> {
     await this.rpc.request('workspace.create', { name });
     const windowName = opts?.exactName && opts.windowName ? opts.windowName : generateWindowName(opts?.windowName || 'win');
     try {
-      const windowId = await this.createWindowWithPane(server, name, windowName, opts?.command, opts?.extraEnv);
+      const windowId = await this.createWindowWithPane(server, name, windowName, opts?.command, opts?.extraEnv, opts?.program);
       return { ref: misaoRef(name, windowId), result: OK, windowName };
     } catch (err) {
       // Best-effort rollback of the workspace this call created; the original failure is what the caller sees.
@@ -82,9 +82,9 @@ export class MisaoMuxClient implements IMuxClient {
     }
   }
 
-  async openWindow(server: ServerConfig, workspace: string, baseName?: string, opts?: { exactName?: boolean; extraEnv?: Record<string, string> }): Promise<{ ref: MuxRef; result: ExecResult; windowName?: string }> {
+  async openWindow(server: ServerConfig, workspace: string, baseName?: string, opts?: { exactName?: boolean; extraEnv?: Record<string, string>; program?: PaneProgram }): Promise<{ ref: MuxRef; result: ExecResult; windowName?: string }> {
     const windowName = opts?.exactName && baseName ? baseName : generateWindowName(baseName || 'win');
-    const windowId = await this.createWindowWithPane(server, workspace, windowName, undefined, opts?.extraEnv);
+    const windowId = await this.createWindowWithPane(server, workspace, windowName, undefined, opts?.extraEnv, opts?.program);
     return { ref: misaoRef(workspace, windowId), result: OK, windowName };
   }
 
@@ -362,15 +362,26 @@ export class MisaoMuxClient implements IMuxClient {
     await this.rpc.request('pane.write', { paneId: handle, data, source: 'hub' });
   }
 
-  private async createWindowWithPane(server: ServerConfig, workspace: string, windowName: string, command: string | undefined, extraEnv: Record<string, string> | undefined): Promise<string> {
+  /**
+   * A new window with its first pane: a shell (with `command` typed as its command line when given), or, with `program`, that program
+   * started directly by `pane.open` (its argv, cwd and size; misao resolves `claude` to `claude.cmd` by the child's PATH / PATHEXT and
+   * names the pane's profile after it). The program is the pane from the start: no shell pane is opened and replaced.
+   */
+  private async createWindowWithPane(server: ServerConfig, workspace: string, windowName: string, command: string | undefined, extraEnv: Record<string, string> | undefined, program?: PaneProgram): Promise<string> {
+    if (program && command) throw new Error('A window is started with a command line or as a program, not both.');
     // Resolved before the window exists: a host whose shell is unknown or unsupported must not leave an empty window behind.
-    const paneShell = await this.options.paneShell();
-    const { shell } = paneShell;
-    const commandArgs = command ? requireCommandArgs(paneShell, 'Starting a command in a new pane') : [];
+    let cmd: string[];
+    if (program) {
+      cmd = [...program.argv];
+    } else {
+      const paneShell = await this.options.paneShell();
+      cmd = command ? [paneShell.shell, ...requireCommandArgs(paneShell, 'Starting a command in a new pane'), command] : [paneShell.shell];
+    }
     const { windowId } = await this.rpc.request('window.create', { workspace, name: windowName });
     try {
       await this.rpc.request('pane.open', {
-        cmd: command ? [shell, ...commandArgs, command] : [shell],
+        cmd,
+        ...(program ? { ...(program.cwd !== undefined ? { cwd: program.cwd } : {}), cols: program.cols, rows: program.rows } : {}),
         windowId,
         labels: { origin: 'hub', name: windowName },
         ...this.paneEnvParams(server, extraEnv),

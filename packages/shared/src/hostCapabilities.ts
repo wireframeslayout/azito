@@ -11,6 +11,8 @@
  *  - file name search: `searchFileNames` over `IFileOps.walk`.
  *  - file content search: `GET /files/search` runs `rg` when the host has it, else the host's own search
  *    (`IFileOps.searchContent`, Node), and reports hit paths relative to the root with `/`.
+ *  - starting claude / codex / a command in a window (#371): a Windows host's worker is started by misao's `pane.open` with the program and its
+ *    arguments (no shell line is typed): the agent is the first pane of the window it is created with (`PaneProgram` -> `openWorkspace` / `openWindow` `program`, `agents/workerProgram.ts`).
  *  - the harness (`harness/install`, the status row, the auto-update): `setup.mjs` through the agent's IFileOps / `run` (setup.sh stays the Unix route).
  *  - git (diff / commits / branches / worktree list / repository discovery): `runGit`, which asks the host for the `git.exe` of Git for
  *    Windows (`GitLocator`: PATH, then the standard install locations). Not installed there: the API answers `501 git_not_found` with
@@ -27,12 +29,11 @@ export interface HostPlatformInfo {
 
 export type HostFeature =
   | 'taskExecution'
-  | 'workerLaunch'
   | 'tmux'
   | 'browserRuntime'
   | 'isolation';
 
-export const HOST_FEATURES: readonly HostFeature[] = ['taskExecution', 'workerLaunch', 'tmux', 'browserRuntime', 'isolation'];
+export const HOST_FEATURES: readonly HostFeature[] = ['taskExecution', 'tmux', 'browserRuntime', 'isolation'];
 
 export type HostFeatureSupport =
   | { available: true }
@@ -41,8 +42,7 @@ export type HostFeatureSupport =
 /**
  * The Windows rows: feature -> the issue that supports it (null: never, the host has no such program). Each row says
  * which path closes it.
- *  - taskExecution (#371): `ExecuteTaskUseCase` starts the worker in a pane with a command (`paneShell.commandArgs` is null on Windows -> `unsupported_os`).
- *  - workerLaunch (#371): a new window with claude / codex / a command: the same pane command (`MisaoServers`, `paneShell.ts`).
+ *  - taskExecution (#371): `ExecuteTaskUseCase` refuses first. What stays closed behind it is the harness and hooks (T5) and the task's signal, azitoctl and push scripts (T6).
  *  - tmux: not installed on Windows; `install-tmux` / `apply-tmux-config` answer `unsupported_os`.
  *  - isolation (#464): declaring a server isolated (`isolationIntent: true`) needs the cleanup of the operator credentials, which is only built for
  *    a Unix agent (`attemptIsolationCleanup`); a Windows agent cannot be made an isolated server in v0.12.0.
@@ -50,7 +50,6 @@ export type HostFeatureSupport =
  */
 const WIN32_UNAVAILABLE: Record<HostFeature, number | null> = {
   taskExecution: 371,
-  workerLaunch: 371,
   tmux: null,
   browserRuntime: 372,
   isolation: 464,

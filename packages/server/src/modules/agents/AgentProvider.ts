@@ -1,7 +1,7 @@
 import type { TransportFactory } from '../servers/transport/TransportFactory';
 import type { ISessionStrategy } from './SessionStrategy';
 import type { LocalAgentHomes } from './agentHomes';
-import type { ShellDialect } from '../../shared/os/shellDialect';
+import type { WorkerLaunch } from './WorkerLaunch';
 
 // ─── Catalog types (旧 AgentCatalog.AgentDefinition 相当) ───
 
@@ -29,8 +29,6 @@ export interface LaunchOptions {
   extraArgs?: string | null;
   /** When false, omit MCP blocking flags. Default true (fail-closed). */
   blockMcp?: boolean;
-  /** The shell of the pane the line is typed into (the target host's: `shellDialectFor(hostProfile)`). */
-  dialect: ShellDialect;
 }
 
 // ─── Session strategy injection ───
@@ -54,8 +52,8 @@ export interface TokenUsage {
 export interface IAgentProvider {
   /** カタログ情報(type/label/kind/launchable/contexts/models/headlessCommand) */
   readonly definition: AgentDefinition;
-  /** tmux ペインでの対話起動コマンドを組み立てる。非対応な組み合わせは null */
-  buildLaunchCommand(opts: LaunchOptions): string | null;
+  /** ペインでの対話起動を組み立てる（シェルの行にするか、プログラムと引数にするかは起動する側が決める）。非対応な組み合わせは null */
+  buildLaunch(opts: LaunchOptions): WorkerLaunch | null;
   /** ヘッドレス(subagent)実行コマンドを組み立てる。非対応なら null */
   buildHeadlessCommand(model: string): string | null;
   /** セッション再開戦略を組み立てる。非対応なら null(利用側で NullSessionStrategy 相当に落とす) */

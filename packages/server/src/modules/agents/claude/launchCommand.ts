@@ -1,5 +1,6 @@
 import { shellQuote } from '../../../shared/shellQuote';
 import type { LaunchOptions } from '../AgentProvider';
+import { extraArgValues, flag, raw, value, type LaunchArg, type ProgramLaunch } from '../WorkerLaunch';
 
 /**
  * `--strict-mcp-config` (Issue #28 design v3 §3): a task worker's tmux pane
@@ -14,15 +15,26 @@ import type { LaunchOptions } from '../AgentProvider';
  * `--strict-mcp-config` is a claude-cli-specific flag, and adding it to
  * codex/generic worker launches would just be an unrecognized argument.
  */
-const STRICT_MCP_CONFIG_FLAG = ' --strict-mcp-config';
+const STRICT_MCP_CONFIG_FLAG = '--strict-mcp-config';
 
-export function buildClaudeLaunchCommand({ model, extraArgs, blockMcp = true, dialect }: LaunchOptions): string {
-  const mcpFlag = blockMcp ? STRICT_MCP_CONFIG_FLAG : '';
-  const modelFlag = model ? ` --model ${dialect.quote(model)}` : '';
-  const extra = extraArgs?.trim()
-    ? ' ' + extraArgs.trim().split(/\s+/).map((arg) => dialect.quote(arg)).join(' ')
-    : '';
-  return `claude --dangerously-skip-permissions${mcpFlag}${modelFlag}${extra}`;
+/** `claude` started fresh, or resumed when `agentSessionId` is given (`claude --resume <id> ...`; a new session's id is added by the caller). */
+export function buildClaudeLaunch({ model, extraArgs, blockMcp = true }: LaunchOptions, agentSessionId: string | null = null): ProgramLaunch {
+  return {
+    kind: 'program',
+    file: 'claude',
+    args: [
+      ...(agentSessionId ? [flag('--resume'), flag(agentSessionId)] : []),
+      flag('--dangerously-skip-permissions'),
+      ...(blockMcp ? [flag(STRICT_MCP_CONFIG_FLAG)] : []),
+      ...(model ? [flag('--model'), value(model)] : []),
+      ...(agentSessionId ? resumeExtraArgs(extraArgs) : extraArgValues(extraArgs)),
+    ],
+  };
+}
+
+/** A resumed launch has always carried `extraArgs` in the line as the user wrote it (the fresh one quotes each word): kept as it was. */
+function resumeExtraArgs(extraArgs: string | null | undefined): LaunchArg[] {
+  return extraArgs?.trim() ? [raw(extraArgs.trim())] : [];
 }
 
 export function buildClaudeHeadlessCommand(model: string): string {

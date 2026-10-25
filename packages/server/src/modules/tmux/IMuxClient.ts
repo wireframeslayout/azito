@@ -14,6 +14,20 @@ export type PaneLocation =
   | { status: 'absent' }
   | { status: 'unknown' };
 
+/**
+ * A program that is the first pane of a new window, run directly with no shell between the hub and it (a Windows host starts a worker
+ * this way, #371). The pane's env is the call's `extraEnv`. Only the misao driver supports it.
+ */
+export interface PaneProgram {
+  /** The program and its arguments; the program is looked up by the host's own rules (PATH, PATHEXT on Windows). */
+  argv: readonly string[];
+  /** Where it starts. Omitted: the mux's own default. */
+  cwd?: string;
+  /** The size the program starts with: a Node TUI does not follow a later resize on Windows (a ConPTY limit), so it must be right at start. */
+  cols: number;
+  rows: number;
+}
+
 export interface IMuxClient {
   readonly kind: MuxDriverKind;
   readonly caps: MuxCapabilities;
@@ -25,8 +39,8 @@ export interface IMuxClient {
   listWorkspaces(server: ServerConfig): Promise<MuxWorkspace[]>;
   listWorkspacesStrict(server: ServerConfig): Promise<MuxWorkspace[]>;
   /** `kind` (routing driver only) picks the mux to create in; omitted = the server's default mux. A single driver ignores it. */
-  openWorkspace(server: ServerConfig, name: string, opts?: { command?: string; windowName?: string; exactName?: boolean; extraEnv?: Record<string, string>; kind?: MuxDriverKind }): Promise<{ ref: MuxRef; result: ExecResult; windowName?: string }>;
-  openWindow(server: ServerConfig, workspace: string, baseName?: string, opts?: { exactName?: boolean; extraEnv?: Record<string, string>; kind?: MuxDriverKind }): Promise<{ ref: MuxRef; result: ExecResult; windowName?: string }>;
+  openWorkspace(server: ServerConfig, name: string, opts?: { command?: string; windowName?: string; exactName?: boolean; extraEnv?: Record<string, string>; kind?: MuxDriverKind; program?: PaneProgram }): Promise<{ ref: MuxRef; result: ExecResult; windowName?: string }>;
+  openWindow(server: ServerConfig, workspace: string, baseName?: string, opts?: { exactName?: boolean; extraEnv?: Record<string, string>; kind?: MuxDriverKind; program?: PaneProgram }): Promise<{ ref: MuxRef; result: ExecResult; windowName?: string }>;
   closeWindow(server: ServerConfig, ref: MuxRef): Promise<ExecResult>;
   closeWorkspace(server: ServerConfig, workspace: string, opts?: { kind?: MuxDriverKind }): Promise<ExecResult>;
   renameWindowByRef(server: ServerConfig, ref: MuxRef, name: string): Promise<ExecResult>;

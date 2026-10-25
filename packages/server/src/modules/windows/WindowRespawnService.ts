@@ -1,5 +1,8 @@
 import { isPrimaryTaskWindow, type IWindowRepository, type PaneLayout, type Window } from './Window';
-import { assertHostFeature, workerLineDialect } from '../../shared/os/hostFeature';
+import { assertHostFeature, workerStartsAsProgram } from '../../shared/os/hostFeature';
+import { HostProfileError } from '../../shared/os/hostProfile';
+import { programFor } from '../agents/workerProgram';
+import type { PaneProgram } from '../tmux/IMuxClient';
 import { changeDirectoryLine } from '../../shared/os/changeDirectoryLine';
 import { DuplicateAgentSessionError } from './DuplicateAgentSessionError';
 import type { ServerConfig } from '../servers/Server';
@@ -19,7 +22,8 @@ import { argsContainSessionId } from '../transcripts/agentProcessDetection';
 import type { ProcessEntry } from '../../shared/os/processList';
 import type { IExecutionLogRepository } from '../tasks/ExecutionLog';
 import { assertDirectoryContained } from '../git/PathContainment';
-import { type ShellDialect } from '../../shared/os/shellDialect';
+import { shellDialectFor, type ShellDialect } from '../../shared/os/shellDialect';
+import { renderLaunchLine } from '../agents/WorkerLaunch';
 import type { SupervisorRegistry } from '../supervisors/SupervisorRegistry';
 import { shouldSupervise, wrapWithSupervisor } from '../supervisors/SupervisorLaunch';
 import type { SessionCaptureService } from './SessionCaptureService';
@@ -190,8 +194,8 @@ export class WindowRespawnService {
   async respawn(windowId: number, server: ServerConfig, opts?: { skipAgentLaunch?: boolean; gateAlreadyEnforced?: boolean; inLockGate?: (freshServer: ServerConfig) => void }): Promise<{ tmuxTarget: string }> {
     const win = this.windowRepo.findById(windowId);
     if (!win) throw new Error('Window not found');
-    // Before the window is destroyed or any row changes: a host that cannot run a worker in a pane (Windows, #371) keeps the window as it is.
-    assertHostFeature(this.transportFactory.hostProfileFor(server), 'workerLaunch', 'Respawning a window');
+    // Before the window is destroyed or any row changes: what a host that starts a worker as a program (Windows, #371) cannot restore keeps the window as it is.
+    this.assertRespawnable(win, server);
 
     // Validated once here for a fast, early failure on an obviously-corrupt
     // row — the ACTUAL session/window names `rotate` below acts on are
@@ -288,6 +292,22 @@ export class WindowRespawnService {
     // task/unitId already resolved above for the execution gate — reused
     // here instead of re-querying the repositories a second time.
     const supervision: SupervisionContext = { supervise, taskId: win.taskId, unitId, windowId };
+
+    // A host that starts a worker as a program (Windows) gets it as the first pane of the window created below: argv and directory are
+    // decided here, before anything is destroyed, and nothing is typed into a shell or replaced afterwards.
+    let respawnProgram: PaneProgram | undefined;
+    if (this.startsWorkerAsProgram(server) && win.workerType && !opts?.skipAgentLaunch) {
+      if (supervise) throw new Error(`A worker started as a program cannot run under a supervisor (${server.name}).`);
+      let sessionId = win.agentSessionId;
+      if (!sessionId && this.sessionCaptureService) sessionId = await this.sessionCaptureService.tryScanForWindow(windowId);
+      const launch = this.sessionStrategyFactory.create(win.workerType).buildRespawnLaunch(sessionId, win.workerModel, null, blockMcp);
+      // A window whose launch cannot be rebuilt (a custom command is not stored, so a generic worker has none) would be destroyed and
+      // recreated as a bare shell with nothing started: refused before anything is touched.
+      if (!launch) {
+        throw new HostProfileError('unsupported_os', `Respawning a window with a ${win.workerType} worker is not available on Windows hosts: its command is not stored, so the worker cannot be started again with the new window.`);
+      }
+      respawnProgram = await programFor(launch, resolvedCwds.singleCwd, () => this.transportFactory.getFileOps(server));
+    }
 
     // Window-generation point for this window: EITHER branch below actually
     // (re)creates the window that becomes the respawned pane (unlike
@@ -464,12 +484,18 @@ export class WindowRespawnService {
           const freshWorkspaces = await createDriver.listWorkspaces(fs);
           const freshWorkspaceExists = freshWorkspaces.some((s) => s.name === sessionName && (s.kind ?? windowKind) === windowKind);
           createdViaNewSession = !freshWorkspaceExists;
-          if (!freshWorkspaceExists) {
-            const opened = await createDriver.openWorkspace(fs, sessionName, { windowName: openName, exactName: true, extraEnv: env, kind: windowKind });
+          try {
+            if (!freshWorkspaceExists) {
+              const opened = await createDriver.openWorkspace(fs, sessionName, { windowName: openName, exactName: true, extraEnv: env, kind: windowKind, ...(respawnProgram ? { program: respawnProgram } : {}) });
+              return { result: opened.result, windowName: opened.ref.window, ref: opened.ref };
+            }
+            const opened = await createDriver.openWindow(fs, sessionName, openName, { exactName: true, extraEnv: env, kind: windowKind, ...(respawnProgram ? { program: respawnProgram } : {}) });
             return { result: opened.result, windowName: opened.ref.window, ref: opened.ref };
+          } catch (err) {
+            // The old window is already gone when the program cannot be started (on a POSIX host a failed line leaves the shell, so the window stays).
+            if (!respawnProgram) throw err;
+            throw new Error(`The program ${respawnProgram.argv[0]} could not be started in the recreated window (is it installed, and found through PATH / PATHEXT?); the old window is already gone: ${err instanceof Error ? err.message : String(err)}`);
           }
-          const opened = await createDriver.openWindow(fs, sessionName, openName, { exactName: true, extraEnv: env, kind: windowKind });
-          return { result: opened.result, windowName: opened.ref.window, ref: opened.ref };
         };
 
         if (isPrimary) {
@@ -537,7 +563,7 @@ export class WindowRespawnService {
         if (opts?.skipAgentLaunch) {
           // Issue #274: only restore working directory, skip agent launch.
           // The caller (follow-up) will launch the agent itself.
-          if (!win.paneLayout && resolvedCwds.singleCwd) {
+          if (!win.paneLayout && resolvedCwds.singleCwd && !this.startsWorkerAsProgram(respawnServer)) {
             const paneId = await restoreDriver.resolvePane(respawnServer, newRef, 1);
             await restoreDriver.sendKeysToHandle(respawnServer, paneId, [await changeDirectoryLine(() => this.transportFactory.getFileOps(respawnServer), this.dialectOf(respawnServer), resolvedCwds.singleCwd), 'Enter']);
           } else if (win.paneLayout) {
@@ -546,7 +572,8 @@ export class WindowRespawnService {
           }
         } else if (win.paneLayout) {
           await this.restorePaneLayout(respawnServer, newRef, baseTarget, win.paneLayout, win, supervision, resolvedCwds.paneCwds, windowEnv, false, blockMcp);
-        } else {
+        } else if (!respawnProgram) {
+          // (A worker started as a program is already the window's pane: there is nothing to type.)
           const paneId = await restoreDriver.resolvePane(respawnServer, newRef, 1);
           await this.setupSinglePane(respawnServer, paneId, baseTarget, win, supervision, resolvedCwds.singleCwd, blockMcp);
         }
@@ -836,7 +863,7 @@ export class WindowRespawnService {
    * caller for the bug this pattern avoids.
    */
   async resumeLegacySession(taskId: number, server: ServerConfig): Promise<{ windowName: string }> {
-    assertHostFeature(this.transportFactory.hostProfileFor(server), 'workerLaunch', 'Resuming a session');
+    assertHostFeature(this.transportFactory.hostProfileFor(server), 'taskExecution', 'Resuming a session');
     const task = this.taskRepo.findById(taskId);
     if (!task) throw new Error(`Task ${taskId} not found`);
     if (!task.agentSessionId) throw new Error(`Task ${taskId} has no agent session ID`);
@@ -1079,7 +1106,29 @@ export class WindowRespawnService {
 
   /** The shell of the server's panes: what the lines typed into them are written in. */
   private dialectOf(server: ServerConfig): ShellDialect {
-    return workerLineDialect(this.transportFactory.hostProfileFor(server), 'Launching or resuming a worker in a pane');
+    return shellDialectFor(this.transportFactory.hostProfileFor(server));
+  }
+
+  /** Whether a worker is started as a program by the mux (Windows) rather than by a line typed into the pane's shell. */
+  private startsWorkerAsProgram(server: ServerConfig): boolean {
+    return workerStartsAsProgram(this.transportFactory.hostProfileFor(server));
+  }
+
+  /**
+   * A task's window is refused on a host that cannot run tasks yet. A host that starts a worker as a program opens its pane with the program and its directory, so there is no shell to type a
+   * directory change into: a window with a worker restarts in its directory; a window with a saved pane layout (several panes), or a
+   * plain shell with a directory to restore, cannot be restored there yet. Refused before the window is touched.
+   */
+  private assertRespawnable(win: Window, server: ServerConfig): void {
+    // A window a task owns is part of running that task (the token generation is rotated, the worker is resumed): closed with it.
+    if (win.taskId !== null) assertHostFeature(this.transportFactory.hostProfileFor(server), 'taskExecution', 'Respawning a task window');
+    if (!this.startsWorkerAsProgram(server)) return;
+    if (win.paneLayout) {
+      throw new HostProfileError('unsupported_os', 'Respawning a window with a saved pane layout is not available on Windows hosts yet.');
+    }
+    if (!win.workerType && win.workingDirectory) {
+      throw new HostProfileError('unsupported_os', 'Respawning a plain shell window in its working directory is not available on Windows hosts yet.');
+    }
   }
 
   private wrapIfSupervised(cmd: string, server: ServerConfig, supervisorTarget: string, supervision: SupervisionContext): string {
@@ -1171,9 +1220,9 @@ export class WindowRespawnService {
         const sessionId = pane.agentSessionId || (pane.index === paneLayout.panes[0]?.index ? win.agentSessionId : null);
         if (workerType) {
           const strategy = this.sessionStrategyFactory.create(workerType);
-          const cmd = strategy.buildRespawnCommand(sessionId, win.workerModel, null, this.dialectOf(server), blockMcp);
-          if (cmd) {
-            const sendCmd = this.wrapIfSupervised(cmd, server, baseTarget, supervision);
+          const launch = strategy.buildRespawnLaunch(sessionId, win.workerModel, null, blockMcp);
+          if (launch) {
+            const sendCmd = this.wrapIfSupervised(renderLaunchLine(launch, this.dialectOf(server)), server, baseTarget, supervision);
             await driver.sendKeysToHandle(server, paneId, [sendCmd, 'Enter']);
           }
         }
@@ -1191,7 +1240,8 @@ export class WindowRespawnService {
     blockMcp = true,
   ): Promise<void> {
     const driver = this.resolveDriver(server);
-    if (singleCwd) {
+    // A host that starts a worker as a program has no shell to type a directory change into (its cwd was the window's start directory).
+    if (singleCwd && !this.startsWorkerAsProgram(server)) {
       await driver.sendKeysToHandle(server, handle, [await changeDirectoryLine(() => this.transportFactory.getFileOps(server), this.dialectOf(server), singleCwd), 'Enter']);
       await sleep(300);
     }
@@ -1202,9 +1252,9 @@ export class WindowRespawnService {
         sessionId = await this.sessionCaptureService.tryScanForWindow(win.id);
       }
       const strategy = this.sessionStrategyFactory.create(win.workerType);
-      const cmd = strategy.buildRespawnCommand(sessionId, win.workerModel, null, this.dialectOf(server), blockMcp);
-      if (cmd) {
-        const sendCmd = this.wrapIfSupervised(cmd, server, supervisorTarget, supervision);
+      const launch = strategy.buildRespawnLaunch(sessionId, win.workerModel, null, blockMcp);
+      if (launch) {
+        const sendCmd = this.wrapIfSupervised(renderLaunchLine(launch, this.dialectOf(server)), server, supervisorTarget, supervision);
         await driver.sendKeysToHandle(server, handle, [sendCmd, 'Enter']);
       }
     }

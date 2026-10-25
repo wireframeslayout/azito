@@ -1,6 +1,7 @@
 import { describe, it, expect, afterEach, beforeEach, vi } from 'vitest';
 import Fastify, { type FastifyInstance } from 'fastify';
 import sessionsRoutes, { invalidateSessionCache, type SessionsRouteOptions } from './sessions';
+import { HostProfileError } from '../../../shared/os/hostProfile';
 import type { IServerRepository, ServerConfig } from '../../servers/Server';
 import type { TmuxClient } from '../TmuxClient';
 import type { SqliteWindowRepository } from '../../windows/SqliteWindowRepository';
@@ -1070,7 +1071,7 @@ describe('mux creation routes hand the new pane its env inside the per-server lo
     resolvePane: vi.fn(async () => 'p_0123456789ABCDEFGHJKMNPQRS'),
   } as unknown as IMuxClient;
 
-  async function build(server: ServerConfig, extra: { windowRepo?: SqliteWindowRepository; buildSecondaryWindowEnv?: (taskId: number, server: ServerConfig) => Record<string, string> } = {}) {
+  async function build(server: ServerConfig, extra: { windowRepo?: SqliteWindowRepository; buildSecondaryWindowEnv?: (taskId: number, server: ServerConfig) => Record<string, string>; planNewWindowProgram?: SessionsRouteOptions['planNewWindowProgram'] } = {}) {
     const registry = new MuxDriverRegistry();
     registry.register('misao', driver);
     const mutex = new KeyedMutex();
@@ -1123,6 +1124,52 @@ describe('mux creation routes hand the new pane its env inside the per-server lo
     await build(isolated);
     await app.inject({ method: 'POST', url: '/api/servers/misao1/mux/workspaces/ws-a/windows', payload: {} });
     expect(openWindow).toHaveBeenCalledWith(isolated, 'ws-a', undefined, { extraEnv: MASKED });
+  });
+
+  describe('a new window started with an agent (`launch`, for a host that starts a worker as a program: #371)', () => {
+    const program = { argv: ['claude', '--session-id', 's-1'], cwd: 'C:\\work', cols: 120, rows: 40 };
+    const launch = { command: 'claude', workerType: 'claude', workingDirectory: 'C:\\work' };
+
+    it('POST /mux/workspaces creates the window with the planned program as its first pane, inside the lock, and returns the session id', async () => {
+      const plan = vi.fn(async () => ({ program, agentSessionId: 's-1' }));
+      await build(normal, { planNewWindowProgram: plan });
+      const res = await app.inject({ method: 'POST', url: '/api/servers/misao1/mux/workspaces', payload: { name: 'ws-a', launch } });
+      expect(res.statusCode).toBe(200);
+      expect(plan).toHaveBeenCalledWith(normal, launch);
+      expect(openWorkspace).toHaveBeenCalledWith(normal, 'ws-a', { windowName: undefined, extraEnv: { AZITO_UI_TOKEN: 'test-token' }, program });
+      expect(res.json()).toMatchObject({ ok: true, agentSessionId: 's-1' });
+      expect(heldAtCall).toEqual([true]);
+    });
+
+    it('POST /mux/workspaces/:ws/windows does the same for a window added to a workspace', async () => {
+      await build(normal, { planNewWindowProgram: async () => ({ program, agentSessionId: null }) });
+      const res = await app.inject({ method: 'POST', url: '/api/servers/misao1/mux/workspaces/ws-a/windows', payload: { name: 'main', launch } });
+      expect(res.statusCode).toBe(200);
+      expect(openWindow).toHaveBeenCalledWith(normal, 'ws-a', 'main', { extraEnv: { AZITO_UI_TOKEN: 'test-token' }, program });
+      expect(res.json()).toMatchObject({ agentSessionId: null });
+    });
+
+    it('answers 400 for a host that types the agent into a shell (the planner gives none), creating nothing', async () => {
+      await build(normal, { planNewWindowProgram: async () => null });
+      const res = await app.inject({ method: 'POST', url: '/api/servers/misao1/mux/workspaces', payload: { name: 'ws-a', launch } });
+      expect(res.statusCode).toBe(400);
+      expect(res.json()).toMatchObject({ error: 'launch_not_supported' });
+      expect(openWorkspace).not.toHaveBeenCalled();
+    });
+
+    it('rejects a launch that is not { command: string } before anything is created', async () => {
+      await build(normal, { planNewWindowProgram: async () => ({ program, agentSessionId: null }) });
+      const res = await app.inject({ method: 'POST', url: '/api/servers/misao1/mux/workspaces', payload: { name: 'ws-a', launch: { command: '  ' } } });
+      expect(res.statusCode).toBe(400);
+      expect(openWorkspace).not.toHaveBeenCalled();
+    });
+
+    it('a command the host cannot start (the planner refuses it) creates nothing', async () => {
+      await build(normal, { planNewWindowProgram: async () => { throw new HostProfileError('unsupported_os', 'no'); } });
+      const res = await app.inject({ method: 'POST', url: '/api/servers/misao1/mux/workspaces', payload: { name: 'ws-a', launch } });
+      expect(res.statusCode).toBeGreaterThanOrEqual(500);
+      expect(openWorkspace).not.toHaveBeenCalled();
+    });
   });
 
   it('POST /mux/windows/:ref/panes (split) passes the UI token env, inside the lock', async () => {

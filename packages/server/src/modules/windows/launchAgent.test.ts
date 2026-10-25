@@ -108,9 +108,9 @@ function claudeStrategy(): ISessionStrategy {
   return {
     supportsSession: true,
     needsPostLaunchScan: false,
-    buildNewSessionFlags: (id: string) => `--session-id ${id}`,
-    buildResumeFlags: (id: string) => `--resume ${id}`,
-    buildRespawnCommand: () => null,
+    buildNewSessionArgs: (id: string) => ['--session-id', id],
+    buildResumeArgs: (id: string) => ['--resume', id],
+    buildRespawnLaunch: () => null,
     scanSessionId: vi.fn().mockResolvedValue(null),
   };
 }
@@ -119,9 +119,9 @@ function codexStrategy(): ISessionStrategy {
   return {
     supportsSession: true,
     needsPostLaunchScan: true,
-    buildNewSessionFlags: () => '',
-    buildResumeFlags: (id: string) => `--resume ${id}`,
-    buildRespawnCommand: () => null,
+    buildNewSessionArgs: () => [],
+    buildResumeArgs: (id: string) => ['--resume', id],
+    buildRespawnLaunch: () => null,
     scanSessionId: vi.fn().mockResolvedValue(null),
   };
 }
@@ -133,6 +133,7 @@ describe('POST /api/windows/:id/launch-agent — MCP blocking', () => {
   let window: Window;
   let server: ServerConfig;
   let sendKeys: ReturnType<typeof vi.fn>;
+  let resolvePane: ReturnType<typeof vi.fn>;
   let taskStore: Map<number, Task>;
 
   async function buildApp(opts: {
@@ -148,6 +149,7 @@ describe('POST /api/windows/:id/launch-agent — MCP blocking', () => {
     taskStore = new Map((opts.tasks ?? []).map(t => [t.id, t]));
 
     sendKeys = vi.fn().mockResolvedValue(undefined);
+    resolvePane = vi.fn().mockResolvedValue('%0');
 
     const windowRepo: Partial<IWindowRepository> = {
       findById: (id: number) => (id === window.id ? window : undefined),
@@ -158,7 +160,7 @@ describe('POST /api/windows/:id/launch-agent — MCP blocking', () => {
     };
     const mux = {
       sendKeysToHandle: sendKeys as unknown as TmuxClient['sendKeysToHandle'],
-      resolvePane: vi.fn().mockResolvedValue('%0') as unknown as TmuxClient['resolvePane'],
+      resolvePane: resolvePane as unknown as TmuxClient['resolvePane'],
     };
     const respawnService = {
       isTaskExecutionAllowed: vi.fn(() => false),
@@ -197,17 +199,17 @@ describe('POST /api/windows/:id/launch-agent — MCP blocking', () => {
     return keys[0];
   }
 
-  it('refuses a Windows host as unsupported_os (501) and types nothing into the pane: worker launch is #371', async () => {
-    app = await buildApp({ win: makeWindow(), hostProfile: { platform: 'win32', arch: 'x64' } });
-    const res = await app.inject({
-      method: 'POST',
-      url: `/api/windows/${window.id}/launch-agent`,
-      payload: { command: 'claude' },
+  describe('a Windows host (an agent is started as the first pane of a new window, never in an existing one)', () => {
+    const win32 = { platform: 'win32' as const, arch: 'x64' as const };
+
+    it('refuses as unsupported_os (501) with the reason, typing nothing and asking nothing of the mux', async () => {
+      app = await buildApp({ win: makeWindow({ muxRef: { kind: 'misao', workspace: 'proj', window: 'w_01' } }), hostProfile: win32 });
+      const res = await app.inject({ method: 'POST', url: `/api/windows/${window.id}/launch-agent`, payload: { command: 'claude --dangerously-skip-permissions' } });
+      expect(res.statusCode).toBe(501);
+      expect(res.json()).toMatchObject({ code: 'unsupported_os', error: expect.stringContaining('an agent is started in a new window') });
+      expect(sendKeys).not.toHaveBeenCalled();
+      expect(resolvePane).not.toHaveBeenCalled();
     });
-    expect(res.statusCode).toBe(501);
-    expect(res.json()).toEqual({ error: 'Launching an agent in a window is not available on Windows hosts yet (tracked in #371).', code: 'unsupported_os' });
-    expect(sendKeys).not.toHaveBeenCalled();
-    await app.close();
   });
 
   it('(a) isPrimary=true, claude, no session-id → both --strict-mcp-config and --session-id present', async () => {

@@ -418,6 +418,61 @@ describe('MisaoMuxClient writes', () => {
     });
   });
 
+  describe('a window whose first pane is a program (a worker started with no shell: #371)', () => {
+    const program = { argv: ['claude', '--model', 'sonnet'], cwd: 'C:\\work\\wt', cols: 120, rows: 40 };
+
+    it('openWorkspace opens the program as the first pane: its argv, cwd and size as given, the window env, the hub labels; no shell is resolved or typed into', async () => {
+      const { daemon, client } = setup({ windowsHub: true });
+
+      const opened = await client.openWorkspace(server, 'proj', { windowName: 'agent', exactName: true, extraEnv: { AZITO_UI_TOKEN: 'secret' }, program });
+
+      expect(daemon.calls.map((c) => c.method)).toEqual(['workspace.create', 'window.create', 'pane.open']);
+      expect(daemon.callsTo('pane.open')).toEqual([{
+        cmd: ['claude', '--model', 'sonnet'],
+        cwd: 'C:\\work\\wt',
+        cols: 120,
+        rows: 40,
+        windowId: opened.ref.window,
+        labels: { origin: 'hub', name: 'agent' },
+        ephemeralEnv: { ...HUB_PANE_ENV, AZITO_UI_TOKEN: 'secret' },
+      }]);
+      expect(daemon.panes.map((p) => p.cmd)).toEqual([['claude', '--model', 'sonnet']]);
+      expect(daemon.callsTo('pane.write')).toEqual([]);
+    });
+
+    it('openWindow adds a window to an existing workspace the same way, and leaves out an unset directory', async () => {
+      const { daemon, client } = setup({ windowsHub: true });
+      daemon.workspaces.set('proj', []);
+
+      await client.openWindow(server, 'proj', 'agent', { exactName: true, program: { argv: ['codex'], cols: 120, rows: 40 } });
+
+      expect(daemon.callsTo('pane.open')[0]).toMatchObject({ cmd: ['codex'], cols: 120, rows: 40 });
+      expect(daemon.callsTo('pane.open')[0]).not.toHaveProperty('cwd');
+    });
+
+    it('closes the window (and the workspace this call created) when the program cannot be found', async () => {
+      const { daemon, client } = setup({ windowsHub: true });
+      daemon.failures.set('pane.open', new FakeRpcError(1007, 'command not found: claude'));
+
+      await expect(client.openWorkspace(server, 'proj', { windowName: 'agent', program })).rejects.toThrow('command not found: claude');
+
+      expect(daemon.calls.map((c) => c.method)).toEqual(['workspace.create', 'window.create', 'pane.open', 'window.close', 'workspace.close']);
+      expect(daemon.workspaces.size).toBe(0);
+    });
+
+    it('is not combined with a command line', async () => {
+      const { daemon, client } = setup();
+      await expect(client.openWorkspace(server, 'proj', { command: 'claude', program })).rejects.toThrow(/not both/);
+      expect(daemon.callsTo('pane.open')).toEqual([]);
+    });
+
+    it('is not a tmux operation: a window is never silently opened bare', async () => {
+      const tmux = new TmuxClient({} as TransportFactory, HUB_ENV.publicUrl, 'ui-secret', HUB_ENV.localUrl, HUB_ENV.webhookToken);
+      await expect(tmux.openWorkspace(server, 'proj', { program })).rejects.toBeInstanceOf(MuxOperationUnsupportedError);
+      await expect(tmux.openWindow(server, 'proj', 'win', { program })).rejects.toBeInstanceOf(MuxOperationUnsupportedError);
+    });
+  });
+
   it('openPaneInWindow fails before pane.open when the window does not exist', async () => {
     const { daemon, client } = setup();
     await expect(client.openPaneInWindow(server, refOf('proj', 'w_missing'))).rejects.toThrow('not found');

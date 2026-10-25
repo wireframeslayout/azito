@@ -14,8 +14,6 @@ import { findSessionByKey, sessionKindOf, windowTargetSelectOptions } from '../l
 import { muxCreateFailureText, muxKindSelectModel } from '../lib/muxKindChoice';
 import { useMisaoInstallOffer } from './useMisaoInstallOffer';
 import { useMuxKindAvailability } from './useMuxKindAvailability';
-import { useHostFeatureBlock } from './useHostFeatureBlock';
-import { workerLaunchBlock } from '../lib/workerLaunch';
 
 /** 409 insufficient_resources レスポンス（api() はステータスを返さないため body のマーカーで判定する） */
 export function isInsufficientResources(res: unknown): res is { error: string; resources: ResourceStatus } {
@@ -30,7 +28,7 @@ export function isWindowExists(res: unknown): res is { error: string; windowName
 }
 
 /** The 201 body of `POST /mux/workspaces[/:ws/windows]`. */
-interface MuxCreateResponse { ok: boolean; ref: string; target: string; windowName: string }
+interface MuxCreateResponse { ok: boolean; ref: string; target: string; windowName: string; agentSessionId?: string | null }
 
 export type AgentPreset = { command: string; label: string };
 
@@ -53,6 +51,20 @@ export function buildAgentPresets(agentDefs: AgentDefinition[], t: TFunction<'wo
  * モデル/追加引数なし起動コマンド。'none' / 'custom' はエージェント種別ではなく
  * UI 専用の仮想選択肢なので、ここでのみ特別扱いする。
  */
+/**
+ * 新しいウィンドウの作成 API に渡す `launch`。ワーカーをプログラムとして起動するホスト（Windows）は、エージェントをその窓の最初のペインとして
+ * 1 回の作成で起動する（シェルのペインを作ってから launch-agent で置き換えない）。それ以外は undefined で、窓を作ってからシェルに打ち込む。
+ */
+export function buildNewWindowLaunch(
+  hostPlatform: string | undefined,
+  agent: string,
+  agentCommand: string,
+  workDir: string,
+): { command: string; workerType: string; workingDirectory?: string } | undefined {
+  if (hostPlatform !== 'win32' || agent === 'none' || !agentCommand) return undefined;
+  return { command: agentCommand, workerType: agent === 'custom' ? 'generic' : agent, ...(workDir.trim() ? { workingDirectory: workDir.trim() } : {}) };
+}
+
 export function buildAgentCommand(
   agent: string,
   model: string,
@@ -112,7 +124,6 @@ export function useAddWindowModal(
   const { t } = useTranslation('workspace');
   const { agents: agentDefs, loading: agentDefsLoading, error: agentDefsError } = useAgentDefinitions('worker');
   const { showToast } = useToast();
-  const hostFeatureBlock = useHostFeatureBlock();
   const withMisaoInstall = useMisaoInstallOffer();
   const { statuses } = useServerStatuses();
   const isServerOffline = useCallback((name: string) => statuses[name]?.status === 'offline', [statuses]);
@@ -265,9 +276,6 @@ export function useAddWindowModal(
 
   const handleAddWindow = useCallback(async function perform(force = false) {
     if (addWindowLoading) return;
-    // The one gate for the Add Window form and the quick add: refused before anything is created on the host.
-    const launchBlock = workerLaunchBlock({ mode: awMode, serverName: awServer, agent: awAgent }, hostFeatureBlock);
-    if (launchBlock) return showToast(launchBlock);
     if (awMode === 'existing') {
       if (!awTarget) return showToast(t('addWindow.selectWindowError'));
     } else if (awMode === 'session') {
@@ -345,6 +353,9 @@ export function useAddWindowModal(
             return;
           }
         }
+        // A host that starts the agent as a program (Windows) makes it the window's first pane in this one call; any other types it into the new shell afterwards.
+        const agentCmd = awAgent !== 'none' ? buildAgentCommand(awAgent, awAgentModel, agentPresets[awAgent]?.command || '', awNewCommand) : '';
+        const newWindowLaunch = buildNewWindowLaunch(awServerInfo?.hostProfile?.platform, awAgent, agentCmd, awWorkDir);
         const sessionName = awNewSession.trim();
         const beforeSessions = awSessionData[awServer] || [];
         // Only a session of the mux the window is created in counts (a same-named session of the other mux does not).
@@ -357,8 +368,8 @@ export function useAddWindowModal(
           {
             method: 'POST',
             body: JSON.stringify(sessionExists
-              ? { name: windowName, kind: newKind, force }
-              : { name: sessionName, windowName, kind: newKind, force }),
+              ? { name: windowName, kind: newKind, force, launch: newWindowLaunch }
+              : { name: sessionName, windowName, kind: newKind, force, launch: newWindowLaunch }),
           },
         ));
         if (isInsufficientResources(res)) {
@@ -376,7 +387,7 @@ export function useAddWindowModal(
         const label = awLabel.trim() || awNewWindowName.trim() || '';
         const newRef = createdRef;
         // tmux keeps its target on the registered row; a misao window is identified by its ref alone.
-        const windowBody: Record<string, unknown> = { server_name: awServer, ...(newKind === 'tmux' ? { tmux_target: target } : {}), ref: newRef, label };
+        const windowBody: Record<string, unknown> = { server_name: awServer, ...(newKind === 'tmux' ? { tmux_target: target } : {}), ref: newRef, label, ...(createdWindow.agentSessionId ? { agent_session_id: createdWindow.agentSessionId } : {}) };
         if (awAgent !== 'none') {
           windowBody['window_type'] = 'agent';
           windowBody['worker_type'] = awAgent === 'custom' ? 'generic' : awAgent;
@@ -394,16 +405,15 @@ export function useAddWindowModal(
           onConnect?.(termRef, numericProjectId);
         }
 
-        if (awWorkDir.trim()) {
-          if (created.id) {
-            await api(`/windows/${created.id}/panes/1/send-keys`, { method: 'POST', body: JSON.stringify({ keys: [`cd ${awWorkDir.trim()}`, 'Enter'] }) });
-          } else {
-            await api(`/servers/${encodeURIComponent(awServer)}/mux/windows/${encodeURIComponent(newRef)}/panes/1/send-keys`, { method: 'POST', body: JSON.stringify({ keys: [`cd ${awWorkDir.trim()}`, 'Enter'] }) });
+        if (!newWindowLaunch) {
+          if (awWorkDir.trim()) {
+            if (created.id) {
+              await api(`/windows/${created.id}/panes/1/send-keys`, { method: 'POST', body: JSON.stringify({ keys: [`cd ${awWorkDir.trim()}`, 'Enter'] }) });
+            } else {
+              await api(`/servers/${encodeURIComponent(awServer)}/mux/windows/${encodeURIComponent(newRef)}/panes/1/send-keys`, { method: 'POST', body: JSON.stringify({ keys: [`cd ${awWorkDir.trim()}`, 'Enter'] }) });
+            }
+            await new Promise((r) => setTimeout(r, 500));
           }
-          await new Promise((r) => setTimeout(r, 500));
-        }
-        if (awAgent !== 'none') {
-          const agentCmd = buildAgentCommand(awAgent, awAgentModel, agentPresets[awAgent]?.command || '', awNewCommand);
           if (agentCmd) {
             // ウィンドウ作成後の launch-agent が 409 になった場合はウィンドウ自体は残し、
             // retry では launch-agent のみ force 再送する（ウィンドウを二重作成しない）
@@ -418,7 +428,7 @@ export function useAddWindowModal(
     } finally {
       setAddWindowLoading(false);
     }
-  }, [projectId, awEffectiveProjectId, awMode, awServer, awTarget, awLabel, awSelectedSession, awNewSession, awNewWindowName, awNewCommand, awWorkDir, awAgent, awAgentModel, awSessionData, muxKindModel, agentPresets, project, refreshWorkspace, refreshSessions, addWindowLoading, awTaskId, onConnect, onTaskWindowAdded, launchAgent, showToast, t, closeQuickAddWindow, withMisaoInstall, hostFeatureBlock]);
+  }, [projectId, awEffectiveProjectId, awMode, awServer, awTarget, awLabel, awSelectedSession, awNewSession, awNewWindowName, awNewCommand, awWorkDir, awAgent, awAgentModel, awSessionData, muxKindModel, agentPresets, project, refreshWorkspace, refreshSessions, addWindowLoading, awTaskId, onConnect, onTaskWindowAdded, launchAgent, showToast, t, closeQuickAddWindow, withMisaoInstall, awServerInfo]);
 
   return {
     // State

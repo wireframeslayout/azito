@@ -35,7 +35,8 @@ import type { IWindowRepository } from '../../windows/Window';
 import type { IPaneStreamFactory } from '../../tmux/PaneStream';
 import type { TaskTempFiles } from '../../../shared/os/taskTempFiles';
 import type { ISessionStrategyFactory } from '../../agents/SessionStrategy';
-import { buildWorkerLaunchCommand } from '../../agents/LaunchCommand';
+import { buildWorkerLaunch, buildWorkerLaunchCommand } from '../../agents/LaunchCommand';
+import { renderLaunchLine, withFlags } from '../../agents/WorkerLaunch';
 import { type ShellDialect } from '../../../shared/os/shellDialect';
 import { expandTemplate } from './PromptExpander';
 import type { UnitTypeLoader } from '../../sidekicks/UnitTypeLoader';
@@ -264,7 +265,7 @@ export class ExecuteTaskUseCase {
 
   /** Refuses, before anything is changed, an operation that would resume a worker on a host that cannot run one (Windows, #371). */
   assertCanLaunchWorker(server: ServerConfig): void {
-    assertHostFeature(this.transportFactory.hostProfileFor(server), 'workerLaunch', 'Resuming a worker');
+    assertHostFeature(this.transportFactory.hostProfileFor(server), 'taskExecution', 'Resuming a worker');
   }
 
   private getWorktreeService(server: ServerConfig): IWorktreeService {
@@ -1415,16 +1416,13 @@ export class ExecuteTaskUseCase {
     await labelAddedWindowOrRemove(this.resolveDriver(server), server, ref, { windowId: windowRowId, taskId }, this.windowRepo);
 
     // Launch worker command
-    const workerLaunchCommand = buildWorkerLaunchCommand(unit.workerType, unit.workerModel, unit.workerExtraArgs, this.dialectOf(server));
-    if (workerLaunchCommand) {
-      let effectiveLaunchCommand = workerLaunchCommand;
+    const workerLaunch = buildWorkerLaunch(unit.workerType, unit.workerModel, unit.workerExtraArgs);
+    if (workerLaunch) {
+      let effectiveLaunch = workerLaunch;
       const strategy = this.sessionStrategyFactory.create(unit.workerType);
       if (strategy.supportsSession) {
         const sessionId = randomUUID();
-        const sessionFlags = strategy.buildNewSessionFlags(sessionId);
-        if (sessionFlags) {
-          effectiveLaunchCommand = `${workerLaunchCommand} ${sessionFlags}`;
-        }
+        effectiveLaunch = withFlags(workerLaunch, strategy.buildNewSessionArgs(sessionId));
         this.taskRepo.update(taskId, { agentSessionId: sessionId } as Partial<Task>);
 
         const taskWindows = this.windowRepo.findByTask(taskId);
@@ -1475,7 +1473,7 @@ export class ExecuteTaskUseCase {
           windowId: launchPrimaryWin?.id,
           windowType,
           workerExecutionMode: unit.workerExecutionMode,
-          effectiveLaunchCommand,
+          effectiveLaunchCommand: renderLaunchLine(effectiveLaunch, this.dialectOf(server)),
           dialect: this.dialectOf(server),
         });
         this.appendLog(taskId, unitId, 'command', { type: 'worker_launch', command: actualCommand });
@@ -1974,16 +1972,13 @@ export class ExecuteTaskUseCase {
         }
       }
 
-      const followUpLaunchCommand = buildWorkerLaunchCommand(unit.workerType, unit.workerModel, unit.workerExtraArgs, this.dialectOf(server));
-      if (followUpLaunchCommand) {
-        let effectiveFollowUpCommand = followUpLaunchCommand;
+      const followUpLaunch = buildWorkerLaunch(unit.workerType, unit.workerModel, unit.workerExtraArgs);
+      if (followUpLaunch) {
+        let effectiveFollowUpLaunch = followUpLaunch;
         if (task.agentSessionId) {
           const followUpStrategy = this.sessionStrategyFactory.create(unit.workerType);
           if (followUpStrategy.supportsSession) {
-            const sessionFlags = followUpStrategy.buildResumeFlags(task.agentSessionId);
-            if (sessionFlags) {
-              effectiveFollowUpCommand = `${followUpLaunchCommand} ${sessionFlags}`;
-            }
+            effectiveFollowUpLaunch = withFlags(followUpLaunch, followUpStrategy.buildResumeArgs(task.agentSessionId));
           }
         }
         const runtime = this.runtimeRegistry.get(unit.workerRuntime);
@@ -1999,7 +1994,7 @@ export class ExecuteTaskUseCase {
             windowId: primaryWin?.id,
             windowType: followUpWindowType,
             workerExecutionMode: unit.workerExecutionMode,
-            effectiveLaunchCommand: effectiveFollowUpCommand,
+            effectiveLaunchCommand: renderLaunchLine(effectiveFollowUpLaunch, this.dialectOf(server)),
             dialect: this.dialectOf(server),
           });
           this.appendLog(taskId, unitId, 'command', { type: 'worker_launch', command: actualCommand });

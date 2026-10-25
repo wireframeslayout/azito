@@ -1,5 +1,8 @@
 import type { FastifyPluginCallback } from 'fastify';
-import { assertHostFeature, workerLineDialect } from '../../shared/os/hostFeature';
+import { workerStartsAsProgram } from '../../shared/os/hostFeature';
+import { HostProfileError } from '../../shared/os/hostProfile';
+import { isAgentSessionId } from '../agents/agentSessionId';
+import { shellDialectFor } from '../../shared/os/shellDialect';
 import { randomUUID } from 'node:crypto';
 import type { IWindowRepository, Window } from './Window';
 import type { IProjectRepository } from '../projects/Project';
@@ -188,6 +191,11 @@ const windowsRoutes: FastifyPluginCallback<WindowsRouteOptions> = (fastify, opts
         return reply.code(400).send({ error: 'Invalid worker_model format' });
       }
       const workingDirectory = (body['working_directory'] as string) || null;
+      // The session id a Windows host's agent was started with (it is the window's first pane, so no launch-agent call records it).
+      const agentSessionId = (body['agent_session_id'] as string | undefined) || null;
+      if (agentSessionId !== null && !isAgentSessionId(agentSessionId)) {
+        return reply.code(400).send({ error: 'Invalid agent_session_id format' });
+      }
       const winId = windowRepo.add({
         ownerType: 'project',
         projectId: id,
@@ -200,7 +208,7 @@ const windowsRoutes: FastifyPluginCallback<WindowsRouteOptions> = (fastify, opts
         windowType: (body['window_type'] as string) === 'agent' ? 'agent' : 'terminal',
         workerType,
         workerModel,
-        agentSessionId: null,
+        agentSessionId,
         launchCommand: (body['launch_command'] as string) || null,
         workingDirectory,
         paneLayout: null,
@@ -436,8 +444,11 @@ const windowsRoutes: FastifyPluginCallback<WindowsRouteOptions> = (fastify, opts
 
       const srv = serverRepo.findByName(win.serverName);
       if (!srv) return reply.status(404).send({ error: 'Server not found' });
-      // A host that cannot yet run a worker command in a pane (Windows, #371) is refused as unsupported_os.
-      assertHostFeature(opts.transportFactory.hostProfileFor(srv), 'workerLaunch', 'Launching an agent in a window');
+      // A Windows host starts an agent as the first pane of its window, not by typing into a shell pane (POST /mux/workspaces with `launch`),
+      // so an agent cannot be started in a window that already exists: its shell pane would have to be replaced, and what runs in it could be lost.
+      if (workerStartsAsProgram(opts.transportFactory.hostProfileFor(srv))) {
+        throw new HostProfileError('unsupported_os', 'Launching an agent in an existing window is not available on Windows hosts: an agent is started in a new window (the window is created with the agent as its first pane).');
+      }
 
       const body = request.body as Record<string, unknown>;
       const command = (body['command'] as string | undefined)?.trim();
@@ -470,9 +481,9 @@ const windowsRoutes: FastifyPluginCallback<WindowsRouteOptions> = (fastify, opts
           windowRepo.updateAgentSessionIdByWindow(win.serverName, win.tmuxTarget, existingId);
         } else {
           const sessionId = randomUUID();
-          const flags = strategy.buildNewSessionFlags(sessionId);
-          if (flags) {
-            effectiveCommand = `${effectiveCommand} ${flags}`;
+          const sessionArgs = strategy.buildNewSessionArgs(sessionId);
+          if (sessionArgs.length > 0) {
+            effectiveCommand = `${effectiveCommand} ${sessionArgs.join(' ')}`;
             windowRepo.updateAgentSessionIdByWindow(win.serverName, win.tmuxTarget, sessionId);
           }
         }
@@ -485,11 +496,12 @@ const windowsRoutes: FastifyPluginCallback<WindowsRouteOptions> = (fastify, opts
       }
 
       const supervised = shouldSupervise(srv.type, win.windowType, windowKindOf(win));
-      const paneHandle = await driverFor(srv).resolvePane(srv, win.muxRef ?? muxRefFromTmuxTarget(win.tmuxTarget), 1);
+      const paneRef = win.muxRef ?? muxRefFromTmuxTarget(win.tmuxTarget);
+      const paneHandle = await driverFor(srv).resolvePane(srv, paneRef, 1);
       const cmd = supervised
         ? wrapWithSupervisor(effectiveCommand, {
             server: srv,
-            dialect: workerLineDialect(opts.transportFactory.hostProfileFor(srv), 'Launching an agent in a window'),
+            dialect: shellDialectFor(opts.transportFactory.hostProfileFor(srv)),
             target: win.tmuxTarget,
             harnessPrefix: opts.harnessPrefix,
             ...supervisorRegistry.issueLaunch({ serverName: srv.name, target: win.tmuxTarget, taskId: null, unitId: null, windowId: win.id }),

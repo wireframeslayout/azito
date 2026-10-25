@@ -7,7 +7,7 @@ import * as path from 'path';
  * End-to-end check of the hub's own misao on a real Windows (Windows PowerShell 5.1, the real schtasks.exe, the real misao.exe of the
  * bundle, a real named pipe): install.ps1 WITHOUT -NoService installs the hub and misao into a throwaway prefix with spaces and
  * parentheses, then `azito misao status`, the hub's view of the daemon (`GET /api/system/misao`, the sessions listing), the local server on misao only (create / rename /
- * send-keys / capture / terminal WebSocket / tier0_mux / delete, and a worker refused as unsupported_os), `azito stop` (misao keeps running), `azito start`, a repeated install / update (nothing is
+ * send-keys / capture / terminal WebSocket / tier0_mux / delete, and an agent launched in an existing window refused as unsupported_os), `azito stop` (misao keeps running), `azito start`, a repeated install / update (nothing is
  * restarted), `misao stop` and `azito misao start`. The tasks are deleted at the end whatever happened.
  * The tasks keep their product names: they only exist inside the CI runner. A skipped step is a failure, never a pass.
  * Usage: tsx smoke-misao-win32.ts <azito-hub-*-win32-x64.zip> <SHA256SUMS> <install.ps1>
@@ -130,7 +130,7 @@ interface ActivityRow { windowId?: number; decidedBy: string; state: string }
 /**
  * The local server of a Windows hub runs misao only (B4a): its tmux is closed with a reason, a window can be created, renamed,
  * typed into, read back, attached through the browser terminal WebSocket, seen by the activity detection (tier0_mux) and
- * deleted, and what needs a command in a pane (a worker) is `unsupported_os`. The server runs on the daemon this script installed.
+ * deleted, and an agent in an existing window is `unsupported_os` (a worker is a new window's first pane, #371). The server runs on the daemon this script installed.
  */
 async function checkLocalServerOnMisaoOnly(token: string, hubLog: string): Promise<void> {
   step('the local server of a Windows hub: Windows, misao by default, no tmux');
@@ -171,7 +171,7 @@ async function checkLocalServerOnMisaoOnly(token: string, hubLog: string): Promi
   const wsUrl = `ws://127.0.0.1:${PORT}/ws?token=${encodeURIComponent(token)}&server=local&ref=${encodeURIComponent(ref!)}&pane=1&cols=100&rows=30`;
   await terminalRoundTrip(wsUrl, 'echo w851-ws-%OS%\r', /w851-ws-Windows_NT/, 30_000);
 
-  step('a worker (a command in a pane) is unsupported_os: #371');
+  step('an agent is started as the first pane of a new window, never typed or put into an existing one (#371): launch-agent is unsupported_os');
   const project = await api(token, 'POST', '/api/projects', { name: 'w851 b4a', slug: 'w851-b4a' });
   const projectId = (project.json as { id?: number } | null)?.id;
   assert(project.status === 200 && typeof projectId === 'number', 'a project must be created', project.text);
@@ -179,7 +179,13 @@ async function checkLocalServerOnMisaoOnly(token: string, hubLog: string): Promi
   const windowId = (registered.json as { id?: number } | null)?.id;
   assert(registered.status === 200 && typeof windowId === 'number', 'the window must be registered as an agent window', registered.text);
   const launch = await api(token, 'POST', `/api/windows/${windowId}/launch-agent`, { command: 'claude' });
-  assert(launch.status === 501 && (launch.json as { code?: string } | null)?.code === 'unsupported_os', 'launching an agent must be refused as unsupported_os', launch.text);
+  assert(launch.status === 501 && (launch.json as { code?: string } | null)?.code === 'unsupported_os', 'launching an agent in an existing window must be refused as unsupported_os', launch.text);
+  const stillShell = await api(token, 'GET', `${windowBase}/panes/1/capture`);
+  assert(stillShell.status === 200 && stillShell.text.includes('w851-b4a-Windows_NT'), 'the shell pane must be as it was after the refused launch', stillShell.text);
+  const missing = await api(token, 'POST', '/api/servers/local/mux/workspaces', { name: 'w851-noprog', kind: 'misao', launch: { command: 'azito-smoke-no-such-program', workerType: 'generic' } });
+  assert(missing.status >= 400, 'a window whose program cannot be found must not be reported as created', missing.text);
+  const afterMissing = await api(token, 'GET', '/api/servers/local/sessions?detail=1');
+  assert(!afterMissing.text.includes('w851-noprog'), 'no workspace may be left behind by the failed creation', afterMissing.text);
 
   step('activity detection: GET /api/debug/activity shows the window, decided by tier0_mux from the daemon\'s pane.state');
   // A burst of output, which the daemon reads as work and then as quiet.
