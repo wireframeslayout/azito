@@ -9,6 +9,8 @@ import { HOST_PROBE_COMMAND, HostProfileError, assertPosixHost, parseHostProbe, 
 import { HOST_OS_PROBE_COMMAND, parseHostOsProbe } from './hostOsProbe';
 import { buildWindowsPreflightCommand, checkWindowsPreflight, parseWindowsPreflight, type WindowsPreflightInfo } from './windowsPreflight';
 import { buildSha256VerifyCommand, buildSafeExtractCommand, readSha256FromSumsFile } from './integrityVerifier';
+import { KeyedMutex } from '../../../shared/keyedMutex';
+import { INSTALL_ID_FILE, MANUAL_STEPS_ANY_START, buildCleanupScript, buildRecordProcessScript, manualCleanupSteps, parseCleanupOutcome, parseRecordedProcess, type NohupProcess } from './unixAgentCleanup';
 import { WindowsAgentDeployer, windowsAgentLayout, type WindowsDeployment } from './WindowsAgentDeployer';
 import { DEFAULT_WINDOWS_AGENT_OPTIONS, type WindowsAgentOptions } from './windowsAgentConfig';
 
@@ -76,14 +78,15 @@ const HEALTH_RETRY_INTERVAL_MS = 1000;
 /** Answers whether the host already has an agent of this hub's kind (its unit or its folder), before this install touches anything. */
 export const AGENT_PRESENCE_COMMAND = 'if [ -e ~/.config/systemd/user/azito-agent.service ] || [ -e ~/.azito/agent ]; then echo AZITO_AGENT_PRESENT; else echo AZITO_AGENT_ABSENT; fi';
 
-/** The file that says which install owns `~/.azito/agent`: the cleanup removes the folder only when it holds this install's id. */
-const INSTALL_ID_FILE = '~/.azito/agent/install.id';
-/** Marks the agent's own process (run.sh `exec`s node, so the process the pid file names is node running the bundle's entry). */
-const AGENT_ENTRY = 'azito-agent.cjs';
-const REMOVE_FOLDER_MANUALLY = 'rm -rf ~/.azito/agent';
-
-/** The process a nohup start made: the pid alone is not an identity (a pid is reused once the process ends), so its start time is kept with it. */
-interface NohupProcess { pid: number; startedAt: string }
+/**
+ * The key two installs on the same host share, whatever the spelling: `User@Host` and `user@host:22` are one. (A host reached under
+ * two different names is not recognised; the install id on the host still protects it from a cleanup by the wrong install.)
+ */
+export function hostLockKey(sshHost: string): string {
+  const m = /^(?:([^@]+)@)?([^:@]+)(?::(\d+))?$/.exec(sshHost.trim());
+  if (!m) return sshHost.trim().toLowerCase();
+  return `${m[1] ? `${m[1]}@` : ''}${m[2]!.toLowerCase()}:${m[3] ?? '22'}`;
+}
 
 /** The error for a host that has no tmux and no misao: the same text is the API's `error` and what the UI shows. */
 function noMuxMessage(host: string, misaoError: string | undefined): string {
@@ -91,6 +94,14 @@ function noMuxMessage(host: string, misaoError: string | undefined): string {
 }
 
 export class AgentInstaller {
+  /**
+   * One install (or update) at a time per host, from its start to the end of its start-up / cleanup, so that no other install of this hub
+   * runs between "this folder is mine" and the removal. Keyed by the SSH target, not the server name: two names can reach one host.
+   * (Another hub installing on the same host at the same time is not covered; the install id only keeps a cleanup from removing what
+   * is not its own.)
+   */
+  private readonly hostLocks = new KeyedMutex();
+
   constructor(
     private sshClient: SshClient,
     private bundler: AgentBundler,
@@ -106,7 +117,11 @@ export class AgentInstaller {
     }
   }
 
-  async install(
+  install(sshHost: string, onProgress?: (p: InstallProgress) => void, muxRuntime?: string): Promise<InstallResult> {
+    return this.hostLocks.withLock(hostLockKey(sshHost), () => this.installLocked(sshHost, onProgress, muxRuntime));
+  }
+
+  private async installLocked(
     sshHost: string,
     onProgress?: (p: InstallProgress) => void,
     muxRuntime?: string,
@@ -217,73 +232,31 @@ export class AgentInstaller {
    */
   private async discardUnregisteredAgent(sshHost: string, install: { hadAgent: boolean; installId: string; startMethod: 'systemd' | 'nohup'; nohupProcess: NohupProcess | undefined }): Promise<string> {
     if (install.hadAgent) {
-      return `An agent was already installed on this host before this install; it was replaced by the new one and left running, nothing was removed. The new agent holds a new token that the hub does not store: run the install again once a mux is available. To remove it by hand: systemctl --user disable --now azito-agent; ${REMOVE_FOLDER_MANUALLY}`;
+      return `An agent was already installed on this host before this install; it was replaced by the new one and left running, nothing was removed. The new agent holds a new token that the hub does not store: run the install again once a mux is available. To remove it by hand: ${MANUAL_STEPS_ANY_START}`;
     }
-    const owner = await this.runOnHost(sshHost, `cat ${INSTALL_ID_FILE}`);
-    if (!owner.ok || owner.stdout.trim() !== install.installId) {
-      return `Nothing was removed: ~/.azito/agent on ${sshHost} does not hold this install's id${owner.ok ? ' (another install is using it)' : ` (${owner.error})`}. Whatever agent is there is not this install's to remove.`;
+    const result = await this.runOnHost(sshHost, buildCleanupScript({ installId: install.installId, startMethod: install.startMethod, process: install.nohupProcess }));
+    if (!result.ok) {
+      return `The agent this install started could not be checked or removed (${result.error}); it may still be running on ${sshHost}. Remove it by hand: ${manualCleanupSteps(install.startMethod, install.nohupProcess)}`;
     }
-
-    const unitManual = install.startMethod === 'systemd' ? 'systemctl --user disable azito-agent; rm -f ~/.config/systemd/user/azito-agent.service; ' : '';
-    const stop = install.startMethod === 'systemd' ? await this.stopSystemdAgent(sshHost) : await this.stopNohupAgent(sshHost, install.nohupProcess);
-    if (!stop.ok) {
-      return `The agent this install started could not be stopped (${stop.error}), so it and ~/.azito/agent were left in place. Stop it by hand: ${stop.manual}; then remove it: ${unitManual}${REMOVE_FOLDER_MANUALLY}`;
+    const outcome = parseCleanupOutcome(result.stdout);
+    switch (outcome.kind) {
+      case 'removed':
+        return 'The agent this install started was stopped and removed.';
+      case 'not_owner':
+        return `Nothing was removed: ~/.azito/agent on ${sshHost} does not hold this install's id${outcome.found ? ' (another install is using it)' : ' (it is gone or has no id)'}. Whatever agent is there is not this install's to remove.`;
+      case 'not_stopped':
+        return `The agent this install started could not be stopped (${outcome.reason}), so it and ~/.azito/agent were left in place. Stop and remove it by hand: ${manualCleanupSteps(install.startMethod, install.nohupProcess)}`;
+      case 'not_removed':
+        return `The agent this install started was stopped, but not fully removed (could not remove ${outcome.reason}). Remove what is left on ${sshHost} by hand: ${install.startMethod === 'systemd' ? 'rm -f ~/.config/systemd/user/azito-agent.service; ' : ''}rm -rf ~/.azito/agent`;
     }
-
-    const problems: string[] = [];
-    if (install.startMethod === 'systemd') {
-      const unit = await this.runOnHost(sshHost, 'systemctl --user disable azito-agent 2>/dev/null; rm -f ~/.config/systemd/user/azito-agent.service && (systemctl --user daemon-reload 2>/dev/null; true)');
-      if (!unit.ok) problems.push(`could not remove the systemd unit: ${unit.error}`);
-    }
-    const folder = await this.runOnHost(sshHost, `${REMOVE_FOLDER_MANUALLY} && test ! -e ~/.azito/agent`);
-    if (!folder.ok) problems.push(`could not remove ~/.azito/agent: ${folder.error}`);
-    if (problems.length === 0) return 'The agent this install started was stopped and removed.';
-    return `The agent this install started was stopped, but not fully removed (${problems.join('; ')}). Remove what is left on ${sshHost} by hand: ${unitManual}${REMOVE_FOLDER_MANUALLY}`;
   }
 
-  /** Stops the unit (not a pid) and asks systemd, over SSH, whether it is still running. */
-  private async stopSystemdAgent(sshHost: string): Promise<{ ok: true } | { ok: false; error: string; manual: string }> {
-    const manual = 'systemctl --user stop azito-agent';
-    const stopped = await this.runOnHost(sshHost, 'systemctl --user stop azito-agent');
-    if (!stopped.ok) return { ok: false, error: stopped.error, manual };
-    const state = await this.runOnHost(sshHost, 'systemctl --user is-active azito-agent; true');
-    if (!state.ok) return { ok: false, error: state.error, manual };
-    const active = state.stdout.trim();
-    return active === 'inactive' || active === 'failed' ? { ok: true } : { ok: false, error: `the unit is still ${active || 'in an unknown state'} after it was stopped`, manual };
-  }
-
-  /**
-   * Stops the process this install started, only if it is still that process: the pid must have the recorded start time and the
-   * agent's entry in its command line. The script prints what it found, so the hub decides on the answer and not on an exit code.
-   */
-  private async stopNohupAgent(sshHost: string, proc: NohupProcess | undefined): Promise<{ ok: true } | { ok: false; error: string; manual: string }> {
-    if (!proc) {
-      return { ok: false, error: 'the agent process could not be identified when it started, so it is not stopped on a guess', manual: 'find it with `cat ~/.azito/agent/agent.pid` and `ps -o args= -p <pid>`, and kill that pid' };
-    }
-    const manual = `kill ${proc.pid}`;
-    const script = [
-      `p=${proc.pid}`,
-      'now=$(ps -o lstart= -p "$p" 2>/dev/null); args=$(ps -o args= -p "$p" 2>/dev/null)',
-      'if [ -z "$now" ]; then echo GONE',
-      `elif [ "$now" != '${proc.startedAt}' ]; then echo REUSED`,
-      `else case "$args" in *${AGENT_ENTRY}*) kill "$p" 2>/dev/null; i=0; while kill -0 "$p" 2>/dev/null && [ $i -lt 20 ]; do sleep 0.5; i=$((i+1)); done; if kill -0 "$p" 2>/dev/null; then echo ALIVE; else echo STOPPED; fi;; *) echo REUSED;; esac`,
-      'fi',
-    ].join('\n');
-    const result = await this.runOnHost(sshHost, script);
-    if (!result.ok) return { ok: false, error: result.error, manual };
-    const outcome = result.stdout.trim();
-    // GONE / REUSED: the agent this install started has ended (its pid is free, or belongs to another program, which was not touched).
-    if (outcome === 'GONE' || outcome === 'REUSED' || outcome === 'STOPPED') return { ok: true };
-    return { ok: false, error: outcome === 'ALIVE' ? `process ${proc.pid} is still running 10s after it was asked to stop` : `unexpected answer "${outcome}"`, manual };
-  }
-
-  /** The pid file's process with its start time, or undefined when the host does not answer in the expected form. */
+  /** The agent's process, as the pid file names it, with its start time; undefined when it is not the agent's entry (nothing is stopped later on a guess). */
   private async readNohupProcess(sshHost: string): Promise<NohupProcess | undefined> {
-    const result = await this.runOnHost(sshHost, 'p=$(cat ~/.azito/agent/agent.pid 2>/dev/null) && echo "$p|$(ps -o lstart= -p "$p")|$(ps -o args= -p "$p")"');
+    const result = await this.runOnHost(sshHost, buildRecordProcessScript());
     if (!result.ok) return undefined;
-    const [pid, startedAt, args] = result.stdout.trim().split('|');
-    if (!/^\d+$/.test(pid ?? '') || !startedAt || !/^[\w :]+$/.test(startedAt) || !args?.includes(AGENT_ENTRY)) return undefined;
-    return { pid: Number(pid), startedAt: startedAt.trim() };
+    const recorded = parseRecordedProcess(result.stdout);
+    return 'error' in recorded ? undefined : recorded;
   }
 
   private async writeInstallId(sshHost: string, installId: string): Promise<void> {
@@ -399,7 +372,11 @@ export class AgentInstaller {
    * Redeploys the agent over SSH with the Unix bootstrap (tar, nohup, systemd). A win32 agent (`hostProfile`; null = a Unix agent
    * registered before the OS was recorded) is refused with the `unsupported_os` reason as the error, before anything is sent.
    */
-  async update(sshHost: string, tailscaleIp: string, existingToken: string, hostProfile: HostProfile | null, muxRuntime?: string): Promise<{ success: boolean; version: string; error?: string }> {
+  update(sshHost: string, tailscaleIp: string, existingToken: string, hostProfile: HostProfile | null, muxRuntime?: string): Promise<{ success: boolean; version: string; error?: string }> {
+    return this.hostLocks.withLock(hostLockKey(sshHost), () => this.updateLocked(sshHost, tailscaleIp, existingToken, hostProfile, muxRuntime));
+  }
+
+  private async updateLocked(sshHost: string, tailscaleIp: string, existingToken: string, hostProfile: HostProfile | null, muxRuntime?: string): Promise<{ success: boolean; version: string; error?: string }> {
     await this.bundler.ensureBuild();
     const version = this.bundler.getBundleHash();
 
