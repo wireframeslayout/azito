@@ -205,7 +205,7 @@ async function main(): Promise<void> {
     // The restart lands while the launcher waits to start the crashed hub again (right after the crash, and a few seconds into the wait):
     // a hub the launcher starts between the restart's first look and the End must be waited for too, and never meets the new one on the port.
     for (const delayMs of [0, 3000]) {
-      step(`azito service restart ${delayMs === 0 ? 'right after a crash' : '3s into the launcher\\'s wait'}: exactly one hub, no port conflict`);
+      step(`azito service restart ${delayMs === 0 ? 'right after a crash' : '3s into the launcher wait'}: exactly one hub, no port conflict`);
       await waitFor('the hub to be running before the crash', async () => (await healthStatus()) === 200, 90_000, () => readLog(hubLog));
       killForcibly(hubNodePids(entryFragment));
       await sleep(delayMs);
