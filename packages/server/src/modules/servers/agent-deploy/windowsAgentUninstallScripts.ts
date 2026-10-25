@@ -114,8 +114,12 @@ export const RESOLVE_LONG = [
  *   home (so that a home spelled another way still counts). A name mixing long and short parts of the folder itself is not found.
  * - `Owner` is `mine`, `other` or `unknown` (the query failed or said nothing); a process of someone else is mostly `unknown` to a user
  *   who is not an administrator, so those are out of reach and are left out: the limit of what a user's session can see.
- * - `Blind` is a process whose `ExecutablePath` or `CommandLine` the host did not give. One that is `mine` is a process that might use the
- *   folder and cannot be told.
+ * - `Blind` is a process whose `ExecutablePath` or `CommandLine` the host did not give. One that is `mine` and `Matters` is a process that
+ *   might use the folder and cannot be told. `Matters` is the processes that can run from, or hold, the folders of the install: the program
+ *   the tasks start (`node.exe`, `misao.exe`), what they are started under (`conhost.exe`, `cmd.exe`, `powershell.exe`, `pwsh.exe`). A
+ *   process of the user's own that hides its program and command line and is something else (measured on a Windows runner:
+ *   `DefenderSessionHelper.exe`, a protected process) is not counted, since it would stop every removal on such a machine for a process that
+ *   is not AZITO's to hold a folder; it is listed as `HIDDEN` instead, so that the result says what was not looked into.
  */
 export const USES_FOLDER = [
   ...RESOLVE_LONG,
@@ -127,6 +131,7 @@ export const USES_FOLDER = [
   'Add-Needle $(try { (New-Object -ComObject Scripting.FileSystemObject).GetFolder($root).ShortPath } catch { $null })',
   'function Uses($p) { $text = (Norm $p.ExecutablePath) + "`n" + (Norm $p.CommandLine); foreach ($n in $needles) { if ($text.Contains($n)) { return $true } }; return $false }',
   'function Blind($p) { (-not $p.ExecutablePath) -or (-not $p.CommandLine) }',
+  'function Matters($p) { @(\'node.exe\', \'misao.exe\', \'conhost.exe\', \'cmd.exe\', \'powershell.exe\', \'pwsh.exe\') -contains "$($p.Name)".ToLowerInvariant() }',
   'function Owner($p) {',
   '  try { $r = Invoke-CimMethod -InputObject $p -MethodName GetOwnerSid -ErrorAction Stop } catch { return \'unknown\' }',
   '  if ($r.ReturnValue -ne 0 -or -not $r.Sid) { return \'unknown\' }',
@@ -158,17 +163,24 @@ export function leftoverProcessesScript(root: string, home: string): string {
     'function Find-Left { @(All | Where-Object { Uses $_ }) }',
     '$left = Find-Left',
     'for ($i = 0; $i -lt 20 -and $left.Count -gt 0; $i++) { Start-Sleep -Milliseconds 500; $left = Find-Left }',
-    '$blind = @(All | Where-Object { (Blind $_) -and -not (Uses $_) -and (Owner $_) -eq \'mine\' })',
+    '$mineBlind = @(All | Where-Object { (Blind $_) -and -not (Uses $_) -and (Owner $_) -eq \'mine\' })',
+    '$blind = @($mineBlind | Where-Object { Matters $_ }); $hidden = @($mineBlind | Where-Object { -not (Matters $_) })',
     'function Clean($t) { "$t" -replace \'[\\r\\n|]+\', \' \' }',
     'foreach ($p in $left) { Write-Output (\'LEFT|\' + $p.ProcessId + \'|\' + (Clean $p.Name) + \'|\' + (Clean $p.ExecutablePath)) }',
     'foreach ($p in $blind) { Write-Output (\'BLIND|\' + $p.ProcessId + \'|\' + (Clean $p.Name)) }',
-    'if ($left.Count -eq 0 -and $blind.Count -eq 0) { Write-Output \'CLEAR\' }',
+    'foreach ($p in $hidden) { Write-Output (\'HIDDEN|\' + $p.ProcessId + \'|\' + (Clean $p.Name)) }',
+    'if ($left.Count -eq 0 -and $blind.Count -eq 0 -and $hidden.Count -eq 0) { Write-Output \'CLEAR\' }',
   ].join('\n');
 }
 
 export function parseLeftoverOutput(output: string, root: string): ScriptOutcome {
   const all = lines(output);
   if (all.length === 1 && all[0] === 'CLEAR') return { outcome: 'absent' };
+  const hidden = all.filter((l) => l.startsWith('HIDDEN|')).map((l) => {
+    const [, pid = '', name = ''] = l.split('|');
+    return `${redactSecretText(name).slice(0, 100)} (process ${pid})`;
+  });
+  const note = hidden.length === 0 ? undefined : `Not counted, since the host hides their program and command line and they are not programs that start from an AZITO folder: ${hidden.join('; ')}.`;
   const left = all.filter((l) => l.startsWith('LEFT|')).map((l) => {
     const [, pid = '', name = '', exe = ''] = l.split('|');
     return { pid, name: redactSecretText(name).slice(0, 100), exe: redactSecretText(exe).slice(0, 300) };
@@ -177,7 +189,10 @@ export function parseLeftoverOutput(output: string, root: string): ScriptOutcome
     const [, pid = '', name = ''] = l.split('|');
     return { pid, name: redactSecretText(name).slice(0, 100) };
   });
-  if (left.length === 0 && blind.length === 0) throw unreadable(output);
+  if (left.length === 0 && blind.length === 0) {
+    if (note === undefined) throw unreadable(output);
+    return { outcome: 'absent', detail: note };
+  }
   const parts: string[] = [];
   if (left.length > 0) {
     const listed = left.map((p) => `${p.name} (process ${p.pid}${p.exe ? `, ${p.exe}` : ''})`).join('; ');
@@ -187,5 +202,5 @@ export function parseLeftoverOutput(output: string, root: string): ScriptOutcome
     const listed = blind.map((p) => `${p.name} (process ${p.pid})`).join('; ');
     parts.push(`The host did not give the program or the command line of ${blind.length === 1 ? 'a process of yours' : `${blind.length} processes of yours`}, so it cannot be told whether ${blind.length === 1 ? 'it uses' : 'they use'} ${root}: ${listed}. Check ${blind.length === 1 ? 'it' : 'them'}.`);
   }
-  return { outcome: 'failed', detail: `${parts.join(' ')} The folder was left; delete it, or remove the server again, once that is settled. (Processes of other users cannot be seen from this session.)` };
+  return { outcome: 'failed', detail: `${parts.join(' ')} The folder was left; delete it, or remove the server again, once that is settled. (Processes of other users cannot be seen from this session.)${note === undefined ? '' : ` ${note}`}` };
 }

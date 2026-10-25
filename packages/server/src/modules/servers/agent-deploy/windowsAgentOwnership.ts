@@ -126,7 +126,8 @@ export function misaoHubScript(input: MisaoHubInput): string {
  * The misao daemons of the folder, looked for with the same "uses the folder" test as the leftover look (see `USES_FOLDER`): a `misao.exe`
  * that uses `root` and is the user's own must have been started by a task (one of its parents, up to four levels, is a `conhost.exe
  * --headless`, which is what every task of AZITO runs under), else `FOREIGN <pid>`; its owner not readable is `UNKNOWN <pid>`, and so is
- * a process of the user's own whose path or command line the host did not give (it might be one). Otherwise `CLEAR`.
+ * a process of the user's own that can hold the folders of the install (see `USES_FOLDER`) and whose path or command line the host did not
+ * give (it might be one). Otherwise `CLEAR`.
  */
 export function misaoDaemonScript(root: string, home: string): string {
   const q = powershellDialect.quote;
@@ -147,7 +148,7 @@ export function misaoDaemonScript(root: string, home: string): string {
     '  }',
     '  if (-not $byTask) { Write-Output ("FOREIGN " + $d.ProcessId); exit 0 }',
     '}',
-    'foreach ($b in @(All | Where-Object { (Blind $_) -and (Owner $_) -eq \'mine\' })) { Write-Output ("UNKNOWN " + $b.ProcessId); exit 0 }',
+    'foreach ($b in @(All | Where-Object { (Blind $_) -and (Matters $_) -and (Owner $_) -eq \'mine\' })) { Write-Output ("UNKNOWN " + $b.ProcessId); exit 0 }',
     'Write-Output \'CLEAR\'',
   ].join('\n');
 }

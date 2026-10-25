@@ -626,6 +626,21 @@ describe('what the scripts answer', () => {
     expect(both.detail).toContain('process 12');
   });
 
+  it('a process of the user\'s own that hides its program and is not one that can hold an AZITO folder (a protected Defender helper on a runner) is named, not counted', () => {
+    const hidden = parseLeftoverOutput('HIDDEN|6312|DefenderSessionHelper.exe', 'C:\\r');
+    expect(hidden.outcome).toBe('absent');
+    expect(hidden.detail).toContain('DefenderSessionHelper.exe (process 6312)');
+    // Still a failure beside a real find.
+    expect(parseLeftoverOutput('LEFT|1|node.exe|C:\\n.exe\nHIDDEN|6312|DefenderSessionHelper.exe', 'C:\\r')).toMatchObject({ outcome: 'failed', detail: expect.stringContaining('DefenderSessionHelper.exe') });
+  });
+
+  it('only the processes that can run from, or hold, an AZITO folder count when their program is hidden', () => {
+    for (const script of [leftoverProcessesScript(AGENT_ROOT, HOME), misaoDaemonScript(MISAO_ROOT, HOME)]) {
+      expect(script).toContain("@('node.exe', 'misao.exe', 'conhost.exe', 'cmd.exe', 'powershell.exe', 'pwsh.exe') -contains");
+    }
+    expect(misaoDaemonScript(MISAO_ROOT, HOME)).toContain('(Blind $_) -and (Matters $_)');
+  });
+
   it('what is left running: CLEAR is "absent", LEFT lines are a failure with the pids and paths, anything else is an error', () => {
     expect(parseLeftoverOutput('CLEAR\r\n', 'C:\\r')).toEqual({ outcome: 'absent' });
     const left = parseLeftoverOutput('LEFT|10|node.exe|C:\\n\\node.exe\nLEFT|11|misao.exe|', 'C:\\r');
