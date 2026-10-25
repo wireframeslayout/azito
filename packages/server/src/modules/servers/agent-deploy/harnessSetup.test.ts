@@ -42,9 +42,9 @@ function baseEnv(extra: Record<string, string> = {}): Record<string, string> {
   return { ...env, HOME: home, USERPROFILE: home, PATH: emptyBin, ...extra };
 }
 
-function runSetup(args: string[], extraEnv: Record<string, string> = {}): Promise<RunResult> {
+function runSetup(args: string[], extraEnv: Record<string, string> = {}, script = SETUP): Promise<RunResult> {
   return new Promise((resolve) => {
-    execFile(process.execPath, [SETUP, ...args], { env: baseEnv(extraEnv), timeout: 120_000 }, (err, stdout, stderr) => {
+    execFile(process.execPath, [script, ...args], { env: baseEnv(extraEnv), timeout: 120_000 }, (err, stdout, stderr) => {
       resolve({ code: err ? (typeof err.code === 'number' ? err.code : 1) : 0, stdout, stderr });
     });
   });
@@ -132,6 +132,15 @@ describe('setup.mjs', () => {
     const script = HOOK.replace(/\\/g, '/');
     expect(commandsOf(settings, 'UserPromptSubmit')).toEqual([`node "${script}" activity start`, `node "${script}" activity start --prefix prod`]);
     expect(settings.mcpServers['azt-mcp'].env.AZITO_URL).toBe('http://hub.example:3001');
+  });
+
+  it('refuses a prefix that could make a file name leave ~/.azito, before writing anything', async () => {
+    for (const prefix of ['../evil', 'a/b', '.hidden', 'x..y']) {
+      const result = await runSetup(['--prefix', prefix, '--azito-url', 'http://x', '--webhook-token', 't']);
+      expect(result.code, prefix).toBe(1);
+      expect(result.stderr).toContain('--prefix');
+    }
+    expect(fs.existsSync(path.join(home, '.azito'))).toBe(false);
   });
 
   it('refuses a prefix the hook command could not carry through either shell', async () => {
@@ -229,7 +238,9 @@ describe('setup.mjs and Codex', () => {
   /** A `codex` on PATH that records its arguments (a .cmd shim on Windows, like the npm one). */
   function installFakeCodex(failAdd = false): string {
     const log = path.join(home, 'codex-calls.log');
-    const js = path.join(emptyBin, 'codex.js');
+    // As npm lays it out: the script under node_modules, a .cmd shim that runs it, and (to be skipped) an sh script and a .ps1.
+    const js = path.join(emptyBin, 'node_modules', '@openai', 'codex', 'bin', 'codex.js');
+    fs.mkdirSync(path.dirname(js), { recursive: true });
     fs.writeFileSync(js, `
 const fs = require('fs');
 fs.appendFileSync(${JSON.stringify(log)}, JSON.stringify(process.argv.slice(2)) + '\\n');
@@ -237,7 +248,13 @@ if (process.argv[2] === 'mcp' && process.argv[3] === 'add' && ${failAdd}) proces
 if (process.argv[2] === 'mcp' && process.argv[3] === 'get') process.exit(1);
 `);
     if (isWindows) {
-      fs.writeFileSync(path.join(emptyBin, 'codex.cmd'), `@echo off\r\n"${process.execPath}" "${js}" %*\r\n`);
+      fs.writeFileSync(path.join(emptyBin, 'codex'), '#!/bin/sh\nexit 99\n');
+      fs.writeFileSync(path.join(emptyBin, 'codex.ps1'), 'exit 99\r\n');
+      fs.writeFileSync(path.join(emptyBin, 'codex.cmd'), [
+        '@ECHO off', 'GOTO start', ':find_dp0', 'SET dp0=%~dp0', 'EXIT /b', ':start', 'SETLOCAL', 'CALL :find_dp0', '',
+        'IF EXIST "%dp0%\\node.exe" (', '  SET "_prog=%dp0%\\node.exe"', ') ELSE (', '  SET "_prog=node"', '  SET PATHEXT=%PATHEXT:;.JS;=;%', ')', '',
+        'endLocal & goto #_undefined_# 2>NUL || title %COMSPEC% & "%_prog%"  "%dp0%\\node_modules\\@openai\\codex\\bin\\codex.js" %*', '',
+      ].join('\r\n'));
     } else {
       fs.writeFileSync(path.join(emptyBin, 'codex'), `#!/bin/sh\nexec "${process.execPath}" "${js}" "$@"\n`, { mode: 0o755 });
     }
@@ -263,6 +280,29 @@ if (process.argv[2] === 'mcp' && process.argv[3] === 'get') process.exit(1);
     expect(fs.readFileSync(path.join(home, '.codex', 'AGENTS.md'), 'utf8')).toBe(agents);
   }, 60_000);
 
+  it('registers with a harness under a path with non-ASCII characters, parentheses, & and % (no shell sees the path)', async () => {
+    const log = installFakeCodex();
+    const copy = path.join(path.dirname(home), 'ハーネス (コピー) & 100%', 'harness');
+    fs.cpSync(HARNESS_DIR, copy, { recursive: true, filter: (src) => !src.includes('node_modules') });
+    const result = await runSetup(FULL, { PATHEXT: '.COM;.EXE;.BAT;.CMD' }, path.join(copy, 'setup.mjs'));
+    expect(result.stderr).toBe('');
+    expect(result.code).toBe(0);
+    const add = calls(log).find((c) => c[1] === 'add')!;
+    expect(add.slice(-2)).toEqual(['node', path.join(copy, 'skills', 'azt-mcp', 'mcp-server', 'index.js')]);
+    expect(add).toContain('AZITO_URL=http://hub.example:3001');
+  }, 60_000);
+
+  it('says why when codex cannot be started, and changes nothing', async () => {
+    fs.mkdirSync(path.join(home, '.codex'));
+    fs.writeFileSync(path.join(home, '.codex', 'config.toml'), 'model = "x"\n');
+    if (isWindows) fs.writeFileSync(path.join(emptyBin, 'codex.cmd'), '@echo off\r\nrem not an npm shim\r\n');
+    else fs.writeFileSync(path.join(emptyBin, 'codex'), '#!/bin/sh\nexit 7\n', { mode: 0o755 });
+    const result = await runSetup(FULL, { PATHEXT: '.COM;.EXE;.BAT;.CMD' });
+    expect(result.code).toBe(1);
+    expect(fs.readFileSync(path.join(home, '.codex', 'config.toml'), 'utf8')).toBe('model = "x"\n');
+    expect(result.stderr).toContain(isWindows ? '読み取れません' : 'azt-mcp (Codex)');
+  }, 60_000);
+
   it('a failed `codex mcp add` restores config.toml and makes the run fail', async () => {
     installFakeCodex(true);
     fs.mkdirSync(path.join(home, '.codex'));
@@ -284,6 +324,22 @@ if (process.argv[2] === 'mcp' && process.argv[3] === 'get') process.exit(1);
     const unknown = await runSetup(['--purge-operator-token']);
     expect(unknown.code).toBe(1);
     expect(fs.readFileSync(config, 'utf8')).toContain('secret');
+  });
+
+  it.each([
+    ['a key written with an escape', '[mcp_servers.azt-mcp.env]\n"AZITO_UI_TOK\\u0045N" = "secret"\n'],
+    ['an escaped table name', '[mcp_servers."azt\\u002dmcp".env]\nAZITO_UI_TOKEN = "secret"\n'],
+    ['an escaped part of a dotted key', 'mcp_servers."azt-mc\\u0070".env.AZITO_UI_TOKEN = "secret"\n'],
+  ])('--purge-operator-token fails closed, before editing, on %s', async (_name, toml) => {
+    fs.mkdirSync(path.join(home, '.codex'));
+    const config = path.join(home, '.codex', 'config.toml');
+    // a standard-layout key that would be removed if the file were edited at all
+    const content = `${toml}\n[mcp_servers.azt-mcp.env]\nAZITO_UI_TOKEN = "standard"\n`;
+    fs.writeFileSync(config, content);
+    const result = await runSetup(['--purge-operator-token']);
+    expect(result.code).toBe(1);
+    expect(result.stderr).toContain('手動で確認');
+    expect(fs.readFileSync(config, 'utf8')).toBe(content);
   });
 });
 
@@ -351,7 +407,7 @@ describe('the hook written by setup.mjs', () => {
     }
   }, 60_000);
 
-  it('does not put the token in the arguments of the process that delivers it', async () => {
+  it('keeps the token out of the request body (it reaches the detached sender over its stdin, never its arguments)', async () => {
     const mod = await import(pathToFileURL(HOOK).href);
     const plan = await mod.planHook({
       args: { kind: 'activity', event: 'start', prefix: '' },

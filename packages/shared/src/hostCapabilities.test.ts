@@ -20,6 +20,7 @@ describe('hostFeatureSupport', () => {
     expect(hostFeatureSupport(win32, 'taskExecution')).toEqual({ available: false, issue: 371 });
     expect(hostFeatureSupport(win32, 'workerLaunch')).toEqual({ available: false, issue: 371 });
     expect(hostFeatureSupport(win32, 'browserRuntime')).toEqual({ available: false, issue: 372 });
+    expect(hostFeatureSupport(win32, 'isolation')).toEqual({ available: false, issue: 464 });
   });
 
   it('tmux is unavailable on Windows for good (no issue)', () => {

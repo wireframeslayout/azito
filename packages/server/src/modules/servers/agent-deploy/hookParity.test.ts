@@ -68,7 +68,7 @@ const sleep = (ms: number): Promise<void> => new Promise((r) => setTimeout(r, ms
 
 async function waitForRequest(expectNone: boolean): Promise<void> {
   if (expectNone) {
-    await sleep(300);
+    await sleep(600);
     return;
   }
   const deadline = Date.now() + 5000;

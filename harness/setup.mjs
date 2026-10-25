@@ -16,7 +16,7 @@ import { fileURLToPath } from 'node:url';
 import { codexHomeOf, findOnPath, registerCodexMcp, stripCodexUiToken, writeAgentsBlock } from './lib/codex.mjs';
 import { purgeOperatorEnv, scrubLegacyUiToken, writeAzitoctlEnv, writeOperatorEnv } from './lib/envFiles.mjs';
 import { copyRules, linkSkills } from './lib/links.mjs';
-import { mergeClaudeSettings } from './lib/claudeSettings.mjs';
+import { PREFIX_PATTERN, mergeClaudeSettings } from './lib/claudeSettings.mjs';
 import { createSecretFiles } from './lib/secretFile.mjs';
 
 const DEFAULT_URL = 'http://localhost:3001';
@@ -48,6 +48,10 @@ export function parseSetupArgs(argv, env) {
     }
     options[keys[flag]] = value;
     if (flag === '--ui-token') uiTokenGiven = true;
+  }
+  // Checked here, before any file name is made from it (azitoctl-<prefix>.env).
+  if (options.prefix && (!PREFIX_PATTERN.test(options.prefix) || options.prefix.includes('..'))) {
+    throw new Error(`--prefix に使える文字は英数字と . _ - です（先頭は英数字、.. は不可）: ${options.prefix}`);
   }
   if (options.purge) {
     if (uiTokenGiven) throw new Error('--purge-operator-token と --ui-token は同時指定できません');

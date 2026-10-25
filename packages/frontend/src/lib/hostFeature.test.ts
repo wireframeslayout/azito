@@ -16,6 +16,11 @@ describe('hostFeatureBlockReason', () => {
     expect(hostFeatureBlockReason({ platform: 'win32' }, 'taskExecution', t)).toBe('common:hostFeature.windowsPending{"issue":371}');
   });
 
+  it('says isolation is deferred, not planned for v0.12.x, on Windows', () => {
+    expect(hostFeatureBlockReason({ platform: 'win32' }, 'isolation', t)).toBe('common:hostFeature.windowsDeferred{"issue":464}');
+    expect(hostFeatureBlockReason({ platform: 'linux' }, 'isolation', t)).toBeNull();
+  });
+
   it('says tmux is not there at all, not that it is coming', () => {
     expect(hostFeatureBlockReason({ platform: 'win32' }, 'tmux', t)).toBe('common:hostFeature.windowsNoTmux');
   });

@@ -15,7 +15,7 @@ const HOOKS = [
   ['SessionStart', 'session', '', 'SessionStart hook (セッション更新)'],
 ];
 
-const PREFIX_PATTERN = /^[A-Za-z0-9._-]+$/;
+export const PREFIX_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._-]*$/;
 const HOOK_COMMAND = /azito-hook\.mjs"?\s+(\w+)(?:\s+(start|stop))?(?:\s+--prefix\s+(\S+))?\s*$/;
 
 /**
@@ -28,7 +28,7 @@ export function hookCommand(hookScript, kind, event, prefix) {
   if (/["$`]/.test(script)) {
     throw new Error(`hook のパスに " $ \` を含められません（シェルが展開してしまいます）: ${script}`);
   }
-  if (prefix && !PREFIX_PATTERN.test(prefix)) {
+  if (prefix && (!PREFIX_PATTERN.test(prefix) || prefix.includes('..'))) {
     throw new Error(`--prefix に使える文字は英数字と . _ - です: ${prefix}`);
   }
   return ['node', `"${script}"`, kind, ...(event ? [event] : []), ...(prefix ? ['--prefix', prefix] : [])].join(' ');

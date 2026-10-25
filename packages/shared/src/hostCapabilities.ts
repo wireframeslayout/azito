@@ -29,9 +29,10 @@ export type HostFeature =
   | 'taskExecution'
   | 'workerLaunch'
   | 'tmux'
-  | 'browserRuntime';
+  | 'browserRuntime'
+  | 'isolation';
 
-export const HOST_FEATURES: readonly HostFeature[] = ['taskExecution', 'workerLaunch', 'tmux', 'browserRuntime'];
+export const HOST_FEATURES: readonly HostFeature[] = ['taskExecution', 'workerLaunch', 'tmux', 'browserRuntime', 'isolation'];
 
 export type HostFeatureSupport =
   | { available: true }
@@ -43,6 +44,8 @@ export type HostFeatureSupport =
  *  - taskExecution (#371): `ExecuteTaskUseCase` starts the worker in a pane with a command (`paneShell.commandArgs` is null on Windows -> `unsupported_os`).
  *  - workerLaunch (#371): a new window with claude / codex / a command: the same pane command (`MisaoServers`, `paneShell.ts`).
  *  - tmux: not installed on Windows; `install-tmux` / `apply-tmux-config` answer `unsupported_os`.
+ *  - isolation (#464): declaring a server isolated (`isolationIntent: true`) needs the cleanup of the operator credentials, which is only built for
+ *    a Unix agent (`attemptIsolationCleanup`); a Windows agent cannot be made an isolated server in v0.12.0.
  *  - browserRuntime (#372): `install-browser-runtime` is sh (`assertPosixHost`).
  */
 const WIN32_UNAVAILABLE: Record<HostFeature, number | null> = {
@@ -50,6 +53,7 @@ const WIN32_UNAVAILABLE: Record<HostFeature, number | null> = {
   workerLaunch: 371,
   tmux: null,
   browserRuntime: 372,
+  isolation: 464,
 };
 
 export function hostFeatureSupport(profile: HostPlatformInfo | null | undefined, feature: HostFeature): HostFeatureSupport {

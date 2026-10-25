@@ -47,6 +47,12 @@ export function buildNodeSetupInvocation(options: NodeSetupOptions): NodeSetupIn
 }
 
 /**
+ * The dependencies of the azt-mcp MCP server, installed on the host by hand (`npm install`, see docs/harness.md). They are not
+ * part of the harness that is sent (node_modules is left out), so a replacement of the directory must carry them over.
+ */
+const MCP_DEPENDENCIES = ['skills', 'azt-mcp', 'mcp-server', 'node_modules'];
+
+/**
  * Writes the harness directory on the host: into a staging directory next to it, then swapped in as one operation
  * (`replaceDirectory` puts the old one back when that fails), so a transfer that stops half way never leaves a half harness.
  */
@@ -58,6 +64,9 @@ export async function sendHarnessDirectory(files: IFileOps, sourceDir: string, l
     fileMode: () => 0o644,
     directoryMode: 0o755,
   });
+  const installedDependencies = api.join(location.harnessDir, ...MCP_DEPENDENCIES);
+  const stagedDependencies = api.join(staging, ...MCP_DEPENDENCIES);
+  let carriedOver = false;
   try {
     await files.create(staging, 'directory', { recursive: true });
     for (const entry of entries) {
@@ -66,9 +75,16 @@ export async function sendHarnessDirectory(files: IFileOps, sourceDir: string, l
       else if (entry.type === 'file' && entry.data) await files.write(target, entry.data);
       else throw new Error(`Cannot send ${entry.path} to the host: it is neither a file nor a directory`);
     }
+    // The installed dependencies move into the new copy before it takes the old one's place (a rename on the same disk).
+    if ((await files.stat(installedDependencies, { followLinks: false }))?.kind === 'directory') {
+      await files.rename(installedDependencies, stagedDependencies);
+      carriedOver = true;
+    }
     await files.replaceDirectory(staging, location.harnessDir);
   } catch (err) {
-    // Best effort: the error being reported is the transfer's, not the cleanup's.
+    // Best effort: the error being reported is the transfer's, not the cleanup's. A replacement that failed leaves the old
+    // harness in place, so the dependencies go back to it before the staging directory is removed.
+    if (carriedOver) await files.rename(stagedDependencies, installedDependencies).catch(() => undefined);
     await files.remove(staging).catch(() => undefined);
     throw err;
   }

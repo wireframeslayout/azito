@@ -150,3 +150,5 @@ Node 版のフックの動きは bash 版と同じです。宛先プロファイ
 `setup.mjs` が書くフックのコマンドは `node "C:/Users/<ユーザー>/.azito/harness/hooks/azito-hook.mjs" activity start` の形（`/` 区切りと二重引用符）です。Claude Code がフックを Git Bash で動かしても PowerShell で動かしても、同じ意味になります。`node` が `PATH` にある必要があります。
 
 Windows の agent への導入は、他のサーバーと同じく UI（サーバー詳細 → Setup → Install Harness）から行います。Windows のマシン上で手で行う場合は `node harness\setup.mjs --azito-url <url> --webhook-token <token> --server-name <名前>` を実行します（運用者の資格情報も入れるなら `--ui-token <token>` を足します）。
+
+Windows の agent は、このリリースでは隔離サーバー（`isolationIntent`）にできません（#464 で扱います）。API は 501 `unsupported_os` で断り、サーバーのフォームには理由を表示します。`codex` は npm の shim が実行するスクリプトを node で直接起動するので、日本語や括弧を含むパスでも動きます。`npm install` で入れた `azt-mcp` の依存は、ハーネスを更新しても残ります。

@@ -235,6 +235,10 @@ function assertStageContents(platform: Args['platform']): void {
     ...(isWin32 ? ['node.exe', 'run.ps1', 'node_modules/better-sqlite3/build/Release/better_sqlite3.node'] : UNIX_ONLY_FILES),
     'public/index.html',
     'harness/chat-commands.json',
+    // The Windows route of the harness install (setup.mjs, the Node hook and the modules setup.mjs imports).
+    'harness/setup.mjs',
+    'harness/hooks/azito-hook.mjs',
+    'harness/lib/secretFile.mjs',
     'dist-agent/azito-agent.tar.gz',
     'deploy/azito-release.service',
     'deploy/com.azito.hub.plist',

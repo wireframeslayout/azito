@@ -8,7 +8,9 @@ import { hostFeatureSupport, type HostFeature, type HostPlatformInfo } from '@az
 export function hostFeatureBlockReason(profile: HostPlatformInfo | null | undefined, feature: HostFeature, t: TFunction): string | null {
   const support = hostFeatureSupport(profile, feature);
   if (support.available) return null;
-  return support.issue === null ? t('common:hostFeature.windowsNoTmux') : t('common:hostFeature.windowsPending', { issue: support.issue });
+  if (support.issue === null) return t('common:hostFeature.windowsNoTmux');
+  // Isolation is out of v0.12.0 on Windows (a later release): not "planned for v0.12.x".
+  return feature === 'isolation' ? t('common:hostFeature.windowsDeferred', { issue: support.issue }) : t('common:hostFeature.windowsPending', { issue: support.issue });
 }
 
 /** The body of an API answer that refused for the host's OS (`{ error: <the reason in words>, code: 'unsupported_os' }`). */

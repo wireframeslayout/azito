@@ -150,3 +150,5 @@ What the Node hook does is what the bash hooks do: the same destination-profile 
 `setup.mjs` writes the hook commands as `node "C:/Users/<you>/.azito/harness/hooks/azito-hook.mjs" activity start` (forward slashes, double quotes): the same text means the same in Git Bash and in PowerShell, whichever Claude Code uses to run hooks. `node` has to be on `PATH`.
 
 Install the harness on a Windows agent from the UI (server detail -> Setup -> Install Harness) as for any server; to do it by hand on the Windows machine, run `node harness\setup.mjs --azito-url <url> --webhook-token <token> --server-name <name>` (add `--ui-token <token>` for the operator credential).
+
+A Windows agent cannot be declared an isolated server (`isolationIntent`) in this release (tracked in #464): the API answers 501 `unsupported_os` and the server form shows the reason. `codex` is started through the script its npm shim runs, with node, so paths with non-ASCII characters or parentheses work; the dependencies of `azt-mcp` installed with `npm install` are kept when the harness is updated.

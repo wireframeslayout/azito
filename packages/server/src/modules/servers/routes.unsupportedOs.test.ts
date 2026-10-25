@@ -91,6 +91,18 @@ describe('Unix-only install operations on a Windows server answer unsupported_os
     expect(install).not.toHaveBeenCalled();
   });
 
+  it('PUT /api/servers/:name cannot declare a Windows agent isolated (#464): 501 unsupported_os, and no credential cleanup runs', async () => {
+    const { app, harnessInstaller } = await buildApp(win32);
+    const install = vi.spyOn(harnessInstaller, 'install');
+    const installOnAgent = vi.spyOn(harnessInstaller, 'installOnAgent');
+    const res = await app.inject({ method: 'PUT', url: '/api/servers/srv', payload: { isolationIntent: true } });
+    expect(res.statusCode).toBe(501);
+    expect(res.json()).toMatchObject({ code: 'unsupported_os', error: expect.stringContaining('#464') });
+    expect(res.json().error).toContain('isolationIntent');
+    expect(install).not.toHaveBeenCalled();
+    expect(installOnAgent).not.toHaveBeenCalled();
+  });
+
   it('a server with no recorded OS (a Unix agent from before it was kept) still applies the tmux config', async () => {
     const { app, exec } = await buildApp(null);
     const res = await app.inject({ method: 'POST', url: '/api/servers/srv/apply-tmux-config' });

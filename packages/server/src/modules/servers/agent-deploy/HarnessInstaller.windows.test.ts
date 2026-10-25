@@ -67,6 +67,32 @@ describe('HarnessInstaller.installOnAgent', () => {
     expect(run.mock.calls[0][0].args).toContain('--prefix');
   });
 
+  it('keeps the MCP server\'s installed dependencies through an update (they are not part of what is sent)', async () => {
+    const mcp = path.join(home, '.azito', 'harness', 'skills', 'azt-mcp', 'mcp-server');
+    fs.mkdirSync(path.join(mcp, 'node_modules', '@modelcontextprotocol', 'sdk'), { recursive: true });
+    fs.writeFileSync(path.join(mcp, 'node_modules', '@modelcontextprotocol', 'sdk', 'index.js'), 'installed');
+    fs.writeFileSync(path.join(mcp, 'stale.js'), 'stale');
+    const run = vi.fn(async (_spec: CommandSpec): Promise<CommandResult> => OK);
+    const result = await new HarnessInstaller({} as SshClient).installOnAgent({ files: () => files, run }, options());
+    expect(result.success).toBe(true);
+    expect(fs.readFileSync(path.join(mcp, 'node_modules', '@modelcontextprotocol', 'sdk', 'index.js'), 'utf8')).toBe('installed');
+    expect(fs.existsSync(path.join(mcp, 'stale.js'))).toBe(false);
+    expect(fs.existsSync(path.join(mcp, 'index.js'))).toBe(true);
+    expect(fs.readdirSync(path.join(home, '.azito'))).toEqual(['harness']);
+  });
+
+  it('puts the dependencies back where they were when the replacement fails', async () => {
+    const mcp = path.join(home, '.azito', 'harness', 'skills', 'azt-mcp', 'mcp-server');
+    fs.mkdirSync(path.join(mcp, 'node_modules', 'pkg'), { recursive: true });
+    fs.writeFileSync(path.join(mcp, 'node_modules', 'pkg', 'index.js'), 'installed');
+    const failing: IFileOps = Object.create(files);
+    failing.replaceDirectory = async () => { throw new Error('in use'); };
+    const result = await new HarnessInstaller({} as SshClient).installOnAgent({ files: () => failing, run: vi.fn() }, options());
+    expect(result).toMatchObject({ success: false, error: 'in use' });
+    expect(fs.readFileSync(path.join(mcp, 'node_modules', 'pkg', 'index.js'), 'utf8')).toBe('installed');
+    expect(fs.readdirSync(path.join(home, '.azito'))).toEqual(['harness']);
+  });
+
   it('withholds the UI token from an isolation-intent server and has setup purge it', async () => {
     const run = vi.fn(async (_spec: CommandSpec): Promise<CommandResult> => OK);
     await new HarnessInstaller({} as SshClient).installOnAgent({ files: () => files, run }, options({ isolationIntent: true }));

@@ -6,9 +6,6 @@ import path from 'node:path';
 
 const AGENTS_BEGIN = '<!-- AZITO-HARNESS:BEGIN (managed by harness/setup.sh) -->';
 const AGENTS_END = '<!-- AZITO-HARNESS:END -->';
-// What may appear in an argument of `codex` on Windows, where it is a .cmd shim run through cmd.exe: nothing cmd would interpret.
-const CMD_SAFE_ARG = /^[A-Za-z0-9_.:/\\=@+,~ -]*$/;
-
 export function codexHomeOf(env, homeDir) {
   return env.CODEX_HOME || path.join(homeDir, '.codex');
 }
@@ -16,7 +13,8 @@ export function codexHomeOf(env, homeDir) {
 /** The first match of `name` in PATH (with PATHEXT on Windows), or null. No shell is involved. */
 export function findOnPath(name, env, platform) {
   const pathValue = env.PATH ?? env.Path ?? '';
-  const exts = platform === 'win32' ? ['', ...(env.PATHEXT ?? '.COM;.EXE;.BAT;.CMD').split(';').filter(Boolean)] : [''];
+  // On Windows only a name with a PATHEXT extension runs (npm also leaves an extensionless sh script and a .ps1 next to the .cmd).
+  const exts = platform === 'win32' ? (env.PATHEXT ?? '.COM;.EXE;.BAT;.CMD').split(';').filter(Boolean) : [''];
   for (const dir of pathValue.split(platform === 'win32' ? ';' : ':').filter(Boolean)) {
     for (const ext of exts) {
       const candidate = path.join(dir, name + ext);
@@ -28,15 +26,30 @@ export function findOnPath(name, env, platform) {
   return null;
 }
 
+/**
+ * What to start for `codex`. A Unix host runs `codex` from PATH. On Windows an npm install leaves a `codex.cmd` shim that Node
+ * refuses to start without a shell, and a shell (cmd.exe) cannot be given an arbitrary path safely (non-ASCII, parentheses,
+ * `%`, `&`...). So the shim is read for the script it runs (`"%dp0%\\node_modules\\...\\codex.js"`) and that script is started
+ * with node, every argument going through argv. A native `codex.exe` is started as it is. Anything else is an error.
+ */
+export function resolveCodexCommand(env, platform) {
+  if (platform !== 'win32') return { file: 'codex', prefix: [] };
+  const found = findOnPath('codex', env, platform);
+  if (!found) throw new Error('codex が PATH に見つかりません');
+  const ext = path.extname(found).toLowerCase();
+  if (ext === '.exe' || ext === '.com') return { file: found, prefix: [] };
+  if (ext !== '.cmd' && ext !== '.bat') throw new Error(`codex (${found}) は実行できる形式ではありません`);
+  const match = /"%dp0%\\([^"\r\n]+\.(?:c|m)?js)"/i.exec(fs.readFileSync(found, 'utf8'));
+  if (!match) throw new Error(`${found} から codex の実体（node のスクリプト）を読み取れません。npm の shim ではない可能性があります`);
+  const dir = path.dirname(found);
+  const bundledNode = path.join(dir, 'node.exe');
+  return { file: fs.existsSync(bundledNode) ? bundledNode : process.execPath, prefix: [path.join(dir, match[1])] };
+}
+
 /** Runs `codex <args>`; returns stdout. Throws on a non-zero exit. */
 export function runCodex(args, { env, platform }) {
-  const options = { env, encoding: 'utf8', windowsHide: true, timeout: 60_000, stdio: ['ignore', 'pipe', 'pipe'] };
-  if (platform !== 'win32') return execFileSync('codex', args, options);
-  // codex is an npm .cmd shim: Node refuses to start it without a shell, so it goes through cmd.exe with every argument checked.
-  const bad = args.find((a) => !CMD_SAFE_ARG.test(a));
-  if (bad !== undefined) throw new Error(`codex に渡せない文字を含む引数があります: ${bad}`);
-  const quoted = args.map((a) => (a.includes(' ') ? `"${a}"` : a));
-  return execFileSync(env.ComSpec ?? 'cmd.exe', ['/d', '/s', '/c', `"codex ${quoted.join(' ')}"`], { ...options, windowsVerbatimArguments: true });
+  const { file, prefix } = resolveCodexCommand(env, platform);
+  return execFileSync(file, [...prefix, ...args], { env, encoding: 'utf8', windowsHide: true, timeout: 60_000, stdio: ['ignore', 'pipe', 'pipe'] });
 }
 
 function tryCodex(args, ctx) {
@@ -93,6 +106,14 @@ function existingMcpUiToken(ctx) {
 
 /** Registers azt-mcp with Codex. The UI token already registered is kept when none is given (as setup.sh does). */
 export function registerCodexMcp({ codexHome, mcpServerPath, azitoUrl, uiToken, ctx, log, fail }) {
+  // Before anything is changed: a codex that cannot be started is reported with its reason, not as a failed `mcp add`.
+  try {
+    resolveCodexCommand(ctx.env, ctx.platform);
+  } catch (err) {
+    fail(`azt-mcp (Codex): ${err.message}`);
+    log('  azt-mcp: 登録に失敗しました');
+    return;
+  }
   const existingToken = uiToken ? '' : existingMcpUiToken(ctx);
   const effective = uiToken || existingToken;
   const args = ['--env', `AZITO_URL=${azitoUrl}`];
@@ -124,6 +145,12 @@ export function writeAgentsBlock({ agentsPath, modulesDir, log }) {
   log(`  AGENTS.md: 更新しました (${files.length} モジュール)`);
 }
 
+/** The key part of a line (before the first `=`; a table header has none, so the whole line) holds a double-quoted segment with a backslash. */
+function hasEscapedQuotedKey(line) {
+  const eq = line.indexOf('=');
+  return /"[^"]*\\[^"]*"/.test(eq === -1 ? line : line.slice(0, eq));
+}
+
 /**
  * --purge-operator-token: removes AZITO_UI_TOKEN from config.toml. Only the layout `codex mcp add` writes is edited
  * (the key under [mcp_servers.azt-mcp.env]). Anything else that carries the key (an inline table, a dotted key, a multi-line
@@ -141,6 +168,15 @@ export function stripCodexUiToken({ configFile, fail, log }) {
   const manual = [];
   let inEnvTable = false;
   let removed = false;
+  // A double-quoted key segment with a backslash escape (`"AZITO_UI_TOKEN"`) names a key this routine does not decode, so
+  // it would slip past every comparison below. Before anything is edited, any such key or table name fails the purge closed.
+  const escaped = lines
+    .map((line, i) => ({ line, n: i + 1 }))
+    .filter(({ line }) => !line.trim().startsWith('#') && hasEscapedQuotedKey(line));
+  if (escaped.length > 0) {
+    fail(`azt-mcp (Codex): ${configFile} にエスケープを含む引用符付きのキー／テーブル名があります。AZITO_UI_TOKEN を確実に除去できないため自動編集しません。以下の行を手動で確認・除去してください:\n${escaped.map(({ line, n }) => `${n}: ${line}`).join('\n')}`);
+    return;
+  }
   lines.forEach((line, i) => {
     const trimmed = line.trim();
     if (trimmed.startsWith('[')) {

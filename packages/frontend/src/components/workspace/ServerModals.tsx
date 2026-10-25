@@ -178,7 +178,9 @@ function ServerFormFields({ mode, autoInstall, type, serverType, hostProfile, ho
   if (mode === 'edit' && serverType === 'local') return muxField;
   const isolationCurrentlyOn = isolationIntent ?? false;
   const isolationPersistedOn = persistedIsolationIntent ?? false;
-  const isolationToggleBlocked = scopedAuthEnabled === false && !isolationPersistedOn;
+  // A Windows agent cannot be declared isolated (#464); the server refuses it with unsupported_os.
+  const isolationHostBlockReason = hostFeatureBlockReason(hostProfile, 'isolation', t);
+  const isolationToggleBlocked = (scopedAuthEnabled === false && !isolationPersistedOn) || (!!isolationHostBlockReason && !isolationPersistedOn);
 
   if (mode === 'add' && autoInstall) {
     return (
@@ -277,7 +279,7 @@ function ServerFormFields({ mode, autoInstall, type, serverType, hostProfile, ho
                 checked={isolationCurrentlyOn}
                 disabled={isolationToggleBlocked}
                 onChange={(e) => onIsolationIntentChange(e.target.checked)}
-                aria-describedby="server-modal-isolation-intent-hint"
+                aria-describedby={isolationHostBlockReason && !isolationPersistedOn ? 'server-modal-isolation-intent-hint server-modal-isolation-host-reason' : 'server-modal-isolation-intent-hint'}
               />
               <span className="toggle-slider" />
             </span>
@@ -286,7 +288,11 @@ function ServerFormFields({ mode, autoInstall, type, serverType, hostProfile, ho
           <div id="server-modal-isolation-intent-hint" style={{ fontSize: 'var(--font-xs)', color: 'var(--text-dim)', marginTop: 6 }}>
             {t('serverModals.isolationIntentHint')}
           </div>
-          {isolationToggleBlocked && (
+          {isolationHostBlockReason && !isolationPersistedOn ? (
+            <div id="server-modal-isolation-host-reason" style={{ fontSize: 'var(--font-xs)', color: 'var(--text-dim)', marginTop: 6 }}>
+              {isolationHostBlockReason}
+            </div>
+          ) : isolationToggleBlocked && (
             <div style={{ fontSize: 'var(--font-xs)', color: 'var(--warning, #f0ad4e)', marginTop: 6 }}>
               {t('serverModals.isolationRequiresScopedAuth')}
             </div>
