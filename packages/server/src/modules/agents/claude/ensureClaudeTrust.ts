@@ -2,7 +2,7 @@ import { createHash } from 'crypto';
 import type { IServerTransport } from '../../servers/transport/ServerTransport';
 import { FileOpsError, type IFileOps } from '../../../shared/fs/fileOps';
 import path from 'node:path';
-import { pathApiFor } from '../../../shared/os/hostPath';
+import { resolveClaudeConfigPath } from './claudeConfigPath';
 import type { HostPlatform } from '../../../shared/os/hostEnv';
 import { KeyedMutex } from '../../../shared/keyedMutex';
 
@@ -40,7 +40,7 @@ export function claudeProjectKeys(platform: HostPlatform, projectPath: string): 
  */
 export async function ensureClaudeTrust(transport: IServerTransport, projectPath: string): Promise<EnsureClaudeTrustResult> {
   const ops = transport.files();
-  const configPath = pathApiFor(ops.platform).join(await ops.realpath('~'), '.claude.json');
+  const configPath = await resolveClaudeConfigPath(ops);
   // The whole read, update and save of one config file is one step for this process; the write's own check
   // (the hash of what was read) is the guard against anything else that changes the file.
   return configLocks.withLock(configPath, () => registerTrust(ops, configPath, claudeProjectKeys(ops.platform, projectPath)));
