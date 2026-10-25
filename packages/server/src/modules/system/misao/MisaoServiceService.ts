@@ -12,6 +12,9 @@ import { DuplicateLoadError, type ServiceInspection, type ServiceManager } from 
 import { MisaoServiceError } from './MisaoServiceError';
 import { renderMisaoUnit } from './misaoUnit';
 import { taskStartsMisaoOf, type LocalMisaoWindows } from './misaoLocalWindows';
+import { isManagedMisaoDown } from './MisaoWindowsInstaller';
+import { underMisaoRootLock } from './misaoRootLock';
+import { FOREIGN_LOCK_PREFIX } from '../../../shared/recoveryBackoff';
 
 export interface MisaoServiceDeps {
   /** Null when this hub is not a release install (no prefix): a source checkout never installs a service. */
@@ -379,12 +382,54 @@ export class MisaoServiceService {
     throw new MisaoServiceError('update_failed', `Updating misao to ${bundledVersion} failed (${causeText}). The previous version ${previous} was restored and started; its panes had already ended.`);
   }
 
-  /** One install / start / update at a time: two of them interleaving could stop a daemon the other just started. */
+  /** Whether this is a hub whose own misao is a Windows task that AZITO installs, so that `LocalMisaoWatchdog` has something to watch. */
+  managesWindowsDaemon(): boolean {
+    return this.deps.windows !== undefined && this.deps.paths !== null;
+  }
+
+  /** Windows only: the daemon AZITO installed for this hub does not answer (a daemon of another pipe, or one AZITO did not install, is not this). */
+  async isWindowsDaemonDown(): Promise<boolean> {
+    const { windows } = this.deps;
+    if (!windows) throw new MisaoServiceError('unsupported_host', 'The hub\'s own misao is a Windows task only on Windows.');
+    return isManagedMisaoDown(await windows.target.fetchMisaoStatus());
+  }
+
+  /**
+   * Windows only: starts the task of the daemon AZITO installed for this hub when it died (its task reports 0 whatever happened, so the
+   * Task Scheduler does not start it again): `MisaoWindowsInstaller.reviveDaemon`, the very steps an agent's gets. It takes the
+   * same one-at-a-time slot as install / start / update (across processes too, so also `azito misao ...` of the CLI) and gives way to them (`busy`, nothing done). Only the misao this hub installed
+   * is touched: a `MISAO_SOCKET` set by hand to another daemon is `custom_socket`, and a task that starts another folder's misao
+   * (`taskStartsMisaoOf`) is `other_task`.
+   */
+  async reviveWindowsDaemon(force: boolean): Promise<string> {
+    const { windows } = this.deps;
+    if (!windows) throw new MisaoServiceError('unsupported_host', 'The hub\'s own misao is a Windows task only on Windows.');
+    try {
+      return await this.exclusive(async () => {
+        if (this.socketSetting() !== 'managed') return 'custom_socket';
+        if ((await windows.tasks.query(windows.taskName)).exists && !taskStartsMisaoOf(await windows.tasks.exportXml(windows.taskName), this.paths.root)) return 'other_task';
+        return await windows.installer.reviveDaemon(windows.target, force);
+      });
+    } catch (err) {
+      if (err instanceof MisaoServiceError && err.code === 'busy') return 'busy';
+      if (err instanceof MisaoServiceError && err.code === 'lock_foreign') return `${FOREIGN_LOCK_PREFIX}${err.message}`;
+      throw err;
+    }
+  }
+
+  /**
+   * One install / start / update at a time: two of them interleaving could stop a daemon the other just started. In this process by
+   * a flag; on Windows also across processes by the named-pipe lock of `LocalMisaoWindows.operationLock`, because `azito misao ...` runs in
+   * its own process beside the hub (whose Setup row, API and watchdog share this instance). Nothing waits: a taken slot is `busy`.
+   * Unix is not locked across processes (systemd / launchd are driven by the CLI and the hub as before, and nothing there starts the
+   * service on its own, so no watchdog contends for it).
+   */
   private async exclusive<T>(operation: () => Promise<T>): Promise<T> {
     if (this.busy) throw new MisaoServiceError('busy', 'Another misao service operation is still running.');
     this.busy = true;
     try {
-      return await operation();
+      const lock = this.deps.windows?.operationLock;
+      return await (lock ? underMisaoRootLock(lock, operation) : operation());
     } catch (err) {
       if (err instanceof DuplicateLoadError) throw new MisaoServiceError('duplicate_load', err.message);
       throw err;

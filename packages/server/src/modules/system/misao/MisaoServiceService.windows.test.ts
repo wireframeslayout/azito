@@ -9,6 +9,7 @@ import type { MisaoPaths } from './misaoPaths';
 import { MisaoServiceError } from './MisaoServiceError';
 import { MisaoServiceService } from './MisaoServiceService';
 import { readEnvValue } from '../../../shared/envFile';
+import { ProcessLock, type HolderCheck } from '../../../shared/processLock';
 import { createSecretFileGuard } from '../../../shared/os/secretFileGuard';
 import type { ServiceManager } from '../serviceManager';
 
@@ -36,6 +37,8 @@ describe('MisaoServiceService on Windows (the hub\'s own misao)', () => {
   let update: ReturnType<typeof vi.fn>;
   let controller: ServiceManager;
   let controllerInstall: ReturnType<typeof vi.fn>;
+  /** The slot of this folder (a named pipe on Windows, a socket path elsewhere), as taken by this hub (pid 100) or by the CLI (pid 200). */
+  const lockFor = (check?: HolderCheck): ProcessLock => new ProcessLock(process.platform === 'win32' ? `\\\\.\\pipe\\azito-lock-test-${path.basename(dir)}` : path.join(dir, 'l.sock'), check);
 
   beforeEach(() => {
     dir = fs.mkdtempSync(path.join(os.tmpdir(), 'azw-'));
@@ -55,6 +58,7 @@ describe('MisaoServiceService on Windows (the hub\'s own misao)', () => {
         exportXml: async () => exportedXml,
       } as unknown as LocalMisaoWindows['tasks'],
       taskName: 'AzitoMisao',
+      operationLock: lockFor(async () => ({ state: 'same-user', pid: 200 })),
     };
     controllerInstall = vi.fn();
     controller = {
@@ -161,6 +165,89 @@ describe('MisaoServiceService on Windows (the hub\'s own misao)', () => {
     expect(await service().status()).toMatchObject({ serviceInstalled: false, installedVersion: '0.3.0' });
     fs.writeFileSync(paths.current, 'garbage');
     expect(service().installedVersion()).toBeUndefined();
+  });
+
+  describe('bringing the daemon back (LocalMisaoWatchdog)', () => {
+    let revive: ReturnType<typeof vi.fn>;
+    beforeEach(() => {
+      revive = vi.fn(async () => 'started');
+      windows = { ...windows, installer: { install, update, reviveDaemon: revive } as unknown as LocalMisaoWindows['installer'] };
+      fs.writeFileSync(paths.hubEnvFile, `MISAO_SOCKET=${PIPE}\n`);
+      taskExists = true;
+    });
+
+    it('revives through the agent installer\'s own steps for the task of this folder, with the force flag it was given', async () => {
+      expect(await service().reviveWindowsDaemon(false)).toBe('started');
+      expect(await service().reviveWindowsDaemon(true)).toBe('started');
+      expect(revive.mock.calls).toEqual([[windows.target, false], [windows.target, true]]);
+    });
+
+    it('leaves a misao the hub was pointed at by hand alone (MISAO_SOCKET is not the managed pipe, or is not set)', async () => {
+      fs.writeFileSync(paths.hubEnvFile, 'MISAO_SOCKET=\\\\.\\pipe\\someone-else\n');
+      expect(await service().reviveWindowsDaemon(false)).toBe('custom_socket');
+      fs.rmSync(paths.hubEnvFile);
+      expect(await service().reviveWindowsDaemon(false)).toBe('custom_socket');
+      expect(revive).not.toHaveBeenCalled();
+    });
+
+    it('leaves a task that starts another folder\'s misao alone', async () => {
+      exportedXml = taskXml('D:\\other\\.azito\\misao');
+      expect(await service().reviveWindowsDaemon(true)).toBe('other_task');
+      expect(revive).not.toHaveBeenCalled();
+    });
+
+    it('gives way to an install / update that holds the slot (busy, nothing done) and takes the slot itself', async () => {
+      const svc = service();
+      let release!: () => void;
+      update.mockImplementation(() => new Promise<MisaoAgentInstallResult>((resolve) => { release = () => resolve(RESULT); }));
+      fs.writeFileSync(paths.current, '0.2.0\n');
+      const updating = svc.update();
+      await vi.waitFor(() => expect(update).toHaveBeenCalled());
+      expect(await svc.reviveWindowsDaemon(false)).toBe('busy');
+      expect(revive).not.toHaveBeenCalled();
+      release();
+      await updating;
+      expect(await svc.reviveWindowsDaemon(false)).toBe('started');
+    });
+
+    it('does nothing while the CLI (another process) is installing / updating: busy, and the CLI\'s update is refused the other way round', async () => {
+      const cli = lockFor();
+      let during: string | undefined;
+      await cli.run(async () => {
+        during = await service().reviveWindowsDaemon(true);
+        await expect(service().update()).rejects.toMatchObject({ code: 'busy', message: expect.stringContaining('(200)') });
+      });
+      expect(during).toBe('busy');
+      expect(revive).not.toHaveBeenCalled();
+      expect(update).not.toHaveBeenCalled();
+      // The slot is free again once the other process is done.
+      expect(await service().reviveWindowsDaemon(false)).toBe('started');
+    });
+
+    it('answers foreign_lock:<reason> (no attempt, nothing touched) when the lock is held by another user\'s process or one that cannot be identified', async () => {
+      const taken = lockFor();
+      for (const verdict of [{ state: 'other-user', pid: 9, ownerSid: 'S-1-5-21-9' }, { state: 'unknown', reason: 'no answer' }] as const) {
+        windows = { ...windows, operationLock: lockFor(async () => verdict) };
+        await taken.run(async () => {
+          const outcome = await service().reviveWindowsDaemon(true);
+          expect(outcome.startsWith('foreign_lock:')).toBe(true);
+          expect(outcome).toContain(verdict.state === 'other-user' ? 'another user' : 'could not be identified');
+        });
+      }
+      expect(revive).not.toHaveBeenCalled();
+      // a CLI / Setup operation is refused with the code, so that it says why instead of waiting
+      windows = { ...windows, operationLock: lockFor(async () => ({ state: 'other-user', pid: 9, ownerSid: 'S-1-5-21-9' })) };
+      await taken.run(async () => {
+        await expect(service().update()).rejects.toMatchObject({ code: 'lock_foreign' });
+      });
+    });
+
+    it('is only for a Windows hub with a managed misao', () => {
+      expect(service().managesWindowsDaemon()).toBe(true);
+      const withoutWindows = new MisaoServiceService({ paths, bundle: BUNDLE, controller, env: {}, secretFileGuard: createSecretFileGuard(process.platform, process.env) });
+      expect(withoutWindows.managesWindowsDaemon()).toBe(false);
+      expect(new MisaoServiceService({ paths: null, bundle: BUNDLE, controller, env: {}, secretFileGuard: createSecretFileGuard(process.platform, process.env), windows }).managesWindowsDaemon()).toBe(false);
+    });
   });
 
   it('reports an update when the installed release is not the bundled one', async () => {

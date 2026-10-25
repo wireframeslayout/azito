@@ -1,6 +1,8 @@
 export type MisaoServiceErrorCode =
   | 'usage'
   | 'busy'
+  /** The misao folder's lock is held by another user's process (or one that cannot be identified): a possible pre-emption, not "try later". */
+  | 'lock_foreign'
   | 'not_managed'
   | 'custom_socket'
   /** launchd has the misao job loaded into both gui/<uid> and user/<uid>: which copy is meant is not guessed. */

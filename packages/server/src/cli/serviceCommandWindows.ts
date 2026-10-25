@@ -51,7 +51,7 @@ function isThisPrefix(other: string, hub: WindowsHub): boolean {
 }
 
 /** Which install the REGISTERED task (asked of the Task Scheduler, not read from our copy) belongs to; undefined when it is not a hub task this version recognises. */
-async function registeredOwner(hub: WindowsHub): Promise<{ prefix: string } | undefined> {
+async function registeredOwner(hub: WindowsHub): Promise<ReturnType<typeof inspectRegisteredHub>> {
   return inspectRegisteredHub(await hub.client.exportXml(HUB_SERVICE.windowsTaskName), hub.systemRoot);
 }
 
@@ -75,7 +75,7 @@ export async function requireOwnTask(manager: ServiceManager, hub: WindowsHub): 
 /**
  * Registers the task. The definition is generated here (`buildHubTaskXml`), so install.ps1 never writes XML.
  * - A task that exists is judged from the task itself, whatever the definition copy says:
- *   - this install's, with the definition we would register: nothing to do (a missing or different copy is written again);
+ *   - this install's, with the definition we would register (a launcher that runs the hub once is not it): nothing to do (a missing or different copy is written again);
  *   - running: never replaced;
  *   - another install's, or one this version does not recognise: replaced only with `--yes`.
  * - No task (a copy left behind after a delete by hand, or nothing): registered.
@@ -85,7 +85,7 @@ export async function installWindowsTask(manager: ServiceManager, hub: WindowsHu
   if (await taskExists(hub)) {
     const owner = await registeredOwner(hub);
     const own = owner !== undefined && isThisPrefix(owner.prefix, hub);
-    if (own && manager.readDefinition() === xml) {
+    if (own && !owner.singleRun && manager.readDefinition() === xml) {
       console.log('service install: the task is already registered with this definition');
       return;
     }
@@ -110,8 +110,12 @@ export async function runOnWindows(command: 'start' | 'stop' | 'restart' | 'relo
   }
   // Found BEFORE the task is ended, and of any version folder: a restart after `current.txt` was switched must wait for the old version.
   const run: SpecRunner = (spec) => runCommandSpec(spec, hub.runHost);
-  const targets = await findHubProcesses(run, hub.systemRoot, hub.hubRoots, context.pid);
+  const before = await findHubProcesses(run, hub.systemRoot, hub.hubRoots, context.pid);
   await manager.stop();
+  // And again AFTER: the launcher restarts a hub that crashed, and one that it started between the first look and the End has no one to
+  // follow once the conhost is gone but is not in `before`. Both sets are waited for (the same process, by id and creation time, once).
+  const after = await findHubProcesses(run, hub.systemRoot, hub.hubRoots, context.pid);
+  const targets = [...before, ...after.filter((a) => !before.some((b) => b.pid === a.pid && b.created === a.created))];
   const forced = await endHubProcesses(run, hub.systemRoot, targets, HUB_GRACE_MS);
   if (forced.length > 0) console.warn(`azito service: the hub did not end within ${HUB_GRACE_MS / 1000}s of the task being ended, so it was ended forcibly (process ${forced.join(', ')})`);
   // restart and reload are the same here: the registered task is the installed definition, so making it current is a restart.

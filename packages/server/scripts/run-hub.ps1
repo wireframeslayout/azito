@@ -2,15 +2,20 @@
 # Runs under Windows PowerShell 5.1, never asks a question (a scheduled task may start it), runs the hub in the
 # foreground and exits with the hub's exit code.
 #
-# -Service -LogFile <file> is how the Task Scheduler task starts it (see modules/system/windowsHubService.ts): the hub's stdout and
-# stderr are appended to <file> (a task has nowhere to send them), and the hub is told which conhost.exe the task runs under so that
-# it ends when that process is gone (the Task Scheduler's "End" ends only that conhost.exe, never the hub below it).
+# -Service -LogFile <file> -FollowPid <pid> -FollowStart <FileTime> is how the Task Scheduler task starts it (see modules/system/windowsHubService.ts):
+# the hub's stdout and stderr are appended to <file> (a task has nowhere to send them), and the hub is told which conhost.exe the task runs
+# under so that it ends when that process is gone (the Task Scheduler's "End" ends only that conhost.exe, never the hub below it). The
+# launcher names that process by id AND start time, and this script checks it is still running right before it starts the hub: a hub that
+# nothing follows would outlive an End and meet the next one on the port, so with the process gone (or not named) no hub is started.
 param(
     [switch]$Service,
-    [string]$LogFile = ''
+    [string]$LogFile = '',
+    [int]$FollowPid = 0,
+    [long]$FollowStart = 0
 )
 $ErrorActionPreference = 'Stop'
 if ($Service -and $LogFile -eq '') { throw '-Service needs -LogFile <file>' }
+if ($Service -and ($FollowPid -le 0 -or $FollowStart -le 0)) { throw '-Service needs -FollowPid <pid> and -FollowStart <FileTime> of the conhost.exe the task runs under' }
 
 $bundle = $PSScriptRoot
 
@@ -96,14 +101,14 @@ function Start-HubService([string]$Node, [string]$Entry, [string]$Log) {
     $info.EnvironmentVariables['AZITO_HUB_NODE'] = $Node
     $info.EnvironmentVariables['AZITO_HUB_ENTRY'] = $Entry
     $info.EnvironmentVariables['AZITO_HUB_LOG'] = $Log
-    # The task runs this script under `conhost.exe --headless`: that process is what "End" ends, and what the hub follows.
-    $me = Get-CimInstance Win32_Process -Filter "ProcessId = $PID"
-    $parent = Get-CimInstance Win32_Process -Filter "ProcessId = $($me.ParentProcessId)"
-    if ($parent -and $parent.Name -eq 'conhost.exe') {
-        $info.EnvironmentVariables['AZITO_HUB_EXIT_WITH_PID'] = [string]$parent.ProcessId
-    } else {
-        [System.IO.File]::AppendAllText($Log, "[$([DateTime]::UtcNow.ToString('o'))] run.ps1: not started under conhost.exe, so the hub will not follow a parent process`r`n")
+    # The task runs this script under `conhost.exe --headless`: that process is what "End" ends, and what the hub follows. It is checked here, at the
+    # last moment before the hub starts (an End that came in since the launcher looked leaves nothing for the hub to follow).
+    $followed = Get-Process -Id $FollowPid -ErrorAction SilentlyContinue
+    if (-not $followed -or $followed.StartTime.ToFileTimeUtc() -ne $FollowStart) {
+        [System.IO.File]::AppendAllText($Log, "[$([DateTime]::UtcNow.ToString('o'))] run.ps1: the process to follow ($FollowPid) is gone, so the hub is not started`r`n")
+        return 0
     }
+    $info.EnvironmentVariables['AZITO_HUB_EXIT_WITH_PID'] = [string]$FollowPid
     if ($rotationFailure) {
         [System.IO.File]::AppendAllText($Log, "[$([DateTime]::UtcNow.ToString('o'))] run.ps1: could not move the log over 10 MB aside, so it keeps growing: $rotationFailure`r`n")
     }

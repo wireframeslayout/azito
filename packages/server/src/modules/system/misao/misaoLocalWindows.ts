@@ -4,12 +4,15 @@ import type { CommandSpec } from '../../../shared/exec/commandSpec';
 import { runCommandSpec, runHostOf } from '../../../shared/exec/runCommandSpec';
 import { LocalFileOps, localFileOpsHost } from '../../../shared/fs/LocalFileOps';
 import type { HostEnv } from '../../../shared/os/hostEnv';
+import type { SecretFileGuard } from '../../../shared/os/secretFileGuard';
 import { rawRunnerOf, SchtasksClient } from '../../../shared/os/taskScheduler/schtasks';
 import { readMisaoSocketStatus, stageMisaoReleaseFile, type AgentMisaoHost } from '../../servers/transport/agentMisaoSocket';
 import { MisaoWindowsInstaller, type WindowsTarget } from './MisaoWindowsInstaller';
 import { MISAO_SERVICE, type MisaoPaths } from './misaoPaths';
 import { taskMisaoRoot } from './misaoWindowsTask';
 import { resolveRealPath } from '../../../shared/os/realPath';
+import type { ProcessLock } from '../../../shared/processLock';
+import { createMisaoRootLock } from './misaoRootLock';
 
 /**
  * The hub's own misao on Windows: the very installer an agent server gets (`MisaoWindowsInstaller`), pointed at this machine.
@@ -23,6 +26,12 @@ export interface LocalMisaoWindows {
   /** The Task Scheduler as the hub's service managers use it, for reading the task (exists / running). */
   tasks: SchtasksClient;
   taskName: string;
+  /**
+   * One misao operation at a time across processes: the hub (Setup, the API, `LocalMisaoWatchdog`), `azito misao install|start|update` and a
+   * Windows agent on this machine run in different processes, so the in-process flag of `MisaoServiceService` cannot keep them apart. A named
+   * pipe made from the misao folder, held while the operation runs (the OS frees it when the holder dies), see `misaoRootLock.ts`.
+   */
+  operationLock: ProcessLock;
 }
 
 export type LocalWindowsHostEnv = Pick<HostEnv, 'platform' | 'arch' | 'homeDir' | 'tmpDir' | 'execPath' | 'systemRoot'>;
@@ -42,7 +51,7 @@ function localAgentHost(hostEnv: LocalWindowsHostEnv, paths: MisaoPaths, userNam
   };
 }
 
-export function createLocalMisaoWindows(hostEnv: LocalWindowsHostEnv, paths: MisaoPaths, userName: string, env: NodeJS.ProcessEnv): LocalMisaoWindows {
+export function createLocalMisaoWindows(hostEnv: LocalWindowsHostEnv, paths: MisaoPaths, userName: string, env: NodeJS.ProcessEnv, secretFileGuard: SecretFileGuard): LocalMisaoWindows {
   const host = localAgentHost(hostEnv, paths, userName, env);
   const runHost = runHostOf(hostEnv);
   const files = new LocalFileOps(localFileOpsHost(hostEnv));
@@ -60,6 +69,7 @@ export function createLocalMisaoWindows(hostEnv: LocalWindowsHostEnv, paths: Mis
     target,
     tasks: new SchtasksClient(rawRunnerOf((command) => runCommandSpec(command, { ...runHost, rawOutput: true })), hostEnv),
     taskName: MISAO_SERVICE.windowsTaskName,
+    operationLock: createMisaoRootLock(paths.root, secretFileGuard, hostEnv.systemRoot!),
   };
 }
 

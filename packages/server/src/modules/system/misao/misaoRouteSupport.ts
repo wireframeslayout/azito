@@ -9,6 +9,7 @@ export const MISAO_ERROR_STATUS: Record<MisaoServiceErrorCode, number> = {
   duplicate_load: 409,
   not_installed: 409,
   busy: 409,
+  lock_foreign: 409,
   daemon_not_ready: 502,
   update_failed: 502,
   unsupported_host: 409,
