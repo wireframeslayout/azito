@@ -13,7 +13,7 @@ import { KeyedMutex } from '../../../shared/keyedMutex';
 import { CLEANUP_LOCK_DIR, CLEANUP_TIMEOUT_MS, INSTALL_ID_FILE, MANUAL_STEPS_ANY_START, SYSTEMD_MANUAL_STEPS, buildCleanupGuardScript, buildCleanupScript, buildNohupSightingScript, cleanupMarkMessage, parseCleanupGuard, nohupManualSteps, parseCleanupOutcome, parseNohupSighting, type NohupSighting } from './unixAgentCleanup';
 import { WindowsAgentDeployer, windowsAgentLayout, type WindowsDeployment } from './WindowsAgentDeployer';
 import { DEFAULT_WINDOWS_AGENT_OPTIONS, type WindowsAgentOptions } from './windowsAgentConfig';
-import { updateWindowsAgent } from './windowsAgentUpdate';
+import { updateWindowsAgent, type AgentUpdateResult } from './windowsAgentUpdate';
 
 export type InstallStep = 'preflight' | 'transfer' | 'start' | 'health' | 'misao';
 
@@ -41,13 +41,7 @@ export interface AgentMisaoInstaller {
   install(transport: AgentTransport, onProgress?: (step: AgentMisaoInstallStep) => void): Promise<{ version: string; startMethod: 'systemd' | 'nohup' | 'taskscheduler' | 'running'; updateAvailable: boolean }>;
 }
 
-export interface AgentUpdateResult {
-  success: boolean;
-  version: string;
-  error?: string;
-  /** The update worked, but something is left on the host that a person should know about (e.g. an old release that is in use and could not be removed). */
-  warning?: string;
-}
+export type { AgentUpdateResult };
 
 export interface InstallResult {
   success: boolean;
@@ -447,8 +441,8 @@ export class AgentInstaller {
 
   /**
    * The Windows update: the install's transaction (deploy, start, health, commit / rollback) with the agent's current token, so that
-   * the hub's stored token and the host's settings stay the same. The firewall rule is not looked at again: the agent already
-   * answers on its port, which is how the update was found necessary. The misao task is not touched.
+   * the hub's stored token and the host's settings stay the same. The firewall is checked as in the install, for the `node.exe`
+   * found now (it may not be the one the running agent uses), before anything is stopped. The misao task is not touched.
    */
   private async updateOnWindows(sshHost: string, tailscaleIp: string, token: string, version: string): Promise<AgentUpdateResult> {
     let host: WindowsPreflightInfo;
@@ -459,6 +453,7 @@ export class AgentInstaller {
       host = parseWindowsPreflight(probe.stdout, probe.stderr, probe.code);
       const missing = checkWindowsPreflight(host);
       if (missing.length > 0) throw new Error(`Preflight failed:\n${missing.map(m => `  - ${m}`).join('\n')}`);
+      await this.windowsDeployer().ensureFirewall(sshHost, host.nodePath!, tailscaleIp);
       if (!fs.existsSync(tarballPath)) throw new Error('Agent tarball not found — run build first');
       expectedSha256 = readSha256FromSumsFile(this.bundler.getSha256sumsPath(), 'azito-agent.tar.gz');
     } catch (err) {

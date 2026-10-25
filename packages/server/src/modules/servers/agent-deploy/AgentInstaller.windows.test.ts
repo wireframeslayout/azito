@@ -510,7 +510,7 @@ describe('AgentInstaller on a Windows host', () => {
       expect(kinds.indexOf('/Run')).toBeLessThan(kinds.indexOf('prune'));
       const prune = host.calls.find((c) => c.text.includes('REMOVED'))!.text;
       expect(prune).toContain(`$keep = @('${VERSION}', '${OLD}')`);
-      expect(host.calls.some((c) => c.kind === 'firewall')).toBe(false);
+      expect(host.calls.some((c) => c.kind === 'firewall')).toBe(true); // checked as in the install, before anything is stopped
     });
 
     it('reports an old release that could not be removed as a warning of a successful update', async () => {
@@ -550,6 +550,18 @@ describe('AgentInstaller on a Windows host', () => {
 
       expect(result.success).toBe(false);
       expect(result.error).toContain('the previous agent does NOT answer');
+    });
+
+    it('stops with the install\'s firewall error, before anything is stopped, when the node.exe found now has no rule', async () => {
+      const { installer, host } = makeRunning({ firewall: { ruleFound: false, elevated: false, created: false, problem: null } });
+      stubAgent(() => OLD);
+
+      const result = await installer.update('user@win', '100.64.0.9', 'tok', WIN);
+
+      expect(result.success).toBe(false);
+      expect(result.error).toMatch(/[Ff]irewall/);
+      expect(host.taskState).toBe('running');
+      expect(host.uploaded.size).toBe(0);
     });
 
     it('fails before anything is stopped when the bundle cannot be verified on the host (the previous agent keeps running)', async () => {

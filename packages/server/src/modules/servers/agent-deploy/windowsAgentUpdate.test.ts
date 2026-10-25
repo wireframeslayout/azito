@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
-import type { WindowsDeployInput } from './WindowsAgentDeployer';
+import { WindowsDeployError, type WindowsDeployInput } from './WindowsAgentDeployer';
 import { updateWindowsAgent, type WindowsUpdateDeployer } from './windowsAgentUpdate';
 
 const INPUT = { sshHost: 'ssh', host: { home: 'C:\\Users\\dev' }, version: 'new000000000', token: 'the-token' } as unknown as WindowsDeployInput;
@@ -72,7 +72,8 @@ describe('updateWindowsAgent', () => {
   it('does not wait for a previous agent that was not running', async () => {
     const m = make({ previousWasRunning: false, start: async () => { throw new Error('x'); } });
     const result = await updateWindowsAgent(m.deps, INPUT, 3002, 'agent.log');
-    expect(result.error).toMatch(/Rolled back: restored the previous task definition$/);
+    expect(result.error).toMatch(/Rolled back: restored the previous task definition. the previous agent was not running, so it was not started$/);
+    expect(result.previousAgent).toBe('not_running');
     expect(m.checkHealth).not.toHaveBeenCalled();
   });
 
@@ -100,5 +101,48 @@ describe('updateWindowsAgent', () => {
     expect(result.success).toBe(true);
     expect(result.warning).toContain('previous release is not known');
     expect(unknown.deployer.pruneOldVersions).not.toHaveBeenCalled();
+  });
+
+  describe('a deploy that fails after it began to change the host', () => {
+    const failDeploy = (m: ReturnType<typeof make>, stopped: ConstructorParameters<typeof WindowsDeployError>[1]): void => {
+      m.deployer.deploy.mockRejectedValue(new WindowsDeployError('Extracting the agent bundle failed (the previous agent was started again)', stopped));
+    };
+
+    it('checks that the previous agent answers, and returns that as a state', async () => {
+      const m = make();
+      failDeploy(m, { wasRunning: true, version: 'old000000000' });
+      const result = await updateWindowsAgent(m.deps, INPUT, 3002, 'agent.log');
+      expect(result).toMatchObject({ success: false, previousAgent: 'answers' });
+      expect(result.error).toContain('Transfer failed: Extracting the agent bundle failed');
+      expect(result.error).toContain('the previous agent answers again');
+      expect(m.checkHealth).toHaveBeenCalledWith('old000000000');
+    });
+
+    it('says the previous agent does not answer when it started and exited again', async () => {
+      const m = make({ health: async () => { throw new Error('ECONNREFUSED'); } });
+      failDeploy(m, { wasRunning: true, version: 'old000000000' });
+      const result = await updateWindowsAgent(m.deps, INPUT, 3002, 'agent.log');
+      expect(result.previousAgent).toBe('not_answering');
+      expect(result.error).toContain('the previous agent does NOT answer (ECONNREFUSED)');
+    });
+
+    it('does not look at health when the previous agent was not running, nor when nothing on the host had been touched', async () => {
+      const stopped = make();
+      failDeploy(stopped, { wasRunning: false, version: undefined });
+      expect((await updateWindowsAgent(stopped.deps, INPUT, 3002, 'agent.log')).previousAgent).toBe('not_running');
+      expect(stopped.checkHealth).not.toHaveBeenCalled();
+
+      const untouched = make();
+      failDeploy(untouched, undefined);
+      const result = await updateWindowsAgent(untouched.deps, INPUT, 3002, 'agent.log');
+      expect(result.previousAgent).toBeUndefined();
+      expect(untouched.checkHealth).not.toHaveBeenCalled();
+    });
+  });
+
+  it('logs a failed commit (a *.prev that blocks the next update) itself', async () => {
+    const m = make({ commit: async () => { throw new Error('access denied'); } });
+    await updateWindowsAgent(m.deps, INPUT, 3002, 'agent.log');
+    expect(m.logger.warn).toHaveBeenCalledWith(expect.stringContaining('access denied'));
   });
 });

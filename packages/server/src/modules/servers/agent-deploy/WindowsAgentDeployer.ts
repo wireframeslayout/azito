@@ -49,6 +49,17 @@ export interface WindowsDeployment {
   readonly previousWasRunning: boolean;
 }
 
+/**
+ * A deploy that failed and was undone (see {@link WindowsAgentDeployer.deploy}). `stopped` is set once the deploy had begun to change the
+ * host, i.e. the previous agent was stopped: `wasRunning` then says whether it was running before, and so whether the rollback started it again.
+ */
+export class WindowsDeployError extends Error {
+  constructor(message: string, readonly stopped: { wasRunning: boolean; version: string | undefined } | undefined) {
+    super(message);
+    this.name = 'WindowsDeployError';
+  }
+}
+
 /** What {@link WindowsAgentDeployer.pruneOldVersions} did: the folders it removed, and each one it could not (with the reason, e.g. a file in use). */
 export interface PruneResult {
   removed: string[];
@@ -238,7 +249,7 @@ export class WindowsAgentDeployer {
       await this.registerXml(input.sshHost, layout, client, taskXml);
     } catch (err) {
       const outcome = await rollback().catch((e: unknown) => `the previous install could not be restored: ${(e as Error).message}`);
-      throw new Error(`${(err as Error).message} (${outcome})`);
+      throw new WindowsDeployError(`${(err as Error).message} (${outcome})`, previous === undefined ? undefined : { wasRunning: previous.wasRunning, version: previous.version });
     }
     return {
       commit: () => this.discardPrevious(input.sshHost, layout),
@@ -278,10 +289,23 @@ export class WindowsAgentDeployer {
     const q = powershellDialect.quote;
     const root = windowsAgentRoot(host.home, this.options);
     const out = await this.script(sshHost, 'Removing the old agent versions', [
+      `$homeDir = ${q(host.home)}`,
       `$root = ${q(root)}`,
       `$keep = @(${keep.map(q).join(', ')})`,
-      `$old = @(Get-ChildItem -LiteralPath $root -Directory -Force | Where-Object { $_.Name -match '${RELEASE_DIR_PATTERN}' -and $keep -notcontains $_.Name })`,
+      'function Test-Link($path) { return [bool]((Get-Item -LiteralPath $path -Force).Attributes -band [System.IO.FileAttributes]::ReparsePoint) }',
+      // Nothing is followed out of the home: the agent folder and every folder between it and the home must be real folders, not junctions or symbolic links.
+      '$walk = $root',
+      'while ($walk.TrimEnd([char]92) -ne $homeDir.TrimEnd([char]92)) {',
+      '  if (-not (Test-Path -LiteralPath $walk)) { throw ("The agent folder " + $root + " does not exist") }',
+      '  if (Test-Link $walk) { throw ("Refusing to remove anything: " + $walk + " is a link (junction or symbolic link), and removing below it could delete files outside the home folder") }',
+      '  $parent = [System.IO.Path]::GetDirectoryName($walk)',
+      '  if ($null -eq $parent -or $parent -eq $walk) { throw ("The agent folder " + $root + " is not below the home folder " + $homeDir) }',
+      '  $walk = $parent',
+      '}',
+      // -cmatch: the folder names the bundles make are lower case; a name in another case is somebody else's.
+      `$old = @(Get-ChildItem -LiteralPath $root -Directory -Force | Where-Object { $_.Name -cmatch '${RELEASE_DIR_PATTERN}' -and $keep -notcontains $_.Name })`,
       'foreach ($dir in $old) {',
+      '  if (Test-Link $dir.FullName) { Write-Output (\'FAILED \' + $dir.Name + \' is a link (junction or symbolic link): left alone, not followed\'); continue }',
       '  try { Remove-Item -LiteralPath $dir.FullName -Recurse -Force -ErrorAction Stop; Write-Output (\'REMOVED \' + $dir.Name) }',
       '  catch { Write-Output (\'FAILED \' + $dir.Name + \' \' + (($_.Exception.Message -replace \'[\\r\\n]+\', \' \').Trim())) }',
       '}',

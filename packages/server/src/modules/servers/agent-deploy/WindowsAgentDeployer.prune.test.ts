@@ -35,8 +35,13 @@ describe('WindowsAgentDeployer.pruneOldVersions', () => {
     const script = host.calls.at(-1)!.text;
     expect(script).toContain("$root = 'C:\\Users\\dev\\.azito\\agent'");
     expect(script).toContain("$keep = @('cccccccccccc', 'dddddddddddd')");
-    expect(script).toContain("-match '^[0-9a-f]{12}$'");
+    expect(script).toContain("-cmatch '^[0-9a-f]{12}$'");
     expect(script).toContain('-notcontains $_.Name');
+    // Links are never followed: the agent folder and its ancestors up to the home, and every candidate, are checked for a reparse point.
+    expect(script).toContain("$homeDir = 'C:\\Users\\dev'");
+    expect(script).toContain('[System.IO.FileAttributes]::ReparsePoint');
+    expect(script).toContain('Refusing to remove anything');
+    expect(script).toContain('is a link (junction or symbolic link): left alone, not followed');
   });
 
   it('throws with the reason when the script itself fails', async () => {

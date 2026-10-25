@@ -38,7 +38,7 @@ function makeMocks(bundleHash = 'abc1234') {
   };
   const serverRepo = {
     findAll: vi.fn((): ServerConfig[] => []),
-    findByName: vi.fn(),
+    findByName: vi.fn((): ServerConfig | null => makeServer()),
     create: vi.fn(),
     update: vi.fn(),
     updateAgentVersion: vi.fn(), updateHostProfile: vi.fn(),
@@ -71,7 +71,7 @@ describe('AgentUpdater', () => {
     const mocks = makeMocks();
     const updater = new AgentUpdater(
       mocks.bundler as any, mocks.installer as any,
-      mocks.serverRepo as any, mocks.taskRepo as any, mocks.hostRecorder as any, new KeyedMutex(),
+      mocks.serverRepo as any, mocks.taskRepo as any, mocks.hostRecorder as any, new KeyedMutex(), { warn: vi.fn() },
     );
 
     const result = await updater.checkAndUpdate(makeServer({ type: 'local' }));
@@ -82,7 +82,7 @@ describe('AgentUpdater', () => {
     const mocks = makeMocks();
     const updater = new AgentUpdater(
       mocks.bundler as any, mocks.installer as any,
-      mocks.serverRepo as any, mocks.taskRepo as any, mocks.hostRecorder as any, new KeyedMutex(),
+      mocks.serverRepo as any, mocks.taskRepo as any, mocks.hostRecorder as any, new KeyedMutex(), { warn: vi.fn() },
     );
 
     const result = await updater.checkAndUpdate(makeServer({ host: null }));
@@ -93,7 +93,7 @@ describe('AgentUpdater', () => {
     const mocks = makeMocks('new-sha');
     const updater = new AgentUpdater(
       mocks.bundler as any, mocks.installer as any,
-      mocks.serverRepo as any, mocks.taskRepo as any, mocks.hostRecorder as any, new KeyedMutex(),
+      mocks.serverRepo as any, mocks.taskRepo as any, mocks.hostRecorder as any, new KeyedMutex(), { warn: vi.fn() },
     );
 
     vi.stubGlobal('fetch', vi.fn(() => Promise.reject(new Error('ECONNREFUSED'))));
@@ -112,7 +112,7 @@ describe('AgentUpdater', () => {
     const mocks = makeMocks(sha);
     const updater = new AgentUpdater(
       mocks.bundler as any, mocks.installer as any,
-      mocks.serverRepo as any, mocks.taskRepo as any, mocks.hostRecorder as any, new KeyedMutex(),
+      mocks.serverRepo as any, mocks.taskRepo as any, mocks.hostRecorder as any, new KeyedMutex(), { warn: vi.fn() },
     );
 
     let callCount = 0;
@@ -139,7 +139,7 @@ describe('AgentUpdater', () => {
     const mocks = makeMocks('new-sha');
     const updater = new AgentUpdater(
       mocks.bundler as any, mocks.installer as any,
-      mocks.serverRepo as any, mocks.taskRepo as any, mocks.hostRecorder as any, new KeyedMutex(),
+      mocks.serverRepo as any, mocks.taskRepo as any, mocks.hostRecorder as any, new KeyedMutex(), { warn: vi.fn() },
     );
 
     vi.stubGlobal('fetch', vi.fn(() => Promise.reject(new Error('ECONNREFUSED'))));
@@ -164,7 +164,7 @@ describe('AgentUpdater', () => {
 
     const updater = new AgentUpdater(
       mocks.bundler as any, mocks.installer as any,
-      mocks.serverRepo as any, mocks.taskRepo as any, mocks.hostRecorder as any, new KeyedMutex(),
+      mocks.serverRepo as any, mocks.taskRepo as any, mocks.hostRecorder as any, new KeyedMutex(), { warn: vi.fn() },
     );
 
     vi.stubGlobal('fetch', vi.fn(() => Promise.reject(new Error('ECONNREFUSED'))));
@@ -187,7 +187,7 @@ describe('AgentUpdater', () => {
     mocks.installer.recoverAgent.mockResolvedValue('taskscheduler' as never);
     const updater = new AgentUpdater(
       mocks.bundler as any, mocks.installer as any,
-      mocks.serverRepo as any, mocks.taskRepo as any, mocks.hostRecorder as any, new KeyedMutex(),
+      mocks.serverRepo as any, mocks.taskRepo as any, mocks.hostRecorder as any, new KeyedMutex(), { warn: vi.fn() },
     );
     const fetchMock = vi.fn()
       .mockRejectedValueOnce(new Error('ECONNREFUSED'))
@@ -216,19 +216,72 @@ describe('AgentUpdater', () => {
       takenDuringUpdate = acquired;
       return { success: true, version: 'new-sha', warning: 'Old releases left in place: aaaaaaaaaaaa (in use)' };
     });
+    const logger = { warn: vi.fn() };
     const updater = new AgentUpdater(
       mocks.bundler as any, mocks.installer as any,
-      mocks.serverRepo as any, mocks.taskRepo as any, mocks.hostRecorder as any, lock,
+      mocks.serverRepo as any, mocks.taskRepo as any, mocks.hostRecorder as any, lock, logger,
     );
+    const win = makeServer({ hostProfile: { platform: 'win32', arch: 'x64' } });
+    mocks.serverRepo.findByName.mockReturnValue(win);
     vi.stubGlobal('fetch', vi.fn(() => Promise.resolve({ ok: true, json: async () => ({ version: 'old-sha' }) })));
 
-    const result = await updater.checkAndUpdate(makeServer({ hostProfile: { platform: 'win32', arch: 'x64' } }));
+    const result = await updater.checkAndUpdate(win);
     await other;
 
     // While update() ran, a second taker of the same key had to wait.
     expect(takenDuringUpdate).toBe(false);
     expect(result).toMatchObject({ status: 'updated', currentVersion: 'new-sha', message: 'Old releases left in place: aaaaaaaaaaaa (in use)' });
     expect(mocks.installer.update).toHaveBeenCalledWith('user@remote', '100.64.0.1', 'tok123', { platform: 'win32', arch: 'x64' }, 'system');
+    // The warning of the update is logged here, not left to the caller of checkAllServers.
+    expect(logger.warn).toHaveBeenCalledWith(expect.stringContaining('Old releases left in place: aaaaaaaaaaaa (in use)'));
+    vi.unstubAllGlobals();
+  });
+
+  it('updates with the token registered once the lock is held, and not at all when it changed while waiting (a reinstall wrote a new one)', async () => {
+    const mocks = makeMocks('new-sha');
+    const lock = new KeyedMutex();
+    const updater = new AgentUpdater(
+      mocks.bundler as any, mocks.installer as any,
+      mocks.serverRepo as any, mocks.taskRepo as any, mocks.hostRecorder as any, lock, { warn: vi.fn() },
+    );
+    vi.stubGlobal('fetch', vi.fn(() => Promise.resolve({ ok: true, json: async () => ({ version: 'old-sha' }) })));
+    const seen = makeServer({ agentToken: 'old-token' });
+    // A reinstall holds the lock, and registers a new token before it lets go.
+    let finishReinstall!: () => void;
+    const reinstall = lock.withLock('test-server', () => new Promise<void>((resolve) => { finishReinstall = resolve; }));
+    mocks.serverRepo.findByName.mockReturnValue(makeServer({ agentToken: 'new-token' }));
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    const pending = updater.checkAndUpdate(seen);
+    finishReinstall();
+    await reinstall;
+    const result = await pending;
+
+    expect(result.status).toBe('skipped');
+    expect(result.message).toContain('reinstalled');
+    expect(mocks.installer.update).not.toHaveBeenCalled();
+    expect(mocks.serverRepo.updateAgentVersion).not.toHaveBeenCalled();
+    vi.unstubAllGlobals();
+  });
+
+  it('skips the update of a server that was deleted while it waited, and does nothing when the reinstall already brought the current version', async () => {
+    const mocks = makeMocks('new-sha');
+    const updater = new AgentUpdater(
+      mocks.bundler as any, mocks.installer as any,
+      mocks.serverRepo as any, mocks.taskRepo as any, mocks.hostRecorder as any, new KeyedMutex(), { warn: vi.fn() },
+    );
+    vi.stubGlobal('fetch', vi.fn(() => Promise.resolve({ ok: true, json: async () => ({ version: 'old-sha' }) })));
+    mocks.serverRepo.findByName.mockReturnValue(null);
+    expect((await updater.checkAndUpdate(makeServer())).status).toBe('skipped');
+
+    mocks.serverRepo.findByName.mockReturnValue(makeServer());
+    const fetchMock = vi.fn()
+      .mockResolvedValueOnce({ ok: true, json: async () => ({ version: 'old-sha' }) })
+      .mockResolvedValue({ ok: true, json: async () => ({ version: 'new-sha' }) });
+    vi.stubGlobal('fetch', fetchMock);
+    const result = await updater.checkAndUpdate(makeServer());
+    expect(result).toMatchObject({ status: 'up_to_date', currentVersion: 'new-sha' });
+    expect(mocks.installer.update).not.toHaveBeenCalled();
     vi.unstubAllGlobals();
   });
 
@@ -237,7 +290,7 @@ describe('AgentUpdater', () => {
     const mocks = makeMocks(sha);
     const updater = new AgentUpdater(
       mocks.bundler as any, mocks.installer as any,
-      mocks.serverRepo as any, mocks.taskRepo as any, mocks.hostRecorder as any, new KeyedMutex(),
+      mocks.serverRepo as any, mocks.taskRepo as any, mocks.hostRecorder as any, new KeyedMutex(), { warn: vi.fn() },
     );
 
     vi.stubGlobal('fetch', vi.fn(() => Promise.resolve({
@@ -261,7 +314,7 @@ describe('AgentUpdater', () => {
 
     const updater = new AgentUpdater(
       mocks.bundler as any, mocks.installer as any,
-      mocks.serverRepo as any, mocks.taskRepo as any, mocks.hostRecorder as any, new KeyedMutex(),
+      mocks.serverRepo as any, mocks.taskRepo as any, mocks.hostRecorder as any, new KeyedMutex(), { warn: vi.fn() },
     );
 
     vi.stubGlobal('fetch', vi.fn(() => Promise.resolve({
@@ -286,7 +339,7 @@ describe('AgentUpdater', () => {
 
     const updater = new AgentUpdater(
       mocks.bundler as any, mocks.installer as any,
-      mocks.serverRepo as any, mocks.taskRepo as any, mocks.hostRecorder as any, new KeyedMutex(),
+      mocks.serverRepo as any, mocks.taskRepo as any, mocks.hostRecorder as any, new KeyedMutex(), { warn: vi.fn() },
     );
 
     vi.stubGlobal('fetch', vi.fn(() => Promise.resolve({
@@ -309,7 +362,7 @@ describe('AgentUpdater', () => {
 
     const updater = new AgentUpdater(
       mocks.bundler as any, mocks.installer as any,
-      mocks.serverRepo as any, mocks.taskRepo as any, mocks.hostRecorder as any, new KeyedMutex(),
+      mocks.serverRepo as any, mocks.taskRepo as any, mocks.hostRecorder as any, new KeyedMutex(), { warn: vi.fn() },
     );
 
     vi.stubGlobal('fetch', vi.fn(() => Promise.resolve({
@@ -328,7 +381,7 @@ describe('AgentUpdater', () => {
     const mocks = makeMocks('new-sha');
     const updater = new AgentUpdater(
       mocks.bundler as any, mocks.installer as any,
-      mocks.serverRepo as any, mocks.taskRepo as any, mocks.hostRecorder as any, new KeyedMutex(),
+      mocks.serverRepo as any, mocks.taskRepo as any, mocks.hostRecorder as any, new KeyedMutex(), { warn: vi.fn() },
     );
 
     vi.stubGlobal('fetch', vi.fn(() => Promise.resolve({
@@ -349,7 +402,7 @@ describe('AgentUpdater', () => {
 
     const updater = new AgentUpdater(
       mocks.bundler as any, mocks.installer as any,
-      mocks.serverRepo as any, mocks.taskRepo as any, mocks.hostRecorder as any, new KeyedMutex(),
+      mocks.serverRepo as any, mocks.taskRepo as any, mocks.hostRecorder as any, new KeyedMutex(), { warn: vi.fn() },
     );
 
     vi.stubGlobal('fetch', vi.fn(() => Promise.resolve({
@@ -371,7 +424,7 @@ describe('AgentUpdater', () => {
 
     const updater = new AgentUpdater(
       mocks.bundler as any, mocks.installer as any,
-      mocks.serverRepo as any, mocks.taskRepo as any, mocks.hostRecorder as any, new KeyedMutex(),
+      mocks.serverRepo as any, mocks.taskRepo as any, mocks.hostRecorder as any, new KeyedMutex(), { warn: vi.fn() },
     );
 
     vi.stubGlobal('fetch', vi.fn(() => Promise.resolve({
@@ -402,7 +455,7 @@ describe('AgentUpdater', () => {
 
     const updater = new AgentUpdater(
       mocks.bundler as any, mocks.installer as any,
-      mocks.serverRepo as any, mocks.taskRepo as any, mocks.hostRecorder as any, new KeyedMutex(),
+      mocks.serverRepo as any, mocks.taskRepo as any, mocks.hostRecorder as any, new KeyedMutex(), { warn: vi.fn() },
     );
 
     const results = await updater.checkAllServers();
@@ -416,7 +469,7 @@ describe('AgentUpdater', () => {
     const reachable = (version: string) => vi.stubGlobal('fetch', vi.fn(() => Promise.resolve({ ok: true, json: () => Promise.resolve({ version }) })));
     const build = (mocks: ReturnType<typeof makeMocks>) => new AgentUpdater(
       mocks.bundler as any, mocks.installer as any,
-      mocks.serverRepo as any, mocks.taskRepo as any, mocks.hostRecorder as any, new KeyedMutex(),
+      mocks.serverRepo as any, mocks.taskRepo as any, mocks.hostRecorder as any, new KeyedMutex(), { warn: vi.fn() },
     );
 
     it('asks for the host of a reached agent that has none recorded (connection)', async () => {

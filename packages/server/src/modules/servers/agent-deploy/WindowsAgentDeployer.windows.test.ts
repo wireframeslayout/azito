@@ -533,6 +533,52 @@ describe.skipIf(process.platform !== 'win32')('the Windows agent install on a re
       fs.rmSync(bundleDir, { recursive: true, force: true });
     });
 
+    it('does not follow a junction: a link named like a release, or a linked agent folder, leaves what it points to alone', async () => {
+      const junction = async (link: string, target: string): Promise<void> => {
+        const made = await cmdExec('ci', `mklink /J "${link}" "${target}"`, 60_000);
+        expect(made.code, made.stdout + made.stderr).toBe(0);
+      };
+      const unlink = (link: string): Promise<unknown> => cmdExec('ci', `rmdir "${link}"`, 60_000);
+      const outside = path.join(bundleDir, 'outside');
+      fs.mkdirSync(path.join(outside, 'inner', 'eeeeeeeeeeee'), { recursive: true });
+      fs.writeFileSync(path.join(outside, 'inner', 'eeeeeeeeeeee', 'precious.txt'), 'x');
+      fs.writeFileSync(path.join(outside, 'precious.txt'), 'x');
+
+      // (1) A release-named link inside the agent folder.
+      const link = path.join(layoutOf().root, 'cccccccccccc');
+      await junction(link, outside);
+      try {
+        const result = await deployer.pruneOldVersions('ci', host, [version, 'dddddddddddd']);
+        expect(result.failed.map((f) => f.version)).toContain('cccccccccccc');
+        expect(result.failed.find((f) => f.version === 'cccccccccccc')!.reason).toContain('is a link');
+        expect(fs.existsSync(path.join(outside, 'precious.txt'))).toBe(true);
+        expect(fs.existsSync(link)).toBe(true);
+      } finally {
+        await unlink(link);
+      }
+
+      // (2) The agent folder itself is a link to somewhere else: nothing below it is removed.
+      const linkedName = `azito-ci-link-${SUFFIX}`;
+      const linkedRoot = path.join(os.homedir(), linkedName);
+      await junction(linkedRoot, path.join(outside, 'inner'));
+      try {
+        const linked = new WindowsAgentDeployer(cmdExec, homeTransfer, { ...OPTIONS, dir: linkedName });
+        await expect(linked.pruneOldVersions('ci', host, ['dddddddddddd'])).rejects.toThrow(/is a link/);
+        expect(fs.existsSync(path.join(outside, 'inner', 'eeeeeeeeeeee', 'precious.txt'))).toBe(true);
+      } finally {
+        await unlink(linkedRoot);
+      }
+    }, 120_000);
+
+    it('removes only lower-case release names (a folder named in capitals is not touched)', async () => {
+      const upper = path.join(layoutOf().root, 'ABCDEF123456');
+      fs.mkdirSync(upper, { recursive: true });
+      const result = await deployer.pruneOldVersions('ci', host, [version]);
+      expect(result.removed).not.toContain('ABCDEF123456');
+      expect(fs.existsSync(upper)).toBe(true);
+      fs.rmSync(upper, { recursive: true, force: true });
+    }, 120_000);
+
     it('A to B: the agent answers B with the same token, A is kept as the previous release, older releases are removed and other folders are not touched', async (ctx) => {
       if (!logonSession) ctx.skip('no interactive logon session on this machine');
       await deployer.start('ci', host);
