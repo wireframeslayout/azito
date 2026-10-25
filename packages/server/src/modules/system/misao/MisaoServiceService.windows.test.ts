@@ -9,8 +9,7 @@ import type { MisaoPaths } from './misaoPaths';
 import { MisaoServiceError } from './MisaoServiceError';
 import { MisaoServiceService } from './MisaoServiceService';
 import { readEnvValue } from '../../../shared/envFile';
-import { MemoryLock, type MemorySlot } from '../../../shared/processLock.testing';
-import type { ExclusiveLock } from '../../../shared/processLock';
+import { ProcessLock } from '../../../shared/processLock';
 import { createSecretFileGuard } from '../../../shared/os/secretFileGuard';
 import type { ServiceManager } from '../serviceManager';
 
@@ -39,8 +38,7 @@ describe('MisaoServiceService on Windows (the hub\'s own misao)', () => {
   let controller: ServiceManager;
   let controllerInstall: ReturnType<typeof vi.fn>;
   /** The slot of this folder (a named pipe on Windows, a socket path elsewhere), as taken by this hub (pid 100) or by the CLI (pid 200). */
-  let slot: MemorySlot;
-  const lockFor = (pid: number): ExclusiveLock => new MemoryLock(slot, pid);
+  const lockFor = (pid: number): ProcessLock => new ProcessLock(process.platform === 'win32' ? `\\\\.\\pipe\\azito-lock-test-${path.basename(dir)}` : path.join(dir, 'l.sock'), pid);
 
   beforeEach(() => {
     dir = fs.mkdtempSync(path.join(os.tmpdir(), 'azw-'));
@@ -48,7 +46,6 @@ describe('MisaoServiceService on Windows (the hub\'s own misao)', () => {
     paths = { prefix: dir, root, current: path.join(root, 'current'), socket: PIPE, log: path.join(root, 'misao.log'), hubEnvFile: path.join(dir, 'hub', '.env') };
     fs.mkdirSync(path.join(dir, 'hub'), { recursive: true });
     fs.mkdirSync(root, { recursive: true });
-    slot = {};
     taskExists = false;
     exportedXml = taskXml(root);
     install = vi.fn(async () => RESULT);
@@ -218,7 +215,7 @@ describe('MisaoServiceService on Windows (the hub\'s own misao)', () => {
       let during: string | undefined;
       await cli.run(async () => {
         during = await service().reviveWindowsDaemon(true);
-        await expect(service().update()).rejects.toMatchObject({ code: 'busy', message: expect.stringContaining('(200, started test)') });
+        await expect(service().update()).rejects.toMatchObject({ code: 'busy', message: expect.stringContaining('(200)') });
       });
       expect(during).toBe('busy');
       expect(revive).not.toHaveBeenCalled();

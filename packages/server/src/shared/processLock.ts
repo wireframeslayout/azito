@@ -1,95 +1,91 @@
-import fs from 'fs';
+import { createHash } from 'crypto';
+import net from 'net';
 import path from 'path';
-import type { SecretFileGuard } from './os/secretFileGuard';
 
-/** One at a time, across processes. Not queued: when it is taken, {@link run} throws {@link ProcessLockBusyError} at once. */
-export interface ExclusiveLock {
-  run<T>(operation: () => Promise<T>): Promise<T>;
-}
-
-/** Who holds a lock, as the holder wrote it for display (never used to decide who holds it). */
-export interface LockOwner {
-  pid: number;
-  started: string;
-}
-
-/** Another process (or another holder in this one) has the lock. `owner` is what the holder recorded, undefined when that cannot be read. */
+/** Another process (or another holder in this one) has the lock. */
 export class ProcessLockBusyError extends Error {
-  constructor(readonly file: string, readonly owner: LockOwner | undefined) {
-    super(`${file} is held${owner ? ` by process ${owner.pid} (started ${owner.started})` : ' by a process that could not be identified'}`);
+  constructor(readonly endpoint: string, readonly ownerPid: number | undefined) {
+    super(`${endpoint} is held${ownerPid !== undefined ? ` by process ${ownerPid}` : ' by another process'}`);
     this.name = 'ProcessLockBusyError';
   }
 }
 
-/**
- * libuv's `UV_FS_O_EXLOCK` (uv/win.h): open with sharing mode 0. Node does not export it in `fs.constants`, but passes a numeric `flags` to
- * `uv_fs_open` as it is; the test `processLock.windows.test.ts` is what shows, on a real Windows, that it takes effect.
- */
-const UV_FS_O_EXLOCK = 0x10000000;
-
-/** What Windows answers to an open that the sharing mode of the holder refuses (libuv: ERROR_SHARING_VIOLATION -> EBUSY, ERROR_ACCESS_DENIED on a held handle -> EPERM). */
-const REFUSED_BECAUSE_HELD = new Set(['EBUSY', 'EPERM']);
+/** How long a refused taker waits to hear who holds the lock (only to name it in the refusal). */
+const OWNER_PROBE_MS = 1000;
+/** How long the holder keeps a connection that asked who it is: a client that never reads is cut off, never waited for. */
+const ANSWER_LIMIT_MS = 2000;
 
 /**
- * One-at-a-time across processes on Windows, by a file only one handle can have open: `UV_FS_O_EXLOCK` makes libuv open it with sharing
- * mode 0, so no other process (and no other open in this one) can open it while the handle lives, and the OS closes the handle when the
- * holder dies however it dies. There is no stale lock to judge or take over, and nothing for two takers to race on: the open succeeds for
- * exactly one of them, the rest are refused (`busy`, at once, never waited for).
+ * One-at-a-time across processes, by an endpoint only one server can listen on: the lock is held for as long as a `net` server
+ * listens on it (a Windows named pipe `\\.\pipe\...`; a unix socket path serves the tests on other OSes). The OS releases it when the
+ * holder dies, however it dies, so there is no stale lock to judge or take over and nothing for two takers to race on: `listen` either
+ * succeeds (EADDRINUSE otherwise) for exactly one of them. Not queued: when it is held, {@link run} throws {@link ProcessLockBusyError}
+ * at once. A holder answers a connection with its process id, which the refusal names; those connections are cut after `ANSWER_LIMIT_MS`
+ * and all of them are destroyed when the lock is released, so a client that does not read cannot keep the release waiting.
  *
- * Who can take it first: only someone who can create or open the file, so the folder that holds it must be writable by this user alone.
- * That is checked before every acquisition (the folder, and the lock file, against the secret-file policy), and a folder or file that is
- * not owner-only fails with the reason; a missing folder is made owner-only. The lock file is made owner-only before it is first opened.
- *
- * The owner file (the holder's pid and start time) is written once the lock is held and removed on release, so that a
- * refused taker can say who has it. It is for display only: it decides nothing, and a taker that cannot read it says the holder is unknown.
+ * The endpoint is a function when it needs a secret that can fail to be read (see `misaoRootLock.ts`): it is called when the lock is taken.
  */
-export class FileLock implements ExclusiveLock {
-  constructor(
-    private readonly file: string,
-    private readonly ownerFile: string,
-    private readonly guard: SecretFileGuard,
-  ) {}
+export class ProcessLock {
+  constructor(private readonly endpoint: string | (() => string), private readonly pid: number = process.pid) {}
 
   async run<T>(operation: () => Promise<T>): Promise<T> {
-    if (process.platform !== 'win32') throw new Error('An exclusive file lock is only available on Windows');
-    this.requirePrivate();
-    let fd: number;
+    const held = await this.acquire(typeof this.endpoint === 'string' ? this.endpoint : this.endpoint());
     try {
-      fd = fs.openSync(this.file, fs.constants.O_RDWR | fs.constants.O_CREAT | UV_FS_O_EXLOCK, 0o600);
-    } catch (err) {
-      if (REFUSED_BECAUSE_HELD.has((err as NodeJS.ErrnoException).code ?? '')) throw new ProcessLockBusyError(this.file, this.readOwner());
-      throw err;
-    }
-    try {
-      const started = new Date(Date.now() - process.uptime() * 1000).toISOString();
-      this.guard.writeSecretFile(this.ownerFile, JSON.stringify({ pid: process.pid, started } satisfies LockOwner));
       return await operation();
     } finally {
-      fs.rmSync(this.ownerFile, { force: true });
-      fs.closeSync(fd);
+      for (const socket of held.sockets) socket.destroy();
+      await new Promise<void>((resolve) => { held.server.close(() => resolve()); });
     }
   }
 
-  /** The folder is owner-only (made so when missing, never silently changed when it exists), and so is the lock file (made so before it is opened the first time). */
-  private requirePrivate(): void {
-    const dir = path.dirname(this.file);
-    if (!fs.existsSync(dir)) this.guard.ensureProtectedDir(dir);
-    this.requireOk(dir, 'dir');
-    if (!fs.existsSync(this.file)) this.guard.prepareFile(this.file);
-    this.requireOk(this.file, 'file');
+  private acquire(endpoint: string): Promise<{ server: net.Server; sockets: Set<net.Socket> }> {
+    return new Promise((resolve, reject) => {
+      const sockets = new Set<net.Socket>();
+      const server = net.createServer((socket) => {
+        sockets.add(socket);
+        socket.on('close', () => sockets.delete(socket));
+        socket.on('error', () => undefined); // a probe that went away
+        socket.setTimeout(ANSWER_LIMIT_MS, () => socket.destroy());
+        socket.end(String(this.pid));
+      });
+      server.once('error', (err: NodeJS.ErrnoException) => {
+        if (err.code !== 'EADDRINUSE') {
+          reject(err);
+          return;
+        }
+        this.readOwner(endpoint).then((owner) => reject(new ProcessLockBusyError(endpoint, owner)), reject);
+      });
+      server.listen(endpoint, () => {
+        server.removeAllListeners('error');
+        server.on('error', () => undefined); // after listening, nothing here can fail an operation that already runs
+        resolve({ server, sockets });
+      });
+    });
   }
 
-  private requireOk(target: string, kind: 'file' | 'dir'): void {
-    const verdict = this.guard.inspect(target, kind);
-    if (!verdict.ok) throw new Error(`${target} is not private to this user (${verdict.summary}), so the misao lock in it could be taken first by someone else. ${verdict.fix}`);
+  private readOwner(endpoint: string): Promise<number | undefined> {
+    return new Promise((resolve) => {
+      const socket = net.connect(endpoint);
+      let text = '';
+      const done = (): void => {
+        socket.destroy();
+        clearTimeout(timer);
+        resolve(/^\d+$/.test(text) ? Number(text) : undefined);
+      };
+      const timer = setTimeout(done, OWNER_PROBE_MS);
+      socket.on('data', (chunk) => { text += chunk.toString('utf-8'); });
+      socket.on('end', done);
+      socket.on('error', done);
+    });
   }
+}
 
-  private readOwner(): LockOwner | undefined {
-    try {
-      const parsed = JSON.parse(fs.readFileSync(this.ownerFile, 'utf-8')) as Partial<LockOwner>;
-      return typeof parsed.pid === 'number' && typeof parsed.started === 'string' ? { pid: parsed.pid, started: parsed.started } : undefined;
-    } catch {
-      return undefined; // not written yet, already removed, or not readable: the holder is unknown
-    }
-  }
+/**
+ * The lock endpoint of one misao folder: `\\.\pipe\azito-lock-<hash of the folder (lower-cased, normalised) and its secret key>`. The same folder and
+ * key give the same name whoever asks (the hub, `azito misao ...`, an agent install the hub runs for the same folder), whatever the
+ * letter case of the folder; without the key the name cannot be worked out, so another user cannot create the pipe first.
+ */
+export function misaoRootLockEndpoint(root: string, key: string): string {
+  const normalised = path.win32.normalize(root).replace(/[\\/]+$/, '').toLowerCase();
+  return `\\\\.\\pipe\\azito-lock-${createHash('sha256').update(`${normalised}\0${key}`).digest('hex').slice(0, 32)}`;
 }

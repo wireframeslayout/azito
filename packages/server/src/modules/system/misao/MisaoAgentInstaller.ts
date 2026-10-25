@@ -11,7 +11,7 @@ import { assertPosixHost, HostProfileError, pathDelimiterFor, type HostProfile }
 import { renderMisaoUnit } from './misaoUnit';
 import { MisaoWindowsInstaller } from './MisaoWindowsInstaller';
 import { underMisaoRootLock } from './misaoRootLock';
-import type { ExclusiveLock } from '../../../shared/processLock';
+import type { ProcessLock } from '../../../shared/processLock';
 import type { MisaoAgentInstallResult, MisaoInstallStep, MisaoInstallTarget } from './misaoInstallTypes';
 
 export type { MisaoAgentInstallResult, MisaoAgentStartMethod, MisaoInstallStep, MisaoInstallTarget } from './misaoInstallTypes';
@@ -30,7 +30,7 @@ export interface MisaoAgentInstallerOptions {
    * folder is on this machine, as this user, and shares that daemon: its install / update / revive then take the same cross-process slot as
    * the hub's own operations (`misaoRootLock.ts`) instead of only the per-server mutex. Compared by the folder's name alone.
    */
-  localMisao?: { root: string; lock: ExclusiveLock };
+  localMisao?: { root: string; lock: ProcessLock };
 }
 
 const DEFAULT_READY_TIMEOUT_MS = 15_000;
