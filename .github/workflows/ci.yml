@@ -351,7 +351,7 @@ jobs:
           "MISAO_CLI=$bin" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
 
       - name: misao integration tests (Windows)
-        run: npx -w packages/server vitest run --project misao-integration src/modules/system/misao/MisaoWindowsInstaller.misaoIntegration.test.ts
+        run: npx -w packages/server vitest run --project misao-integration src/modules/system/misao/MisaoWindowsInstaller.misaoIntegration.test.ts src/modules/servers/agent-deploy/WindowsAgentDeployer.uninstall.misaoIntegration.test.ts
 
   # A Windows hub reaching an SSH server for real: the runner's own OpenSSH server over the loopback, authenticated by a key under the hub's
   # home and by the OpenSSH Authentication Agent service (named pipe), with a changed host key refused. The script puts the runner back as it

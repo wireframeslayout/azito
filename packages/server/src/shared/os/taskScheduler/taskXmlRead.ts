@@ -19,6 +19,16 @@ export function taskExecActions(xml: string): TaskExecAction[] {
   return [...xml.matchAll(/<Exec>([\s\S]*?)<\/Exec>/g)].map((m) => ({ command: tag(m[1]!, 'Command'), argumentsLine: tag(m[1]!, 'Arguments') }));
 }
 
+/** The quote characters PowerShell reads as a single quote, which `powershellDialect.quote` doubles (the same set as the writer's). */
+const QUOTE_CHARS = "'‘’‚‛";
+const HUB_ROOT_LINE = new RegExp(`^\\$hubRoot = '((?:[^${QUOTE_CHARS}]|([${QUOTE_CHARS}])\\2)*)'\\r?$`, 'm');
+
+/** The hub's `<prefix>\hub` folder, from the launcher script of the hub's task (its `$hubRoot = '...'` line, quotes undoubled); undefined when the script has no such line. */
+export function hubRootOfScript(script: string): string | undefined {
+  const hubRoot = HUB_ROOT_LINE.exec(script)?.[1];
+  return hubRoot?.replace(new RegExp(`([${QUOTE_CHARS}])\\1`, 'g'), '$1');
+}
+
 /**
  * The folder a misao task starts the daemon in (its `--data` folder), read from the task definition: from the launcher script
  * (`AZITO_MISAO_ROOT`, a PowerShell literal where `'` is doubled) or from the plain command line (`--data "<root>"`). Undefined when

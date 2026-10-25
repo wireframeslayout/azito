@@ -8,7 +8,8 @@ import { DEFAULT_WINDOWS_AGENT_OPTIONS, MISAO_WINDOWS_TASK_NAME, type WindowsAge
 import { WindowsAgentDeployer, windowsAgentEnvFile, type WindowsSshExec } from './WindowsAgentDeployer';
 import { FakeWindowsHost } from './testing/fakeWindowsHost';
 import { WINDOWS_HUB_TASK_NAME, uninstallWindowsAgent, type UninstallStepId, type WindowsUninstallHost, type WindowsUninstallResult } from './windowsAgentUninstall';
-import { parseFirewallOutput, parseFolderOutput, parseMisaoGuardOutput, parseProcessesOutput } from './windowsAgentUninstallScripts';
+import { parseFolderOutput, parseProcessesOutput } from './windowsAgentUninstallScripts';
+import { HUB_COMMAND_LINE_PATTERN, firewallScript, misaoGuardScript, parseFirewallOutput, parseMisaoGuardOutput } from './windowsAgentOwnership';
 
 const HOME = 'C:\\Users\\dev';
 const OPTIONS = DEFAULT_WINDOWS_AGENT_OPTIONS;
@@ -181,6 +182,21 @@ describe('uninstallWindowsAgent', () => {
       expect(outcomes(await run(host)).task).toBe('failed');
     });
 
+    it.each([
+      ['a doubled closing quote', (file: string) => `--headless "${NODE}" "--env-file=${file}"""`],
+      ['an extra quote at the end', (file: string) => `--headless "${NODE}" "--env-file=${file}""`],
+      ['four quotes at the end', (file: string) => `--headless "${NODE}" "--env-file=${file}""""  a.cjs`],
+    ])('does not take %s after the file for the file itself (quotes in a row inside quotes are a quote, the argument stays open)', async (_label, line) => {
+      const xml = buildTaskXml({
+        userId: 'PC\\dev', description: 'x', executable: 'C:\\Windows\\System32\\conhost.exe', argumentsLine: line(envFile),
+        workingDirectory: HOME, restartOnFailure: { intervalMinutes: 1, count: 1 },
+      });
+      const host = new FakeUninstallHost({ AzitoAgent: { xml, running: true } });
+      const result = await run(host);
+      expect(outcomes(result)).toMatchObject({ task: 'failed', processes: 'skipped', firewall: 'skipped', folder: 'skipped' });
+      expect(host.tasks.has('AzitoAgent')).toBe(true);
+    });
+
     it('takes it whatever the case of the path, and for a folder with a space in it', async () => {
       const spaced = 'C:\\Users\\Dev User';
       const file = windowsAgentEnvFile(spaced, OPTIONS);
@@ -280,13 +296,15 @@ describe('uninstallWindowsAgent', () => {
 
     it('fails with the command to run when the session is not elevated, and still removes the folder', async () => {
       const host = new FakeUninstallHost({ AzitoAgent: { xml: AGENT_XML } });
-      host.answers['Removing the Windows Firewall rule'] = 'FAILED NOTELEVATED Access is denied.';
+      host.answers['Removing the Windows Firewall rule'] = 'FAILED|{1111-AAAA}|0|Access is denied.';
       const result = await run(host);
       expect(result.ok).toBe(false);
       expect(outcomes(result)).toEqual({ task: 'done', processes: 'done', firewall: 'failed', folder: 'done' });
       const text = detail(result, 'firewall');
       expect(text).toContain('not elevated');
-      expect(text).toContain('Remove-NetFirewallRule -DisplayName "AZITO Agent (TCP 3002)"');
+      // By the rule's own Name: a command by display name would also reach a rule of that name that was left on purpose.
+      expect(text).toContain("Remove-NetFirewallRule -Name '{1111-AAAA}'");
+      expect(text).not.toContain('Remove-NetFirewallRule -DisplayName');
     });
 
     it('a rule that cannot be looked at (the query fails) is a failure, not "absent"', async () => {
@@ -318,22 +336,39 @@ describe('uninstallWindowsAgent', () => {
     });
 
     describe('a hub on the host', () => {
-      it('leaves the misao that is the hub\'s own folder, whatever the names the agent was given', async () => {
+      it('hands the hub\'s folder to the host to compare with the folder to remove, whatever the names the agent was given', async () => {
         const trial: WindowsAgentOptions = { ...OPTIONS, misaoTaskName: 'w806-Misao', misaoDir: 'w851\\misao' };
         const host = new FakeUninstallHost({
           AzitoAgent: { xml: AGENT_XML }, AzitoHub: { xml: hubTaskXml(`${HOME}\\w851`) }, 'w806-Misao': { xml: misaoXml(`${HOME}\\w851\\misao`, 'w806-Misao'), running: true },
         });
+        host.answers['Checking who runs the misao'] = 'SAMEHUB';
         const result = await run(host, true, trial);
         expect(outcomes(result)).toMatchObject({ task: 'done', misaoTask: 'skipped', misaoProcesses: 'skipped', misaoFolder: 'skipped' });
         expect(detail(result, 'misaoTask')).toContain('AzitoHub');
         expect(host.tasks.has('w806-Misao')).toBe(true);
         expect(host.log).not.toContain('end w806-Misao');
+        const guard = host.bodyOf('Checking who runs the misao');
+        expect(guard).toContain(`$hubRoot = '${HOME}\\w851\\misao'`);
+        expect(guard).toContain(`$root = '${HOME}\\w851\\misao'`);
+        // Both are put in their long form on the host before they are compared (8.3 names, case).
+        expect(guard).toContain('function Resolve-Long');
+        expect(guard).toContain('-ieq $hub');
       });
 
       it('leaves the default misao when the hub has the default prefix', async () => {
         const host = new FakeUninstallHost({ AzitoHub: { xml: hubTaskXml(`${HOME}\\.azito`) }, AzitoMisao: { xml: MISAO_XML, running: true } });
+        host.answers['Checking who runs the misao'] = 'SAMEHUB';
         const result = await run(host, true);
         expect(outcomes(result)).toMatchObject({ misaoTask: 'skipped', misaoProcesses: 'skipped', misaoFolder: 'skipped' });
+        expect(host.tasks.has('AzitoMisao')).toBe(true);
+      });
+
+      it('leaves the misao when the host cannot resolve the hub\'s folder (the two may be one)', async () => {
+        const host = new FakeUninstallHost({ AzitoHub: { xml: hubTaskXml(`${HOME}\\.azito`) }, AzitoMisao: { xml: MISAO_XML, running: true } });
+        host.answers['Checking who runs the misao'] = 'MAYBEHUB';
+        const result = await run(host, true);
+        expect(outcomes(result)).toMatchObject({ misaoTask: 'skipped', misaoProcesses: 'skipped', misaoFolder: 'skipped' });
+        expect(detail(result, 'misaoTask')).toContain('may be the same');
         expect(host.tasks.has('AzitoMisao')).toBe(true);
       });
 
@@ -342,7 +377,7 @@ describe('uninstallWindowsAgent', () => {
         const result = await run(host, true);
         expect(outcomes(result)).toMatchObject({ misaoTask: 'done', misaoProcesses: 'done', misaoFolder: 'done' });
         // The hub is a task here, so its process is not looked for as a taskless hub.
-        expect(host.bodyOf('Checking who runs the misao')).not.toContain('azito-hub');
+        expect(host.bodyOf('Checking who runs the misao')).not.toContain('$hubPattern');
       });
 
       it('leaves the misao when the hub task is registered but its folder cannot be read', async () => {
@@ -350,6 +385,7 @@ describe('uninstallWindowsAgent', () => {
         const result = await run(host, true);
         expect(outcomes(result)).toMatchObject({ misaoTask: 'skipped', misaoProcesses: 'skipped', misaoFolder: 'skipped' });
         expect(host.tasks.has('AzitoMisao')).toBe(true);
+        expect(host.log).not.toContain('script Checking who runs the misao');
       });
 
       it('leaves the misao when it cannot tell whether a hub is registered', async () => {
@@ -368,7 +404,7 @@ describe('uninstallWindowsAgent', () => {
         const host = new FakeUninstallHost({ AzitoMisao: { xml: MISAO_XML } });
         await run(host, true);
         const guard = host.bodyOf('Checking who runs the misao');
-        expect(guard).toContain('azito-hub');
+        expect(guard).toContain('$hubPattern');
         expect(guard).toContain("Name = 'misao.exe'");
         expect(guard).toContain('--headless');
       });
@@ -389,6 +425,16 @@ describe('uninstallWindowsAgent', () => {
         const result = await run(host, true);
         expect(outcomes(result)).toMatchObject({ misaoTask: 'skipped', misaoProcesses: 'skipped', misaoFolder: 'skipped' });
         expect(detail(result, 'misaoTask')).toContain('77');
+      });
+
+      it('leaves the misao when the owner of a process cannot be read (it is neither mine nor someone else\'s)', async () => {
+        const host = new FakeUninstallHost({ AzitoMisao: { xml: MISAO_XML, running: true } });
+        host.answers['Checking who runs the misao'] = 'UNKNOWN 88';
+        const result = await run(host, true);
+        expect(result.ok).toBe(true);
+        expect(outcomes(result)).toMatchObject({ misaoTask: 'skipped', misaoProcesses: 'skipped', misaoFolder: 'skipped' });
+        expect(detail(result, 'misaoTask')).toContain('88');
+        expect(host.tasks.has('AzitoMisao')).toBe(true);
       });
 
       it('leaves the misao when the check cannot be read', async () => {
@@ -450,15 +496,44 @@ describe('what the scripts answer', () => {
     expect(parseFirewallOutput('REMOVED', 'R')).toEqual({ outcome: 'done' });
     expect(parseFirewallOutput('KEPT C:\\x.exe', 'R')).toMatchObject({ outcome: 'skipped' });
     expect(parseFirewallOutput('REMOVED\nKEPT C:\\x.exe', 'R')).toMatchObject({ outcome: 'done', detail: expect.stringContaining('C:\\x.exe') });
-    expect(parseFirewallOutput('REMOVED\nFAILED boom', 'R')).toMatchObject({ outcome: 'failed' });
+    expect(parseFirewallOutput('REMOVED\nFAILED|{G}|1|boom', 'R')).toMatchObject({ outcome: 'failed', detail: expect.stringContaining("-Name '{G}'") });
     expect(() => parseFirewallOutput('', 'R')).toThrow(/could not be read/);
   });
 
-  it('misao guard: clear, hub, foreign', () => {
+  it('misao guard: clear, same hub, maybe the hub, hub, foreign, unknown owner', () => {
     expect(parseMisaoGuardOutput('CLEAR')).toEqual({ kind: 'clear' });
+    expect(parseMisaoGuardOutput('SAMEHUB')).toEqual({ kind: 'sameHub' });
+    expect(parseMisaoGuardOutput('MAYBEHUB')).toEqual({ kind: 'maybeHub' });
+    expect(parseMisaoGuardOutput('UNKNOWN 3')).toEqual({ kind: 'unknown', pid: '3' });
     expect(parseMisaoGuardOutput('HUB 5')).toEqual({ kind: 'hub', pid: '5' });
     expect(parseMisaoGuardOutput('FOREIGN 9')).toEqual({ kind: 'foreign', pid: '9' });
     expect(() => parseMisaoGuardOutput('what')).toThrow(/could not be read/);
+  });
+});
+
+describe('what looks like a hub process', () => {
+  const hub = new RegExp(HUB_COMMAND_LINE_PATTERN, 'i');
+
+  it.each([
+    // `npm run dev` in packages/server: tsx watch with the entry given relative to the working directory.
+    ['node.exe C:\\repo\\node_modules\\tsx\\dist\\cli.mjs watch --env-file-if-exists=.env src/main.ts'],
+    ['node.exe --require C:\\repo\\node_modules\\tsx\\dist\\preflight.cjs --import file:///C:/repo/node_modules/tsx/dist/loader.mjs src/main.ts'],
+    ['node.exe C:\\repo\\packages\\server\\src\\main.ts'],
+    ['node.exe packages/server/dist/main.js'],
+    ['node.exe dist\\main.js'],
+    ['"C:\\Program Files\\nodejs\\node.exe" "C:\\Users\\dev\\.azito\\hub\\v0.12.0\\azito-hub.cjs"'],
+  ])('%s', (line) => {
+    expect(hub.test(line)).toBe(true);
+  });
+
+  it.each([
+    ['node.exe C:\\Users\\dev\\.azito\\agent\\abc123abc123\\azito-agent.cjs'],
+    ['node.exe C:\\repo\\node_modules\\tsx\\dist\\cli.mjs C:\\repo\\packages\\server\\src\\agent\\main.ts'],
+    ['node.exe src/agent/main.ts'],
+    ['node.exe C:\\tools\\domain.ts'],
+    ['node.exe C:\\repo\\node_modules\\vitest\\vitest.mjs run'],
+  ])('is not a hub: %s', (line) => {
+    expect(hub.test(line)).toBe(false);
   });
 });
 
@@ -478,6 +553,15 @@ describe('the scripts it sends', () => {
     for (const { what, body } of long.bodies) {
       expect(() => powershellDialect.wrapScript(`$ProgressPreference = 'SilentlyContinue'\n${body}`), what).not.toThrow();
     }
+  });
+
+  it('the largest forms of the guard and of the firewall script fit too (a hub folder and a hub process check; two long node.exe paths)', () => {
+    const long = `C:\\Users\\${'a-very-long-user-name-'.repeat(4)}`;
+    const scripts = [
+      misaoGuardScript({ root: `${long}\\.azito\\misao`, hubRoot: `${long}\\.azito\\misao`, looksForHub: true }),
+      firewallScript('AZITO Agent (TCP 3002)', 3002, [`${long}\\a\\b\\node.exe`, `${long}\\c\\d\\node.exe`]),
+    ];
+    for (const body of scripts) expect(() => powershellDialect.wrapScript(`$ProgressPreference = 'SilentlyContinue'\n${body}`)).not.toThrow();
   });
 
   it('the folder script treats only a missing folder as absent, refuses a link on the way to the home folder, and removes a link inside as a link (it never enters it)', async () => {

@@ -1,14 +1,12 @@
 import * as path from 'path';
 import type { SchtasksClient } from '../../../shared/os/taskScheduler/schtasks';
-import { misaoRootOfCommandLine, taskExecActions } from '../../../shared/os/taskScheduler/taskXmlRead';
+import { hubRootOfScript, misaoRootOfCommandLine, taskExecActions } from '../../../shared/os/taskScheduler/taskXmlRead';
 import { splitWindowsCommandLine } from '../../../shared/os/taskScheduler/windowsCommandLine';
 import { buildEndProcessesScript } from '../../../shared/os/windowsProcessSweep';
 import { firewallRuleName } from './windowsFirewall';
 import type { WindowsAgentOptions } from './windowsAgentConfig';
-import {
-  firewallScript, folderScript, misaoGuardScript, parseFirewallOutput, parseFolderOutput, parseMisaoGuardOutput, parseProcessesOutput,
-  type ScriptOutcome, type UninstallOutcome,
-} from './windowsAgentUninstallScripts';
+import { folderScript, parseFolderOutput, parseProcessesOutput, type ScriptOutcome, type UninstallOutcome } from './windowsAgentUninstallScripts';
+import { firewallScript, misaoGuardScript, parseFirewallOutput, parseMisaoGuardOutput } from './windowsAgentOwnership';
 
 /** The Task Scheduler task of a Windows hub (`HUB_SERVICE.windowsTaskName`, fixed: there is no setting for it; a test keeps the two in step). */
 export const WINDOWS_HUB_TASK_NAME = 'AzitoHub';
@@ -180,37 +178,42 @@ async function removeMisao(host: WindowsUninstallHost, home: string, options: Wi
 function hubMisaoRootOf(xml: string): string | undefined {
   for (const action of taskExecActions(xml)) {
     const encoded = /-EncodedCommand ([A-Za-z0-9+/=]+)/.exec(action.argumentsLine)?.[1];
-    if (!encoded) continue;
-    const hubRoot = /^\$hubRoot = '((?:[^'‘’‚‛]|(['‘’‚‛])\2)*)'\r?$/m.exec(Buffer.from(encoded, 'base64').toString('utf16le'))?.[1];
-    if (hubRoot !== undefined) return path.win32.join(path.win32.dirname(hubRoot.replace(/(['‘’‚‛])\1/g, '$1')), 'misao');
+    const hubRoot = encoded === undefined ? undefined : hubRootOfScript(Buffer.from(encoded, 'base64').toString('utf16le'));
+    if (hubRoot !== undefined) return path.win32.join(path.win32.dirname(hubRoot), 'misao');
   }
   return undefined;
 }
 
 /**
  * `absent` = nothing says this misao is someone else's, so it may be removed. A misao is left (`skipped`, with the reason) when
- * - the hub's task `AzitoHub` is registered and keeps its misao in this very folder (the hub's own misao; a hub of another prefix has another folder), or its folder cannot be read;
+ * - the hub's task `AzitoHub` is registered and keeps its misao in this very folder (the hub's own misao; a hub of another prefix has another folder), or its folder cannot be read, or the two folders cannot be compared on the host (so they may be one);
  * - no hub task is registered but a hub process runs on the host (a hub started from a source checkout or by hand has no task to ask), since its misao cannot be told from the agent's;
- * - a `misao.exe` of this folder is running that no task started.
+ * - a `misao.exe` of this folder is running that no task started;
+ * - the owner of a process that matters cannot be read (it is then neither "mine" nor "someone else's").
  * A hub that is started in a way none of these can see is not recognised; that is the limit of what can be known from outside.
  */
 async function misaoOwner(host: WindowsUninstallHost, root: string): Promise<ScriptOutcome> {
   const hub = await host.tasks.query(WINDOWS_HUB_TASK_NAME);
+  let hubRoot: string | undefined;
   if (hub.exists) {
-    const hubRoot = hubMisaoRootOf(await host.tasks.exportXml(WINDOWS_HUB_TASK_NAME));
+    hubRoot = hubMisaoRootOf(await host.tasks.exportXml(WINDOWS_HUB_TASK_NAME));
     if (hubRoot === undefined) {
       return { outcome: 'skipped', detail: `A Windows hub is registered on this host (the task "${WINDOWS_HUB_TASK_NAME}") but the folder of its misao cannot be read from the task, so this misao was left in place. Remove it by hand if it is not the hub's.` };
     }
-    if (path.win32.normalize(hubRoot).toLowerCase() === path.win32.normalize(root).toLowerCase()) {
-      return { outcome: 'skipped', detail: `This misao (${root}) is the one of the Windows hub registered on this host (the task "${WINDOWS_HUB_TASK_NAME}"), so it was left in place. Remove it with the hub.` };
-    }
   }
-  const answer = parseMisaoGuardOutput(await host.script('Checking who runs the misao', misaoGuardScript(root, !hub.exists), QUICK_MS));
-  if (answer.kind === 'hub') {
-    return { outcome: 'skipped', detail: `An AZITO hub is running on this host without the task "${WINDOWS_HUB_TASK_NAME}" (process ${answer.pid}), and its misao cannot be told from the agent's, so this misao was left in place.` };
+  const answer = parseMisaoGuardOutput(await host.script('Checking who runs the misao', misaoGuardScript({ root, hubRoot, looksForHub: !hub.exists }), QUICK_MS));
+  switch (answer.kind) {
+    case 'sameHub':
+      return { outcome: 'skipped', detail: `This misao (${root}) is the one of the Windows hub registered on this host (the task "${WINDOWS_HUB_TASK_NAME}"; the folders are the same once their names are resolved on the host), so it was left in place. Remove it with the hub.` };
+    case 'maybeHub':
+      return { outcome: 'skipped', detail: `A Windows hub is registered on this host (the task "${WINDOWS_HUB_TASK_NAME}") and its misao folder (${hubRoot}) could not be resolved on the host to compare with ${root}, so they may be the same and this misao was left in place.` };
+    case 'hub':
+      return { outcome: 'skipped', detail: `An AZITO hub is running on this host without the task "${WINDOWS_HUB_TASK_NAME}" (process ${answer.pid}), and its misao cannot be told from the agent's, so this misao was left in place.` };
+    case 'foreign':
+      return { outcome: 'skipped', detail: `A misao of ${root} is running (process ${answer.pid}) that no scheduled task started, so it is not known to be the agent's and was left in place.` };
+    case 'unknown':
+      return { outcome: 'skipped', detail: `The owner of the process ${answer.pid} could not be read, so it is not known whether it uses the misao of ${root}; this misao was left in place.` };
+    case 'clear':
+      return { outcome: 'absent' };
   }
-  if (answer.kind === 'foreign') {
-    return { outcome: 'skipped', detail: `A misao of ${root} is running (process ${answer.pid}) that no scheduled task started, so it is not known to be the agent's and was left in place.` };
-  }
-  return { outcome: 'absent' };
 }

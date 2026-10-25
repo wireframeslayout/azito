@@ -42,9 +42,9 @@ function RowError({ reason }: { reason: string }) {
 }
 
 /**
- * The host removal went wrong: what happened, and the three things the person can do. The row is still registered, and this screen
- * stays (with the result it shows) while a retry or the deletion of the entry runs, and when that fails too. Focus moves to the
- * heading when it appears, so a keyboard or screen reader user lands on the result instead of on nothing.
+ * The host removal went wrong: what happened, and the three things the person can do. The row is still registered. This screen (with
+ * the result it shows) stays while the entry is being deleted, and when that fails too; "try again" goes back to the choices to show
+ * the progress. Focus moves to the heading when it appears, so a keyboard or screen reader user lands on the result instead of on nothing.
  */
 function HostFailure({ deletion }: DeleteServerPanelProps) {
   const { t } = useTranslation('servers');
@@ -78,14 +78,19 @@ function HostFailure({ deletion }: DeleteServerPanelProps) {
   );
 }
 
-/** The choices (and, for a host that is not touched, what stays on it), with the buttons that start or abandon the deletion. */
+/**
+ * The choices (and, for a host that is not touched, what stays on it), with the buttons that start or abandon the deletion. Focus moves
+ * to it when it appears (after "Delete", and after "try again", whose button is gone by then), and it stays put while the progress shows.
+ */
 function Choices({ deletion }: DeleteServerPanelProps) {
   const { t } = useTranslation('servers');
   const { phase, support, choice, busy, rowError } = deletion;
   const touchesHost = support === 'windows' && choice.removeFromHost;
   const showStays = support !== 'none' && !touchesHost;
+  const container = useRef<HTMLDivElement>(null);
+  useEffect(() => { container.current?.focus(); }, []);
   return (
-    <>
+    <div ref={container} tabIndex={-1} role="group" aria-label={t('danger.deleteServer')} style={{ outline: 'none', display: 'flex', flexDirection: 'column', gap: 'var(--space-3)' }}>
       {support === 'windows' && (
         <div role="group" aria-label={t('danger.hostRemoval.groupLabel')} style={{ display: 'flex', flexDirection: 'column', gap: 'var(--space-3)' }}>
           <ToggleField
@@ -131,7 +136,7 @@ function Choices({ deletion }: DeleteServerPanelProps) {
           {t('common:actions.confirm')}
         </Button>
       </div>
-    </>
+    </div>
   );
 }
 

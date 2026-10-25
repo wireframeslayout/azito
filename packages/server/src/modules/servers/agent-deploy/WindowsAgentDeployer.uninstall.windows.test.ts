@@ -5,9 +5,8 @@ import net from 'net';
 import os from 'os';
 import path from 'path';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
-import { buildTaskXml } from '../../../shared/os/taskScheduler/taskDefinition';
 import { powershellDialect } from '../../../shared/os/shellDialect';
-import { encodeTaskXml } from '../../../shared/os/taskScheduler/taskDefinition';
+import { buildTaskXml, encodeTaskXml } from '../../../shared/os/taskScheduler/taskDefinition';
 import { buildMisaoTaskXml, misaoWindowsLayout } from '../../system/misao/misaoWindowsTask';
 import { readSha256FromSumsFile } from './integrityVerifier';
 import { AgentBundler } from './AgentBundler';
@@ -15,6 +14,7 @@ import { WindowsAgentDeployer, windowsAgentLayout, type WindowsDeployInput, type
 import { checkFirewall, firewallRuleName } from './windowsFirewall';
 import { buildWindowsPreflightCommand, parseWindowsPreflight, type WindowsPreflightInfo } from './windowsPreflight';
 import type { UninstallStepId, WindowsUninstallResult } from './windowsAgentUninstall';
+import { misaoGuardScript, parseMisaoGuardOutput } from './windowsAgentOwnership';
 import type { WindowsAgentOptions } from './windowsAgentConfig';
 
 /**
@@ -264,6 +264,59 @@ describe.skipIf(process.platform !== 'win32')('removing the Windows agent from a
     expect(await ruleCount()).toBe(1);
     await ps(`Remove-NetFirewallRule -DisplayName ${powershellDialect.quote(name)}`);
   }, 120_000);
+
+  /** The 8.3 form of an existing file or folder, or undefined when this volume makes none. */
+  async function shortFormOf(target: string): Promise<string | undefined> {
+    const out = (await ps([
+      `$target = ${powershellDialect.quote(target)}`,
+      '$fso = New-Object -ComObject Scripting.FileSystemObject',
+      '$item = if (Test-Path -LiteralPath $target -PathType Container) { $fso.GetFolder($target) } else { $fso.GetFile($target) }',
+      '$global:LASTEXITCODE = 0',
+      '$item.ShortPath',
+    ].join('\n'))).trim();
+    return out.includes('~') && out.toLowerCase() !== target.toLowerCase() ? out : undefined;
+  }
+
+  it('finds its own firewall rule when the task names the node.exe by its 8.3 name and the rule by its long name (the same file)', async (ctx) => {
+    if (!elevated) ctx.skip('this session is not elevated: a rule cannot be added here');
+    const short = await shortFormOf(fwNode);
+    if (short === undefined) ctx.skip('this volume makes no 8.3 names');
+    const root = agentRoot();
+    fs.mkdirSync(root, { recursive: true });
+    const task = buildTaskXml({
+      userId: host.userId, description: 'AZITO Agent: started at logon by the AZITO hub', executable: path.win32.join(host.systemRoot, 'System32', 'conhost.exe'),
+      args: ['--headless', short!, `--env-file=${path.win32.join(root, 'agent.env')}`, path.win32.join(root, 'x.cjs')], workingDirectory: root,
+      restartOnFailure: { intervalMinutes: 1, count: 1 },
+    });
+    const file = path.join(scratch, 'short.task.xml');
+    fs.mkdirSync(scratch, { recursive: true });
+    fs.writeFileSync(file, encodeTaskXml(task));
+    expect((await cmdExec('ci', `"${schtasksPath()}" /Create /XML "${file}" /TN ${OPTIONS.taskName} /F`, 60_000)).code).toBe(0);
+    // The rule has the long form (the firewall refuses an 8.3 name as a program).
+    await checkFirewall((command) => cmdExec('ci', command, 120_000), OPTIONS.port, fwNode, BIND);
+    expect(await ruleCount()).toBe(1);
+
+    const result = await deployer.uninstall('ci', host, { removeMisao: false });
+
+    expect(result.ok, JSON.stringify(result.steps)).toBe(true);
+    expect(stepsOf(result)).toMatchObject({ task: 'done', firewall: 'done', folder: 'done' });
+    expect(await ruleCount()).toBe(0);
+  }, 120_000);
+
+  describe('who owns the misao folder, on the real host', () => {
+    const ask = async (hubRoot: string | undefined): Promise<string> =>
+      parseMisaoGuardOutput(await ps(misaoGuardScript({ root: misaoRoot(), hubRoot, looksForHub: false }))).kind;
+
+    it('knows a hub folder named by its 8.3 name or in another case is the same folder, and one that does not exist may be', async (ctx) => {
+      fs.mkdirSync(misaoRoot(), { recursive: true });
+      const short = await shortFormOf(misaoRoot());
+      if (short === undefined) ctx.skip('this volume makes no 8.3 names');
+      expect(await ask(short)).toBe('sameHub');
+      expect(await ask(misaoRoot().toUpperCase())).toBe('sameHub');
+      expect(await ask(path.win32.join(host.home, `azito-ci-no-such-${SUFFIX}`))).toBe('maybeHub');
+      expect(await ask(host.home)).toBe('clear');
+    }, 120_000);
+  });
 
   it('does not follow a link: a junction inside the folder is removed as a link, and what it points to is untouched', async () => {
     const root = agentRoot();
