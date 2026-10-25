@@ -3,7 +3,7 @@
 Windows のマシンを、SSH 経由で AZITO のエージェントサーバーとして使うための文書です。準備、追加、使える機能、更新、削除、制約、困ったときの順に読めます。
 
 - Windows の**ハブ**（AZITO 本体を Windows で動かす）の導入は [インストールとアップデート](./install-and-update.md) の「Windows 版の配布物」にあります。ハブとエージェントは別のものです。同じ Windows マシンに両方を置くこともできます。
-- Windows のハブの**アプリ内更新**は、同じ文書の「アップデート」の節（#381）です。このページが扱うのは、ハブから見た Windows のエージェントの更新です（[更新](#更新)）。
+- Windows のハブの**アプリ内更新**は、同じ文書の [Windows のハブのアプリ内更新](./install-and-update.md#windows-のハブのアプリ内更新)です。このページが扱うのは、ハブから見た Windows のエージェントの更新です（[更新](#更新)）。
 - 機能ごとの詳細: [ファイル操作](./files.md#windows-のサーバーで使えるファイルの機能)、[タスクの実行](./tasks.md#windows-の-agent-でのタスクの実行371)、[ハーネス](./harness.md#windows)、[misao](./misao.md#windows-のエージェントへの導入)。
 
 ## 準備
@@ -174,6 +174,6 @@ misao の更新は別です。agent の更新は misao に触れません（動�
 
 ## Windows のハブとの関係
 
-- ハブ自身を Windows で動かすとき（導入、タスクスケジューラのタスクとしての常駐、制約）は [インストールとアップデート](./install-and-update.md#windows-版の配布物) を参照してください。ハブのアプリ内更新は、同じ文書の「アップデート」の節です（#381）。
+- ハブ自身を Windows で動かすとき（導入、タスクスケジューラのタスクとしての常駐、制約）は [インストールとアップデート](./install-and-update.md#windows-版の配布物) を参照してください。ハブのアプリ内更新は、同じ文書の [Windows のハブのアプリ内更新](./install-and-update.md#windows-のハブのアプリ内更新) です。
 - Windows のハブから、Windows の agent を含む SSH / agent のサーバーを使う準備（ssh-agent、鍵、ホストキー）は [Windows のハブから SSH / エージェントのサーバーを使う準備](./install-and-update.md#windows-のハブから-ssh--エージェントのサーバーを使う準備) にあります。
 - Windows のハブの local サーバーは misao だけ（tmux は無い）です。ファイルとタスクの扱いは Windows の agent と同じです（[misao](./misao.md#windows-のハブ自身の-misao)）。

@@ -3,7 +3,7 @@
 This page is about using a Windows machine as an AZITO agent server over SSH. It reads in order: prepare, add, what works, update, remove, limits, troubleshooting.
 
 - Running the **hub** (AZITO itself) on Windows is covered in [Install and Update](./install-and-update.md), "Windows bundle". The hub and the agent are different things; one Windows machine can have both.
-- The hub's own **in-app update** on Windows is the "Updates" section of that page (#381). This page covers how the hub updates a Windows agent ([Update](#update)).
+- The hub's own **in-app update** on Windows is [In-app update of a Windows hub](./install-and-update.md#in-app-update-of-a-windows-hub). This page covers how the hub updates a Windows agent ([Update](#update)).
 - Details by area: [Files](./files.md#file-features-on-a-windows-server), [Task execution](./tasks.md#running-tasks-on-a-windows-agent-371), [Harness](./harness.md#windows), [misao](./misao.md#installing-on-a-windows-agent).
 
 ## Prepare
@@ -174,6 +174,6 @@ By hand (when you did not use the UI, or the host was offline):
 
 ## How this relates to a Windows hub
 
-- Running the hub itself on Windows (install, running as a Task Scheduler task, its limits) is in [Install and Update](./install-and-update.md#windows-bundle). The hub's in-app update is the "Updates" section of the same page (#381).
+- Running the hub itself on Windows (install, running as a Task Scheduler task, its limits) is in [Install and Update](./install-and-update.md#windows-bundle). The hub's in-app update is [In-app update of a Windows hub](./install-and-update.md#in-app-update-of-a-windows-hub) on the same page.
 - Preparing a Windows hub to use SSH / agent servers, Windows agents included (ssh-agent, keys, host keys), is in [Using SSH / agent servers from a Windows hub](./install-and-update.md#using-ssh--agent-servers-from-a-windows-hub).
 - A Windows hub's local server is misao only (no tmux). Files and tasks behave as on a Windows agent ([misao](./misao.md#the-hubs-own-misao-on-windows)).

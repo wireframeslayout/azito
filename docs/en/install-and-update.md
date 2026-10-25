@@ -157,7 +157,7 @@ The CLI reads `current.txt` and runs the bundled hub:
 | `azito service status\|start\|stop\|restart\|reload\|install` | The same operations the Unix service has. `install` registers the task (install.ps1 calls it); registering the same definition again does nothing, and a different one is refused while the hub runs |
 | `azito misao status\|install\|update\|start` | The hub's own misao as the Task Scheduler task `AzitoMisao` (below and `misao.md`). `install.ps1` runs `install` for you; `update` ends every pane first |
 
-**Not supported yet (#380):** in-app update/uninstall (#381).
+**Not supported yet:** a hub uninstaller. The in-app update is [In-app update of a Windows hub](#in-app-update-of-a-windows-hub).
 
 ### Using SSH / agent servers from a Windows hub
 
@@ -198,9 +198,71 @@ Unless `-NoService` is given, install.ps1 registers the task `AzitoHub` (through
 - ends with the task: the Task Scheduler's "End" (`azito stop`, `schtasks /End /TN AzitoHub`) ends only the `conhost.exe`, so `run.ps1 -Service` names it to the hub (`AZITO_HUB_EXIT_WITH_PID`) and the hub shuts down within seconds when it is gone, the way the Windows agent follows its parent. `azito stop|restart|reload` finds the hub's `node.exe` (any version folder under `<prefix>\hub\`, same user, exact command-line argument) before it ends the task, waits up to 20 s for it to shut down by itself, and ends forcibly only what is still the same process after that (the warning says so). A restart after `current.txt` was switched therefore waits for the old version, and the new one never meets it on the port. It touches no other prefix, no other user and nothing else.
 - **comes back from a crash by itself.** `conhost.exe --headless` reports exit code 0 whatever its child did, and the Task Scheduler does not restart a task for a non-zero exit code either (measured on Windows CI), so the **launcher** does it: when the hub ends with a non-zero exit code (a crash, `Stop-Process -Force`, an out-of-memory kill), the launcher starts it again after 5 seconds, then 10, 20, 40 and at most 60 seconds between starts, starting over from 5 seconds once a hub has run for 5 minutes. Each start reads `current.txt` again; a bad one is written to the log and retried every 60 seconds. The launcher names its `conhost.exe` (id and start time) to `run.ps1 -Service -FollowPid -FollowStart`, which starts no hub unless that process is still running, so an End that comes in just before a start cannot leave a hub nothing follows (it needs a `run.ps1` of this version: a task registered by this version runs the version `current.txt` names, so switch `current.txt` to a bundle of this version). A hub that shut down on purpose (exit code 0: it was told to stop, or its `conhost.exe` is gone) is **not** started again, and `azito stop|restart|reload` end the launcher with the task, so there is nothing to switch off. Every restart is written to `hub.log` (`launcher: run.ps1 (v0.12.0) exited with code 1`, `launcher: start 2 in 5s`) and counted in `<prefix>\logs\hub-launcher.json`, which `azito status` prints as `launcher:` (the task's own Last Result stays 0 whatever happened). **Limits:** it works only while you are logged on (the task is a logon task), and a hub that fails at once on every start is tried again every 60 seconds for ever (read `hub.log`). A task registered by an earlier 0.12 build, whose launcher starts the hub only once, still answers to `azito stop`/`start`; `azito service install` (with the hub stopped) replaces it (`install.ps1` on an installed hub does nothing, so this is the step you need).
 
-Settings → System shows the deploy mode "Task Scheduler" and the reason the in-app update is off (#381). Update by hand: extract the new zip into `hub\<tag>`, write the tag into `current.txt` (one ASCII line, no BOM), then `azito service restart`.
+Settings → System shows the deploy mode "Task Scheduler" and the in-app update works ([In-app update of a Windows hub](#in-app-update-of-a-windows-hub)). To update by hand: extract the new zip into `hub\<tag>`, write the tag into `current.txt` (one ASCII line, no BOM), then `azito service restart`.
 
-install.ps1 registers the task before it writes `current.txt` and starts it after, so a run that failed in between is repaired by running it again; if only the start failed, the files are installed and `azito start` is what to run. On an installed hub the installer does nothing (like `install.sh`); the task name is fixed, so there is one per user: `azito start|stop|restart|reload` refuse to touch a task registered for another prefix, `azito service install` replaces one only with `--yes` (install.ps1 passes it for `-Yes`) and never while it runs. A task that was deleted by hand is registered again by `azito service install`. Remove it by hand with `schtasks /Delete /TN AzitoHub /F` (the uninstaller is #381; `azito status` warns when only the copy `%USERPROFILE%\.azito\service\AzitoHub.xml` is left).
+install.ps1 registers the task before it writes `current.txt` and starts it after, so a run that failed in between is repaired by running it again; if only the start failed, the files are installed and `azito start` is what to run. On an installed hub the installer does nothing (like `install.sh`); the task name is fixed, so there is one per user: `azito start|stop|restart|reload` refuse to touch a task registered for another prefix, `azito service install` replaces one only with `--yes` (install.ps1 passes it for `-Yes`) and never while it runs. A task that was deleted by hand is registered again by `azito service install`. Remove it by hand with `schtasks /Delete /TN AzitoHub /F` (there is no uninstaller yet; `azito status` warns when only the copy `%USERPROFILE%\.azito\service\AzitoHub.xml` is left).
+
+### In-app update of a Windows hub
+
+A hub that runs as the Task Scheduler task `AzitoHub` updates from Settings → System like a Linux / macOS hub. A hub run from source, or started by hand with `azito run`, cannot (the reason is shown on screen; update by hand as above). There is no Windows arm64 build yet, so an arm64 Windows cannot update from the screen either.
+
+**Using it**
+
+- Settings → System → "Check for updates": when the latest stable release is newer than the current one, "Update available" appears. "Update and restart" starts it.
+- To pick a version, turn on "Development channel" (the rc channel). "Available versions" lists the releases; press "Install" on a row. A version older than the current one asks you to confirm the rollback. The channels work as in [Update Channels](#update-channels), the same as on Unix.
+- It does not start while tasks are running; start it again after they finish.
+- A progress dialog opens. The steps are "Download changes", "Verify SHA256", "Extract", "Smoke test (post-extract)", "Switch", "Restart" and "Health check". While the hub restarts it says "Waiting for server response…"; when the new version answers it shows "Update completed" and the page reloads. A failure shows "Update failed" with the reason. The dialog's log holds only this run's lines.
+
+**The flow**
+
+1. **A one-shot task, `AzitoHubUpdate`.** The hub registers the update as this task and `/Run`s it, rather than spawning it as its own child: the update ends the hub's own task `AzitoHub` and starts it again, and a child of the hub would end with it. The task runs the current version's `node.exe` and `azito-hub.cjs` with `update-run` (the new version is not extracted yet). It has no trigger, and the task deletes itself when the update ends.
+2. **Download and check.** The zip and `SHA256SUMS` are downloaded (each is cut off after 10 minutes) and the zip's SHA-256 is compared. A mismatch fails here and nothing has changed.
+3. **Extract.** Into `hub\<version>`. A zip with entries that leave the folder, or with links, is refused. If a folder of that name is already there it is never written into; it is used only if it holds everything the zip holds, otherwise the update fails and the folder is not replaced.
+4. **Check with the new version.** The new version's own `node.exe` runs `azito-hub.cjs --version` (up to 30 s) and the version must match. A broken version stops here.
+5. **Switch `current.txt`.** Rewritten as one ASCII line without a BOM.
+6. **Restart.** The very sequence of `azito service restart`: the task `AzitoHub` is ended, the hub's `node.exe` is waited for, and the task starts again. The launcher reads `current.txt` anew, so the new version runs.
+7. **Check that it started.** Up to 90 s for the new version to answer `/api/health` with its own version (a first start on Windows is slower than on Unix because the antivirus scans what loads).
+
+The whole update gives up after 50 minutes; the Task Scheduler's own 1-hour limit is only a backstop.
+
+**A failure puts the previous version back.** A failure before the switch changed nothing. After the switch, `current.txt` is written back, the hub restarts and the previous version's answer is checked. The folder this run made is removed (one that was already there is not). If going back fails too, the error on screen says so. If a request to stop arrives after the new version has already answered, the update stays a success and the late stop is recorded in the state's `note`.
+
+**`azito service` is refused during an update.** `azito service install|start|stop|restart|reload` and an update never run at the same time on one install. Run during an update it ends with `Another AZITO hub operation (process N) is running on this install ... Nothing was changed`. If `azito service` is running when an update starts, the update fails with that reason.
+
+**misao is not stopped.** misao is a separate task, `AzitoMisao`, which the update does not touch. A misao terminal in the browser disconnects while the hub restarts; reconnect and you see the same window where you left it. Updating misao is a different operation (`azito misao update`, or the Setup row's button).
+
+**The GitHub token (`AZITO_GITHUB_TOKEN`) is never on a command line.** It is the token set in the hub's environment for a private release repository. A task cannot carry an environment variable and a command line is readable by every process on the machine, so the token goes in a file only you can read, `<prefix>\data\update-token`. The update reads it first and deletes it (the hub deletes it if the update could not start, and the next update removes any leftover). Only the health check's address (the hub's bind address and port) travels in the task's arguments.
+
+**Tidying old versions.** After a successful update (never after a rollback) the old version folders in `hub\` are removed. A Unix hub keeps its old versions as before.
+
+- Kept: the current version (`current.txt`), the version before this update (the way back), and every version a running process uses (a process whose executable or command line is under that version's folder).
+- Only a real folder named like a release version the update makes (`v0.12.0`, `v0.12.0-rc.1`) is a candidate. `.staging-*`, `.env`, `current.txt` and names such as a hand-made `v0.12.0.bak.old` are not looked at. A junction or symlink with a version's name is not entered; it is left as it is and logged.
+- A version to remove is first renamed to `.prune-<version>-<random>` inside `hub\` and then removed with `rd /s /q`; a junction or mount point inside is removed as the link only, never its target. A version holding a file that cannot be opened for writing (a running exe, a loaded DLL) is kept whole instead of being removed in part. A `.prune-*` left over is removed by the next update.
+- **Precondition: the ACL of the `hub\` folder.** Nobody but you, SYSTEM and Administrators may be able to change `hub\`; otherwise a folder could be swapped for a link after it was checked, so the whole tidying is skipped. An install in the default place (under your user profile) normally meets it.
+- **When it is skipped.** If the precondition fails, if a process whose use of a version cannot be ruled out exists, or if the process list cannot be read, nothing is removed. The update itself stays a success, also when some version could not be removed. The reason is in `update.log` and in the state's `note`, and the next update tries again. For example:
+  - `Old versions that could not be removed yet (the next update tries again): v0.11.2 (...)`
+  - `Could not tidy the old versions: Cannot tell whether process ... uses an old version (its path is not readable), so no old version is removed. This is usually a window of the same user that runs as administrator ...`
+
+For trouble with an update see [Troubleshooting a Windows hub update](#troubleshooting-a-windows-hub-update).
+
+#### Troubleshooting a Windows hub update
+
+The records of an update are in `<prefix>\data\`.
+
+| File | Content |
+|---|---|
+| `update.log` | A record by step. Every update appends, so this run is at the end. A failed step is `[<step>] ERROR: ...`; a skipped tidying is `Left ... alone` / `Could not remove ...` |
+| `update-state.json` | The state of the last update (`status`, `step`, each step's result, `error`, `note`). The progress on screen reads it |
+| `update-run.out.log` | `update-run`'s stdout and stderr: the reason when it died before it could write its state |
+
+| Symptom | Cause and what to do |
+|---|---|
+| The update does not start | The reason is on screen. (1) Tasks are running: wait for them. (2) "Already running": an earlier update is going (a state that stays `running` for 15 minutes is treated as stale and a new update may start). (3) `A task named AzitoHubUpdate exists that AZITO did not register`: a task of that name exists that AZITO cannot tell is its own. Look at it, delete it with `schtasks /Delete /TN AzitoHubUpdate /F` and try again. (4) `An update of another install ... is running`: another install's update is going; wait for it |
+| The update failed | Read the reason on screen and the `ERROR` line in `update.log`. If it failed before the switch nothing changed; after the switch the previous version is back (an error says so when it could not be put back). Even on a SHA256 mismatch or a version that does not start, the hub keeps running the previous version |
+| Old versions are not tidied | Read `Left ... alone` / `Could not ...` in `update.log`, or the state's `note`. **`Cannot tell whether process ... uses an old version`**: usually a window of the same user that runs as administrator (an elevated PowerShell, for example). The non-elevated hub cannot read that process's executable path, so it cannot rule out that it uses an old version and skips the tidying to be safe. Close that window and the next update tidies up. The hub never closes it. **`the hub folder can be changed by others`**: the ACL of `hub\` gives someone besides you, SYSTEM and Administrators write access; correct it and the next update tidies up. **`a running process uses it` / `cannot be opened for writing`**: end the process using that version and the next update tidies up |
+| A previous update's process is left, or the lock cannot be taken | When `azito service ...` or an update keeps being refused with `Another AZITO hub operation (process N)`, look at process N. If it is the `node.exe` running `update-run`, an update is still going; it ends by itself within 50 minutes. If it does not, end that process in Task Manager (the OS releases the lock with the process). A leftover task `AzitoHubUpdate` that AZITO registered is replaced by the next update after it ends the previous `update-run` |
+| I want to go back to the previous version by hand | Make sure the previous version's folder is still in `hub\` (the current and the previous version are never tidied), write its name into `current.txt` without a BOM and run `azito service restart`: `[System.IO.File]::WriteAllText("$env:USERPROFILE\.azito\hub\current.txt", 'v0.12.0')`. `>` and `Set-Content -Encoding UTF8` write a BOM or UTF-16 and do not work |
+| It will not update to a pre-release | By default (stable) only stable releases are offered. A pre-release (`-rc.N`) is listed, and can be chosen, only with "Development channel" on. The same as on Unix |
 
 ## Manual Install (tarball)
 
@@ -431,6 +493,7 @@ The in-app updater has limits:
 |---|---|
 | Running under systemd (Linux) | Can update |
 | Running under launchd (macOS) | Can update |
+| Running under the Task Scheduler (Windows) | Can update ([In-app update of a Windows hub](#in-app-update-of-a-windows-hub)) |
 | Started without a service manager | Not supported — switch by hand |
 | Pre-releases (`v*-rc*`) | Included when you switch to the rc channel (see below) |
 
@@ -500,6 +563,8 @@ systemctl --user restart azito  # Linux
 # or
 launchctl kickstart -k "gui/$(id -u)/com.azito.hub" || launchctl kickstart -k "user/$(id -u)/com.azito.hub"    # macOS
 ```
+
+On a Windows hub, rewrite `current.txt` and run `azito service restart` ([going back by hand](#troubleshooting-a-windows-hub-update)).
 
 ## CLI Commands
 
