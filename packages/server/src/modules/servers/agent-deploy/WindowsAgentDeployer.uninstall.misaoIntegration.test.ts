@@ -14,7 +14,7 @@ import { encodeTaskXml } from '../../../shared/os/taskScheduler/taskDefinition';
 import { buildMisaoTaskXml, misaoWindowsLayout } from '../../system/misao/misaoWindowsTask';
 import { windowsMisaoPipe } from '../transport/agentMisaoSocket';
 import { WindowsAgentDeployer, type WindowsSshExec } from './WindowsAgentDeployer';
-import { decideMisaoStop, misaoHolderScript, parseMisaoHolderOutput } from './windowsAgentUninstallScripts';
+import { decideMisaoStop, decidePathChains, misaoHolderScript, parseMisaoHolderOutput, parsePathChainOutput, pathChainScript } from './windowsAgentUninstallScripts';
 import { buildWindowsPreflightCommand, parseWindowsPreflight, type WindowsPreflightInfo } from './windowsPreflight';
 import type { WindowsAgentOptions } from './windowsAgentConfig';
 
@@ -197,6 +197,21 @@ describe.skipIf(process.platform !== 'win32' || !fs.existsSync(MISAO_CLI))('remo
     expect(decideMisaoStop(misaoRoot, own)).toEqual({ stop: true });
     // And no pipe, no daemon, nothing to ask.
     expect(parseMisaoHolderOutput(await ps(misaoHolderScript(misaoRoot, `\\\\.\\pipe\\azito-ci-no-such-${SUFFIX}`)))).toEqual({ kind: 'nopipe' });
+
+    // A junction on the way to a path a stop would rely on: <home>\\<junction> leads back to the home folder, so the path is the same file under another name.
+    const jn = path.win32.join(home, `azito-ci-umi-jct-${SUFFIX}`);
+    await new Promise<void>((resolve) => execFile('cmd.exe', ['/d', '/c', 'mklink', '/J', jn, home], { windowsHide: true }, () => resolve()));
+    const real = path.win32.join(misaoRoot, VERSION, 'misao.exe');
+    try {
+      const viaJunction = path.win32.join(jn, OPTIONS.misaoDir, VERSION, 'misao.exe');
+      const chains = parsePathChainOutput(await ps(pathChainScript(real, viaJunction)));
+      expect(chains).toEqual({ first: 'ok', second: 'link' });
+      expect(decidePathChains(chains, real, viaJunction)).toMatchObject({ stop: false, reason: expect.stringContaining('junction or symbolic link') });
+      // A path with an element that does not exist cannot be looked at.
+      expect(parsePathChainOutput(await ps(pathChainScript(path.win32.join(misaoRoot, 'no-such', 'misao.exe'), real)))).toEqual({ first: 'unreadable', second: 'ok' });
+    } finally {
+      await new Promise<void>((resolve) => execFile('cmd.exe', ['/d', '/c', 'rmdir', jn], { windowsHide: true }, () => resolve()));
+    }
   }, 120_000);
 
   it('removes the misao in one go: the task is ended, the daemon behind the pipe is shown to be the install\'s and is asked to stop, nothing is left, the folder goes, and the daemon of another folder is never touched', async (ctx) => {

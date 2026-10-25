@@ -210,7 +210,7 @@ export function parseLeftoverOutput(output: string, root: string, advice = ''): 
 
 /**
  * Who serves the pipe of the misao task, asked of Windows (see `PIPE_HOLDER_HELPER`: not of the daemon). Prints `NOPIPE` when no pipe of
- * that name exists (no daemon is running: nothing to stop), else `FORMS|<long form of root>|<8.3 form of root>` (either may be empty) and
+ * that name exists (no daemon is running: nothing to stop), else `FORMS|<long form of root>|<8.3 form of root>` (either may be empty),
  * `HOLDER|<pid>|<name>|<mine, other or unknown>|<program path>` for the process that serves it, or `ERROR|<why>` when that cannot be told.
  */
 export function misaoHolderScript(root: string, pipe: string): string {
@@ -267,6 +267,45 @@ export function decideMisaoStop(root: string, holder: MisaoHolder): { stop: true
   const exe = normalizePath(holder.exe);
   const under = [root, ...holder.forms].map((folder) => `${normalizePath(folder).replace(/\\+$/, '')}\\`);
   if (!under.some((folder) => exe.startsWith(folder))) return { stop: false, reason: `${what} runs ${holder.exe}, which is not under ${root}` };
+  return { stop: true };
+}
+
+/**
+ * For the two paths a stop would rely on (the program of the process that serves the pipe, and the `misao.exe` that would be asked to
+ * stop it): prints `CHAIN|<state of the first>|<state of the second>`, each `ok` when every element of the path up to the drive's root is a
+ * real one that can be looked at, `link` when one is a junction or symbolic link (where it leads is not what the name says), `unreadable`
+ * otherwise. The same check the deletion of a folder makes.
+ */
+export function pathChainScript(first: string, second: string): string {
+  const q = powershellDialect.quote;
+  return [
+    `$first = ${q(first)}; $second = ${q(second)}`,
+    'function Chain($path) {',
+    '  if (-not $path) { return \'unreadable\' }',
+    '  $driveRoot = [System.IO.Path]::GetPathRoot($path).TrimEnd([char]92); $cur = $path',
+    '  while ($cur -and $cur.TrimEnd([char]92) -ne $driveRoot) {',
+    '    try { if ([bool]((Get-Item -LiteralPath $cur -Force -ErrorAction Stop).Attributes -band [System.IO.FileAttributes]::ReparsePoint)) { return \'link\' } } catch { return \'unreadable\' }',
+    '    $cur = [System.IO.Path]::GetDirectoryName($cur)',
+    '  }',
+    '  \'ok\'',
+    '}',
+    'Write-Output (\'CHAIN|\' + (Chain $first) + \'|\' + (Chain $second))',
+  ].join('\n');
+}
+
+export type PathChains = { first: string; second: string };
+
+/** A path chain that was not reported (or not understood) was not checked: it counts as `unreadable`. */
+export function parsePathChainOutput(output: string): PathChains {
+  const [, first = 'unreadable', second = 'unreadable'] = (lines(output).find((l) => l.startsWith('CHAIN|')) ?? '').split('|');
+  return { first, second };
+}
+
+/** Whether a stop may rely on the two paths: every element of both is a real one that can be looked at. `reason` otherwise. */
+export function decidePathChains(chains: PathChains, holderExe: string, stopExe: string): { stop: true } | { stop: false; reason: string } {
+  const fault = (state: string, path: string, what: string): string => `${what}, ${path}, ${state === 'link' ? 'has a junction or symbolic link on the way' : 'cannot be looked at all the way to the drive\'s root'}`;
+  if (chains.first !== 'ok') return { stop: false, reason: fault(chains.first, holderExe, 'the program of the process that serves the pipe') };
+  if (chains.second !== 'ok') return { stop: false, reason: fault(chains.second, stopExe, 'the misao.exe that would be asked to stop it') };
   return { stop: true };
 }
 

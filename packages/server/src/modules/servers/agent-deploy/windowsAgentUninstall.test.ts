@@ -9,7 +9,7 @@ import { DEFAULT_WINDOWS_AGENT_OPTIONS, MISAO_WINDOWS_TASK_NAME, type WindowsAge
 import { WindowsAgentDeployer, windowsAgentEnvFile, type WindowsSshExec } from './WindowsAgentDeployer';
 import { FakeWindowsHost } from './testing/fakeWindowsHost';
 import { WINDOWS_HUB_TASK_NAME, uninstallWindowsAgent, type UninstallStepId, type WindowsUninstallHost, type WindowsUninstallResult } from './windowsAgentUninstall';
-import { decideMisaoStop, folderScript, leftoverProcessesScript, misaoHolderScript, misaoStopScript, parseFolderOutput, parseLeftoverOutput, parseMisaoHolderOutput, tailBelow } from './windowsAgentUninstallScripts';
+import { decideMisaoStop, decidePathChains, folderScript, leftoverProcessesScript, misaoHolderScript, misaoStopScript, parseFolderOutput, parseLeftoverOutput, parseMisaoHolderOutput, parsePathChainOutput, pathChainScript, tailBelow } from './windowsAgentUninstallScripts';
 import { HUB_COMMAND_LINE_PATTERN, firewallInspectScript, misaoDaemonScript, misaoHubScript, parseFirewallOutput, parseMisaoGuardOutput, parseSameFileOutput, sameFileScript } from './windowsAgentOwnership';
 
 const HOME = 'C:\\Users\\dev';
@@ -64,6 +64,7 @@ class FakeUninstallHost {
     'Looking for the Windows Firewall rule': 'ABSENT',
     'Checking the hub of the misao': 'CLEAR',
     'Asking Windows which process serves the misao pipe': 'NOPIPE',
+    'Checking the paths a stop relies on': 'CHAIN|ok|ok',
     'Asking the misao daemon to stop': 'DONE',
     'Checking who runs the misao': 'CLEAR',
     'Looking for processes still running from the misao folder': 'CLEAR',
@@ -414,11 +415,12 @@ describe('uninstallWindowsAgent', () => {
       expect(result.ok).toBe(true);
       expect(outcomes(result)).toEqual({ task: 'done', processes: 'absent', firewall: 'absent', folder: 'done', misaoTask: 'done', misaoProcesses: 'absent', misaoFolder: 'done' });
       expect(host.tasks.has('AzitoMisao')).toBe(false);
-      const order = host.log.filter((l) => /AzitoMisao|misao/.test(l));
+      const order = host.log.filter((l) => /AzitoMisao|misao|relies/.test(l));
       const at = (entry: string): number => order.indexOf(entry);
       expect(at('end AzitoMisao')).toBeLessThan(at('delete AzitoMisao'));
       expect(at('delete AzitoMisao')).toBeLessThan(at('script Asking Windows which process serves the misao pipe'));
-      expect(at('script Asking Windows which process serves the misao pipe')).toBeLessThan(at('script Asking the misao daemon to stop'));
+      expect(at('script Asking Windows which process serves the misao pipe')).toBeLessThan(at('script Checking the paths a stop relies on'));
+      expect(at('script Checking the paths a stop relies on')).toBeLessThan(at('script Asking the misao daemon to stop'));
       expect(at('script Asking the misao daemon to stop')).toBeLessThan(at('script Looking for processes still running from the misao folder'));
       const stop = host.bodyOf('Asking the misao daemon to stop');
       expect(stop).toContain(`$exe = '${MISAO_ROOT}\\0.3.0\\misao.exe'`);
@@ -458,6 +460,19 @@ describe('uninstallWindowsAgent', () => {
       const result = await run(host, true);
       expect(host.ran('Asking the misao daemon to stop')).toBe(false);
       expect(outcomes(result)).toMatchObject({ misaoTask: 'done', misaoProcesses: 'absent', misaoFolder: 'done' });
+    });
+
+    it('does not ask for a stop when the path of the holder or of the misao.exe to ask has a link or an unreadable element, and says so', async () => {
+      for (const [chain, what] of [['link|ok', 'junction or symbolic link'], ['ok|unreadable', 'cannot be looked at'], ['unreadable|ok', 'cannot be looked at']] as const) {
+        const host = new FakeUninstallHost({ AzitoMisao: { xml: MISAO_XML } });
+        host.answers['Asking Windows which process serves the misao pipe'] = HOLDER_OK;
+        host.answers['Checking the paths a stop relies on'] = `CHAIN|${chain}`;
+        host.answers['Looking for processes still running from the misao folder'] = `LEFT|6224|misao.exe|${MISAO_ROOT}\\0.3.0\\misao.exe`;
+        const result = await run(host, true);
+        expect(host.ran('Asking the misao daemon to stop'), chain).toBe(false);
+        expect(outcomes(result), chain).toMatchObject({ misaoProcesses: 'failed', misaoFolder: 'skipped' });
+        expect(detail(result, 'misaoProcesses'), chain).toContain(what);
+      }
     });
 
     it('a daemon that was asked to stop and is still there is reported with how to stop it by hand', async () => {
@@ -773,6 +788,20 @@ describe('which daemon may be asked to stop', () => {
     expect(decideMisaoStop(root, h).stop).toBe(false);
   });
 
+  it('the two paths a stop relies on must each be real all the way to the drive\'s root', () => {
+    expect(parsePathChainOutput('CHAIN|ok|ok')).toEqual({ first: 'ok', second: 'ok' });
+    expect(parsePathChainOutput('CHAIN|link|ok')).toEqual({ first: 'link', second: 'ok' });
+    // What was not reported was not checked.
+    expect(parsePathChainOutput('')).toEqual({ first: 'unreadable', second: 'unreadable' });
+    expect(decidePathChains({ first: 'ok', second: 'ok' }, 'C:\\a.exe', 'C:\\b.exe')).toEqual({ stop: true });
+    expect(decidePathChains({ first: 'link', second: 'ok' }, 'C:\\a.exe', 'C:\\b.exe')).toMatchObject({ stop: false, reason: expect.stringContaining('junction or symbolic link') });
+    expect(decidePathChains({ first: 'ok', second: 'unreadable' }, 'C:\\a.exe', 'C:\\b.exe')).toMatchObject({ stop: false, reason: expect.stringContaining('cannot be looked at') });
+    const script = pathChainScript('C:\\a.exe', 'C:\\b.exe');
+    expect(script).toContain('GetPathRoot($path)');
+    expect(script).toContain('[System.IO.FileAttributes]::ReparsePoint');
+    expect(script).toContain("catch { return 'unreadable' }");
+  });
+
   it('reads what the host printed', () => {
     expect(parseMisaoHolderOutput('NOPIPE')).toEqual({ kind: 'nopipe' });
     expect(parseMisaoHolderOutput('FORMS|C:\\a|C:\\A~1\nHOLDER|7|misao.exe|mine|C:\\a\\0.3.0\\misao.exe')).toEqual({ kind: 'holder', pid: '7', name: 'misao.exe', owner: 'mine', exe: 'C:\\a\\0.3.0\\misao.exe', forms: ['C:\\a', 'C:\\A~1'] });
@@ -846,6 +875,7 @@ describe('the scripts it sends', () => {
       misaoDaemonScript(`${long}\\.azito\\misao`, long),
       leftoverProcessesScript(`${long}\\.azito\\misao`, long),
       misaoHolderScript(`${long}\\.azito\\misao`, '\\\\.\\pipe\\misao-a-very-long-user-name-0123456789abcdef'),
+      pathChainScript(`${long}\\.azito\\misao\\0.3.0\\misao.exe`, `${long}\\.azito\\misao\\0.3.0\\misao.exe`),
       misaoStopScript(`${long}\\.azito\\misao\\0.3.0\\misao.exe`, '\\\\.\\pipe\\misao-a-very-long-user-name-0123456789abcdef'),
       firewallInspectScript('AZITO Agent (TCP 3002)'),
       sameFileScript(`${long}\\a\\b\\node.exe`, `${long}\\c\\d\\node.exe`),

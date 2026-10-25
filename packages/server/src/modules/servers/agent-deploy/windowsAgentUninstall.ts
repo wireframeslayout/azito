@@ -5,8 +5,23 @@ import { firewallRuleName } from './windowsFirewall';
 import { windowsMisaoPipe } from '../transport/agentMisaoSocket';
 import { agentTaskIdentity, misaoTaskVersion, type AgentTaskIdentity } from './windowsAgentTask';
 import type { WindowsAgentOptions } from './windowsAgentConfig';
-import { decideMisaoStop, folderScript, leftoverProcessesScript, misaoHolderScript, misaoStopScript, parseFolderOutput, parseLeftoverOutput, parseMisaoHolderOutput, type ScriptOutcome, type UninstallOutcome } from './windowsAgentUninstallScripts';
+import { decideMisaoStop, decidePathChains, folderScript, leftoverProcessesScript, misaoHolderScript, misaoStopScript, parseFolderOutput, parseLeftoverOutput, parseMisaoHolderOutput, parsePathChainOutput, pathChainScript, type ScriptOutcome, type UninstallOutcome } from './windowsAgentUninstallScripts';
 import { firewallInspectScript, misaoDaemonScript, misaoHubScript, parseFirewallOutput, parseMisaoGuardOutput, parseSameFileOutput, sameFileScript } from './windowsAgentOwnership';
+
+/*
+ * The threat this removal is built against, and the one it is not.
+ *
+ * It guards against taking away, or stopping, what is not this install's by mistake: another install's task, a hub's misao, a program
+ * that happens to look like the agent. Every deletion needs the thing to be shown to be the install's; what cannot be shown is left, with the
+ * reason. It does NOT guard against a malicious process running as the SAME user (one that swaps the daemon between the check and the stop,
+ * or spells a path in a mix of forms on purpose to be missed): that user can delete everything this removes by himself, so nothing is
+ * crossed. Three limits follow from that, and are accepted:
+ * - the check that a daemon is the install's and the request to stop it are two connections, and the daemon can be replaced between them;
+ * - a process that uses the folder under a name that mixes the long and the 8.3 forms of its parts (beyond the folder's own spellings and
+ *   the part below the home) is not found by the look for what is left;
+ * - a process of the user's own that hides its program and command line and is not in the list of names that can hold an AZITO folder
+ *   (a protected process, which has no way to run a script from an AZITO folder) is named in the result but not counted.
+ */
 
 /** The Task Scheduler task of a Windows hub (`HUB_SERVICE.windowsTaskName`, fixed: there is no setting for it; a test keeps the two in step). */
 export const WINDOWS_HUB_TASK_NAME = 'AzitoHub';
@@ -204,6 +219,11 @@ async function askToStop(host: WindowsUninstallHost, root: string, pipe: string,
     const holder = parseMisaoHolderOutput(await host.script('Asking Windows which process serves the misao pipe', misaoHolderScript(root, pipe), QUICK_MS));
     const decision = decideMisaoStop(root, holder);
     if (!decision.stop) return holder.kind === 'nopipe' ? '' : decision.reason;
+    // Both paths a stop relies on are walked to the drive's root, as the deletion of a folder does, before anything is asked of the daemon.
+    if (holder.kind === 'holder') {
+      const chains = decidePathChains(parsePathChainOutput(await host.script('Checking the paths a stop relies on', pathChainScript(holder.exe, exe), QUICK_MS)), holder.exe, exe);
+      if (!chains.stop) return chains.reason;
+    }
     await host.script('Asking the misao daemon to stop', misaoStopScript(exe, pipe), 60_000);
     return '';
   } catch (err) {
