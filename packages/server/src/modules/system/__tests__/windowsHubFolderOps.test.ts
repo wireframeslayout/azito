@@ -27,9 +27,47 @@ describe('findHubVersionsInUse', () => {
     await expect(findHubVersionsInUse(run, 'C:\\Windows', ['C:\\h'])).rejects.toThrow(/exit 1.*boom/);
   });
 
-  it('stops everything when a process whose path cannot be read might be using a version (the query succeeded, the path is missing), whoever owns it', async () => {
+  it('stops everything when a process whose path cannot be read might be using a version (the query succeeded, the path is missing)', async () => {
     const run = ok('version v0.1.0\r\nunknown 4242 Foo.exe\r\nunknown 77 Bar.exe\r\n');
     await expect(findHubVersionsInUse(run, 'C:\\Windows', ['C:\\h'])).rejects.toThrow(/process 4242 \(Foo.exe\), 77 \(Bar.exe\).*no old version is removed/);
+  });
+});
+
+describe('findHubVersionsInUse script: whose unreadable processes stop the tidying', () => {
+  const scriptOf = async (): Promise<string> => {
+    const run = vi.fn(async (_spec: CommandSpec) => ({ exitCode: 0, stdout: '', stderr: '', signal: null }));
+    await findHubVersionsInUse(run, 'C:\\Windows', ['C:\\h']);
+    const spec = run.mock.calls[0][0];
+    return Buffer.from(spec.args[spec.args.indexOf('-EncodedCommand') + 1], 'base64').toString('utf16le');
+  };
+
+  it('lets only this user\'s process, or an interpreter whose owner is unknown, be reported as unknown', async () => {
+    const script = await scriptOf();
+    expect(script).toContain('$me = [Security.Principal.WindowsIdentity]::GetCurrent().User.Value');
+    const at = (text: string): number => script.indexOf(text);
+    const nonInterpreter = at('$interpreters -notcontains');
+    const other = at('if ($ownerSid -and $ownerSid -ne $me) { continue }');
+    const noOwnerNoImage = at('if (-not $ownerSid -and -not $image) { continue }');
+    const unknown = at('unknown $($p.ProcessId)');
+    // A known non-interpreter is skipped first; then another account's (owner read and not ours); then an owner that cannot be read with no image to
+    // call an interpreter; what is left is this user's process, or an unreadable owner whose image is an interpreter: both are unknown.
+    expect(at('$ownerSid = if ($owner -and $owner.ReturnValue -eq 0)')).toBeGreaterThan(nonInterpreter);
+    expect(other).toBeGreaterThan(-1);
+    expect(noOwnerNoImage).toBeGreaterThan(other);
+    expect(unknown).toBeGreaterThan(noOwnerNoImage);
+    // Nothing between the last skip and the report: no further "continue" lets an interpreter of an unreadable owner (an external node.exe that read a
+    // version's script and loads another module from it later) or this user's process through.
+    expect(script.slice(noOwnerNoImage + 'if (-not $ownerSid -and -not $image) { continue }'.length, unknown)).not.toContain('continue');
+  });
+
+  it('still matches a version in the path or command line of any account before the owner is looked at', async () => {
+    const script = await scriptOf();
+    expect(script.indexOf('Matches("$path`n$cmd"')).toBeLessThan(script.indexOf('GetOwnerSid'));
+  });
+
+  it('a process of this user that the script reports as unknown stops everything', async () => {
+    const run = vi.fn(async (_spec: CommandSpec) => ({ exitCode: 0, stdout: 'unknown 4242 Mine.exe\r\n', stderr: '', signal: null }));
+    await expect(findHubVersionsInUse(run, 'C:\\Windows', ['C:\\h'])).rejects.toThrow(/process 4242 \(Mine.exe\)/);
   });
 });
 

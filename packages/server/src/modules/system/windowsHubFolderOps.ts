@@ -126,8 +126,19 @@ public static class AzitoImage {
 /**
  * The version folders under any of `hubRoots` that a running process uses: the process's executable or its command line has
  * `<hubRoot>\<version>\...` in it (the hub's node.exe and azito-hub.cjs, the launcher's run.ps1, an update process). A process of any user
- * counts. A process whose use cannot be ruled out (its image path is unknown even to the least-right query, or it is an
- * interpreter with no readable command line) stops the tidying, whoever it belongs to: reading and running a version needs no write right.
+ * counts when its path or command line can be read and names a version.
+ *
+ * A process whose use cannot be ruled out (its image path is unknown even to the least-right query, or it is an interpreter with no readable
+ * command line) stops the tidying, but only in these cases, by the owner (`GetOwnerSid`, compared with this user's SID):
+ *  - the owner is this user: it stops the tidying;
+ *  - the owner is read and is somebody else: it does not. The hub lives under the user's profile, whose default ACL lets no other standard user
+ *    read it (only SYSTEM and Administrators can), and a non-administrator cannot read the path of smss, csrss, svchost, MsMpEng or any other
+ *    account's process, so stopping for those would stop the tidying on every run. What such a process holds of a version is found by the two
+ *    checks that run anyway: a running exe or a loaded DLL is a mapped image, which `whyAFileIsHeld` finds when it opens every file of the
+ *    version for writing (a mapped image cannot be opened for writing, whoever maps it); an open handle makes the isolating `rename` fail;
+ *  - the owner cannot be read (it may be this user's own elevated process): it stops the tidying when it is a known interpreter (`INTERPRETERS`)
+ *    whose command line is unreadable, because an interpreter can have read a version's script into memory and load another module from the
+ *    version later with no handle open; any other program is skipped, as is one whose image is also unknown.
  * Its image path is asked again with the least right (`QueryFullProcessImageName`); when that is known and is not a program that runs files it
  * is given (`INTERPRETERS`), the missing command line does not matter (protected system and antivirus components have none). One that is gone by
  * the time it is looked at is not counted. PowerShell prints only version names (ASCII), so a code page cannot garble them.
@@ -140,6 +151,7 @@ export async function findHubVersionsInUse(run: SpecRunner, systemRoot: string, 
     IMAGE_HELPER,
     `$pattern = ${q(pattern)}`,
     `$interpreters = @(${INTERPRETERS.map((n) => q(n)).join(', ')})`,
+    '$me = [Security.Principal.WindowsIdentity]::GetCurrent().User.Value',
     'foreach ($p in @(Get-CimInstance Win32_Process)) {',
     '  $path = $p.ExecutablePath',
     '  $cmd = $p.CommandLine',
@@ -159,8 +171,13 @@ export async function findHubVersionsInUse(run: SpecRunner, systemRoot: string, 
     '  if ($image -and ($interpreters -notcontains [IO.Path]::GetFileName($image).ToLowerInvariant())) { continue }',
     // The kernel's own processes have no image file at all (no name here ends in .exe), so they cannot be running a version.
     "  if (@('System', 'Registry', 'Memory Compression', 'Secure System', 'vmmem', 'vmmemWSL') -contains $p.Name) { continue }",
+    // Whose it is (see the doc above): another account's is left to the write check and the rename; this user's stops the tidying; an owner that cannot be
+    // read (maybe this user's own elevated process) stops it only when it is a known interpreter, whose image is known.
+    '  $owner = Invoke-CimMethod -InputObject $p -MethodName GetOwnerSid -ErrorAction SilentlyContinue',
+    '  $ownerSid = if ($owner -and $owner.ReturnValue -eq 0) { $owner.Sid } else { $null }',
+    '  if ($ownerSid -and $ownerSid -ne $me) { continue }',
+    '  if (-not $ownerSid -and -not $image) { continue }',
     "  $name = ($p.Name -replace '[^A-Za-z0-9._-]', '_')",
-    // Whoever the process belongs to: a read-and-run use of a version needs no write right, so the ACL of hub\ does not clear it.
     '  "unknown $($p.ProcessId) $name"',
     '}',
   ].join('\n');

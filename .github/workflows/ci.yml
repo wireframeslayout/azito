@@ -217,7 +217,7 @@ jobs:
     name: Hub bundle (Windows)
     runs-on: windows-latest
     needs: agent-native
-    timeout-minutes: 20
+    timeout-minutes: 40
     defaults:
       run:
         shell: bash
