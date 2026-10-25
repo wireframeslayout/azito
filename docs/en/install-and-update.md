@@ -16,6 +16,18 @@ curl --proto '=https' --tlsv1.2 -fsSL https://github.com/wireframeslayout/azito/
 
 > **`| bash`, not `| sh`** — `install.sh` uses `set -euo pipefail`, which is not available in POSIX sh (dash). Using `| sh` on Ubuntu/Debian will fail immediately.
 
+On Windows (Windows PowerShell 5.1, no administrator rights; `git` must be installed first, see [Install on Windows](#install-on-windows-installps1)):
+
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -Command "[Net.ServicePointManager]::SecurityProtocol = [Net.ServicePointManager]::SecurityProtocol -bor 3072; irm https://github.com/wireframeslayout/azito/releases/latest/download/install.ps1 | iex"
+```
+
+To pass options, call the downloaded script as a script block (`iex` cannot take arguments):
+
+```powershell
+[Net.ServicePointManager]::SecurityProtocol = [Net.ServicePointManager]::SecurityProtocol -bor 3072; & ([scriptblock]::Create((irm https://github.com/wireframeslayout/azito/releases/latest/download/install.ps1))) -Version v0.12.0 -Port 3010 -Yes
+```
+
 `--proto '=https'` restricts the entire redirect chain to HTTPS (the `latest/download/` URL goes through two redirects before reaching `release-assets.githubusercontent.com`). `--tlsv1.2` rejects TLS 1.0/1.1 downgrade. Confirmation prompts still work under the pipe — `install.sh` reads from `/dev/tty`, not stdin.
 
 ### Review before running
@@ -80,21 +92,40 @@ Each release also carries `azito-hub-<version>-win32-x64.zip`, the hub for Windo
 
 ### Install on Windows (install.ps1)
 
-`install.ps1` (a release asset, also in the repository root) installs it for the current user with Windows PowerShell 5.1: no administrator rights, no symlinks. It needs `git` on the PATH.
+`install.ps1` (a release asset, also in the repository root) installs it for the current user with Windows PowerShell 5.1: no administrator rights, no symlinks.
+
+**Prepare git first.** AZITO creates a git worktree for every task, so Git for Windows must be on the PATH. The installer does not install it for you (that changes the machine beyond the install prefix); without it, it stops before downloading anything and prints how:
 
 ```powershell
-# Download install.ps1 and SHA256SUMS from the release page, check install.ps1 against SHA256SUMS, then:
-powershell -NoProfile -ExecutionPolicy Bypass -File .\install.ps1 [-Version v0.12.0] [-Prefix <dir>] [-Yes] [-NoPath]
+winget install --id Git.Git -e --source winget
 ```
+
+(without winget: <https://git-scm.com/download/win>). Then **open a new PowerShell window** and run the installer: the PATH of the window that was open during the git install does not change.
+
+```powershell
+# One-liner (the counterpart of `curl | bash`):
+powershell -NoProfile -ExecutionPolicy Bypass -Command "[Net.ServicePointManager]::SecurityProtocol = [Net.ServicePointManager]::SecurityProtocol -bor 3072; irm https://github.com/wireframeslayout/azito/releases/latest/download/install.ps1 | iex"
+
+# With options: a script block takes arguments the way `-File` does.
+[Net.ServicePointManager]::SecurityProtocol = [Net.ServicePointManager]::SecurityProtocol -bor 3072; & ([scriptblock]::Create((irm https://github.com/wireframeslayout/azito/releases/latest/download/install.ps1))) -Version v0.12.0 -Port 3010 -Yes
+
+# From a file (download install.ps1 and SHA256SUMS from the release page, check install.ps1 against SHA256SUMS, then):
+powershell -NoProfile -ExecutionPolicy Bypass -File .\install.ps1 [-Version v0.12.0] [-Prefix <dir>] [-Port <n>] [-Yes] [-NoPath]
+```
+
+All three forms do the same. The `[Net.ServicePointManager]... -bor 3072;` in front of `irm` turns on TLS 1.2 for the download of the script itself (Windows PowerShell 5.1 may not have it on by default, and GitHub requires it); the installer turns it on again for its own downloads. `iex` takes no arguments, and inside a function or script that has arguments of its own `iex` would receive them: use the script block form there. The one-liner works from v0.12.0, the first release with a Windows bundle; before that the download is a 404. The installer is written to run as text: it never ends the PowerShell it was started from (a failure is an error that stops the command and fails `-Command` with a non-zero exit), and it leaves no variable, function, `$ErrorActionPreference` change or temporary file in that session. The release's `install.ps1` carries its own tag, so the one-liner downloads the zip and `SHA256SUMS` of **that** release and does not ask for "latest" again (a release published while the installer runs cannot make the two differ); a copy from a checkout asks the GitHub API for the latest release instead.
 
 | Option | Meaning |
 |---|---|
-| `-Version <tag>` | Release to install (default: the latest release) |
+| `-Version <tag>` | Release to install (default: the release this `install.ps1` was published with; a copy from a checkout asks for the latest release) |
 | `-Prefix <dir>` | Installation prefix (default: `%USERPROFILE%\.azito`) |
-| `-ZipPath <file>` | Use a local `azito-hub-<tag>-win32-x64.zip` instead of downloading (offline installs). Add `-Sha256Sums <file>` to check it |
+| `-Port <n>` | Port of the hub (default `3001`). Written to a new `hub\.env` as `PORT`, and `AZITO_ALLOWED_ORIGINS` lists `localhost:<n>`, `127.0.0.1:<n>` and the Tailscale name with `:<n>`; the Tailscale hint (`tailscale serve --bg <n>`) uses it too. An existing `hub\.env` is never touched (a warning says so when its `PORT` differs) |
+| `-ZipPath <file>` | Use a local `azito-hub-<tag>-win32-x64.zip` instead of downloading (offline installs). Add `-Sha256Sums <file>` to check it; **without it the zip is not verified** (a warning is printed) |
 | `-Yes` | Skip the confirmation prompt |
 | `-NoPath` | Do not add `<prefix>\bin` to the user's PATH |
 | `-NoService` | Do not register the Task Scheduler task. Run the hub with `azito run`, or register it later with `azito service install` |
+
+With `irm | iex` there is no way to pass arguments, so each option can also be given by an environment variable set before the command: `AZITO_INSTALL_VERSION`, `AZITO_INSTALL_PREFIX`, `AZITO_INSTALL_PORT`, `AZITO_INSTALL_ZIPPATH`, `AZITO_INSTALL_SHA256SUMS`, and `AZITO_INSTALL_YES` / `AZITO_INSTALL_NOPATH` / `AZITO_INSTALL_NOSERVICE` (set to `1`); an argument wins over the variable. A zip named by `AZITO_INSTALL_ZIPPATH` is never used unverified: the installer stops, before writing anything, unless `-Sha256Sums` or `AZITO_INSTALL_SHA256SUMS` names the checksum file (a variable left over in the session must not switch a normal install to an unchecked zip). Run it in a PowerShell window and remove the variable afterwards so it does not stay in the session, for example `$env:AZITO_INSTALL_PORT = 3010; [Net.ServicePointManager]::SecurityProtocol = [Net.ServicePointManager]::SecurityProtocol -bor 3072; irm https://github.com/wireframeslayout/azito/releases/latest/download/install.ps1 | iex; Remove-Item Env:AZITO_INSTALL_PORT`.
 
 It downloads the zip and `SHA256SUMS`, stops if the checksum does not match, and refuses a zip whose entries would land outside the install folder. Layout:
 
@@ -119,7 +150,7 @@ The CLI reads `current.txt` and runs the bundled hub:
 
 | Command | Effect |
 |---|---|
-| `azito start` / `azito stop` / `azito status` | Start, stop and show the Task Scheduler task `AzitoHub` (below). `status` prints the state and the log's place; `stop` returns when no `node.exe` of this install is left |
+| `azito start` / `azito stop` / `azito restart` / `azito status` | Start, stop, restart and show the Task Scheduler task `AzitoHub` (below). `status` prints the state and the log's place; `stop` returns when no `node.exe` of this install is left |
 | `azito run` | Runs the hub in the foreground through `run.ps1` (Ctrl+C stops it): for a first look, or an install made with `-NoService` |
 | `azito token show` / `token rotate` | The UI token (it is stored in `hub\.env`: `rotate` stops while it is set there, so change `AZITO_UI_TOKEN` in that file instead) |
 | `azito version` | The version in `current.txt` and the bundle's own |

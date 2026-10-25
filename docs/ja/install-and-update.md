@@ -14,6 +14,18 @@ curl --proto '=https' --tlsv1.2 -fsSL https://github.com/wireframeslayout/azito/
 curl --proto '=https' --tlsv1.2 -fsSL https://github.com/wireframeslayout/azito/releases/latest/download/install.sh | bash -s -- --version v0.3.0 --no-service
 ```
 
+Windows（Windows PowerShell 5.1、管理者権限は不要。先に `git` が必要です。[Windows への導入](#windows-への導入installps1)を参照）:
+
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -Command "[Net.ServicePointManager]::SecurityProtocol = [Net.ServicePointManager]::SecurityProtocol -bor 3072; irm https://github.com/wireframeslayout/azito/releases/latest/download/install.ps1 | iex"
+```
+
+オプションを渡すときは、取得したスクリプトをスクリプトブロックとして呼びます（`iex` は引数を渡せません）:
+
+```powershell
+[Net.ServicePointManager]::SecurityProtocol = [Net.ServicePointManager]::SecurityProtocol -bor 3072; & ([scriptblock]::Create((irm https://github.com/wireframeslayout/azito/releases/latest/download/install.ps1))) -Version v0.12.0 -Port 3010 -Yes
+```
+
 > **`| sh` ではなく `| bash`** — `install.sh` は `set -euo pipefail` を使っており、POSIX sh（dash）にはありません。Ubuntu / Debian で `| sh` を使うと即座に失敗します。
 
 `--proto '=https'` はリダイレクト経路全体を HTTPS に制限します（`latest/download/` の URL は `release-assets.githubusercontent.com` に到達するまでに2回リダイレクトされます）。`--tlsv1.2` は TLS 1.0/1.1 へのダウングレードを拒否します。パイプ実行でも確認プロンプトは動作します（`install.sh` は標準入力ではなく `/dev/tty` から読むため）。
@@ -80,21 +92,40 @@ Servers → 対象サーバー → Setup の Node.js 欄は、同梱 Node では
 
 ### Windows への導入（install.ps1）
 
-`install.ps1`（リリースの資産。リポジトリのルートにもあります）は、Windows PowerShell 5.1 で現在のユーザー向けに導入します。管理者権限もシンボリックリンクも要りません。PATH に `git` が必要です。
+`install.ps1`（リリースの資産。リポジトリのルートにもあります）は、Windows PowerShell 5.1 で現在のユーザー向けに導入します。管理者権限もシンボリックリンクも要りません。
+
+**先に git を用意してください。** AZITO はタスクごとに git worktree を作るため、Git for Windows が PATH に必要です。インストーラは git を自動では入れません（導入先の外までマシンを変えてしまうため）。無いときは、何もダウンロードする前に止まり、入れ方を表示します:
 
 ```powershell
-# リリースページから install.ps1 と SHA256SUMS を取得し、install.ps1 を SHA256SUMS で照合してから:
-powershell -NoProfile -ExecutionPolicy Bypass -File .\install.ps1 [-Version v0.12.0] [-Prefix <dir>] [-Yes] [-NoPath]
+winget install --id Git.Git -e --source winget
 ```
+
+（winget が無い場合は <https://git-scm.com/download/win>）。入れたあとは**新しい PowerShell を開いて**から実行してください。git を入れる前から開いていたウィンドウの PATH は変わりません。
+
+```powershell
+# ワンライナー（`curl | bash` に当たるもの）:
+powershell -NoProfile -ExecutionPolicy Bypass -Command "[Net.ServicePointManager]::SecurityProtocol = [Net.ServicePointManager]::SecurityProtocol -bor 3072; irm https://github.com/wireframeslayout/azito/releases/latest/download/install.ps1 | iex"
+
+# オプション付き: スクリプトブロックなら `-File` と同じように引数を渡せます。
+[Net.ServicePointManager]::SecurityProtocol = [Net.ServicePointManager]::SecurityProtocol -bor 3072; & ([scriptblock]::Create((irm https://github.com/wireframeslayout/azito/releases/latest/download/install.ps1))) -Version v0.12.0 -Port 3010 -Yes
+
+# ファイルから（リリースページから install.ps1 と SHA256SUMS を取得し、install.ps1 を SHA256SUMS で照合してから）:
+powershell -NoProfile -ExecutionPolicy Bypass -File .\install.ps1 [-Version v0.12.0] [-Prefix <dir>] [-Port <n>] [-Yes] [-NoPath]
+```
+
+3 つの形はどれも同じに動きます。`irm` の前の `[Net.ServicePointManager]... -bor 3072;` は、スクリプト自身のダウンロードで TLS 1.2 を有効にします（Windows PowerShell 5.1 では既定で有効とは限らず、GitHub は TLS 1.2 を要求します）。インストーラは自分のダウンロードのために改めて有効にします。`iex` は引数を受け取らず、自前の引数を持つ関数やスクリプトの中から呼ぶと、その引数を受け取ってしまいます。そういう場所ではスクリプトブロックの形を使ってください。ワンライナーは、Windows 用のバンドルを含む最初のリリースである v0.12.0 から使えます。それ以前は 404 になります。インストーラはテキストとして実行されても困らないように書かれています。起動元の PowerShell を終了させず（失敗はそのコマンドを止めるエラーになり、`-Command` なら 0 以外で終わります）、そのセッションに変数・関数・`$ErrorActionPreference` の変更・一時ファイルを残しません。リリースに載る `install.ps1` は自分の tag を持っているので、ワンライナーは**その**リリースの zip と `SHA256SUMS` を取得し、「最新」を改めて問い合わせません（実行中に新しいリリースが出ても、2 つがずれることはありません）。リポジトリのチェックアウトにある写しは、GitHub API に最新のリリースを問い合わせます。
 
 | オプション | 意味 |
 |---|---|
-| `-Version <tag>` | 導入する版（省略時は最新のリリース） |
+| `-Version <tag>` | 導入する版（省略時は、この `install.ps1` が載ったリリース。チェックアウトの写しは最新のリリース） |
 | `-Prefix <dir>` | 導入先（既定は `%USERPROFILE%\.azito`） |
-| `-ZipPath <file>` | ダウンロードの代わりにローカルの `azito-hub-<tag>-win32-x64.zip` を使う（オフライン用）。`-Sha256Sums <file>` を足すと照合する |
+| `-Port <n>` | ハブのポート（既定 `3001`）。新しい `hub\.env` の `PORT` に書かれ、`AZITO_ALLOWED_ORIGINS` には `localhost:<n>`・`127.0.0.1:<n>`・Tailscale の名前の `:<n>` が入ります。Tailscale の案内（`tailscale serve --bg <n>`）にも使われます。既にある `hub\.env` には触れません（`PORT` が違うときは警告します） |
+| `-ZipPath <file>` | ダウンロードの代わりにローカルの `azito-hub-<tag>-win32-x64.zip` を使う（オフライン用）。`-Sha256Sums <file>` を足すと照合する。**足さないと zip は照合されません**（警告を表示）|
 | `-Yes` | 確認を省く |
 | `-NoPath` | `<prefix>\bin` をユーザーの PATH に足さない |
 | `-NoService` | タスクスケジューラのタスクを登録しない。`azito run` で起動するか、あとから `azito service install` で登録する |
+
+`irm | iex` では引数を渡せないので、各オプションは、コマンドの前に設定した環境変数でも指定できます: `AZITO_INSTALL_VERSION`・`AZITO_INSTALL_PREFIX`・`AZITO_INSTALL_PORT`・`AZITO_INSTALL_ZIPPATH`・`AZITO_INSTALL_SHA256SUMS`、および `AZITO_INSTALL_YES` / `AZITO_INSTALL_NOPATH` / `AZITO_INSTALL_NOSERVICE`（`1` を設定）。引数と環境変数の両方があれば引数が優先されます。`AZITO_INSTALL_ZIPPATH` で指定した zip は、照合なしでは使われません。`-Sha256Sums` または `AZITO_INSTALL_SHA256SUMS` でチェックサムのファイルを指定しないと、何も書く前に止まります（セッションに残った変数のせいで、通常の導入が未検証の zip に切り替わらないようにするためです）。PowerShell の窓で実行し、終わったら変数を消して、セッションに残さないでください。例: `$env:AZITO_INSTALL_PORT = 3010; [Net.ServicePointManager]::SecurityProtocol = [Net.ServicePointManager]::SecurityProtocol -bor 3072; irm https://github.com/wireframeslayout/azito/releases/latest/download/install.ps1 | iex; Remove-Item Env:AZITO_INSTALL_PORT`。
 
 zip と `SHA256SUMS` を取得し、チェックサムが合わなければ止まります。展開先のフォルダの外に出るエントリを含む zip も拒否します。配置:
 
@@ -119,7 +150,7 @@ CLI は `current.txt` を読んで同梱のハブを実行します:
 
 | コマンド | 動作 |
 |---|---|
-| `azito start` / `azito stop` / `azito status` | タスクスケジューラのタスク `AzitoHub`（下記）の起動・停止・状態表示。`status` は状態とログの場所を表示し、`stop` はこの導入の `node.exe` が残っていない状態になってから戻る |
+| `azito start` / `azito stop` / `azito restart` / `azito status` | タスクスケジューラのタスク `AzitoHub`（下記）の起動・停止・再起動・状態表示。`status` は状態とログの場所を表示し、`stop` はこの導入の `node.exe` が残っていない状態になってから戻る |
 | `azito run` | `run.ps1` 経由でハブを前面で実行（Ctrl+C で止める）。試しに動かすときや、`-NoService` で導入したとき用 |
 | `azito token show` / `token rotate` | UI トークン（`hub\.env` に保存。そこに設定されている間は `rotate` が中止するので、そのファイルの `AZITO_UI_TOKEN` を書き換える） |
 | `azito version` | `current.txt` の版と、配布物自身の版 |
