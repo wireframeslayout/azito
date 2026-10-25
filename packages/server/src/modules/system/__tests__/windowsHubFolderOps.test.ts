@@ -27,9 +27,9 @@ describe('findHubVersionsInUse', () => {
     await expect(findHubVersionsInUse(run, 'C:\\Windows', ['C:\\h'])).rejects.toThrow(/exit 1.*boom/);
   });
 
-  it('stops everything when a process whose path cannot be read might be using a version (the query succeeded, the path is missing)', async () => {
-    const run = ok('version v0.1.0\r\nunknown 4242 no-path\r\nunknown 77 owner-unreadable\r\n');
-    await expect(findHubVersionsInUse(run, 'C:\\Windows', ['C:\\h'])).rejects.toThrow(/process 4242 \(no-path\), 77 \(owner-unreadable\).*no old version is removed/);
+  it('stops everything when a process whose path cannot be read might be using a version (the query succeeded, the path is missing), whoever owns it', async () => {
+    const run = ok('version v0.1.0\r\nunknown 4242 Foo.exe\r\nunknown 77 Bar.exe\r\n');
+    await expect(findHubVersionsInUse(run, 'C:\\Windows', ['C:\\h'])).rejects.toThrow(/process 4242 \(Foo.exe\), 77 \(Bar.exe\).*no old version is removed/);
   });
 });
 

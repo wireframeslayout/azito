@@ -25,7 +25,13 @@ const TRANSIENT_CODES = new Set(['EBUSY', 'EPERM', 'EACCES']);
 const RENAME_ATTEMPTS = 3;
 const RENAME_RETRY_MS = 250;
 /** `.prune-<tag>-<8 hex>`: what {@link pruneHubVersions} renames a folder to, and what a later run picks up again. */
-const ISOLATED_NAME = /^\.prune-[0-9A-Za-z.+-]+-[0-9a-f]{8}$/;
+const ISOLATED_NAME = /^\.prune-(.+)-[0-9a-f]{8}$/;
+
+/** Only a name this module can have made: `.prune-<release tag>-<8 hex>`. `.prune-not-a-version-deadbeef` and `.prune-v1.0.0.bak.old-deadbeef` are somebody else's. */
+export function isIsolatedName(name: string): boolean {
+  const tag = ISOLATED_NAME.exec(name)?.[1];
+  return tag !== undefined && isReleaseTag(tag);
+}
 
 export interface HubFolderClassification {
   /** Version-named folders that nothing needs: these are removed. */
@@ -51,6 +57,38 @@ export function classifyHubFolders(names: readonly string[], versions: { current
     else result.remove.push(name);
   }
   return result;
+}
+
+const OPEN_REFUSED = new Set(['EBUSY', 'EPERM', 'EACCES', 'ETXTBSY']);
+
+/**
+ * Why a file under `dir` could not be removed whole, or undefined when every file can be opened for writing. A running program's image and a
+ * loaded DLL stay mapped after their file handle is closed: they are not seen by the in-use list when its process is not found, and a rename of the
+ * folder is not refused for them, but they cannot be opened for writing (nor deleted). Looking first means `rd` is not started on a folder it would
+ * remove only in part. A read-only file is skipped (`rd /q` removes it), and a link is not entered (its target is not this folder's).
+ */
+export function whyAFileIsHeld(dir: string): string | undefined {
+  const expected = (folder: string): string => (process.platform === 'win32' ? folder.toLowerCase() : folder);
+  for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
+    const full = path.join(dir, entry.name);
+    const stat = fs.lstatSync(full);
+    if (stat.isSymbolicLink()) continue;
+    if (stat.isDirectory()) {
+      // A volume mount point looks like a folder to `lstat`; its real path is not under this one.
+      if (expected(fs.realpathSync.native(full)) !== expected(path.join(fs.realpathSync.native(dir), entry.name))) continue;
+      const inner = whyAFileIsHeld(full);
+      if (inner !== undefined) return inner;
+    } else if (stat.isFile() && (stat.mode & 0o200) !== 0) {
+      try {
+        fs.closeSync(fs.openSync(full, 'r+'));
+      } catch (err) {
+        const code = codeOf(err);
+        if (code !== undefined && OPEN_REFUSED.has(code)) return `${entry.name} cannot be opened for writing (${code}), a program may be running it`;
+        throw err;
+      }
+    }
+  }
+  return undefined;
 }
 
 export interface PruneInput {
@@ -118,7 +156,7 @@ export async function pruneHubVersions(input: PruneInput): Promise<PruneReport> 
   const all = fs.readdirSync(input.hubDir);
   const names = all.filter(isReleaseTag);
   const versions = { current: input.current, previous: input.previous };
-  const leftovers = all.filter((name) => ISOLATED_NAME.test(name));
+  const leftovers = all.filter(isIsolatedName);
   const hasCandidates = classifyHubFolders(names, { ...versions, inUse: new Set() }).remove.length > 0;
   if (!hasCandidates && leftovers.length === 0) return report;
   // Asked before anything is removed, and a failure to ask stops the tidying: a folder that is in use must not be taken for one that is not.
@@ -133,6 +171,11 @@ export async function pruneHubVersions(input: PruneInput): Promise<PruneReport> 
       report.skipped.push({ name, reason: refusal });
       continue;
     }
+    const held = whyAFileIsHeldSafely(path.join(input.hubDir, name));
+    if (held !== undefined) {
+      report.failed.push({ name, reason: `${held}; nothing was removed` });
+      continue;
+    }
     const isolated = `.prune-${name}-${crypto.randomBytes(4).toString('hex')}`;
     try {
       await renameWithRetry(path.join(input.hubDir, name), path.join(input.hubDir, isolated));
@@ -143,6 +186,14 @@ export async function pruneHubVersions(input: PruneInput): Promise<PruneReport> 
     await removeOne(input, name, isolated, report, false);
   }
   return report;
+}
+
+function whyAFileIsHeldSafely(dir: string): string | undefined {
+  try {
+    return whyAFileIsHeld(dir);
+  } catch (err) {
+    return `it could not be examined (${reasonOf(err)})`;
+  }
 }
 
 /** An entry that cannot be examined is a failure of that entry, not of the run: the others still go. */
@@ -160,6 +211,11 @@ async function removeOne(input: PruneInput, name: string, isolated: string, repo
     const refusal = whyNotARealChildSafely(input.hubDir, isolated);
     if (refusal !== undefined) {
       report.skipped.push({ name: isolated, reason: refusal });
+      return;
+    }
+    const held = whyAFileIsHeldSafely(path.join(input.hubDir, isolated));
+    if (held !== undefined) {
+      report.failed.push({ name, reason: `${held}; left as ${isolated}` });
       return;
     }
   }

@@ -142,6 +142,9 @@ describe.skipIf(process.platform !== 'win32')('tidying the old versions on a rea
     expect(first.failed).toHaveLength(1);
     expect(first.failed[0].name).toBe('v0.1.0');
     expect(first.failed[0].reason).toMatch(/EBUSY|EPERM|EACCES|rd could not remove/);
+    // Nothing of it was removed: the check came before the rename.
+    expect(fs.readdirSync(hub)).toEqual(['v0.1.0']);
+    expect(fs.existsSync(path.join(dir, 'azito-hub.cjs'))).toBe(true);
 
     await holder.release();
     const second = await prune();
@@ -170,6 +173,24 @@ describe.skipIf(process.platform !== 'win32')('tidying the old versions on a rea
     child.kill();
     await new Promise<void>((resolve) => child.once('exit', () => resolve()));
     expect((await prune(() => findHubVersionsInUse(run, host!.systemRoot!, [hub]))).removed).toHaveLength(1);
+  });
+
+  it('removes nothing of a version whose node.exe runs although no one told the tidying (the image stays mapped after its handle is closed)', async () => {
+    const dir = folder('v0.1.0');
+    const exe = path.join(dir, 'node.exe');
+    fs.copyFileSync(process.execPath, exe);
+    const child = spawn(exe, ['-e', 'setTimeout(() => {}, 60000)'], { stdio: 'ignore' });
+    children.push(child);
+    await new Promise<void>((resolve, reject) => { child.once('spawn', () => resolve()); child.once('error', reject); });
+
+    const report = await prune(noneInUse);
+
+    expect(report.removed).toEqual([]);
+    expect(report.failed).toEqual([{ name: 'v0.1.0', reason: expect.stringMatching(/node\.exe cannot be opened for writing.*nothing was removed/) }]);
+    expect(fs.existsSync(exe)).toBe(true);
+    expect(fs.existsSync(path.join(dir, 'azito-hub.cjs'))).toBe(true);
+    expect(fs.existsSync(path.join(dir, 'sub', 'deep.txt'))).toBe(true);
+    expect(fs.readdirSync(hub)).toEqual(['v0.1.0']);
   });
 
   it('finds nothing in use when no process runs from the hub folder, and does not stop on the processes of the real machine', async () => {

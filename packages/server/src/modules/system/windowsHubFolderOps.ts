@@ -126,9 +126,8 @@ public static class AzitoImage {
 /**
  * The version folders under any of `hubRoots` that a running process uses: the process's executable or its command line has
  * `<hubRoot>\<version>\...` in it (the hub's node.exe and azito-hub.cjs, the launcher's run.ps1, an update process). A process of any user
- * counts. A process whose executable or command line cannot be read and that is this user's (or whose owner cannot be told) could be using
- * a version without showing it, so it stops the tidying; the same process of another account is not counted: it cannot write in `hub\`
- * (see {@link assertHubDirOnlyOwnerWritable}), and if it did hold a file of an old version, that file's removal fails and is reported.
+ * counts. A process whose use cannot be ruled out (its image path is unknown even to the least-right query, or it is an
+ * interpreter with no readable command line) stops the tidying, whoever it belongs to: reading and running a version needs no write right.
  * Its image path is asked again with the least right (`QueryFullProcessImageName`); when that is known and is not a program that runs files it
  * is given (`INTERPRETERS`), the missing command line does not matter (protected system and antivirus components have none). One that is gone by
  * the time it is looked at is not counted. PowerShell prints only version names (ASCII), so a code page cannot garble them.
@@ -138,7 +137,6 @@ export async function findHubVersionsInUse(run: SpecRunner, systemRoot: string, 
   const pattern = `(?:${hubRoots.map(rootPattern).join('|')})([^\\\\/"\\s]+)(?=[\\\\/"\\s]|$)`;
   const script = [
     "$ProgressPreference = 'SilentlyContinue'",
-    '$me = [Security.Principal.WindowsIdentity]::GetCurrent().User.Value',
     IMAGE_HELPER,
     `$pattern = ${q(pattern)}`,
     `$interpreters = @(${INTERPRETERS.map((n) => q(n)).join(', ')})`,
@@ -159,10 +157,11 @@ export async function findHubVersionsInUse(run: SpecRunner, systemRoot: string, 
     '  if ($hit) { continue }',
     // A program that runs files it is given needs its command line to be known; any other program whose image is outside the hub folders does not use a version.
     '  if ($image -and ($interpreters -notcontains [IO.Path]::GetFileName($image).ToLowerInvariant())) { continue }',
+    // The kernel's own processes have no image file at all (no name here ends in .exe), so they cannot be running a version.
+    "  if (@('System', 'Registry', 'Memory Compression', 'Secure System', 'vmmem', 'vmmemWSL') -contains $p.Name) { continue }",
     "  $name = ($p.Name -replace '[^A-Za-z0-9._-]', '_')",
-    '  try { $r = Invoke-CimMethod -InputObject $p -MethodName GetOwnerSid -ErrorAction Stop } catch { $r = $null }',
-    '  if ($null -eq $r -or $r.ReturnValue -ne 0 -or -not ($r.Sid -is [string]) -or $r.Sid -eq \'\') { "unknown $($p.ProcessId) $name-owner-unreadable"; continue }',
-    '  if ($r.Sid -eq $me) { "unknown $($p.ProcessId) $name-no-path" }',
+    // Whoever the process belongs to: a read-and-run use of a version needs no write right, so the ACL of hub\ does not clear it.
+    '  "unknown $($p.ProcessId) $name"',
     '}',
   ].join('\n');
   return parseVersionsInUse(await powershell(run, systemRoot, script, 'Looking for the version folders in use'));

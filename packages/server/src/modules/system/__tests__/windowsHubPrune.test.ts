@@ -2,7 +2,7 @@ import fs from 'fs';
 import os from 'os';
 import path from 'path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { classifyHubFolders, pruneHubVersions } from '../windowsHubPrune';
+import { classifyHubFolders, isIsolatedName, pruneHubVersions } from '../windowsHubPrune';
 
 const noneInUse = async (): Promise<ReadonlySet<string>> => new Set();
 
@@ -33,6 +33,19 @@ describe('classifyHubFolders (what stays and what goes)', () => {
 
   it('removes a prerelease folder that nothing needs', () => {
     expect(classifyHubFolders(['v0.12.0-rc.1', 'v0.12.0'], { current: 'v0.12.0', previous: 'v0.11.2', inUse: new Set() }).remove).toEqual(['v0.12.0-rc.1']);
+  });
+});
+
+describe('isIsolatedName', () => {
+  it('is the name this module makes: .prune-<release tag>-<8 hex>', () => {
+    expect(isIsolatedName('.prune-v1.0.0-0123abcd')).toBe(true);
+    expect(isIsolatedName('.prune-v1.0.0-rc.1-0123abcd')).toBe(true);
+  });
+
+  it('is not a name that could not have been made from a release tag', () => {
+    for (const name of ['.prune-not-a-version-deadbeef', '.prune-v1.0.0.bak.old-deadbeef', '.prune-v1.0.0-DEADBEEF', '.prune-v1.0.0-0123abc', 'prune-v1.0.0-0123abcd', '.prune--0123abcd']) {
+      expect(isIsolatedName(name), name).toBe(false);
+    }
   });
 });
 
@@ -182,6 +195,35 @@ describe('pruneHubVersions', () => {
     expect(report.removed).toEqual([]);
     expect(report.skipped).toEqual([{ name: 'v0.1.0', reason: expect.stringMatching(/not a folder/) }]);
     expect(fs.readFileSync(path.join(hub, 'v0.1.0'), 'utf-8')).toBe('a file');
+  });
+
+  it('does not pick up a .prune-* that this module could not have made', async () => {
+    folder('.prune-not-a-version-deadbeef');
+    folder('.prune-v1.0.0.bak.old-deadbeef');
+    expect(await prune()).toEqual({ removed: [], failed: [], skipped: [] });
+    expect(removeIsolated).not.toHaveBeenCalled();
+    expect(fs.existsSync(path.join(hub, '.prune-not-a-version-deadbeef', 'azito-hub.cjs'))).toBe(true);
+    expect(fs.existsSync(path.join(hub, '.prune-v1.0.0.bak.old-deadbeef', 'azito-hub.cjs'))).toBe(true);
+  });
+
+  it('removes nothing of a version when one of its files cannot be opened for writing (a mapped image), and reports it', async () => {
+    const dir = folder('v0.1.0');
+    folder('v0.2.0');
+    const open = fs.openSync;
+    const spy = vi.spyOn(fs, 'openSync').mockImplementation(((p: fs.PathLike, flags: fs.OpenMode, mode?: fs.Mode) => {
+      if (String(p).endsWith('deep.txt') && String(p).includes('v0.1.0')) throw Object.assign(new Error('busy'), { code: 'EBUSY' });
+      return open(p, flags, mode);
+    }) as typeof fs.openSync);
+    try {
+      const report = await prune();
+      expect(report.removed).toEqual(['v0.2.0']);
+      expect(report.failed).toEqual([{ name: 'v0.1.0', reason: expect.stringMatching(/deep\.txt cannot be opened for writing \(EBUSY\).*nothing was removed/) }]);
+    } finally {
+      spy.mockRestore();
+    }
+    expect(fs.existsSync(path.join(dir, 'azito-hub.cjs'))).toBe(true);
+    expect(fs.existsSync(path.join(dir, 'sub', 'deep.txt'))).toBe(true);
+    expect(fs.readdirSync(hub)).toEqual(['v0.1.0']);
   });
 
   it('is a no-op on an empty hub folder', async () => {
