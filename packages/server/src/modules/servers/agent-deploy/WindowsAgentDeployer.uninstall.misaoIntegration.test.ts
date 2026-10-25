@@ -90,9 +90,18 @@ describe.skipIf(process.platform !== 'win32' || !fs.existsSync(MISAO_CLI))('remo
   const children: ChildProcess[] = [];
   let otherPid: number | undefined;
 
-  /** `conhost.exe --headless misao.exe serve ...`: what the Task Scheduler's task runs the daemon under. */
+  /**
+   * `conhost.exe --headless cmd.exe /c "misao.exe serve ..." >> log`: the form the Task Scheduler's task runs the daemon in (the output goes to
+   * the log in the folder, as the task's does; a daemon with nowhere to write may not start).
+   */
   function startUnderConhost(exe: string, root: string): void {
-    children.push(spawn(path.win32.join(SYSTEM_ROOT, 'System32', 'conhost.exe'), ['--headless', exe, 'serve', '--socket', pipeOf(root), '--data', root], { stdio: 'ignore', windowsHide: true }));
+    const command = `/d /v:off /s /c ""${exe}" serve --socket "${pipeOf(root)}" --data "${root}" >>"${path.win32.join(root, 'misao.log')}" 2>&1"`;
+    children.push(spawn(path.win32.join(SYSTEM_ROOT, 'System32', 'conhost.exe'), ['--headless', path.win32.join(SYSTEM_ROOT, 'System32', 'cmd.exe'), command], { stdio: 'ignore', windowsHide: true, windowsVerbatimArguments: true }));
+  }
+
+  /** The tail of a daemon's log, for the message of a daemon that did not come up. */
+  function logTail(root: string): string {
+    try { return fs.readFileSync(path.win32.join(root, 'misao.log'), 'utf8').slice(-1500); } catch { return '(no log)'; }
   }
 
   beforeAll(async () => {
@@ -114,7 +123,7 @@ describe.skipIf(process.platform !== 'win32' || !fs.existsSync(MISAO_CLI))('remo
     // A daemon of a different folder, which must survive.
     fs.mkdirSync(otherRoot, { recursive: true });
     startUnderConhost(MISAO_CLI, otherRoot);
-    await waitFor('the other daemon\'s pipe', () => pipeUp(pipeOf(otherRoot)), 60_000);
+    await waitFor('the other daemon\'s pipe', () => pipeUp(pipeOf(otherRoot)), 60_000).catch((err: Error) => { throw new Error(`${err.message}; its log:\n${logTail(otherRoot)}`); });
     otherPid = (await daemonPids(otherRoot))[0];
 
     // The daemon to be removed, started by its task; with no logon session the task cannot start, and it is started under conhost directly.
@@ -123,7 +132,7 @@ describe.skipIf(process.platform !== 'win32' || !fs.existsSync(MISAO_CLI))('remo
     if (!started) {
       console.warn('[uninstall.misaoIntegration] the Task Scheduler did not start the misao task here (no logon session): started it under conhost --headless directly');
       startUnderConhost(layout.exe, misaoRoot);
-      await waitFor('the daemon of the folder to remove', () => pipeUp(pipeOf(misaoRoot)), 60_000);
+      await waitFor('the daemon of the folder to remove', () => pipeUp(pipeOf(misaoRoot)), 60_000).catch((err: Error) => { throw new Error(`${err.message}; its log:\n${logTail(misaoRoot)}`); });
     }
   }, 300_000);
 
