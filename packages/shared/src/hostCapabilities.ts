@@ -50,11 +50,11 @@ export type HostFeatureSupport =
  *  - codeDistribution (#464): the code distribution to a server (`distribute_code` of the project's server environment) bundles and unpacks the
  *    repository with POSIX tools (`RemoteBundleOps`); a Windows agent cannot be the target in v0.12.0. A Windows hub can still distribute to a
  *    Linux / macOS agent: the target's OS decides, not the hub's.
- *  - browserRuntime (#372): `install-browser-runtime` is sh (`assertPosixHost`).
+ *  - browserRuntime (#500): `install-browser-runtime` is sh (`assertPosixHost`); the Chromium detection / install / CDP for Windows is out of v0.12.0 (#500, a later release).
  */
 const WIN32_UNAVAILABLE: Record<HostFeature, number | null> = {
   tmux: null,
-  browserRuntime: 372,
+  browserRuntime: 500,
   isolation: 464,
   codeDistribution: 464,
 };

@@ -9,8 +9,8 @@ export function hostFeatureBlockReason(profile: HostPlatformInfo | null | undefi
   const support = hostFeatureSupport(profile, feature);
   if (support.available) return null;
   if (support.issue === null) return t('common:hostFeature.windowsNoTmux');
-  // Isolation and the code distribution are out of v0.12.0 on Windows (#464, a later release): not "planned for v0.12.x".
-  return feature === 'isolation' || feature === 'codeDistribution' ? t('common:hostFeature.windowsDeferred', { issue: support.issue }) : t('common:hostFeature.windowsPending', { issue: support.issue });
+  // Isolation, the code distribution and the browser runtime are out of v0.12.0 on Windows (#464 / #500, a later release): not "planned for v0.12.x".
+  return feature === 'isolation' || feature === 'codeDistribution' || feature === 'browserRuntime' ? t('common:hostFeature.windowsDeferred', { issue: support.issue }) : t('common:hostFeature.windowsPending', { issue: support.issue });
 }
 
 /** The body of an API answer that refused for the host's OS (`{ error: <the reason in words>, code: 'unsupported_os' }`). */
