@@ -1,23 +1,9 @@
 import { useTranslation } from 'react-i18next';
 import { useSystemUpdate } from '../../hooks/useSystemUpdate';
-import type { UpdateStep } from '../../hooks/useSystemUpdate';
 import { InstallSteps, type InstallStep } from '../ui/InstallSteps';
 import { Spinner } from '../ui/Spinner';
 import { Icon } from '../ui/Icon';
-
-const STEP_LABEL_KEYS: Record<UpdateStep, string> = {
-  download: 'updateOverlay.steps.download',
-  verify: 'updateOverlay.steps.verify',
-  extract: 'updateOverlay.steps.extract',
-  'smoke-test': 'updateOverlay.steps.smokeTest',
-  switch: 'updateOverlay.steps.switch',
-  restart: 'updateOverlay.steps.restart',
-  'health-check': 'updateOverlay.steps.healthCheck',
-};
-
-function shortSha(version: string): string {
-  return version.length > 7 ? version.slice(0, 7) : version;
-}
+import { STEP_LABEL_KEYS, formatUpdateVersion } from './updateOverlayLabels';
 
 export function UpdateOverlay() {
   const { t } = useTranslation('settings');
@@ -79,7 +65,7 @@ export function UpdateOverlay() {
           </div>
           {state && (
             <div style={{ fontSize: 'var(--font-xs)', color: 'var(--text-dim)', fontFamily: 'var(--mono)', marginTop: 6, display: 'flex', alignItems: 'center', gap: 4 }}>
-              {shortSha(state.fromVersion)} <Icon name="arrow-right" size={14} /> {shortSha(state.toVersion)}
+              {formatUpdateVersion(state.fromVersion)} <Icon name="arrow-right" size={14} /> {formatUpdateVersion(state.toVersion)}
             </div>
           )}
         </div>
