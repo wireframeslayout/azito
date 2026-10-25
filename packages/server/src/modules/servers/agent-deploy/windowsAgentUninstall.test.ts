@@ -111,7 +111,7 @@ class FakeUninstallHost {
 
 const outcomes = (result: WindowsUninstallResult): Record<string, string> => Object.fromEntries(result.steps.map((s) => [s.id, s.outcome]));
 const detail = (result: WindowsUninstallResult, id: UninstallStepId): string => result.steps.find((s) => s.id === id)?.detail ?? '';
-const run = (host: FakeUninstallHost, removeMisao = false, options: WindowsAgentOptions = OPTIONS, hostNode: string | null = NODE): Promise<WindowsUninstallResult> => uninstallWindowsAgent(host.asHost(), HOME, options, { removeMisao }, hostNode);
+const run = (host: FakeUninstallHost, removeMisao = false, options: WindowsAgentOptions = OPTIONS, hostNode: string | null = NODE): Promise<WindowsUninstallResult> => uninstallWindowsAgent(host.asHost(), { home: HOME, systemRoot: 'C:\\Windows', nodePath: hostNode }, options, { removeMisao });
 
 describe('uninstallWindowsAgent', () => {
   it('stops the running task, unregisters it, ends its processes, removes the firewall rule and the folder, in that order', async () => {
@@ -148,13 +148,26 @@ describe('uninstallWindowsAgent', () => {
     expect(host.log).toContain('script Ending the agent processes');
   });
 
-  describe('whose task it is (the program action\'s --env-file argument, as a whole)', () => {
+  describe('whose task it is (only a task that is exactly what the install writes)', () => {
     const envFile = windowsAgentEnvFile(HOME, OPTIONS);
+    const entry = `${HOME}\\.azito\\agent\\abc123abc123\\azito-agent.cjs`;
+    const conhost = 'C:\\Windows\\System32\\conhost.exe';
+    /** A task with the program and the arguments line given as they are written. */
+    const taskWith = (argumentsLine: string, executable = conhost): string => buildTaskXml({
+      userId: 'PC\\dev', description: 'x', executable, argumentsLine, workingDirectory: HOME, restartOnFailure: { intervalMinutes: 1, count: 1 },
+    });
+    const exact = `--headless "${NODE}" --env-file=${envFile} ${entry}`;
+
+    it('takes the task the install writes (the same builder), and a hand-written line that is character for character the same', async () => {
+      expect(outcomes(await run(new FakeUninstallHost({ AzitoAgent: { xml: AGENT_XML } }))).task).toBe('done');
+      expect(outcomes(await run(new FakeUninstallHost({ AzitoAgent: { xml: taskWith(exact) } }))).task).toBe('done');
+    });
 
     it.each([
       ['a path that only starts like it (agent.env.other)', agentTaskXml(`${envFile}.other`)],
       ['another install\'s settings file', agentTaskXml('D:\\other\\agent.env')],
       ['an install nested below it', agentTaskXml(`${HOME}\\.azito\\agent\\sub\\agent.env`)],
+      ['the settings file in another case', agentTaskXml(envFile.toUpperCase())],
     ])('leaves a task that runs %s, with the processes, the folder and the firewall rule', async (_label, xml) => {
       const host = new FakeUninstallHost({ AzitoAgent: { xml, running: true } });
       const result = await run(host);
@@ -173,35 +186,42 @@ describe('uninstallWindowsAgent', () => {
       expect(host.tasks.has('AzitoAgent')).toBe(true);
     });
 
-    it('does not take the file as a part of another argument', async () => {
-      const xml = buildTaskXml({
-        userId: 'PC\\dev', description: 'x', executable: 'C:\\Windows\\System32\\conhost.exe',
-        args: ['--headless', NODE, `--note=--env-file=${envFile}`, 'a.cjs'], workingDirectory: HOME, restartOnFailure: { intervalMinutes: 1, count: 1 },
-      });
-      const host = new FakeUninstallHost({ AzitoAgent: { xml } });
-      expect(outcomes(await run(host)).task).toBe('failed');
-    });
-
     it.each([
-      ['a doubled closing quote', (file: string) => `--headless "${NODE}" "--env-file=${file}"""`],
-      ['an extra quote at the end', (file: string) => `--headless "${NODE}" "--env-file=${file}""`],
-      ['four quotes at the end', (file: string) => `--headless "${NODE}" "--env-file=${file}""""  a.cjs`],
-    ])('does not take %s after the file for the file itself (quotes in a row inside quotes are a quote, the argument stays open)', async (_label, line) => {
-      const xml = buildTaskXml({
-        userId: 'PC\\dev', description: 'x', executable: 'C:\\Windows\\System32\\conhost.exe', argumentsLine: line(envFile),
-        workingDirectory: HOME, restartOnFailure: { intervalMinutes: 1, count: 1 },
-      });
-      const host = new FakeUninstallHost({ AzitoAgent: { xml, running: true } });
+      ['the settings file as a part of another argument', `--headless "${NODE}" --note=--env-file=${envFile} a.cjs`],
+      ['quotes the install does not write around the settings file', `--headless "${NODE}" "--env-file=${envFile}" ${entry}`],
+      ['a quote doubled at the end of the settings file', `--headless "${NODE}" "--env-file=${envFile}""" ${entry}`],
+      ['quotes in a row inside the settings file path (the input that once read as the file)', `--headless "${NODE}" "--env-file=C:\\""Users\\dev\\.azito\\agent\\agent.env" ${entry}`],
+      ['an extra argument at the end', `${exact} --extra`],
+      ['an extra argument at the front', `--x ${exact}`],
+      ['a missing --headless', `"${NODE}" --env-file=${envFile} ${entry}`],
+      ['two spaces between the arguments', `--headless "${NODE}"  --env-file=${envFile} ${entry}`],
+      ['a node.exe quoted in a form the install does not write', `--headless "C:\\node.exe\\" --env-file=${envFile} ${entry}`],
+      ['an entry in another folder', `--headless "${NODE}" --env-file=${envFile} D:\\x\\abc123abc123\\azito-agent.cjs`],
+      ['an entry that is not a release folder\'s azito-agent.cjs', `--headless "${NODE}" --env-file=${envFile} ${HOME}\\.azito\\agent\\evil.cjs`],
+      ['an entry below the release folder', `--headless "${NODE}" --env-file=${envFile} ${HOME}\\.azito\\agent\\a\\b\\azito-agent.cjs`],
+    ])('leaves a task with %s', async (_label, line) => {
+      const host = new FakeUninstallHost({ AzitoAgent: { xml: taskWith(line), running: true } });
       const result = await run(host);
       expect(outcomes(result)).toMatchObject({ task: 'failed', processes: 'skipped', firewall: 'skipped', folder: 'skipped' });
       expect(host.tasks.has('AzitoAgent')).toBe(true);
     });
 
-    it('takes it whatever the case of the path, and for a folder with a space in it', async () => {
+    it('leaves a task that runs another program, or runs more than one', async () => {
+      const other = new FakeUninstallHost({ AzitoAgent: { xml: taskWith(exact, 'C:\\Windows\\System32\\cmd.exe') } });
+      expect(outcomes(await run(other)).task).toBe('failed');
+      const two = taskWith(exact).replace('</Exec>', `</Exec><Exec><Command>C:\\x.exe</Command></Exec>`);
+      expect(outcomes(await run(new FakeUninstallHost({ AzitoAgent: { xml: two } }))).task).toBe('failed');
+    });
+
+    it('takes a node.exe path with a space in it, and a home folder with a space in it (the same quoting as the install)', async () => {
       const spaced = 'C:\\Users\\Dev User';
       const file = windowsAgentEnvFile(spaced, OPTIONS);
-      const host = new FakeUninstallHost({ AzitoAgent: { xml: agentTaskXml(file.toUpperCase()) } });
-      const result = await uninstallWindowsAgent(host.asHost(), spaced, OPTIONS, { removeMisao: false }, NODE);
+      const xml = buildTaskXml({
+        userId: 'PC\\dev', description: 'x', executable: conhost, args: ['--headless', NODE, `--env-file=${file}`, `${spaced}\\.azito\\agent\\abc123abc123\\azito-agent.cjs`],
+        workingDirectory: spaced, restartOnFailure: { intervalMinutes: 1, count: 1 },
+      });
+      const host = new FakeUninstallHost({ AzitoAgent: { xml } });
+      const result = await uninstallWindowsAgent(host.asHost(), { home: spaced, systemRoot: 'C:\\Windows', nodePath: NODE }, OPTIONS, { removeMisao: false });
       expect(outcomes(result).task).toBe('done');
     });
   });
@@ -548,7 +568,7 @@ describe('the scripts it sends', () => {
   it('each fits one command line (8191 characters once encoded) for a long user folder', async () => {
     const home = `C:\\Users\\${'a-very-long-user-name-'.repeat(4)}`;
     const long = new FakeUninstallHost({});
-    await uninstallWindowsAgent(long.asHost(), home, OPTIONS, { removeMisao: true }, `${home}\\a\\very\\long\\path\\to\\node.exe`);
+    await uninstallWindowsAgent(long.asHost(), { home, systemRoot: 'C:\\Windows', nodePath: `${home}\\a\\very\\long\\path\\to\\node.exe` }, OPTIONS, { removeMisao: true });
     expect(long.bodies.length).toBeGreaterThanOrEqual(6);
     for (const { what, body } of long.bodies) {
       expect(() => powershellDialect.wrapScript(`$ProgressPreference = 'SilentlyContinue'\n${body}`), what).not.toThrow();
@@ -574,6 +594,14 @@ describe('the scripts it sends', () => {
     expect(script).toContain('[System.IO.FileAttributes]::ReparsePoint');
     expect(script).toMatch(/ReparsePoint\)\) \{\s*if \(\$isDirectory\) \{ \[System\.IO\.Directory\]::Delete\(\$entry\) \}/);
     expect(script).not.toContain('-Recurse');
+  });
+
+  it('a path with a junction or symbolic link on the way is not resolved, and a folder that is there but cannot be resolved may be the hub\'s', () => {
+    const guard = misaoGuardScript({ root: 'C:\\h\\m', hubRoot: 'C:\\h\\m', looksForHub: false });
+    expect(guard).toContain('[System.IO.FileAttributes]::ReparsePoint');
+    expect(guard).toContain('Test-Path -LiteralPath $root');
+    expect(guard).toContain("Write-Output 'MAYBEHUB'");
+    expect(firewallScript('R', 1, ['C:\\n.exe'])).toContain('[System.IO.FileAttributes]::ReparsePoint');
   });
 
   it('the firewall script lists the rules without hiding a failure (an error stops it)', async () => {

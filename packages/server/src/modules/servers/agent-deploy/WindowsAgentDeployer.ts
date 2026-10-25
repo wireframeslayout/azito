@@ -10,6 +10,7 @@ import { createSshCommandSpecRunner } from './windowsSshRunner';
 import { checkFirewall, describeFirewallProblem } from './windowsFirewall';
 import { MISAO_WINDOWS_DIR, type WindowsAgentOptions } from './windowsAgentConfig';
 import type { WindowsPreflightInfo } from './windowsPreflight';
+import { agentTaskAction } from './windowsAgentTask';
 import { uninstallWindowsAgent, type WindowsUninstallChoice, type WindowsUninstallResult } from './windowsAgentUninstall';
 
 /** Runs one command line on the Windows host through its SSH login shell. */
@@ -332,10 +333,9 @@ export class WindowsAgentDeployer {
         endTask: (taskName) => this.endTask(client, taskName),
         script: (what, body, timeoutMs) => this.script(sshHost, what, body, timeoutMs),
       },
-      host.home,
+      { home: host.home, systemRoot: host.systemRoot, nodePath: host.nodePath },
       this.options,
       choice,
-      host.nodePath,
     );
   }
 
@@ -358,11 +358,12 @@ export class WindowsAgentDeployer {
    * `--headless` (Windows 10 1809 and later) gives the process a console that has no window.
    */
   private buildTask(input: WindowsDeployInput, layout: WindowsAgentLayout): string {
+    const action = agentTaskAction(input.host.systemRoot, input.nodePath, layout.envFile, layout.entry);
     return buildTaskXml({
       userId: input.host.userId,
       description: 'AZITO Agent: started at logon by the AZITO hub',
-      executable: path.win32.join(input.host.systemRoot, 'System32', 'conhost.exe'),
-      args: ['--headless', input.nodePath, `--env-file=${layout.envFile}`, layout.entry],
+      executable: action.executable,
+      args: action.args,
       workingDirectory: layout.versionDir,
       restartOnFailure: { intervalMinutes: RESTART_INTERVAL_MINUTES, count: RESTART_COUNT },
     });

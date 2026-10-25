@@ -1,9 +1,9 @@
 import * as path from 'path';
 import type { SchtasksClient } from '../../../shared/os/taskScheduler/schtasks';
 import { hubRootOfScript, misaoRootOfCommandLine, taskExecActions } from '../../../shared/os/taskScheduler/taskXmlRead';
-import { splitWindowsCommandLine } from '../../../shared/os/taskScheduler/windowsCommandLine';
 import { buildEndProcessesScript } from '../../../shared/os/windowsProcessSweep';
 import { firewallRuleName } from './windowsFirewall';
+import { nodeOfAgentTask } from './windowsAgentTask';
 import type { WindowsAgentOptions } from './windowsAgentConfig';
 import { folderScript, parseFolderOutput, parseProcessesOutput, type ScriptOutcome, type UninstallOutcome } from './windowsAgentUninstallScripts';
 import { firewallScript, misaoGuardScript, parseFirewallOutput, parseMisaoGuardOutput } from './windowsAgentOwnership';
@@ -25,6 +25,13 @@ export interface WindowsUninstallResult {
   /** No step failed. A skipped step (misao not asked for, a hub owns it, a rule that is not this install's) is not a failure. */
   ok: boolean;
   steps: UninstallStep[];
+}
+
+/** What the host reports of itself (the SSH preflight): the user's home, `%SystemRoot%` and the node.exe found now (null: none). */
+export interface HostFacts {
+  home: string;
+  systemRoot: string;
+  nodePath: string | null;
 }
 
 export interface WindowsUninstallChoice {
@@ -55,17 +62,13 @@ async function step(id: UninstallStepId, action: () => Promise<ScriptOutcome>): 
   }
 }
 
-/** The node.exe that precedes `--env-file=<envFile>` in the arguments of a program action of the task (null: the argument is there but no program before it); undefined = no action passes that argument. */
-function agentTaskNode(xml: string, envFile: string): string | null | undefined {
-  const wanted = `--env-file=${envFile}`.toLowerCase();
-  for (const action of taskExecActions(xml)) {
-    const args = splitWindowsCommandLine(action.argumentsLine);
-    const at = args.findIndex((a) => a.toLowerCase() === wanted);
-    if (at < 0) continue;
-    const before = args[at - 1];
-    return at > 0 && before !== undefined && !before.startsWith('--') ? before : null;
-  }
-  return undefined;
+/**
+ * The node.exe the agent's task runs, when the task is exactly the one the install writes for this install (one program action,
+ * equal to what `agentTaskAction` makes; see `nodeOfAgentTask`); undefined when it is not known to be the install's.
+ */
+function agentTaskNode(xml: string, facts: HostFacts, root: string, envFile: string): string | undefined {
+  const actions = taskExecActions(xml);
+  return actions.length === 1 ? nodeOfAgentTask(actions[0]!, facts.systemRoot, root, envFile) : undefined;
 }
 
 function taskMisaoRootOf(xml: string): string | undefined {
@@ -109,18 +112,19 @@ async function removeTask(host: WindowsUninstallHost, taskName: string, isOurs: 
  *
  * `hostNodePath` is the node.exe found on the host now: with the one the task runs, it is what the firewall rule's program is compared with.
  */
-export async function uninstallWindowsAgent(host: WindowsUninstallHost, home: string, options: WindowsAgentOptions, choice: WindowsUninstallChoice, hostNodePath: string | null): Promise<WindowsUninstallResult> {
+export async function uninstallWindowsAgent(host: WindowsUninstallHost, facts: HostFacts, options: WindowsAgentOptions, choice: WindowsUninstallChoice): Promise<WindowsUninstallResult> {
+  const { home, nodePath: hostNodePath } = facts;
   const steps: UninstallStep[] = [];
   const agentRoot = path.win32.join(home, options.dir);
   const envFile = path.win32.join(agentRoot, 'agent.env');
 
-  let taskNode: string | null | undefined;
+  let taskNode: string | undefined;
   let removal: TaskRemoval;
   try {
     removal = await removeTask(host, options.taskName, (xml) => {
-      taskNode = agentTaskNode(xml, envFile);
+      taskNode = agentTaskNode(xml, facts, agentRoot, envFile);
       return taskNode !== undefined;
-    }, `run ${envFile} as its --env-file argument`);
+    }, `have the form the AZITO install writes for ${envFile}`);
   } catch (err) {
     removal = { step: { outcome: 'failed', detail: err instanceof Error ? err.message : String(err) }, foreign: false };
   }

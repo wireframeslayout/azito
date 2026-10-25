@@ -285,7 +285,7 @@ describe.skipIf(process.platform !== 'win32')('removing the Windows agent from a
     fs.mkdirSync(root, { recursive: true });
     const task = buildTaskXml({
       userId: host.userId, description: 'AZITO Agent: started at logon by the AZITO hub', executable: path.win32.join(host.systemRoot, 'System32', 'conhost.exe'),
-      args: ['--headless', short!, `--env-file=${path.win32.join(root, 'agent.env')}`, path.win32.join(root, 'x.cjs')], workingDirectory: root,
+      args: ['--headless', short!, `--env-file=${path.win32.join(root, 'agent.env')}`, path.win32.join(root, 'abc123abc123', 'azito-agent.cjs')], workingDirectory: root,
       restartOnFailure: { intervalMinutes: 1, count: 1 },
     });
     const file = path.join(scratch, 'short.task.xml');
@@ -303,6 +303,35 @@ describe.skipIf(process.platform !== 'win32')('removing the Windows agent from a
     expect(await ruleCount()).toBe(0);
   }, 120_000);
 
+  it('leaves its own firewall rule when the task reaches the node.exe through a junction (where it leads is not what the name says)', async (ctx) => {
+    if (!elevated) ctx.skip('this session is not elevated: a rule cannot be added here');
+    const root = agentRoot();
+    fs.mkdirSync(root, { recursive: true });
+    fs.mkdirSync(scratch, { recursive: true });
+    const jn = path.join(scratch, `jn-${SUFFIX}`);
+    expect((await cmdExec('ci', `mklink /J "${jn}" "${fs.realpathSync.native(fwDir)}"`, 60_000)).code).toBe(0);
+    try {
+      const task = buildTaskXml({
+        userId: host.userId, description: 'AZITO Agent: started at logon by the AZITO hub', executable: path.win32.join(host.systemRoot, 'System32', 'conhost.exe'),
+        args: ['--headless', path.win32.join(jn, 'node.exe'), `--env-file=${path.win32.join(root, 'agent.env')}`, path.win32.join(root, 'abc123abc123', 'azito-agent.cjs')], workingDirectory: root,
+        restartOnFailure: { intervalMinutes: 1, count: 1 },
+      });
+      const file = path.join(scratch, 'jn.task.xml');
+      fs.writeFileSync(file, encodeTaskXml(task));
+      expect((await cmdExec('ci', `"${schtasksPath()}" /Create /XML "${file}" /TN ${OPTIONS.taskName} /F`, 60_000)).code).toBe(0);
+      await checkFirewall((command) => cmdExec('ci', command, 120_000), OPTIONS.port, fwNode, BIND);
+      expect(await ruleCount()).toBe(1);
+
+      const result = await deployer.uninstall('ci', host, { removeMisao: false });
+
+      expect(stepsOf(result)).toMatchObject({ task: 'done', firewall: 'skipped' });
+      expect(await ruleCount()).toBe(1);
+    } finally {
+      await cmdExec('ci', `rmdir "${jn}"`, 60_000);
+      await ps(`Remove-NetFirewallRule -DisplayName ${powershellDialect.quote(firewallRuleName(OPTIONS.port))} -ErrorAction SilentlyContinue`);
+    }
+  }, 120_000);
+
   describe('who owns the misao folder, on the real host', () => {
     const ask = async (hubRoot: string | undefined): Promise<string> =>
       parseMisaoGuardOutput(await ps(misaoGuardScript({ root: misaoRoot(), hubRoot, looksForHub: false }))).kind;
@@ -315,6 +344,18 @@ describe.skipIf(process.platform !== 'win32')('removing the Windows agent from a
       expect(await ask(misaoRoot().toUpperCase())).toBe('sameHub');
       expect(await ask(path.win32.join(host.home, `azito-ci-no-such-${SUFFIX}`))).toBe('maybeHub');
       expect(await ask(host.home)).toBe('clear');
+    }, 120_000);
+
+    it('does not compare a hub folder that is reached through a junction: it may be this very folder', async () => {
+      fs.mkdirSync(misaoRoot(), { recursive: true });
+      // home\\<junction> leads back to the home folder, so <junction>\\<misao dir> IS the misao folder, under another name.
+      const jn = path.join(host.home, `azito-ci-un-jct-${SUFFIX}`);
+      expect((await cmdExec('ci', `mklink /J "${jn}" "${host.home}"`, 60_000)).code).toBe(0);
+      try {
+        expect(await ask(path.win32.join(jn, OPTIONS.misaoDir))).toBe('maybeHub');
+      } finally {
+        await cmdExec('ci', `rmdir "${jn}"`, 60_000);
+      }
     }, 120_000);
   });
 

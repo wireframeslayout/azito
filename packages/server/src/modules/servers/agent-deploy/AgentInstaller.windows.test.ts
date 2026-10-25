@@ -580,7 +580,7 @@ describe('AgentInstaller on a Windows host', () => {
   describe('removing the agent from the host', () => {
     it('asks the host who it is, takes the task off, and reports each step; no install check (node, Tailscale) is needed', async () => {
       const { installer, host } = make({ existingTask: 'running', nodePath: '', tailscaleIp: '' });
-      host.registeredXml = '<Task><Actions><Exec><Command>conhost.exe</Command><Arguments>--headless "C:\\node.exe" --env-file=C:\\Users\\dev\\.azito\\agent\\agent.env a.cjs</Arguments></Exec></Actions></Task>';
+      host.registeredXml = '<Task><Actions><Exec><Command>C:\\Windows\\System32\\conhost.exe</Command><Arguments>--headless C:\\node.exe --env-file=C:\\Users\\dev\\.azito\\agent\\agent.env C:\\Users\\dev\\.azito\\agent\\abc123abc123\\azito-agent.cjs</Arguments></Exec></Actions></Task>';
       const result = await installer.uninstallFromWindowsHost('user@win', { removeMisao: false });
       expect(result.steps.find((s) => s.id === 'task')).toEqual({ id: 'task', outcome: 'done' });
       expect(host.taskState).toBe('absent');

@@ -5,8 +5,9 @@ import { lines, unreadable, type ScriptOutcome } from './windowsAgentUninstallSc
 /**
  * Looks at what is on the HOST to decide whether something is this install's, so that it is never decided by how a path happens to be
  * spelled (`C:\Users\RUNNER~1\...` and `C:\Users\runneradmin\...` are one folder). A path is put in its long form, with the case it has
- * on disk, component by component; one that cannot be resolved (it does not exist, or cannot be read) is `$null`, and every caller treats
- * "cannot resolve" as "may be the same", never as "different".
+ * on disk, component by component. A path with a junction or symbolic link anywhere on the way is NOT resolved either (where it leads is
+ * not what its name says, and following it here would be a guess): it is `$null` like one that does not exist or cannot be read, and every
+ * caller treats "cannot resolve" as "may be the same", never as "different".
  */
 const RESOLVE_LONG = [
   'function Resolve-Long([string]$p) {',
@@ -18,6 +19,7 @@ const RESOLVE_LONG = [
   '      $hit = @([System.IO.Directory]::GetFileSystemEntries($cur, $part))',
   '      if ($hit.Count -ne 1) { return $null }',
   '      $cur = $hit[0]',
+  '      if ([bool]([System.IO.File]::GetAttributes($cur) -band [System.IO.FileAttributes]::ReparsePoint)) { return $null }',
   '    }',
   '    return $cur',
   '  } catch { return $null }',
@@ -130,7 +132,8 @@ export function misaoGuardScript(input: MisaoGuardInput): string {
     '}',
     ...(input.hubRoot !== undefined ? [
       '$here = Resolve-Long $root; $hub = Resolve-Long $hubRoot',
-      'if ($null -eq $hub) { Write-Output \'MAYBEHUB\'; exit 0 }',
+      // A folder that is there but cannot be resolved (a link on the way, unreadable) may be the hub's; one that is not there has nothing to remove.
+      'if ($null -eq $hub -or ($null -eq $here -and (Test-Path -LiteralPath $root))) { Write-Output \'MAYBEHUB\'; exit 0 }',
       'if ($null -ne $here -and $here -ieq $hub) { Write-Output \'SAMEHUB\'; exit 0 }',
     ] : []),
     ...(input.looksForHub ? [

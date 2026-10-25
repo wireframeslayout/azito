@@ -6,7 +6,10 @@ import * as os from 'node:os';
 import * as path from 'node:path';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { MISAO_CLI } from '../../../shared/misaoTestBinary';
+import { runCommandSpec, runHostOf } from '../../../shared/exec/runCommandSpec';
+import { resolveCurrentHostEnv } from '../../../shared/os/hostEnv';
 import { powershellDialect } from '../../../shared/os/shellDialect';
+import { SchtasksClient, rawRunnerOf } from '../../../shared/os/taskScheduler/schtasks';
 import { encodeTaskXml } from '../../../shared/os/taskScheduler/taskDefinition';
 import { buildMisaoTaskXml, misaoWindowsLayout } from '../../system/misao/misaoWindowsTask';
 import { windowsMisaoPipe } from '../transport/agentMisaoSocket';
@@ -24,6 +27,11 @@ import type { WindowsAgentOptions } from './windowsAgentConfig';
 const SUFFIX = crypto.randomBytes(4).toString('hex');
 const OPTIONS: WindowsAgentOptions = { taskName: `AzitoCiAgent-${SUFFIX}`, dir: `azito-ci-umi-${SUFFIX}`, port: 3999, misaoTaskName: `AzitoCiMisao-${SUFFIX}`, misaoDir: `azito-ci-umi-misao-${SUFFIX}` };
 const OTHER_DIR = `azito-ci-umi-other-${SUFFIX}`;
+/** The Task Scheduler's last results of a task that could not start for want of a logon session of its user (the same pair the other Windows tests accept). */
+const NO_INTERACTIVE_LOGON = new Set([0x8004130f, 0x80070520]);
+
+class NoLogonSession extends Error {}
+
 const OTHER_TASK = `AzitoCiOtherMisao-${SUFFIX}`;
 const VERSION = '0.3.0';
 const SYSTEM_ROOT = process.env.SystemRoot ?? 'C:\\Windows';
@@ -98,9 +106,11 @@ describe.skipIf(process.platform !== 'win32' || !fs.existsSync(MISAO_CLI))('remo
   /**
    * A misao for `root` the way the installer sets it up: the release in `<root>\0.3.0`, a Task Scheduler task registered from the same
    * definition, and the daemon started BY that task (so its parents are the task's `conhost.exe --headless`, which is what the uninstall
-   * looks for). Returns whether the daemon answered; false when this machine has no logon session for the Task Scheduler to start it in.
+   * looks for). Resolves when the daemon answers. When it does not, the Task Scheduler is asked why: a result that says the user has no logon
+   * session to run it in is {@link NoLogonSession} (the only reason the test is skipped); anything else (the launcher, a daemon that
+   * crashed, a task that never ran) is an error that fails the test, with the result and the daemon's log.
    */
-  async function startByTask(taskName: string, root: string): Promise<boolean> {
+  async function startByTask(taskName: string, root: string): Promise<void> {
     const layout = misaoWindowsLayout({ misaoRoot: root }, VERSION, taskName);
     fs.mkdirSync(layout.versionDir, { recursive: true });
     fs.copyFileSync(MISAO_CLI, layout.exe);
@@ -112,11 +122,20 @@ describe.skipIf(process.platform !== 'win32' || !fs.existsSync(MISAO_CLI))('remo
     expect(created.code, created.text).toBe(0);
     const run = await schtasks(['/Run', '/TN', taskName]);
     expect(run.code, run.text).toBe(0);
-    return waitFor(`the daemon of ${taskName}`, () => pipeUp(pipeOf(root)), 45_000).then(() => true, () => false);
+    try {
+      await waitFor(`the daemon of ${taskName}`, () => pipeUp(pipeOf(root)), 45_000);
+    } catch (err) {
+      const state = await taskScheduler.query(taskName);
+      const lastResult = state.exists ? state.lastResult : undefined;
+      if (lastResult !== undefined && NO_INTERACTIVE_LOGON.has(lastResult)) throw new NoLogonSession(`the task ${taskName} did not start: last result 0x${lastResult.toString(16)} (no logon session for ${host.userId})`);
+      throw new Error(`${(err as Error).message}; the task's state: ${JSON.stringify(state)}; the daemon's log:\n${logTail(root)}`);
+    }
   }
 
-  /** Why the daemons could not be started by their tasks here (a machine with no logon session), or undefined. */
+  /** Why the daemons could not be started by their tasks here: the Task Scheduler said there is no logon session. Undefined otherwise. */
   let noLogonSession: string | undefined;
+  const hostEnv = resolveCurrentHostEnv();
+  let taskScheduler: SchtasksClient;
 
   beforeAll(async () => {
     const pre = await cmdExec('ci', buildWindowsPreflightCommand(), 120_000);
@@ -124,10 +143,13 @@ describe.skipIf(process.platform !== 'win32' || !fs.existsSync(MISAO_CLI))('remo
     deployer = new WindowsAgentDeployer(cmdExec, { putFile: async () => undefined, putBuffer: async () => undefined }, OPTIONS);
 
     // A daemon of a different folder (its own task, which the uninstall does not know), which must survive; then the daemon to be removed.
-    const otherUp = await startByTask(OTHER_TASK, otherRoot);
-    const up = otherUp && await startByTask(OPTIONS.misaoTaskName, misaoRoot);
-    if (!up) {
-      noLogonSession = `the Task Scheduler could not start the misao tasks here (no logon session?); logs: ${logTail(otherRoot)} / ${logTail(misaoRoot)}`;
+    taskScheduler = new SchtasksClient(rawRunnerOf((spec) => runCommandSpec(spec, { ...runHostOf(hostEnv), rawOutput: true })), hostEnv);
+    try {
+      await startByTask(OTHER_TASK, otherRoot);
+      await startByTask(OPTIONS.misaoTaskName, misaoRoot);
+    } catch (err) {
+      if (!(err instanceof NoLogonSession)) throw err;
+      noLogonSession = err.message;
       return;
     }
     otherPid = (await daemonPids(otherRoot))[0];
