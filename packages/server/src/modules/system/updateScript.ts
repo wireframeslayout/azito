@@ -20,6 +20,7 @@ import { createWindowsUpdateBackend } from './windowsUpdateBackend';
 import { HUB_UPDATE_TASK } from './windowsHubUpdateTask';
 import { resolveWindowsHub } from './windowsHubOperations';
 import { createHubLock, underHubLock } from './hubLock';
+import { startHubExitWithParent, takeExitWithPid } from '../../app/hubExitWithParent';
 
 interface UpdateArgs {
   dataDir: string;
@@ -62,10 +63,19 @@ function parseArgs(argv: string[]): UpdateArgs {
   return args as UpdateArgs;
 }
 
+/** A download that has not finished by then (a server that stopped answering) is a failed step, not a wait with no end. */
+const DOWNLOAD_TIMEOUT_MS = 10 * 60_000;
+/**
+ * The whole run. The Task Scheduler's own limit for the task is one hour; this is shorter so that a run that hangs ends itself, writes
+ * its state and puts the old version back, instead of being cut off without a word.
+ */
+const RUN_DEADLINE_MS = 50 * 60_000;
+
 async function downloadFile(url: string, destPath: string, token?: string): Promise<void> {
   const headers: Record<string, string> = { 'User-Agent': 'azito-hub' };
   if (token) headers.Authorization = `Bearer ${token}`;
-  const res = await fetch(url, { headers });
+  const signal = AbortSignal.timeout(DOWNLOAD_TIMEOUT_MS);
+  const res = await fetch(url, { headers, signal });
   if (!res.ok || !res.body) throw new Error(`Download failed (${res.status}): ${url}`);
   const writeStream = fs.createWriteStream(destPath);
   await finished(Readable.fromWeb(res.body as import('stream/web').ReadableStream).pipe(writeStream));
@@ -130,17 +140,32 @@ export async function runUpdate(argv: string[], host: HostEnv, secretFileGuard: 
     steps: [],
   };
 
+  // The run ends by itself when it takes too long, and (Windows) when its task is ended: the Task Scheduler's /End ends only the
+  // conhost.exe the task runs under, so the run follows that process the way the hub does (the task's script names it, `AZITO_HUB_EXIT_WITH_PID`).
+  const abort = new AbortController();
+  const deadline = setTimeout(() => abort.abort(new Error(`The update did not finish within ${RUN_DEADLINE_MS / 60_000} minutes`)), RUN_DEADLINE_MS);
+  const parentPid = takeExitWithPid(process.env);
+  const parentWatch = args.serviceManager === 'taskscheduler'
+    ? startHubExitWithParent({
+      hostEnv: host,
+      pid: parentPid,
+      onGone: (reason) => abort.abort(new Error(`The update task was ended (${reason})`)),
+      warn: (message) => stateManager.appendLog(`parent watch: ${message}`),
+      info: (message) => stateManager.appendLog(`parent watch: ${message}`),
+    })
+    : undefined;
+
   try {
     const token = takeToken(args.tokenFile);
     const healthUrl = args.healthUrl ?? healthUrlOf(process.env.AZITO_BIND || '127.0.0.1', process.env.PORT || '3001');
     const backend = createBackend(args, host, secretFileGuard, healthUrl);
     if (args.serviceManager !== 'taskscheduler') {
-      await runUpdateSteps(args, backend, healthUrl, token, state, stateManager);
+      await runUpdateSteps(args, backend, healthUrl, token, state, stateManager, abort.signal);
       return;
     }
     // One at a time with `azito service ...` on the same install. A taken lock is a failed run with the reason, and nothing was changed.
     const lock = createHubLock(args.hubDir, secretFileGuard, host.systemRoot!);
-    await underHubLock(lock, () => runUpdateSteps(args, backend, healthUrl, token, state, stateManager));
+    await underHubLock(lock, () => runUpdateSteps(args, backend, healthUrl, token, state, stateManager, abort.signal));
   } catch (err) {
     // Everything a step throws is recorded inside runUpdateSteps; what gets here is a run that could not even start.
     const message = (err as Error).message;
@@ -150,6 +175,8 @@ export async function runUpdate(argv: string[], host: HostEnv, secretFileGuard: 
     state.completedAt = new Date().toISOString();
     stateManager.write(state);
   } finally {
+    clearTimeout(deadline);
+    parentWatch?.stop();
     if (args.serviceManager === 'taskscheduler') await deleteOwnTask(host, stateManager);
   }
 }
@@ -171,14 +198,21 @@ export async function runUpdateSteps(
   token: string | undefined,
   state: UpdateState,
   stateManager: UpdateStateManager,
+  signal: AbortSignal,
 ): Promise<void> {
+  /** Rejects when the run is told to end (the deadline, or the task being ended); a step that is still working is left behind and the run goes on to put the old version back. */
+  const aborted = new Promise<never>((_, reject) => {
+    if (signal.aborted) reject(signal.reason);
+    signal.addEventListener('abort', () => reject(signal.reason), { once: true });
+  });
+  aborted.catch(() => undefined);
   const runStep = async (step: UpdateStep, message: string, fn: () => Promise<void>): Promise<void> => {
     state.step = step;
     state.steps.push({ step, status: 'running', message });
     stateManager.write(state);
     stateManager.appendLog(`[${step}] ${message}`);
     try {
-      await fn();
+      await Promise.race([fn(), aborted]);
       state.steps[state.steps.length - 1] = { step, status: 'ok', message };
       stateManager.write(state);
     } catch (err) {
@@ -215,8 +249,11 @@ export async function runUpdateSteps(
 
     await runStep('smoke-test', 'Running smoke test', () => backend.smokeTest(newInstallDir, args.version));
 
-    await runStep('switch', `Switching current -> ${args.version}`, () => backend.switchTo(newInstallDir, args.version));
-    switched = true;
+    // `switched` is set the moment the switch has happened, before anything else can fail (the step's own state write included).
+    await runStep('switch', `Switching current -> ${args.version}`, async () => {
+      await backend.switchTo(newInstallDir, args.version);
+      switched = true;
+    });
 
     await runStep('restart', 'Restarting azito service', () => backend.restart());
 

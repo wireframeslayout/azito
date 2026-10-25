@@ -5,7 +5,7 @@ import { powershellDialect, powershellEncodedArgs } from '../../shared/os/shellD
 import type { SchtasksClient } from '../../shared/os/taskScheduler/schtasks';
 import { buildTaskXml } from '../../shared/os/taskScheduler/taskDefinition';
 import { joinWindowsArgs } from '../../shared/os/taskScheduler/windowsCommandLine';
-import { MAX_COMMAND_LINE, samePrefix, singleExec, windowsPowershell } from './windowsHubService';
+import { MAX_COMMAND_LINE, endHubProcesses, findHubProcesses, samePrefix, singleExec, windowsPowershell, type SpecRunner } from './windowsHubService';
 
 /**
  * The in-app update of a Windows hub runs as its own Task Scheduler task (#381 U2), registered and started by the hub and deleted by the
@@ -23,8 +23,13 @@ import { MAX_COMMAND_LINE, samePrefix, singleExec, windowsPowershell } from './w
 
 export const HUB_UPDATE_TASK = 'AzitoHubUpdate';
 
-/** The Task Scheduler stops an update that has not finished by then (a hung download); well over what a download, extract and two restarts take. */
+/**
+ * The Task Scheduler's own limit, a backstop only: it ends the task's `conhost.exe`, not the `node.exe` under it. What really bounds a run is the run
+ * itself (`update-run` gives up after 50 minutes, and ends when its `conhost.exe` is gone, see updateScript.ts).
+ */
 const UPDATE_TIME_LIMIT = 'PT1H';
+/** How long a previous update's process gets to end by itself after its task was ended (it notices within seconds) before it is ended. */
+const PREVIOUS_RUN_GRACE_MS = 20_000;
 /** A previous update that is still ending when the next one is asked for gets this long before it is ended. */
 const LEFTOVER_GRACE_MS = 15_000;
 const LEFTOVER_POLL_MS = 500;
@@ -59,6 +64,8 @@ export function buildHubUpdateScript(input: HubUpdateTaskInput): string {
     `${MARKER}${input.hubDir}`,
     // Native stderr lines are not errors here: the update reports its failures in its state file and exit code.
     "$ErrorActionPreference = 'Continue'",
+    // `/End` ends only this script's conhost.exe; update-run follows it (as the hub does) and ends when it is gone.
+    '$env:AZITO_HUB_EXIT_WITH_PID = [string](Get-CimInstance Win32_Process -Filter "ProcessId = $PID").ParentProcessId',
     `& ${args} 2>&1 | Out-File -LiteralPath ${q(input.outputLog)} -Encoding utf8`,
   ].join('\n');
 }
@@ -76,7 +83,7 @@ function updateTaskExec(systemRoot: string, script: string): { command: string; 
 /**
  * The task: no trigger (it runs only when the hub calls `/Run`, and a task left behind never starts again at a logon), as the hub's
  * user with least privilege, under `conhost.exe --headless` so that no console window appears, ended by the Task Scheduler after
- * {@link UPDATE_TIME_LIMIT}.
+ * {@link UPDATE_TIME_LIMIT} as a backstop only (it ends the conhost.exe; the run bounds itself).
  */
 export function buildHubUpdateTaskXml(input: HubUpdateTaskInput): string {
   const exec = updateTaskExec(input.systemRoot, buildHubUpdateScript(input));
@@ -110,11 +117,13 @@ export function inspectHubUpdateTask(xml: string, systemRoot: string): { hubDir:
 export interface HubUpdateLauncher {
   client: SchtasksClient;
   guard: SecretFileGuard;
+  /** Runs PowerShell to find and end the previous update's process. */
+  run: SpecRunner;
 }
 
 export interface HubUpdateLaunch {
   task: HubUpdateTaskInput;
-  /** Where the token file is written (the update reads and deletes it). Ignored without a token. */
+  /** Where the token file is written (the update reads and deletes it); a file left there is removed first even without a token. */
   tokenFile: string;
   /** The GitHub token, when the release repository needs one (never an empty string). */
   token: string | undefined;
@@ -132,6 +141,7 @@ async function clearLeftover(launcher: HubUpdateLauncher, launch: HubUpdateLaunc
   const { client } = launcher;
   const state = await client.query(HUB_UPDATE_TASK);
   if (!state.exists) return;
+  const hubRoots = [launch.task.hubDir];
   const owner = inspectHubUpdateTask(await client.exportXml(HUB_UPDATE_TASK), launch.task.systemRoot);
   if (owner === undefined) {
     throw new Error(`A task named ${HUB_UPDATE_TASK} exists that AZITO did not register, so it is not replaced. Delete it (schtasks /Delete /TN ${HUB_UPDATE_TASK}) and try again`);
@@ -149,6 +159,10 @@ async function clearLeftover(launcher: HubUpdateLauncher, launch: HubUpdateLaunc
     if (await stillRunning()) await client.stop(HUB_UPDATE_TASK);
   }
   await client.delete(HUB_UPDATE_TASK);
+  // `/End` ended the task's conhost.exe only. The previous update's node.exe follows it and ends within seconds; it is waited for, and ended if it
+  // does not, BEFORE a new one is registered: two updates must not meet, and one that stays holds the hub lock. One that cannot be ended stops this with the reason.
+  const previous = await findHubProcesses(launcher.run, launch.task.systemRoot, hubRoots, process.pid);
+  await endHubProcesses(launcher.run, launch.task.systemRoot, previous, PREVIOUS_RUN_GRACE_MS);
 }
 
 /**
@@ -157,6 +171,8 @@ async function clearLeftover(launcher: HubUpdateLauncher, launch: HubUpdateLaunc
  */
 export async function launchHubUpdateTask(launcher: HubUpdateLauncher, launch: HubUpdateLaunch): Promise<void> {
   await clearLeftover(launcher, launch);
+  // Whatever an earlier run left of the token file (it ended before it read it) goes first; it is written again only when there is a token now.
+  fs.rmSync(launch.tokenFile, { force: true });
   const { token } = launch;
   if (token !== undefined) launcher.guard.writeSecretFile(launch.tokenFile, token);
   try {

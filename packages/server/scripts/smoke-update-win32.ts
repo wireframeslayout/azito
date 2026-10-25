@@ -19,6 +19,8 @@ import { extractZipSafely } from '../src/shared/fs/safeArchive';
  *   3. update to a build whose `--version` is wrong: stops at the smoke test, the hub was never restarted, its folder is removed.
  *   4. update while another process holds the hub lock: the update stops with the reason, and `azito service restart` is refused too.
  *   5. update to a build that passes `--version` and never serves: the hub is restarted on it, never gets healthy, and is put back on a.
+ *   5b. a download that stops answering: the update task is ended (`/End`), the update process ends by itself (it follows its conhost.exe), the
+ *      hub is untouched, and the next update runs.
  *   6. update to b: the hub is b (health, current.txt), the update task and the token file are gone, the token never was on a command line,
  *      misao.exe was not restarted and the window is still there.
  *   7. the Setup row's misao update (`POST /api/system/misao/update`) runs once.
@@ -45,6 +47,7 @@ const TAG_B = 'v0.0.0-ci.b';
 const TAG_CORRUPT = 'v0.0.0-ci.c';
 const TAG_UNBOOTABLE = 'v0.0.0-ci.d';
 const TAG_BADVERSION = 'v0.0.0-ci.e';
+const TAG_STALLED = 'v0.0.0-ci.f';
 
 interface Result { status: number | null; output: string }
 
@@ -120,6 +123,14 @@ function hubPids(): number[] {
   return r.output.split(/\r?\n/).map((l) => l.trim()).filter((l) => /^\d+$/.test(l)).map(Number).sort((x, y) => x - y);
 }
 
+/** The update processes: node.exe running `azito-hub.cjs update-run`. */
+function updateRunPids(): number[] {
+  const script = "Get-CimInstance Win32_Process -Filter \"Name = 'node.exe'\" | Where-Object { $_.CommandLine -and $_.CommandLine -match 'azito-hub\\.cjs.* update-run' } | ForEach-Object { $_.ProcessId }";
+  const r = powershell(['-Command', script]);
+  assert(r.status === 0, 'could not list node.exe processes', r.output);
+  return r.output.split(/\r?\n/).map((l) => l.trim()).filter((l) => /^\d+$/.test(l)).map(Number);
+}
+
 function misaoPids(pipe: string): number[] {
   const script = [
     `$pipe = '${pipe.replace(/'/g, "''")}'`,
@@ -189,6 +200,8 @@ interface FakeServer {
   port: number;
   /** Authorization headers the downloads came with. */
   downloadAuth: string[];
+  /** Requests for the stalled release's zip so far (the server never finishes the answer). */
+  stalledRequests: number;
   /** The task XML read while the b zip was being downloaded (the update process was running then). */
   taskXmlDuringDownload: string | null;
   close(): Promise<void>;
@@ -200,7 +213,7 @@ function releaseOf(tag: string, zip: string, claimedSha: string | undefined): Fa
 }
 
 async function startFakeReleaseServer(releases: FakeRelease[], watchTag: string): Promise<FakeServer> {
-  const state: FakeServer = { port: 0, downloadAuth: [], taskXmlDuringDownload: null, close: async () => undefined };
+  const state: FakeServer = { port: 0, downloadAuth: [], stalledRequests: 0, taskXmlDuringDownload: null, close: async () => undefined };
   const byTag = new Map(releases.map((r) => [r.tag, r]));
   const server = http.createServer((req, res) => {
     const url = new URL(req.url ?? '/', 'http://127.0.0.1');
@@ -226,6 +239,13 @@ async function startFakeReleaseServer(releases: FakeRelease[], watchTag: string)
       if (!release) return send(404, 'text/plain', 'no such release');
       state.downloadAuth.push(String(req.headers.authorization ?? ''));
       if (decodeURIComponent(download[2]) === 'SHA256SUMS') return send(200, 'text/plain', release.sumsText);
+      if (release.tag === TAG_STALLED) {
+        // Answers the first bytes and then nothing, for ever: a download that has stopped.
+        state.stalledRequests++;
+        res.writeHead(200, { 'content-type': 'application/zip', 'content-length': String(release.zipBytes.length) });
+        res.write(release.zipBytes.subarray(0, 1024));
+        return;
+      }
       if (release.tag === watchTag) {
         // The update process is running right now: its task must not carry the token on its command line.
         state.taskXmlDuringDownload = schtasks(['/Query', '/TN', UPDATE_TASK, '/XML']).output;
@@ -326,6 +346,7 @@ async function main(): Promise<void> {
       releaseOf(TAG_CORRUPT, corruptZip, sha256(zipB)),
       releaseOf(TAG_UNBOOTABLE, zipUnbootable, undefined),
       releaseOf(TAG_BADVERSION, zipBadVersion, undefined),
+      releaseOf(TAG_STALLED, zipUnbootable, undefined),
     ], TAG_B);
 
     step(`step 1: install.ps1 installs ${TAG_A} (hub task and misao) into ${prefix}`);
@@ -413,6 +434,18 @@ async function main(): Promise<void> {
     assert(!fs.existsSync(path.join(hubDir, TAG_UNBOOTABLE)), 'the folder this run made must be removed after the rollback');
     await waitFor('the update task to be deleted', () => schtasks(['/Query', '/TN', UPDATE_TASK]).status !== 0, 60_000, updateLog);
     const hubAfterRollback = hubPids();
+
+    step('step 5b: a download that stops answering; ending the update task ends the update process, and the next update runs');
+    since = await startUpdate(token, TAG_STALLED);
+    await waitFor('the stalled download to be requested', () => fake!.stalledRequests > 0, 120_000, updateLog);
+    assert(updateRunPids().length === 1, 'exactly one update process must run during the download', updateRunPids().join(','));
+    assert(schtasks(['/End', '/TN', UPDATE_TASK]).status === 0, 'schtasks /End of the update task failed');
+    await waitFor('the update process to end by itself after /End', () => updateRunPids().length === 0, 60_000, updateLog);
+    ended = await waitForUpdateEnd(token, TAG_STALLED, since, 60_000, updateLog);
+    assert(ended.status === 'failed' && /task was ended/.test(ended.error ?? ''), 'the update must be recorded as failed because its task was ended', JSON.stringify(ended));
+    assert(pointerValue() === TAG_A && JSON.stringify(hubPids()) === JSON.stringify(hubAfterRollback), 'the hub must be untouched');
+    assert(!fs.existsSync(path.join(dataDir, 'update-token')), 'the token file must be gone');
+    await waitFor('the update task to be deleted', () => schtasks(['/Query', '/TN', UPDATE_TASK]).status !== 0, 60_000, updateLog);
 
     step(`step 6: ${TAG_B}: the hub is b, the update task and the token file are gone, misao is untouched and the window is still there`);
     since = await startUpdate(token, TAG_B);

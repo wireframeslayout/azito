@@ -47,6 +47,7 @@ describe('buildHubUpdateTaskXml', () => {
     expect(script).toContain(`'${TASK.nodePath}' '${TASK.bundlePath}' 'update-run' '--version' 'v1.1.0' '--health-url' 'http://127.0.0.1:3001/api/health'`);
     expect(script).toContain(`Out-File -LiteralPath '${TASK.outputLog}'`);
     expect(script).toContain("$ErrorActionPreference = 'Continue'");
+    expect(script).toContain('$env:AZITO_HUB_EXIT_WITH_PID = [string](Get-CimInstance Win32_Process -Filter "ProcessId = $PID").ParentProcessId');
   });
 
   it('quotes a single quote in a path for PowerShell', () => {
@@ -82,6 +83,19 @@ describe('launchHubUpdateTask', () => {
 
   afterEach(() => fs.rmSync(dir, { recursive: true, force: true }));
 
+  /** The PowerShell runner of the sweep for the previous run's process: `previousPids` are what the search finds; the end of them prints nothing. */
+  function fakeRun(previousPids: number[] = []) {
+    const scripts: string[] = [];
+    const run = vi.fn(async (spec: { args: readonly string[] }) => {
+      const encoded = spec.args[spec.args.length - 1]!;
+      const script = Buffer.from(encoded, 'base64').toString('utf16le');
+      scripts.push(script);
+      const finding = script.includes('Get-CimInstance Win32_Process -Filter "ProcessId = $($p.Id)"');
+      return { exitCode: 0, signal: null, stdout: finding ? previousPids.map((pid) => `${pid} 133000000000000000`).join('\n') : '', stderr: '' };
+    });
+    return { run: run as unknown as import('../windowsHubService').SpecRunner, scripts };
+  }
+
   /** A Task Scheduler with at most one task (`existing`: its XML and whether it runs); every call is recorded. */
   function fakeClient(existing?: { xml: string; running: boolean }) {
     const calls: string[] = [];
@@ -99,7 +113,7 @@ describe('launchHubUpdateTask', () => {
 
   it('registers the task and starts it; the token is in its file (owner-only), not in the task', async () => {
     const { client, calls, registered } = fakeClient();
-    await launchHubUpdateTask({ client, guard }, launch);
+    await launchHubUpdateTask({ client, guard, run: fakeRun().run }, launch);
     expect(calls).toEqual(['register', 'start']);
     expect(registered()).not.toContain('secret-token');
     expect(scriptOf(registered()!)).not.toContain('secret-token');
@@ -108,19 +122,38 @@ describe('launchHubUpdateTask', () => {
   });
 
   it('writes no token file when there is no token', async () => {
-    await launchHubUpdateTask({ client: fakeClient().client, guard }, { ...launch, token: undefined });
+    await launchHubUpdateTask({ client: fakeClient().client, guard, run: fakeRun().run }, { ...launch, token: undefined });
     expect(fs.existsSync(launch.tokenFile)).toBe(false);
   });
 
   it('replaces the leftover of an earlier update that is no longer running', async () => {
     const { client, calls } = fakeClient({ xml: buildHubUpdateTaskXml(TASK), running: false });
-    await launchHubUpdateTask({ client, guard }, launch);
+    await launchHubUpdateTask({ client, guard, run: fakeRun().run }, launch);
     expect(calls).toEqual(['delete', 'register', 'start']);
+  });
+
+  it('looks for the previous update\'s process after ending its task and ends it before registering a new one', async () => {
+    // The task is no longer running (its conhost.exe was ended) but its node.exe may still be.
+    const { client, calls } = fakeClient({ xml: buildHubUpdateTaskXml(TASK), running: false });
+    const { run, scripts } = fakeRun([777]);
+    await launchHubUpdateTask({ client, guard, run }, launch);
+    expect(calls).toEqual(['delete', 'register', 'start']);
+    expect(scripts).toHaveLength(2);
+    expect(scripts[1]).toContain('Id = 777');
+  });
+
+  it('removes a token file an earlier run left, and writes none when there is no token now', async () => {
+    fs.writeFileSync(launch.tokenFile, 'old-secret');
+    await launchHubUpdateTask({ client: fakeClient().client, guard, run: fakeRun().run }, { ...launch, token: undefined });
+    expect(fs.existsSync(launch.tokenFile)).toBe(false);
+    fs.writeFileSync(launch.tokenFile, 'old-secret');
+    await launchHubUpdateTask({ client: fakeClient().client, guard, run: fakeRun().run }, launch);
+    expect(fs.readFileSync(launch.tokenFile, 'utf-8')).toBe('secret-token');
   });
 
   it('does not touch a task of that name that this code did not register', async () => {
     const { client, calls } = fakeClient({ xml: '<Task><Actions><Exec><Command>calc.exe</Command></Exec></Actions></Task>', running: false });
-    await expect(launchHubUpdateTask({ client, guard }, launch)).rejects.toThrow(/did not register.*schtasks \/Delete/);
+    await expect(launchHubUpdateTask({ client, guard, run: fakeRun().run }, launch)).rejects.toThrow(/did not register.*schtasks \/Delete/);
     expect(calls).toEqual([]);
     expect(fs.existsSync(launch.tokenFile)).toBe(false);
   });
@@ -128,14 +161,14 @@ describe('launchHubUpdateTask', () => {
   it('does not stop an update of another install that is running', async () => {
     const other = buildHubUpdateTaskXml({ ...TASK, hubDir: 'C:\\Users\\other\\.azito\\hub' });
     const { client, calls } = fakeClient({ xml: other, running: true });
-    await expect(launchHubUpdateTask({ client, guard }, launch)).rejects.toThrow(/another install \(C:\\Users\\other\\\.azito\\hub\) is running/);
+    await expect(launchHubUpdateTask({ client, guard, run: fakeRun().run }, launch)).rejects.toThrow(/another install \(C:\\Users\\other\\\.azito\\hub\) is running/);
     expect(calls).toEqual([]);
   });
 
   it('removes the token file and the half-registered task when the task cannot be started, and reports the original reason', async () => {
     const { client, calls } = fakeClient();
     (client.start as ReturnType<typeof vi.fn>).mockRejectedValueOnce(new Error('schtasks /Run failed'));
-    await expect(launchHubUpdateTask({ client, guard }, launch)).rejects.toThrow('schtasks /Run failed');
+    await expect(launchHubUpdateTask({ client, guard, run: fakeRun().run }, launch)).rejects.toThrow('schtasks /Run failed');
     expect(calls).toEqual(['register', 'delete']);
     expect(fs.existsSync(launch.tokenFile)).toBe(false);
   });

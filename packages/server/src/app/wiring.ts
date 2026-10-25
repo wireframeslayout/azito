@@ -653,7 +653,7 @@ function buildSystemUpdateModule(dataPaths: DataPaths, repos: Repositories, misa
   const hubService = createServiceManager(hostEnv, HUB_SERVICE, runCommand);
   // Windows updates through a one-shot task of their own: the means to register and start it, resolved here once.
   const windowsUpdate: WindowsUpdateHost | null = hostEnv.platform === 'win32' && hostEnv.systemRoot
-    ? { launcher: { client: new SchtasksClient(rawRunnerOf((spec) => runCommandSpec(spec, { ...runHostOf(hostEnv), rawOutput: true })), hostEnv), guard: secretFileGuard }, systemRoot: hostEnv.systemRoot, env: process.env }
+    ? { launcher: { client: new SchtasksClient(rawRunnerOf((spec) => runCommandSpec(spec, { ...runHostOf(hostEnv), rawOutput: true })), hostEnv), guard: secretFileGuard, run: (spec) => runCommandSpec(spec, runHostOf(hostEnv)) }, systemRoot: hostEnv.systemRoot, env: process.env }
     : null;
   const systemUpdateService = new SystemUpdateService(
     channelResolver, stateManager, deployModeDetector, dataPaths, repos.taskRepo, 'manager' in hubService ? hubService.manager : null,

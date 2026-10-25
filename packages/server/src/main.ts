@@ -90,7 +90,8 @@ async function main(): Promise<void> {
 
   if (process.argv[2] === 'update-run') {
     await runUpdate(process.argv.slice(3), hostEnv, secretFileGuard);
-    return;
+    // A step that was given up on (a download that stopped answering) may still hold a socket open: the run is over, so the process is too.
+    process.exit(process.exitCode ?? 0);
   }
 
   const paths = resolveDataDir(secretFileGuard);

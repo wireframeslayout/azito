@@ -46,7 +46,7 @@ describe('runUpdateSteps (the part of update-run that is the same on every OS)',
     };
   }
 
-  const run = (b: UpdateBackend, token?: string): Promise<void> => runUpdateSteps(args(), b, 'http://127.0.0.1:3001/api/health', token, state, stateManager);
+  const run = (b: UpdateBackend, token?: string, signal?: AbortSignal): Promise<void> => runUpdateSteps(args(), b, 'http://127.0.0.1:3001/api/health', token, state, stateManager, signal ?? new AbortController().signal);
 
   beforeEach(() => {
     dir = fs.mkdtempSync(path.join(os.tmpdir(), 'azito-update-script-'));
@@ -147,5 +147,37 @@ describe('runUpdateSteps (the part of update-run that is the same on every OS)',
     await run(b);
     expect(state.error).toBe('Health check timed out');
     expect(stateManager.readLog().join('\n')).toMatch(/Could not remove .*EBUSY/);
+  });
+
+  it('puts the old version back when only the state write right after the switch fails', async () => {
+    const realWrite = stateManager.write.bind(stateManager);
+    let failed = false;
+    vi.spyOn(stateManager, 'write').mockImplementation((s) => {
+      const last = s.steps[s.steps.length - 1];
+      if (!failed && last?.step === 'switch' && last.status === 'ok') { failed = true; throw new Error('EBUSY: state file is locked'); }
+      realWrite(s);
+    });
+    const b = backend();
+    await run(b);
+    expect(b.switchTo).toHaveBeenCalled();
+    expect(b.rollback).toHaveBeenCalledWith('v1.0.0', true);
+    expect(state).toMatchObject({ status: 'failed', step: 'switch' });
+  });
+
+  it('ends as a failed run when it is told to (the deadline, or its task ended), and puts the old version back if it had switched', async () => {
+    const abort = new AbortController();
+    const b = backend({ restart: vi.fn(async () => { abort.abort(new Error('The update did not finish within 50 minutes')); await new Promise(() => undefined); }) });
+    await run(b, undefined, abort.signal);
+    expect(state).toMatchObject({ status: 'failed', step: 'restart', error: 'The update did not finish within 50 minutes' });
+    expect(b.rollback).toHaveBeenCalledWith('v1.0.0', true);
+  });
+
+  it('a download that is stopped by the abort before anything was switched leaves the hub alone', async () => {
+    const abort = new AbortController();
+    vi.stubGlobal('fetch', vi.fn(() => { abort.abort(new Error('The update task was ended')); return new Promise(() => undefined); }));
+    const b = backend();
+    await run(b, undefined, abort.signal);
+    expect(state).toMatchObject({ status: 'failed', step: 'download', error: 'The update task was ended' });
+    expect(b.rollback).toHaveBeenCalledWith('v1.0.0', false);
   });
 });

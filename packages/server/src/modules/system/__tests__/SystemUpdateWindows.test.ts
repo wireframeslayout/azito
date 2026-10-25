@@ -42,7 +42,7 @@ describe('SystemUpdateService on Windows', () => {
   let stateManager: UpdateStateManager;
   let channelResolver: UpdateChannelResolver;
   const taskRepo = { findByStatus: () => [] } as unknown as SqliteTaskRepository;
-  const windowsUpdate: WindowsUpdateHost = { launcher: { client: {} as SchtasksClient, guard }, systemRoot: 'C:\\Windows', env: { USERDOMAIN: 'PC', USERNAME: 'me' } };
+  const windowsUpdate: WindowsUpdateHost = { launcher: { client: {} as SchtasksClient, guard, run: async () => { throw new Error('not used'); } }, systemRoot: 'C:\\Windows', env: { USERDOMAIN: 'PC', USERNAME: 'me' } };
   const detector = { detect: () => 'taskscheduler', canUpdate: () => true, serviceManager: () => null, getDisabledReason: () => null } as unknown as DeployModeDetector;
   let host: { platform: 'win32'; arch: 'x64'; bundleRoot: string };
   const fetchMock = vi.fn();

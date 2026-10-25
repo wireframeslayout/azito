@@ -20,7 +20,7 @@ export function readOrCreateLockKey(root: string, guard: SecretFileGuard): strin
   const file = path.join(root, LOCK_KEY_FILE);
   if (!fs.existsSync(file)) createExclusively(file, guard);
   const verdict = guard.inspect(file, 'file');
-  if (!verdict.ok) throw new Error(`The misao lock key ${file} is not private to this user (${verdict.summary}). ${verdict.fix}`);
+  if (!verdict.ok) throw new Error(`The lock key ${file} is not private to this user (${verdict.summary}). ${verdict.fix}`);
   const key = fs.readFileSync(file, 'utf-8').trim();
   if (!KEY_PATTERN.test(key)) throw new Error(`${file} does not hold a lock key. Delete it and a new one is made.`);
   return key;
