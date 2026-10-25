@@ -32,8 +32,6 @@ export function buildNodeSetupInvocation(options: NodeSetupOptions): NodeSetupIn
   if (azitoUrl) args.push('--azito-url', azitoUrl);
   if (serverName) args.push('--server-name', serverName);
   if (prefix) args.push('--prefix', prefix);
-  // Withheld for an isolation-intent server and purged from it (see HarnessInstallOptions.isolationIntent).
-  if (isolationIntent) args.push('--purge-operator-token');
   return {
     args,
     env: {
@@ -41,6 +39,8 @@ export function buildNodeSetupInvocation(options: NodeSetupOptions): NodeSetupIn
       AZITO_SERVER_NAME: '',
       AZITO_PREFIX: '',
       AZITO_WEBHOOK_TOKEN: webhookToken ?? '',
+      // Withheld for an isolation-intent server (see HarnessInstallOptions.isolationIntent). A Windows agent cannot be one (#464),
+      // so there is no purge of an earlier token here: setup.mjs refuses --purge-operator-token.
       AZITO_UI_TOKEN: uiToken && !isolationIntent ? uiToken : '',
     },
   };
@@ -82,9 +82,19 @@ export async function sendHarnessDirectory(files: IFileOps, sourceDir: string, l
     }
     await files.replaceDirectory(staging, location.harnessDir);
   } catch (err) {
-    // Best effort: the error being reported is the transfer's, not the cleanup's. A replacement that failed leaves the old
-    // harness in place, so the dependencies go back to it before the staging directory is removed.
-    if (carriedOver) await files.rename(stagedDependencies, installedDependencies).catch(() => undefined);
+    // A replacement that failed leaves the old harness in place, so the dependencies go back to it before the staging directory
+    // is removed. When they cannot be put back, the staging directory is kept: it is the only place they are in.
+    if (carriedOver) {
+      try {
+        await files.rename(stagedDependencies, installedDependencies);
+      } catch (restoreErr) {
+        throw new Error(
+          `${(err as Error).message}. The MCP dependencies could not be put back: they are kept in ${stagedDependencies} `
+          + `(${(restoreErr as Error).message}); move that node_modules to ${installedDependencies} by hand.`,
+        );
+      }
+    }
+    // Best effort: the error being reported is the transfer's, not the cleanup's.
     await files.remove(staging).catch(() => undefined);
     throw err;
   }

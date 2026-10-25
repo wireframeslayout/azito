@@ -68,20 +68,3 @@ export function writeOperatorEnv(azitoDir, { azitoUrl, uiToken }, secrets) {
   secrets.writeSecretFile(file, `${lines.join('\n')}\n`);
   return file;
 }
-
-/** --purge-operator-token: operator.env holds only these two lines, so it is deleted as a whole. A symlink is reported, not followed. */
-export function purgeOperatorEnv(azitoDir) {
-  const file = path.join(azitoDir, 'operator.env');
-  let stat;
-  try {
-    stat = fs.lstatSync(file);
-  } catch (err) {
-    if (err.code === 'ENOENT') return { message: `${file}: 存在しないためスキップ (--purge-operator-token)` };
-    throw err;
-  }
-  if (stat.isSymbolicLink()) {
-    return { error: `${file} はシンボリックリンクです（リンク先: ${fs.readlinkSync(file)}）。dotfiles 管理等の可能性があるため自動削除しません。リンク先のファイルを手動で確認し、AZITO_UI_TOKEN を除去してください` };
-  }
-  fs.rmSync(file, { force: true });
-  return { message: `${file}: --purge-operator-token により削除しました` };
-}

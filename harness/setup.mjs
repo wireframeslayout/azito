@@ -2,7 +2,6 @@
 // AZITO Harness setup, Node version (used on Windows; POSIX keeps setup.sh).
 //
 //   node setup.mjs [--azito-url <url>] [--webhook-token <t>] [--ui-token <t>] [--server-name <name>] [--prefix <name>]
-//                  [--purge-operator-token]
 //
 // Does what setup.sh does, without a shell, a symbolic link or `chmod`: the skills (`/azt-*`) are junctions and the rules are
 // copies (lib/links.mjs), azitoctl*.env / operator.env are written in the Windows form and kept owner-only (lib/secretFile.mjs),
@@ -13,8 +12,8 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { codexHomeOf, findOnPath, registerCodexMcp, stripCodexUiToken, writeAgentsBlock } from './lib/codex.mjs';
-import { purgeOperatorEnv, scrubLegacyUiToken, writeAzitoctlEnv, writeOperatorEnv } from './lib/envFiles.mjs';
+import { codexHomeOf, findOnPath, registerCodexMcp, writeAgentsBlock } from './lib/codex.mjs';
+import { scrubLegacyUiToken, writeAzitoctlEnv, writeOperatorEnv } from './lib/envFiles.mjs';
 import { copyRules, linkSkills } from './lib/links.mjs';
 import { PREFIX_PATTERN, mergeClaudeSettings } from './lib/claudeSettings.mjs';
 import { createSecretFiles } from './lib/secretFile.mjs';
@@ -29,15 +28,13 @@ export function parseSetupArgs(argv, env) {
     uiToken: env.AZITO_UI_TOKEN ?? '',
     serverName: env.AZITO_SERVER_NAME ?? '',
     prefix: env.AZITO_PREFIX ?? '',
-    purge: false,
   };
-  let uiTokenGiven = false;
   const keys = { '--azito-url': 'azitoUrl', '--webhook-token': 'webhookToken', '--ui-token': 'uiToken', '--server-name': 'serverName', '--prefix': 'prefix' };
   for (let i = 0; i < argv.length; i++) {
     const arg = argv[i];
     if (arg === '--purge-operator-token') {
-      options.purge = true;
-      continue;
+      // The purge belongs to declaring a server isolated, which a Windows agent cannot be (#464).
+      throw new Error('--purge-operator-token は Windows では使えません（Windows のエージェントを隔離サーバーにすることは、このリリースの範囲外です。#464 で対応予定）');
     }
     const [flag, inline] = arg.includes('=') ? [arg.slice(0, arg.indexOf('=')), arg.slice(arg.indexOf('=') + 1)] : [arg, undefined];
     if (!(flag in keys)) throw new Error(`Unknown option: ${arg}`);
@@ -47,16 +44,10 @@ export function parseSetupArgs(argv, env) {
       if (value === undefined || value.startsWith('--')) throw new Error(`Option ${flag} requires a value`);
     }
     options[keys[flag]] = value;
-    if (flag === '--ui-token') uiTokenGiven = true;
   }
   // Checked here, before any file name is made from it (azitoctl-<prefix>.env).
   if (options.prefix && (!PREFIX_PATTERN.test(options.prefix) || options.prefix.includes('..'))) {
     throw new Error(`--prefix に使える文字は英数字と . _ - です（先頭は英数字、.. は不可）: ${options.prefix}`);
-  }
-  if (options.purge) {
-    if (uiTokenGiven) throw new Error('--purge-operator-token と --ui-token は同時指定できません');
-    // An inherited AZITO_UI_TOKEN must not be written back in the run that purges it.
-    options.uiToken = '';
   }
   return options;
 }
@@ -73,8 +64,7 @@ export function runSetup(options, host, log) {
   const claudeDir = path.join(homeDir, '.claude');
   const secrets = createSecretFiles({ platform, env });
   const azitoUrlValue = options.azitoUrl || DEFAULT_URL;
-  const modeSkipped = options.purge ? '  スキップ (--purge-operator-token)' : '  スキップ (--prefix モード)';
-  const linksEnabled = !options.purge && !options.prefix;
+  const linksEnabled = !options.prefix;
 
   log('AZITO Harness セットアップ');
   log(`ハーネス: ${harnessDir}`);
@@ -83,11 +73,11 @@ export function runSetup(options, host, log) {
 
   log('\n=== Skills ===');
   if (linksEnabled) linkSkills({ harnessDir, destDir: path.join(claudeDir, 'skills'), platform, log });
-  else log(modeSkipped);
+  else log('  スキップ (--prefix モード)');
 
   log('\n=== Rules (prompt-modules) ===');
   if (linksEnabled) copyRules({ harnessDir, destDir: path.join(claudeDir, 'rules'), manifestFile: path.join(azitoDir, 'harness-copies.json'), log });
-  else log(modeSkipped);
+  else log('  スキップ (--prefix モード)');
 
   log('\n=== Settings (settings.json) ===');
   if (!options.azitoUrl) {
@@ -101,7 +91,6 @@ export function runSetup(options, host, log) {
       azitoUrl: azitoUrlValue,
       uiToken: options.uiToken,
       prefix: options.prefix,
-      purge: options.purge,
     })) log(line);
   } catch (err) {
     fail(err.message);
@@ -121,11 +110,6 @@ export function runSetup(options, host, log) {
   }
 
   log('\n=== operator.env ===');
-  if (options.purge) {
-    const purged = purgeOperatorEnv(azitoDir);
-    if (purged.error) fail(purged.error);
-    else log(`  ${purged.message}`);
-  }
   if (options.uiToken) {
     const file = writeOperatorEnv(azitoDir, { azitoUrl: azitoUrlValue, uiToken: options.uiToken }, secrets);
     log(`  ${file}: 書き出しました`);
@@ -142,9 +126,7 @@ export function runSetup(options, host, log) {
 function setupCodex({ options, host, codexHome, harnessDir, azitoUrlValue, log, fail }) {
   const { platform, env } = host;
   log('\n=== Codex CLI ===');
-  if (options.purge) stripCodexUiToken({ configFile: path.join(codexHome, 'config.toml'), fail, log });
   if (options.prefix) return log('  スキップ (--prefix モード)');
-  if (options.purge) return log('  スキップ (--purge-operator-token — トークン除去のみ実施済み)');
   const codexFound = findOnPath('codex', env, platform) !== null;
   if (!codexFound && !fs.existsSync(codexHome)) return log('  スキップ (codex 未検出)');
 
@@ -171,7 +153,7 @@ function main() {
     options = parseSetupArgs(process.argv.slice(2), process.env);
   } catch (err) {
     console.error(err.message);
-    console.error('Usage: node setup.mjs [--azito-url <url>] [--webhook-token <t>] [--ui-token <t>] [--server-name <name>] [--prefix <name>] [--purge-operator-token]');
+    console.error('Usage: node setup.mjs [--azito-url <url>] [--webhook-token <t>] [--ui-token <t>] [--server-name <name>] [--prefix <name>]');
     process.exit(1);
   }
   const host = { platform: process.platform, env: process.env, homeDir: os.homedir(), harnessDir: path.dirname(fileURLToPath(import.meta.url)) };

@@ -93,11 +93,35 @@ describe('HarnessInstaller.installOnAgent', () => {
     expect(fs.readdirSync(path.join(home, '.azito'))).toEqual(['harness']);
   });
 
-  it('withholds the UI token from an isolation-intent server and has setup purge it', async () => {
+  it('keeps the dependencies where they are, and keeps the staging directory, when they cannot be put back', async () => {
+    const mcp = path.join(home, '.azito', 'harness', 'skills', 'azt-mcp', 'mcp-server');
+    fs.mkdirSync(path.join(mcp, 'node_modules', 'pkg'), { recursive: true });
+    fs.writeFileSync(path.join(mcp, 'node_modules', 'pkg', 'index.js'), 'installed');
+    const failing: IFileOps = Object.create(files);
+    failing.replaceDirectory = async () => { throw new Error('in use'); };
+    let renames = 0;
+    // the first rename carries the dependencies into the staging directory; the one that puts them back fails
+    failing.rename = async (from, to) => {
+      if (++renames === 2) throw new Error('access denied');
+      return files.rename(from, to);
+    };
+    const result = await new HarnessInstaller({} as SshClient).installOnAgent({ files: () => failing, run: vi.fn() }, options());
+    expect(result.success).toBe(false);
+    const staging = fs.readdirSync(path.join(home, '.azito')).filter((n) => n.startsWith('harness.staging-'));
+    expect(staging).toHaveLength(1);
+    const kept = path.join(home, '.azito', staging[0], 'skills', 'azt-mcp', 'mcp-server', 'node_modules');
+    expect(fs.readFileSync(path.join(kept, 'pkg', 'index.js'), 'utf8')).toBe('installed');
+    expect(result.error).toContain('in use');
+    expect(result.error).toContain('access denied');
+    expect(result.error).toContain(kept);
+    expect(result.error).toContain(path.join(mcp, 'node_modules'));
+  });
+
+  it('withholds the UI token from an isolation-intent server (there is no purge: a Windows agent cannot be isolated)', async () => {
     const run = vi.fn(async (_spec: CommandSpec): Promise<CommandResult> => OK);
     await new HarnessInstaller({} as SshClient).installOnAgent({ files: () => files, run }, options({ isolationIntent: true }));
     const [spec] = run.mock.calls[0];
-    expect(spec.args).toContain('--purge-operator-token');
+    expect(spec.args).not.toContain('--purge-operator-token');
     expect(spec.env).toMatchObject({ AZITO_WEBHOOK_TOKEN: 'wh-secret', AZITO_UI_TOKEN: '' });
   });
 

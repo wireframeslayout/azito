@@ -39,15 +39,11 @@ function describeHookCommand(command) {
   return m ? { kind: m[1], event: m[2] ?? '', prefix: m[3] ?? '' } : null;
 }
 
-function readSettings(settingsPath, purge) {
+function readSettings(settingsPath) {
   try {
     return JSON.parse(fs.readFileSync(settingsPath, 'utf8'));
-  } catch (err) {
-    // First run: no file. In purge mode any other failure must not read as "nothing to purge".
-    if (err.code === 'ENOENT') return {};
-    if (purge) {
-      throw new Error(`--purge-operator-token は ${settingsPath} の読み込みに失敗しました（${err.message}）。ファイルの内容を確認し、AZITO_UI_TOKEN の除去が必要か手動で確認してください。`);
-    }
+  } catch {
+    // First run: no file. (An unreadable file is treated the same, as setup.sh does.)
     return {};
   }
 }
@@ -107,39 +103,27 @@ function upsertHook(settings, eventName, kind, event, prefix, command, label, me
 
 /**
  * Merges the MCP server and the hooks into settings.json (idempotent: a second run with the same input changes nothing).
- * `purge` only removes AZITO_UI_TOKEN from the MCP env. A prefix run registers the hooks only (no MCP server).
+ * A prefix run registers the hooks only (no MCP server).
  * Returns the lines to print.
  */
-export function mergeClaudeSettings({ settingsPath, hookScript, mcpServerPath, azitoUrl, uiToken, prefix, purge }) {
-  const settings = readSettings(settingsPath, purge);
+export function mergeClaudeSettings({ settingsPath, hookScript, mcpServerPath, azitoUrl, uiToken, prefix }) {
+  const settings = readSettings(settingsPath);
   const messages = [];
   let changed = false;
 
-  if (purge) {
-    const env = settings.mcpServers?.[MCP_ENTRY_KEY]?.env;
-    if (env && 'AZITO_UI_TOKEN' in env) {
-      delete env.AZITO_UI_TOKEN;
-      changed = true;
-      messages.push('  azt-mcp: --purge-operator-token により AZITO_UI_TOKEN を除去しました（登録/更新はスキップ）');
-    } else {
-      messages.push('  azt-mcp: 除去対象の AZITO_UI_TOKEN はありません');
-    }
-    messages.push('  hooks: スキップ (--purge-operator-token)');
+  if (prefix) {
+    messages.push('  azt-mcp: スキップ (--prefix モード)');
+  } else if (fs.existsSync(mcpServerPath)) {
+    changed = upsertMcp(settings, { mcpServerPath, azitoUrl, uiToken }, messages) || changed;
   } else {
-    if (prefix) {
-      messages.push('  azt-mcp: スキップ (--prefix モード)');
-    } else if (fs.existsSync(mcpServerPath)) {
-      changed = upsertMcp(settings, { mcpServerPath, azitoUrl, uiToken }, messages) || changed;
-    } else {
-      messages.push('  azt-mcp: スキップ (MCP サーバーが見つかりません)');
+    messages.push('  azt-mcp: スキップ (MCP サーバーが見つかりません)');
+  }
+  if (fs.existsSync(hookScript)) {
+    for (const [eventName, kind, event, label] of HOOKS) {
+      changed = upsertHook(settings, eventName, kind, event, prefix, hookCommand(hookScript, kind, event, prefix), label, messages) || changed;
     }
-    if (fs.existsSync(hookScript)) {
-      for (const [eventName, kind, event, label] of HOOKS) {
-        changed = upsertHook(settings, eventName, kind, event, prefix, hookCommand(hookScript, kind, event, prefix), label, messages) || changed;
-      }
-    } else {
-      messages.push('  hooks: スキップ (hook スクリプトが見つかりません)');
-    }
+  } else {
+    messages.push('  hooks: スキップ (hook スクリプトが見つかりません)');
   }
 
   if (changed) {

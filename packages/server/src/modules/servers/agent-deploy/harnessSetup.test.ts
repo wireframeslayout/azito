@@ -149,33 +149,12 @@ describe('setup.mjs', () => {
     expect(result.stderr).toContain('--prefix');
   });
 
-  it('--purge-operator-token removes the UI token everywhere and registers nothing', async () => {
-    await runSetup(FULL);
-    const before = readJson(settingsPath());
-    const result = await runSetup(['--purge-operator-token']);
-    expect(result.code).toBe(0);
-    expect(fs.existsSync(path.join(home, '.azito', 'operator.env'))).toBe(false);
-    const after = readJson(settingsPath());
-    expect(after.mcpServers['azt-mcp'].env).toEqual({ AZITO_URL: 'http://hub.example:3001' });
-    expect(after.hooks).toEqual(before.hooks);
-    expect(fs.existsSync(path.join(home, '.azito', 'azitoctl.env'))).toBe(true);
-  });
-
-  it('--purge-operator-token ignores an inherited AZITO_UI_TOKEN and refuses --ui-token', async () => {
-    const inherited = await runSetup(['--purge-operator-token'], { AZITO_UI_TOKEN: 'inherited' });
-    expect(inherited.code).toBe(0);
-    expect(fs.existsSync(path.join(home, '.azito', 'operator.env'))).toBe(false);
-    const both = await runSetup(['--purge-operator-token', '--ui-token', 'x']);
-    expect(both.code).toBe(1);
-    expect(both.stderr).toContain('同時指定できません');
-  });
-
-  it('--purge-operator-token fails (does not report "nothing to purge") when settings.json cannot be read', async () => {
-    fs.mkdirSync(path.join(home, '.claude'));
-    fs.writeFileSync(settingsPath(), '{ not json');
-    const result = await runSetup(['--purge-operator-token']);
+  it('refuses --purge-operator-token with the reason, before writing anything (a Windows agent cannot be isolated: #464)', async () => {
+    const result = await runSetup(['--purge-operator-token', '--azito-url', 'http://x', '--webhook-token', 't']);
     expect(result.code).toBe(1);
-    expect(result.stderr).toContain('読み込みに失敗');
+    expect(result.stderr).toContain('#464');
+    expect(fs.existsSync(path.join(home, '.azito'))).toBe(false);
+    expect(fs.existsSync(path.join(home, '.claude'))).toBe(false);
   });
 
   it('the tokens can come from the environment (not the argument list)', async () => {
@@ -312,35 +291,6 @@ if (process.argv[2] === 'mcp' && process.argv[3] === 'get') process.exit(1);
     expect(fs.readFileSync(path.join(home, '.codex', 'config.toml'), 'utf8')).toBe('model = "x"\n');
     expect(result.stderr).toContain('azt-mcp (Codex)');
   }, 60_000);
-
-  it('--purge-operator-token removes the key from the standard env table and fails closed on a layout it does not know', async () => {
-    fs.mkdirSync(path.join(home, '.codex'));
-    const config = path.join(home, '.codex', 'config.toml');
-    fs.writeFileSync(config, '[mcp_servers.azt-mcp]\ncommand = "node"\n\n[mcp_servers.azt-mcp.env]\nAZITO_URL = "http://x"\nAZITO_UI_TOKEN = "secret"\n');
-    expect((await runSetup(['--purge-operator-token'])).code).toBe(0);
-    expect(fs.readFileSync(config, 'utf8')).toBe('[mcp_servers.azt-mcp]\ncommand = "node"\n\n[mcp_servers.azt-mcp.env]\nAZITO_URL = "http://x"\n');
-
-    fs.writeFileSync(config, '[mcp_servers.azt-mcp]\nenv = { AZITO_UI_TOKEN = "secret" }\n');
-    const unknown = await runSetup(['--purge-operator-token']);
-    expect(unknown.code).toBe(1);
-    expect(fs.readFileSync(config, 'utf8')).toContain('secret');
-  });
-
-  it.each([
-    ['a key written with an escape', '[mcp_servers.azt-mcp.env]\n"AZITO_UI_TOK\\u0045N" = "secret"\n'],
-    ['an escaped table name', '[mcp_servers."azt\\u002dmcp".env]\nAZITO_UI_TOKEN = "secret"\n'],
-    ['an escaped part of a dotted key', 'mcp_servers."azt-mc\\u0070".env.AZITO_UI_TOKEN = "secret"\n'],
-  ])('--purge-operator-token fails closed, before editing, on %s', async (_name, toml) => {
-    fs.mkdirSync(path.join(home, '.codex'));
-    const config = path.join(home, '.codex', 'config.toml');
-    // a standard-layout key that would be removed if the file were edited at all
-    const content = `${toml}\n[mcp_servers.azt-mcp.env]\nAZITO_UI_TOKEN = "standard"\n`;
-    fs.writeFileSync(config, content);
-    const result = await runSetup(['--purge-operator-token']);
-    expect(result.code).toBe(1);
-    expect(result.stderr).toContain('手動で確認');
-    expect(fs.readFileSync(config, 'utf8')).toBe(content);
-  });
 });
 
 describe('the hook written by setup.mjs', () => {

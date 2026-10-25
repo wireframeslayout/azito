@@ -15,16 +15,16 @@ import { CommandSpawnError, GitNotFoundError } from '../../shared/exec/commandSp
 
 const TMUX_CAPS = { changeEvents: true, agentState: false, independentClients: true, copyMode: true };
 
-function makeServer(hostProfile: HostProfile | null): ServerConfig {
+function makeServer(hostProfile: HostProfile | null, isolationIntent = false): ServerConfig {
   return {
     name: 'srv', type: 'agent', host: '100.64.0.7', agentPort: 3002, agentToken: 'tok', agentVersion: 'v1', sshHost: 'user@host',
-    hostProfile, sshHostFingerprint: null, isolationIntent: false, isolationVerifiedAt: null, isolationReport: null,
+    hostProfile, sshHostFingerprint: null, isolationIntent, isolationVerifiedAt: null, isolationReport: null,
     isolationCleanupReport: null, defaultMux: 'tmux', muxRuntime: 'managed', createdAt: '2026-01-01T00:00:00Z',
   };
 }
 
-async function buildApp(hostProfile: HostProfile | null, run: (spec: unknown) => Promise<unknown> = vi.fn()) {
-  const server = makeServer(hostProfile);
+async function buildApp(hostProfile: HostProfile | null, run: (spec: unknown) => Promise<unknown> = vi.fn(), isolationIntent = false) {
+  const server = makeServer(hostProfile, isolationIntent);
   const exec = vi.fn(async () => ({ stdout: '', stderr: '', code: 0 }));
   const serverRepo = { findAll: () => [server], findByName: (name: string) => (name === server.name ? server : null) } as unknown as IServerRepository;
   const harnessInstaller = new HarnessInstaller({} as SshClient);
@@ -101,6 +101,12 @@ describe('Unix-only install operations on a Windows server answer unsupported_os
     expect(res.json().error).toContain('isolationIntent');
     expect(install).not.toHaveBeenCalled();
     expect(installOnAgent).not.toHaveBeenCalled();
+  });
+
+  it('PUT with isolationIntent unchanged (already true) is not refused for the OS: only the change to true is', async () => {
+    const { app } = await buildApp(win32, vi.fn(), true);
+    const res = await app.inject({ method: 'PUT', url: '/api/servers/srv', payload: { isolationIntent: true } });
+    expect(res.json()?.code).not.toBe('unsupported_os');
   });
 
   it('a server with no recorded OS (a Unix agent from before it was kept) still applies the tmux config', async () => {

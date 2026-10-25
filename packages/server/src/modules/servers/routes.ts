@@ -532,8 +532,9 @@ const serversRoutes: FastifyPluginCallback<ServersRouteOptions> = (fastify, opts
         return reply.status(400).send({ error: 'isolationIntent is only settable for agent servers' });
       }
       // A Windows agent cannot be declared isolated (#464): the credential cleanup that goes with the declaration
-      // (attemptIsolationCleanup) is built for a Unix agent only, so it is refused here, before anything is touched.
-      if (isolationIntent === true) assertHostFeature(transportFactory.hostProfileFor(srv), 'isolation', 'Declaring a server isolated (isolationIntent)');
+      // (attemptIsolationCleanup) is built for a Unix agent only, so the change to true is refused here, before anything is
+      // touched. A request that leaves the value as it is (a mux setting saved on a server that already has it) goes through.
+      if (isolationIntent === true && !srv.isolationIntent) assertHostFeature(transportFactory.hostProfileFor(srv), 'isolation', 'Declaring a server isolated (isolationIntent)');
       // Issue #29 review, Critical finding 1: a false->true isolation_intent
       // transition previously only cleaned up the persisted operator-token
       // config (HarnessInstaller purge via attemptIsolationCleanup below) —

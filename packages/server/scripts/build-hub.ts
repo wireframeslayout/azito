@@ -238,7 +238,9 @@ function assertStageContents(platform: Args['platform']): void {
     // The Windows route of the harness install (setup.mjs, the Node hook and the modules setup.mjs imports).
     'harness/setup.mjs',
     'harness/hooks/azito-hook.mjs',
-    'harness/lib/secretFile.mjs',
+    // every module setup.mjs imports at run time
+    ...['claudeSettings', 'codex', 'envFiles', 'links', 'secretFile'].map((m) => `harness/lib/${m}.mjs`),
+    'harness/lib/winAclScripts.mjs',
     'dist-agent/azito-agent.tar.gz',
     'deploy/azito-release.service',
     'deploy/com.azito.hub.plist',
