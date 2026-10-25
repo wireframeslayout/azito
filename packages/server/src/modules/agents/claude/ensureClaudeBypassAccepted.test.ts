@@ -7,7 +7,7 @@ import { FileOpsError, type IFileOps } from '../../../shared/fs/fileOps';
 import type { HostPlatform } from '../../../shared/os/hostEnv';
 import { LocalFileOps, localFileOpsHost } from '../../../shared/fs/LocalFileOps';
 import { ensureClaudeBypassAccepted, ensureClaudeLegacyBypassAccepted } from './ensureClaudeBypassAccepted';
-import { ensureClaudeTrust } from './ensureClaudeTrust';
+import { claudeProjectKeys, ensureClaudeTrust } from './ensureClaudeTrust';
 import { prepareClaudeLaunch } from './prepareClaudeLaunch';
 
 let fakeHome: string;
@@ -243,6 +243,28 @@ describe('~/.claude.json as a symbolic link (folder trust and the 2.0.x acceptan
       const config = readTarget();
       expect(config.bypassPermissionsModeAccepted).toBe(true);
       expect(Object.keys(config.projects).length).toBeGreaterThanOrEqual(2);
+    });
+
+    it('loses nothing when one home reaches the file by its link and another by its real path, at the same time', async () => {
+      const otherHome = realpathSync.native(mkdtempSync(join(tmpdir(), 'claude-json-link-other-')));
+      try {
+        writeFileSync(join(otherHome, '.claude.json'), JSON.stringify({ projects: {} }));
+        symlinkSync(join(otherHome, '.claude.json'), linkPath());
+        const viaLink = transportWithHome(fakeHome);
+        const viaRealPath = transportWithHome(otherHome);
+        const results = await Promise.all([
+          ensureClaudeLegacyBypassAccepted(viaLink),
+          ensureClaudeTrust(viaRealPath, '/wt-a'),
+          ensureClaudeTrust(viaLink, '/wt-b'),
+          ensureClaudeLegacyBypassAccepted(viaRealPath),
+        ]);
+        expect(results.every((r) => r.action === 'accepted' || r.action === 'registered' || r.action === 'already_accepted')).toBe(true);
+        const config = JSON.parse(readFileSync(join(otherHome, '.claude.json'), 'utf8'));
+        expect(config.bypassPermissionsModeAccepted).toBe(true);
+        expect(Object.keys(config.projects)).toEqual(expect.arrayContaining([...claudeProjectKeys(process.platform === 'win32' ? 'win32' : 'linux', '/wt-a'), ...claudeProjectKeys(process.platform === 'win32' ? 'win32' : 'linux', '/wt-b')]));
+      } finally {
+        rmSync(otherHome, { recursive: true, force: true });
+      }
     });
 
     it('treats a dangling link as a missing file', async () => {
