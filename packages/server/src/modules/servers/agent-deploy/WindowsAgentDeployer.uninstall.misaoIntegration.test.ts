@@ -1,4 +1,4 @@
-import { exec as execCallback, execFile, spawn, type ChildProcess } from 'node:child_process';
+import { exec as execCallback, execFile } from 'node:child_process';
 import * as crypto from 'node:crypto';
 import * as fs from 'node:fs';
 import * as net from 'node:net';
@@ -16,14 +16,15 @@ import type { WindowsAgentOptions } from './windowsAgentConfig';
 
 /**
  * Removing the misao beside a Windows agent against a REAL misao daemon: one daemon runs for the folder that is to be removed, started
- * by its Task Scheduler task as the installer does (under `conhost.exe --headless`; on a machine with no logon session the Task
- * Scheduler cannot start it, and it is started under `conhost.exe --headless` directly instead), and another runs for a different folder.
+ * by its Task Scheduler task as the installer does (under `conhost.exe --headless`), and another runs, by a task of its own, for a different
+ * folder. On a machine with no logon session the Task Scheduler cannot start them and the test is skipped, with the reason.
  * The uninstall must stop the first (its process gone, its pipe closed, its task and folder removed) and leave the second running.
  * Everything here is unique to this run, and the suite FAILS if it cannot clean up.
  */
 const SUFFIX = crypto.randomBytes(4).toString('hex');
 const OPTIONS: WindowsAgentOptions = { taskName: `AzitoCiAgent-${SUFFIX}`, dir: `azito-ci-umi-${SUFFIX}`, port: 3999, misaoTaskName: `AzitoCiMisao-${SUFFIX}`, misaoDir: `azito-ci-umi-misao-${SUFFIX}` };
 const OTHER_DIR = `azito-ci-umi-other-${SUFFIX}`;
+const OTHER_TASK = `AzitoCiOtherMisao-${SUFFIX}`;
 const VERSION = '0.3.0';
 const SYSTEM_ROOT = process.env.SystemRoot ?? 'C:\\Windows';
 
@@ -87,60 +88,58 @@ describe.skipIf(process.platform !== 'win32' || !fs.existsSync(MISAO_CLI))('remo
   const misaoRoot = path.win32.join(home, OPTIONS.misaoDir);
   const otherRoot = path.win32.join(home, OTHER_DIR);
   const pipeOf = (root: string): string => windowsMisaoPipe(root, os.userInfo().username);
-  const children: ChildProcess[] = [];
   let otherPid: number | undefined;
-
-  /**
-   * `conhost.exe --headless cmd.exe /c "misao.exe serve ..." >> log`: the form the Task Scheduler's task runs the daemon in (the output goes to
-   * the log in the folder, as the task's does; a daemon with nowhere to write may not start).
-   */
-  function startUnderConhost(exe: string, root: string): void {
-    const command = `/d /v:off /s /c ""${exe}" serve --socket "${pipeOf(root)}" --data "${root}" >>"${path.win32.join(root, 'misao.log')}" 2>&1"`;
-    children.push(spawn(path.win32.join(SYSTEM_ROOT, 'System32', 'conhost.exe'), ['--headless', path.win32.join(SYSTEM_ROOT, 'System32', 'cmd.exe'), command], { stdio: 'ignore', windowsHide: true, windowsVerbatimArguments: true }));
-  }
 
   /** The tail of a daemon's log, for the message of a daemon that did not come up. */
   function logTail(root: string): string {
     try { return fs.readFileSync(path.win32.join(root, 'misao.log'), 'utf8').slice(-1500); } catch { return '(no log)'; }
   }
 
+  /**
+   * A misao for `root` the way the installer sets it up: the release in `<root>\0.3.0`, a Task Scheduler task registered from the same
+   * definition, and the daemon started BY that task (so its parents are the task's `conhost.exe --headless`, which is what the uninstall
+   * looks for). Returns whether the daemon answered; false when this machine has no logon session for the Task Scheduler to start it in.
+   */
+  async function startByTask(taskName: string, root: string): Promise<boolean> {
+    const layout = misaoWindowsLayout({ misaoRoot: root }, VERSION, taskName);
+    fs.mkdirSync(layout.versionDir, { recursive: true });
+    fs.copyFileSync(MISAO_CLI, layout.exe);
+    const xml = buildMisaoTaskXml({ userId: host.userId, systemRoot: host.systemRoot, homeDir: home, layout, pipe: pipeOf(root) });
+    const xmlFile = path.join(os.tmpdir(), `azito-ci-umi-${SUFFIX}-${taskName}.xml`);
+    fs.writeFileSync(xmlFile, encodeTaskXml(xml));
+    const created = await schtasks(['/Create', '/XML', xmlFile, '/TN', taskName, '/F']);
+    fs.rmSync(xmlFile, { force: true });
+    expect(created.code, created.text).toBe(0);
+    const run = await schtasks(['/Run', '/TN', taskName]);
+    expect(run.code, run.text).toBe(0);
+    return waitFor(`the daemon of ${taskName}`, () => pipeUp(pipeOf(root)), 45_000).then(() => true, () => false);
+  }
+
+  /** Why the daemons could not be started by their tasks here (a machine with no logon session), or undefined. */
+  let noLogonSession: string | undefined;
+
   beforeAll(async () => {
     const pre = await cmdExec('ci', buildWindowsPreflightCommand(), 120_000);
     host = parseWindowsPreflight(pre.stdout, pre.stderr, pre.code);
     deployer = new WindowsAgentDeployer(cmdExec, { putFile: async () => undefined, putBuffer: async () => undefined }, OPTIONS);
 
-    // The folder to be removed: the release the task runs, and the task itself (registered the way the installer registers it).
-    const layout = misaoWindowsLayout({ misaoRoot }, VERSION, OPTIONS.misaoTaskName);
-    fs.mkdirSync(layout.versionDir, { recursive: true });
-    fs.copyFileSync(MISAO_CLI, layout.exe);
-    const xml = buildMisaoTaskXml({ userId: host.userId, systemRoot: host.systemRoot, homeDir: home, layout, pipe: pipeOf(misaoRoot) });
-    const xmlFile = path.join(os.tmpdir(), `azito-ci-umi-${SUFFIX}.xml`);
-    fs.writeFileSync(xmlFile, encodeTaskXml(xml));
-    const created = await schtasks(['/Create', '/XML', xmlFile, '/TN', OPTIONS.misaoTaskName, '/F']);
-    fs.rmSync(xmlFile, { force: true });
-    expect(created.code, created.text).toBe(0);
-
-    // A daemon of a different folder, which must survive.
-    fs.mkdirSync(otherRoot, { recursive: true });
-    startUnderConhost(MISAO_CLI, otherRoot);
-    await waitFor('the other daemon\'s pipe', () => pipeUp(pipeOf(otherRoot)), 60_000).catch((err: Error) => { throw new Error(`${err.message}; its log:\n${logTail(otherRoot)}`); });
-    otherPid = (await daemonPids(otherRoot))[0];
-
-    // The daemon to be removed, started by its task; with no logon session the task cannot start, and it is started under conhost directly.
-    await schtasks(['/Run', '/TN', OPTIONS.misaoTaskName]);
-    const started = await waitFor('the daemon of the task', () => pipeUp(pipeOf(misaoRoot)), 30_000).then(() => true, () => false);
-    if (!started) {
-      console.warn('[uninstall.misaoIntegration] the Task Scheduler did not start the misao task here (no logon session): started it under conhost --headless directly');
-      startUnderConhost(layout.exe, misaoRoot);
-      await waitFor('the daemon of the folder to remove', () => pipeUp(pipeOf(misaoRoot)), 60_000).catch((err: Error) => { throw new Error(`${err.message}; its log:\n${logTail(misaoRoot)}`); });
+    // A daemon of a different folder (its own task, which the uninstall does not know), which must survive; then the daemon to be removed.
+    const otherUp = await startByTask(OTHER_TASK, otherRoot);
+    const up = otherUp && await startByTask(OPTIONS.misaoTaskName, misaoRoot);
+    if (!up) {
+      noLogonSession = `the Task Scheduler could not start the misao tasks here (no logon session?); logs: ${logTail(otherRoot)} / ${logTail(misaoRoot)}`;
+      return;
     }
+    otherPid = (await daemonPids(otherRoot))[0];
   }, 300_000);
 
   afterAll(async () => {
     const problems: string[] = [];
-    await schtasks(['/Delete', '/TN', OPTIONS.misaoTaskName, '/F']);
-    if ((await schtasks(['/Query', '/TN', OPTIONS.misaoTaskName])).code === 0) problems.push('the misao task is still registered');
-    for (const child of children) child.kill();
+    for (const name of [OPTIONS.misaoTaskName, OTHER_TASK]) {
+      await schtasks(['/End', '/TN', name]);
+      await schtasks(['/Delete', '/TN', name, '/F']);
+      if ((await schtasks(['/Query', '/TN', name])).code === 0) problems.push(`the task ${name} is still registered`);
+    }
     for (const root of [misaoRoot, otherRoot]) {
       for (const pid of await daemonPids(root).catch(() => [] as number[])) { try { process.kill(pid); } catch { /* already gone */ } }
     }
@@ -153,7 +152,8 @@ describe.skipIf(process.platform !== 'win32' || !fs.existsSync(MISAO_CLI))('remo
     if (problems.length > 0) throw new Error(`The test could not clean up after itself:\n${problems.join('\n')}`);
   }, 120_000);
 
-  it('stops the daemon of the folder (process gone, pipe closed), removes its task and folder, and leaves a daemon of another folder running', async () => {
+  it('stops the daemon of the folder (process gone, pipe closed), removes its task and folder, and leaves a daemon of another folder running', async (ctx) => {
+    if (noLogonSession !== undefined) ctx.skip(noLogonSession);
     expect((await daemonPids(misaoRoot)).length).toBeGreaterThan(0);
     expect(await pipeUp(pipeOf(misaoRoot))).toBe(true);
 
