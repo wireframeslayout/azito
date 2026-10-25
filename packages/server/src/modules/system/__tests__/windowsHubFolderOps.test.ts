@@ -75,6 +75,12 @@ describe('parseVersionsInUse', () => {
   it('is the versions found when no process is unknown', () => {
     expect([...parseVersionsInUse('version v1.0.0\nversion v1.0.0\n')]).toEqual(['v1.0.0']);
   });
+
+  it('stops for an unknown process and tells the operator that an administrator window of the same user is the usual cause', () => {
+    expect(() => parseVersionsInUse('version v1.0.0\nunknown 3352 powershell.exe\n')).toThrow(
+      /3352 \(powershell\.exe\).*no old version is removed\. .*runs as administrator.*close it and the next update tidies the old versions up/,
+    );
+  });
 });
 
 describe('who may write the hub folder', () => {

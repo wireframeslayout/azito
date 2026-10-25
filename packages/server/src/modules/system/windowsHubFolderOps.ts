@@ -85,7 +85,11 @@ export function parseVersionsInUse(output: string): Set<string> {
     if (missing) unknown.push(`${missing[1]} (${missing[2]})`);
   }
   if (unknown.length > 0) {
-    throw new Error(`Cannot tell whether process ${unknown.join(', ')} uses an old version (its path is not readable), so no old version is removed`);
+    // The usual case on a desktop is a window of the same user that runs as administrator (an elevated PowerShell, for one): its path
+    // cannot be read from the hub, which is not elevated. Removing a version it might use is not worth the risk, so the operator is told how
+    // to let the next update tidy up.
+    throw new Error(`Cannot tell whether process ${unknown.join(', ')} uses an old version (its path is not readable), so no old version is removed. `
+      + 'This is usually a window of the same user that runs as administrator (an elevated PowerShell, for example): close it and the next update tidies the old versions up');
   }
   return found;
 }
