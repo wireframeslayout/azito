@@ -11,7 +11,7 @@ import { MisaoWindowsInstaller, type WindowsTarget } from './MisaoWindowsInstall
 import { MISAO_SERVICE, type MisaoPaths } from './misaoPaths';
 import { taskMisaoRoot } from './misaoWindowsTask';
 import { resolveRealPath } from '../../../shared/os/realPath';
-import type { ProcessLock } from '../../../shared/processLock';
+import type { ExclusiveLock } from '../../../shared/processLock';
 import { createMisaoRootLock } from './misaoRootLock';
 
 /**
@@ -31,7 +31,7 @@ export interface LocalMisaoWindows {
    * Windows agent on this machine run in different processes, so the in-process flag of `MisaoServiceService` cannot keep them apart. A named
    * pipe made from the misao folder, held while the operation runs (the OS frees it when the holder dies), see `misaoRootLock.ts`.
    */
-  operationLock: ProcessLock;
+  operationLock: ExclusiveLock;
 }
 
 export type LocalWindowsHostEnv = Pick<HostEnv, 'platform' | 'arch' | 'homeDir' | 'tmpDir' | 'execPath' | 'systemRoot'>;

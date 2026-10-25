@@ -1,58 +1,129 @@
 import { spawn, type ChildProcess } from 'child_process';
-import crypto from 'crypto';
-import { afterEach, describe, expect, it } from 'vitest';
-import { ProcessLock, ProcessLockBusyError } from './processLock';
+import fs from 'fs';
+import os from 'os';
+import path from 'path';
+import { pathToFileURL } from 'url';
+import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { createSecretFileGuard, type SecretFileGuard } from './os/secretFileGuard';
+import { FileLock, ProcessLockBusyError } from './processLock';
 
 /**
- * The lock between real processes on a real Windows named pipe: a second process cannot take what a first holds, two processes that
- * come at once get exactly one, and the OS frees it when the holder is killed (no stale lock to judge).
+ * The exclusive file lock on a real Windows, between real processes: the flag libuv opens the file with (sharing mode 0) really keeps
+ * a second process (or a second open in the same one) out, the OS frees it when the holder is killed, one of several takers that come at
+ * once gets it, a refused taker is told who holds it, and a folder that is not owner-only is refused.
  */
-const children: ChildProcess[] = [];
+let guard: SecretFileGuard;
+const PACKAGE_DIR = path.resolve(__dirname, '..', '..');
+const LOCK_MODULE = pathToFileURL(path.join(__dirname, 'processLock.ts')).href;
+const GUARD_MODULE = pathToFileURL(path.join(__dirname, 'os', 'secretFileGuard.ts')).href;
 
-/** A process that takes the pipe like a lock holder (a `net` server answering with its pid) and says "held" once it listens. */
-function startHolder(endpoint: string): Promise<ChildProcess> {
-  const script = `const net=require('net');const s=net.createServer(c=>{c.on('error',()=>{});c.end(String(process.pid));});s.on('error',e=>{console.log(e.code);process.exit(2);});s.listen(${JSON.stringify(endpoint)},()=>console.log('held'));setInterval(()=>{},1000);`;
-  const child = spawn(process.execPath, ['-e', script], { stdio: ['ignore', 'pipe', 'inherit'] });
+let dir: string;
+let root: string;
+let children: ChildProcess[];
+
+const lockIn = (folder: string): FileLock => new FileLock(path.join(folder, '.operation.lock'), path.join(folder, '.operation.owner'), guard);
+const exited = (child: ChildProcess): Promise<void> => new Promise((resolve) => { if (child.exitCode !== null || child.signalCode !== null) resolve(); else child.once('exit', () => resolve()); });
+
+/** A process that takes the lock with the real FileLock and holds it until it is killed; resolves 'held' or 'busy' once it knows. */
+function startTaker(folder: string): Promise<{ child: ChildProcess; result: 'held' | 'busy' }> {
+  const script = path.join(dir, `taker-${children.length}.mjs`);
+  fs.writeFileSync(script, [
+    `import { FileLock, ProcessLockBusyError } from ${JSON.stringify(LOCK_MODULE)};`,
+    `import { createSecretFileGuard } from ${JSON.stringify(GUARD_MODULE)};`,
+    'const folder = process.argv[2];',
+    "const lock = new FileLock(folder + '\\\\.operation.lock', folder + '\\\\.operation.owner', createSecretFileGuard('win32', process.env));",
+    'try {',
+    "  await lock.run(async () => { console.log('held'); await new Promise(() => {}); });",
+    '} catch (err) {',
+    "  if (err instanceof ProcessLockBusyError) { console.log('busy'); process.exit(0); }",
+    '  console.error(err); process.exit(2);',
+    '}',
+  ].join('\n'));
+  const child = spawn(process.execPath, ['--import', 'tsx', script, folder], { cwd: PACKAGE_DIR, stdio: ['ignore', 'pipe', 'inherit'] });
   children.push(child);
   return new Promise((resolve, reject) => {
     let out = '';
     child.stdout!.on('data', (chunk: Buffer) => {
       out += chunk.toString('utf-8');
-      if (out.includes('held')) resolve(child);
-      else if (/E[A-Z]+/.test(out)) reject(new Error(`the holder could not take ${endpoint}: ${out}`));
+      if (out.includes('held')) resolve({ child, result: 'held' });
+      else if (out.includes('busy')) resolve({ child, result: 'busy' });
     });
-    child.once('exit', (code) => reject(new Error(`the holder exited with ${code} before it held ${endpoint}: ${out}`)));
+    child.once('exit', (code) => reject(new Error(`the taker exited with ${code} before it knew: ${out}`)));
   });
 }
 
-const exited = (child: ChildProcess): Promise<void> => new Promise((resolve) => { if (child.exitCode !== null || child.signalCode !== null) resolve(); else child.once('exit', () => resolve()); });
+describe.skipIf(process.platform !== 'win32')('FileLock (UV_FS_O_EXLOCK) between processes on Windows', () => {
+  beforeEach(() => {
+    guard = createSecretFileGuard('win32', process.env);
+    dir = fs.mkdtempSync(path.join(os.tmpdir(), 'azito-filelock-'));
+    root = path.join(dir, 'misao');
+    guard.ensureProtectedDir(root);
+    children = [];
+  });
 
-describe.skipIf(process.platform !== 'win32')('ProcessLock on a Windows named pipe, between processes', () => {
   afterEach(async () => {
-    for (const child of children.splice(0)) {
+    for (const child of children) {
       child.kill();
       await exited(child);
     }
+    fs.rmSync(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 500 });
   });
 
-  it('is busy while another process holds the pipe (naming its pid), and free once that process is killed', async () => {
-    const endpoint = `\\\\.\\pipe\\azito-lock-test-${crypto.randomBytes(6).toString('hex')}`;
-    const holder = await startHolder(endpoint);
-    const refused = await new ProcessLock(endpoint).run(async () => 'in').catch((err: unknown) => err);
-    expect(refused).toBeInstanceOf(ProcessLockBusyError);
-    expect((refused as ProcessLockBusyError).ownerPid).toBe(holder.pid);
-    holder.kill('SIGKILL');
-    await exited(holder);
-    expect(await new ProcessLock(endpoint).run(async () => 'in')).toBe('in');
+  it('keeps a second process out while the first holds it (naming the holder), and lets the next one in as soon as the holder is killed', async () => {
+    const holder = await startTaker(root);
+    expect(holder.result).toBe('held');
+    const refused = await lockIn(root).run(async () => 'in').catch((err: unknown) => err);
+    expect(refused, 'the second open must be refused while the first process holds the file').toBeInstanceOf(ProcessLockBusyError);
+    expect((refused as ProcessLockBusyError).owner?.pid).toBe(holder.child.pid);
+    holder.child.kill('SIGKILL');
+    await exited(holder.child);
+    expect(await lockIn(root).run(async () => 'in')).toBe('in');
+    expect(fs.existsSync(path.join(root, '.operation.owner'))).toBe(false);
+  }, 120_000);
+
+  it('keeps a second holder out inside one process too, and frees the lock when the operation fails', async () => {
+    const lock = lockIn(root);
+    await lock.run(async () => {
+      await expect(lockIn(root).run(async () => 'in')).rejects.toBeInstanceOf(ProcessLockBusyError);
+    });
+    await expect(lock.run(async () => { throw new Error('boom'); })).rejects.toThrow('boom');
+    expect(await lock.run(async () => 'free')).toBe('free');
   });
 
-  it('gives a process that is holding it a refusal for another process starting at the same moment, and the other way round', async () => {
-    const endpoint = `\\\\.\\pipe\\azito-lock-test-${crypto.randomBytes(6).toString('hex')}`;
-    // Two processes and this one all go for the pipe: exactly one holds it.
-    const outcomes = await Promise.all([startHolder(endpoint).then(() => 'in', () => 'busy'), startHolder(endpoint).then(() => 'in', () => 'busy'), new ProcessLock(endpoint).run(async () => {
-      await new Promise((resolve) => setTimeout(resolve, 1500));
-      return 'in';
-    }).catch((err: unknown) => (err instanceof ProcessLockBusyError ? 'busy' : Promise.reject(err)))]);
-    expect(outcomes.filter((o) => o === 'in')).toHaveLength(1);
-  }, 60_000);
+  it('says the holder is unknown when it left nothing to read', async () => {
+    const lock = lockIn(root);
+    await lock.run(async () => {
+      fs.rmSync(path.join(root, '.operation.owner'), { force: true });
+      const refused = await lockIn(root).run(async () => 'in').catch((err: unknown) => err);
+      expect(refused).toBeInstanceOf(ProcessLockBusyError);
+      expect((refused as ProcessLockBusyError).owner).toBeUndefined();
+    });
+  });
+
+  it('lets exactly one of three takers that come at the same moment in (two processes and this one)', async () => {
+    const [a, b, mine] = await Promise.all([
+      startTaker(root),
+      startTaker(root),
+      lockIn(root).run(async () => {
+        await new Promise((resolve) => setTimeout(resolve, 4000));
+        return 'in' as const;
+      }).catch((err: unknown) => (err instanceof ProcessLockBusyError ? ('busy' as const) : Promise.reject(err))),
+    ]);
+    const results = [a.result === 'held' ? 'in' : 'busy', b.result === 'held' ? 'in' : 'busy', mine];
+    expect(results.filter((r) => r === 'in')).toHaveLength(1);
+  }, 120_000);
+
+  it('refuses a folder that is not owner-only, before it opens anything (so that nobody else could have made or opened the file first)', async () => {
+    const open = path.join(dir, 'open');
+    fs.mkdirSync(open); // inherits the ACL of the temp folder: not a protected, owner-only one
+    await expect(lockIn(open).run(async () => 'in')).rejects.toThrow(/is not private to this user/);
+    expect(fs.existsSync(path.join(open, '.operation.lock'))).toBe(false);
+  });
+
+  it('makes a missing folder owner-only and its lock file with it', async () => {
+    const fresh = path.join(dir, 'fresh', 'misao');
+    expect(await lockIn(fresh).run(async () => 'in')).toBe('in');
+    expect(guard.inspect(fresh, 'dir')).toEqual({ ok: true });
+    expect(guard.inspect(path.join(fresh, '.operation.lock'), 'file')).toEqual({ ok: true });
+  });
 });

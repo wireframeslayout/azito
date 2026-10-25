@@ -56,7 +56,7 @@ import { resolveWindowsAgentOptions, type WindowsAgentOptions } from '../modules
 import { AgentUpdater } from '../modules/servers/agent-deploy/AgentUpdater';
 import { AgentRecoveryWatchdog } from '../modules/servers/agent-deploy/AgentRecoveryWatchdog';
 import { createMisaoRootLock } from '../modules/system/misao/misaoRootLock';
-import type { ProcessLock } from '../shared/processLock';
+import type { ExclusiveLock } from '../shared/processLock';
 import { LocalMisaoWatchdog } from '../modules/system/misao/LocalMisaoWatchdog';
 import { HostProfileError, resolveHubHostProfile, type HostProfile, type HubHostProfile } from '../shared/os/hostProfile';
 import { registerTmuxDriver } from '../modules/tmux/registerTmuxDriver';
@@ -609,7 +609,7 @@ function localWindowsMisaoRoot(hostEnv: HostEnv): string | undefined {
   }
 }
 
-function optionalLocalMisao(root: string | undefined, guard: SecretFileGuard): { localMisao?: { root: string; lock: ProcessLock } } {
+function optionalLocalMisao(root: string | undefined, guard: SecretFileGuard): { localMisao?: { root: string; lock: ExclusiveLock } } {
   return root === undefined ? {} : { localMisao: { root, lock: createMisaoRootLock(root, guard) } };
 }
 
