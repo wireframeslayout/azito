@@ -1,9 +1,10 @@
 import { describe, expect, it } from 'vitest';
 import type { ServerConfig } from '../Server';
 import { KeyedMutex } from '../../../shared/keyedMutex';
-import { AgentRecoveryWatchdog, type AgentRecoveryTiming } from './AgentRecoveryWatchdog';
+import { AgentRecoveryWatchdog } from './AgentRecoveryWatchdog';
+import type { RecoveryTiming } from '../../../shared/recoveryBackoff';
 
-const TIMING: AgentRecoveryTiming = { tickMs: 15_000, baseMs: 60_000, maxMs: 240_000 };
+const TIMING: RecoveryTiming = { tickMs: 15_000, baseMs: 60_000, maxMs: 240_000 };
 const MIN = 60_000;
 
 function server(name: string, platform: 'win32' | 'linux' = 'win32', type: ServerConfig['type'] = 'agent'): ServerConfig {
@@ -336,6 +337,36 @@ describe('AgentRecoveryWatchdog: what a misao revive answers', () => {
     const h = await afterAttempts(result, 4);
     expect(h.revived.length).toBeGreaterThan(2);
     expect(h.logs.filter((l) => l.startsWith('WARN') && l.includes(result))).toHaveLength(1);
+  });
+
+  it('does not count a lock held by someone who is not this user as an attempt, and warns once for the same reason', async () => {
+    const h = new Harness();
+    h.misaoDown = true;
+    h.reviveResult = 'foreign_lock:A process of another user (process 9) holds the lock';
+    await h.watchdog.tick();
+    for (let i = 0; i < 12; i += 1) await h.advance(15_000 * 4);
+    // looked at at every tick after the first wait, never backing off
+    expect(h.revived.length).toBeGreaterThan(8);
+    expect(h.logs.filter((l) => l.startsWith('WARN') && l.includes('another user (process 9)'))).toHaveLength(1);
+    h.reviveResult = 'foreign_lock:The process that holds the lock could not be identified';
+    await h.advance(15_000);
+    expect(h.logs.filter((l) => l.startsWith('WARN') && l.includes('could not be identified'))).toHaveLength(1);
+  });
+
+  it('says a foreign-lock reason again when it comes back after another one (A, B, A is three warnings)', async () => {
+    const h = new Harness();
+    h.misaoDown = true;
+    await h.watchdog.tick();
+    const reasons = ['foreign_lock:reason A', 'foreign_lock:reason B', 'foreign_lock:reason A'];
+    h.reviveResult = reasons[0]!;
+    await h.advance(MIN);
+    await h.advance(15_000); // the same reason again: not said again
+    for (const reason of reasons.slice(1)) {
+      h.reviveResult = reason;
+      await h.advance(15_000);
+    }
+    const warned = h.logs.filter((l) => l.startsWith('WARN') && l.includes('cannot bring the misao back'));
+    expect(warned.map((l) => /reason ([AB])/.exec(l)?.[1])).toEqual(['A', 'B', 'A']);
   });
 
   it.each(['disabled', 'custom_socket', 'running'])('says nothing for %s', async (result) => {

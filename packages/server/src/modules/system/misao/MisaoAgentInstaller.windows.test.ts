@@ -10,6 +10,7 @@ import { readMisaoBundle, sha256Buffer, type MisaoBundle } from './MisaoBundle';
 import { writeHubBundle } from './misaoBundleFixture';
 import { MisaoAgentInstaller, type MisaoInstallStep, type MisaoInstallTarget } from './MisaoAgentInstaller';
 import { isManagedMisaoDown } from './MisaoWindowsInstaller';
+import { ProcessLock } from '../../../shared/processLock';
 
 const VERSION = '0.3.0';
 const OLD_VERSION = '0.2.0';
@@ -455,6 +456,71 @@ describe('MisaoAgentInstaller on a Windows agent', () => {
       expect(agent.schtasks()).toEqual([]);
     });
   });
+  describe('a Windows agent on the hub\'s own machine (same misao folder) shares the hub\'s cross-process slot', () => {
+    const endpoint = (): string => (process.platform === 'win32' ? `\\\\.\\pipe\\azito-lock-test-${process.pid}-${Math.random().toString(16).slice(2)}` : path.join(fs.mkdtempSync(path.join(os.tmpdir(), 'azslot-')), 'l.sock'));
+    const sharing = (lock: ProcessLock, root: string) => new MisaoAgentInstaller(bundle, { windowsTaskName: TASK, readyTimeoutMs: 400, pollIntervalMs: 10, taskIdleTimeoutMs: 60, localMisao: { root, lock } });
+
+    it('install, update and revive give way to the hub\'s own operation (the watchdog\'s and the CLI\'s slot) and touch nothing', async () => {
+      const lock = new ProcessLock(endpoint());
+      const agent = new FakeWindowsAgent(bundle);
+      agent.seedInstalled(OLD_VERSION, true);
+      await lock.run(async () => {
+        await expect(sharing(lock, ROOT.toLowerCase()).update(agent.asTarget())).rejects.toMatchObject({ code: 'busy' });
+        await expect(sharing(lock, ROOT).install(agent.asTarget())).rejects.toMatchObject({ code: 'busy' });
+        expect(await sharing(lock, ROOT).reviveWindowsDaemon(agent.asTarget(), true)).toBe('busy');
+      });
+      expect(agent.schtasks()).toEqual([]);
+      expect(agent.uploads).toEqual([]);
+    });
+
+    it('holds the slot while it runs, so the hub\'s watchdog cannot revive in the middle of an update', async () => {
+      const lock = new ProcessLock(endpoint());
+      const agent = new FakeWindowsAgent(bundle);
+      agent.seedInstalled(OLD_VERSION, true);
+      const target = agent.asTarget();
+      let duringUpdate: string | undefined;
+      const original = target.fetchMisaoStatus;
+      let calls = 0;
+      target.fetchMisaoStatus = async () => {
+        calls += 1;
+        // The 2nd look is the installer's own, inside the slot: the hub's watchdog asks for the slot now.
+        if (calls === 2) duringUpdate = await new ProcessLock((lock as unknown as { endpoint: string }).endpoint).run(async () => 'revived').catch(() => 'busy');
+        return original();
+      };
+      await sharing(lock, ROOT).update(target);
+      expect(duringUpdate).toBe('busy');
+    });
+
+    it('fails the operation, rather than run it unlocked, when the first read of the agent\'s status fails (the operation would read it again and could succeed)', async () => {
+      const lock = new ProcessLock(endpoint());
+      const agent = new FakeWindowsAgent(bundle);
+      agent.seedInstalled(OLD_VERSION, true);
+      const target = agent.asTarget();
+      const original = target.fetchMisaoStatus;
+      let calls = 0;
+      target.fetchMisaoStatus = async () => {
+        calls += 1;
+        if (calls === 1) throw new Error('agent unreachable for a moment');
+        return original();
+      };
+      await expect(sharing(lock, ROOT).update(target)).rejects.toMatchObject({ code: 'unsupported_host', message: expect.stringContaining('agent unreachable for a moment') });
+      expect(calls).toBe(1); // the operation never asked again
+      expect(agent.schtasks()).toEqual([]);
+      expect(agent.uploads).toEqual([]);
+      calls = 0;
+      await expect(sharing(lock, ROOT).reviveWindowsDaemon(target, false)).rejects.toMatchObject({ code: 'unsupported_host' });
+    });
+
+    it('leaves an agent with another folder (another machine) to the per-server mutex alone', async () => {
+      const lock = new ProcessLock(endpoint());
+      const agent = new FakeWindowsAgent(bundle);
+      agent.seedInstalled(OLD_VERSION, true);
+      await lock.run(async () => {
+        expect(await sharing(lock, 'D:\\other\\.azito\\misao').reviveWindowsDaemon(agent.asTarget(), false)).toBe('running');
+      });
+    });
+  });
+
   describe('reviveWindowsDaemon (the hub starts a dead daemon again)', () => {
     it('does nothing while the daemon answers', async () => {
       const agent = new FakeWindowsAgent(bundle);

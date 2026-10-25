@@ -106,7 +106,7 @@ export async function misaoCommand(argv: string[], host: HostEnv, secretFileGuar
       env: process.env,
       homeDir: host.homeDir,
       secretFileGuard,
-      ...(windowsUser && paths ? { windows: createLocalMisaoWindows(host, paths, windowsUser.userName, process.env) } : {}),
+      ...(windowsUser && paths ? { windows: createLocalMisaoWindows(host, paths, windowsUser.userName, process.env, secretFileGuard) } : {}),
     });
 
     if (args.command === 'status') {

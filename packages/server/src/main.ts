@@ -182,7 +182,7 @@ async function main(): Promise<void> {
     }, SHUTDOWN_HARD_CAP_MS);
     hardCap.unref();
     // A restart of an agent that has begun is let finish (not cut between /End and /Run), within the hard cap.
-    wiring.agentRecoveryWatchdog.drain(RECOVERY_DRAIN_MS).catch(() => undefined).then(() => app.close()).then(() => process.exit(0)).catch(() => process.exit(0));
+    Promise.all([wiring.agentRecoveryWatchdog.drain(RECOVERY_DRAIN_MS), wiring.localMisaoWatchdog?.drain(RECOVERY_DRAIN_MS)]).catch(() => undefined).then(() => app.close()).then(() => process.exit(0)).catch(() => process.exit(0));
   };
   process.on('SIGTERM', () => shutdown('SIGTERM'));
   process.on('SIGINT', () => shutdown('SIGINT'));
@@ -315,6 +315,7 @@ async function main(): Promise<void> {
   }).catch(() => {}).finally(() => {
     // After the start-up version check, which brings back an agent that is down by itself: the two never try at once.
     wiring.agentRecoveryWatchdog.start();
+    wiring.localMisaoWatchdog?.start();
   });
 
   // ─── Startup: check harness versions ───

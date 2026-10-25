@@ -1,5 +1,6 @@
 import type { ServerConfig } from '../Server';
 import type { KeyedMutex } from '../../../shared/keyedMutex';
+import { DEFAULT_RECOVERY_TIMING, FOREIGN_LOCK_PREFIX, NOTHING_TO_DO_WARNED, QUIET_OUTCOMES, afterAttempt, firstBackoff, isForeignLock, type Backoff, type RecoveryTiming } from '../../../shared/recoveryBackoff';
 
 /** How the watchdog sees the world: everything it touches comes in here, so that it can be driven by a clock in a test. */
 export interface AgentRecoveryDeps {
@@ -19,35 +20,8 @@ export interface AgentRecoveryDeps {
   logger: { info(message: string): void; warn(message: string): void };
 }
 
-export interface AgentRecoveryTiming {
-  /** How often the servers are looked at. */
-  tickMs: number;
-  /** How long a failure has to last before the first attempt, and the first wait after it. */
-  baseMs: number;
-  /** The longest wait between two attempts. */
-  maxMs: number;
-}
-
-export const DEFAULT_RECOVERY_TIMING: AgentRecoveryTiming = { tickMs: 15_000, baseMs: 60_000, maxMs: 15 * 60_000 };
-
 /** How many servers are looked at at the same time (one waiting for a lock or an SSH timeout must not hold the others back). */
 const MAX_CONCURRENT_LOOKS = 4;
-
-/** What reviveMisao answers when nothing was done and waiting will not change it: warned once per server and answer, not on every attempt. */
-const NOTHING_TO_DO_WARNED = new Set(['no_task', 'not_installed', 'other_task']);
-/** Nothing to say: the daemon answers again, or someone chose this (a custom pipe, a task disabled by hand). */
-const QUIET = new Set(['running', 'custom_socket', 'disabled']);
-
-/** The waiting state of one thing being brought back (an agent, or the misao on it). */
-interface Backoff {
-  /** When the next attempt may be made. */
-  nextAt: number;
-  /** The wait that follows the next attempt. */
-  waitMs: number;
-  attempts: number;
-  /** Which address, credentials and OS the waits were for: a server that was edited starts over. */
-  identity: string;
-}
 
 /**
  * Brings back a Windows agent (and the misao it hosts) that died, for as long as the hub runs.
@@ -80,9 +54,11 @@ export class AgentRecoveryWatchdog {
   private stopped = false;
   /** The `cannot be started` answers already warned about: `<server>\0<answer>`. */
   private readonly warned = new Set<string>();
+  /** The last foreign-lock reason said for each server: a new reason is said, the same one again is not, and A, B, A says A twice. */
+  private readonly foreignReason = new Map<string, string>();
   private timer: ReturnType<typeof setInterval> | undefined;
 
-  constructor(private readonly deps: AgentRecoveryDeps, private readonly timing: AgentRecoveryTiming = DEFAULT_RECOVERY_TIMING) {}
+  constructor(private readonly deps: AgentRecoveryDeps, private readonly timing: RecoveryTiming = DEFAULT_RECOVERY_TIMING) {}
 
   start(): void {
     if (this.timer !== undefined) return;
@@ -121,6 +97,7 @@ export class AgentRecoveryWatchdog {
     const names = new Set(servers.map((s) => s.name));
     for (const map of [this.agents, this.misaos]) for (const name of map.keys()) if (!names.has(name)) map.delete(name);
     for (const key of this.warned) if (!names.has(key.split('\0')[0]!)) this.warned.delete(key);
+    for (const name of this.foreignReason.keys()) if (!names.has(name)) this.foreignReason.delete(name);
     const started: Array<Promise<void>> = [];
     const first = servers.length === 0 ? 0 : this.cursor % servers.length;
     let next = first;
@@ -146,6 +123,7 @@ export class AgentRecoveryWatchdog {
     this.agents.delete(name);
     this.misaos.delete(name);
     for (const key of this.warned) if (key.startsWith(`${name}\0`)) this.warned.delete(key);
+    this.foreignReason.delete(name);
   }
 
   private async look(server: ServerConfig): Promise<void> {
@@ -168,6 +146,7 @@ export class AgentRecoveryWatchdog {
     if (!down) {
       this.misaos.delete(server.name);
       for (const key of this.warned) if (key.startsWith(`${server.name}\0`)) this.warned.delete(key);
+      this.foreignReason.delete(server.name);
       return;
     }
     const force = (this.misaos.get(server.name)?.attempts ?? 0) > 0;
@@ -184,7 +163,7 @@ export class AgentRecoveryWatchdog {
     const identity = identityOf(server);
     const wait = waits.get(server.name);
     if (wait === undefined) {
-      waits.set(server.name, { nextAt: now + this.timing.baseMs, waitMs: this.timing.baseMs, attempts: 0, identity });
+      waits.set(server.name, firstBackoff(now, identity, this.timing));
       this.deps.logger.info(`${server.name}: the ${what} does not answer; trying to bring it back in ${this.timing.baseMs / 1000}s`);
       return;
     }
@@ -206,12 +185,21 @@ export class AgentRecoveryWatchdog {
       this.deps.logger.warn(`${server.name}: could not bring the ${what} back: ${describe(err)}`);
     }
     if (waits.get(server.name) !== wait) return; // reset while waiting for the lock
+    if (outcome === 'busy') return; // another operation holds the misao folder: not an attempt, looked at again next tick
+    if (outcome !== undefined && isForeignLock(outcome)) {
+      // The lock of a folder shared with the hub is held by someone who is not this user: not an attempt, said once per state.
+      if (this.foreignReason.get(server.name) !== outcome) {
+        this.foreignReason.set(server.name, outcome);
+        this.deps.logger.warn(`${server.name}: cannot bring the ${what} back: ${outcome.slice(FOREIGN_LOCK_PREFIX.length)}`);
+      }
+      return;
+    }
     if (outcome !== undefined) this.report(server.name, what, outcome, wait.attempts + 1);
-    waits.set(server.name, { ...wait, nextAt: this.deps.now() + wait.waitMs, waitMs: Math.min(wait.waitMs * 2, this.timing.maxMs), attempts: wait.attempts + 1 });
+    waits.set(server.name, afterAttempt(wait, this.deps.now(), this.timing));
   }
 
   private report(name: string, what: 'agent' | 'misao', outcome: string, attempt: number): void {
-    if (QUIET.has(outcome)) return;
+    if (QUIET_OUTCOMES.has(outcome)) return;
     if (NOTHING_TO_DO_WARNED.has(outcome)) {
       const key = `${name}\0${outcome}`;
       if (this.warned.has(key)) return;
