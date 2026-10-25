@@ -1,28 +1,10 @@
 import { execFile } from 'child_process';
 import path from 'path';
+import { PIPE_HOLDER_HELPER } from '../../../shared/os/pipeHolderHelper';
 import { powershellDialect, powershellEncodedArgs } from '../../../shared/os/shellDialect';
 import type { HolderCheck, HolderVerdict } from '../../../shared/processLock';
 
 const PIPE_PREFIX = '\\\\.\\pipe\\';
-
-/** Asks Windows (not the pipe: a holder's own answer is not believed) which process serves a named pipe. Compiled in the PowerShell session; nothing is installed. */
-const HELPER = `Add-Type -TypeDefinition @'
-using System;
-using System.IO.Pipes;
-using System.Runtime.InteropServices;
-public static class AzitoPipeHolder {
-  [DllImport("kernel32.dll", SetLastError = true)]
-  static extern bool GetNamedPipeServerProcessId(IntPtr pipe, out uint processId);
-  public static uint ServerProcessId(string name) {
-    using (var client = new NamedPipeClientStream(".", name, PipeDirection.InOut)) {
-      client.Connect(5000);
-      uint pid;
-      if (!GetNamedPipeServerProcessId(client.SafePipeHandle.DangerousGetHandle(), out pid)) throw new System.ComponentModel.Win32Exception(Marshal.GetLastWin32Error());
-      return pid;
-    }
-  }
-}
-'@`;
 
 /**
  * A PowerShell script that prints who holds a named pipe: the pid of the process that serves it (`GetNamedPipeServerProcessId`), the SID
@@ -32,7 +14,7 @@ public static class AzitoPipeHolder {
 export function pipeHolderScript(pipe: string): string {
   if (!pipe.startsWith(PIPE_PREFIX)) throw new Error(`Not a named pipe path: ${pipe}`);
   return [
-    HELPER,
+    PIPE_HOLDER_HELPER,
     `$name = ${powershellDialect.quote(pipe.slice(PIPE_PREFIX.length))}`,
     '$serverPid = [AzitoPipeHolder]::ServerProcessId($name)',
     '$me = [Security.Principal.WindowsIdentity]::GetCurrent().User.Value',

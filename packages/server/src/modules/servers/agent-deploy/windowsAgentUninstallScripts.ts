@@ -1,5 +1,6 @@
 import { powershellDialect } from '../../../shared/os/shellDialect';
 import { redactSecretText } from '../../../shared/redactSecretText';
+import { PIPE_HOLDER_HELPER } from '../../../shared/os/pipeHolderHelper';
 
 /**
  * - `done`: it was there and is gone now (for the processes: they were running and are ended).
@@ -203,4 +204,85 @@ export function parseLeftoverOutput(output: string, root: string, advice = ''): 
     parts.push(`The host did not give the program or the command line of ${blind.length === 1 ? 'a process of yours' : `${blind.length} processes of yours`}, so it cannot be told whether ${blind.length === 1 ? 'it uses' : 'they use'} ${root}: ${listed}. Check ${blind.length === 1 ? 'it' : 'them'}.`);
   }
   return { outcome: 'failed', detail: `${parts.join(' ')} The folder was left; delete it, or remove the server again, once that is settled. (Processes of other users cannot be seen from this session.)${note === undefined ? '' : ` ${note}`}` };
+}
+
+// ─── Stopping a misao daemon that outlived its task ───
+
+/**
+ * Who serves the pipe of the misao task, asked of Windows (see `PIPE_HOLDER_HELPER`: not of the daemon). Prints `NOPIPE` when no pipe of
+ * that name exists (no daemon is running: nothing to stop), else `FORMS|<long form of root>|<8.3 form of root>` (either may be empty) and
+ * `HOLDER|<pid>|<name>|<mine, other or unknown>|<program path>` for the process that serves it, or `ERROR|<why>` when that cannot be told.
+ */
+export function misaoHolderScript(root: string, pipe: string): string {
+  const q = powershellDialect.quote;
+  return [
+    `$root = ${q(root)}; $pipe = ${q(pipe)}`,
+    PIPE_HOLDER_HELPER,
+    ...RESOLVE_LONG,
+    'function Clean($t) { "$t" -replace \'[\\r\\n|]+\', \' \' }',
+    'if (-not (Test-Path -LiteralPath $pipe)) { Write-Output \'NOPIPE\'; exit 0 }',
+    '$short = try { (New-Object -ComObject Scripting.FileSystemObject).GetFolder($root).ShortPath } catch { $null }',
+    'Write-Output (\'FORMS|\' + (Clean (Resolve-Long $root)) + \'|\' + (Clean $short))',
+    'try { $id = [AzitoPipeHolder]::ServerProcessId($pipe.Substring(9)) } catch { Write-Output (\'ERROR|\' + (Clean $_.Exception.Message)); exit 0 }',
+    '$p = Get-CimInstance Win32_Process -Filter "ProcessId = $id"',
+    'if (-not $p) { Write-Output \'ERROR|the process that serves the pipe is gone\'; exit 0 }',
+    '$me = [Security.Principal.WindowsIdentity]::GetCurrent().User.Value; $owner = \'unknown\'',
+    'try { $r = Invoke-CimMethod -InputObject $p -MethodName GetOwnerSid -ErrorAction Stop; if ($r.ReturnValue -eq 0 -and $r.Sid) { $owner = if ($r.Sid -eq $me) { \'mine\' } else { \'other\' } } } catch { }',
+    'Write-Output (\'HOLDER|\' + $id + \'|\' + (Clean $p.Name) + \'|\' + $owner + \'|\' + (Clean $p.ExecutablePath))',
+  ].join('\n');
+}
+
+export type MisaoHolder =
+  | { kind: 'nopipe' }
+  | { kind: 'error'; message: string }
+  | { kind: 'holder'; pid: string; name: string; owner: string; exe: string; forms: string[] };
+
+export function parseMisaoHolderOutput(output: string): MisaoHolder {
+  const all = lines(output);
+  if (all.length === 1 && all[0] === 'NOPIPE') return { kind: 'nopipe' };
+  const forms = (all.find((l) => l.startsWith('FORMS|')) ?? '').split('|').slice(1).filter((f) => f !== '');
+  const error = all.find((l) => l.startsWith('ERROR|'));
+  if (error !== undefined) return { kind: 'error', message: redactSecretText(error.slice(6)).slice(0, 200) };
+  const holder = all.find((l) => l.startsWith('HOLDER|'));
+  if (holder === undefined) throw unreadable(output);
+  const [, pid = '', name = '', owner = '', ...exe] = holder.split('|');
+  return { kind: 'holder', pid, name, owner, exe: exe.join('|'), forms };
+}
+
+const normalizePath = (path: string): string => path.replace(/\//g, '\\').toLowerCase();
+
+/**
+ * Whether the daemon behind the task's pipe is the install's, so that its own `stop` may be asked for: the process Windows says serves
+ * the pipe is a `misao.exe`, the user's own, whose program lies under `root` (in the folder's own spelling, its long form or its 8.3 form,
+ * as the host resolved them). Anything else (nobody found, a misao.exe somewhere else, someone else's, a path that cannot be read) is
+ * a reason not to ask: that daemon is not shown to be the install's, and nothing is stopped.
+ */
+export function decideMisaoStop(root: string, holder: MisaoHolder): { stop: true } | { stop: false; reason: string } {
+  if (holder.kind === 'nopipe') return { stop: false, reason: 'no daemon is serving the pipe, so there is nothing to stop' };
+  if (holder.kind === 'error') return { stop: false, reason: `Windows did not say which process serves the pipe (${holder.message})` };
+  const what = `the process that serves the pipe (${holder.name || '?'}, process ${holder.pid})`;
+  if (holder.name.toLowerCase() !== 'misao.exe') return { stop: false, reason: `${what} is not a misao.exe` };
+  if (holder.owner !== 'mine') return { stop: false, reason: `${what} is not shown to be yours (its owner is ${holder.owner})` };
+  if (holder.exe === '') return { stop: false, reason: `the program of ${what} could not be read` };
+  const exe = normalizePath(holder.exe);
+  const under = [root, ...holder.forms].map((folder) => `${normalizePath(folder).replace(/\\+$/, '')}\\`);
+  if (!under.some((folder) => exe.startsWith(folder))) return { stop: false, reason: `${what} runs ${holder.exe}, which is not under ${root}` };
+  return { stop: true };
+}
+
+/**
+ * `misao stop` through the daemon's own pipe, once {@link decideMisaoStop} has said the daemon is the install's: the `misao.exe` of the
+ * recognised task, with that task's pipe, given 30 s. A daemon that stops closes every window it holds. Nothing is killed here; what is
+ * still running afterwards is {@link leftoverProcessesScript}'s to find.
+ */
+export function misaoStopScript(exe: string, pipe: string): string {
+  const q = powershellDialect.quote;
+  return [
+    `$exe = ${q(exe)}`,
+    'if (Test-Path -LiteralPath $exe -PathType Leaf) {',
+    `  $env:MISAO_SOCKET = ${q(pipe)}`,
+    '  try { $stop = Start-Process -FilePath $exe -ArgumentList \'stop\' -WindowStyle Hidden -PassThru; [void]$stop.WaitForExit(30000) } catch { }',
+    '}',
+    'Write-Output \'DONE\'',
+  ].join('\n');
 }

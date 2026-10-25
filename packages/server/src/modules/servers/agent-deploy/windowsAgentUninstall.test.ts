@@ -9,7 +9,7 @@ import { DEFAULT_WINDOWS_AGENT_OPTIONS, MISAO_WINDOWS_TASK_NAME, type WindowsAge
 import { WindowsAgentDeployer, windowsAgentEnvFile, type WindowsSshExec } from './WindowsAgentDeployer';
 import { FakeWindowsHost } from './testing/fakeWindowsHost';
 import { WINDOWS_HUB_TASK_NAME, uninstallWindowsAgent, type UninstallStepId, type WindowsUninstallHost, type WindowsUninstallResult } from './windowsAgentUninstall';
-import { folderScript, leftoverProcessesScript, parseFolderOutput, parseLeftoverOutput, tailBelow } from './windowsAgentUninstallScripts';
+import { decideMisaoStop, folderScript, leftoverProcessesScript, misaoHolderScript, misaoStopScript, parseFolderOutput, parseLeftoverOutput, parseMisaoHolderOutput, tailBelow } from './windowsAgentUninstallScripts';
 import { HUB_COMMAND_LINE_PATTERN, firewallInspectScript, misaoDaemonScript, misaoHubScript, parseFirewallOutput, parseMisaoGuardOutput, parseSameFileOutput, sameFileScript } from './windowsAgentOwnership';
 
 const HOME = 'C:\\Users\\dev';
@@ -63,6 +63,8 @@ class FakeUninstallHost {
     'Looking for processes still running from the agent folder': 'CLEAR',
     'Looking for the Windows Firewall rule': 'ABSENT',
     'Checking the hub of the misao': 'CLEAR',
+    'Asking Windows which process serves the misao pipe': 'NOPIPE',
+    'Asking the misao daemon to stop': 'DONE',
     'Checking who runs the misao': 'CLEAR',
     'Looking for processes still running from the misao folder': 'CLEAR',
     'Removing C:': 'DONE',
@@ -403,17 +405,75 @@ describe('uninstallWindowsAgent', () => {
   });
 
   describe('with the misao', () => {
-    it('ends its task and only looks for what is left (it stops no daemon, asks none to stop), then removes its folder', async () => {
+    const HOLDER_OK = `FORMS|${MISAO_ROOT}|\nHOLDER|6224|misao.exe|mine|${MISAO_ROOT}\\0.3.0\\misao.exe`;
+
+    it('ends its task, asks Windows who serves the pipe, asks that daemon to stop when it is a misao.exe of the user\'s own under the folder, then looks for what is left, and removes the folder', async () => {
       const host = new FakeUninstallHost({ AzitoAgent: { xml: AGENT_XML }, AzitoMisao: { xml: MISAO_XML, running: true } });
+      host.answers['Asking Windows which process serves the misao pipe'] = HOLDER_OK;
       const result = await run(host, true);
       expect(result.ok).toBe(true);
       expect(outcomes(result)).toEqual({ task: 'done', processes: 'absent', firewall: 'absent', folder: 'done', misaoTask: 'done', misaoProcesses: 'absent', misaoFolder: 'done' });
       expect(host.tasks.has('AzitoMisao')).toBe(false);
       const order = host.log.filter((l) => /AzitoMisao|misao/.test(l));
-      expect(order.indexOf('end AzitoMisao')).toBeLessThan(order.indexOf('script Looking for processes still running from the misao folder'));
-      expect(order.indexOf('delete AzitoMisao')).toBeLessThan(order.indexOf('script Looking for processes still running from the misao folder'));
-      expect(host.bodyOf('Looking for processes still running from the misao folder')).toContain(`$root = '${MISAO_ROOT}'`);
-      for (const { what, body } of host.bodies) expect(body, what).not.toMatch(/misao\.exe' -ArgumentList|Start-Process|MISAO_SOCKET|Stop-Process/);
+      const at = (entry: string): number => order.indexOf(entry);
+      expect(at('end AzitoMisao')).toBeLessThan(at('delete AzitoMisao'));
+      expect(at('delete AzitoMisao')).toBeLessThan(at('script Asking Windows which process serves the misao pipe'));
+      expect(at('script Asking Windows which process serves the misao pipe')).toBeLessThan(at('script Asking the misao daemon to stop'));
+      expect(at('script Asking the misao daemon to stop')).toBeLessThan(at('script Looking for processes still running from the misao folder'));
+      const stop = host.bodyOf('Asking the misao daemon to stop');
+      expect(stop).toContain(`$exe = '${MISAO_ROOT}\\0.3.0\\misao.exe'`);
+      expect(stop).toContain(`$env:MISAO_SOCKET = '${windowsMisaoPipe(MISAO_ROOT, 'dev')}'`);
+      expect(host.bodyOf('Asking Windows which process serves the misao pipe')).toContain(`$pipe = '${windowsMisaoPipe(MISAO_ROOT, 'dev')}'`);
+    });
+
+    it('asks for no stop when no pipe is served (no daemon runs), and says nothing about it', async () => {
+      const host = new FakeUninstallHost({ AzitoMisao: { xml: MISAO_XML } });
+      const result = await run(host, true);
+      expect(outcomes(result)).toMatchObject({ misaoProcesses: 'absent', misaoFolder: 'done' });
+      expect(host.ran('Asking the misao daemon to stop')).toBe(false);
+    });
+
+    it.each([
+      ['a misao.exe of another folder holds the pipe', `FORMS|${MISAO_ROOT}|\nHOLDER|99|misao.exe|mine|D:\\manual\\misao.exe`, 'is not under'],
+      ['something that is not a misao.exe holds the pipe', `FORMS|${MISAO_ROOT}|\nHOLDER|98|node.exe|mine|${MISAO_ROOT}\\0.3.0\\node.exe`, 'is not a misao.exe'],
+      ['another user\'s process holds it', `FORMS|${MISAO_ROOT}|\nHOLDER|97|misao.exe|other|${MISAO_ROOT}\\0.3.0\\misao.exe`, 'not shown to be yours'],
+      ['the owner of the holder cannot be read', `FORMS|${MISAO_ROOT}|\nHOLDER|96|misao.exe|unknown|${MISAO_ROOT}\\0.3.0\\misao.exe`, 'not shown to be yours'],
+      ['the program of the holder cannot be read', `FORMS|${MISAO_ROOT}|\nHOLDER|95|misao.exe|mine|`, 'could not be read'],
+      ['Windows does not say who holds the pipe', 'ERROR|Exception calling "Connect"', 'did not say which process'],
+    ])('does not ask for a stop when %s, and the folder stays with the way to stop it by hand', async (_label, answer, reason) => {
+      const host = new FakeUninstallHost({ AzitoMisao: { xml: MISAO_XML } });
+      host.answers['Asking Windows which process serves the misao pipe'] = answer;
+      host.answers['Looking for processes still running from the misao folder'] = `LEFT|${answer.includes('HOLDER|') ? /HOLDER\|(\d+)/.exec(answer)![1] : '1'}|misao.exe|D:\\manual\\misao.exe`;
+      const result = await run(host, true);
+      expect(host.ran('Asking the misao daemon to stop')).toBe(false);
+      expect(outcomes(result)).toMatchObject({ misaoTask: 'done', misaoProcesses: 'failed', misaoFolder: 'skipped' });
+      expect(detail(result, 'misaoProcesses')).toContain('was not asked to stop');
+      expect(detail(result, 'misaoProcesses')).toContain(reason);
+      expect(detail(result, 'misaoProcesses')).toContain("& '" + MISAO_ROOT + "\\0.3.0\\misao.exe' stop");
+    });
+
+    it('a host that cannot be asked who holds the pipe is a reason not to stop, not a failure of its own', async () => {
+      const host = new FakeUninstallHost({ AzitoMisao: { xml: MISAO_XML } });
+      host.answers['Asking Windows which process serves the misao pipe'] = new Error('Asking Windows failed on the Windows host (exit 1): boom');
+      const result = await run(host, true);
+      expect(host.ran('Asking the misao daemon to stop')).toBe(false);
+      expect(outcomes(result)).toMatchObject({ misaoTask: 'done', misaoProcesses: 'absent', misaoFolder: 'done' });
+    });
+
+    it('a daemon that was asked to stop and is still there is reported with how to stop it by hand', async () => {
+      const host = new FakeUninstallHost({ AzitoMisao: { xml: MISAO_XML } });
+      host.answers['Asking Windows which process serves the misao pipe'] = HOLDER_OK;
+      host.answers['Looking for processes still running from the misao folder'] = `LEFT|6224|misao.exe|${MISAO_ROOT}\\0.3.0\\misao.exe`;
+      const text = detail(await run(host, true), 'misaoProcesses');
+      expect(text).toContain('The daemon was asked to stop and is still there');
+    });
+
+    it('a misao that has no task to say which release to ask is not asked', async () => {
+      const host = new FakeUninstallHost({});
+      host.answers['Asking Windows which process serves the misao pipe'] = HOLDER_OK;
+      await run(host, true);
+      expect(host.ran('Asking Windows which process serves the misao pipe')).toBe(false);
+      expect(host.ran('Asking the misao daemon to stop')).toBe(false);
     });
 
     it('looks even when the task is not there', async () => {
@@ -689,6 +749,47 @@ describe('what the scripts answer', () => {
   });
 });
 
+describe('which daemon may be asked to stop', () => {
+  const root = 'C:\\Users\\Dev User\\.azito\\misao';
+  const holder = (over: Partial<Extract<ReturnType<typeof parseMisaoHolderOutput>, { kind: 'holder' }>> = {}) => ({ kind: 'holder' as const, pid: '5', name: 'misao.exe', owner: 'mine', exe: `${root}\\0.3.0\\misao.exe`, forms: [], ...over });
+
+  it('the user\'s own misao.exe under the folder, in the folder\'s spelling, its long form or its 8.3 form, whatever the slashes and the case', () => {
+    expect(decideMisaoStop(root, holder())).toEqual({ stop: true });
+    expect(decideMisaoStop(root, holder({ exe: `${root.replace(/\\/g, '/').toUpperCase()}/0.3.0/MISAO.EXE` }))).toEqual({ stop: true });
+    expect(decideMisaoStop(root, holder({ exe: 'C:\\Users\\DEVUSE~1\\AZITO~1\\MISAO\\0.3.0\\misao.exe', forms: ['', 'C:\\Users\\DEVUSE~1\\AZITO~1\\MISAO'].filter(Boolean) }))).toEqual({ stop: true });
+    expect(decideMisaoStop(root, holder({ exe: 'D:\\real\\misao\\0.3.0\\misao.exe', forms: ['D:\\real\\misao'] }))).toEqual({ stop: true });
+  });
+
+  it.each([
+    ['no pipe', { kind: 'nopipe' as const }],
+    ['an error', { kind: 'error' as const, message: 'x' }],
+    ['a node.exe', holder({ name: 'node.exe' })],
+    ['someone else\'s process', holder({ owner: 'other' })],
+    ['an owner nobody read', holder({ owner: 'unknown' })],
+    ['a program nobody read', holder({ exe: '' })],
+    ['a misao.exe of another folder', holder({ exe: 'D:\\manual\\0.3.0\\misao.exe' })],
+    ['a misao.exe whose folder only starts like the folder (misao-old)', holder({ exe: `${root}-old\\0.3.0\\misao.exe` })],
+  ])('not %s', (_label, h) => {
+    expect(decideMisaoStop(root, h).stop).toBe(false);
+  });
+
+  it('reads what the host printed', () => {
+    expect(parseMisaoHolderOutput('NOPIPE')).toEqual({ kind: 'nopipe' });
+    expect(parseMisaoHolderOutput('FORMS|C:\\a|C:\\A~1\nHOLDER|7|misao.exe|mine|C:\\a\\0.3.0\\misao.exe')).toEqual({ kind: 'holder', pid: '7', name: 'misao.exe', owner: 'mine', exe: 'C:\\a\\0.3.0\\misao.exe', forms: ['C:\\a', 'C:\\A~1'] });
+    expect(parseMisaoHolderOutput('FORMS||\nERROR|nope')).toEqual({ kind: 'error', message: 'nope' });
+    expect(() => parseMisaoHolderOutput('what')).toThrow(/could not be read/);
+  });
+
+  it('the host is asked of Windows, not of the daemon, and the stop is given the pipe of the task and no way to kill', () => {
+    const asked = misaoHolderScript(root, '\\\\.\\pipe\\p');
+    expect(asked).toContain('[AzitoPipeHolder]::ServerProcessId');
+    expect(asked).toContain('GetOwnerSid');
+    const stop = misaoStopScript(`${root}\\0.3.0\\misao.exe`, '\\\\.\\pipe\\p');
+    expect(stop).toContain("-ArgumentList 'stop'");
+    expect(stop).not.toMatch(/Stop-Process|\.Kill\(|taskkill/i);
+  });
+});
+
 describe('what looks like a hub process', () => {
   const hub = new RegExp(HUB_COMMAND_LINE_PATTERN, 'i');
 
@@ -744,6 +845,8 @@ describe('the scripts it sends', () => {
       misaoHubScript({ root: `${long}\\.azito\\misao`, hubRoot: `${long}\\.azito\\misao`, looksForHub: true }),
       misaoDaemonScript(`${long}\\.azito\\misao`, long),
       leftoverProcessesScript(`${long}\\.azito\\misao`, long),
+      misaoHolderScript(`${long}\\.azito\\misao`, '\\\\.\\pipe\\misao-a-very-long-user-name-0123456789abcdef'),
+      misaoStopScript(`${long}\\.azito\\misao\\0.3.0\\misao.exe`, '\\\\.\\pipe\\misao-a-very-long-user-name-0123456789abcdef'),
       firewallInspectScript('AZITO Agent (TCP 3002)'),
       sameFileScript(`${long}\\a\\b\\node.exe`, `${long}\\c\\d\\node.exe`),
     ];

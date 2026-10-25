@@ -5,7 +5,7 @@ import { firewallRuleName } from './windowsFirewall';
 import { windowsMisaoPipe } from '../transport/agentMisaoSocket';
 import { agentTaskIdentity, misaoTaskVersion, type AgentTaskIdentity } from './windowsAgentTask';
 import type { WindowsAgentOptions } from './windowsAgentConfig';
-import { folderScript, leftoverProcessesScript, parseFolderOutput, parseLeftoverOutput, type ScriptOutcome, type UninstallOutcome } from './windowsAgentUninstallScripts';
+import { decideMisaoStop, folderScript, leftoverProcessesScript, misaoHolderScript, misaoStopScript, parseFolderOutput, parseLeftoverOutput, parseMisaoHolderOutput, type ScriptOutcome, type UninstallOutcome } from './windowsAgentUninstallScripts';
 import { firewallInspectScript, misaoDaemonScript, misaoHubScript, parseFirewallOutput, parseMisaoGuardOutput, parseSameFileOutput, sameFileScript } from './windowsAgentOwnership';
 
 /** The Task Scheduler task of a Windows hub (`HUB_SERVICE.windowsTaskName`, fixed: there is no setting for it; a test keeps the two in step). */
@@ -183,8 +183,11 @@ async function removeMisao(host: WindowsUninstallHost, facts: HostFacts, options
     const why = 'the misao task is still registered, so it would start the daemon again';
     return [task, skipped('misaoProcesses', why), skipped('misaoFolder', why)];
   }
-  // The task is ended and that is all AZITO does to the daemon (a daemon of another folder, or one started by hand, is not touched); then only a look.
-  const processes = await step('misaoProcesses', async () => parseLeftoverOutput(await host.script('Looking for processes still running from the misao folder', leftoverProcessesScript(root, home), QUICK_MS), root, misaoAdvice(root, userNameOf(facts.userId), version as string | undefined)));
+  // The task is ended, and ending it does not end the daemon. The daemon is asked to stop, through its own pipe, only once Windows has said that
+  // the process serving that pipe is a misao.exe of the user's own under this folder; otherwise nothing is stopped and the look says what is left.
+  const pipe = windowsMisaoPipe(root, userNameOf(facts.userId));
+  const stopNote = version === undefined ? 'the misao task was not there to say which release to ask' : await askToStop(host, root, pipe, path.win32.join(root, version as string, 'misao.exe'));
+  const processes = await step('misaoProcesses', async () => parseLeftoverOutput(await host.script('Looking for processes still running from the misao folder', leftoverProcessesScript(root, home), QUICK_MS), root, misaoAdvice(root, pipe, version as string | undefined, stopNote)));
   const folder = processes.outcome === 'failed'
     ? skipped('misaoFolder', 'the misao daemon may still be running: its folder is left so that nothing breaks underneath it')
     : await step('misaoFolder', async () => parseFolderOutput(await host.script(`Removing ${root}`, folderScript(home, root), FOLDER_MS)));
@@ -192,12 +195,27 @@ async function removeMisao(host: WindowsUninstallHost, facts: HostFacts, options
 }
 
 /**
- * What to tell the person when a misao daemon outlived its task (ending the task does not end it, measured on a Windows runner: the daemon
- * and the `cmd.exe` it runs under stay). A daemon is stopped cleanly by its own `stop`, with the pipe of the task; its windows close.
+ * Asks the daemon behind `pipe` to stop (its own `stop`; every window it holds closes) when, and only when, Windows says the process serving
+ * that pipe is a `misao.exe` of the user's own under `root` (see `decideMisaoStop`). Returns why it did not ask, or '' when it did (what is
+ * still running afterwards is for the look to find, not this). A host that cannot be asked is a reason not to ask, never a failure of its own.
  */
-function misaoAdvice(root: string, userName: string, version: string | undefined): string {
+async function askToStop(host: WindowsUninstallHost, root: string, pipe: string, exe: string): Promise<string> {
+  try {
+    const holder = parseMisaoHolderOutput(await host.script('Asking Windows which process serves the misao pipe', misaoHolderScript(root, pipe), QUICK_MS));
+    const decision = decideMisaoStop(root, holder);
+    if (!decision.stop) return holder.kind === 'nopipe' ? '' : decision.reason;
+    await host.script('Asking the misao daemon to stop', misaoStopScript(exe, pipe), 60_000);
+    return '';
+  } catch (err) {
+    return `the daemon could not be asked (${err instanceof Error ? err.message : String(err)})`;
+  }
+}
+
+/** What to tell the person when a misao daemon is still running after the task was ended (and the daemon was, or was not, asked to stop: `stopNote` says why not). */
+function misaoAdvice(root: string, pipe: string, version: string | undefined, stopNote: string): string {
   const exe = version === undefined ? '<the misao.exe of the daemon>' : path.win32.join(root, version, 'misao.exe');
-  return `Ending the task does not end a misao daemon. To stop it cleanly (every window it holds closes), in PowerShell: $env:MISAO_SOCKET = '${windowsMisaoPipe(root, userName)}'; & '${exe}' stop`;
+  const why = stopNote === '' ? 'The daemon was asked to stop and is still there.' : `The daemon was not asked to stop, because ${stopNote}.`;
+  return `Ending the task does not end a misao daemon. ${why} If it is the daemon of this install, stop it cleanly (every window it holds closes), in PowerShell: $env:MISAO_SOCKET = '${pipe}'; & '${exe}' stop`;
 }
 
 /** The hub's misao folder, from the hub task's launcher script (`$hubRoot = '<prefix>\hub'`; the hub keeps its misao in `<prefix>\misao`). */
