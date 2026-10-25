@@ -80,7 +80,55 @@ describe('TuiWorkerRuntime.launch — a worker started as the pane\'s program (W
   it('still stops on the trust dialog of a Claude worker', async () => {
     const { runtime, tmux } = makeRuntime(['Do you trust this folder?']);
     const ctx = { ...makeLaunchCtx(tmux), startedAsProgram: true, effectiveLaunchCommand: 'claude' };
-    await expect(runtime.launch(ctx)).rejects.toMatchObject({ name: 'TuiNotReadyError', trustDialogDetected: true });
+    await expect(runtime.launch(ctx)).rejects.toMatchObject({ name: 'TuiNotReadyError', reason: 'trust_dialog' });
     expect(tmux.sendKeysToHandle).not.toHaveBeenCalled();
   }, 15_000);
+});
+
+describe('TuiWorkerRuntime.launch — the Bypass Permissions mode dialog (Claude Code 2.1.310 / 2.0.50 texts)', () => {
+  const dialog = [
+    '╭──────────────────────────────────────────────╮',
+    '│ WARNING: Claude Code running in Bypass Permissions mode',
+    '│ In Bypass Permissions mode, Claude Code will not ask for your approval before running potentially dangerous commands.',
+    '│ By proceeding, you accept all responsibility for actions taken while running in Bypass Permissions mode.',
+    '│ ❯ 1. No, exit',
+    '│   2. Yes, I accept',
+  ].join('\n');
+
+  it('is not taken for a ready TUI: fails with the reason, and types nothing into the dialog', async () => {
+    const { runtime, tmux } = makeRuntime([dialog]);
+    const ctx = { ...makeLaunchCtx(tmux), effectiveLaunchCommand: 'claude --dangerously-skip-permissions' };
+    await expect(runtime.launch(ctx)).rejects.toMatchObject({ name: 'TuiNotReadyError', reason: 'bypass_permissions_dialog' });
+    expect(tmux.sendKeysToHandle).toHaveBeenCalledTimes(1);
+  }, 15_000);
+
+  it('is recognised when the pane wraps the title across lines', async () => {
+    const { runtime, tmux } = makeRuntime(['│ WARNING: Claude Code running in      │\n│ Bypass Permissions mode              │\n│ ❯ 1. No,   │\n│ exit  2. Yes, I accept │\n']);
+    const ctx = { ...makeLaunchCtx(tmux), startedAsProgram: true, effectiveLaunchCommand: 'claude --dangerously-skip-permissions' };
+    await expect(runtime.launch(ctx)).rejects.toMatchObject({ reason: 'bypass_permissions_dialog' });
+  }, 15_000);
+
+  it('is not mistaken for the dialog when a conversation quotes its sentences next to the ready status line', async () => {
+    const { runtime, tmux } = makeRuntime([[
+      'Claude',
+      'Earlier answer: By proceeding, you accept all responsibility for this deployment.',
+      'The dialog is titled "WARNING: Claude Code running in Bypass Permissions mode" and offers "No, exit".',
+      'bypass permissions on (shift+tab to cycle)',
+    ].join('\n')]);
+    const ctx = { ...makeLaunchCtx(tmux), effectiveLaunchCommand: 'claude --resume 7a8b0f9c-1d2e-4f30-8a45-6b7c8d9e0f12 --dangerously-skip-permissions' };
+    await expect(runtime.launch(ctx)).resolves.toBeDefined();
+  }, 15_000);
+
+  it('still treats the status line of a running TUI as ready', async () => {
+    const { runtime, tmux } = makeRuntime(['bypass permissions on (shift+tab to cycle)']);
+    const ctx = { ...makeLaunchCtx(tmux), effectiveLaunchCommand: 'claude --dangerously-skip-permissions' };
+    await expect(runtime.launch(ctx)).resolves.toBeDefined();
+  }, 15_000);
+
+  it('does not look at the screen of a codex worker', async () => {
+    const { runtime, tmux } = makeRuntime([dialog]);
+    const ctx = { ...makeLaunchCtx(tmux), effectiveLaunchCommand: 'codex --dangerously-bypass-approvals-and-sandbox' };
+    await expect(runtime.launch(ctx)).resolves.toBeDefined();
+    expect(tmux.captureScreen).not.toHaveBeenCalled();
+  }, 10_000);
 });

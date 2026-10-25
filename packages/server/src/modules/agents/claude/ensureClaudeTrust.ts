@@ -7,7 +7,7 @@ import type { HostPlatform } from '../../../shared/os/hostEnv';
 import { KeyedMutex } from '../../../shared/keyedMutex';
 
 /** Two projects registering at once would each read the same file and the later write would drop the earlier registration. */
-const configLocks = new KeyedMutex();
+export const configLocks = new KeyedMutex();
 
 export type EnsureClaudeTrustResult =
   | { action: 'registered' }

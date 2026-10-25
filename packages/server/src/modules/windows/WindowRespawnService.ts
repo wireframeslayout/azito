@@ -30,6 +30,7 @@ import type { SessionCaptureService } from './SessionCaptureService';
 import { checkExecutionGate, ExecutionGateDeniedError, ExecutionGatePendingApprovalError, reverifyExecutionGateInLock } from '../tasks/execution/ExecutionGate';
 import { resolveExecutionManifest, hashExecutionManifest, type RespawnManifestInput } from '../tasks/execution/ExecutionManifest';
 import { appendLogAndEmit } from '../tasks/execution/AppendLog';
+import { prepareClaudeLaunch } from '../agents/claude/prepareClaudeLaunch';
 import { shouldBlockMcp } from '../agents/shouldBlockMcp';
 import type { TaskPaneEnvironmentService } from '../tasks/execution/TaskPaneEnvironmentService';
 import { resolveMuxWorkspace, resolveBaseBranch, resolveAndDetectBaseBranch } from '../tasks/execution/TaskExecutionEnv';
@@ -481,6 +482,10 @@ export class WindowRespawnService {
         createdViaNewSession = !workspaceExists;
         const doCreate = async (fs: ServerConfig, env: Record<string, string>) => {
           const createDriver = this.resolveDriver(fs);
+          // The gate was verified for `fs` just before this: a Claude worker is about to be started in the new window (as its program, or
+          // typed into its shell below), so the host's Claude Code settings are prepared before the window exists. Only for a task's window:
+          // a window that is not a task's (Add Window) is looked at by a person, who can accept the dialog.
+          if (!opts?.skipAgentLaunch && task && this.launchesClaude(win)) await this.prepareClaudeLaunchFor(fs, task.id, unitId);
           const freshWorkspaces = await createDriver.listWorkspaces(fs);
           const freshWorkspaceExists = freshWorkspaces.some((s) => s.name === sessionName && (s.kind ?? windowKind) === windowKind);
           createdViaNewSession = !freshWorkspaceExists;
@@ -846,6 +851,18 @@ export class WindowRespawnService {
     }
   }
 
+  /** Whether respawning `win` starts a Claude worker (the window's own, or one of its panes'). */
+  private launchesClaude(win: Pick<Window, 'workerType' | 'paneLayout'>): boolean {
+    return win.workerType === 'claude' || (win.paneLayout?.panes.some((pane) => pane.workerType === 'claude') ?? false);
+  }
+
+  /** Before a Claude worker is started on `server` (see {@link prepareClaudeLaunch}); reported in the execution log of the task's unit when there is one. */
+  private async prepareClaudeLaunchFor(server: ServerConfig, taskId: number, unitId: number | null): Promise<void> {
+    await prepareClaudeLaunch(this.transportFactory.getTransport(server), (entry) => {
+      if (unitId !== null) appendLogAndEmit(this.logRepo, this.events, taskId, unitId, 'command', entry);
+    });
+  }
+
   /**
    * Legacy recovery path for tasks that predate Window records (migration
    * 034): creates a fresh tmux window and launches `claude --resume
@@ -901,6 +918,7 @@ export class WindowRespawnService {
     const { windowName } = await runExclusiveForTask(taskId, async () => {
       const created = await createRotatedWindow(this.paneEnvService, this.serverIsolationLock, server, task, 'resume_legacy_create_failed', async (freshServer, env) => {
           const d = this.resolveDriver(freshServer);
+          await this.prepareClaudeLaunchFor(freshServer, task.id, unitId);
           const opened = await d.openWindow(freshServer, tmuxSession, `task-${task.id}`, { extraEnv: env });
           return { result: opened.result, windowName: opened.ref.window, ref: opened.ref, label: opened.windowName ?? opened.ref.window };
         },

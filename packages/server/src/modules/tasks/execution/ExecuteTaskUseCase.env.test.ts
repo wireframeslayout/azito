@@ -6,6 +6,9 @@ import * as path from 'path';
 import { ExecuteTaskUseCase } from './ExecuteTaskUseCase';
 import { ExecutionGateDeniedError } from './ExecutionGate';
 vi.mock('../../git/ensureGitIdentity', () => ({ ensureGitIdentity: vi.fn(async () => ({ action: 'already_set' })) }));
+// What the host's Claude Code settings get is tested on its own; here only that every boundary that starts a Claude worker calls it, in time.
+vi.mock('../../agents/claude/prepareClaudeLaunch', () => ({ prepareClaudeLaunch: vi.fn(async () => {}) }));
+import { prepareClaudeLaunch } from '../../agents/claude/prepareClaudeLaunch';
 import { ensureGitIdentity } from '../../git/ensureGitIdentity';
 
 // The hub's own `gh`/`glab` login is the second stage of distribution's token
@@ -494,6 +497,77 @@ describe('ExecuteTaskUseCase execution-env resolution', () => {
     await useCase.execute(42, 1);
 
     expect(windowRepo.add).toHaveBeenCalledWith(expect.objectContaining({ workerType: 'claude', workerModel: 'opus' }));
+  });
+
+  describe('prepares the host for a Claude worker (Bypass Permissions dialog, #497)', () => {
+    /** The order in which `prepareClaudeLaunch` and the first typed line that starts `claude` were called. */
+    function preparedBeforeLaunch(tmux: { sendKeysToHandle: ReturnType<typeof vi.fn> }): boolean {
+      const prepared = vi.mocked(prepareClaudeLaunch).mock.invocationCallOrder[0];
+      const launchIndex = tmux.sendKeysToHandle.mock.calls.findIndex((call: unknown[]) => (call[2] as string[])[0]?.includes('claude'));
+      expect(launchIndex).toBeGreaterThanOrEqual(0);
+      return prepared < tmux.sendKeysToHandle.mock.invocationCallOrder[launchIndex];
+    }
+
+    it('execute() without any working directory (no worktree is made) still prepares it, before the worker is typed', async () => {
+      const unit = makeUnit({ id: 60, workerType: 'claude', workerModel: 'opus' });
+      const task = makeTask({ id: 6, serverName: 'local-server', unitId: 60 });
+      const { useCase, tmux } = buildUseCase({ task, project: makeProject({ defaultUnitId: null }), units: [unit] });
+
+      await useCase.execute(60, 6);
+
+      expect(prepareClaudeLaunch).toHaveBeenCalledTimes(1);
+      expect(prepareClaudeLaunch).toHaveBeenCalledWith(expect.anything(), expect.any(Function));
+      expect(preparedBeforeLaunch(tmux)).toBe(true);
+    });
+
+    it('execute() writes what is reported into the task\'s execution log', async () => {
+      const unit = makeUnit({ id: 60, workerType: 'claude', workerModel: 'opus' });
+      const task = makeTask({ id: 6, serverName: 'local-server', unitId: 60 });
+      vi.mocked(prepareClaudeLaunch).mockImplementationOnce(async (_transport, report) => { report({ type: 'claude_bypass_accepted', file: 'settings.json' }); });
+      const { useCase, logRepo } = buildUseCase({ task, project: makeProject({ defaultUnitId: null }), units: [unit] });
+
+      await useCase.execute(60, 6);
+
+      expect(logRepo.append).toHaveBeenCalledWith(6, 60, 'command', { type: 'claude_bypass_accepted', file: 'settings.json' });
+    });
+
+    it('does not prepare anything for a worker that is not Claude', async () => {
+      const unit = makeUnit({ id: 61, workerType: 'codex', workerModel: null });
+      const task = makeTask({ id: 6, serverName: 'local-server', unitId: 61 });
+      const { useCase } = buildUseCase({ task, project: makeProject({ defaultUnitId: null }), units: [unit] });
+
+      await useCase.execute(61, 6);
+
+      expect(prepareClaudeLaunch).not.toHaveBeenCalled();
+    });
+
+    it('followUp() prepares it before the worker is resumed', async () => {
+      const unit = makeUnit({ id: 62, workerType: 'claude', workerModel: 'opus' });
+      const task = makeTask({ id: 6, serverName: 'local-server', unitId: 62, tmuxWindow: null });
+      const { useCase, tmux } = buildUseCase({ task, project: makeProject({ defaultUnitId: null }), units: [unit] });
+
+      await useCase.followUp(62, 6, 'please continue');
+
+      expect(prepareClaudeLaunch).toHaveBeenCalledTimes(1);
+      expect(preparedBeforeLaunch(tmux)).toBe(true);
+    });
+
+    it('a Bypass Permissions dialog that is still on the screen fails the task with its reason, without waiting or typing the prompt', async () => {
+      const unit = makeUnit({ id: 63, workerType: 'claude', workerModel: 'opus' });
+      const task = makeTask({ id: 6, serverName: 'local-server', unitId: 63 });
+      const { useCase, tmux, taskRepo, logRepo } = buildUseCase({ task, project: makeProject({ defaultUnitId: null }), units: [unit] });
+      tmux.captureScreen.mockResolvedValue({
+        stdout: 'WARNING: Claude Code running in Bypass Permissions mode\n1. No, exit\n2. Yes, I accept',
+        stderr: '',
+        code: 0,
+      });
+
+      await useCase.execute(63, 6);
+
+      expect(taskRepo.updateStatus).toHaveBeenCalledWith(6, 'failed');
+      expect(logRepo.append).toHaveBeenCalledWith(6, 63, 'command', expect.objectContaining({ type: 'bypass_permissions_dialog' }));
+      expect(logRepo.append).not.toHaveBeenCalledWith(6, 63, 'command', expect.objectContaining({ type: 'worker_launch_failed' }));
+    }, 15_000);
   });
 
   it('labels the new primary window row and, when labelling fails, removes that row and rethrows', async () => {
@@ -5273,6 +5347,25 @@ describe('ExecuteTaskUseCase on a host that starts the worker as the window\'s p
     expect(events.slice(0, 4)).toEqual(['create', 'remove-start', 'remove-end', 'create']);
   });
 
+  it('prepares the host\'s Claude Code settings before the window that starts the worker is opened (#497)', async () => {
+    const { useCase, tmux, worktreeServiceFactory } = build();
+    worktreeServiceFactory.create.mockReturnValue({ create: vi.fn(async () => ({ path: worktreePath, branch: 'task/8-slug' })), remove: vi.fn(async () => {}) });
+
+    await useCase.execute(80, 8);
+
+    expect(prepareClaudeLaunch).toHaveBeenCalledTimes(1);
+    expect(vi.mocked(prepareClaudeLaunch).mock.invocationCallOrder[0]).toBeLessThan(tmux.openWindow.mock.invocationCallOrder[0]);
+  });
+
+  it('prepares nothing when the gate refused the run (verified again inside the lock)', async () => {
+    const { useCase } = build();
+    vi.spyOn(useCase as unknown as { reverifyGateInLock: () => void }, 'reverifyGateInLock').mockImplementation(() => { throw new ExecutionGateDeniedError(8); });
+
+    await expect(useCase.execute(80, 8)).rejects.toBeInstanceOf(ExecutionGateDeniedError);
+
+    expect(prepareClaudeLaunch).not.toHaveBeenCalled();
+  });
+
   it('follow-up: a lost window is created again with the worker resumed as its program, without waking a shell window', async () => {
     const { useCase, tmux, primaryWindowWaker, sessionStrategyFactory, task, worktreeServiceFactory } = build();
     task.tmuxWindow = null;
@@ -5289,6 +5382,9 @@ describe('ExecuteTaskUseCase on a host that starts the worker as the window\'s p
     await useCase.followUp(80, 8, 'please continue');
 
     expect(primaryWindowWaker.wake).not.toHaveBeenCalled();
+    // #497: the host's Claude Code settings are prepared before the window that starts the worker is opened.
+    expect(prepareClaudeLaunch).toHaveBeenCalledTimes(1);
+    expect(vi.mocked(prepareClaudeLaunch).mock.invocationCallOrder[0]).toBeLessThan(tmux.openWindow.mock.invocationCallOrder[0]);
     expect(opened?.program?.argv.slice(-2)).toEqual(['--resume', '7a8b0f9c-1d2e-4f30-8a45-6b7c8d9e0f12']);
     expect(opened?.program?.cwd).toBe(worktreePath);
     const typed = tmux.sendKeysToHandle.mock.calls.map((c: unknown[]) => (c[2] as string[])[0]);

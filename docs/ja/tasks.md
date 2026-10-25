@@ -81,6 +81,14 @@ running (phase N) ────────────────────�
 review → done  (または failed — 各フェーズから遷移可能)
 ```
 
+### Claude Code の確認ダイアログ（Bypass Permissions mode）
+
+Claude のワーカーは `claude --dangerously-skip-permissions` で起動します。新しいホストで初めて起動すると「Bypass Permissions mode」の確認ダイアログが出て、タスクがそこで止まってしまいます。そのため AZITO は、Claude のワーカーを起動する前（実行・フォローアップ・復元・respawn・セッション復旧のいずれも）に、そのサーバー（ホスト）の Claude Code の設定へ自動で受け入れを書き込みます。
+
+- 書き込み先は `~/.claude/settings.json` の `skipDangerousModePermissionPrompt: true` です（Claude Code 2.0.x 向けに、すでにある `~/.claude.json` へ `bypassPermissionsModeAccepted: true` も書きます）。ほかのキーは保ち、JSON が壊れているファイルは書き換えずに実行ログへ理由を残します。Linux / macOS / Windows で共通です。
+- これはホストの Claude Code 全体の設定です。**そのホストで人が手で `claude --dangerously-skip-permissions` を起動したときも、警告が出なくなります。** local サーバーではハブを動かしている人自身の設定です。
+- それでもダイアログが出た場合、タスクは待ち続けず `bypass_permissions_dialog` として失敗します。手動で追加するウィンドウ（Add Window）は、人が画面を見ながら受け入れられるため、この自動の書き込みの対象外です。
+
 ## Worktree ベース実行
 
 タスクの実行時に Git worktree を自動的に作成し、独立したブランチで作業を行います。
