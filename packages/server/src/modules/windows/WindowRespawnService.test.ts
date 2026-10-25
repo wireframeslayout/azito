@@ -169,6 +169,8 @@ function buildService(opts: {
   projectServerRepo?: Pick<IProjectServerRepository, 'find' | 'findByProject'>;
   projectRepo?: Pick<IProjectRepository, 'findById'>;
   transportFactory?: Pick<TransportFactory, 'getTransport' | 'getFileOps' | 'hostProfileFor'>;
+  /** The strategy cannot rebuild a launch (a generic worker: its custom command is not stored). */
+  noRespawnLaunch?: boolean;
 }) {
   const windowRepo: IWindowRepository = {
     add: vi.fn(() => 1),
@@ -221,7 +223,7 @@ function buildService(opts: {
   const sessionStrategyFactory = {
     create: vi.fn(() => ({
       supportsSession: true,
-      buildRespawnLaunch: vi.fn(() => program('claude', ['--resume', 'abc', '--dangerously-skip-permissions'])),
+      buildRespawnLaunch: vi.fn(() => (opts.noRespawnLaunch ? null : program('claude', ['--resume', 'abc', '--dangerously-skip-permissions']))),
     })),
   };
 
@@ -2403,6 +2405,36 @@ describe('WindowRespawnService.respawn — a host that starts a worker as a prog
     expect(created[3].extraEnv).toEqual({ AZITO_UI_TOKEN: 'ui-token-fixture' });
     expect(sentCommands).toEqual([]);
     expect(tmux.resolvePane).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ['with a working directory', 'C:\\work'],
+    ['without one', null],
+  ])('refuses a generic worker window %s before the window is destroyed (its command is not stored, so nothing could be started), and types no directory change', async (_name, workingDirectory) => {
+    const { service, tmux, windowRepo, sentCommands } = buildService({
+      window: makeWindow({ id: 7, workerType: 'generic', workingDirectory, muxRef: { kind: 'misao', workspace: 'azito', window: 'w_01' } }),
+      transportFactory: win32Factory(),
+      noRespawnLaunch: true,
+    });
+    Object.assign(tmux, { windowExists: vi.fn(async () => true) });
+
+    await expect(service.respawn(7, makeServer())).rejects.toMatchObject({ code: 'unsupported_os' });
+
+    expect(tmux.closeWindow).not.toHaveBeenCalled();
+    expect(tmux.openWindow).not.toHaveBeenCalled();
+    expect(windowRepo.update).not.toHaveBeenCalled();
+    expect(sentCommands).toEqual([]);
+  });
+
+  it('says the program could not be started (PATH / PATHEXT) when the recreated window cannot be made, and that the old window is gone', async () => {
+    const { service, tmux } = buildService({
+      window: makeWindow({ id: 7, workerType: 'claude', workerModel: 'opus', agentSessionId: 'abc', muxRef: { kind: 'misao', workspace: 'azito', window: 'w_01' } }),
+      transportFactory: win32Factory(),
+    });
+    Object.assign(tmux, { windowExists: vi.fn(async () => false) });
+    tmux.openWindow.mockRejectedValue(new Error('command not found: claude'));
+
+    await expect(service.respawn(7, makeServer())).rejects.toThrow(/claude could not be started.*PATH \/ PATHEXT.*old window is already gone.*command not found: claude/);
   });
 
   it('a plain shell window without a directory is respawned as a bare window: nothing is started', async () => {

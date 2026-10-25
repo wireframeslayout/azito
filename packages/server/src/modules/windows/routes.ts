@@ -1,6 +1,7 @@
 import type { FastifyPluginCallback } from 'fastify';
 import { workerStartsAsProgram } from '../../shared/os/hostFeature';
 import { HostProfileError } from '../../shared/os/hostProfile';
+import { isAgentSessionId } from '../agents/agentSessionId';
 import { shellDialectFor } from '../../shared/os/shellDialect';
 import { randomUUID } from 'node:crypto';
 import type { IWindowRepository, Window } from './Window';
@@ -192,7 +193,7 @@ const windowsRoutes: FastifyPluginCallback<WindowsRouteOptions> = (fastify, opts
       const workingDirectory = (body['working_directory'] as string) || null;
       // The session id a Windows host's agent was started with (it is the window's first pane, so no launch-agent call records it).
       const agentSessionId = (body['agent_session_id'] as string | undefined) || null;
-      if (agentSessionId !== null && !/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(agentSessionId)) {
+      if (agentSessionId !== null && !isAgentSessionId(agentSessionId)) {
         return reply.code(400).send({ error: 'Invalid agent_session_id format' });
       }
       const winId = windowRepo.add({

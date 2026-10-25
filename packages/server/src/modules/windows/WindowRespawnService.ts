@@ -301,7 +301,12 @@ export class WindowRespawnService {
       let sessionId = win.agentSessionId;
       if (!sessionId && this.sessionCaptureService) sessionId = await this.sessionCaptureService.tryScanForWindow(windowId);
       const launch = this.sessionStrategyFactory.create(win.workerType).buildRespawnLaunch(sessionId, win.workerModel, null, blockMcp);
-      if (launch) respawnProgram = await programFor(launch, resolvedCwds.singleCwd, () => this.transportFactory.getFileOps(server));
+      // A window whose launch cannot be rebuilt (a custom command is not stored, so a generic worker has none) would be destroyed and
+      // recreated as a bare shell with nothing started: refused before anything is touched.
+      if (!launch) {
+        throw new HostProfileError('unsupported_os', `Respawning a window with a ${win.workerType} worker is not available on Windows hosts: its command is not stored, so the worker cannot be started again with the new window.`);
+      }
+      respawnProgram = await programFor(launch, resolvedCwds.singleCwd, () => this.transportFactory.getFileOps(server));
     }
 
     // Window-generation point for this window: EITHER branch below actually
@@ -479,12 +484,18 @@ export class WindowRespawnService {
           const freshWorkspaces = await createDriver.listWorkspaces(fs);
           const freshWorkspaceExists = freshWorkspaces.some((s) => s.name === sessionName && (s.kind ?? windowKind) === windowKind);
           createdViaNewSession = !freshWorkspaceExists;
-          if (!freshWorkspaceExists) {
-            const opened = await createDriver.openWorkspace(fs, sessionName, { windowName: openName, exactName: true, extraEnv: env, kind: windowKind, ...(respawnProgram ? { program: respawnProgram } : {}) });
+          try {
+            if (!freshWorkspaceExists) {
+              const opened = await createDriver.openWorkspace(fs, sessionName, { windowName: openName, exactName: true, extraEnv: env, kind: windowKind, ...(respawnProgram ? { program: respawnProgram } : {}) });
+              return { result: opened.result, windowName: opened.ref.window, ref: opened.ref };
+            }
+            const opened = await createDriver.openWindow(fs, sessionName, openName, { exactName: true, extraEnv: env, kind: windowKind, ...(respawnProgram ? { program: respawnProgram } : {}) });
             return { result: opened.result, windowName: opened.ref.window, ref: opened.ref };
+          } catch (err) {
+            // The old window is already gone when the program cannot be started (on a POSIX host a failed line leaves the shell, so the window stays).
+            if (!respawnProgram) throw err;
+            throw new Error(`The program ${respawnProgram.argv[0]} could not be started in the recreated window (is it installed, and found through PATH / PATHEXT?); the old window is already gone: ${err instanceof Error ? err.message : String(err)}`);
           }
-          const opened = await createDriver.openWindow(fs, sessionName, openName, { exactName: true, extraEnv: env, kind: windowKind, ...(respawnProgram ? { program: respawnProgram } : {}) });
-          return { result: opened.result, windowName: opened.ref.window, ref: opened.ref };
         };
 
         if (isPrimary) {
@@ -1229,7 +1240,8 @@ export class WindowRespawnService {
     blockMcp = true,
   ): Promise<void> {
     const driver = this.resolveDriver(server);
-    if (singleCwd) {
+    // A host that starts a worker as a program has no shell to type a directory change into (its cwd was the window's start directory).
+    if (singleCwd && !this.startsWorkerAsProgram(server)) {
       await driver.sendKeysToHandle(server, handle, [await changeDirectoryLine(() => this.transportFactory.getFileOps(server), this.dialectOf(server), singleCwd), 'Enter']);
       await sleep(300);
     }

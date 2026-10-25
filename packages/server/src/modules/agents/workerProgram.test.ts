@@ -48,6 +48,25 @@ describe('planNewWindowProgram', () => {
     expect(planned.program.argv).toEqual(['claude', '--resume', '11111111-1111-4111-8111-111111111111']);
   });
 
+  it('reads a quoted session id the way the program gets it, and records it', async () => {
+    const planned = await planNewWindowProgram(claude, hostFiles().files, { command: "claude --resume '22222222-2222-4222-8222-222222222222'", workerType: 'claude', workingDirectory: null });
+    expect(planned.agentSessionId).toBe('22222222-2222-4222-8222-222222222222');
+    expect(planned.program.argv).toEqual(['claude', '--resume', '22222222-2222-4222-8222-222222222222']);
+  });
+
+  it('records nothing for a session value the window row would reject, and adds none of its own to a command that has one', async () => {
+    const planned = await planNewWindowProgram(claude, hostFiles().files, { command: 'claude --resume my-name', workerType: 'claude', workingDirectory: null });
+    expect(planned.agentSessionId).toBeNull();
+    expect(planned.program.argv).toEqual(['claude', '--resume', 'my-name']);
+  });
+
+  it('does not take a --resume that is only text inside another quoted argument for the session flag', async () => {
+    const planned = await planNewWindowProgram(claude, hostFiles().files, { command: "claude --append-system-prompt 'do --resume 33333333-3333-4333-8333-333333333333 never'", workerType: 'claude', workingDirectory: null });
+    expect(planned.agentSessionId).toMatch(/^[0-9a-f-]{36}$/);
+    expect(planned.agentSessionId).not.toBe('33333333-3333-4333-8333-333333333333');
+    expect(planned.program.argv.slice(-2)).toEqual(['--session-id', planned.agentSessionId]);
+  });
+
   it('an agent whose session is found after launch (or a custom command) gets no id and its command as written', async () => {
     const codex = strategies({ supportsSession: true, needsPostLaunchScan: true });
     expect(await planNewWindowProgram(codex, hostFiles().files, { command: 'codex', workerType: 'codex', workingDirectory: null })).toMatchObject({ agentSessionId: null, program: { argv: ['codex'] } });

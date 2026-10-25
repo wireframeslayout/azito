@@ -3,6 +3,7 @@ import type { IFileOps } from '../../shared/fs/fileOps';
 import { resolveShellDirectory } from '../../shared/os/changeDirectoryLine';
 import type { PaneProgram } from '../tmux/IMuxClient';
 import { DEFAULT_TERMINAL_COLS, DEFAULT_TERMINAL_ROWS } from '../tmux/terminalSize';
+import { isAgentSessionId } from './agentSessionId';
 import type { ISessionStrategyFactory } from './SessionStrategy';
 import { commandLineLaunch, launchArgv, withFlags, type WorkerLaunch } from './WorkerLaunch';
 
@@ -39,12 +40,21 @@ export async function planNewWindowProgram(
   let launch: WorkerLaunch = commandLineLaunch(request.command.trim());
   let agentSessionId: string | null = null;
   if (strategy.supportsSession && !strategy.needsPostLaunchScan) {
-    agentSessionId = /(?:^|\s)--session-id\s+(\S+)/.exec(request.command)?.[1] ?? /(?:^|\s)--resume\s+(\S+)/.exec(request.command)?.[1] ?? null;
-    if (agentSessionId === null) {
-      agentSessionId = randomUUID();
-      const args = strategy.buildNewSessionArgs(agentSessionId);
-      if (args.length === 0) agentSessionId = null;
-      else launch = withFlags(launch, args);
+    // Read from the split argument list, as the program will get it: a standalone `--session-id` / `--resume` and the word after it,
+    // not text inside another (quoted) argument.
+    const words = launchArgv(launch);
+    const flagAt = words.findIndex((word) => word === '--session-id' || word === '--resume');
+    if (flagAt >= 0) {
+      // The command carries a session of its own: none is added. It is recorded only if it is an id the window row accepts.
+      const given = words[flagAt + 1];
+      agentSessionId = given !== undefined && isAgentSessionId(given) ? given : null;
+    } else {
+      const id = randomUUID();
+      const args = strategy.buildNewSessionArgs(id);
+      if (args.length > 0) {
+        agentSessionId = id;
+        launch = withFlags(launch, args);
+      }
     }
   }
   return { program: await programFor(launch, request.workingDirectory, files), agentSessionId };

@@ -12,7 +12,7 @@
  *  - file content search: `GET /files/search` runs `rg` when the host has it, else the host's own search
  *    (`IFileOps.searchContent`, Node), and reports hit paths relative to the root with `/`.
  *  - starting claude / codex / a command in a window (#371): a Windows host's worker is started by misao's `pane.open` with the program and its
- *    arguments (no shell line is typed): `launchProgramInPane` -> `IMuxClient.replacePaneWithProgram`.
+ *    arguments (no shell line is typed): the agent is the first pane of the window it is created with (`PaneProgram` -> `openWorkspace` / `openWindow` `program`, `agents/workerProgram.ts`).
  *  - git (diff / commits / branches / worktree list / repository discovery): `runGit`, which asks the host for the `git.exe` of Git for
  *    Windows (`GitLocator`: PATH, then the standard install locations). Not installed there: the API answers `501 git_not_found` with
  *    the reason, which is not known in advance, so it is shown as the error of the call, not as a closed feature.
