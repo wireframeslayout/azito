@@ -116,8 +116,8 @@ export function exactProcessesScript(input: { image: string; shape: ProcessShape
     '  if ($r.ReturnValue -ne 0 -or -not $r.Sid) { return \'unknown\' }',
     '  if ($r.Sid -eq $me) { \'mine\' } else { \'other\' }',
     '}',
-    // Quotes out, and the blanks at the ends (cmd.exe leaves one where it cut the redirects off) trimmed.
-    'function Line($p) { if ($p.CommandLine) { $p.CommandLine.Replace(\'"\', \'\').Trim() } else { \'\' } }',
+    // Quotes out, runs of blanks as one, the ends trimmed: cmd.exe leaves a blank where it took the quotes or the redirects off (measured on a real misao daemon: two blanks after the program, one at the end). The words and their order are what is compared.
+    'function Line($p) { if ($p.CommandLine) { ($p.CommandLine.Replace(\'"\', \'\') -replace \'\\s+\', \' \').Trim() } else { \'\' } }',
     'function Shaped($p) {',
     '  $e = $p.ExecutablePath; $l = Line $p',
     '  [bool]($e -and $e -match $exePattern -and $l.StartsWith($e + \' \', [System.StringComparison]::OrdinalIgnoreCase) -and $l.Substring($e.Length + 1) -match $tailPattern)',

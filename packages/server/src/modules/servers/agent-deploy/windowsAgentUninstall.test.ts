@@ -615,7 +615,7 @@ describe('the processes it ends: the whole command line of what the install\'s t
   /** What the host matches: the command line with its quotes taken out and its own executable path taken off the front. */
   const matches = (shape: ReturnType<typeof agentProcessShape>, exe: string, line: string): boolean => {
     const { exe: exePattern, tail } = expandShape(shape);
-    const stripped = line.replace(/"/g, '');
+    const stripped = line.replace(/"/g, '').replace(/\s+/g, ' ').trim();
     return new RegExp(exePattern, 'i').test(exe) && stripped.toLowerCase().startsWith(`${exe.toLowerCase()} `) && new RegExp(`^(?:${tail})$`, 'i').test(stripped.slice(exe.length + 1));
   };
   const agent = agentProcessShape(agentRoot, 'abc123abc123');
@@ -656,6 +656,10 @@ describe('the processes it ends: the whole command line of what the install\'s t
 
     it('takes the daemon the task starts (cmd.exe expands the line; its redirects are not part of it)', () => {
       expect(matchesMisao(exe, `"${exe}" serve --socket "${pipe}" --data "${root}"`)).toBe(true);
+    });
+
+    it('takes the line as a real daemon had it on a Windows runner: no quotes, two blanks after the program, one at the end', () => {
+      expect(matchesMisao(exe, `${exe}  serve --socket ${pipe} --data ${root} `)).toBe(true);
     });
 
     it.each([
