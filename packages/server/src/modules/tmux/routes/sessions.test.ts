@@ -1126,6 +1126,62 @@ describe('mux creation routes hand the new pane its env inside the per-server lo
     expect(openWindow).toHaveBeenCalledWith(isolated, 'ws-a', undefined, { extraEnv: MASKED });
   });
 
+  describe('create bodies are strict (#501)', () => {
+    it('POST /mux/workspaces/:ws/windows answers 400 naming a field it does not know (windowName is the workspace route\'s), creating nothing', async () => {
+      await build(normal);
+      const res = await app.inject({ method: 'POST', url: '/api/servers/misao1/mux/workspaces/ws-a/windows', payload: { windowName: 'main' } });
+      expect(res.statusCode).toBe(400);
+      expect(res.json()).toEqual({ error: 'unknown_fields', unknown: ['windowName'], accepted: ['name', 'force', 'kind', 'launch'] });
+      expect(openWindow).not.toHaveBeenCalled();
+    });
+
+    it('POST /mux/workspaces answers 400 naming every field it does not know', async () => {
+      await build(normal);
+      const res = await app.inject({ method: 'POST', url: '/api/servers/misao1/mux/workspaces', payload: { name: 'ws-a', wndowName: 'main', launchh: {} } });
+      expect(res.statusCode).toBe(400);
+      expect(res.json()).toEqual({ error: 'unknown_fields', unknown: ['wndowName', 'launchh'], accepted: ['name', 'windowName', 'force', 'kind', 'launch'] });
+      expect(openWorkspace).not.toHaveBeenCalled();
+    });
+
+    it('POST /mux/workspaces still takes windowName, force, kind and launch together', async () => {
+      await build(normal, { planNewWindowProgram: async () => null });
+      const res = await app.inject({ method: 'POST', url: '/api/servers/misao1/mux/workspaces', payload: { name: 'ws-a', windowName: 'main', force: true, kind: 'misao' } });
+      expect(res.statusCode).toBe(200);
+      expect(openWorkspace).toHaveBeenCalledWith(normal, 'ws-a', expect.objectContaining({ windowName: 'main', kind: 'misao' }));
+    });
+
+    it('POST /mux/workspaces/:ws/windows takes an empty or absent body as before', async () => {
+      await build(normal);
+      const res = await app.inject({ method: 'POST', url: '/api/servers/misao1/mux/workspaces/ws-a/windows' });
+      expect(res.statusCode).toBe(200);
+      expect(openWindow).toHaveBeenCalledWith(normal, 'ws-a', undefined, { extraEnv: { AZITO_UI_TOKEN: 'test-token' } });
+    });
+
+    it('a field of the wrong type is an invalid_body 400, and a bad kind / launch keep their own errors', async () => {
+      await build(normal);
+      const typed = await app.inject({ method: 'POST', url: '/api/servers/misao1/mux/workspaces', payload: { name: 5 } });
+      expect(typed.statusCode).toBe(400);
+      expect(typed.json()).toMatchObject({ error: 'invalid_body', issues: [{ path: 'name' }] });
+      const kind = await app.inject({ method: 'POST', url: '/api/servers/misao1/mux/workspaces', payload: { name: 'ws-a', kind: 'zellij' } });
+      expect(kind.statusCode).toBe(400);
+      expect(kind.json()).toEqual({ error: 'Invalid kind' });
+      const launch = await app.inject({ method: 'POST', url: '/api/servers/misao1/mux/workspaces', payload: { name: 'ws-a', launch: 'claude' } });
+      expect(launch.statusCode).toBe(400);
+      expect(launch.json()).toEqual({ error: 'launch must be { command: string, workerType?: string, workingDirectory?: string }' });
+      expect(openWorkspace).not.toHaveBeenCalled();
+    });
+
+    it('the tmux-only POST /sessions and /sessions/:session/windows refuse an unknown field too', async () => {
+      await build(normal);
+      const session = await app.inject({ method: 'POST', url: '/api/servers/misao1/sessions', payload: { name: 's', kind: 'tmux' } });
+      expect(session.statusCode).toBe(400);
+      expect(session.json()).toEqual({ error: 'unknown_fields', unknown: ['kind'], accepted: ['name', 'command', 'windowName', 'force'] });
+      const window = await app.inject({ method: 'POST', url: '/api/servers/misao1/sessions/s/windows', payload: { windowName: 'w' } });
+      expect(window.statusCode).toBe(400);
+      expect(window.json()).toEqual({ error: 'unknown_fields', unknown: ['windowName'], accepted: ['name', 'force'] });
+    });
+  });
+
   describe('a new window started with an agent (`launch`, for a host that starts a worker as a program: #371)', () => {
     const program = { argv: ['claude', '--session-id', 's-1'], cwd: 'C:\\work', cols: 120, rows: 40 };
     const launch = { command: 'claude', workerType: 'claude', workingDirectory: 'C:\\work' };
