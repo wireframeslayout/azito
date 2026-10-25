@@ -2,6 +2,7 @@ import type { FastifyPluginCallback, FastifyReply, FastifyRequest } from 'fastif
 import type { SystemUpdateService } from './SystemUpdateService';
 import type { UpdateChannelResolver } from './UpdateChannelResolver';
 import type { MisaoServiceService } from './misao/MisaoServiceService';
+import { isReleaseTag } from './hubVersion';
 import { requireOperator, runMisaoOperation } from './misao/misaoRouteSupport';
 
 interface SystemRouteOptions {
@@ -9,8 +10,6 @@ interface SystemRouteOptions {
   channelResolver: UpdateChannelResolver;
   misaoService: MisaoServiceService;
 }
-
-const VERSION_RE = /^v?\d+\.\d+\.\d+(?:-[0-9A-Za-z.]+)?$/;
 
 const systemRoutes: FastifyPluginCallback<SystemRouteOptions> = (fastify, opts, done) => {
   const { systemUpdateService, channelResolver, misaoService } = opts;
@@ -22,7 +21,7 @@ const systemRoutes: FastifyPluginCallback<SystemRouteOptions> = (fastify, opts, 
   fastify.post<{ Body: { version?: string } }>('/api/system/update', async (request, reply) => {
     const { version } = (request.body ?? {}) as { version?: string };
     if (version !== undefined) {
-      if (typeof version !== 'string' || !VERSION_RE.test(version)) {
+      if (typeof version !== 'string' || !isReleaseTag(version)) {
         return reply.status(400).send({ error: '無効なバージョン形式です' });
       }
     }

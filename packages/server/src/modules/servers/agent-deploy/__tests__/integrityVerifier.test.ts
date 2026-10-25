@@ -1,9 +1,9 @@
 import { describe, it, expect, afterEach } from 'vitest';
-import { execSync } from 'child_process';
+import { execFileSync, execSync } from 'child_process';
 import * as fs from 'fs';
 import * as path from 'path';
 import * as os from 'os';
-import { buildSha256VerifyCommand, buildSafeExtractCommand, readSha256FromSumsFile } from '../integrityVerifier';
+import { assertNoTraversal, buildSha256VerifyCommand, buildSafeExtractCommand, readSha256FromSumsFile } from '../integrityVerifier';
 
 describe('buildSha256VerifyCommand', () => {
   it('generates a command with sha256sum and shasum fallback', () => {
@@ -130,5 +130,40 @@ describe('readSha256FromSumsFile', () => {
     ].join('\n'));
     const hash = readSha256FromSumsFile(tmpFile, 'azito-agent.tar.gz');
     expect(hash).toBe('0000000000000000000000000000000000000000000000000000000000000002');
+  });
+});
+
+// tar.gz files are listed with the `tar` on PATH; the cases that need `-P` (keep a leading / or ..) are written for GNU / bsd tar on Unix.
+describe.skipIf(process.platform === 'win32')('assertNoTraversal', () => {
+  let dir: string;
+  afterEach(() => fs.rmSync(dir, { recursive: true, force: true }));
+
+  function tarballOf(members: string[], flags = '-czf'): string {
+    dir = fs.mkdtempSync(path.join(os.tmpdir(), 'azito-traversal-'));
+    fs.mkdirSync(path.join(dir, 'src', 'inner'), { recursive: true });
+    fs.writeFileSync(path.join(dir, 'src', 'ok.txt'), 'ok');
+    fs.writeFileSync(path.join(dir, 'outside.txt'), 'outside');
+    const out = path.join(dir, 'a.tar.gz');
+    execFileSync('tar', [flags, out, '-C', path.join(dir, 'src', 'inner'), ...members.map((m) => m.replace('<dir>', dir))].filter(Boolean));
+    return out;
+  }
+
+  it('accepts an ordinary archive', async () => {
+    dir = fs.mkdtempSync(path.join(os.tmpdir(), 'azito-traversal-'));
+    fs.mkdirSync(path.join(dir, 'src', 'sub'), { recursive: true });
+    fs.writeFileSync(path.join(dir, 'src', 'sub', 'a.txt'), 'a');
+    const out = path.join(dir, 'a.tar.gz');
+    execFileSync('tar', ['-czf', out, '-C', path.join(dir, 'src'), '.']);
+    await expect(assertNoTraversal(out)).resolves.toBeUndefined();
+  });
+
+  it('refuses a ".." entry', async () => {
+    const out = tarballOf(['../../outside.txt'], '-czPf');
+    await expect(assertNoTraversal(out)).rejects.toThrow(/Path traversal detected in archive: .*outside\.txt \(a ".." segment\)/);
+  });
+
+  it('refuses an absolute entry', async () => {
+    const out = tarballOf(['<dir>/outside.txt'], '-czPf');
+    await expect(assertNoTraversal(out)).rejects.toThrow(/Path traversal detected in archive: \/.*outside\.txt \(an absolute path\)/);
   });
 });

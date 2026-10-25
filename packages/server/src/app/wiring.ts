@@ -649,7 +649,7 @@ function buildSystemUpdateModule(dataPaths: DataPaths, repos: Repositories, misa
   const stateManager = new UpdateStateManager(dataPaths.updateState, dataPaths.updateLog, secretFileGuard);
   const deployModeDetector = new DeployModeDetector(hostEnv.homeDir, launchedByTaskScheduler);
   const hubService = createServiceManager(hostEnv, HUB_SERVICE, runCommand);
-  const systemUpdateService = new SystemUpdateService(channelResolver, stateManager, deployModeDetector, dataPaths, repos.taskRepo, 'manager' in hubService ? hubService.manager : null);
+  const systemUpdateService = new SystemUpdateService(channelResolver, stateManager, deployModeDetector, dataPaths, repos.taskRepo, 'manager' in hubService ? hubService.manager : null, { platform: hostEnv.platform, arch: hostEnv.arch, bundleRoot: getBundleRoot() });
   return { deployModeDetector, systemUpdateService, channelResolver, misaoService: buildMisaoService(misao, hostEnv, secretFileGuard) };
 }
 

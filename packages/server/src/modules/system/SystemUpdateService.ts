@@ -1,4 +1,3 @@
-import path from 'path';
 import { execFile, spawn } from 'child_process';
 import { promisify } from 'util';
 import type { DataPaths } from '../../shared/dataDir';
@@ -11,6 +10,8 @@ import { DeployModeDetector, type DeployMode } from './DeployModeDetector';
 import { compareVersions, isNewer } from './semver';
 import { isDiagnosticsEnabled } from './diagnosticsEligibility';
 import { DuplicateLoadError, type ServiceManager } from './serviceManager';
+import { assertSupportedHubHost, hubAssetNames, resolveHubInstallPaths, type HubInstallHost } from './hubInstall';
+import { isReleaseTag } from './hubVersion';
 
 const execFileAsync = promisify(execFile);
 
@@ -103,10 +104,9 @@ const TERMINAL_STATE_TTL_MS = 10 * 60 * 1000;
 const CHANGELOG_LINE_RE = /^[-*]\s+([0-9a-f]{7,40})\s+(.+)$/;
 
 // Release tags are used as a filesystem path segment (hubDir/<version>) and
-// as a symlink target — validate the shape before it ever reaches path.join
-// so a crafted/unexpected tag_name (e.g. containing "/" or "..") can't escape
-// hubDir. Matches the vN.N.N[-suffix] tags produced by the release workflow.
-const VERSION_RE = /^v?\d+\.\d+\.\d+(?:-[0-9A-Za-z.]+)?$/;
+// as a symlink target — validate the shape (isReleaseTag) before it ever reaches
+// path.join so a crafted/unexpected tag_name (e.g. containing "/" or "..") can't
+// escape hubDir. Matches the vN.N.N[-suffix] tags produced by the release workflow.
 
 function parseChangelog(body: string | null): UpdateCommit[] {
   if (!body) return [];
@@ -118,12 +118,6 @@ function parseChangelog(body: string | null): UpdateCommit[] {
     commits.push({ sha: match[1], message: match[2].trim() });
   }
   return commits;
-}
-
-function currentPlatformArch(): { platform: 'linux' | 'darwin'; arch: 'x64' | 'arm64' } {
-  const platform = process.platform === 'darwin' ? 'darwin' : 'linux';
-  const arch = process.arch === 'arm64' ? 'arm64' : 'x64';
-  return { platform, arch };
 }
 
 /**
@@ -152,6 +146,8 @@ export class SystemUpdateService {
     private taskRepo: SqliteTaskRepository,
     /** The hub's own service on this host (null where there is none); asked before an update starts whether launchd has it loaded twice. */
     private hubService: ServiceManager | null,
+    /** The OS / architecture and bundle location of this hub, resolved at the entry point: which release asset to take and where the hub folder is. */
+    private host: HubInstallHost,
   ) {}
 
   async getStatus(): Promise<UpdateStatusResponse> {
@@ -284,6 +280,7 @@ export class SystemUpdateService {
   }
 
   private async resolveTarget(repo: string): Promise<UpdateTarget | null> {
+    assertSupportedHubHost(this.host);
     const channel = this.channelResolver.resolveChannel();
     if (this.cachedCheck && Date.now() - this.cachedCheck.fetchedAt < CHECK_CACHE_TTL_MS && this.cachedCheck.channel === channel) {
       return this.cachedCheck.target;
@@ -308,10 +305,9 @@ export class SystemUpdateService {
 
   private hasRequiredAssets(release: GithubRelease): boolean {
     if (!Array.isArray(release.assets)) return false;
-    const { platform, arch } = currentPlatformArch();
-    const tarballName = `azito-hub-${release.tag_name}-${platform}-${arch}.tar.gz`;
-    return release.assets.some((a) => a.name === tarballName)
-      && release.assets.some((a) => a.name === 'SHA256SUMS');
+    const names = hubAssetNames(release.tag_name, this.host);
+    return release.assets.some((a) => a.name === names.archive)
+      && release.assets.some((a) => a.name === names.sums);
   }
 
   private async fetchLatestRelease(repo: string): Promise<UpdateTarget | null> {
@@ -333,7 +329,7 @@ export class SystemUpdateService {
       const releases = await res.json() as GithubRelease[];
       if (!Array.isArray(releases)) return null;
       const valid = releases
-        .filter((r) => !r.draft && typeof r.tag_name === 'string' && VERSION_RE.test(r.tag_name))
+        .filter((r) => !r.draft && typeof r.tag_name === 'string' && isReleaseTag(r.tag_name))
         .sort((a, b) => compareVersions(b.tag_name, a.tag_name));
       for (const release of valid) {
         const target = this.resolveReleaseAssets(release);
@@ -346,6 +342,7 @@ export class SystemUpdateService {
   }
 
   private async fetchSpecificRelease(repo: string, version: string): Promise<UpdateTarget | null> {
+    assertSupportedHubHost(this.host);
     try {
       const tag = version.startsWith('v') ? version : `v${version}`;
       const res = await fetch(`https://api.github.com/repos/${repo}/releases/tags/${encodeURIComponent(tag)}`, { headers: this.buildGithubHeaders() });
@@ -358,6 +355,7 @@ export class SystemUpdateService {
   }
 
   async fetchAvailableVersions(): Promise<VersionEntry[]> {
+    if (!this.deployModeDetector.canUpdate()) return [];
     if (this.cachedVersions && Date.now() - this.cachedVersions.fetchedAt < CHECK_CACHE_TTL_MS) {
       return this.cachedVersions.versions;
     }
@@ -372,7 +370,7 @@ export class SystemUpdateService {
       const currentVersion = release?.version ?? null;
       const versions: VersionEntry[] = [];
       for (const r of releases) {
-        if (r.draft || typeof r.tag_name !== 'string' || !VERSION_RE.test(r.tag_name)) continue;
+        if (r.draft || typeof r.tag_name !== 'string' || !isReleaseTag(r.tag_name)) continue;
         if (!this.hasRequiredAssets(r)) continue;
         let relation: VersionEntry['relation'] = 'newer';
         if (currentVersion) {
@@ -395,14 +393,13 @@ export class SystemUpdateService {
   }
 
   private resolveReleaseAssets(release: GithubRelease): UpdateTarget | null {
-    if (typeof release.tag_name !== 'string' || !VERSION_RE.test(release.tag_name)) {
+    if (typeof release.tag_name !== 'string' || !isReleaseTag(release.tag_name)) {
       return null;
     }
     if (!this.hasRequiredAssets(release)) return null;
-    const { platform, arch } = currentPlatformArch();
-    const tarballName = `azito-hub-${release.tag_name}-${platform}-${arch}.tar.gz`;
-    const tarballAsset = release.assets.find((a) => a.name === tarballName)!;
-    const sumsAsset = release.assets.find((a) => a.name === 'SHA256SUMS')!;
+    const names = hubAssetNames(release.tag_name, this.host);
+    const tarballAsset = release.assets.find((a) => a.name === names.archive)!;
+    const sumsAsset = release.assets.find((a) => a.name === names.sums)!;
     return {
       version: release.tag_name,
       publishedAt: release.published_at,
@@ -416,8 +413,7 @@ export class SystemUpdateService {
     const manager = this.deployModeDetector.serviceManager();
     if (!manager) throw new Error('no service manager to restart through');
 
-    const hubDir = path.join(path.dirname(this.dataPaths.dir), 'hub');
-    const bundlePath = path.join(hubDir, 'current', 'azito-hub.cjs');
+    const { hubDir, bundlePath } = resolveHubInstallPaths(this.host);
     const token = process.env.AZITO_GITHUB_TOKEN;
 
     const scriptArgs = [

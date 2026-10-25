@@ -15,6 +15,7 @@ import { DeployModeDetector } from '../DeployModeDetector';
 import type { DataPaths } from '../../../shared/dataDir';
 import type { SqliteTaskRepository } from '../../tasks/SqliteTaskRepository';
 import type { Task } from '../../tasks/Task';
+import { hubAssetNames, type HubInstallHost } from '../hubInstall';
 import { createSecretFileGuard } from '../../../shared/os/secretFileGuard';
 
 const secretFileGuard = createSecretFileGuard(process.platform, process.env);
@@ -43,6 +44,7 @@ describe('SystemUpdateService', () => {
   let deployModeDetector: DeployModeDetector;
   let channelResolver: UpdateChannelResolver;
   let stateManager: UpdateStateManager;
+  let host: HubInstallHost;
 
   beforeEach(() => {
     tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'azito-system-update-test-'));
@@ -59,6 +61,7 @@ describe('SystemUpdateService', () => {
       updateLog: path.join(tmpDir, 'update.log'),
       updateChannel: path.join(tmpDir, 'update-channel.json'),
     };
+    host = { platform: process.platform, arch: process.arch, bundleRoot: path.join(tmpDir, 'hub', 'current') };
     channelResolver = new UpdateChannelResolver(dataPaths.updateChannel, secretFileGuard);
     channelResolver.updateChannel('acme/azito-hub');
     stateManager = new UpdateStateManager(dataPaths.updateState, dataPaths.updateLog, secretFileGuard);
@@ -79,11 +82,11 @@ describe('SystemUpdateService', () => {
         tag_name: 'v1.1.0',
         body: '- ab12cd3 feat: add thing\n- fix: unrelated bug (#42)\nnot a changelog line',
         published_at: '2026-01-01T00:00:00Z',
-        assets: [releaseAsset(`azito-hub-v1.1.0-${process.platform === 'darwin' ? 'darwin' : 'linux'}-${process.arch === 'arm64' ? 'arm64' : 'x64'}.tar.gz`), releaseAsset('SHA256SUMS')],
+        assets: [releaseAsset(hubAssetNames('v1.1.0', host).archive), releaseAsset('SHA256SUMS')],
       }),
     } as Response)));
 
-    const service = new SystemUpdateService(channelResolver, stateManager, deployModeDetector, dataPaths, makeTaskRepoStub(0), null);
+    const service = new SystemUpdateService(channelResolver, stateManager, deployModeDetector, dataPaths, makeTaskRepoStub(0), null, host);
     const status = await service.checkForUpdate();
 
     expect(status.status).toBe('update-available');
@@ -105,7 +108,7 @@ describe('SystemUpdateService', () => {
       }),
     } as Response)));
 
-    const service = new SystemUpdateService(channelResolver, stateManager, deployModeDetector, dataPaths, makeTaskRepoStub(0), null);
+    const service = new SystemUpdateService(channelResolver, stateManager, deployModeDetector, dataPaths, makeTaskRepoStub(0), null, host);
     const status = await service.checkForUpdate();
 
     expect(status.status).toBe('check-failed');
@@ -118,12 +121,12 @@ describe('SystemUpdateService', () => {
       json: () => Promise.resolve({ tag_name: 'v1.1.0', body: null, published_at: '2026-01-01T00:00:00Z' }),
     } as Response)));
 
-    const service = new SystemUpdateService(channelResolver, stateManager, deployModeDetector, dataPaths, makeTaskRepoStub(0), null);
+    const service = new SystemUpdateService(channelResolver, stateManager, deployModeDetector, dataPaths, makeTaskRepoStub(0), null, host);
     await expect(service.checkForUpdate()).resolves.toMatchObject({ status: 'check-failed' });
   });
 
   it('startUpdate refuses when non-terminal tasks are running', async () => {
-    const service = new SystemUpdateService(channelResolver, stateManager, deployModeDetector, dataPaths, makeTaskRepoStub(2), null);
+    const service = new SystemUpdateService(channelResolver, stateManager, deployModeDetector, dataPaths, makeTaskRepoStub(2), null, host);
     const result = await service.startUpdate();
     expect(result.started).toBe(false);
     expect(result.error).toMatch(/2/);
@@ -136,7 +139,7 @@ describe('SystemUpdateService', () => {
     });
     vi.stubGlobal('fetch', vi.fn(() => pending));
 
-    const service = new SystemUpdateService(channelResolver, stateManager, deployModeDetector, dataPaths, makeTaskRepoStub(0), null);
+    const service = new SystemUpdateService(channelResolver, stateManager, deployModeDetector, dataPaths, makeTaskRepoStub(0), null, host);
     const first = service.startUpdate();
     const second = await service.startUpdate();
 
@@ -153,11 +156,11 @@ describe('SystemUpdateService', () => {
         tag_name: 'v1.1.0',
         body: '## v1.1.0\n\n### メインフィーチャー\n\n- **対応プラットフォーム**: linux-x64 / linux-arm64\n- **install.sh**: チェックサム検証、依存の検出\n',
         published_at: '2026-01-01T00:00:00Z',
-        assets: [releaseAsset(`azito-hub-v1.1.0-${process.platform === 'darwin' ? 'darwin' : 'linux'}-${process.arch === 'arm64' ? 'arm64' : 'x64'}.tar.gz`), releaseAsset('SHA256SUMS')],
+        assets: [releaseAsset(hubAssetNames('v1.1.0', host).archive), releaseAsset('SHA256SUMS')],
       }),
     } as Response)));
 
-    const service = new SystemUpdateService(channelResolver, stateManager, deployModeDetector, dataPaths, makeTaskRepoStub(0), null);
+    const service = new SystemUpdateService(channelResolver, stateManager, deployModeDetector, dataPaths, makeTaskRepoStub(0), null, host);
     const status = await service.checkForUpdate();
 
     expect(status.status).toBe('update-available');
@@ -172,11 +175,11 @@ describe('SystemUpdateService', () => {
         tag_name: 'v1.1.0',
         body: '* ab12cd3 fix: bug\n* cd45ef6 feat: feature',
         published_at: '2026-01-01T00:00:00Z',
-        assets: [releaseAsset(`azito-hub-v1.1.0-${process.platform === 'darwin' ? 'darwin' : 'linux'}-${process.arch === 'arm64' ? 'arm64' : 'x64'}.tar.gz`), releaseAsset('SHA256SUMS')],
+        assets: [releaseAsset(hubAssetNames('v1.1.0', host).archive), releaseAsset('SHA256SUMS')],
       }),
     } as Response)));
 
-    const service = new SystemUpdateService(channelResolver, stateManager, deployModeDetector, dataPaths, makeTaskRepoStub(0), null);
+    const service = new SystemUpdateService(channelResolver, stateManager, deployModeDetector, dataPaths, makeTaskRepoStub(0), null, host);
     const status = await service.checkForUpdate();
 
     expect(status.commits).toEqual([
@@ -193,11 +196,11 @@ describe('SystemUpdateService', () => {
         tag_name: 'v1.1.0',
         body: '- ab12cd3\n- cd45ef6 feat: valid',
         published_at: '2026-01-01T00:00:00Z',
-        assets: [releaseAsset(`azito-hub-v1.1.0-${process.platform === 'darwin' ? 'darwin' : 'linux'}-${process.arch === 'arm64' ? 'arm64' : 'x64'}.tar.gz`), releaseAsset('SHA256SUMS')],
+        assets: [releaseAsset(hubAssetNames('v1.1.0', host).archive), releaseAsset('SHA256SUMS')],
       }),
     } as Response)));
 
-    const service = new SystemUpdateService(channelResolver, stateManager, deployModeDetector, dataPaths, makeTaskRepoStub(0), null);
+    const service = new SystemUpdateService(channelResolver, stateManager, deployModeDetector, dataPaths, makeTaskRepoStub(0), null, host);
     const status = await service.checkForUpdate();
 
     expect(status.commits).toEqual([
@@ -219,7 +222,7 @@ describe('SystemUpdateService', () => {
     stateManager.write(state);
     stateManager.appendLog('Update succeeded');
 
-    const service = new SystemUpdateService(channelResolver, stateManager, deployModeDetector, dataPaths, makeTaskRepoStub(0), null);
+    const service = new SystemUpdateService(channelResolver, stateManager, deployModeDetector, dataPaths, makeTaskRepoStub(0), null, host);
     const result = service.getProgress();
 
     expect(result.state).not.toBeNull();
@@ -240,7 +243,7 @@ describe('SystemUpdateService', () => {
     };
     stateManager.write(state);
 
-    const service = new SystemUpdateService(channelResolver, stateManager, deployModeDetector, dataPaths, makeTaskRepoStub(0), null);
+    const service = new SystemUpdateService(channelResolver, stateManager, deployModeDetector, dataPaths, makeTaskRepoStub(0), null, host);
     const result = service.getProgress();
 
     expect(result.state).toBeNull();
@@ -260,7 +263,7 @@ describe('SystemUpdateService', () => {
     };
     stateManager.write(state);
 
-    const service = new SystemUpdateService(channelResolver, stateManager, deployModeDetector, dataPaths, makeTaskRepoStub(0), null);
+    const service = new SystemUpdateService(channelResolver, stateManager, deployModeDetector, dataPaths, makeTaskRepoStub(0), null, host);
     const result = service.getProgress();
 
     expect(result.state).toBeNull();
@@ -274,8 +277,61 @@ describe('SystemUpdateService', () => {
       canUpdate: () => false,
       getDisabledReason: () => '開発モードで起動中のため、画面からは更新できません。ターミナルで git pull を実行してください',
     } as unknown as DeployModeDetector;
-    const service = new SystemUpdateService(channelResolver, stateManager, disabledDetector, dataPaths, makeTaskRepoStub(0), null);
+    const service = new SystemUpdateService(channelResolver, stateManager, disabledDetector, dataPaths, makeTaskRepoStub(0), null, host);
     const result = await service.startUpdate();
     expect(result).toEqual({ started: false, error: disabledDetector.getDisabledReason() });
+  });
+
+  describe('which release asset is taken', () => {
+    function stubRelease(assetNames: string[]): void {
+      vi.stubGlobal('fetch', vi.fn(() => Promise.resolve({
+        ok: true,
+        json: () => Promise.resolve({
+          tag_name: 'v1.1.0', body: null, published_at: '2026-01-01T00:00:00Z',
+          assets: assetNames.map(releaseAsset),
+        }),
+      } as Response)));
+    }
+
+    const cases: Array<[string, HubInstallHost['platform'], string, string]> = [
+      ['linux x64', 'linux', 'x64', 'azito-hub-v1.1.0-linux-x64.tar.gz'],
+      ['linux arm64', 'linux', 'arm64', 'azito-hub-v1.1.0-linux-arm64.tar.gz'],
+      ['macOS arm64', 'darwin', 'arm64', 'azito-hub-v1.1.0-darwin-arm64.tar.gz'],
+      ['Windows x64', 'win32', 'x64', 'azito-hub-v1.1.0-win32-x64.zip'],
+    ];
+    it.each(cases)('%s takes %s', async (_label, platform, arch, archive) => {
+      stubRelease([archive, 'SHA256SUMS']);
+      const service = new SystemUpdateService(channelResolver, stateManager, deployModeDetector, dataPaths, makeTaskRepoStub(0), null, { platform, arch, bundleRoot: host.bundleRoot });
+      const status = await service.checkForUpdate();
+      expect(status.status).toBe('update-available');
+      expect(status.latestVersion).toBe('v1.1.0');
+    });
+
+    it('does not take another OS\'s archive for a Windows hub', async () => {
+      stubRelease(['azito-hub-v1.1.0-linux-x64.tar.gz', 'SHA256SUMS']);
+      const service = new SystemUpdateService(channelResolver, stateManager, deployModeDetector, dataPaths, makeTaskRepoStub(0), null, { platform: 'win32', arch: 'x64', bundleRoot: host.bundleRoot });
+      await expect(service.checkForUpdate()).resolves.toMatchObject({ status: 'check-failed' });
+    });
+
+    it('does not take a zip for a Linux hub', async () => {
+      stubRelease(['azito-hub-v1.1.0-win32-x64.zip', 'SHA256SUMS']);
+      const service = new SystemUpdateService(channelResolver, stateManager, deployModeDetector, dataPaths, makeTaskRepoStub(0), null, { platform: 'linux', arch: 'x64', bundleRoot: host.bundleRoot });
+      await expect(service.checkForUpdate()).resolves.toMatchObject({ status: 'check-failed' });
+    });
+
+    it('refuses a Windows architecture without a release, with the reason, instead of looking for another archive', async () => {
+      stubRelease(['azito-hub-v1.1.0-win32-x64.zip', 'SHA256SUMS']);
+      const service = new SystemUpdateService(channelResolver, stateManager, deployModeDetector, dataPaths, makeTaskRepoStub(0), null, { platform: 'win32', arch: 'arm64', bundleRoot: host.bundleRoot });
+      await expect(service.checkForUpdate()).rejects.toThrow(/no AZITO hub release for Windows on arm64/);
+    });
+
+    it('lists no versions, without asking GitHub or failing, where an update is not possible (a Windows arm64 hub today)', async () => {
+      const fetchMock = vi.fn();
+      vi.stubGlobal('fetch', fetchMock);
+      const disabled = { detect: () => 'taskscheduler', canUpdate: () => false, getDisabledReason: () => 'off' } as unknown as DeployModeDetector;
+      const service = new SystemUpdateService(channelResolver, stateManager, disabled, dataPaths, makeTaskRepoStub(0), null, { platform: 'win32', arch: 'arm64', bundleRoot: host.bundleRoot });
+      await expect(service.fetchAvailableVersions()).resolves.toEqual([]);
+      expect(fetchMock).not.toHaveBeenCalled();
+    });
   });
 });
