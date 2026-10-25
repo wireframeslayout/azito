@@ -32,7 +32,7 @@ function buildHeadlessCommand(model: string): string {
 }
 
 function createSessionStrategy(deps: SessionStrategyDeps): ISessionStrategy {
-  return new CodexSessionStrategy(deps.transportFactory);
+  return new CodexSessionStrategy(deps.transportFactory, deps.localHomes);
 }
 
 export const codexProvider: IAgentProvider = {

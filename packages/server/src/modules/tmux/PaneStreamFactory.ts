@@ -2,6 +2,7 @@ import { asPaneHandle, muxKindOfPaneHandle, type PaneHandle } from '@azito/share
 import type { IPaneStream, IPaneStreamFactory } from './PaneStream';
 import type { ServerConfig } from '../servers/Server';
 import type { TransportFactory } from '../servers/transport/TransportFactory';
+import type { TaskTempServer } from '../../shared/os/taskTempFiles';
 import { PaneOutputStream } from './PaneOutputStream';
 import type { MisaoLineSource } from './misao/MisaoConnection';
 import { MisaoPaneStream } from './misao/MisaoPaneStream';
@@ -15,14 +16,14 @@ export class PaneStreamFactory implements IPaneStreamFactory {
     private misaoLines: (server: StreamServer) => MisaoLineSource,
   ) {}
 
-  create(handle: PaneHandle | string, server: StreamServer, pane?: PaneHandle): IPaneStream {
+  create(handle: PaneHandle | string, server: StreamServer, tempServer: TaskTempServer, pane?: PaneHandle): IPaneStream {
     // A misao pane's output comes from the daemon's line stream (told by the pane's handle, not by the server's default mux).
     if (pane && muxKindOfPaneHandle(pane) === 'misao') return new MisaoPaneStream(pane, this.misaoLines(server));
 
     const paneHandle = typeof handle === 'string' ? asPaneHandle(handle) : handle;
 
     if (server.type === 'agent') {
-      return this.transportFactory.getTransport(server).createPaneStream(paneHandle);
+      return this.transportFactory.getTransport(server).createPaneStream(paneHandle, tempServer);
     }
     return this.transportFactory.getTransport({
       name: server.name,
@@ -32,6 +33,6 @@ export class PaneStreamFactory implements IPaneStreamFactory {
       agentPort: null,
       agentToken: null,
       muxRuntime: server.muxRuntime,
-    }).createPaneStream(paneHandle);
+    }).createPaneStream(paneHandle, tempServer);
   }
 }

@@ -49,7 +49,7 @@ function setup(status: () => Promise<{ socketPresent: boolean }> = async () => (
   const servers = new MisaoServers({
     sdk, hubPaneShell: hubPaneShell('/bin/bash', { platform: 'linux', arch: 'x64' }), hubEnv, onChange: vi.fn(), log,
     local: { connection: localConnection, driver: localDriver },
-    agent: { target: (srv) => { targetsSeen.push(srv); return { connect }; }, status, hostInfo: async () => ({ platform: 'linux', arch: 'x64', shell: '/bin/zsh' }), latest: (name) => latestOf(name) },
+    agent: { target: (srv) => { targetsSeen.push(srv); return { connect }; }, status, hostInfo: async () => ({ platform: 'linux', arch: 'x64', shell: '/bin/zsh', homeDir: '/home/x', tmpDir: '/tmp' }), latest: (name) => latestOf(name) },
   });
   return { servers, clients, localConnection, localDriver, connect, log };
 }

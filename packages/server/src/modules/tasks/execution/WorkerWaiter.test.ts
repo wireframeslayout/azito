@@ -34,17 +34,19 @@ function setup(filePath: string) {
   return { stream, create, driver, appendLog, waiter };
 }
 
+const tempServer = { type: 'local' as const };
+
 describe('WorkerWaiter.startPaneStream', () => {
   it('passes the real pane to the stream factory and pipes tmux-style file streams', () => {
     const { waiter, create, driver } = setup('/tmp/azito-pipe-1.log');
-    waiter.startPaneStream(server, handle, 1, 2);
-    expect(create).toHaveBeenCalledWith(expect.stringMatching(/^1-\d+$/), server, handle);
+    waiter.startPaneStream(server, tempServer, handle, 1, 2);
+    expect(create).toHaveBeenCalledWith(expect.stringMatching(/^1-\d+$/), server, tempServer, handle);
     expect(driver.startOutputStream).toHaveBeenCalledWith(server, handle, '/tmp/azito-pipe-1.log');
   });
 
   it('does not start a pipe for a stream without an output file (misao line stream)', () => {
     const { waiter, stream, driver } = setup('');
-    expect(waiter.startPaneStream(server, handle, 1, 2)).toBe(stream);
+    expect(waiter.startPaneStream(server, tempServer, handle, 1, 2)).toBe(stream);
     expect(stream.start).toHaveBeenCalled();
     expect(driver.startOutputStream).not.toHaveBeenCalled();
   });
@@ -54,7 +56,7 @@ describe('WorkerWaiter.startPaneStream stream events', () => {
   it('logs gaps and subscription errors, including ones reported during start()', () => {
     const { waiter, stream, appendLog } = setup('');
     stream.start.mockImplementation(() => { stream.emit('subscription_error', new Error('pane not found')); });
-    waiter.startPaneStream(server, handle, 1, 2);
+    waiter.startPaneStream(server, tempServer, handle, 1, 2);
     stream.emit('gap', { reason: 'epoch' });
     expect(appendLog).toHaveBeenCalledWith(1, 2, 'command', { type: 'pane_stream_subscription_error', message: 'pane not found' });
     expect(appendLog).toHaveBeenCalledWith(1, 2, 'command', { type: 'pane_stream_gap', reason: 'epoch' });
@@ -136,7 +138,7 @@ describe('WorkerWaiter with a local file stream that fails', () => {
       { resolve: () => ({ startOutputStream: async () => undefined, stopOutputStream: async () => undefined }) } as never,
       {} as never, {} as never, {} as never, { create: () => real }, vi.fn(), () => {}, {} as never,
     );
-    waiter.startPaneStream(server, handle, 1, 2);
+    waiter.startPaneStream(server, tempServer, handle, 1, 2);
     real.on('data', () => { throw new Error('disk read failed'); });
     const waiting = waiter.waitForWorker(server, handle, 1, 2, new AbortController().signal, real);
     fs.appendFileSync(file, 'x\n');
@@ -148,7 +150,7 @@ describe('WorkerWaiter with a local file stream that fails', () => {
 describe('WorkerWaiter stream_failed', () => {
   it('ends the wait as a stopped worker when a stream fails during it, and releases the stream', async () => {
     const { waiter, stream, appendLog } = setup('/tmp/azito-pipe-1.log');
-    waiter.startPaneStream(server, handle, 1, 2);
+    waiter.startPaneStream(server, tempServer, handle, 1, 2);
     const waiting = waiter.waitForWorker(server, handle, 1, 2, new AbortController().signal, stream as unknown as IPaneStream);
     stream.emit('stream_failed', new Error('agent_outdated: x'));
     await expect(waiting).resolves.toMatchObject({ classification: { status: 'stopped' } });
@@ -158,7 +160,7 @@ describe('WorkerWaiter stream_failed', () => {
 
   it('also ends it when the stream failed before the wait began', async () => {
     const { waiter, stream } = setup('/tmp/azito-pipe-1.log');
-    waiter.startPaneStream(server, handle, 1, 2);
+    waiter.startPaneStream(server, tempServer, handle, 1, 2);
     stream.emit('stream_failed', new Error('early'));
     const waiting = waiter.waitForWorker(server, handle, 1, 2, new AbortController().signal, stream as unknown as IPaneStream);
     await expect(waiting).resolves.toMatchObject({ classification: { status: 'stopped' } });
@@ -167,7 +169,7 @@ describe('WorkerWaiter stream_failed', () => {
 
   it('does not throw for a failure nobody is waiting on (no error event)', () => {
     const { waiter, stream } = setup('');
-    waiter.startPaneStream(server, handle, 1, 2);
+    waiter.startPaneStream(server, tempServer, handle, 1, 2);
     expect(() => stream.emit('stream_failed', new Error('late'))).not.toThrow();
   });
 });

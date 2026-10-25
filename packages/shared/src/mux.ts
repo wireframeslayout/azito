@@ -56,6 +56,8 @@ export interface MuxPane {
   pid: number;
   /** Set by drivers that know the pane's process state (misao). Omitted = the driver does not report it. */
   processState?: MuxPaneProcessState;
+  /** False when `command` is only the launch command because the driver could not report the foreground one (misao on Windows). Omitted = `command` is the foreground command. */
+  commandKnown?: boolean;
 }
 
 export interface MuxWindowInfo {

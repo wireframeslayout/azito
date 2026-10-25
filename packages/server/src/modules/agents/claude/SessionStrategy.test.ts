@@ -24,9 +24,9 @@ afterEach(() => {
 });
 
 /** A strategy over the real files of a temporary home directory (the hub's own host: LocalFileOps). */
-function createStrategy(): ClaudeSessionStrategy {
+function createStrategy(claudeConfigDir: string | null = null): ClaudeSessionStrategy {
   const ops = new LocalFileOps(localFileOpsHost({ platform: process.platform, homeDir: home }));
-  return new ClaudeSessionStrategy({ getFileOps: () => ops } as unknown as TransportFactory);
+  return new ClaudeSessionStrategy({ getFileOps: () => ops } as unknown as TransportFactory, { claudeConfigDir, codexHome: null });
 }
 
 /** A session file under ~/.claude/projects/<encoded working directory>/. */
@@ -44,6 +44,39 @@ describe('ClaudeSessionStrategy.scanSessionId', () => {
     session('-work-other', '33333333-3333-4333-8333-333333333333.jsonl', 3000);
 
     await expect(createStrategy().scanSessionId(server, '/work/my.app')).resolves.toBe(SESSION_B);
+  });
+
+  it('encodes the working directory by Claude Code\'s rule (every non-alphanumeric character becomes a dash)', async () => {
+    session('-work-my-app-1-', `${SESSION_A}.jsonl`, 1000);
+
+    await expect(createStrategy().scanSessionId(server, '/work/my_app 1日')).resolves.toBe(SESSION_A);
+  });
+
+  it('reads CLAUDE_CONFIG_DIR/projects on the hub\'s own server, and ~/.claude/projects on any other', async () => {
+    const configDir = path.join(home, 'custom-claude');
+    const full = path.join(configDir, 'projects', '-work-app', `${SESSION_B}.jsonl`);
+    mkdirSync(path.dirname(full), { recursive: true });
+    writeFileSync(full, '{}\n');
+    session('-work-app', `${SESSION_A}.jsonl`, 1000);
+
+    await expect(createStrategy(configDir).scanSessionId(server, '/work/app')).resolves.toBe(SESSION_B);
+    await expect(createStrategy(configDir).scanSessionId({ ...server, type: 'agent' } as ServerConfig, '/work/app')).resolves.toBe(SESSION_A);
+    await expect(createStrategy().scanSessionId(server, '/work/app')).resolves.toBe(SESSION_A);
+  });
+
+  it('finds a session under the uncut name (Claude Code 2.0.x) for a working directory over 200 characters', async () => {
+    const long = `/${'a'.repeat(249)}`;
+    session(`-${'a'.repeat(249)}`, `${SESSION_A}.jsonl`, 1000);
+
+    await expect(createStrategy().scanSessionId(server, long)).resolves.toBe(SESSION_A);
+  });
+
+  it('takes the newest of the cut-name and uncut-name directories', async () => {
+    const long = `/${'a'.repeat(249)}`;
+    session(`-${'a'.repeat(249)}`, `${SESSION_A}.jsonl`, 1000);
+    session(`-${'a'.repeat(199)}-wkpu26`, `${SESSION_B}.jsonl`, 2000);
+
+    await expect(createStrategy().scanSessionId(server, long)).resolves.toBe(SESSION_B);
   });
 
   it('ignores a trailing slash of the working directory', async () => {
@@ -70,7 +103,7 @@ describe('ClaudeSessionStrategy.scanSessionId', () => {
 });
 
 describe('ClaudeSessionStrategy', () => {
-  const strategy = new ClaudeSessionStrategy({} as TransportFactory);
+  const strategy = new ClaudeSessionStrategy({} as TransportFactory, { claudeConfigDir: null, codexHome: null });
 
   it('starts a new session with --session-id', () => {
     expect(strategy.buildNewSessionFlags(SESSION_ID)).toBe(`--session-id ${SESSION_ID}`);

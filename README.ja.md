@@ -118,6 +118,16 @@ curl --proto '=https' --tlsv1.2 -fsSL https://github.com/wireframeslayout/azito/
 
 対応環境: Linux x64 / arm64、macOS Apple Silicon。
 
+Windows（x64）では、先に Git for Windows を入れ（`winget install --id Git.Git -e --source winget`、そのあと新しい PowerShell を開く）、Windows PowerShell 5.1 で次を実行します:
+
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -Command "[Net.ServicePointManager]::SecurityProtocol = [Net.ServicePointManager]::SecurityProtocol -bor 3072; irm https://github.com/wireframeslayout/azito/releases/latest/download/install.ps1 | iex"
+```
+
+Windows 用のバンドルを含む最初のリリース v0.12.0 から使えます。
+
+`-Port 3010` などのオプションを渡すときは `[Net.ServicePointManager]::SecurityProtocol = [Net.ServicePointManager]::SecurityProtocol -bor 3072; & ([scriptblock]::Create((irm https://github.com/wireframeslayout/azito/releases/latest/download/install.ps1))) -Port 3010 -Yes`。詳細は [インストールとアップデート](./docs/ja/install-and-update.md#windows-への導入installps1) を参照してください。
+
 ### ソースから起動（開発）
 
 ```bash

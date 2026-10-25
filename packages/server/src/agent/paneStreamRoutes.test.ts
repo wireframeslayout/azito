@@ -13,7 +13,7 @@ describe('agent pane-stream routes', () => {
 
   beforeEach(async () => {
     dir = fs.mkdtempSync(path.join(os.tmpdir(), 'pane-streams-'));
-    managed = new ManagedStreamFiles([dir]);
+    managed = new ManagedStreamFiles(process.platform, [dir]);
     app = Fastify();
     await app.register(paneStreamRoutes, { managed });
   });

@@ -23,6 +23,7 @@ import { normalizeBranchRef } from '../git/assertSafeGitArgs';
 import { ensureGitIdentity, type GitIdentity } from '../git/ensureGitIdentity';
 import { buildWorkerLaunchCommand } from '../agents/LaunchCommand';
 import { assertHostFeature, workerLineDialect } from '../../shared/os/hostFeature';
+import { changeDirectoryLine } from '../../shared/os/changeDirectoryLine';
 import { checkExecutionGate, ExecutionGateDeniedError, ExecutionGatePendingApprovalError, reverifyExecutionGateInLock } from './execution/ExecutionGate';
 import { resolveExecutionManifest, hashExecutionManifest } from './execution/ExecutionManifest';
 import { appendLogAndEmit } from './execution/AppendLog';
@@ -620,7 +621,7 @@ export class TaskRestoreService {
         }
 
         try {
-          const identityResult = await ensureGitIdentity(server.type, transport, worktreePath, hubGitIdentity);
+          const identityResult = await ensureGitIdentity(transport, worktreePath, hubGitIdentity);
           if (unitId !== null && identityResult.action === 'applied') {
             appendLogAndEmit(logRepo, events, task.id, unitId, 'command', { type: 'git_identity_applied', fields: identityResult.fields });
           } else if (unitId !== null && identityResult.action === 'hub_missing') {
@@ -636,7 +637,7 @@ export class TaskRestoreService {
           // effectiveDir is a resolved (symlink-free) real path — must be
           // shell-quoted before being typed into the pane; see the matching
           // fix/comment in ExecuteTaskUseCase (Issue #27 cd injection).
-          await this.resolveDriver(server).sendKeysToHandle(server, handle, [workerLineDialect(transportFactory.hostProfileFor(server), 'Restoring a task').changeDirectory(effectiveDir), 'Enter']);
+          await this.resolveDriver(server).sendKeysToHandle(server, handle, [await changeDirectoryLine(() => transportFactory.getFileOps(server), workerLineDialect(transportFactory.hostProfileFor(server), 'Restoring a task'), effectiveDir), 'Enter']);
           await sleep(500);
         } catch (e) {
           log.warn(`[task-restore] Failed to cd into ${effectiveDir}: ${(e as Error).message}`);

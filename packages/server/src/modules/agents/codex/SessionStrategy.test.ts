@@ -36,10 +36,10 @@ afterEach(() => {
 });
 
 /** A strategy over the real files of a temporary home directory (the hub's own host: LocalFileOps). */
-function createStrategy(): CodexSessionStrategy {
+function createStrategy(codexHome: string | null = null): CodexSessionStrategy {
   const ops = new LocalFileOps(localFileOpsHost({ platform: process.platform, homeDir: home }));
   const transportFactory = { getFileOps: () => ops } as unknown as TransportFactory;
-  return new CodexSessionStrategy(transportFactory);
+  return new CodexSessionStrategy(transportFactory, { claudeConfigDir: null, codexHome });
 }
 
 /** Writes a rollout file under ~/.codex/sessions; each call is newer than the one before. Returns its path. */
@@ -98,6 +98,18 @@ describe('CodexSessionStrategy.buildRespawnCommand (Issue #28 third-party review
 });
 
 describe('CodexSessionStrategy.scanSessionId', () => {
+  it('reads CODEX_HOME/sessions on the hub\'s own server, and ~/.codex/sessions on any other', async () => {
+    const codexHome = path.join(home, 'custom-codex');
+    const full = path.join(codexHome, 'sessions', '2026', '07', '15', 'rollout-1.jsonl');
+    mkdirSync(path.dirname(full), { recursive: true });
+    writeFileSync(full, `${meta('from-codex-home', '/work', 'codex')}\n`);
+    utimesSync(full, 1_000_010, 1_000_010);
+
+    await expect(createStrategy(codexHome).scanSessionId(server, '/work')).resolves.toBe('from-codex-home');
+    await expect(createStrategy(codexHome).scanSessionId({ ...server, type: 'agent' }, '/work')).resolves.toBeNull();
+    await expect(createStrategy().scanSessionId(server, '/work')).resolves.toBeNull();
+  });
+
   it('returns a session with a matching cwd', async () => {
     rollout('rollout-1.jsonl', meta('session-1', '/work', 'codex'));
     await expect(createStrategy().scanSessionId(server, '/work')).resolves.toBe('session-1');

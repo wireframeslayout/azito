@@ -5,6 +5,11 @@ import { windowsProgramEnvOf, type WindowsProgramEnv } from '../exec/windowsGit'
 export type HostPlatform = 'linux' | 'darwin' | 'win32';
 export type HostArch = 'x64' | 'arm64';
 
+/** The path rules (`hostPathFor`) of a Node platform: win32 and darwin have their own, every other OS writes paths like Linux. Not a support check. */
+export function pathRulesOf(platform: NodeJS.Platform): HostPlatform {
+  return platform === 'win32' || platform === 'darwin' ? platform : 'linux';
+}
+
 /**
  * この Node プロセスが動くホストの環境。ハブ・エージェント・CLI がそれぞれ起動時に 1 回だけ解決し、
  * コアには解決済みの値を渡す（コアの中で process.env.HOME / process.platform を読まない）。

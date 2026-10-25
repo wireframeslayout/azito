@@ -1,9 +1,9 @@
-import { execFileSync } from 'child_process';
 import type { TransportFactory } from '../../servers/transport/TransportFactory';
 import type { ServerConfig } from '../../servers/Server';
 import { SAFE_BRANCH } from '../../git/GitDiffService';
-import { shellQuote } from '../../../shared/shellQuote';
-import { assertPosixHost } from '../../../shared/os/hostProfile';
+import { runGit } from '../../git/runGit';
+
+const GIT_INFO_TIMEOUT_MS = 10_000;
 
 function parseNameStatus(diff: string): string | null {
   if (!diff) return null;
@@ -22,68 +22,38 @@ export interface GitInfo {
 /**
  * Collects post-execution git state (current branch, changed files) from a
  * task's working directory, and writes files into the target environment
- * (local/agent) via the transport shell. PR/MR URL lookup is not this
- * module's responsibility — callers resolve it via
+ * (local/agent) through the host's file operations. git runs as an argv on the
+ * host that owns the directory (no shell, so the same on every OS).
+ * PR/MR URL lookup is not this module's responsibility — callers resolve it via
  * GitProviderService.findPullRequestByBranch (no CLI dependency).
  */
 export class GitInfoCollector {
   constructor(private transportFactory: TransportFactory) {}
 
-  collectGitInfoSync(workingDir: string, baseBranch?: string): GitInfo {
-    const result: GitInfo = { branch: null, changedFiles: null };
-    const opts = { cwd: workingDir, encoding: 'utf-8' as const, timeout: 5000 };
-
-    try {
-      result.branch = execFileSync('git', ['branch', '--show-current'], opts).trim() || null;
-    } catch {}
-
-    // Distinguish command failure from an empty diff: a successful base...HEAD
-    // diff with zero changes is a valid result and must not fall back to HEAD~1.
-    let baseDiffSucceeded = false;
-    if (baseBranch && SAFE_BRANCH.test(baseBranch)) {
-      try {
-        result.changedFiles = parseNameStatus(execFileSync('git', ['-c', 'core.quotepath=false', 'diff', '--name-status', `${baseBranch}...HEAD`], opts).trim());
-        baseDiffSucceeded = true;
-      } catch {}
-    }
-    if (!baseDiffSucceeded) {
-      try {
-        result.changedFiles = parseNameStatus(execFileSync('git', ['-c', 'core.quotepath=false', 'diff', '--name-status', 'HEAD~1'], opts).trim());
-      } catch {}
-    }
-
-    return result;
-  }
-
-  async collectGitInfoRemote(server: ServerConfig, workingDir: string, baseBranch?: string): Promise<GitInfo> {
+  async collectGitInfo(server: ServerConfig, workingDir: string, baseBranch?: string): Promise<GitInfo> {
     const transport = this.transportFactory.getTransport(server);
-    // The command is a shell line (`cd <dir> && git ...`): refused on a Windows host, never swallowed into an empty result.
-    assertPosixHost(this.transportFactory.hostProfileFor(server), `server "${server.name}"`, 'collecting git info');
     const result: GitInfo = { branch: null, changedFiles: null };
-    // Returns null on failure so callers can distinguish it from empty output.
-    // SSH transports always report code 0, so git errors are detected in stdout/stderr.
-    const run = async (cmd: string): Promise<string | null> => {
-      try {
-        const r = await transport.exec(`cd ${shellQuote(workingDir)} && ${cmd}`);
-        if (r.code !== 0 || /^fatal:|^error:/m.test(`${r.stdout}\n${r.stderr}`)) return null;
-        return r.stdout.trim();
-      } catch { return null; }
+    // git's own refusal (not a repository, no parent commit) is a null result, so callers can tell it from empty output.
+    // A transport that cannot run git at all (unreachable agent, git missing) is thrown, not turned into an empty result.
+    const run = async (args: string[]): Promise<string | null> => {
+      const r = await runGit(transport, workingDir, args, { timeoutMs: GIT_INFO_TIMEOUT_MS });
+      return r.exitCode === 0 ? r.stdout.trim() : null;
     };
 
-    result.branch = (await run('git branch --show-current')) || null;
+    result.branch = (await run(['branch', '--show-current'])) || null;
 
     // Distinguish command failure from an empty diff: a successful base...HEAD
     // diff with zero changes is a valid result and must not fall back to HEAD~1.
     let baseDiffSucceeded = false;
     if (baseBranch && SAFE_BRANCH.test(baseBranch)) {
-      const baseDiff = await run(`git -c core.quotepath=false diff --name-status ${baseBranch}...HEAD`);
+      const baseDiff = await run(['-c', 'core.quotepath=false', 'diff', '--name-status', `${baseBranch}...HEAD`]);
       if (baseDiff !== null) {
         result.changedFiles = parseNameStatus(baseDiff);
         baseDiffSucceeded = true;
       }
     }
     if (!baseDiffSucceeded) {
-      const diff = await run('git -c core.quotepath=false diff --name-status HEAD~1');
+      const diff = await run(['-c', 'core.quotepath=false', 'diff', '--name-status', 'HEAD~1']);
       if (diff !== null) result.changedFiles = parseNameStatus(diff);
     }
 
@@ -91,17 +61,10 @@ export class GitInfoCollector {
   }
 
   /**
-   * Write a text file into the target environment (local/agent) via the
-   * transport shell. Content is base64-encoded so arbitrary multi-line text
-   * (rules, markdown) transfers safely without shell-quoting concerns.
+   * Write a text file into the target environment (local/agent) through the host's own file operations (UTF-8, no shell,
+   * so arbitrary multi-line text and any path notation transfer as they are). The directory must already exist.
    */
   async writeRemoteFile(server: ServerConfig, filePath: string, content: string): Promise<void> {
-    const b64 = Buffer.from(content, 'utf-8').toString('base64');
-    // base64 alphabet contains no single quotes, so single-quoting is safe.
-    const command = `echo '${b64}' | base64 -d > '${filePath}'`;
-    const result = await this.transportFactory.getTransport(server).exec(command);
-    if (result.code !== 0) {
-      throw new Error(`Failed to write file ${filePath}: ${result.stderr || `exit ${result.code}`}`);
-    }
+    await this.transportFactory.getFileOps(server).write(filePath, Buffer.from(content, 'utf-8'));
   }
 }

@@ -1,4 +1,4 @@
-import { basename } from 'node:path';
+import { programFileName } from '../../../shared/os/shellCommands';
 import type { MethodResult } from '@misao/protocol' with { 'resolution-mode': 'import' };
 import type { MuxPane, MuxPaneInfo, MuxRef, MuxWindowInfo, MuxWorkspace } from '@azito/shared';
 
@@ -18,9 +18,9 @@ export function panesOfWindow(panes: readonly MisaoPane[], windowId: string): Mi
   return sortPanes(panes).filter((p) => p.window.id === windowId);
 }
 
-/** Foreground command when the daemon reports one (running panes), otherwise the launch command. */
+/** Foreground command when the daemon reports one (running panes), otherwise the launch command (a display name only: `commandKnown` in `toMuxPane` says which it is). */
 export function paneCommand(pane: MisaoPane): string {
-  return pane.fgCommand ?? basename(pane.cmd[0]);
+  return pane.fgCommand ?? programFileName(pane.cmd[0]);
 }
 
 /** Latest output time among the panes in epoch seconds (tmux's window_activity unit), or null when none has produced output. */
@@ -31,10 +31,10 @@ export function lastOutputEpochSeconds(panes: readonly MisaoPane[]): number | nu
 
 /** Window and pane indexes are 1-based: AZITO's pane ordinals and window numbers follow tmux base-index / pane-base-index 1, and the UI uses `index` as the ordinal as-is. */
 function toMuxPane(pane: MisaoPane, index: number): MuxPane {
-  return { index, handle: pane.paneId, command: paneCommand(pane), title: pane.title, width: pane.cols, height: pane.rows, active: false, pid: pane.pid ?? 0, processState: pane.processState };
+  return { index, handle: pane.paneId, command: paneCommand(pane), title: pane.title, width: pane.cols, height: pane.rows, active: false, pid: pane.pid ?? 0, processState: pane.processState, commandKnown: pane.fgCommand != null || pane.processState !== 'running' };
 }
 
-function toMuxWindow(workspace: string, window: MisaoWorkspace['windows'][number], index: number, panes: readonly MisaoPane[]): MuxWindowInfo {
+export function toMuxWindow(workspace: string, window: MisaoWorkspace['windows'][number], index: number, panes: readonly MisaoPane[]): MuxWindowInfo {
   const windowPanes = panesOfWindow(panes, window.windowId);
   return {
     index,

@@ -1,9 +1,11 @@
+import type { TaskTempServer } from '../../../shared/os/taskTempFiles';
 import type { EventEmitter } from 'events';
 import type { MuxRef, PaneHandle, PaneOrdinal, MuxExecRequest } from '@azito/shared';
 import type { IPaneStream } from '../../tmux/PaneStream';
 import type { HostProfile } from '../../../shared/os/hostProfile';
 import type { CommandResult, CommandSpec } from '../../../shared/exec/commandSpec';
 import type { IFileOps } from '../../../shared/fs/fileOps';
+import type { ListProcessesOptions, ProcessEntry } from '../../../shared/os/processList';
 
 export interface ExecResult {
   stdout: string;
@@ -41,6 +43,12 @@ export interface IServerTransport {
   files(): IFileOps;
 
   /**
+   * The processes of the server's host (pid / ppid / start time / executable / command line), the same shape for every OS. A host
+   * that cannot list them rejects; it is never an empty list.
+   */
+  listProcesses(options?: ListProcessesOptions): Promise<ProcessEntry[]>;
+
+  /**
    * シェルコマンド実行（現行 TmuxClient.execCommand 相当）
    * @deprecated POSIX-only: runs `command` with `/bin/sh -c`, so a win32 host rejects it with an `unsupported_os` HostProfileError.
    */
@@ -53,5 +61,6 @@ export interface OpenTerminalOpts {
 export interface IMuxTransport {
   execMux(req: MuxExecRequest): Promise<ExecResult>;
   openTerminal(ref: MuxRef, ordinal: PaneOrdinal, cols: number, rows: number, opts?: OpenTerminalOpts): Promise<ITerminalStream>;
-  createPaneStream(handle: PaneHandle): IPaneStream;
+  /** `tempServer`: where the task's files are kept on this server, resolved by the caller (the pipe file is named from it). */
+  createPaneStream(handle: PaneHandle, tempServer: TaskTempServer): IPaneStream;
 }

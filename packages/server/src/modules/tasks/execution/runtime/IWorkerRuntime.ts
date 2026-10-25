@@ -5,6 +5,7 @@ import type { WorkerExecutionMode } from '../../../units/Unit';
 import type { IPaneStream } from '../../../tmux/PaneStream';
 import type { AgentTurn } from '../../turns/AgentTurn';
 import type { PhaseSignalCapability } from '../../../prompt/executionEnvelope';
+import type { TaskTempServer } from '../../../../shared/os/taskTempFiles';
 import type { ShellDialect } from '../../../../shared/os/shellDialect';
 
 export interface WorkerLaunchContext {
@@ -41,6 +42,8 @@ export interface EnvelopeBuildContext {
   unitId: number;
   workerExecutionMode: WorkerExecutionMode;
   server: ServerConfig;
+  /** Where this server keeps the task's files, resolved once by the caller (see `TransportFactory.taskTempServer`). */
+  tempServer: TaskTempServer;
   handle: PaneHandle;
   supervisorTarget: string;
   prompt: string;

@@ -1,5 +1,6 @@
 import { EventEmitter } from 'events';
 import { assertHostFeature, workerLineDialect } from '../../../shared/os/hostFeature';
+import { changeDirectoryLine } from '../../../shared/os/changeDirectoryLine';
 import { randomUUID, randomBytes } from 'crypto';
 import type { ITaskRepository, Task } from '../Task';
 import type { TaskStatus } from '../TaskStatus';
@@ -41,7 +42,7 @@ import type { UnitTypeLoader } from '../../sidekicks/UnitTypeLoader';
 import { WorkerWaiter } from './WorkerWaiter';
 import { WorkerInputService, WorkerNotRunningError } from './WorkerInputService';
 import { PushVerifier } from './PushVerifier';
-import { GitInfoCollector } from './GitInfoCollector';
+import { GitInfoCollector, type GitInfo } from './GitInfoCollector';
 import { PullRequestCreator } from './PullRequestCreator';
 import { PhaseLoopRunner } from './PhaseLoopRunner';
 import { appendLogAndEmit } from './AppendLog';
@@ -1292,7 +1293,6 @@ export class ExecuteTaskUseCase {
 
       try {
         const identityResult = await ensureGitIdentity(
-          server.type,
           this.transportFactory.getTransport(server),
           wt.path,
           this.hubGitIdentity,
@@ -1585,9 +1585,12 @@ export class ExecuteTaskUseCase {
                 this.taskRepo.update(taskId, updates);
               }
             } else if (workingDir) {
-              const gitInfo = server.type === 'local'
-                ? this.gitInfoCollector.collectGitInfoSync(workingDir, wtBaseBranch ?? undefined)
-                : await this.gitInfoCollector.collectGitInfoRemote(server, workingDir, wtBaseBranch ?? undefined);
+              let gitInfo: GitInfo = { branch: null, changedFiles: null };
+              try {
+                gitInfo = await this.gitInfoCollector.collectGitInfo(server, workingDir, wtBaseBranch ?? undefined);
+              } catch (err) {
+                this.appendLog(taskId, unitId, 'command', { type: 'git_info_failed', message: err instanceof Error ? err.message : String(err) });
+              }
               const updates: Partial<Task> = {};
               if (gitInfo.changedFiles) updates.changedFiles = gitInfo.changedFiles;
               const prUrl = await this.findPrUrl(repo, gitInfo.branch);
@@ -1964,9 +1967,11 @@ export class ExecuteTaskUseCase {
 
       if (followUpDir) {
         try {
-          await this.resolveDriver(server).sendKeysToHandle(server, handle, [this.dialectOf(server).changeDirectory(followUpDir), 'Enter']);
+          await this.resolveDriver(server).sendKeysToHandle(server, handle, [await changeDirectoryLine(() => this.transportFactory.getFileOps(server), this.dialectOf(server), followUpDir), 'Enter']);
           await sleep(500);
-        } catch {}
+        } catch (err) {
+          this.appendLog(taskId, unitId, 'command', { type: 'cd_failed', directory: followUpDir, reason: err instanceof Error ? err.message : String(err) });
+        }
       }
 
       const followUpLaunchCommand = buildWorkerLaunchCommand(unit.workerType, unit.workerModel, unit.workerExtraArgs, this.dialectOf(server));
@@ -2034,12 +2039,13 @@ export class ExecuteTaskUseCase {
       const doneMarker = `AZITO_DONE_${taskId}_${nonce}`;
       const questionsMarker = `AZITO_QUESTIONS_${taskId}_${nonce}`;
       const testFailedMarker = `AZITO_TEST_FAILED_${taskId}_${nonce}`;
-      const outputFilePath = this.taskTempFiles.outputFile(server, taskId, nonce);
+      const tempServer = await this.transportFactory.taskTempServer(server);
+      const outputFilePath = this.taskTempFiles.outputFile(tempServer, taskId, nonce);
       const httpSignalMode = usesHttpSignalPath(unit.workerExecutionMode);
 
       // Start pipe-pane BEFORE sending to capture all output — this capture runs
       // in BOTH execution modes (see PhaseLoopRunner.stateMachineLoop's identical note).
-      const followUpStream = this.workerWaiter.startPaneStream(server, handle, taskId, unitId);
+      const followUpStream = this.workerWaiter.startPaneStream(server, tempServer, handle, taskId, unitId);
       if (!followUpStream) return;
 
       const followUpProject = this.projectRepo.findById(task.projectId);
@@ -2086,7 +2092,7 @@ export class ExecuteTaskUseCase {
       const runtime = this.runtimeRegistry.get(unit.workerRuntime);
       const envelopeResult = runtime.buildFollowUpEnvelope({
         nonce, taskId, unitId, workerExecutionMode: unit.workerExecutionMode,
-        server, handle, supervisorTarget: windowTarget, prompt: expandedComment, outputFilePath,
+        server, tempServer, handle, supervisorTarget: windowTarget, prompt: expandedComment, outputFilePath,
         doneMarker, questionsMarker, testFailedMarker,
       });
       const followUpSignalStream = envelopeResult.signalStream;

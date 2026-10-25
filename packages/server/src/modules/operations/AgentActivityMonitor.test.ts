@@ -192,6 +192,18 @@ describe('AgentActivityMonitor', () => {
     expect(monitor.snapshot()).toEqual([]);
   });
 
+  it.each(['cmd.exe', 'CMD.EXE', 'powershell.exe', 'pwsh.exe', 'pwsh'])('treats a fresh manual agent window with only the Windows shell %s in the foreground as idle', async (command) => {
+    findAll.mockReturnValue([makeWindow({ taskId: 7, tmuxTarget: 'azito:agent-1' })]);
+    listSessions.mockResolvedValue(makeSessions(
+      'azito', 'agent-1', 3, Math.floor(Date.now() / 1000) - 5,
+      [makePane({ command })],
+    ));
+
+    await monitor.tick();
+    expect(emit).not.toHaveBeenCalled();
+    expect(monitor.snapshot()).toEqual([]);
+  });
+
   it('detects a running agent in the specific pane named by the target even when other panes are shells', async () => {
     findAll.mockReturnValue([makeWindow({ taskId: 7, tmuxTarget: 'azito:agent-1' })]);
     const base = Math.floor(Date.now() / 1000) - 5;
@@ -679,6 +691,44 @@ describe('AgentActivityMonitor', () => {
       expect(monitor.snapshot()).toEqual([
         expect.objectContaining({ target: 'azito:agent-1', running: true, source: 'manual' }),
       ]);
+    });
+
+    it('does not mistake an unknown foreground (Windows misao pane: only the launch command cmd.exe is known) for a bare shell: the hook stays running, no offline', async () => {
+      findAll.mockReturnValue([makeWindow({ taskId: 7, tmuxTarget: 'azito:agent-1' })]);
+      const base = Math.floor(Date.now() / 1000) - 5;
+      const unknownForeground = [makePane({ command: 'cmd.exe', commandKnown: false })];
+      listSessions.mockResolvedValue(makeSessions('azito', 'agent-1', 3, base, unknownForeground));
+
+      monitor.recordHookSignal(baseSignal({ event: 'start' }));
+      await flush();
+      await monitor.tick();
+
+      expect(monitor.snapshot()).toEqual([expect.objectContaining({ target: 'azito:agent-1', running: true })]);
+      expect(monitor.diagnostics().find((d) => d.target === 'azito:agent-1')).toEqual(expect.objectContaining({ decidedBy: 'tier1_hook', state: 'working' }));
+    });
+
+    it('still drops the hook when the foreground is known and is cmd.exe (a real bare shell)', async () => {
+      findAll.mockReturnValue([makeWindow({ taskId: 7, tmuxTarget: 'azito:agent-1' })]);
+      const base = Math.floor(Date.now() / 1000) - 5;
+      listSessions.mockResolvedValue(makeSessions('azito', 'agent-1', 3, base, [makePane({ command: 'claude' })]));
+      monitor.recordHookSignal(baseSignal({ event: 'start' }));
+      await flush();
+      expect(monitor.snapshot()).toHaveLength(1);
+
+      listSessions.mockResolvedValue(makeSessions('azito', 'agent-1', 3, base, [makePane({ command: 'cmd.exe', commandKnown: true })]));
+      await monitor.tick();
+      expect(monitor.snapshot()).toEqual([]);
+    });
+
+    it('Tier 3 does not light up a pane whose foreground is unknown and whose launch command is a shell, however fresh its output', async () => {
+      findAll.mockReturnValue([makeWindow({ taskId: 7, tmuxTarget: 'azito:agent-1' })]);
+      const base = Math.floor(Date.now() / 1000) - 5;
+      const unknownForeground = [makePane({ command: 'cmd.exe', commandKnown: false })];
+      for (let i = 0; i < 4; i++) {
+        listSessions.mockResolvedValueOnce(makeSessions('azito', 'agent-1', 3, base + i, unknownForeground));
+        await monitor.tick();
+      }
+      expect(monitor.snapshot()).toEqual([]);
     });
 
     it('releases an idle hook state once the pane becomes a bare shell, so a hookless agent in the same pane is later detected by the heuristic', async () => {

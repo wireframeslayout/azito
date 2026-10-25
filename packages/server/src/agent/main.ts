@@ -27,6 +27,7 @@ import { handleDevtoolsRelay } from '../modules/browser/devtools';
 import { createMisaoRelay } from './misaoRelay';
 import misaoRoutes from './misaoRoutes';
 import hostRoutes from './hostRoutes';
+import processRoutes from './processRoutes';
 import fileOpsRoutes from './fileOpsRoutes';
 import { LocalFileOps, localFileOpsHost } from '../shared/fs/LocalFileOps';
 import transcriptRoutes from './transcriptRoutes';
@@ -38,7 +39,8 @@ import { MISAO_WINDOWS_DIR, parseHomeRelativeDir } from '../modules/servers/agen
 import { buildServicePath } from '../modules/system/misao/misaoPaths';
 import { serializeRequestForLog } from '../shared/redactUrlSecrets';
 import { toHostProfile } from '../shared/os/hostProfile';
-import { runHostOf } from '../shared/exec/runCommandSpec';
+import { runCommandSpec, runHostOf } from '../shared/exec/runCommandSpec';
+import { listProcessesWith } from '../shared/os/processList';
 import { resolveLoginShell } from '../shared/os/loginShell';
 
 // ─── Fatal errors ───
@@ -168,8 +170,9 @@ async function main(): Promise<void> {
 
   const agentTransport = new LocalTransport(hookRt, process.env.AZITO_URL ?? '', hostEnv, TaskTempFiles.fromHostEnv(hostEnv), agentHostProfile);
 
-  // Files the hub has registered for tailing (`/ws?mode=file-tail` serves nothing else). The hub names them under /tmp for now.
-  const managedStreamFiles = new ManagedStreamFiles(['/tmp', hostEnv.tmpDir], { logger: app.log });
+  // Files the hub has registered for tailing (`/ws?mode=file-tail` serves nothing else). The hub names them under the temp folder this agent reports
+  // (`GET /api/host`); a Windows host has no /tmp.
+  const managedStreamFiles = new ManagedStreamFiles(hostEnv.platform, hostEnv.platform === 'win32' ? [hostEnv.tmpDir] : ['/tmp', hostEnv.tmpDir], { logger: app.log });
   await app.register(paneStreamRoutes, { managed: managedStreamFiles });
 
   // The misao daemon's socket (a named pipe on Windows) is fixed here, at startup, from the agent's own environment. A setting that
@@ -188,7 +191,10 @@ async function main(): Promise<void> {
   // Registered after the auth hook above, so it is covered by it like every other /api route.
   await app.register(misaoRoutes, { socket: misaoSocket, host: misaoHost });
   // The host's own report (OS, architecture, default shell) for the hub, behind the same token check. A Windows host's default shell is its command interpreter (%ComSpec%), the one misao itself starts without a setting.
-  await app.register(hostRoutes, { host: { platform: hostEnv.platform, arch: hostEnv.arch, shell: hostEnv.platform === 'win32' ? process.env.ComSpec || null : resolveLoginShell(process.env) } });
+  await app.register(hostRoutes, { host: { platform: hostEnv.platform, arch: hostEnv.arch, shell: hostEnv.platform === 'win32' ? process.env.ComSpec || null : resolveLoginShell(process.env), homeDir: hostEnv.homeDir, tmpDir: hostEnv.tmpDir } });
+  // The processes of this host, for the hub's agent detection and resource measurement (one list for every OS).
+  const processRunHost = runHostOf(hostEnv);
+  await app.register(processRoutes, { listProcesses: () => listProcessesWith(hostEnv.platform, (spec) => runCommandSpec(spec, processRunHost)) });
   // File operations on this host (list / read / write / create / remove / rename / realpath / which), the hub's files API for an agent server.
   await app.register(fileOpsRoutes, { ops: new LocalFileOps(localFileOpsHost(hostEnv)) });
 

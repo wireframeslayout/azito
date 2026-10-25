@@ -120,6 +120,10 @@ npx -w packages/server tsx scripts/build-hub.ts --version v0.3.0 --platform linu
   (config, outside the versioned dir) and `~/.azito/data/` (DB, keys, token).
 - In-app update: Settings → System. Works under systemd and launchd; not for a source checkout, and
   not for pre-releases (GitHub's `releases/latest` returns stable releases only).
+- Windows one-liner: `irm https://github.com/wireframeslayout/azito/releases/latest/download/install.ps1 | iex` (Windows PowerShell 5.1). `install.ps1` is one script block called at the end of the file, so it runs as text
+  (iex / `& ([scriptblock]::Create((irm <url>))) -Port 3010 -Yes`) as well as `-File`: never `exit` (a failure is a terminating error), nothing left in the caller's session, options also from `AZITO_INSTALL_<OPTION>`
+  variables. `release.yml` replaces the one `__AZITO_RELEASE_TAG__` placeholder with the tag, so the downloaded installer installs its own release (a checkout asks the GitHub API for "latest"). `-Port` goes to
+  `init-env --port` (PORT + AZITO_ALLOWED_ORIGINS); git is checked first and, if missing, the winget / git-scm.com guidance is printed. CI: `scripts/smoke-oneliner-win32.ts`.
 - The tarball also carries the misao **native binary** (Rust, no Node / node-pty needed) for every target
   (`misao/<target>/{misao,LICENSE,NOTICE,THIRD-PARTY-LICENSES.txt}` for `x86_64`/`aarch64-unknown-linux-musl` and
   `aarch64`/`x86_64-apple-darwin`, plus `x86_64-pc-windows-msvc`, plus `misao/manifest.json` with each file's sha256) (every hub tarball has all five targets, four Unix ones and `x86_64-pc-windows-msvc`: the hub installs its own from them, since hubs run on linux x64 / arm64 and
@@ -251,6 +255,13 @@ packages/
   and leaves it NULL). `exec(command: string)` is `@deprecated` (POSIX-only) and throws `unsupported_os` when the host is win32. misao pane
   shells are per node (`modules/tmux/misao/paneShell.ts`): the hub's shell for its own daemon, the agent's reported shell (`$SHELL`, else its user's passwd login shell) for an agent's
   (neither is an error; an agent too old to report keeps the hub's shell); a Windows agent's node opens its reported `%ComSpec%` bare (a pane with a launch command is `unsupported_os` until #371), and so does a Windows hub's own (`hubPaneShell`, the hub's `%ComSpec%`; #380 B4a)
+
+- Task files (#371 T2): `GET /api/host` also reports the agent's `homeDir` / `tmpDir`. `TaskTempFiles` names a task's signal / pipe / output / rules files
+  from a `TaskTempServer` (`local` = the hub's tmpDir; `agent` = the agent's OS notation via `hostPathFor` + its reported tmpDir). The hub asks once per
+  transport (`TransportFactory.taskTempServer` → `AgentTransport.loadTaskTempHost`, kept in memory, nothing stored; an unrecorded agent is a Unix `/tmp`) and it
+  must be awaited before an agent pane stream is created. `ManagedStreamFiles(platform, allowedDirs)` judges paths by the agent's own rules (a win32 agent has no `/tmp`).
+  `WorkerWaiter.readPhaseOutputFile` / `GitInfoCollector.writeRemoteFile` use `IFileOps` (a missing output file is `null`, an unreadable one throws); `GitInfoCollector.collectGitInfo`
+  and `gitConfigOps` run git as an argv through `runGit` (local and remote are one path).
 
 ### Local server on a Windows hub: misao only (#380 B4a)
 - `hostFeatureSupport(profile, 'tmux')` (`@azito/shared`) is the one decision. `SqliteServerRepository(db, hubHost)` stamps the hub's own host on a local server's `hostProfile` when it reads it
@@ -537,6 +548,7 @@ packages/
   - `GET /api/servers/:name/git/worktrees?project_id=` (worktree list for the root switcher, joined to tasks)
 - Directory autocomplete: `/api/servers/:name/directories?path=`
 - Agent routes: `/api/agent/*` (authenticated via `X-Agent-Token` header)
+- Process list (#371): `transport.listProcesses()` is the one way to list a host's processes (pid / ppid / startMs / executable / commandLine / rssBytes; `shared/os/processList.ts`). Unix runs `ps` and Windows `Get-CimInstance Win32_Process` (PowerShell EncodedCommand, FILETIME start times), both as a `CommandSpec`; an agent serves it at `GET /api/processes` (an older agent without it is read through `/api/run`, or its shell route when its host is unrecorded)
 - Task answer: `POST /api/tasks/:id/answer` (submit question responses)
 - Task recovery: `POST /api/tasks/:id/recover-session` (resume agent session)
 - Task deletion: `DELETE /api/tasks/:id` (cleans up tmux window, worktree, temp files)

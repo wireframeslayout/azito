@@ -223,7 +223,11 @@ function checkUserPath(installPs1: string, work: string): void {
   step('Add-UserPathEntry keeps the existing value, adds once and keeps the registry type');
   const script = path.join(work, 'path-check.ps1');
   fs.writeFileSync(script, [
-    `. '${installPs1.replace(/'/g, "''")}'`,
+    // install.ps1 keeps its functions inside one script block (so `irm | iex` leaves nothing behind): take the two under test out of its syntax tree.
+    `$ast = [System.Management.Automation.Language.Parser]::ParseFile('${installPs1.replace(/'/g, "''")}', [ref]$null, [ref]$null)`,
+    "$found = $ast.FindAll({ param($n) ($n -is [System.Management.Automation.Language.FunctionDefinitionAst]) -and (($n.Name -eq 'Add-UserPathEntry') -or ($n.Name -eq 'Send-EnvironmentChange')) }, $true)",
+    "if (@($found).Count -ne 2) { throw 'Add-UserPathEntry / Send-EnvironmentChange not found in install.ps1' }",
+    'foreach ($function in $found) { . ([scriptblock]::Create($function.Extent.Text)) }',
     "$key = [Microsoft.Win32.Registry]::CurrentUser.OpenSubKey('Environment', $true)",
     "$had = $key.GetValueNames() -contains 'Path'",
     "$orig = $key.GetValue('Path', $null, [Microsoft.Win32.RegistryValueOptions]::DoNotExpandEnvironmentNames)",

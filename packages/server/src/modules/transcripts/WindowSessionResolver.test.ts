@@ -3,6 +3,7 @@ import type { MuxPaneInfo, MuxWorkspace } from '@azito/shared';
 import { WindowSessionResolver } from './WindowSessionResolver';
 import { HostTranscriptSourceProvider } from './sources/TranscriptSourceProvider';
 import { AgentUnreachableError } from '../servers/transport/AgentUnreachableError';
+import type { ProcessEntry } from '../../shared/os/processList';
 import type { ITaskRepository, Task } from '../tasks/Task';
 import type { IMuxClient } from '../tmux/IMuxClient';
 import type { MuxDriverRegistry } from '../tmux/MuxDriverRegistry';
@@ -136,8 +137,20 @@ function buildDeps(opts: {
 
   const muxDriverRegistry = { resolve: () => driver } as unknown as MuxDriverRegistry;
 
+  // `opts.exec` answers with rows of `<pid> <ppid> <elapsed seconds> <command line>`; a non-zero code is a host that cannot list its processes.
+  const listPsRows = opts.exec ?? (async () => ({ stdout: '', stderr: '', code: 0 }));
   const transportFactory = {
-    getTransport: () => ({ exec: opts.exec ?? (async () => ({ stdout: '', stderr: '', code: 0 })) }),
+    getTransport: () => ({
+      listProcesses: async (): Promise<ProcessEntry[]> => {
+        const { stdout, code } = await listPsRows('ps');
+        if (code !== 0) throw new Error(`Listing processes failed (exit ${code})`);
+        const now = Date.now();
+        return stdout.split('\n').flatMap((line) => {
+          const m = /^\s*(\d+)\s+(\d+)\s+(\d+)\s+(.+)$/.exec(line);
+          return m ? [{ pid: Number(m[1]), ppid: Number(m[2]), startMs: now - Number(m[3]) * 1000, executable: null, commandLine: m[4], rssBytes: null }] : [];
+        });
+      },
+    }),
   } as any;
 
   const serverRepo = {

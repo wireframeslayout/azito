@@ -34,12 +34,12 @@ describe('hubPaneShell', () => {
 
 describe('agentPaneShell', () => {
   it("uses the default shell the agent reports, not the hub's", async () => {
-    const resolve = agentPaneShell(server(), async () => ({ platform: 'darwin', arch: 'arm64', shell: '/bin/zsh' }), hub, log());
+    const resolve = agentPaneShell(server(), async () => ({ platform: 'darwin', arch: 'arm64', shell: '/bin/zsh', homeDir: '/home/x', tmpDir: '/tmp' }), hub, log());
     expect(await resolve()).toEqual({ shell: '/bin/zsh', commandArgs: ['-lc'] });
   });
 
   it('asks the agent once and keeps the answer', async () => {
-    const fetchHostInfo = vi.fn(async () => ({ platform: 'linux', arch: 'x64', shell: '/bin/fish' }));
+    const fetchHostInfo = vi.fn(async () => ({ platform: 'linux', arch: 'x64', shell: '/bin/fish', homeDir: '/home/x', tmpDir: '/tmp' }));
     const resolve = agentPaneShell(server(), fetchHostInfo, hub, log());
     await resolve();
     await resolve();
@@ -47,19 +47,19 @@ describe('agentPaneShell', () => {
   });
 
   it('fails with a reason when the agent has no $SHELL, instead of falling back to /bin/sh', async () => {
-    const resolve = agentPaneShell(server(), async () => ({ platform: 'linux', arch: 'x64', shell: null }), hub, log());
+    const resolve = agentPaneShell(server(), async () => ({ platform: 'linux', arch: 'x64', shell: null, homeDir: '/home/x', tmpDir: '/tmp' }), hub, log());
     await expect(resolve()).rejects.toThrow(/reports no default shell.*SHELL/);
   });
 
   it('does not keep a failure: the next pane asks again', async () => {
-    const answers = [{ platform: 'linux', arch: 'x64', shell: null }, { platform: 'linux', arch: 'x64', shell: '/bin/sh' }];
+    const answers = [{ platform: 'linux', arch: 'x64', shell: null, homeDir: '/home/x', tmpDir: '/tmp' }, { platform: 'linux', arch: 'x64', shell: '/bin/sh', homeDir: '/home/x', tmpDir: '/tmp' }];
     const resolve = agentPaneShell(server(), async () => answers.shift()!, hub, log());
     await expect(resolve()).rejects.toThrow();
     expect(await resolve()).toEqual({ shell: '/bin/sh', commandArgs: ['-lc'] });
   });
 
   it('gives a Windows agent the shell it reports (%ComSpec%), bare: no command arguments', async () => {
-    const fetchHostInfo = vi.fn(async () => ({ platform: 'win32', arch: 'x64', shell: 'C:\\Windows\\System32\\cmd.exe' }));
+    const fetchHostInfo = vi.fn(async () => ({ platform: 'win32', arch: 'x64', shell: 'C:\\Windows\\System32\\cmd.exe', homeDir: '/home/x', tmpDir: '/tmp' }));
     const resolve = agentPaneShell(server({ platform: 'win32', arch: 'x64' }), fetchHostInfo, hub, log());
     expect(await resolve()).toEqual({ shell: 'C:\\Windows\\System32\\cmd.exe', commandArgs: null });
     await resolve();
@@ -67,14 +67,14 @@ describe('agentPaneShell', () => {
   });
 
   it('fails for a Windows agent that reports no shell, and never uses the hub shell for one', async () => {
-    const noShell = agentPaneShell(server({ platform: 'win32', arch: 'x64' }), async () => ({ platform: 'win32', arch: 'x64', shell: null }), hub, log());
+    const noShell = agentPaneShell(server({ platform: 'win32', arch: 'x64' }), async () => ({ platform: 'win32', arch: 'x64', shell: null, homeDir: '/home/x', tmpDir: '/tmp' }), hub, log());
     await expect(noShell()).rejects.toThrow(/ComSpec/);
     const outdated = agentPaneShell(server({ platform: 'win32', arch: 'x64' }), async () => { throw new AgentHostOutdatedError('a1'); }, hub, log());
     await expect(outdated()).rejects.toBeInstanceOf(AgentHostOutdatedError);
   });
 
   it('refuses an agent that reports win32 even though none was recorded', async () => {
-    const resolve = agentPaneShell(server(), async () => ({ platform: 'win32', arch: 'x64', shell: 'C:\\Windows\\System32\\cmd.exe' }), hub, log());
+    const resolve = agentPaneShell(server(), async () => ({ platform: 'win32', arch: 'x64', shell: 'C:\\Windows\\System32\\cmd.exe', homeDir: '/home/x', tmpDir: '/tmp' }), hub, log());
     await expect(resolve()).rejects.toMatchObject({ code: 'unsupported_os' });
   });
 
