@@ -201,9 +201,27 @@ describe('HarnessInstaller — Windows targets', () => {
     expect(sshClient.execIsolated).not.toHaveBeenCalled();
   });
 
-  it('refuses a win32 hub for the local install', async () => {
-    const installer = new HarnessInstaller({} as SshClient);
-    await expect(installer.installLocal({ hostProfile: { platform: 'win32', arch: 'x64' } })).rejects.toMatchObject({ code: 'unsupported_os' });
+  it('sets up a win32 hub with setup.mjs run by the hub\'s node, the tokens in the environment and not in the arguments', async () => {
+    vi.mocked(fs.existsSync).mockReturnValue(true);
+    const execFileSpy = vi.mocked(child_process.execFile).mockImplementation(
+      ((..._args: unknown[]) => {
+        const callback = _args[_args.length - 1] as (err: Error | null, result: { stdout: string; stderr: string }) => void;
+        callback(null, { stdout: '', stderr: '' });
+        return {} as ReturnType<typeof child_process.execFile>;
+      }) as unknown as typeof child_process.execFile,
+    );
+    const result = await new HarnessInstaller({} as SshClient).installLocal({
+      hostProfile: { platform: 'win32', arch: 'x64' }, azitoUrl: 'http://hub:3001', webhookToken: 'wh-secret', uiToken: 'ui-secret', serverName: 'local',
+    });
+    expect(result.success).toBe(true);
+    const [file, args, execOptions] = execFileSpy.mock.calls[0] as unknown as [string, string[], { env: Record<string, string> }];
+    expect(file).toBe(process.execPath);
+    expect(args[0]).toMatch(/setup\.mjs$/);
+    expect(args).toEqual(expect.arrayContaining(['--azito-url', 'http://hub:3001', '--server-name', 'local']));
+    expect(JSON.stringify(args)).not.toMatch(/secret/);
+    expect(execOptions.env).toMatchObject({ AZITO_WEBHOOK_TOKEN: 'wh-secret', AZITO_UI_TOKEN: 'ui-secret' });
+    vi.mocked(fs.existsSync).mockReset();
+    vi.mocked(child_process.execFile).mockReset();
   });
 
   it('treats a server with no recorded profile as a Unix one', async () => {

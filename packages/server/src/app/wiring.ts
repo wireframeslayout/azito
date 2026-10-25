@@ -714,7 +714,7 @@ export async function buildWiring(db: SqliteDatabase, publicUrl: string, localUr
   const agentUpdater = buildAgentUpdater(agentBundler, infra, repos, agentHostRecorder);
   const agentRecoveryWatchdog = buildAgentRecoveryWatchdog(infra, repos);
   const harnessUpdater = new HarnessUpdater(
-    infra.harnessInstaller, infra.sshClient, repos.serverRepo,
+    infra.harnessInstaller, infra.transportFactory, repos.serverRepo,
     { webhookToken, uiToken, harnessPrefix },
     infra.serverIsolationMutex,
     { info: (m) => console.log(`[harness-updater] ${m}`), warn: (m) => console.warn(`[harness-updater] ${m}`) },

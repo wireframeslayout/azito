@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { parseHarnessCheck, buildHarnessCheckCommand } from './installStatusParsers';
+import { parseHarnessCheck } from './installStatusParsers';
 
 describe('parseHarnessCheck', () => {
   it('returns installed: false when directory is missing', () => {
@@ -47,18 +47,5 @@ describe('parseHarnessCheck', () => {
   it('does not include autoUpdate when not provided', () => {
     const result = parseHarnessCheck('/home/user/.azito/harness-dev/skills\n', 'abc');
     expect(result.autoUpdate).toBeUndefined();
-  });
-});
-
-describe('buildHarnessCheckCommand', () => {
-  it('includes VERSION cat in the command', () => {
-    const cmd = buildHarnessCheckCommand('dev');
-    expect(cmd).toContain('cat ~/.azito/harness-dev/VERSION');
-  });
-
-  it('uses default path without prefix', () => {
-    const cmd = buildHarnessCheckCommand();
-    expect(cmd).toContain('~/.azito/harness/VERSION');
-    expect(cmd).toContain('~/.azito/harness/skills');
   });
 });

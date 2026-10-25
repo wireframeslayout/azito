@@ -130,3 +130,25 @@ AZITO のサーバー詳細パネルは、各サーバーの依存（tmux / Node
 ### UI からのインストール
 
 サーバー詳細パネル → Setup タブの「Install Harness」ボタン（`POST /api/servers/:name/harness/install`）から、CLI を使わずにハーネスをインストールすることもできます。ローカルサーバーの場合は直接インストール、Agent サーバーの場合は SSH 経由でリモートにインストールされます。
+
+## Windows
+
+Windows のホスト（ハブ自身、または Windows の agent）では、bash の代わりに Node でハーネスを入れます。Linux / macOS は今までどおり `setup.sh` と bash のフックです。
+
+| | Linux / macOS | Windows |
+|---|---|---|
+| セットアップ | `harness/setup.sh` | `node harness/setup.mjs`（オプションは同じ） |
+| フック | `hooks/azito-*.sh`（bash + curl） | `hooks/azito-hook.mjs <activity start\|activity stop\|interaction\|question\|session\|notify> [--prefix <名前>]` |
+| スキル（`/azt-*`） | `~/.claude/skills/` へシンボリックリンク | **ディレクトリジャンクション**（開発者モードも管理者権限も要りません） |
+| ルール | `~/.claude/rules/` へシンボリックリンク | **コピー**。更新で置き換えるのは、前回コピーしたままのファイルだけ（ハッシュは `~/.azito/harness-copies.json`）。編集されたファイルは触りません |
+| `azitoctl*.env`・`operator.env` | `KEY=<printf %q>`、mode 600 | `KEY="<JSON 文字列>"` を 1 行ずつ。現在のユーザーだけが読める（保護された ACL。ハブが自分の秘密ファイルに付けるものと同じ） |
+| ハブからの導入 | SSH + `setup.sh` | agent 自身のファイル API + `node setup.mjs`（SSH なし）。トークンはコマンドの引数ではなく環境変数で渡す |
+| ハブ起動時の自動更新 | SSH 経由 | 導入と同じく agent 経由 |
+
+Node 版のフックの動きは bash 版と同じです。宛先プロファイルの規則（URL・トークン・サーバー名は、環境変数で 3 つそろえるか、`~/.azito/azitoctl[-<prefix>].env` からまとめて取るかのどちらかで、混ぜない）、misao のペインへの `misaoPaneId`、送る本文が同じです。プロファイルの prefix は、コマンドの前に付ける環境変数ではなく `--prefix` 引数で渡します。送信は切り離した別プロセスが行うので、フックはすぐ戻り、トークンが引数に載ることもありません。両方の版を同じ HTTP サーバーに向けて動かし、本文を比べるテストがあります。
+
+`setup.mjs` が書くフックのコマンドは `node "C:/Users/<ユーザー>/.azito/harness/hooks/azito-hook.mjs" activity start` の形（`/` 区切りと二重引用符）です。Claude Code がフックを Git Bash で動かしても PowerShell で動かしても、同じ意味になります。`node` が `PATH` にある必要があります。
+
+Windows の agent への導入は、他のサーバーと同じく UI（サーバー詳細 → Setup → Install Harness）から行います。Windows のマシン上で手で行う場合は `node harness\setup.mjs --azito-url <url> --webhook-token <token> --server-name <名前>` を実行します（運用者の資格情報も入れるなら `--ui-token <token>` を足します）。
+
+Windows の agent は、このリリースでは隔離サーバー（`isolationIntent`）にできません（#464 で扱います）。API は 501 `unsupported_os` で断り、サーバーのフォームには理由を表示します。`codex` は npm の shim が実行するスクリプトを node で直接起動するので、日本語や括弧を含むパスでも動きます。`npm install` で入れた `azt-mcp` の依存は、ハーネスを更新しても残ります。

@@ -15,18 +15,20 @@ import { CommandSpawnError, GitNotFoundError } from '../../shared/exec/commandSp
 
 const TMUX_CAPS = { changeEvents: true, agentState: false, independentClients: true, copyMode: true };
 
-function makeServer(hostProfile: HostProfile | null): ServerConfig {
+function makeServer(hostProfile: HostProfile | null, isolationIntent = false): ServerConfig {
   return {
     name: 'srv', type: 'agent', host: '100.64.0.7', agentPort: 3002, agentToken: 'tok', agentVersion: 'v1', sshHost: 'user@host',
-    hostProfile, sshHostFingerprint: null, isolationIntent: false, isolationVerifiedAt: null, isolationReport: null,
+    hostProfile, sshHostFingerprint: null, isolationIntent, isolationVerifiedAt: null, isolationReport: null,
     isolationCleanupReport: null, defaultMux: 'tmux', muxRuntime: 'managed', createdAt: '2026-01-01T00:00:00Z',
   };
 }
 
-async function buildApp(hostProfile: HostProfile | null, run: (spec: unknown) => Promise<unknown> = vi.fn()) {
-  const server = makeServer(hostProfile);
+async function buildApp(hostProfile: HostProfile | null, run: (spec: unknown) => Promise<unknown> = vi.fn(), isolationIntent = false) {
+  const server = makeServer(hostProfile, isolationIntent);
   const exec = vi.fn(async () => ({ stdout: '', stderr: '', code: 0 }));
   const serverRepo = { findAll: () => [server], findByName: (name: string) => (name === server.name ? server : null) } as unknown as IServerRepository;
+  const harnessInstaller = new HarnessInstaller({} as SshClient);
+  const agentTransport = { hostProfile, exec, run, files: () => ({ platform: hostProfile?.platform ?? 'linux', stat: async () => ({ kind: 'directory' }) }) };
   const muxDriverRegistry = new MuxDriverRegistry();
   muxDriverRegistry.register('tmux', { kind: 'tmux', caps: TMUX_CAPS } as unknown as IMuxClient);
   const opts = {
@@ -37,10 +39,11 @@ async function buildApp(hostProfile: HostProfile | null, run: (spec: unknown) =>
     transportFactory: {
       invalidate: vi.fn(),
       hostProfileFor: (s: Pick<ServerConfig, 'hostProfile'>) => s.hostProfile,
-      getTransport: () => ({ hostProfile, exec, run, files: () => ({ platform: hostProfile?.platform ?? 'linux', stat: async () => ({ kind: 'directory' }) }) }),
+      getTransport: () => agentTransport,
+      getAgentTransport: () => agentTransport,
     },
     tmuxInstaller: new TmuxInstaller(),
-    harnessInstaller: new HarnessInstaller({} as SshClient),
+    harnessInstaller,
     windowRepo: { findByServer: vi.fn(() => []) },
     webhookToken: 'wh',
     uiToken: 'ui',
@@ -58,7 +61,7 @@ async function buildApp(hostProfile: HostProfile | null, run: (spec: unknown) =>
     return defaultHandler.call(app, err, request, reply);
   });
   await app.register(serversRoutes, opts);
-  return { app, exec };
+  return { app, exec, harnessInstaller, agentTransport };
 }
 
 describe('Unix-only install operations on a Windows server answer unsupported_os with the reason', () => {
@@ -68,7 +71,6 @@ describe('Unix-only install operations on a Windows server answer unsupported_os
     ['install-tmux', 'Installing tmux'],
     ['install-browser-runtime', 'installing the browser runtime'],
     ['apply-tmux-config', 'applying the tmux config'],
-    ['harness/install', 'installing the harness'],
   ])('POST /api/servers/:name/%s is 501 with the reason in error and the code', async (route, operation) => {
     const { app, exec } = await buildApp(win32);
     const res = await app.inject({ method: 'POST', url: `/api/servers/srv/${route}`, payload: {} });
@@ -77,6 +79,34 @@ describe('Unix-only install operations on a Windows server answer unsupported_os
     // install-tmux is answered by the host-feature table ("... on Windows hosts"), the others by assertPosixHost.
     expect(res.json().error).toMatch(route === 'install-tmux' ? /Windows hosts/ : /win32/);
     expect(exec).not.toHaveBeenCalled();
+  });
+
+  it('POST /api/servers/:name/harness/install on a Windows agent installs through the agent (no SSH, no setup.sh)', async () => {
+    const { app, harnessInstaller, agentTransport } = await buildApp(win32);
+    const installOnAgent = vi.spyOn(harnessInstaller, 'installOnAgent').mockResolvedValue({ success: true, steps: [] });
+    const install = vi.spyOn(harnessInstaller, 'install');
+    const res = await app.inject({ method: 'POST', url: '/api/servers/srv/harness/install', payload: {} });
+    expect(res.statusCode).toBe(200);
+    expect(installOnAgent).toHaveBeenCalledWith(agentTransport, expect.objectContaining({ hostProfile: win32, serverName: 'srv' }), expect.any(Function));
+    expect(install).not.toHaveBeenCalled();
+  });
+
+  it('PUT /api/servers/:name cannot declare a Windows agent isolated (#464): 501 unsupported_os, and no credential cleanup runs', async () => {
+    const { app, harnessInstaller } = await buildApp(win32);
+    const install = vi.spyOn(harnessInstaller, 'install');
+    const installOnAgent = vi.spyOn(harnessInstaller, 'installOnAgent');
+    const res = await app.inject({ method: 'PUT', url: '/api/servers/srv', payload: { isolationIntent: true } });
+    expect(res.statusCode).toBe(501);
+    expect(res.json()).toMatchObject({ code: 'unsupported_os', error: expect.stringContaining('#464') });
+    expect(res.json().error).toContain('isolationIntent');
+    expect(install).not.toHaveBeenCalled();
+    expect(installOnAgent).not.toHaveBeenCalled();
+  });
+
+  it('PUT with isolationIntent unchanged (already true) is not refused for the OS: only the change to true is', async () => {
+    const { app } = await buildApp(win32, vi.fn(), true);
+    const res = await app.inject({ method: 'PUT', url: '/api/servers/srv', payload: { isolationIntent: true } });
+    expect(res.json()?.code).not.toBe('unsupported_os');
   });
 
   it('a server with no recorded OS (a Unix agent from before it was kept) still applies the tmux config', async () => {
