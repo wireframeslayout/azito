@@ -3,9 +3,8 @@ import type { TurnSignalHub } from '../turns/TurnSignalHub';
 import { InProcessSignalStream } from '../turns/InProcessSignalStream';
 import { buildTurnToken, type AgentTurn, type AgentTurnStatus } from '../turns/AgentTurn';
 import { renderForHttpSignal } from '../../prompt/PhasePromptRenderer';
-import { resolveAzitoctlPath } from './AzitoctlPath';
 import type { ServerConfig } from '../../servers/Server';
-import type { PhaseSignalCapability } from '../../prompt/executionEnvelope';
+import type { EnvelopeHost, PhaseSignalCapability } from '../../prompt/executionEnvelope';
 import type { IPaneStream } from '../../tmux/PaneStream';
 import type { PaneClassification, PaneQuestion } from '../../llm/PaneClassifier';
 
@@ -18,6 +17,8 @@ export interface StartHttpSignalTurnOpts {
   capability: PhaseSignalCapability;
   nonce: string;
   server: ServerConfig;
+  /** The shell and azitoctl the prompt is written for (resolved once for the server, `resolveEnvelopeHost`). */
+  host: EnvelopeHost;
   target: string;
   /** The already-expanded Sidekick body (or follow-up comment) to wrap with the http-signal envelope. */
   prompt: string;
@@ -72,7 +73,7 @@ export class HttpSignalTurnCoordinator {
       phase: opts.phase,
       capability: opts.capability,
       turnToken: buildTurnToken(turn),
-      azitoctlPath: resolveAzitoctlPath(opts.server),
+      host: opts.host,
       outputFilePath: opts.outputFilePath,
     });
     return { turn, signalStream, markerizedPrompt };

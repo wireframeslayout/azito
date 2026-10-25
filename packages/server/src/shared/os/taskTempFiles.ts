@@ -21,7 +21,7 @@ const SHELL_SAFE_PATH = /^[A-Za-z0-9_./@:+,=%~-]+$/;
 
 /**
  * A Unix temp folder with a space or shell metacharacter would split the task files' paths, which are written, unquoted,
- * into shell commands (tmux pipe-pane, the commands in the worker's prompt). A Windows one is not written into a shell line.
+ * into shell commands (tmux pipe-pane, the commands in the worker's prompt). A Windows one is written into the worker's prompt only, as a quoted forward-slash path of an `azitoctl.mjs` call; the envelope refuses a path with a double quote, `$` or a backtick (`quotedWindowsPath`).
  * `subject` names whose folder it is, for the message.
  */
 export function assertTmpDirShellSafe(platform: NodeJS.Platform, tmpDir: string, subject: string): void {

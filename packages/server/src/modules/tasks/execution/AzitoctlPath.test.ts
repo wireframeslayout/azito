@@ -1,0 +1,39 @@
+import { describe, expect, it, vi } from 'vitest';
+import type { ServerConfig } from '../../servers/Server';
+import { resolveAzitoctlPath, resolveEnvelopeHost } from './AzitoctlPath';
+
+const agent = { name: 'srv', type: 'agent' } as ServerConfig;
+const local = { name: 'local', type: 'local' } as ServerConfig;
+
+function factory(platform: 'linux' | 'win32' | null, home = '/home/me') {
+  return {
+    hostProfileFor: vi.fn(() => (platform ? { platform, arch: 'x64' as const } : null)),
+    getFileOps: vi.fn(() => ({ realpath: vi.fn(async () => home) })),
+  } as unknown as Parameters<typeof resolveEnvelopeHost>[0];
+}
+
+describe('resolveEnvelopeHost', () => {
+  it('a POSIX host (or one whose OS is not recorded) gets the bash azitoctl, as before', async () => {
+    expect(await resolveEnvelopeHost(factory('linux'), agent)).toEqual({ os: 'posix', azitoctl: '~/.azito/harness/bin/azitoctl' });
+    expect(await resolveEnvelopeHost(factory(null), agent)).toEqual({ os: 'posix', azitoctl: '~/.azito/harness/bin/azitoctl' });
+    expect(await resolveEnvelopeHost(factory('linux'), local)).toEqual({ os: 'posix', azitoctl: resolveAzitoctlPath(local) });
+  });
+
+  it("a Windows agent gets node and its harness's azitoctl.mjs, the home directory written out, with forward slashes", async () => {
+    const host = await resolveEnvelopeHost(factory('win32', 'C:\\Users\\山田 太郎'), agent);
+    expect(host).toEqual({ os: 'windows', azitoctl: 'node "C:/Users/山田 太郎/.azito/harness/bin/azitoctl.mjs"' });
+  });
+
+  it("a Windows hub's own server gets the hub's harness, not the agent's home", async () => {
+    const tf = factory('win32', 'C:\\Users\\me');
+    const host = await resolveEnvelopeHost(tf, local);
+    expect(host.os).toBe('windows');
+    expect(host.azitoctl).toMatch(/^node ".*\/harness\/bin\/azitoctl\.mjs"$/);
+    expect(host.azitoctl).not.toContain('\\');
+    expect(tf.getFileOps).not.toHaveBeenCalled();
+  });
+
+  it('refuses a home directory a double-quoted word would read as more than text', async () => {
+    await expect(resolveEnvelopeHost(factory('win32', 'C:\\Users\\jo$e'), agent)).rejects.toThrow(/double quote, \$ or a backtick/);
+  });
+});

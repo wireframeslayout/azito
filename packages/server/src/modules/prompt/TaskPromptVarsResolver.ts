@@ -8,7 +8,7 @@ import type { ITaskPromptVarsResolver, TaskPromptVars } from '../sidekicks/ITask
 import type { SidekickPackage } from '../sidekicks/SidekickPackage';
 import type { SidekickPackageLoader } from '../sidekicks/SidekickPackageLoader';
 import type { SidekickSyncService } from '../sidekicks/SidekickSyncService';
-import { resolveSidekickDir } from '../sidekicks/SidekickSyncService';
+import { resolveSidekickDirOnHost } from '../sidekicks/SidekickSyncService';
 import { resolveTaskPromptVars } from './resolveTaskPromptVars';
 import { resolveTaskServerName } from '../tasks/execution/TaskExecutionEnv';
 
@@ -47,10 +47,11 @@ export class TaskPromptVarsResolver implements ITaskPromptVarsResolver {
     if (!serverName) return pkg.dir; // best-effort miss (read-only render), same contract as resolveTaskServerName
 
     const server = this.serverRepo.findByName(serverName);
-    if (!server || server.type === 'local') return pkg.dir;
-
-    const transport = this.transportFactory.getTransport(server);
-    await this.sidekickSyncService.sync(server.name, transport, this.sidekickLoader.list());
-    return resolveSidekickDir(pkg, server);
+    if (!server) return pkg.dir;
+    if (server.type !== 'local') {
+      const transport = this.transportFactory.getTransport(server);
+      await this.sidekickSyncService.sync(server.name, transport, this.sidekickLoader.list());
+    }
+    return resolveSidekickDirOnHost(pkg, server, this.transportFactory);
   }
 }

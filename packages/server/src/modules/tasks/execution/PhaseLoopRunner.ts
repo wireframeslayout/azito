@@ -18,7 +18,8 @@ import type { SidekickPackageLoader } from '../../sidekicks/SidekickPackageLoade
 import { resolvePhaseSidekick, resolveEnabledPhases, resolveCurrentPhaseIndex } from '../../sidekicks/resolvePhaseSidekick';
 import { renderSidekickBody } from '../../sidekicks/renderSidekickBody';
 import type { SidekickSyncService } from '../../sidekicks/SidekickSyncService';
-import { resolveSidekickDir } from '../../sidekicks/SidekickSyncService';
+import { resolveSidekickDirOnHost } from '../../sidekicks/SidekickSyncService';
+import { resolveEnvelopeHost } from './AzitoctlPath';
 import type { UnitTypeLoader } from '../../sidekicks/UnitTypeLoader';
 import type { UnitTypePhase } from '../../sidekicks/UnitType';
 import type { IWorktreeService } from '../../git/IWorktreeService';
@@ -444,7 +445,7 @@ export class PhaseLoopRunner {
       this.appendLog(task.id, unit.id, 'status_change', { status: 'phase_started', phase });
 
       const sidekick = resolvePhaseSidekick(this.sidekickLoader, phase, unit.phaseConfig, phaseDef);
-      const sidekickDir = resolveSidekickDir(sidekick, server);
+      const sidekickDir = await resolveSidekickDirOnHost(sidekick, server, this.transportFactory);
       const promptModules = loadPromptModules();
       // Issue #87 review (14th round), Minor finding: pass the SAME
       // distribution-aware repository this phase's own push/PR/notary
@@ -523,7 +524,7 @@ export class PhaseLoopRunner {
         const envelopeResult = runtime.buildEnvelope({
           phase, capability, nonce,
           taskId: task.id, unitId: unit.id, workerExecutionMode: unit.workerExecutionMode,
-          server, tempServer, handle, supervisorTarget: supervisorTarget, prompt, outputFilePath,
+          server, host: await resolveEnvelopeHost(this.transportFactory, server), tempServer, handle, supervisorTarget: supervisorTarget, prompt, outputFilePath,
           doneMarker, questionsMarker, testFailedMarker,
         });
         const phaseSignalStream = envelopeResult.signalStream;

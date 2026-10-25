@@ -9,6 +9,9 @@ import { syncThroughFileOps } from './fileOpsSidekickSync';
 import { syncThroughShell } from './shellSidekickSync';
 import { REMOTE_SIDEKICKS_BASE, type SidekickSyncContext } from './sidekickSyncShared';
 import { collectTreeEntries, packTarGz } from '../../shared/fs/tarGz';
+import type { TransportFactory } from '../servers/transport/TransportFactory';
+import { homeDirOf } from '../servers/agent-deploy/harnessLocation';
+import { windowsPromptPath } from '../../shared/os/windowsPromptPath';
 
 export { REMOTE_SIDEKICKS_BASE } from './sidekickSyncShared';
 export { PAYLOAD_CHUNK_SIZE } from './shellSidekickSync';
@@ -66,6 +69,22 @@ export function resolveSidekickDir(
   server: Pick<ServerConfig, 'type'>,
 ): string {
   return server.type === 'local' ? pkg.dir : `${REMOTE_SIDEKICKS_BASE}/${pkg.name}`;
+}
+
+/**
+ * {@link resolveSidekickDir} for the host the worker runs on. A Windows host's shell expands no `~`, so the path is written out in full: the
+ * hub's own package directory for its local server, `<agent home>/.azito/sidekicks/<name>` for an agent, with forward slashes (Git Bash and
+ * PowerShell both read them) so the SKILL.md can put it in double quotes. A POSIX host keeps `~` for its shell to expand.
+ */
+export async function resolveSidekickDirOnHost(
+  pkg: Pick<SidekickPackage, 'name' | 'dir'>,
+  server: Pick<ServerConfig, 'type'>,
+  transportFactory: Pick<TransportFactory, 'hostProfileFor' | 'getFileOps'>,
+): Promise<string> {
+  if (transportFactory.hostProfileFor(server as ServerConfig)?.platform !== 'win32') return resolveSidekickDir(pkg, server);
+  if (server.type === 'local') return windowsPromptPath(pkg.dir);
+  const home = await homeDirOf(transportFactory.getFileOps(server as ServerConfig));
+  return `${windowsPromptPath(home)}/${REMOTE_SIDEKICKS_BASE.slice(2)}/${pkg.name}`;
 }
 
 /**

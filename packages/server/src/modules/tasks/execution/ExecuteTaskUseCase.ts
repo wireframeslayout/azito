@@ -1,7 +1,7 @@
 import { EventEmitter } from 'events';
-import { assertHostFeature, workerLineDialect } from '../../../shared/os/hostFeature';
+import { assertHostFeature, workerStartsAsProgram } from '../../../shared/os/hostFeature';
 import { changeDirectoryLine } from '../../../shared/os/changeDirectoryLine';
-import { randomUUID, randomBytes } from 'crypto';
+import { randomBytes } from 'crypto';
 import type { ITaskRepository, Task } from '../Task';
 import type { TaskStatus } from '../TaskStatus';
 import type { IUnitRepository, Unit } from '../../units/Unit';
@@ -21,9 +21,7 @@ import type { KeyedMutex } from '../../../shared/keyedMutex';
 import type { IWorktreeService, WorktreeInfo } from '../../git/IWorktreeService';
 import type { WorktreeServiceFactory } from '../../git/WorktreeServiceFactory';
 import { assertDirectoryContained } from '../../git/PathContainment';
-import { normalizeBranchRef } from '../../git/assertSafeGitArgs';
-import { ensureGitIdentity, type GitIdentity } from '../../git/ensureGitIdentity';
-import { ensureClaudeTrust } from '../../agents/claude/ensureClaudeTrust';
+import { type GitIdentity } from '../../git/ensureGitIdentity';
 import type { GitProviderService } from '../../git/providers/GitProviderService';
 import type { ProjectRepositoryWithToken as ProjectRepository, ProjectRepository as ProjectRepositoryEntry } from '../../projects/Project';
 import type { TransportFactory } from '../../servers/transport/TransportFactory';
@@ -35,9 +33,14 @@ import type { IWindowRepository } from '../../windows/Window';
 import type { IPaneStreamFactory } from '../../tmux/PaneStream';
 import type { TaskTempFiles } from '../../../shared/os/taskTempFiles';
 import type { ISessionStrategyFactory } from '../../agents/SessionStrategy';
-import { buildWorkerLaunch, buildWorkerLaunchCommand } from '../../agents/LaunchCommand';
-import { renderLaunchLine, withFlags } from '../../agents/WorkerLaunch';
-import { type ShellDialect } from '../../../shared/os/shellDialect';
+import { buildWorkerLaunchCommand } from '../../agents/LaunchCommand';
+import { launchArgv, renderLaunchLine } from '../../agents/WorkerLaunch';
+import { programFor } from '../../agents/workerProgram';
+import type { PaneProgram } from '../../tmux/IMuxClient';
+import { resolveEnvelopeHost } from './AzitoctlPath';
+import { createTaskWorktree, TaskWorktreeError, type TaskWorktreeDeps } from './TaskWorktreeSetup';
+import { planNewWorkerLaunch, planResumeWorkerLaunch } from './WorkerLaunchPlan';
+import { shellDialectFor, type ShellDialect } from '../../../shared/os/shellDialect';
 import { expandTemplate } from './PromptExpander';
 import type { UnitTypeLoader } from '../../sidekicks/UnitTypeLoader';
 import { WorkerWaiter } from './WorkerWaiter';
@@ -56,7 +59,7 @@ import { resolveExecutionManifest, hashExecutionManifest } from './ExecutionMani
 import { TuiWorkerRuntime, TuiNotReadyError } from './runtime/TuiWorkerRuntime';
 import { WorkerRuntimeRegistry } from './runtime/WorkerRuntimeRegistry';
 import { labelRegisteredWindow, labelAddedWindowOrRemove } from '../../tmux/labelRegisteredWindow';
-import { resolveTaskServerName, resolveMuxWorkspace, resolveUnitId, resolveBaseBranch, resolveAndDetectBaseBranch, canonicalizeBaseBranch, resolveWorktreeCreateBaseBranch } from './TaskExecutionEnv';
+import { resolveTaskServerName, resolveMuxWorkspace, resolveUnitId, resolveBaseBranch, resolveAndDetectBaseBranch, canonicalizeBaseBranch } from './TaskExecutionEnv';
 import { type MuxDriverKind, type MuxRef, type PaneHandle } from '@azito/shared';
 import { muxWindowTarget } from '../../tmux/muxWindowTarget';
 import { isSameWindow, taskWindowRef, windowKindOf, windowRefOf } from '../../tmux/windowIdentity';
@@ -258,14 +261,21 @@ export class ExecuteTaskUseCase {
     return this.muxDriverRegistry.resolve(server);
   }
 
-  /** Every use is a line typed into a pane for a worker (cd, launch, supervisor wrap): refused where a worker cannot run in a pane. */
+  /** The shell of the server's panes: what a line typed into one (cd, launch, supervisor wrap) is written in. */
   private dialectOf(server: ServerConfig): ShellDialect {
-    return workerLineDialect(this.transportFactory.hostProfileFor(server), 'Launching a worker in a pane');
+    return shellDialectFor(this.transportFactory.hostProfileFor(server));
   }
 
-  /** Refuses, before anything is changed, an operation that would resume a worker on a host that cannot run one (Windows, #371). */
-  assertCanLaunchWorker(server: ServerConfig): void {
-    assertHostFeature(this.transportFactory.hostProfileFor(server), 'taskExecution', 'Resuming a worker');
+  /** What the worktree step uses of this use case (it is shared with the follow-up and restore paths, which are not methods of it). */
+  private get worktreeDeps(): TaskWorktreeDeps {
+    return {
+      taskRepo: this.taskRepo,
+      contentExtractor: this.contentExtractor,
+      transportFactory: this.transportFactory,
+      worktreeServiceFactory: this.worktreeServiceFactory,
+      hubGitIdentity: this.hubGitIdentity,
+      appendLog: (taskId, unitId, type, content) => this.appendLog(taskId, unitId, type, content),
+    };
   }
 
   private getWorktreeService(server: ServerConfig): IWorktreeService {
@@ -604,6 +614,43 @@ export class ExecuteTaskUseCase {
     });
   }
 
+  /**
+   * The directory a follow-up's worker runs in: the task's worktree when it still exists, else its working directory. Neither is trusted
+   * because it exists on disk: both fields are settable through `PUT /api/tasks/:id`, so a directory outside the project's is refused
+   * (the task is failed with a `working_directory_rejected` entry), like a first run's. The checked (symlink-free) path is returned, and
+   * null when the task has no directory at all.
+   */
+  private async resolveFollowUpDirectory(server: ServerConfig, task: Task, serverName: string, unitId: number): Promise<string | null> {
+    const project = this.projectRepo.findById(task.projectId);
+    const projectServer = project ? this.projectServerRepo.find(task.projectId, serverName) : null;
+    const allowedRoot = projectServer?.workingDirectory || null;
+    let dir = task.worktreePath && await this.getWorktreeService(server).exists(task.worktreePath)
+      ? task.worktreePath
+      : (task.workingDirectory || projectServer?.workingDirectory);
+    if (dir && allowedRoot) {
+      try {
+        dir = await this.assertDirectoryContained(server, { target: dir, allowedRoot }, 'follow-up working directory');
+      } catch (err) {
+        const message = err instanceof Error ? err.message : String(err);
+        this.appendLog(task.id, unitId, 'command', { type: 'working_directory_rejected', message });
+        this.taskRepo.update(task.id, { status: 'failed' as TaskStatus } as Partial<Task>);
+        throw new Error(`Follow-up working directory rejected: ${message}`);
+      }
+    }
+    return dir || null;
+  }
+
+  /** Removes the worktree a Windows run made before its window, when the window could not be created; clears the task's record of it. */
+  private async discardPreparedWorktree(taskId: number, unitId: number, server: ServerConfig, workingDir: string | null, worktree: WorktreeInfo | null): Promise<void> {
+    if (!worktree || !workingDir) return;
+    try {
+      await this.getWorktreeService(server).remove(workingDir, worktree.path);
+    } catch (cleanupErr) {
+      this.appendLog(taskId, unitId, 'command', { type: 'worktree_cleanup_failed', message: cleanupErr instanceof Error ? cleanupErr.message : String(cleanupErr) });
+    }
+    this.taskRepo.update(taskId, { worktreePath: null, worktreeBranch: null } as Partial<Task>);
+  }
+
   private async rollbackWindowAfterPostCreationFailure(
     taskId: number,
     server: ServerConfig,
@@ -741,8 +788,6 @@ export class ExecuteTaskUseCase {
 
     const serverAtStart = this.serverRepo.findByName(serverName);
     if (!serverAtStart) throw new Error('Server not found');
-    // Before anything is created: a host that cannot yet start a worker in a pane (Windows, #371) is refused as unsupported_os.
-    assertHostFeature(this.transportFactory.hostProfileFor(serverAtStart), 'taskExecution', 'Running a task');
     // `let`, not `const`: reassigned below (ensureSessionWithLock,
     // createRotatedWindow) to whatever fresher row the isolation lock
     // re-read — explicitly typed `ServerConfig` (not inferred from
@@ -828,6 +873,17 @@ export class ExecuteTaskUseCase {
         throw new Error(`Task working directory rejected: ${message}`);
       }
     }
+
+    // A Windows host starts the worker as the first pane of the task's window (not typed into a shell), so the window needs the worker's
+    // launch, and the worktree it starts in, when it is created. Both are decided before anything is touched: a launch that cannot be
+    // started that way, or a server that would need the code distribution (closed on Windows, #464), refuses here.
+    const startedAsProgram = workerStartsAsProgram(this.transportFactory.hostProfileFor(server));
+    const launchPlan = planNewWorkerLaunch(unit, this.sessionStrategyFactory);
+    if (startedAsProgram) {
+      if (isDistributionRequired(server, projectServer)) assertHostFeature(this.transportFactory.hostProfileFor(server), 'codeDistribution', 'Running a task on a server that needs the code distribution');
+      if (launchPlan) launchArgv(launchPlan.launch);
+    }
+    const prepared: { worktree: WorktreeInfo | null } = { worktree: null };
 
     // Ensure tmux session exists. This bootstrap window (if the session
     // doesn't exist yet) is immediately abandoned in favor of the real task
@@ -971,8 +1027,21 @@ export class ExecuteTaskUseCase {
           // transport — see WindowRotation.ts's doc comment; Issue #28
           // third-party review finding).
           const execDriver = this.resolveDriver(freshServer);
+          // A host that starts the worker as a program makes the worktree first, after the old window is gone (a process still running in
+          // the old worktree would keep Windows from removing it) and before the new window (which starts in it).
+          let program: PaneProgram | undefined;
+          if (startedAsProgram) {
+            if (workingDir) {
+              const configuredBranch = resolveBaseBranch(task, projectServer, project);
+              prepared.worktree = await createTaskWorktree(this.worktreeDeps, {
+                server: freshServer, task, unitId, workerType: unit.workerType, workingDir, allowedRoot,
+                baseBranch: configuredBranch ? canonicalizeBaseBranch(configuredBranch) : detectedBaseBranch!, distStatus: null,
+              }, async () => {});
+            }
+            if (launchPlan) program = await programFor(launchPlan.launch, prepared.worktree?.path ?? null, () => this.transportFactory.getFileOps(freshServer));
+          }
           return createRotatedWindowInLock(this.paneEnvService, freshServer, currentTask, 'execute_create_failed', async (fs, env) => {
-            const { ref: createdRef, result, windowName: displayName } = await execDriver.openWindow(fs, muxWorkspace, `task-${task.id}`, { extraEnv: env });
+            const { ref: createdRef, result, windowName: displayName } = await execDriver.openWindow(fs, muxWorkspace, `task-${task.id}`, { extraEnv: env, ...(program ? { program } : {}) });
             return { result, windowName: createdRef.window, ref: createdRef, label: displayName ?? createdRef.window };
           },
             (fs) => {
@@ -997,6 +1066,9 @@ export class ExecuteTaskUseCase {
         return { windowName: newWindowName, windowLabel: newWindowLabel ?? newWindowName, tokenId: newTokenId, server: newServer };
       }));
     } catch (err) {
+      // The window never came to be: the worktree made for it (Windows) is not kept for a window that does not exist.
+      await this.discardPreparedWorktree(taskId, unitId, server, workingDir, prepared.worktree);
+      if (err instanceof TaskWorktreeError) throw err;
       if (this.failOnServerSnapshotMismatch(err, taskId, unitId)) throw err;
       // Issue #29 Step 3a review, Important finding 2: reverifyGateInLock
       // (run as this window creation's `preCheck`, above) throws the SAME
@@ -1154,196 +1226,24 @@ export class ExecuteTaskUseCase {
     // of the plain `baseBranch`.
     const distStatus: 'distributed' | 'already_current' | null = distOutcome.required ? distOutcome.distStatus : null;
 
-    if (workingDir) {
-      const worktreeCreateBaseBranch = resolveWorktreeCreateBaseBranch(baseBranch, distStatus);
-
-      // Create worktree for isolated branch/file tracking
-      let wt: WorktreeInfo;
-      try {
-        const slug = await this.contentExtractor.generateSlug(task.title);
-        // `task.branch` is a PERSISTED value, not fresh API input — a task
-        // saved before `rejectQualifiedBranchInput` rejected new
-        // fully-qualified refs at the API boundary can still have
-        // `branch: 'refs/heads/main'` sitting in the database (Issue #87
-        // third-party review, 12th round, Important finding 2). Normalize
-        // it the same way `baseBranch` above is normalized, rather than
-        // passing it through raw — `assertSafeBranch` inside
-        // `WorktreeService.create()` no longer rejects a fully-qualified
-        // ref (same review round), so this is about keeping the branch this
-        // worktree actually uses/reuses in its plain, unqualified form, not
-        // about avoiding a thrown error.
-        const branchName = task.branch ? normalizeBranchRef(task.branch) : undefined;
-        wt = await this.getWorktreeService(server).create(workingDir, taskId, slug, worktreeCreateBaseBranch, branchName);
-      } catch (err) {
-        const message = err instanceof Error ? err.message : String(err);
-        this.appendLog(taskId, unitId, 'command', {
-          type: 'worktree_failed',
-          message,
-        });
-        // 'failed' is deliberately NOT in TOKEN_REVOKING_STATUSES (a failed
-        // task is resumable via follow-up onto a later window), so the
-        // window-generation token this createWindow() just issued would
-        // otherwise leak — revoke it directly, but only once the kill below
-        // actually confirms the window is gone (Issue #28 third-party review
-        // finding; see TaskPaneEnvironmentService.revokeGeneration's doc
-        // comment). Routed through rollbackWindowReference (Issue #28
-        // third-party review, second round) so `tmuxWindow` is cleared ONLY
-        // once the kill is confirmed — a kill failure leaves the DB row
-        // pointing at the still-live, still-authenticated window instead of
-        // silently untracking it. Scoped to `tokenId` (the generation
-        // createRotatedWindow issued above, inside runExclusiveForTask), not
-        // the whole task — a blanket revoke here could otherwise clobber a
-        // newer generation a concurrent rotation for this task already
-        // persisted (Issue #28 third-party review, WindowRotation.ts finding).
-        //
-        // Fix 3 (Issue #28 third-party review, Important finding): onGone
-        // clears `tmuxWindow` via clearTmuxWindowIfMatches, NOT a blanket
-        // `update(taskId, { tmuxWindow: null })` — this whole span (worktree
-        // creation + its own rollback) runs OUTSIDE runExclusiveForTask, so a
-        // concurrent execute()/followUp() for the SAME task could have
-        // already acquired the lock, created a NEWER window generation, and
-        // persisted its own `tmuxWindow` by the time this rollback runs. An
-        // unconditional null-out would clobber that newer, still-live
-        // reference. Gating on `windowName` (this call's own generation)
-        // makes the clear a no-op when the row has already moved on — see
-        // ITaskRepository.clearTmuxWindowIfMatches's doc comment.
-        //
-        // Both the status update and the rollback are now
-        // rollbackWindowAfterPostCreationFailure() (see its own doc comment)
-        // — shared with the worktree_path_rejected branch below and with the
-        // fetch-distribution failure branch above.
-        await this.rollbackWindowAfterPostCreationFailure(taskId, server, muxWorkspace, windowName, tokenId, 'worktree_creation_failed_rollback');
-        throw new Error(`Worktree creation failed: ${message}`);
-      }
-
-      if (allowedRoot) {
-        try {
-          // Same TOCTOU fix as above: the resolved path (not wt.path as
-          // returned by worktree creation) is what gets persisted and used
-          // from here on (Issue #27 review finding 2).
-          const resolvedWtPath = await this.assertDirectoryContained(server, { target: wt.path, allowedRoot }, 'worktree path');
-          wt = { ...wt, path: resolvedWtPath };
-        } catch (err) {
-          const message = err instanceof Error ? err.message : String(err);
-          this.appendLog(taskId, unitId, 'command', {
-            type: 'worktree_path_rejected',
-            message,
-          });
-          // The worktree was already created on disk (and its branch checked
-          // out) before this check ran — leaving it behind would leak a real
-          // worktree + branch for a task that never got permission to use it
-          // (Issue #27 review finding 3). Cleanup failure is logged, not
-          // swallowed, since it means the leaked worktree needs manual attention.
-          try {
-            await this.getWorktreeService(server).remove(workingDir, wt.path);
-          } catch (cleanupErr) {
-            this.appendLog(taskId, unitId, 'command', {
-              type: 'worktree_cleanup_failed',
-              message: cleanupErr instanceof Error ? cleanupErr.message : String(cleanupErr),
-            });
-          }
-          // Same generation-leak fix as the worktree_failed branch above —
-          // see that branch's comment. `tmuxWindow` is cleared inside
-          // rollbackWindowReference's onGone callback, not unconditionally
-          // above, for the same reason. Scoped to `tokenId`, same reasoning
-          // as the worktree_failed branch's rollbackWindowReference call.
-          // Fix 3: same clearTmuxWindowIfMatches reasoning as the
-          // worktree_failed branch above — this span also runs outside
-          // runExclusiveForTask.
-          await this.rollbackWindowAfterPostCreationFailure(taskId, server, muxWorkspace, windowName, tokenId, 'worktree_path_rejected_rollback', {
-            worktreePath: null,
-            worktreeBranch: null,
-          });
-          throw new Error(`Worktree path rejected: ${message}`);
-        }
-      }
-
-      // Persisted only after the containment check above passes (or is
-      // skipped when there's no allowedRoot to check against) — this closes
-      // the earlier TOCTOU window where wt.path was written to the DB before
-      // it had been verified (Issue #27 review finding 2).
-      //
-      // task.branch is deliberately NOT written here (Issue #328 review
-      // round): it is the value the execution-gate fingerprint hashes as
-      // `branches.work` (ExecutionManifest.ts), and it is also read a few
-      // lines above as the user-specified branchName input to
-      // `getWorktreeService(server).create(...)`. Writing the freshly
-      // resolved worktree branch back into it here made an approved-but-
-      // unstarted run's OWN worktree creation change the very fingerprint
-      // its approval was granted under — the next phase-boundary
-      // reverification (PhaseLoopRunner.reverifyExecutionGateForPhase) then
-      // saw a manifest that no longer matched and threw the task straight
-      // back to pending_approval, mid-run, with the tmux window and worktree
-      // already created. `worktreeBranch` is the correct field for "the
-      // branch the system actually resolved/created" — it's already in the
-      // execution-gate fingerprint's deliberately-excluded list for exactly
-      // this self-invalidation reason (see ExecutionManifest.ts's module doc
-      // comment).
-      this.taskRepo.update(taskId, {
-        worktreePath: wt.path,
-        worktreeBranch: wt.branch,
-        baseBranch,
-      } as Partial<Task>);
-
-      this.appendLog(taskId, unitId, 'command', {
-        type: 'worktree_created',
-        worktreePath: wt.path,
-        worktreeBranch: wt.branch,
-        baseBranch,
+    if (startedAsProgram) {
+      // The worktree was made before the window (see the window creation above): the window already starts in it.
+      if (prepared.worktree) effectiveDir = prepared.worktree.path;
+    } else if (workingDir) {
+      const wt = await createTaskWorktree(this.worktreeDeps, {
+        server, task, unitId, workerType: unit.workerType, workingDir, allowedRoot, baseBranch, distStatus,
+      }, async ({ reason }) => {
+        // The window (and its token generation) exists already: it is rolled back with the worktree step's failure. A rejected path
+        // also clears the worktree fields the task never got permission to keep.
+        await this.rollbackWindowAfterPostCreationFailure(taskId, server, muxWorkspace, windowName, tokenId, reason,
+          reason === 'worktree_path_rejected_rollback' ? { worktreePath: null, worktreeBranch: null } : undefined);
       });
-
-      try {
-        const identityResult = await ensureGitIdentity(
-          this.transportFactory.getTransport(server),
-          wt.path,
-          this.hubGitIdentity,
-        );
-        if (identityResult.action === 'applied') {
-          this.appendLog(taskId, unitId, 'command', {
-            type: 'git_identity_applied',
-            fields: identityResult.fields,
-          });
-        } else if (identityResult.action === 'hub_missing') {
-          this.appendLog(taskId, unitId, 'command', {
-            type: 'git_identity_missing',
-          });
-        }
-      } catch (err) {
-        this.appendLog(taskId, unitId, 'command', {
-          type: 'git_identity_failed',
-          message: err instanceof Error ? err.message : String(err),
-        });
-      }
-
-      if (unit.workerType === 'claude' && workingDir) {
-        try {
-          const transport = this.transportFactory.getTransport(server);
-          const resolvedWorkingDir = await transport.files().realpath(workingDir);
-          const trustResult = await ensureClaudeTrust(transport, resolvedWorkingDir);
-          if (trustResult.action === 'registered') {
-            this.appendLog(taskId, unitId, 'command', { type: 'claude_trust_registered', path: resolvedWorkingDir });
-          } else if (trustResult.action === 'skipped') {
-            this.appendLog(taskId, unitId, 'command', { type: 'claude_trust_skipped', reason: trustResult.reason });
-          } else if (trustResult.action === 'failed') {
-            this.appendLog(taskId, unitId, 'command', { type: 'claude_trust_failed', reason: trustResult.reason });
-          }
-        } catch (err) {
-          this.appendLog(taskId, unitId, 'command', {
-            type: 'claude_trust_failed',
-            reason: err instanceof Error ? err.message : String(err),
-          });
-        }
-      }
-
       effectiveDir = wt.path;
 
       try {
-        // effectiveDir is a resolved (symlink-free) real path (see
-        // PathContainment.ts) and must be shell-quoted before being typed
-        // into the pane — an unquoted realpath can contain shell
-        // metacharacters via a maliciously named directory/symlink inside
-        // the allowed root (Issue #27 review finding: cd command injection).
-        // `--` guards against a leading `-` being read as a cd option.
+        // effectiveDir is a resolved (symlink-free) real path (see PathContainment.ts) and is shell-quoted before it is typed into the
+        // pane: an unquoted real path can contain shell metacharacters via a maliciously named directory inside the allowed root
+        // (Issue #27: cd command injection). `--` guards against a leading `-` being read as a cd option.
         await this.resolveDriver(server).sendKeysToHandle(server, handle, [this.dialectOf(server).changeDirectory(effectiveDir), 'Enter']);
         await sleep(500);
       } catch {}
@@ -1416,13 +1316,9 @@ export class ExecuteTaskUseCase {
     await labelAddedWindowOrRemove(this.resolveDriver(server), server, ref, { windowId: windowRowId, taskId }, this.windowRepo);
 
     // Launch worker command
-    const workerLaunch = buildWorkerLaunch(unit.workerType, unit.workerModel, unit.workerExtraArgs);
-    if (workerLaunch) {
-      let effectiveLaunch = workerLaunch;
-      const strategy = this.sessionStrategyFactory.create(unit.workerType);
-      if (strategy.supportsSession) {
-        const sessionId = randomUUID();
-        effectiveLaunch = withFlags(workerLaunch, strategy.buildNewSessionArgs(sessionId));
+    if (launchPlan) {
+      const { launch: effectiveLaunch, sessionId, strategy } = launchPlan;
+      if (sessionId !== null) {
         this.taskRepo.update(taskId, { agentSessionId: sessionId } as Partial<Task>);
 
         const taskWindows = this.windowRepo.findByTask(taskId);
@@ -1475,6 +1371,7 @@ export class ExecuteTaskUseCase {
           workerExecutionMode: unit.workerExecutionMode,
           effectiveLaunchCommand: renderLaunchLine(effectiveLaunch, this.dialectOf(server)),
           dialect: this.dialectOf(server),
+          startedAsProgram,
         });
         this.appendLog(taskId, unitId, 'command', { type: 'worker_launch', command: actualCommand });
       } catch (launchErr) {
@@ -1619,7 +1516,6 @@ export class ExecuteTaskUseCase {
     // See the matching comment on execute()'s own `server` declaration for
     // why this is explicitly typed `ServerConfig` rather than inferred.
     let server: ServerConfig = serverAtStart;
-    this.assertCanLaunchWorker(serverAtStart);
 
     // Issue #63: ensure baseBranch is persisted so the gate fingerprint
     // matches the approval screen. Normally execute() already persisted it,
@@ -1674,8 +1570,16 @@ export class ExecuteTaskUseCase {
       }
     }
 
+    // A host that starts the worker as a program (Windows) never wakes a window to start the worker in it afterwards: a sleeping or lost
+    // window is created again below with the worker as its first pane.
+    const startedAsProgram = workerStartsAsProgram(this.transportFactory.hostProfileFor(server));
+    if (startedAsProgram) {
+      const resumeLaunch = planResumeWorkerLaunch(unit, task.agentSessionId, this.sessionStrategyFactory);
+      if (resumeLaunch) launchArgv(resumeLaunch);
+    }
+
     // 2-3. Primary window sleeping/dead detection and wake.
-    if (primaryWindow && !runningInWindow) {
+    if (primaryWindow && !runningInWindow && !startedAsProgram) {
       if (primaryWindow.sleeping) {
         wakeResult = await this.primaryWindowWaker.wake(
           primaryWindow.id, serverName, {
@@ -1845,9 +1749,18 @@ export class ExecuteTaskUseCase {
         // WindowRotation.ts's doc comment). The DB is only updated with
         // `windowName` once creation is confirmed to have actually
         // succeeded.
+        // The window starts in the directory the worker runs in, so a host that starts the worker as a program decides both first.
+        let program: PaneProgram | undefined;
+        if (startedAsProgram) {
+          const resumeLaunch = planResumeWorkerLaunch(unit, task.agentSessionId, this.sessionStrategyFactory);
+          if (resumeLaunch) {
+            const dir = await this.resolveFollowUpDirectory(server, task, serverName, unitId);
+            program = await programFor(resumeLaunch, dir, () => this.transportFactory.getFileOps(server));
+          }
+        }
         const created = await createRotatedWindow(this.paneEnvService, this.serverIsolationLock, server, currentTask, 'followup_create_failed', async (freshServer, env) => {
           const fuCreateDriver = this.resolveDriver(freshServer);
-          const { ref: fuRef, result, windowName: displayName } = await fuCreateDriver.openWindow(freshServer, muxWorkspace, `task-${task.id}`, { extraEnv: env });
+          const { ref: fuRef, result, windowName: displayName } = await fuCreateDriver.openWindow(freshServer, muxWorkspace, `task-${task.id}`, { extraEnv: env, ...(program ? { program } : {}) });
           return { result, windowName: fuRef.window, ref: fuRef, label: displayName ?? fuRef.window };
         },
           true,
@@ -1915,40 +1828,14 @@ export class ExecuteTaskUseCase {
     const handle = await fuMainDriver.resolvePane(server, ref, 1);
 
     if (!windowExists) {
-      // Use worktree path if available, otherwise fall back to working directory.
-      // Neither field is trusted just because it resolves/exists on disk: both
-      // task.worktreePath and task.workingDirectory are settable via
-      // PUT /api/tasks/:id, so without the containment check below a caller
-      // could simply walk around the boundary execute() enforces by editing
-      // the task and then triggering a follow-up instead of a fresh execute()
-      // (Issue #27 review finding 1).
-      const followUpProject = this.projectRepo.findById(task.projectId);
-      const followUpProjectServerForDir = followUpProject ? this.projectServerRepo.find(task.projectId, serverName) : null;
-      const followUpAllowedRoot = followUpProjectServerForDir?.workingDirectory || null;
-      let followUpDir = task.worktreePath && await this.getWorktreeService(server).exists(task.worktreePath)
-        ? task.worktreePath
-        : (task.workingDirectory || followUpProjectServerForDir?.workingDirectory);
-
-      if (followUpDir && followUpAllowedRoot) {
+      if (!startedAsProgram) {
+        let followUpDir: string | null;
         try {
-          // Use the resolved path for the `cd` below, same TOCTOU fix as
-          // execute() (Issue #27 review finding 2).
-          followUpDir = await this.assertDirectoryContained(server, { target: followUpDir, allowedRoot: followUpAllowedRoot }, 'follow-up working directory');
+          followUpDir = await this.resolveFollowUpDirectory(server, task, serverName, unitId);
         } catch (err) {
-          const message = err instanceof Error ? err.message : String(err);
-          this.appendLog(taskId, unitId, 'command', { type: 'working_directory_rejected', message });
-          this.taskRepo.update(taskId, { status: 'failed' as TaskStatus } as Partial<Task>);
-          // Same generation-leak fix as execute()'s worktree_failed branch
-          // above — this branch only runs when !windowExists just created a
-          // fresh window (and rotated the task token, so `tokenId` is
-          // non-null here) for this follow-up. `tmuxWindow` is cleared
-          // inside rollbackWindowReference's onGone callback, not
-          // unconditionally above, for the same reason. Scoped to `tokenId`,
-          // same reasoning as execute()'s rollbackWindowReference calls.
-          // Fix 3 (Issue #28 third-party review, Important finding): same
-          // clearTmuxWindowIfMatches reasoning as execute()'s
-          // rollbackWindowReference calls — this span also runs outside
-          // runExclusiveForTask.
+          // This branch only runs when !windowExists just created a fresh window (and rotated the task token, so `tokenId` is non-null
+          // here): the window is rolled back with the token generation, scoped to `tokenId` and clearing `tmuxWindow` only when it still
+          // names this window (this span runs outside runExclusiveForTask).
           try {
             await rollbackWindowReference(
               this.resolveDriver(server).closeWindow(server, ref),
@@ -1959,28 +1846,21 @@ export class ExecuteTaskUseCase {
               () => {},
             );
           } catch {}
-          throw new Error(`Follow-up working directory rejected: ${message}`);
+          throw err;
         }
-      }
 
-      if (followUpDir) {
-        try {
-          await this.resolveDriver(server).sendKeysToHandle(server, handle, [await changeDirectoryLine(() => this.transportFactory.getFileOps(server), this.dialectOf(server), followUpDir), 'Enter']);
-          await sleep(500);
-        } catch (err) {
-          this.appendLog(taskId, unitId, 'command', { type: 'cd_failed', directory: followUpDir, reason: err instanceof Error ? err.message : String(err) });
-        }
-      }
-
-      const followUpLaunch = buildWorkerLaunch(unit.workerType, unit.workerModel, unit.workerExtraArgs);
-      if (followUpLaunch) {
-        let effectiveFollowUpLaunch = followUpLaunch;
-        if (task.agentSessionId) {
-          const followUpStrategy = this.sessionStrategyFactory.create(unit.workerType);
-          if (followUpStrategy.supportsSession) {
-            effectiveFollowUpLaunch = withFlags(followUpLaunch, followUpStrategy.buildResumeArgs(task.agentSessionId));
+        if (followUpDir) {
+          try {
+            await this.resolveDriver(server).sendKeysToHandle(server, handle, [await changeDirectoryLine(() => this.transportFactory.getFileOps(server), this.dialectOf(server), followUpDir), 'Enter']);
+            await sleep(500);
+          } catch (err) {
+            this.appendLog(taskId, unitId, 'command', { type: 'cd_failed', directory: followUpDir, reason: err instanceof Error ? err.message : String(err) });
           }
         }
+      }
+
+      const effectiveFollowUpLaunch = planResumeWorkerLaunch(unit, task.agentSessionId, this.sessionStrategyFactory);
+      if (effectiveFollowUpLaunch) {
         const runtime = this.runtimeRegistry.get(unit.workerRuntime);
         const primaryWin = this.windowRepo.findByTask(taskId).find((w) => w.isPrimary);
         const followUpWindowType = primaryWin?.windowType ?? 'terminal';
@@ -1996,6 +1876,7 @@ export class ExecuteTaskUseCase {
             workerExecutionMode: unit.workerExecutionMode,
             effectiveLaunchCommand: renderLaunchLine(effectiveFollowUpLaunch, this.dialectOf(server)),
             dialect: this.dialectOf(server),
+            startedAsProgram,
           });
           this.appendLog(taskId, unitId, 'command', { type: 'worker_launch', command: actualCommand });
         } catch (launchErr) {
@@ -2087,7 +1968,7 @@ export class ExecuteTaskUseCase {
       const runtime = this.runtimeRegistry.get(unit.workerRuntime);
       const envelopeResult = runtime.buildFollowUpEnvelope({
         nonce, taskId, unitId, workerExecutionMode: unit.workerExecutionMode,
-        server, tempServer, handle, supervisorTarget: windowTarget, prompt: expandedComment, outputFilePath,
+        server, host: await resolveEnvelopeHost(this.transportFactory, server), tempServer, handle, supervisorTarget: windowTarget, prompt: expandedComment, outputFilePath,
         doneMarker, questionsMarker, testFailedMarker,
       });
       const followUpSignalStream = envelopeResult.signalStream;
@@ -2255,7 +2136,6 @@ export class ExecuteTaskUseCase {
 
     const server = this.serverRepo.findByName(serverName);
     if (!server) throw new Error('Server not found');
-    this.assertCanLaunchWorker(server);
 
     // Issue #63: same baseBranch detection safety net as followUp().
     const rsmProjectServer = this.projectServerRepo.find(task.projectId, serverName);

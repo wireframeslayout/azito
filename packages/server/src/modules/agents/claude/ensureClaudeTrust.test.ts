@@ -4,7 +4,7 @@ import { tmpdir } from 'os';
 import { join } from 'path';
 import type { IServerTransport } from '../../servers/transport/ServerTransport';
 import { LocalFileOps, localFileOpsHost } from '../../../shared/fs/LocalFileOps';
-import { ensureClaudeTrust } from './ensureClaudeTrust';
+import { claudeProjectKey, ensureClaudeTrust } from './ensureClaudeTrust';
 
 let fakeHome: string;
 
@@ -104,5 +104,26 @@ describe('ensureClaudeTrust', () => {
     const result = await ensureClaudeTrust(racing, '/wt');
     expect(result.action).toBe('failed');
     expect(readConfig().projects).toEqual({ '/theirs': {} });
+  });
+});
+
+describe('claudeProjectKey', () => {
+  // Claude Code files a project under path.normalize(the repository's top level) / path.resolve(cwd): backslashes on Windows (2.0.50 cli.js).
+  it('is the backslash form on Windows, whichever way the path was written', () => {
+    expect(claudeProjectKey('win32', 'C:/Users/me/repo')).toBe('C:\\Users\\me\\repo');
+    expect(claudeProjectKey('win32', 'C:\\Users\\me\\repo')).toBe('C:\\Users\\me\\repo');
+    expect(claudeProjectKey('win32', 'C:\\Users\\me\\repo\\')).toBe('C:\\Users\\me\\repo');
+    expect(claudeProjectKey('win32', '\\\\?\\C:\\Users\\me\\repo')).toBe('C:\\Users\\me\\repo');
+    expect(claudeProjectKey('win32', 'C:\\Users\\me\\a b\\..\\日本語')).toBe('C:\\Users\\me\\日本語');
+  });
+
+  it('keeps a drive root and a UNC share as they are', () => {
+    expect(claudeProjectKey('win32', 'C:\\')).toBe('C:\\');
+    expect(claudeProjectKey('win32', '\\\\host\\share\\repo')).toBe('\\\\host\\share\\repo');
+  });
+
+  it('leaves a Unix path alone', () => {
+    expect(claudeProjectKey('linux', '/home/me/repo')).toBe('/home/me/repo');
+    expect(claudeProjectKey('darwin', '/Users/me/repo/')).toBe('/Users/me/repo/');
   });
 });

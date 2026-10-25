@@ -64,7 +64,6 @@ import { parseTerminalTabId, terminalRefDisplayLabel, type TerminalRef } from '.
 import { resolveWindowDisplay, formatWindowDisplayLabel, buildWindowIndex } from '../lib/windowDisplay';
 import { findTaskByTarget as findTaskByTargetLib } from '../lib/findTaskByTarget';
 import { describeUnsupportedOs, isUnsupportedOsAnswer } from '../lib/hostFeature';
-import { useHostFeatureBlock } from '../hooks/useHostFeatureBlock';
 export default function Workspace() {
   return (
     <GlobalFocusProvider>
@@ -197,7 +196,6 @@ function WorkspaceInner() {
   const { menu: contextMenu, show: showContextMenu, showAt: showContextMenuAt, hide: hideContextMenu } = useContextMenu();
 
   const { showToast } = useToast();
-  const hostFeatureBlock = useHostFeatureBlock();
   const confirm = useConfirm();
   const { recordOpened: recordTaskOpened } = useRecentTasks();
 
@@ -747,9 +745,6 @@ function WorkspaceInner() {
 
   const executeTask = useCallback(async function perform(taskId: number, unitId: number | null, force = false) {
     if (!unitId) { showToast(t('workspace:toast.noUnit')); return; }
-    // Closed before the confirmation, with the reason: a task on a host that cannot run tasks yet (the entry points are disabled too).
-    const blockReason = hostFeatureBlock((allTasks.find((x) => x.id === taskId) ?? tasks.find((x) => x.id === taskId))?.executionServerName, 'taskExecution');
-    if (blockReason) { showToast(blockReason); return; }
     if (!force) {
       const ok = await confirm({ title: t('workspace:toast.startExecution'), message: t('workspace:toast.startConfirm') });
       if (!ok) return;
@@ -775,7 +770,7 @@ function WorkspaceInner() {
     }
     if (res.error) return showToast(res.error);
     refreshWorkspace();
-  }, [refreshWorkspace, showToast, confirm, t, hostFeatureBlock, allTasks, tasks]);
+  }, [refreshWorkspace, showToast, confirm, t]);
 
   const stopTask = useCallback(async (unitId: number | null, taskId: number) => {
     if (!unitId) return;

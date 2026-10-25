@@ -169,7 +169,7 @@ function makeRunner(overrides: {
   const pullRequestCreator = { ensureCreated: vi.fn(async () => {}), ...overrides.pullRequestCreator };
   const getWorktreeService = vi.fn(() => ({ exists: vi.fn(async () => false), getBranch: vi.fn(async () => null) }));
   const appendLog = vi.fn();
-  const transportFactory = { taskTempServer: vi.fn(async () => ({ type: 'local' as const })), getTransport: vi.fn(() => ({ exec: vi.fn() })), invalidate: vi.fn(), ...overrides.transportFactory };
+  const transportFactory = { taskTempServer: vi.fn(async () => ({ type: 'local' as const })), hostProfileFor: vi.fn(() => null), getFileOps: vi.fn(), getTransport: vi.fn(() => ({ exec: vi.fn() })), invalidate: vi.fn(), ...overrides.transportFactory };
   const sidekickSyncService = { sync: vi.fn(async () => {}), ...overrides.sidekickSyncService };
   const httpSignalCoordinator = {
     start: vi.fn(() => ({

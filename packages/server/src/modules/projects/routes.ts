@@ -1,3 +1,4 @@
+import { assertHostFeature } from '../../shared/os/hostFeature';
 import * as path from 'path';
 import type { FastifyPluginCallback } from 'fastify';
 import type { IProjectRepository, RepositoryProvider } from './Project';
@@ -567,6 +568,12 @@ const projectsRoutes: FastifyPluginCallback<ProjectsRouteOptions> = (fastify, op
       // distribution.
       const targetServerType = serverRepo.findByName(serverName)?.type;
       const distributeCode = targetServerType === 'local' ? false : requestedDistributeCode;
+      // A Windows agent cannot be the target of the code distribution (#464): turning it on is refused (501 unsupported_os) before anything is
+      // saved. A request that leaves the value as it is (a branch saved on a row that already has it) goes through, and a run on such a row refuses.
+      if (distributeCode && !existingRow?.distributeCode) {
+        const distributionTarget = serverRepo.findByName(serverName);
+        if (distributionTarget) assertHostFeature(transportFactory.hostProfileFor(distributionTarget), 'codeDistribution', 'Distributing code to a server (distribute_code)');
+      }
       // distribution_repository_id: same "key absent preserves, key present
       // (incl. explicit null) sets" semantics as working_directory/branch/
       // distribute_code above — a client that PUTs only { distribute_code }

@@ -294,6 +294,16 @@ Specifying a "Working Directory" when creating a task overrides the project serv
 - Branch search is also linked to the task's working directory (BranchInput sends the `working_directory` parameter to the API).
 - Falls back to the project server's configured directory when not specified.
 
+## Running tasks on a Windows agent (#371)
+
+A task runs on a Windows agent the same way, with these differences:
+
+- The worker is the **first pane of the task's window**, started by misao from its program and arguments (no shell line, no `cd`). So the worktree is made *before* the window (after the old window is closed): execute, follow-up (a sleeping or lost window is created again, the session resumed), restore (the window is created with the worker resuming the saved session) and respawn all work this way. The size starts at 120x40.
+- The prompt's completion block has no shell syntax. The worker writes the output file as UTF-8 and signals with `node "<home>/.azito/harness/bin/azitoctl.mjs" signal --file "<signal file>" --marker <marker>` (file-signal mode) or `... complete --turn <token> --output-file "<file>"` (http-signal mode); questions are a JSON file passed with `--json-file`. Paths are forward-slash paths in double quotes.
+- The pushing phase runs `scripts/push.mjs` (the same contract and variables as `push.sh`).
+- Claude Code's trust entry is written under the backslash form of the directory (`C:\Users\me\repo`), the key Claude Code itself uses.
+- Code distribution is not available on a Windows agent (#464).
+
 ## Task Logs
 
 Every event that occurs during task execution is recorded in the execution log.

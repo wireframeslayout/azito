@@ -35,6 +35,7 @@ function makeLaunchCtx(tmux: any) {
     windowType: 'agent',
     workerExecutionMode: 'tmux-pipe' as const,
     dialect: posixDialect,
+    startedAsProgram: false,
   };
 }
 
@@ -65,4 +66,21 @@ describe('TuiWorkerRuntime.launch — waitForTuiReady', () => {
     await expect(runtime.launch(ctx)).resolves.toBeDefined();
     expect(tmux.captureScreen).not.toHaveBeenCalled();
   }, 10_000);
+});
+
+describe('TuiWorkerRuntime.launch — a worker started as the pane\'s program (Windows)', () => {
+  it('types nothing into the pane, only waits for the TUI, and names the launch it was started with', async () => {
+    const { runtime, tmux } = makeRuntime(['bypass permissions on (shift+tab to cycle)']);
+    const ctx = { ...makeLaunchCtx(tmux), startedAsProgram: true, effectiveLaunchCommand: 'claude --session-id 7a8b0f9c-1d2e-4f30-8a45-6b7c8d9e0f12' };
+    await expect(runtime.launch(ctx)).resolves.toBe(ctx.effectiveLaunchCommand);
+    expect(tmux.sendKeysToHandle).not.toHaveBeenCalled();
+    expect(tmux.captureScreen).toHaveBeenCalled();
+  }, 15_000);
+
+  it('still stops on the trust dialog of a Claude worker', async () => {
+    const { runtime, tmux } = makeRuntime(['Do you trust this folder?']);
+    const ctx = { ...makeLaunchCtx(tmux), startedAsProgram: true, effectiveLaunchCommand: 'claude' };
+    await expect(runtime.launch(ctx)).rejects.toMatchObject({ name: 'TuiNotReadyError', trustDialogDetected: true });
+    expect(tmux.sendKeysToHandle).not.toHaveBeenCalled();
+  }, 15_000);
 });

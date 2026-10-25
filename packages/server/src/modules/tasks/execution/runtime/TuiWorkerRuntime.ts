@@ -66,6 +66,11 @@ export class TuiWorkerRuntime implements IWorkerRuntime {
   ) {}
 
   async launch(ctx: WorkerLaunchContext): Promise<string> {
+    if (ctx.startedAsProgram) {
+      // The window was created with the worker as its pane: there is nothing to type, only the TUI to wait for.
+      await this.waitForTuiReady(ctx.driver, ctx.server, ctx.handle, isClaudeLaunchCommand(ctx.effectiveLaunchCommand));
+      return ctx.effectiveLaunchCommand;
+    }
     const sendCommand = shouldSupervise(ctx.server.type, ctx.windowType, ctx.windowKind)
       ? wrapWithSupervisor(ctx.effectiveLaunchCommand, {
           server: ctx.server,
@@ -135,6 +140,7 @@ export class TuiWorkerRuntime implements IWorkerRuntime {
         capability: ctx.capability,
         nonce: ctx.nonce,
         server: ctx.server,
+        host: ctx.host,
         target: ctx.handle,
         prompt: ctx.prompt,
         outputFilePath: ctx.outputFilePath,
@@ -163,6 +169,7 @@ export class TuiWorkerRuntime implements IWorkerRuntime {
       testFailedMarker: ctx.testFailedMarker,
       signalFilePath,
       outputFilePath: ctx.outputFilePath,
+      host: ctx.host,
     });
     return { markerizedPrompt, signalStream, httpSignalTurn: null };
   }
@@ -179,6 +186,7 @@ export class TuiWorkerRuntime implements IWorkerRuntime {
         capability: FOLLOW_UP_CAPABILITY,
         nonce: ctx.nonce,
         server: ctx.server,
+        host: ctx.host,
         target: ctx.handle,
         prompt: ctx.prompt,
         outputFilePath: ctx.outputFilePath,
@@ -207,6 +215,7 @@ export class TuiWorkerRuntime implements IWorkerRuntime {
       testFailedMarker: ctx.testFailedMarker,
       signalFilePath,
       outputFilePath: ctx.outputFilePath,
+      host: ctx.host,
     }).wrap('');
     const markerizedPrompt = ctx.prompt + completionSignalBlock;
     return { markerizedPrompt, signalStream, httpSignalTurn: null };

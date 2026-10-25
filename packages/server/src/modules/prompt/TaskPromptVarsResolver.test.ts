@@ -118,6 +118,8 @@ function makeResolver(overrides: {
 
   const transportFactory = {
     getTransport: vi.fn(() => ({ exec: vi.fn(), execMux: vi.fn(), openTerminal: vi.fn(), createPaneStream: vi.fn() })),
+    hostProfileFor: vi.fn(() => null),
+    getFileOps: vi.fn(),
     invalidate: vi.fn(),
     ...overrides.transportFactory,
   } as unknown as TransportFactory;

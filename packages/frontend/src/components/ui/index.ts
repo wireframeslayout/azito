@@ -52,7 +52,6 @@ export { Slider } from './Slider';
 export { ColorSwatchInput } from './ColorSwatchInput';
 export { Notice } from './Notice';
 export type { NoticeTone } from './Notice';
-export { BlockedActionButton } from './BlockedActionButton';
 export { Tooltip } from './Tooltip';
 export type { TooltipProps } from './Tooltip';
 export { DocsLink } from './DocsLink';

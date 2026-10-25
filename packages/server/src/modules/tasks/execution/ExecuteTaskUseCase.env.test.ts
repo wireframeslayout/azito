@@ -473,7 +473,7 @@ function buildUseCase(opts: {
     new TaskTempFiles('/tmp', 'linux'),
   );
 
-  return { useCase, primaryWindowWaker, taskRepo, windowRepo, logRepo, tmux, supervisorRegistry, worktreeServiceFactory, transportFactory, unitRepo, projectRepo, projectServerRepo, serverRepo, projectSecretRepo, unitTypeLoader, sidekickLoader, paneEnvService, gitProvider };
+  return { useCase, primaryWindowWaker, sessionStrategyFactory, taskRepo, windowRepo, logRepo, tmux, supervisorRegistry, worktreeServiceFactory, transportFactory, unitRepo, projectRepo, projectServerRepo, serverRepo, projectSecretRepo, unitTypeLoader, sidekickLoader, paneEnvService, gitProvider };
 }
 
 describe('ExecuteTaskUseCase execution-env resolution', () => {
@@ -627,27 +627,6 @@ describe('ExecuteTaskUseCase execution-env resolution', () => {
     // A leftover exit marker from the previous run on this exact target must not
     // suppress `supervised` while the new supervisor isn't registered yet.
     expect(supervisorRegistry.clearExitMarker).toHaveBeenCalledWith('local-server', 'azito:w1');
-  });
-
-  it.each(['followUp', 'resumeStateMachine'] as const)('%s(): a host that cannot run a worker in a pane (Windows, #371) is refused before the task, a window or a pane changes', async (method) => {
-    const unit = makeUnit({ id: 51, workerType: 'claude', workerModel: 'opus' });
-    const task = makeTask({ id: 6, serverName: 'local-server', unitId: 51, tmuxWindow: 'task-6', status: 'review' });
-    const { useCase, taskRepo, tmux, transportFactory, windowRepo } = buildUseCase({
-      task,
-      project: makeProject({ defaultUnitId: null }),
-      units: [unit],
-    });
-    (transportFactory.hostProfileFor as ReturnType<typeof vi.fn>).mockReturnValue({ platform: 'win32', arch: 'x64' });
-
-    const run = method === 'followUp' ? useCase.followUp(51, 6, 'please continue') : useCase.resumeStateMachine(51, 6);
-    await expect(run).rejects.toMatchObject({ code: 'unsupported_os' });
-
-    expect(taskRepo.updateStatus).not.toHaveBeenCalled();
-    expect(taskRepo.update).not.toHaveBeenCalled();
-    expect(tmux.sendKeysToHandle).not.toHaveBeenCalled();
-    expect(tmux.openWindow).not.toHaveBeenCalled();
-    expect(windowRepo.add).not.toHaveBeenCalled();
-    expect(task.status).toBe('review');
   });
 
   it('followUp() rejects and marks the task as failed when runtime.resume() throws (Issue #421 regression)', async () => {
@@ -5152,5 +5131,119 @@ describe('ExecuteTaskUseCase.resumeStateMachine — primary window (Issue #276)'
       gateAlreadyEnforced: true,
       inLockGate: expect.any(Function),
     });
+  });
+});
+
+describe('ExecuteTaskUseCase on a host that starts the worker as the window\'s program (Windows, #371)', () => {
+  const WIN32 = { platform: 'win32', arch: 'x64' };
+  let root: string;
+  let worktreePath: string;
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    root = mkdtempSync(path.join(tmpdir(), 'azito-exec-win-'));
+    worktreePath = path.join(root, '.worktrees', 'task-8');
+    mkdirSync(worktreePath, { recursive: true });
+  });
+
+  afterEach(() => {
+    rmSync(root, { recursive: true, force: true });
+  });
+
+  function build(extra: { projectServer?: Parameters<typeof buildUseCase>[0]['projectServer']; server?: ServerConfig } = {}) {
+    const unit = makeUnit({ id: 80, workerType: 'claude', workerModel: 'opus' });
+    const task = makeTask({ id: 8, serverName: 'local-server', unitId: 80 });
+    const built = buildUseCase({
+      task,
+      project: makeProject({ defaultUnitId: null }),
+      units: [unit],
+      projectServer: extra.projectServer ?? { workingDirectory: root, branch: null, tmuxSession: 'azito' },
+      ...(extra.server ? { server: extra.server } : {}),
+    });
+    (built.transportFactory.hostProfileFor as ReturnType<typeof vi.fn>).mockReturnValue(WIN32);
+    return { ...built, task };
+  }
+
+  it('makes the worktree before the window and opens the window with the worker as its program, in the worktree', async () => {
+    const { useCase, tmux, worktreeServiceFactory, windowRepo } = build();
+    const order: string[] = [];
+    worktreeServiceFactory.create.mockReturnValue({
+      create: vi.fn(async () => { order.push('worktree'); return { path: worktreePath, branch: 'task/8-slug' }; }),
+      remove: vi.fn(async () => {}),
+    });
+    let opened: { program?: { argv: string[]; cwd?: string; cols: number; rows: number } } | undefined;
+    tmux.openWindow.mockImplementation((async (_srv: unknown, ws: string, _name: string, o: typeof opened) => {
+      order.push('window');
+      opened = o;
+      return { ref: { kind: 'tmux' as const, workspace: ws, window: 'w1' }, result: { stdout: '', stderr: '', code: 0 } };
+    }) as never);
+
+    await useCase.execute(80, 8);
+
+    expect(order).toEqual(['worktree', 'window']);
+    expect(opened?.program?.argv[0]).toBe('claude');
+    expect(opened?.program?.argv).toEqual(expect.arrayContaining(['--model', 'opus']));
+    expect(opened?.program).toMatchObject({ cwd: worktreePath, cols: 120, rows: 40 });
+    // The worker is the pane: no `cd` and no launch line is typed into a shell.
+    const typed = tmux.sendKeysToHandle.mock.calls.map((c: unknown[]) => (c[2] as string[])[0]);
+    expect(typed.filter((line) => line.startsWith('cd ') || line.includes('claude'))).toEqual([]);
+    expect(windowRepo.add).toHaveBeenCalledWith(expect.objectContaining({ workerType: 'claude', workingDirectory: worktreePath }));
+  });
+
+  it('a worktree that cannot be made creates no window', async () => {
+    const { useCase, tmux, worktreeServiceFactory, taskRepo } = build();
+    worktreeServiceFactory.create.mockReturnValue({ create: vi.fn(async () => { throw new Error('fatal: no such branch'); }), remove: vi.fn() });
+
+    await expect(useCase.execute(80, 8)).rejects.toThrow(/Worktree creation failed: fatal: no such branch/);
+
+    expect(tmux.openWindow).not.toHaveBeenCalled();
+    expect(taskRepo.update).not.toHaveBeenCalledWith(8, expect.objectContaining({ tmuxWindow: expect.anything() }));
+  });
+
+  it('removes the worktree again when the window cannot be created', async () => {
+    const { useCase, tmux, worktreeServiceFactory, taskRepo } = build();
+    const remove = vi.fn(async () => {});
+    worktreeServiceFactory.create.mockReturnValue({ create: vi.fn(async () => ({ path: worktreePath, branch: 'task/8-slug' })), remove });
+    tmux.openWindow.mockRejectedValue(new Error('the program claude could not be started'));
+
+    await expect(useCase.execute(80, 8)).rejects.toThrow(/Failed to create task window: the program claude could not be started/);
+
+    expect(remove).toHaveBeenCalledWith(root, worktreePath);
+    expect(taskRepo.update).toHaveBeenCalledWith(8, { worktreePath: null, worktreeBranch: null });
+  });
+
+  it('refuses a server that needs the code distribution (closed on Windows, #464) before anything is created', async () => {
+    const { useCase, tmux, worktreeServiceFactory } = build({
+      server: makeServer({ type: 'agent', host: 'win-host', agentPort: 3002, agentToken: 't', hostProfile: { platform: 'win32', arch: 'x64' } as ServerConfig['hostProfile'] }),
+      projectServer: { workingDirectory: root, branch: null, tmuxSession: 'azito', distributeCode: true, distributionRepositoryId: 1 },
+    });
+
+    await expect(useCase.execute(80, 8)).rejects.toMatchObject({ code: 'unsupported_os', message: expect.stringContaining('#464') });
+
+    expect(tmux.openWorkspace).not.toHaveBeenCalled();
+    expect(tmux.openWindow).not.toHaveBeenCalled();
+    expect(worktreeServiceFactory.create).not.toHaveBeenCalled();
+  });
+
+  it('follow-up: a lost window is created again with the worker resumed as its program, without waking a shell window', async () => {
+    const { useCase, tmux, primaryWindowWaker, sessionStrategyFactory, task, worktreeServiceFactory } = build();
+    task.tmuxWindow = null;
+    task.agentSessionId = '7a8b0f9c-1d2e-4f30-8a45-6b7c8d9e0f12';
+    task.worktreePath = worktreePath;
+    sessionStrategyFactory.create.mockReturnValue({ supportsSession: true, buildResumeArgs: (id: string) => ['--resume', id] } as never);
+    worktreeServiceFactory.create.mockReturnValue({ exists: vi.fn(async () => true) });
+    let opened: { program?: { argv: string[]; cwd?: string } } | undefined;
+    tmux.openWindow.mockImplementation((async (_srv: unknown, ws: string, _name: string, o: typeof opened) => {
+      opened = o;
+      return { ref: { kind: 'tmux' as const, workspace: ws, window: 'w1' }, result: { stdout: '', stderr: '', code: 0 } };
+    }) as never);
+
+    await useCase.followUp(80, 8, 'please continue');
+
+    expect(primaryWindowWaker.wake).not.toHaveBeenCalled();
+    expect(opened?.program?.argv.slice(-2)).toEqual(['--resume', '7a8b0f9c-1d2e-4f30-8a45-6b7c8d9e0f12']);
+    expect(opened?.program?.cwd).toBe(worktreePath);
+    const typed = tmux.sendKeysToHandle.mock.calls.map((c: unknown[]) => (c[2] as string[])[0]);
+    expect(typed.filter((line) => line.startsWith('cd ') || line.includes('claude'))).toEqual([]);
   });
 });

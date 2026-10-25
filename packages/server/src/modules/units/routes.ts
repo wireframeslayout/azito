@@ -392,9 +392,6 @@ const unitsRoutes: FastifyPluginCallback<UnitsRouteOptions> = (fastify, opts, do
       const resolvedServerName = resolveTaskServerName(task, projectServerRepo);
       const server = resolvedServerName ? serverRepo.findByName(resolvedServerName) : null;
       if (!server) return reply.status(404).send({ error: 'Server not found' });
-      // Both resuming branches below are fire-and-forget after changing status: refuse a host that cannot run a worker first
-      // (a full rejection without feedback resumes nothing and stays allowed).
-      if (approved || feedback) executeTaskUseCase.assertCanLaunchWorker(server);
 
       // Delegates to failAsyncTaskOperation() (tasks/execution/AppendLog.ts)
       // — the same shared helper approve-execution's failApprovedOperation

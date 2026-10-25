@@ -1,5 +1,5 @@
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
-import { spawn, type ChildProcess } from 'node:child_process';
+import { execFileSync, spawn, type ChildProcess } from 'node:child_process';
 import * as crypto from 'node:crypto';
 import * as fs from 'node:fs';
 import * as net from 'node:net';
@@ -24,7 +24,7 @@ import { daemonCheckScript, parseDaemonCheck, sameProgram } from './misaoWindows
 import { readMisaoBundle } from './MisaoBundle';
 import { writeHubBundle } from './misaoBundleFixture';
 import { MisaoAgentInstaller } from './MisaoAgentInstaller';
-import { readFakeAgentReport, writeFakeAgent } from '../../../shared/misaoFakeAgent';
+import { readFakeAgentReport, readFakeTaskAgentResult, writeFakeAgent, writeFakeTaskAgent } from '../../../shared/misaoFakeAgent';
 
 /**
  * misao on a real Windows, end to end: the hub's installer puts the real `misao.exe` (the pinned release the hub ships; CI fetches
@@ -292,6 +292,58 @@ describe.skipIf(process.platform !== 'win32' || !fs.existsSync(MISAO_CLI))('misa
       expect(report.cwd.toLowerCase()).toBe(work.toLowerCase());
       expect(report).toMatchObject({ args: ['--model', 'claude-opus-4-6[1m]', '--flag'], env: 'from-the-window', cols: 120, rows: 40 });
     }, 90_000);
+
+    // A task's worker on Windows: the window starts in the worktree with the worker as its program, and the worker does what the Windows prompt
+    // envelope says with the real scripts — output through azitoctl.mjs (UTF-8 on stdin), the work branch pushed by push.mjs, the done marker
+    // appended by azitoctl.mjs signal. Both shapes of a Windows agent are run: an npm shim (.cmd, like codex.cmd) and a native binary (.exe, like claude.exe).
+    it.each([['fake-task-cmd', 'cmd'], ['fake-task-exe', 'exe']] as const)('runs a task\'s steps as the worker program %s (.%s): output, push and signal reach the files the hub reads', async (program, shape) => {
+      const fake = writeFakeTaskAgent(tmp);
+      const root = fs.realpathSync.native(fs.mkdtempSync(path.join(tmp, `task-${shape}-`)));
+      const remote = path.join(root, 'remote.git');
+      const work = path.join(root, 'work tree');
+      const gitIn = (cwd: string, args: string[]): string => execFileSync('git', args, { cwd, encoding: 'utf8' });
+      execFileSync('git', ['init', '--bare', remote]);
+      fs.mkdirSync(work);
+      gitIn(work, ['init', '-b', 'master']);
+      gitIn(work, ['config', 'user.email', 'ci@example.com']);
+      gitIn(work, ['config', 'user.name', 'CI']);
+      gitIn(work, ['remote', 'add', 'origin', remote]);
+      fs.writeFileSync(path.join(work, 'README.md'), 'initial\n');
+      gitIn(work, ['add', '-A']);
+      gitIn(work, ['commit', '-m', 'initial']);
+      gitIn(work, ['push', '-u', 'origin', 'master']);
+      gitIn(work, ['checkout', '-b', 'task/7-feature']);
+      fs.writeFileSync(path.join(work, 'feature.txt'), 'change\n');
+      const outputFile = path.join(root, 'azito-output-7-abc.md');
+      const signalFile = path.join(root, 'azito-pipe-7-sig-1.log');
+      const content = '# 計画\n\n- "quoted" $(not run)\n\nAZITO_PHASE_SUMMARY: {"phase":"planning"}\n';
+      const harness = path.resolve(__dirname, '../../../../../../harness');
+      const name = `t${shape}${Math.random().toString(36).slice(2, 6)}`;
+
+      const opened = await driver().openWorkspace(server, `azw-${name}`, {
+        windowName: name,
+        exactName: true,
+        program: { argv: [program], cwd: work, cols: 120, rows: 40 },
+        extraEnv: {
+          PATH: `${shape === 'cmd' ? fake.cmdShimDir : fake.exeDir};${process.env.PATH ?? ''}`,
+          ...(shape === 'exe' ? fake.exeEnv : {}),
+          AZITO_FAKE_NODE: process.execPath,
+          AZITO_FAKE_CTL: path.join(harness, 'bin', 'azitoctl.mjs'),
+          AZITO_FAKE_PUSH: path.join(harness, 'sidekicks', 'pushing-default', 'scripts', 'push.mjs'),
+          AZITO_FAKE_OUTPUT: outputFile,
+          AZITO_FAKE_CONTENT: content,
+          AZITO_FAKE_SIGNAL: signalFile,
+          AZITO_FAKE_MARKER: 'AZITO_DONE_7_abc',
+        },
+      });
+      const pane = (await driver().listPanesByRef(server, opened.ref))[0].handle;
+
+      await vi.waitFor(async () => expect(readFakeTaskAgentResult(await screenOf(pane))).not.toBeNull(), { timeout: 60_000, interval: 500 });
+      expect(readFakeTaskAgentResult(await screenOf(pane))).toEqual({ output: 0, push: 0, signal: 0 });
+      expect(fs.readFileSync(outputFile, 'utf8')).toBe(content);
+      expect(fs.readFileSync(signalFile, 'utf8')).toBe('AZITO_DONE_7_abc\n');
+      expect(gitIn(work, ['ls-remote', '--heads', 'origin', 'task/7-feature']).trim()).toContain(gitIn(work, ['rev-parse', 'HEAD']).trim());
+    }, 120_000);
 
     it('leaves no window behind when the program cannot be found (command not found)', async () => {
       const before = (await driver().listWorkspaces(server)).flatMap((w) => w.windows).length;

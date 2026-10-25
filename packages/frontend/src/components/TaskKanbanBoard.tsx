@@ -2,9 +2,8 @@ import { StatusBadge, StatusDot } from './StatusBadge';
 import { timeAgo } from '../utils/time';
 import { useGlobalFocus } from '../hooks/useGlobalFocus';
 import TaskRefBadges from './TaskRefBadges';
-import { Button, BlockedActionButton } from './ui';
+import { Button } from './ui';
 import { useTranslation } from 'react-i18next';
-import { useHostFeatureBlock } from '../hooks/useHostFeatureBlock';
 
 interface Task {
   id: number;
@@ -82,7 +81,6 @@ export default function TaskKanbanBoard({
   onStop,
 }: TaskKanbanBoardProps) {
   const { isFocusedTask } = useGlobalFocus();
-  const executeBlockReason = useHostFeatureBlock();
   const { t } = useTranslation(['tasks', 'common']);
   const columns = groupTasks(tasks);
 
@@ -207,12 +205,11 @@ export default function TaskKanbanBoard({
                   </div>
                   <div style={{ display: 'flex', gap: 6, marginTop: 8 }}>
                     {task.status === 'open' && (
-                      <BlockedActionButton
+                      <Button
                         size="sm" variant="primary"
-                        blockedReason={executeBlockReason(task.executionServerName, 'taskExecution')}
                         onClick={(e) => { e.stopPropagation(); onExecute(task.id, task.unitId); }}
                         style={{ fontSize: 'var(--font-xs)', padding: '2px 8px' }}
-                      >{t('common:actions.execute')}</BlockedActionButton>
+                      >{t('common:actions.execute')}</Button>
                     )}
                     {task.status === 'in_progress' && (
                       <Button

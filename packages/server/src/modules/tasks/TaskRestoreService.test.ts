@@ -190,6 +190,7 @@ function makeDeps(overrides: Partial<TaskRestoreDeps> = {}): TaskRestoreDeps {
     transportFactory: {
       getFileOps: vi.fn(() => hostFiles), hostProfileFor: vi.fn(() => null), getTransport: vi.fn(() => ({})),
     } as unknown as TaskRestoreDeps['transportFactory'],
+    sessionStrategyFactory: { create: vi.fn(() => ({ supportsSession: false, needsPostLaunchScan: false, buildNewSessionArgs: () => [], buildResumeArgs: () => [] })) } as unknown as TaskRestoreDeps['sessionStrategyFactory'],
     contentExtractor: {
       extractPlan: vi.fn(async () => ({ planMarkdown: null })),
       extractQuestions: vi.fn(async () => ({ questions: [] })),
@@ -1323,17 +1324,42 @@ describe('TaskRestoreService', () => {
     });
   });
 
-  describe('a host that cannot run a worker in a pane (Windows, #371)', () => {
-    it('refuses as unsupported_os before the worktree, the window or any row is touched', async () => {
+  describe('a host that starts the worker as the window\'s program (Windows, #371)', () => {
+    beforeEach(() => {
       (deps.transportFactory.hostProfileFor as ReturnType<typeof vi.fn>).mockReturnValue({ platform: 'win32', arch: 'x64' });
+    });
+
+    it('makes the worktree before the window and opens the window with the worker resumed as its program in the worktree', async () => {
+      const order: string[] = [];
+      const worktreeCreate = vi.fn(async () => { order.push('worktree'); return { path: worktreeDir, branch: 'feat/test-task' }; });
+      (deps.worktreeServiceFactory.create as ReturnType<typeof vi.fn>).mockReturnValue({ create: worktreeCreate, remove: vi.fn(async () => {}) });
+      (deps.sessionStrategyFactory.create as ReturnType<typeof vi.fn>).mockReturnValue({ supportsSession: true, buildResumeArgs: (id: string) => ['--resume', id] });
+      (mockDriver().openWindow as ReturnType<typeof vi.fn>).mockImplementation(async (_srv: unknown, ws: string, _name: string, _o: unknown) => {
+        order.push('window');
+        return { ref: { kind: 'tmux', workspace: ws, window: 'task-1' }, result: { stdout: '', stderr: '', code: 0 } };
+      });
+      const task = makeTask({ serverName: 'test-server', agentSessionId: '7a8b0f9c-1d2e-4f30-8a45-6b7c8d9e0f12' });
+
+      await service.restore(task, log);
+
+      expect(order).toEqual(['worktree', 'window']);
+      const options = (mockDriver().openWindow as ReturnType<typeof vi.fn>).mock.calls[0][3];
+      expect(options.program.argv[0]).toBe('claude');
+      expect(options.program.argv.slice(-2)).toEqual(['--resume', '7a8b0f9c-1d2e-4f30-8a45-6b7c8d9e0f12']);
+      expect(options.program).toMatchObject({ cwd: worktreeDir, cols: 120, rows: 40 });
+      expect(mockDriver().sendKeysToHandle).not.toHaveBeenCalled();
+      expect(deps.windowRepo.add).toHaveBeenCalledWith(expect.objectContaining({ agentSessionId: '7a8b0f9c-1d2e-4f30-8a45-6b7c8d9e0f12', workingDirectory: worktreeDir }));
+    });
+
+    it('removes the worktree again when the window cannot be created', async () => {
+      const remove = vi.fn(async () => {});
+      (deps.worktreeServiceFactory.create as ReturnType<typeof vi.fn>).mockReturnValue({ create: vi.fn(async () => ({ path: worktreeDir, branch: 'feat/test-task' })), remove });
+      (mockDriver().openWindow as ReturnType<typeof vi.fn>).mockRejectedValue(new Error('the program claude could not be started'));
       const task = makeTask({ serverName: 'test-server' });
 
-      await expect(service.restore(task, log)).rejects.toMatchObject({ code: 'unsupported_os' });
+      await expect(service.restore(task, log)).rejects.toThrow(/could not be started/);
 
-      expect(mockDriver().openWindow).not.toHaveBeenCalled();
-      expect(deps.worktreeServiceFactory.create).not.toHaveBeenCalled();
-      expect(deps.taskRepo.update).not.toHaveBeenCalled();
-      expect(deps.taskRepo.updateStatus).not.toHaveBeenCalled();
+      expect(remove).toHaveBeenCalledWith(rootDir, worktreeDir);
     });
   });
 

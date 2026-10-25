@@ -9,6 +9,7 @@ import {
   computeSidekicksHash,
   buildTarball,
   resolveSidekickDir,
+  resolveSidekickDirOnHost,
   REMOTE_SIDEKICKS_BASE,
   PAYLOAD_CHUNK_SIZE,
 } from './SidekickSyncService';
@@ -169,6 +170,28 @@ describe('resolveSidekickDir', () => {
 
   it('returns the remote flat path for an agent server', () => {
     expect(resolveSidekickDir(pkg, { type: 'agent' })).toBe(`${REMOTE_SIDEKICKS_BASE}/azt-implement`);
+  });
+});
+
+describe('resolveSidekickDirOnHost', () => {
+  const pkg = makePackage({ name: 'pushing-default', dir: 'C:\\hub\\harness\\sidekicks\\pushing-default' });
+  const factory = (platform: 'linux' | 'win32' | null, home = '/home/me') => ({
+    hostProfileFor: () => (platform ? { platform, arch: 'x64' } : null),
+    getFileOps: () => ({ realpath: async () => home }),
+  }) as never;
+
+  it('a POSIX host keeps ~ for its shell to expand, a local one its own directory', async () => {
+    expect(await resolveSidekickDirOnHost(pkg, { type: 'agent' }, factory('linux'))).toBe(`${REMOTE_SIDEKICKS_BASE}/pushing-default`);
+    expect(await resolveSidekickDirOnHost(pkg, { type: 'agent' }, factory(null))).toBe(`${REMOTE_SIDEKICKS_BASE}/pushing-default`);
+    expect(await resolveSidekickDirOnHost(pkg, { type: 'local' }, factory('linux'))).toBe(pkg.dir);
+  });
+
+  it("a Windows agent's directory is written out under its home, with forward slashes", async () => {
+    expect(await resolveSidekickDirOnHost(pkg, { type: 'agent' }, factory('win32', 'C:\\Users\\me'))).toBe('C:/Users/me/.azito/sidekicks/pushing-default');
+  });
+
+  it("a Windows hub's own server uses the hub's package directory with forward slashes", async () => {
+    expect(await resolveSidekickDirOnHost(pkg, { type: 'local' }, factory('win32'))).toBe('C:/hub/harness/sidekicks/pushing-default');
   });
 });
 
