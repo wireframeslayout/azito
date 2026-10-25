@@ -126,8 +126,16 @@ public static class AzitoImage {
 /**
  * The version folders under any of `hubRoots` that a running process uses: the process's executable or its command line has
  * `<hubRoot>\<version>\...` in it (the hub's node.exe and azito-hub.cjs, the launcher's run.ps1, an update process). A process of any user
- * counts. A process whose use cannot be ruled out (its image path is unknown even to the least-right query, or it is an
- * interpreter with no readable command line) stops the tidying, whoever it belongs to: reading and running a version needs no write right.
+ * counts when its path or command line can be read and names a version.
+ *
+ * A process whose use cannot be ruled out (its image path is unknown even to the least-right query, or it is an interpreter with no readable
+ * command line) stops the tidying, but ONLY when it is this user's. A user who is not an administrator cannot read the path of smss, csrss,
+ * svchost, MsMpEng or any other account's process, so stopping for those would stop the tidying on every run. What another account's (or
+ * the system's) process holds of a version is found by the two checks that run anyway: a running exe or a loaded DLL is a mapped image, which
+ * `whyAFileIsHeld` finds when it opens every file of the version for writing (a mapped image cannot be opened for writing, whoever maps it);
+ * an open handle or a current directory in the folder makes the isolating `rename` fail. In both cases the version is kept whole. A process
+ * whose owner cannot be read counts as not ours (`GetOwnerSid` fails for it): that may include a process of this very user at a higher
+ * integrity level (an elevated shell of the same account) when this one is not elevated; the same two checks cover it.
  * Its image path is asked again with the least right (`QueryFullProcessImageName`); when that is known and is not a program that runs files it
  * is given (`INTERPRETERS`), the missing command line does not matter (protected system and antivirus components have none). One that is gone by
  * the time it is looked at is not counted. PowerShell prints only version names (ASCII), so a code page cannot garble them.
@@ -140,6 +148,7 @@ export async function findHubVersionsInUse(run: SpecRunner, systemRoot: string, 
     IMAGE_HELPER,
     `$pattern = ${q(pattern)}`,
     `$interpreters = @(${INTERPRETERS.map((n) => q(n)).join(', ')})`,
+    '$me = [Security.Principal.WindowsIdentity]::GetCurrent().User.Value',
     'foreach ($p in @(Get-CimInstance Win32_Process)) {',
     '  $path = $p.ExecutablePath',
     '  $cmd = $p.CommandLine',
@@ -159,8 +168,10 @@ export async function findHubVersionsInUse(run: SpecRunner, systemRoot: string, 
     '  if ($image -and ($interpreters -notcontains [IO.Path]::GetFileName($image).ToLowerInvariant())) { continue }',
     // The kernel's own processes have no image file at all (no name here ends in .exe), so they cannot be running a version.
     "  if (@('System', 'Registry', 'Memory Compression', 'Secure System', 'vmmem', 'vmmemWSL') -contains $p.Name) { continue }",
+    // Only this user's processes can stop the tidying (see above); an owner that cannot be read is not ours.
+    '  $owner = Invoke-CimMethod -InputObject $p -MethodName GetOwnerSid -ErrorAction SilentlyContinue',
+    '  if (-not $owner -or $owner.ReturnValue -ne 0 -or $owner.Sid -ne $me) { continue }',
     "  $name = ($p.Name -replace '[^A-Za-z0-9._-]', '_')",
-    // Whoever the process belongs to: a read-and-run use of a version needs no write right, so the ACL of hub\ does not clear it.
     '  "unknown $($p.ProcessId) $name"',
     '}',
   ].join('\n');

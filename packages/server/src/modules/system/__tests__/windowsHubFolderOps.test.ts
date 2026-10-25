@@ -27,9 +27,37 @@ describe('findHubVersionsInUse', () => {
     await expect(findHubVersionsInUse(run, 'C:\\Windows', ['C:\\h'])).rejects.toThrow(/exit 1.*boom/);
   });
 
-  it('stops everything when a process whose path cannot be read might be using a version (the query succeeded, the path is missing), whoever owns it', async () => {
+  it('stops everything when a process whose path cannot be read might be using a version (the query succeeded, the path is missing)', async () => {
     const run = ok('version v0.1.0\r\nunknown 4242 Foo.exe\r\nunknown 77 Bar.exe\r\n');
     await expect(findHubVersionsInUse(run, 'C:\\Windows', ['C:\\h'])).rejects.toThrow(/process 4242 \(Foo.exe\), 77 \(Bar.exe\).*no old version is removed/);
+  });
+});
+
+describe('findHubVersionsInUse script: whose unreadable processes stop the tidying', () => {
+  const scriptOf = async (): Promise<string> => {
+    const run = vi.fn(async (_spec: CommandSpec) => ({ exitCode: 0, stdout: '', stderr: '', signal: null }));
+    await findHubVersionsInUse(run, 'C:\\Windows', ['C:\\h']);
+    const spec = run.mock.calls[0][0];
+    return Buffer.from(spec.args[spec.args.indexOf('-EncodedCommand') + 1], 'base64').toString('utf16le');
+  };
+
+  it('skips a process that is not this user\'s, or whose owner cannot be read, before it can be reported as unknown', async () => {
+    const script = await scriptOf();
+    expect(script).toContain('$me = [Security.Principal.WindowsIdentity]::GetCurrent().User.Value');
+    const ownerCheck = script.indexOf('-not $owner -or $owner.ReturnValue -ne 0 -or $owner.Sid -ne $me) { continue }');
+    expect(ownerCheck).toBeGreaterThan(-1);
+    expect(script.indexOf('GetOwnerSid')).toBeGreaterThan(-1);
+    expect(ownerCheck).toBeLessThan(script.indexOf('unknown $($p.ProcessId)'));
+  });
+
+  it('still matches a version in the path or command line of any account before the owner is looked at', async () => {
+    const script = await scriptOf();
+    expect(script.indexOf('Matches("$path`n$cmd"')).toBeLessThan(script.indexOf('GetOwnerSid'));
+  });
+
+  it('a process of this user that the script reports as unknown stops everything', async () => {
+    const run = vi.fn(async (_spec: CommandSpec) => ({ exitCode: 0, stdout: 'unknown 4242 Mine.exe\r\n', stderr: '', signal: null }));
+    await expect(findHubVersionsInUse(run, 'C:\\Windows', ['C:\\h'])).rejects.toThrow(/process 4242 \(Mine.exe\)/);
   });
 });
 
