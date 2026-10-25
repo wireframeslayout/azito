@@ -2,7 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { HOST_PROBE_COMMAND } from '../../../shared/os/hostProfile';
 import { HOST_OS_PROBE_COMMAND } from './hostOsProbe';
 import { buildWindowsPreflightCommand } from './windowsPreflight';
-import { AgentInstaller, type AgentMisaoInstaller, type InstallProgress } from './AgentInstaller';
+import { AGENT_PRESENCE_COMMAND, AgentInstaller, type AgentMisaoInstaller, type InstallProgress } from './AgentInstaller';
 import { DEFAULT_WINDOWS_AGENT_OPTIONS } from './windowsAgentConfig';
 
 const VERSION = 'bundlehash1';
@@ -16,21 +16,64 @@ function makeBundler() {
   };
 }
 
+interface HostOptions {
+  tmux?: string;
+  probe?: string;
+  /** An agent was on the host before this install. */
+  hadAgent?: boolean;
+  /** Commands matching this fail (exit 1, "Permission denied"). */
+  failCommand?: RegExp;
+  /** The presence check itself cannot be run (the connection fails). */
+  presenceThrows?: boolean;
+  /** What the single cleanup script answers once the id matches (a line of its protocol; default REMOVED). */
+  cleanupResult?: string;
+  /** The mark of a cleanup is on the host: `<pid>:<alive|ended|unknown>`. */
+  cleanupMark?: string;
+  /** The unit cannot be started, so the agent is started with nohup. */
+  nohup?: boolean;
+  /** What the sighting of the nohup agent prints (default: pid 4242 with a start time). */
+  sighting?: string;
+  /** The install id on the host is replaced by this one before the cleanup (another install took the folder). */
+  takeoverId?: string;
+}
+
+/** What one host keeps: shared by every install that is run against the same fake, like the real thing. */
+interface FakeHost { folderId: string; folderExists: boolean }
+
 /** An SSH client whose host answers the preflight and accepts every other command, recording them all. */
-function makeSsh(opts: { tmux?: string; probe?: string } = {}) {
+function makeSsh(opts: HostOptions = {}, host: FakeHost = { folderId: '', folderExists: false }) {
   const commands: string[] = [];
   const execIsolated = vi.fn(async (_host: string, command: string) => {
     commands.push(command);
+    if (opts.cleanupMark && (command === AGENT_PRESENCE_COMMAND || command.includes('echo AZITO_CLEANUP_IDLE'))) return { stdout: `AZITO_CLEANUP_MARK:${opts.cleanupMark}\n`, stderr: '', code: 0 };
+    if (command.includes('echo AZITO_CLEANUP_IDLE')) return { stdout: 'AZITO_CLEANUP_IDLE\n', stderr: '', code: 0 };
+    if (opts.presenceThrows && command === AGENT_PRESENCE_COMMAND) throw new Error('connection reset');
+    const written = /printf %s (\w+) > ~\/\.azito\/agent\/install\.id/.exec(command);
+    if (written) { host.folderId = written[1]!; host.folderExists = true; }
+    if (opts.failCommand?.test(command)) return { stdout: '', stderr: 'Permission denied', code: 1 };
+    if (opts.nohup && command.includes('systemctl --user daemon-reload && systemctl --user enable')) return { stdout: '', stderr: 'no bus', code: 1 };
+    if (command.includes('ps -o lstart=')) return { stdout: opts.sighting ?? '4242|Sat Oct 25 11:00:00 2026\n', stderr: '', code: 0 };
+    if (command.includes('cleanup() {')) {
+      if (opts.takeoverId) host.folderId = opts.takeoverId;
+      const mine = /"\$id" != '(\w+)'/.exec(command)![1]!;
+      if (host.folderId !== mine) return { stdout: `NOT_OWNER:${host.folderId}\n`, stderr: '', code: 0 };
+      const result = opts.cleanupResult ?? 'REMOVED';
+      if (result === 'REMOVED') { host.folderId = ''; host.folderExists = false; }
+      return { stdout: `${result}\n`, stderr: '', code: 0 };
+    }
     const answers: Record<string, string> = {
       [HOST_OS_PROBE_COMMAND]: 'AZITO_OS:%OS%:0\n',
       'node --version': 'v24.14.0\n',
       [HOST_PROBE_COMMAND]: opts.probe ?? 'linux x64\n',
       'tmux -V': opts.tmux ?? '',
       'tailscale ip -4': '100.64.0.9\n',
+      [AGENT_PRESENCE_COMMAND]: opts.hadAgent || host.folderExists ? 'AZITO_AGENT_PRESENT\n' : 'AZITO_AGENT_ABSENT\n',
     };
     return { stdout: answers[command] ?? '', stderr: '', code: 0 };
   });
-  return { ssh: { execIsolated }, commands };
+  // Names of ~/.ssh/config resolve to a user and an address: the alias `box` is user@host.
+  const resolveHost = (h: string) => (h === 'box' ? { username: 'user', host: 'host', port: 22 } : { username: h.includes('@') ? h.split('@')[0]! : 'user', host: h.replace(/^.*@/, '').replace(/:\d+$/, ''), port: Number(/:(\d+)$/.exec(h)?.[1] ?? 22) });
+  return { ssh: { execIsolated, resolveHost }, commands, host };
 }
 
 describe('AgentInstaller', () => {
@@ -42,8 +85,8 @@ describe('AgentInstaller', () => {
     vi.restoreAllMocks();
   });
 
-  function make(misao?: AgentMisaoInstaller, sshOpts: { tmux?: string; probe?: string } = {}) {
-    const { ssh, commands } = makeSsh(sshOpts);
+  function make(misao?: AgentMisaoInstaller, sshOpts: HostOptions = {}, fakeHost?: FakeHost) {
+    const { ssh, commands } = makeSsh(sshOpts, fakeHost);
     const installer = new AgentInstaller(ssh as never, makeBundler() as never, DEFAULT_WINDOWS_AGENT_OPTIONS, misao);
     // The transfer is the SSH library's business (and needs a real server): everything around it is what is tested here.
     (installer as unknown as { transferAndDeploy: () => Promise<void> }).transferAndDeploy = async () => undefined;
@@ -66,19 +109,216 @@ describe('AgentInstaller', () => {
     expect(steps.find((s) => s.step === 'preflight' && s.status === 'ok')?.message).toContain('no tmux (optional)');
   });
 
-  it('fails as before, asking for tmux, when the host has no tmux and this hub has no misao to install', async () => {
-    const { installer } = make(undefined, { tmux: '' });
-    const result = await installer.install('user@host');
+  const NO_MISAO = undefined;
+  const cleanupScripts = (commands: string[]): string[] => commands.filter((c) => c.includes('cleanup() {'));
+
+  it('fails saying no mux is available, and stops and removes the systemd agent it started, in one script', async () => {
+    const { installer, commands } = make(NO_MISAO, { tmux: '' });
+    const steps: InstallProgress[] = [];
+    const result = await installer.install('user@host', (p) => steps.push(p));
     expect(result.success).toBe(false);
-    expect(result.error).toMatch(/tmux is required/);
+    expect(result.error).toMatch(/^no mux is available on user@host: tmux is not installed and misao could not be installed \(this hub has no misao to install\)\. /);
+    expect(result.error).not.toMatch(/tmux is required/);
+    expect(result.error).toContain('The agent this install started was stopped and removed.');
+    const [script] = cleanupScripts(commands);
+    expect(cleanupScripts(commands)).toHaveLength(1);
+    // The id check, the stop (as a unit, no pid) and the removal are one call.
+    expect(script).toContain("systemctl --user stop azito-agent");
+    expect(script).not.toContain('kill "$p"');
+    expect(script.indexOf('mkdir ~/.azito/agent-cleanup.lock')).toBeLessThan(script.indexOf('"$id" != '));
+    expect(script.indexOf('"$id" != ')).toBeLessThan(script.indexOf('systemctl --user stop'));
+    expect(script.indexOf('systemctl --user stop')).toBeLessThan(script.indexOf('rm -rf ~/.azito/agent ||'));
+    expect(steps.at(-1)).toEqual({ step: 'misao', status: 'error', message: result.error });
   });
 
-  it('fails when the host has no tmux and misao could not be installed on it', async () => {
+  it('fails with the reason misao could not be installed, and removes the agent it started', async () => {
     const misao: AgentMisaoInstaller = { install: vi.fn(async () => { throw new Error('no node-pty'); }) };
-    const { installer } = make(misao, { tmux: '' });
+    const { installer, commands } = make(misao, { tmux: '' });
+    const result = await installer.install('user@host');
+    expect(result.error).toMatch(/^no mux is available on user@host: tmux is not installed and misao could not be installed \(no node-pty\)\. /);
+    expect(cleanupScripts(commands)).toHaveLength(1);
+  });
+
+  it('does not remove anything when the host has tmux (the install is kept)', async () => {
+    const misao: AgentMisaoInstaller = { install: vi.fn(async () => { throw new Error('no node-pty'); }) };
+    const { installer, commands } = make(misao, { tmux: 'tmux 3.4\n' });
+    expect((await installer.install('user@host')).success).toBe(true);
+    expect(cleanupScripts(commands)).toEqual([]);
+  });
+
+  it('does not stop or remove a nohup agent: it is left in place, with its pid, start time and the steps to stop it by hand', async () => {
+    const { installer, commands } = make(NO_MISAO, { tmux: '', nohup: true });
     const result = await installer.install('user@host');
     expect(result.success).toBe(false);
-    expect(result.error).toMatch(/tmux is required.*no node-pty/);
+    expect(result.error).toMatch(/^no mux is available on user@host: /);
+    expect(result.error).toContain('runs as a plain process (nohup), which is not stopped automatically');
+    expect(result.error).toContain('when it started the pid was 4242 and the process started at "Sat Oct 25 11:00:00 2026"');
+    expect(result.error).toContain('$HOME/.azito/agent/current/azito-agent.cjs as an argument');
+    expect(result.error).toContain('then rm -rf ~/.azito/agent');
+    expect(cleanupScripts(commands)).toEqual([]);
+    expect(commands.some((c) => /kill "\$p"|\/proc\//.test(c))).toBe(false);
+  });
+
+  it('says so when the pid of a nohup agent could not be read', async () => {
+    const { installer } = make(NO_MISAO, { tmux: '', nohup: true, sighting: '\n' });
+    const result = await installer.install('user@host');
+    expect(result.error).toContain('its pid could not be read when it started');
+  });
+
+  it.each([['777:alive', 'its pid 777 is alive: a cleanup is still running'], ['777:ended', 'its pid 777 has ended']])('stops before changing anything while the mark of a cleanup is on the host (%s), for install, update and recovery', async (mark, seen) => {
+    const { installer, commands } = make(NO_MISAO, { tmux: '', cleanupMark: mark });
+    const install = await installer.install('user@host');
+    expect(install.success).toBe(false);
+    expect(install.error).toContain('The mark ~/.azito/agent-cleanup.lock of a previous cleanup of the agent on user@host is still there');
+    expect(install.error).toContain(seen);
+    expect(install.error).toContain('kill -0 777');
+    expect(install.error).toContain('rm -rf ~/.azito/agent-cleanup.lock');
+    expect(commands.some((c) => c.includes('systemctl --user enable') || c.includes('printf %s'))).toBe(false);
+
+    const update = await installer.update('user@host', '100.64.0.9', 'tok', null, 'system');
+    expect(update).toMatchObject({ success: false });
+    expect(update.error).toContain('is still there');
+    await expect(installer.recoverAgent('user@host', '100.64.0.9', 'tok', null)).rejects.toThrow(/is still there/);
+    expect(commands.some((c) => c.includes('systemctl --user enable'))).toBe(false);
+  });
+
+  it('asks about the running cleanup in the first Unix command of the install (the presence question), not in a call of its own', async () => {
+    const { installer, commands } = make(NO_MISAO, { tmux: '' });
+    await installer.install('user@host');
+    const presence = commands.indexOf(AGENT_PRESENCE_COMMAND);
+    expect(presence).toBeGreaterThan(-1);
+    expect(AGENT_PRESENCE_COMMAND).toContain('agent-cleanup.lock');
+    expect(AGENT_PRESENCE_COMMAND).toContain('AZITO_AGENT_PRESENT');
+    expect(commands.filter((c) => c.includes('agent-cleanup.lock') && !c.includes('cleanup() {'))).toEqual([AGENT_PRESENCE_COMMAND]);
+  });
+
+  it('reports a cleanup that found the mark taken (BUSY) as not done, and keeps the agent', async () => {
+    const { installer } = make(NO_MISAO, { tmux: '', cleanupResult: 'BUSY' });
+    const result = await installer.install('user@host');
+    expect(result.error).toContain('Nothing was removed: another cleanup holds ~/.azito/agent-cleanup.lock');
+  });
+
+  it('gives the systemd steps when the unit does not stop', async () => {
+    const { installer } = make(NO_MISAO, { tmux: '', cleanupResult: 'NOT_STOPPED:the unit is still active after it was stopped' });
+    const result = await installer.install('user@host');
+    expect(result.error).toContain('the unit is still active after it was stopped');
+    expect(result.error).toContain('systemctl --user is-active azito-agent (it must print inactive)');
+  });
+
+  it('does not touch an agent that was on the host before this install, and says how to remove it by hand (systemd or nohup)', async () => {
+    const { installer, commands } = make(NO_MISAO, { tmux: '', hadAgent: true });
+    const result = await installer.install('user@host');
+    expect(result.error).toMatch(/^no mux is available on user@host: /);
+    expect(result.error).toContain('left running, nothing was removed');
+    expect(result.error).toContain('If it runs as a systemd unit: systemctl --user stop azito-agent');
+    expect(result.error).toContain('If it was started with nohup: The pid file is ~/.azito/agent/agent.pid');
+    expect(cleanupScripts(commands)).toEqual([]);
+  });
+
+  it('removes nothing when the host cannot say whether an agent was there (an answer that fails is "has one")', async () => {
+    const { installer, commands } = make(NO_MISAO, { tmux: '', failCommand: new RegExp(`^${AGENT_PRESENCE_COMMAND.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}$`) });
+    const result = await installer.install('user@host');
+    expect(result.error).toContain('left running, nothing was removed');
+    expect(cleanupScripts(commands)).toEqual([]);
+  });
+
+  it('fails like the other steps, removing nothing, when the presence check cannot run', async () => {
+    const { installer, commands } = make(NO_MISAO, { tmux: '', presenceThrows: true });
+    const steps: InstallProgress[] = [];
+    const result = await installer.install('user@host', (p) => steps.push(p));
+    expect(result.success).toBe(false);
+    expect(result.error).toBe('Could not check the host for an existing agent: connection reset');
+    expect(steps.at(-1)).toEqual({ step: 'transfer', status: 'error', message: result.error });
+    expect(commands.some((c) => c.includes('systemctl --user enable'))).toBe(false);
+  });
+
+  it('removes nothing when another install has taken the folder', async () => {
+    const { installer } = make(NO_MISAO, { tmux: '', takeoverId: 'someoneelsesid' });
+    const result = await installer.install('user@host');
+    expect(result.success).toBe(false);
+    expect(result.error).toContain("Nothing was removed: ~/.azito/agent on user@host does not hold this install's id (another install is using it)");
+  });
+
+  it('runs two installs to one host one after the other: the second starts after the first has finished its cleanup', async () => {
+    const host: FakeHost = { folderId: '', folderExists: false };
+    const { ssh, commands } = makeSsh({ tmux: '' }, host);
+    const installer = new AgentInstaller(ssh as never, makeBundler() as never, DEFAULT_WINDOWS_AGENT_OPTIONS, undefined);
+    (installer as unknown as { transferAndDeploy: () => Promise<void> }).transferAndDeploy = async () => undefined;
+    // Same host under two spellings (as two server names would have it).
+    const [a, b] = await Promise.all([installer.install('user@host'), installer.install('user@HOST:22')]);
+    // Without the lock the second one's presence probe would run before the first's cleanup, and it would be refused as "has an agent".
+    expect(a.error).toContain('stopped and removed');
+    expect(b.error).toContain('stopped and removed');
+    const firstCleanup = commands.findIndex((c) => c.includes('cleanup() {'));
+    const probes = commands.flatMap((c, i) => (c === AGENT_PRESENCE_COMMAND ? [i] : []));
+    expect(probes).toHaveLength(2);
+    expect(probes[1]).toBeGreaterThan(firstCleanup);
+    expect(host.folderExists).toBe(false);
+  });
+
+  it('takes one lock for an SSH alias, an omitted port and an explicit one: they are one host', async () => {
+    const host: FakeHost = { folderId: '', folderExists: false };
+    const { ssh, commands } = makeSsh({ tmux: '' }, host);
+    const installer = new AgentInstaller(ssh as never, makeBundler() as never, DEFAULT_WINDOWS_AGENT_OPTIONS, undefined);
+    (installer as unknown as { transferAndDeploy: () => Promise<void> }).transferAndDeploy = async () => undefined;
+    const [a, b] = await Promise.all([installer.install('box'), installer.install('user@host:22')]);
+    expect(a.error).toContain('stopped and removed');
+    expect(b.error).toContain('stopped and removed');
+    const probes = commands.flatMap((c, i) => (c === AGENT_PRESENCE_COMMAND ? [i] : []));
+    expect(probes[1]).toBeGreaterThan(commands.findIndex((c) => c.includes('cleanup() {')));
+  });
+
+  it('makes a recovery wait for an install of the same host', async () => {
+    const { ssh, commands } = makeSsh({ tmux: 'tmux 3.4\n' });
+    const installer = new AgentInstaller(ssh as never, makeBundler() as never, DEFAULT_WINDOWS_AGENT_OPTIONS, undefined);
+    const gate: { release?: () => void } = {};
+    (installer as unknown as { transferAndDeploy: () => Promise<void> }).transferAndDeploy = () => new Promise<void>((resolve) => { gate.release = resolve; });
+    const install = installer.install('user@host');
+    const recovered = installer.recoverAgent('user@host', '100.64.0.9', 'tok', { platform: 'linux', arch: 'x64' }).then(() => commands.length);
+    await new Promise((r) => setTimeout(r, 50));
+    const before = commands.length;
+    expect(commands.some((c) => c.includes('systemctl --user enable'))).toBe(false);
+    gate.release!();
+    await install;
+    expect(await recovered).toBeGreaterThan(before);
+  });
+
+  it('gives the cleanup script a timeout of its own, longer than the unit\'s stop time', async () => {
+    const { installer } = make(NO_MISAO, { tmux: '' });
+    await installer.install('user@host');
+    const exec = (installer as unknown as { sshClient: { execIsolated: { mock: { calls: unknown[][] } } } }).sshClient.execIsolated;
+    const call = exec.mock.calls.find((c) => String(c[1]).includes('cleanup() {'))!;
+    expect(call[2]).toBeGreaterThanOrEqual(100_000);
+  });
+
+  it('does not make installs to different hosts wait for each other', async () => {
+    const gate: { release?: () => void } = {};
+    const blocked = new Promise<void>((resolve) => { gate.release = resolve; });
+    const { ssh: sshA } = makeSsh({ tmux: '' });
+    const installerA = new AgentInstaller(sshA as never, makeBundler() as never, DEFAULT_WINDOWS_AGENT_OPTIONS, undefined);
+    (installerA as unknown as { transferAndDeploy: () => Promise<void> }).transferAndDeploy = () => blocked;
+    const first = installerA.install('user@one');
+    const second = installerA.install('user@two');
+    // user@two is not held up by user@one, which is stuck in its transfer.
+    (installerA as unknown as { transferAndDeploy: () => Promise<void> }).transferAndDeploy = async () => undefined;
+    expect((await second).error).toContain('stopped and removed');
+    gate.release!();
+    await first;
+  });
+
+  it('reports what is left, and how to remove it, when the folder cannot be removed', async () => {
+    const { installer } = make(NO_MISAO, { tmux: '', cleanupResult: 'NOT_REMOVED:~/.azito/agent' });
+    const result = await installer.install('user@host');
+    expect(result.success).toBe(false);
+    expect(result.error).toContain('was stopped, but not fully removed (could not remove ~/.azito/agent)');
+    expect(result.error).toContain('Remove what is left on user@host by hand: rm -f ~/.config/systemd/user/azito-agent.service; rm -rf ~/.azito/agent');
+  });
+
+  it('reports a cleanup that could not be run at all, or whose end is not known (a timeout), and keeps everything', async () => {
+    const { installer } = make(NO_MISAO, { tmux: '', failCommand: /cleanup\(\) \{/ });
+    const result = await installer.install('user@host');
+    expect(result.error).toContain('could not be checked or removed (Permission denied); it may still be running on user@host, and the removal script may still be running there');
+    expect(result.error).toContain('systemctl --user is-active azito-agent');
   });
 
   it('shows the tmux version when the host has one', async () => {
@@ -236,7 +476,7 @@ describe('AgentInstaller', () => {
         if (command === buildWindowsPreflightCommand()) return { stdout: windowsOutput(over), stderr: '', code: 0 };
         throw new Error(`unexpected command on a Windows host: ${command}`);
       });
-      const installer = new AgentInstaller({ execIsolated } as never, makeBundler() as never, DEFAULT_WINDOWS_AGENT_OPTIONS, okMisao());
+      const installer = new AgentInstaller({ execIsolated, resolveHost: (h: string) => ({ username: 'user', host: h.replace(/^.*@/, '').replace(/:\d+$/, ''), port: 22 }) } as never, makeBundler() as never, DEFAULT_WINDOWS_AGENT_OPTIONS, okMisao());
       return { installer, commands };
     }
 
@@ -266,7 +506,7 @@ describe('AgentInstaller', () => {
     it('fails with a reason, and sends nothing else, when the OS probe answers as none of sh, cmd or PowerShell', async () => {
       const commands: string[] = [];
       const execIsolated = vi.fn(async (_host: string, command: string) => { commands.push(command); return { stdout: 'weird\n', stderr: '', code: 0 }; });
-      const installer = new AgentInstaller({ execIsolated } as never, makeBundler() as never, DEFAULT_WINDOWS_AGENT_OPTIONS, okMisao());
+      const installer = new AgentInstaller({ execIsolated, resolveHost: (h: string) => ({ username: 'user', host: h.replace(/^.*@/, '').replace(/:\d+$/, ''), port: 22 }) } as never, makeBundler() as never, DEFAULT_WINDOWS_AGENT_OPTIONS, okMisao());
       const result = await installer.install('user@host');
       expect(result.success).toBe(false);
       expect(result.error).toMatch(/Could not tell the host's OS/);
