@@ -3,6 +3,7 @@ import crypto from 'crypto';
 import fs from 'fs';
 import path from 'path';
 import { promisify } from 'util';
+import type { CommandResult, CommandSpec } from '../../shared/exec/commandSpec';
 import { runCommandSpec } from '../../shared/exec/runCommandSpec';
 import { directoryContains } from '../../shared/fs/directoryContains';
 import { extractZipSafely } from '../../shared/fs/safeArchive';
@@ -10,7 +11,8 @@ import { readHubPointer, writeHubPointer } from './hubPointer';
 import type { ServiceManager } from './serviceManager';
 import type { PruneReport, UpdateBackend } from './updateBackend';
 import { waitForHealthyVersion } from './updateHealth';
-import { pruneHubVersions, findHubVersionsInUse } from './windowsHubPrune';
+import { assertHubDirOnlyOwnerWritable, findHubVersionsInUse, removeFolderWithRd } from './windowsHubFolderOps';
+import { pruneHubVersions } from './windowsHubPrune';
 import { runOnWindows, type ServiceCommandContext, type WindowsHub } from './windowsHubOperations';
 
 const execFileAsync = promisify(execFile);
@@ -99,11 +101,18 @@ export function createWindowsUpdateBackend(input: WindowsUpdateInput): UpdateBac
       }
     },
 
-    pruneOldVersions: (versions): Promise<PruneReport> => pruneHubVersions({
-      hubDir: input.hubDir,
-      ...versions,
-      versionsInUse: () => findHubVersionsInUse((spec) => runCommandSpec(spec, input.hub.runHost), input.hub.systemRoot, input.hub.hubRoots),
-    }),
+    async pruneOldVersions(versions): Promise<PruneReport> {
+      const run = (spec: CommandSpec): Promise<CommandResult> => runCommandSpec(spec, input.hub.runHost);
+      const { systemRoot, hubRoots } = input.hub;
+      // Only when nobody but the owner can change hub\: then nothing can be swapped for a link while the tidying works.
+      await assertHubDirOnlyOwnerWritable(run, systemRoot, input.hubDir);
+      return pruneHubVersions({
+        hubDir: input.hubDir,
+        ...versions,
+        versionsInUse: () => findHubVersionsInUse(run, systemRoot, hubRoots),
+        removeIsolated: (name) => removeFolderWithRd(run, systemRoot, input.hubDir, name, fs.existsSync),
+      });
+    },
 
     removeInstallDir: (installDir) => fs.rmSync(installDir, { recursive: true, force: true, maxRetries: 5, retryDelay: 300 }),
   };

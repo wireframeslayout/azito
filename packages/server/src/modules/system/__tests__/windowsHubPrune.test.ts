@@ -2,8 +2,7 @@ import fs from 'fs';
 import os from 'os';
 import path from 'path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import type { CommandSpec } from '../../../shared/exec/commandSpec';
-import { classifyHubFolders, findHubVersionsInUse, pruneHubVersions } from '../windowsHubPrune';
+import { classifyHubFolders, pruneHubVersions } from '../windowsHubPrune';
 
 const noneInUse = async (): Promise<ReadonlySet<string>> => new Set();
 
@@ -37,27 +36,6 @@ describe('classifyHubFolders (what stays and what goes)', () => {
   });
 });
 
-describe('findHubVersionsInUse', () => {
-  it('asks PowerShell for the versions under every spelling of the hub folder and reads only well-formed version names back', async () => {
-    let spec: CommandSpec | undefined;
-    const run = vi.fn(async (s: CommandSpec) => {
-      spec = s;
-      return { exitCode: 0, stdout: 'version v0.1.0\r\nversion v0.1.0\r\nversion ..\r\nnoise\r\nversion v0.2.0-rc.1\r\n', stderr: '', signal: null };
-    });
-    const found = await findHubVersionsInUse(run, 'C:\\Windows', ['C:\\Users\\a b\\.azito\\hub', 'D:\\real\\hub\\']);
-    expect([...found].sort()).toEqual(['v0.1.0', 'v0.2.0-rc.1']);
-    expect(spec?.file.toLowerCase()).toContain('powershell.exe');
-    const script = Buffer.from(spec!.args[spec!.args.indexOf('-EncodedCommand') + 1], 'base64').toString('utf16le');
-    expect(script).toContain("'C:\\Users\\a b\\.azito\\hub\\'");
-    expect(script).toContain("'D:\\real\\hub\\'");
-  });
-
-  it('throws when PowerShell fails, so that nothing is removed without knowing', async () => {
-    const run = vi.fn(async () => ({ exitCode: 1, stdout: '', stderr: 'boom', signal: null }));
-    await expect(findHubVersionsInUse(run, 'C:\\Windows', ['C:\\h'])).rejects.toThrow(/exit 1.*boom/);
-  });
-});
-
 describe('pruneHubVersions', () => {
   let root: string;
   let hub: string;
@@ -71,9 +49,12 @@ describe('pruneHubVersions', () => {
     }
     return dir;
   };
-  const prune = (current = 'v0.4.0', previous = 'v0.3.0', versionsInUse = noneInUse) => pruneHubVersions({ hubDir: hub, current, previous, versionsInUse });
+  const removeByDeleting = async (name: string): Promise<void> => { fs.rmSync(path.join(hub, name), { recursive: true }); };
+  const removeIsolated = vi.fn(removeByDeleting);
+  const prune = (current = 'v0.4.0', previous = 'v0.3.0', versionsInUse = noneInUse) => pruneHubVersions({ hubDir: hub, current, previous, versionsInUse, removeIsolated });
 
   beforeEach(() => {
+    removeIsolated.mockReset().mockImplementation(removeByDeleting);
     root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'azito-prune-')));
     hub = path.join(root, 'hub');
     outside = path.join(root, 'outside');
@@ -130,15 +111,69 @@ describe('pruneHubVersions', () => {
     expect(fs.readFileSync(path.join(outside, 'precious.txt'), 'utf-8')).toBe('keep me');
   });
 
-  it('removes a link inside a removed version folder as a link: what it points at is untouched', async () => {
-    const dir = folder('v0.1.0');
-    fs.symlinkSync(outside, path.join(dir, 'sub', 'linked-dir'), 'junction');
-    fs.symlinkSync(path.join(outside, 'precious.txt'), path.join(dir, 'linked-file.txt'), 'file');
+  it('sets a folder aside as .prune-<tag>-<random> before it is removed, and removes only that', async () => {
+    folder('v0.1.0');
+    const seen: string[] = [];
+    removeIsolated.mockImplementation(async (name: string) => {
+      seen.push(name);
+      expect(fs.existsSync(path.join(hub, 'v0.1.0'))).toBe(false);
+      fs.rmSync(path.join(hub, name), { recursive: true });
+    });
+    expect(await prune()).toEqual({ removed: ['v0.1.0'], failed: [], skipped: [] });
+    expect(seen).toHaveLength(1);
+    expect(seen[0]).toMatch(/^\.prune-v0\.1\.0-[0-9a-f]{8}$/);
+  });
+
+  it('keeps what could not be removed under its .prune name, reports it, and removes it in the next round', async () => {
+    folder('v0.1.0');
+    removeIsolated.mockRejectedValueOnce(new Error('rd could not remove (exit 1)'));
+    const first = await prune();
+    expect(first.removed).toEqual([]);
+    expect(first.failed).toEqual([{ name: 'v0.1.0', reason: expect.stringMatching(/rd could not remove.*left as \.prune-v0\.1\.0-[0-9a-f]{8}; the next update removes it/) }]);
+    expect(fs.readdirSync(hub)).toHaveLength(1);
+    const second = await prune();
+    expect(second.removed).toHaveLength(1);
+    expect(fs.readdirSync(hub)).toEqual([]);
+  });
+
+  it('a folder that cannot be set aside stays where it was, and is reported', async () => {
+    folder('v0.1.0');
+    const rename = vi.spyOn(fs, 'renameSync').mockImplementation(() => { throw Object.assign(new Error('access denied'), { code: 'EACCES' }); });
+    try {
+      const report = await prune();
+      expect(report.failed).toEqual([{ name: 'v0.1.0', reason: expect.stringMatching(/could not be set aside.*EACCES/) }]);
+    } finally {
+      rename.mockRestore();
+    }
+    expect(removeIsolated).not.toHaveBeenCalled();
+    expect(fs.existsSync(path.join(hub, 'v0.1.0', 'azito-hub.cjs'))).toBe(true);
+  });
+
+  it('a link left as .prune-* is not ours to remove, and a real one is picked up', async () => {
+    fs.symlinkSync(outside, path.join(hub, '.prune-v0.1.0-0123abcd'), 'junction');
+    folder('.prune-v0.2.0-4567cdef');
     const report = await prune();
-    expect(report).toEqual({ removed: ['v0.1.0'], failed: [], skipped: [] });
-    expect(fs.existsSync(dir)).toBe(false);
+    expect(report.removed).toEqual(['.prune-v0.2.0-4567cdef']);
+    expect(report.skipped.map((s) => s.name)).toEqual(['.prune-v0.1.0-0123abcd']);
+    expect(removeIsolated).toHaveBeenCalledTimes(1);
     expect(fs.readFileSync(path.join(outside, 'precious.txt'), 'utf-8')).toBe('keep me');
-    expect(fs.readdirSync(outside)).toEqual(['precious.txt']);
+  });
+
+  it('one entry that cannot be examined does not stop the others', async () => {
+    folder('v0.1.0');
+    folder('v0.2.0');
+    const real = fs.realpathSync.native;
+    const spy = vi.spyOn(fs.realpathSync, 'native').mockImplementation(((p: fs.PathLike, o?: unknown) => {
+      if (String(p).endsWith('v0.1.0')) throw Object.assign(new Error('denied'), { code: 'EACCES' });
+      return (real as (p: fs.PathLike, o?: unknown) => string)(p, o);
+    }) as typeof fs.realpathSync.native);
+    try {
+      const report = await prune();
+      expect(report.removed).toEqual(['v0.2.0']);
+      expect(report.skipped).toEqual([{ name: 'v0.1.0', reason: expect.stringMatching(/could not be examined.*EACCES/) }]);
+    } finally {
+      spy.mockRestore();
+    }
   });
 
   it('leaves a file named like a version alone', async () => {
