@@ -248,4 +248,45 @@ describe('runUpdateSteps (the part of update-run that is the same on every OS)',
     expect(state).toMatchObject({ status: 'failed', step: 'restart' });
     expect(b.rollback).toHaveBeenCalledWith('v1.0.0', true);
   });
+
+  describe('tidying the old versions', () => {
+    it('is asked for after a successful update, with the new version and the one before, and what it removed is logged', async () => {
+      const prune = vi.fn(async () => ({ removed: ['v0.9.0'], failed: [], skipped: [{ name: 'v0.8.0', reason: 'it is a link' }] }));
+      await run(backend({ pruneOldVersions: prune }));
+      expect(prune).toHaveBeenCalledWith({ current: 'v1.1.0', previous: 'v1.0.0' });
+      expect(state.status).toBe('success');
+      expect(state.note).toBeUndefined();
+      expect(stateManager.readLog().join('\n')).toMatch(/Removed old versions: v0\.9\.0[\s\S]*Left v0\.8\.0 alone: it is a link/);
+    });
+
+    it('what cannot be removed goes to the log and the note, and the update stays a success', async () => {
+      const prune = vi.fn(async () => ({ removed: [], failed: [{ name: 'v0.9.0', reason: 'EBUSY: resource busy' }], skipped: [] }));
+      await run(backend({ pruneOldVersions: prune }));
+      expect(state.status).toBe('success');
+      expect(state.note).toMatch(/next update tries again.*v0\.9\.0 \(EBUSY: resource busy\)/);
+      expect(stateManager.readLog().join('\n')).toMatch(/Could not remove v0\.9\.0: EBUSY/);
+      expect(stateManager.read()?.note).toBe(state.note);
+    });
+
+    it('a tidying that throws does not fail the update, and says so', async () => {
+      await run(backend({ pruneOldVersions: vi.fn(async () => { throw new Error('cannot list processes'); }) }));
+      expect(state.status).toBe('success');
+      expect(state.note).toMatch(/Could not tidy the old versions: cannot list processes/);
+    });
+
+    it('is not asked for after a rollback', async () => {
+      vi.mocked(waitForHealthyVersion).mockRejectedValueOnce(new Error('Health check timed out'));
+      const prune = vi.fn();
+      await run(backend({ pruneOldVersions: prune }));
+      expect(state.status).toBe('failed');
+      expect(prune).not.toHaveBeenCalled();
+    });
+
+    it('is not asked for after a failure before the switch', async () => {
+      sumsText = `${'0'.repeat(64)}  azito-hub-v1.1.0-win32-x64.zip\n`;
+      const prune = vi.fn();
+      await run(backend({ pruneOldVersions: prune }));
+      expect(prune).not.toHaveBeenCalled();
+    });
+  });
 });
