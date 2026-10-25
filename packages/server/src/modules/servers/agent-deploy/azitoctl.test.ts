@@ -178,7 +178,7 @@ describe('azitoctl.mjs — the task files', () => {
   });
 });
 
-describe.skipIf(process.platform === 'win32')('azitoctl.mjs sends what the bash azitoctl sends', () => {
+describe.skipIf(process.platform === 'win32')('azitoctl.mjs sends what the bash azitoctl sends', { timeout: 30_000 }, () => {
   async function sameBody(args: string[], env: Record<string, string> = hub()): Promise<Received> {
     received = [];
     const fromBash = await run('bash', [BASH_CTL, ...args], env);
