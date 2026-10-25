@@ -19,6 +19,7 @@ import { AgentUnreachableError } from '../../servers/transport/AgentUnreachableE
 import { HostProfileError } from '../../../shared/os/hostProfile';
 import { muxWindowTarget } from '../muxWindowTarget';
 import { serverSupportsMux } from '../../servers/muxKinds';
+import { createSessionBody, createSessionWindowBody, createMuxWindowBody, createWorkspaceBody, parseStrictBody } from './createBodies';
 
 /** Generic route failure -> 500; an unreachable agent is rethrown so the app error handler answers 503. */
 function replyRouteError(reply: FastifyReply, err: unknown): FastifyReply {
@@ -388,7 +389,9 @@ const sessionsRoutes: FastifyPluginCallback<SessionsRouteOptions> = (fastify, op
   fastify.post<{ Params: { name: string } }>(
     '/api/servers/:name/sessions',
     async (request, reply) => {
-      const { name, command, windowName: reqWindowName, force } = request.body as { name?: string; command?: string; windowName?: string; force?: boolean };
+      const parsedBody = parseStrictBody(createSessionBody, request.body);
+      if (!parsedBody.ok) return reply.status(400).send(parsedBody.body);
+      const { name, command, windowName: reqWindowName, force } = parsedBody.data;
       if (!name) return reply.status(400).send({ error: 'Session name required' });
       // Issue #29 review, Important finding 2: server fetch, the resource
       // check, and the tmux mutation now run in ONE span inside the
@@ -433,7 +436,9 @@ const sessionsRoutes: FastifyPluginCallback<SessionsRouteOptions> = (fastify, op
   fastify.post<{ Params: { name: string; session: string } }>(
     '/api/servers/:name/sessions/:session/windows',
     async (request, reply) => {
-      const { name: reqName, force } = (request.body as { name?: string; force?: boolean } | null) || {};
+      const parsedBody = parseStrictBody(createSessionWindowBody, request.body);
+      if (!parsedBody.ok) return reply.status(400).send(parsedBody.body);
+      const { name: reqName, force } = parsedBody.data;
       // Issue #29 review, Important finding 2: see the identical comment on
       // POST /api/servers/:name/sessions above — the server fetch, the
       // resource check, and the tmux mutation all now run in ONE span
@@ -1151,7 +1156,9 @@ const sessionsRoutes: FastifyPluginCallback<SessionsRouteOptions> = (fastify, op
   fastify.post<{ Params: { name: string } }>(
     '/api/servers/:name/mux/workspaces',
     async (request, reply) => {
-      const { name, windowName, force, kind: kindParam, launch: launchParam } = request.body as { name?: string; windowName?: string; force?: boolean; kind?: unknown; launch?: unknown };
+      const parsedBody = parseStrictBody(createWorkspaceBody, request.body);
+      if (!parsedBody.ok) return reply.status(400).send(parsedBody.body);
+      const { name, windowName, force, kind: kindParam, launch: launchParam } = parsedBody.data;
       if (!name) return reply.status(400).send({ error: 'Workspace name required' });
       const launch = parseNewWindowLaunch(launchParam);
       if (launch === null) return reply.status(400).send({ error: 'launch must be { command: string, workerType?: string, workingDirectory?: string }' });
@@ -1190,7 +1197,9 @@ const sessionsRoutes: FastifyPluginCallback<SessionsRouteOptions> = (fastify, op
   fastify.post<{ Params: { name: string; workspace: string } }>(
     '/api/servers/:name/mux/workspaces/:workspace/windows',
     async (request, reply) => {
-      const { name, force, kind: kindParam, launch: launchParam } = (request.body as { name?: string; force?: boolean; kind?: unknown; launch?: unknown } | null) || {};
+      const parsedBody = parseStrictBody(createMuxWindowBody, request.body);
+      if (!parsedBody.ok) return reply.status(400).send(parsedBody.body);
+      const { name, force, kind: kindParam, launch: launchParam } = parsedBody.data;
       const launch = parseNewWindowLaunch(launchParam);
       if (launch === null) return reply.status(400).send({ error: 'launch must be { command: string, workerType?: string, workingDirectory?: string }' });
       return serverIsolationMutex.withLock(request.params.name, async () => {

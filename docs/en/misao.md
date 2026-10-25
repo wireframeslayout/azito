@@ -80,6 +80,7 @@ choose tmux under "Default terminal" in the same dialog.
   mux's sessions are still returned, and the stopped mux's windows are not treated as deleted (their tabs stay open
   and activity detection announces no completion). When neither can be listed the request fails.
 - Workspace operations such as `POST /api/servers/:name/mux/workspaces` accept `kind` (default: the server's default).
+- The create bodies (`POST /api/servers/:name/mux/workspaces` takes `name`, `windowName`, `force`, `kind`, `launch`; `.../mux/workspaces/:workspace/windows` takes `name`, `force`, `kind`, `launch`; the tmux-only `POST /sessions` and `POST /sessions/:session/windows` likewise) are strict: a field they do not take is a 400 `{ error: 'unknown_fields', unknown: [...], accepted: [...] }` instead of being ignored (#501). Note that the window's name is `windowName` on the workspace route and `name` on the window route.
 - A misao window's `tmux_target` is stored as `<workspace>:<window id>` (migration 078 converts existing rows).
 
 The API takes `defaultMux` (`"misao"` / `"tmux"`) and `muxRuntime`

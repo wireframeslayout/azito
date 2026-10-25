@@ -80,6 +80,7 @@ misao status
   もう一方の方式のセッションは返り、止まっている方式のウィンドウは「削除された」扱いになりません
   （画面のタブは閉じられず、稼働検知も完了を出しません）。両方とも一覧できないときはエラーになります。
 - `POST /api/servers/:name/mux/workspaces` などのワークスペース操作は `kind` を受け付けます（省略時は既定の方式）。
+- 作成の body（`POST /api/servers/:name/mux/workspaces` は `name` / `windowName` / `force` / `kind` / `launch`、`.../mux/workspaces/:workspace/windows` は `name` / `force` / `kind` / `launch`。tmux 専用の `POST /sessions` と `POST /sessions/:session/windows` も同様）は厳格で、受け付けない項目は無視されず 400 `{ error: 'unknown_fields', unknown: [...], accepted: [...] }` になります（#501）。窓の名前の項目は、ワークスペースの route では `windowName`、窓の route では `name` です。
 - misao のウィンドウの `tmux_target` は `<workspace>:<window id>` の形で保存されます（migration 078 で既存の行も変換）。
 
 API では `PUT /api/servers/:name` の `defaultMux`（`"misao"` / `"tmux"`。エージェントサーバーでも、misao が導入済みで接続できれば使えます）と `muxRuntime`（`"system"` / `"managed"`、tmux の実行ファイル）を別々に指定します。
