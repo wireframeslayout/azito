@@ -96,13 +96,42 @@ function rootPattern(root: string): string {
   return `${root.split(/[\\/]+/).filter((part) => part !== '').map(escape).join('[\\\\/]+')}[\\\\/]+`;
 }
 
+/** Programs that run a file they are given (so the file may be in a version folder): their command line must be known. */
+const INTERPRETERS = ['node.exe', 'powershell.exe', 'pwsh.exe', 'cmd.exe', 'wscript.exe', 'cscript.exe', 'mshta.exe', 'python.exe'];
+
+/** `QueryFullProcessImageName` with the least right, compiled in the PowerShell session (nothing is installed). */
+const IMAGE_HELPER = `Add-Type -TypeDefinition @'
+using System;
+using System.Text;
+using System.Runtime.InteropServices;
+public static class AzitoImage {
+  [DllImport("kernel32.dll", SetLastError = true)]
+  static extern IntPtr OpenProcess(uint access, bool inherit, uint pid);
+  [DllImport("kernel32.dll", SetLastError = true, CharSet = CharSet.Unicode)]
+  static extern bool QueryFullProcessImageNameW(IntPtr process, uint flags, StringBuilder name, ref uint size);
+  [DllImport("kernel32.dll")]
+  static extern bool CloseHandle(IntPtr handle);
+  public static string PathOf(uint pid) {
+    IntPtr h = OpenProcess(0x1000, false, pid);
+    if (h == IntPtr.Zero) return null;
+    try {
+      var name = new StringBuilder(32768);
+      uint size = (uint)name.Capacity;
+      return QueryFullProcessImageNameW(h, 0, name, ref size) ? name.ToString() : null;
+    } finally { CloseHandle(h); }
+  }
+}
+'@`;
+
 /**
  * The version folders under any of `hubRoots` that a running process uses: the process's executable or its command line has
  * `<hubRoot>\<version>\...` in it (the hub's node.exe and azito-hub.cjs, the launcher's run.ps1, an update process). A process of any user
  * counts. A process whose executable or command line cannot be read and that is this user's (or whose owner cannot be told) could be using
  * a version without showing it, so it stops the tidying; the same process of another account is not counted: it cannot write in `hub\`
  * (see {@link assertHubDirOnlyOwnerWritable}), and if it did hold a file of an old version, that file's removal fails and is reported.
- * One that is gone by the time it is looked at is not counted. PowerShell prints only version names (ASCII), so a code page cannot garble them.
+ * Its image path is asked again with the least right (`QueryFullProcessImageName`); when that is known and is not a program that runs files it
+ * is given (`INTERPRETERS`), the missing command line does not matter (protected system and antivirus components have none). One that is gone by
+ * the time it is looked at is not counted. PowerShell prints only version names (ASCII), so a code page cannot garble them.
  */
 export async function findHubVersionsInUse(run: SpecRunner, systemRoot: string, hubRoots: readonly string[]): Promise<Set<string>> {
   const q = powershellDialect.quote;
@@ -110,7 +139,9 @@ export async function findHubVersionsInUse(run: SpecRunner, systemRoot: string, 
   const script = [
     "$ProgressPreference = 'SilentlyContinue'",
     '$me = [Security.Principal.WindowsIdentity]::GetCurrent().User.Value',
+    IMAGE_HELPER,
     `$pattern = ${q(pattern)}`,
+    `$interpreters = @(${INTERPRETERS.map((n) => q(n)).join(', ')})`,
     'foreach ($p in @(Get-CimInstance Win32_Process)) {',
     '  $path = $p.ExecutablePath',
     '  $cmd = $p.CommandLine',
@@ -119,6 +150,15 @@ export async function findHubVersionsInUse(run: SpecRunner, systemRoot: string, 
     '  if ($hit -or ($path -and $cmd) -or $p.ProcessId -eq 0 -or $p.ProcessId -eq 4) { continue }',
     '  $live = Get-Process -Id $p.ProcessId -ErrorAction SilentlyContinue',
     '  if (-not $live) { continue }',
+    // The image path again, by the call that needs the least right (PROCESS_QUERY_LIMITED_INFORMATION): it works for many processes WMI gives no path for.
+    '  $image = $path',
+    '  if (-not $image) {',
+    '    $image = [AzitoImage]::PathOf([uint32]$p.ProcessId)',
+    '    foreach ($m in [regex]::Matches("$image", $pattern, [Text.RegularExpressions.RegexOptions]::IgnoreCase)) { "version $($m.Groups[1].Value)"; $hit = $true }',
+    '  }',
+    '  if ($hit) { continue }',
+    // A program that runs files it is given needs its command line to be known; any other program whose image is outside the hub folders does not use a version.
+    '  if ($image -and ($interpreters -notcontains [IO.Path]::GetFileName($image).ToLowerInvariant())) { continue }',
     "  $name = ($p.Name -replace '[^A-Za-z0-9._-]', '_')",
     '  try { $r = Invoke-CimMethod -InputObject $p -MethodName GetOwnerSid -ErrorAction Stop } catch { $r = $null }',
     '  if ($null -eq $r -or $r.ReturnValue -ne 0 -or -not ($r.Sid -is [string]) -or $r.Sid -eq \'\') { "unknown $($p.ProcessId) $name-owner-unreadable"; continue }',
