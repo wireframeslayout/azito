@@ -8,12 +8,17 @@ const t = ((key: string, opts?: Record<string, unknown>) => `${key}${opts ? JSON
 describe('hostFeatureBlockReason', () => {
   it('is null on Linux, macOS and an unrecorded host', () => {
     expect(hostFeatureBlockReason({ platform: 'linux' }, 'taskExecution', t)).toBeNull();
-    expect(hostFeatureBlockReason({ platform: 'darwin' }, 'harness', t)).toBeNull();
-    expect(hostFeatureBlockReason(null, 'harness', t)).toBeNull();
+    expect(hostFeatureBlockReason({ platform: 'darwin' }, 'isolation', t)).toBeNull();
+    expect(hostFeatureBlockReason(null, 'browserRuntime', t)).toBeNull();
   });
 
   it('says the feature is pending, with its issue, on Windows', () => {
     expect(hostFeatureBlockReason({ platform: 'win32' }, 'taskExecution', t)).toBe('common:hostFeature.windowsPending{"issue":371}');
+  });
+
+  it('says isolation is deferred, not planned for v0.12.x, on Windows', () => {
+    expect(hostFeatureBlockReason({ platform: 'win32' }, 'isolation', t)).toBe('common:hostFeature.windowsDeferred{"issue":464}');
+    expect(hostFeatureBlockReason({ platform: 'linux' }, 'isolation', t)).toBeNull();
   });
 
   it('says tmux is not there at all, not that it is coming', () => {
@@ -36,7 +41,7 @@ describe('git_not_found answers', () => {
 
 describe('unsupported_os answers', () => {
   it('recognises the hub answer and keeps its reason', () => {
-    const body = { error: 'installing the harness (setup.sh) is a POSIX shell script', code: 'unsupported_os' };
+    const body = { error: 'installing the browser runtime is a POSIX shell script', code: 'unsupported_os' };
     expect(isUnsupportedOsAnswer(body)).toBe(true);
     expect(describeUnsupportedOs(body, t)).toContain('POSIX shell script');
   });

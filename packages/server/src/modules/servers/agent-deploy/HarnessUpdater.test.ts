@@ -1,7 +1,8 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { HarnessUpdater, computeHarnessHash } from './HarnessUpdater';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
+import { HarnessUpdater, computeHarnessHash, parseAzitoUrl } from './HarnessUpdater';
 import type { ServerConfig } from '../Server';
 import type { HarnessInstallOptions, HarnessInstallResult } from './HarnessInstaller';
+import { LocalFileOps, localFileOpsHost } from '../../../shared/fs/LocalFileOps';
 import * as fs from 'fs';
 import * as path from 'path';
 import * as os from 'os';
@@ -25,25 +26,20 @@ function makeServer(overrides: Partial<ServerConfig> = {}): ServerConfig {
   };
 }
 
-function makeMocks() {
+const OK: HarnessInstallResult = { success: true, steps: [] };
+
+function makeMocks(home: string) {
   const harnessInstaller = {
-    install: vi.fn(async (_host: string, _opts: HarnessInstallOptions): Promise<HarnessInstallResult> => ({ success: true, steps: [] })),
-    installLocal: vi.fn(async (_opts: HarnessInstallOptions): Promise<HarnessInstallResult> => ({ success: true, steps: [] })),
+    install: vi.fn(async (_host: string, _opts: HarnessInstallOptions): Promise<HarnessInstallResult> => OK),
+    installOnAgent: vi.fn(async (_transport: unknown, _opts: HarnessInstallOptions): Promise<HarnessInstallResult> => OK),
   };
-  const sshClient = {
-    execIsolated: vi.fn(async () => ({ stdout: '', stderr: '', code: 0 })),
-    resolveHost: vi.fn((h: string) => ({ host: h, port: 22, username: 'user' })),
-    buildConnectOpts: vi.fn(),
-  };
+  // The agent's own file operations: the real ones, over a temporary home directory.
+  const files = new LocalFileOps(localFileOpsHost({ platform: process.platform === 'win32' ? 'win32' : 'linux', homeDir: home }));
+  const transport = { files: () => files };
+  const transportFactory = { getAgentTransport: vi.fn((_server: ServerConfig) => transport) };
   const serverRepo = {
     findAll: vi.fn((): ServerConfig[] => []),
     findByName: vi.fn((): ServerConfig | undefined => undefined),
-    create: vi.fn(),
-    update: vi.fn(),
-    updateAgentVersion: vi.fn(),
-    updateFingerprint: vi.fn(),
-    clearFingerprint: vi.fn(),
-    delete: vi.fn(),
   };
   const mutex = {
     withLock: vi.fn(async (_key: string, fn: () => Promise<unknown>) => fn()),
@@ -52,23 +48,37 @@ function makeMocks() {
     info: vi.fn(),
     warn: vi.fn(),
   };
-  return { harnessInstaller, sshClient, serverRepo, mutex, logger };
+  return { harnessInstaller, transport, transportFactory, serverRepo, mutex, logger };
 }
 
 const OPTIONS = { webhookToken: 'wh-tok', uiToken: 'ui-tok', harnessPrefix: 'dev' };
+const WIN32 = { platform: 'win32' as const, arch: 'x64' as const };
 
 describe('HarnessUpdater', () => {
+  let home: string;
   let mocks: ReturnType<typeof makeMocks>;
   let updater: HarnessUpdater;
 
+  /** What a harness install leaves on the agent: the env file with the hub URL, and the VERSION of the copy. */
+  function installedHarness(envText: string | null, version: string | null): void {
+    fs.mkdirSync(path.join(home, '.azito', 'harness-dev'), { recursive: true });
+    if (envText !== null) fs.writeFileSync(path.join(home, '.azito', 'azitoctl-dev.env'), envText);
+    if (version !== null) fs.writeFileSync(path.join(home, '.azito', 'harness-dev', 'VERSION'), version);
+  }
+
   beforeEach(() => {
-    mocks = makeMocks();
+    home = fs.mkdtempSync(path.join(os.tmpdir(), 'harness-updater-'));
+    mocks = makeMocks(home);
     updater = new HarnessUpdater(
-      mocks.harnessInstaller as any, mocks.sshClient as any,
+      mocks.harnessInstaller as any, mocks.transportFactory as any,
       mocks.serverRepo as any, OPTIONS, mocks.mutex as any, mocks.logger,
     );
     // Stub getHarnessHash to avoid filesystem dependency
     vi.spyOn(updater, 'getHarnessHash').mockReturnValue('abc123deadbeef00');
+  });
+
+  afterEach(() => {
+    fs.rmSync(home, { recursive: true, force: true });
   });
 
   it('skips local servers', async () => {
@@ -77,28 +87,27 @@ describe('HarnessUpdater', () => {
     expect(results).toHaveLength(0);
   });
 
-  it('skips when no sshHost is configured', async () => {
+  it('skips a Unix agent when no sshHost is configured', async () => {
     const result = await updater.checkAndUpdate(makeServer({ sshHost: null }));
     expect(result.status).toBe('skipped');
     expect(result.message).toContain('No SSH host');
+    expect(mocks.transportFactory.getAgentTransport).not.toHaveBeenCalled();
   });
 
   it('skips when AZITO_URL is not found in azitoctl env', async () => {
-    mocks.sshClient.execIsolated.mockResolvedValue({ stdout: '', stderr: '', code: 0 });
     const result = await updater.checkAndUpdate(makeServer());
     expect(result.status).toBe('skipped');
     expect(result.message).toContain('AZITO_URL not found');
   });
 
-  it('returns up_to_date when remote VERSION matches local hash', async () => {
-    let callCount = 0;
-    mocks.sshClient.execIsolated.mockImplementation(async () => {
-      callCount++;
-      if (callCount === 1) return { stdout: 'AZITO_URL=http://hub:3001\n', stderr: '', code: 0 };
-      if (callCount === 2) return { stdout: 'abc123deadbeef00\n', stderr: '', code: 0 };
-      return { stdout: '', stderr: '', code: 0 };
-    });
+  it('skips with the reason when the installed harness cannot be read (it is not read as "not installed")', async () => {
+    mocks.transportFactory.getAgentTransport.mockImplementation(() => { throw new Error('agent unreachable'); });
+    const result = await updater.checkAndUpdate(makeServer());
+    expect(result).toMatchObject({ status: 'skipped', message: 'Could not read the installed harness: agent unreachable' });
+  });
 
+  it('returns up_to_date when remote VERSION matches local hash', async () => {
+    installedHarness('AZITO_URL=http://hub:3001\n', 'abc123deadbeef00\n');
     const result = await updater.checkAndUpdate(makeServer());
     expect(result.status).toBe('up_to_date');
     expect(mocks.harnessInstaller.install).not.toHaveBeenCalled();
@@ -107,14 +116,7 @@ describe('HarnessUpdater', () => {
   it('updates when remote VERSION differs from local hash', async () => {
     const srv = makeServer();
     mocks.serverRepo.findByName.mockReturnValue(srv);
-
-    let callCount = 0;
-    mocks.sshClient.execIsolated.mockImplementation(async () => {
-      callCount++;
-      if (callCount === 1) return { stdout: 'AZITO_URL=http://hub:3001\n', stderr: '', code: 0 };
-      if (callCount === 2) return { stdout: 'old-version\n', stderr: '', code: 0 };
-      return { stdout: '', stderr: '', code: 0 };
-    });
+    installedHarness('AZITO_URL=http://hub:3001\n', 'old-version\n');
 
     const result = await updater.checkAndUpdate(srv);
     expect(result.status).toBe('updated');
@@ -129,14 +131,7 @@ describe('HarnessUpdater', () => {
   it('updates when remote VERSION is missing', async () => {
     const srv = makeServer();
     mocks.serverRepo.findByName.mockReturnValue(srv);
-
-    let callCount = 0;
-    mocks.sshClient.execIsolated.mockImplementation(async () => {
-      callCount++;
-      if (callCount === 1) return { stdout: 'AZITO_URL=http://hub:3001\n', stderr: '', code: 0 };
-      if (callCount === 2) return { stdout: '', stderr: '', code: 0 };
-      return { stdout: '', stderr: '', code: 0 };
-    });
+    installedHarness('AZITO_URL=http://hub:3001\n', null);
 
     const result = await updater.checkAndUpdate(srv);
     expect(result.status).toBe('updated');
@@ -146,14 +141,7 @@ describe('HarnessUpdater', () => {
     const srvBefore = makeServer({ isolationIntent: false });
     const srvAfterLock = makeServer({ isolationIntent: true });
     mocks.serverRepo.findByName.mockReturnValue(srvAfterLock);
-
-    let callCount = 0;
-    mocks.sshClient.execIsolated.mockImplementation(async () => {
-      callCount++;
-      if (callCount === 1) return { stdout: 'AZITO_URL=http://hub:3001\n', stderr: '', code: 0 };
-      if (callCount === 2) return { stdout: 'old-version\n', stderr: '', code: 0 };
-      return { stdout: '', stderr: '', code: 0 };
-    });
+    installedHarness('AZITO_URL=http://hub:3001\n', 'old-version\n');
 
     await updater.checkAndUpdate(srvBefore);
 
@@ -167,14 +155,7 @@ describe('HarnessUpdater', () => {
   it('does not pass uiToken removal in the install options (HarnessInstaller handles it)', async () => {
     const srv = makeServer({ isolationIntent: true });
     mocks.serverRepo.findByName.mockReturnValue(srv);
-
-    let callCount = 0;
-    mocks.sshClient.execIsolated.mockImplementation(async () => {
-      callCount++;
-      if (callCount === 1) return { stdout: 'AZITO_URL=http://hub:3001\n', stderr: '', code: 0 };
-      if (callCount === 2) return { stdout: 'old\n', stderr: '', code: 0 };
-      return { stdout: '', stderr: '', code: 0 };
-    });
+    installedHarness('AZITO_URL=http://hub:3001\n', 'old\n');
 
     await updater.checkAndUpdate(srv);
 
@@ -188,14 +169,7 @@ describe('HarnessUpdater', () => {
     const srv = makeServer();
     mocks.serverRepo.findByName.mockReturnValue(srv);
     mocks.harnessInstaller.install.mockResolvedValue({ success: false, steps: [], error: 'Transfer failed' });
-
-    let callCount = 0;
-    mocks.sshClient.execIsolated.mockImplementation(async () => {
-      callCount++;
-      if (callCount === 1) return { stdout: 'AZITO_URL=http://hub:3001\n', stderr: '', code: 0 };
-      if (callCount === 2) return { stdout: 'old\n', stderr: '', code: 0 };
-      return { stdout: '', stderr: '', code: 0 };
-    });
+    installedHarness('AZITO_URL=http://hub:3001\n', 'old\n');
 
     const result = await updater.checkAndUpdate(srv);
     expect(result.status).toBe('error');
@@ -206,14 +180,7 @@ describe('HarnessUpdater', () => {
     const srv = makeServer();
     mocks.serverRepo.findByName.mockReturnValue(srv);
     mocks.harnessInstaller.install.mockRejectedValue(new Error('SSH connect failed'));
-
-    let callCount = 0;
-    mocks.sshClient.execIsolated.mockImplementation(async () => {
-      callCount++;
-      if (callCount === 1) return { stdout: 'AZITO_URL=http://hub:3001\n', stderr: '', code: 0 };
-      if (callCount === 2) return { stdout: 'old\n', stderr: '', code: 0 };
-      return { stdout: '', stderr: '', code: 0 };
-    });
+    installedHarness('AZITO_URL=http://hub:3001\n', 'old\n');
 
     const result = await updater.checkAndUpdate(srv);
     expect(result.status).toBe('error');
@@ -222,14 +189,7 @@ describe('HarnessUpdater', () => {
 
   it('skips when server disappears inside the lock', async () => {
     mocks.serverRepo.findByName.mockReturnValue(undefined);
-
-    let callCount = 0;
-    mocks.sshClient.execIsolated.mockImplementation(async () => {
-      callCount++;
-      if (callCount === 1) return { stdout: 'AZITO_URL=http://hub:3001\n', stderr: '', code: 0 };
-      if (callCount === 2) return { stdout: 'old\n', stderr: '', code: 0 };
-      return { stdout: '', stderr: '', code: 0 };
-    });
+    installedHarness('AZITO_URL=http://hub:3001\n', 'old\n');
 
     const result = await updater.checkAndUpdate(makeServer());
     expect(result.status).toBe('skipped');
@@ -237,7 +197,6 @@ describe('HarnessUpdater', () => {
   });
 
   it('stores last result per server and exposes via getLastResult', async () => {
-    mocks.sshClient.execIsolated.mockResolvedValue({ stdout: '', stderr: '', code: 0 });
     await updater.checkAndUpdate(makeServer({ name: 'srv1' }));
     const result = updater.getLastResult('srv1');
     expect(result).toBeDefined();
@@ -254,35 +213,41 @@ describe('HarnessUpdater', () => {
     expect(results[0].name).toBe('agent-1');
   });
 
-  it('checkAllServers skips Windows agents in the auto-update, logs it and records the reason', async () => {
-    mocks.serverRepo.findAll.mockReturnValue([
-      makeServer({ name: 'win-agent', type: 'agent', hostProfile: { platform: 'win32', arch: 'x64' } }),
-      makeServer({ name: 'linux-agent', type: 'agent', sshHost: null, hostProfile: { platform: 'linux', arch: 'x64' } }),
-    ]);
+  it('updates a Windows agent through the agent itself: no SSH host is needed and install() is not used', async () => {
+    const srv = makeServer({ name: 'win-agent', sshHost: null, hostProfile: WIN32 });
+    mocks.serverRepo.findAll.mockReturnValue([srv]);
+    mocks.serverRepo.findByName.mockReturnValue(srv);
+    installedHarness('AZITO_URL="http://hub:3001"\n', 'old\n');
+
     const results = await updater.checkAllServers();
-    expect(results.map((r) => r.name)).toEqual(['win-agent', 'linux-agent']);
-    expect(results[0]).toMatchObject({ status: 'skipped', message: 'Windows agent: harness auto-update runs POSIX commands' });
-    expect(updater.getLastResult('win-agent')).toEqual(results[0]);
-    expect(mocks.sshClient.execIsolated).not.toHaveBeenCalled();
+    expect(results).toEqual([expect.objectContaining({ name: 'win-agent', status: 'updated' })]);
     expect(mocks.harnessInstaller.install).not.toHaveBeenCalled();
-    expect(mocks.logger.info).toHaveBeenCalledWith(expect.stringContaining('win-agent: skipped'));
+    expect(mocks.harnessInstaller.installOnAgent).toHaveBeenCalledTimes(1);
+    const [transport, options] = mocks.harnessInstaller.installOnAgent.mock.calls[0];
+    expect(transport).toBe(mocks.transport);
+    expect(options).toMatchObject({ azitoUrl: 'http://hub:3001', version: 'abc123deadbeef00', serverName: 'win-agent', hostProfile: WIN32 });
   });
 
   it('parses shell-quoted AZITO_URL from azitoctl env', async () => {
     const srv = makeServer();
     mocks.serverRepo.findByName.mockReturnValue(srv);
-
-    let callCount = 0;
-    mocks.sshClient.execIsolated.mockImplementation(async () => {
-      callCount++;
-      if (callCount === 1) return { stdout: "AZITO_URL=$'http://hub:3001'\n", stderr: '', code: 0 };
-      if (callCount === 2) return { stdout: 'old\n', stderr: '', code: 0 };
-      return { stdout: '', stderr: '', code: 0 };
-    });
+    installedHarness("AZITO_URL=$'http://hub:3001'\n", 'old\n');
 
     await updater.checkAndUpdate(srv);
     const installOptions = mocks.harnessInstaller.install.mock.calls[0][1];
     expect(installOptions.azitoUrl).toBe('http://hub:3001');
+  });
+});
+
+describe('parseAzitoUrl', () => {
+  it.each([
+    ['AZITO_URL=http://hub:3001\nAZITO_WEBHOOK_TOKEN=x\n', 'http://hub:3001'],
+    ["AZITO_URL='http://hub:3001'", 'http://hub:3001'],
+    ['AZITO_URL="http://hub:3001"\r\nAZITO_WEBHOOK_TOKEN="x"\r\n', 'http://hub:3001'],
+    ['AZITO_WEBHOOK_TOKEN=x\n', undefined],
+    ['AZITO_URL="unterminated\n', undefined],
+  ])('%j -> %j', (text, expected) => {
+    expect(parseAzitoUrl(text)).toBe(expected);
   });
 });
 

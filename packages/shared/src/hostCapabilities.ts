@@ -13,6 +13,7 @@
  *    (`IFileOps.searchContent`, Node), and reports hit paths relative to the root with `/`.
  *  - starting claude / codex / a command in a window (#371): a Windows host's worker is started by misao's `pane.open` with the program and its
  *    arguments (no shell line is typed): the agent is the first pane of the window it is created with (`PaneProgram` -> `openWorkspace` / `openWindow` `program`, `agents/workerProgram.ts`).
+ *  - the harness (`harness/install`, the status row, the auto-update): `setup.mjs` through the agent's IFileOps / `run` (setup.sh stays the Unix route).
  *  - git (diff / commits / branches / worktree list / repository discovery): `runGit`, which asks the host for the `git.exe` of Git for
  *    Windows (`GitLocator`: PATH, then the standard install locations). Not installed there: the API answers `501 git_not_found` with
  *    the reason, which is not known in advance, so it is shown as the error of the call, not as a closed feature.
@@ -30,9 +31,9 @@ export type HostFeature =
   | 'taskExecution'
   | 'tmux'
   | 'browserRuntime'
-  | 'harness';
+  | 'isolation';
 
-export const HOST_FEATURES: readonly HostFeature[] = ['taskExecution', 'tmux', 'browserRuntime', 'harness'];
+export const HOST_FEATURES: readonly HostFeature[] = ['taskExecution', 'tmux', 'browserRuntime', 'isolation'];
 
 export type HostFeatureSupport =
   | { available: true }
@@ -43,14 +44,15 @@ export type HostFeatureSupport =
  * which path closes it.
  *  - taskExecution (#371): `ExecuteTaskUseCase` refuses first. What stays closed behind it is the harness and hooks (T5) and the task's signal, azitoctl and push scripts (T6).
  *  - tmux: not installed on Windows; `install-tmux` / `apply-tmux-config` answer `unsupported_os`.
+ *  - isolation (#464): declaring a server isolated (`isolationIntent: true`) needs the cleanup of the operator credentials, which is only built for
+ *    a Unix agent (`attemptIsolationCleanup`); a Windows agent cannot be made an isolated server in v0.12.0.
  *  - browserRuntime (#372): `install-browser-runtime` is sh (`assertPosixHost`).
- *  - harness (#371): `harness/install` is `setup.sh` (`assertPosixHost`).
  */
 const WIN32_UNAVAILABLE: Record<HostFeature, number | null> = {
   taskExecution: 371,
   tmux: null,
   browserRuntime: 372,
-  harness: 371,
+  isolation: 464,
 };
 
 export function hostFeatureSupport(profile: HostPlatformInfo | null | undefined, feature: HostFeature): HostFeatureSupport {

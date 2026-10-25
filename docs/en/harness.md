@@ -130,3 +130,25 @@ AZITO's server detail panel visualizes each server's dependency install status (
 ### Installing from the UI
 
 You can also install the harness without the CLI by clicking "Install Harness" in the server detail panel → Setup tab (`POST /api/servers/:name/harness/install`). For local servers the install runs directly; for Agent servers it runs over SSH.
+
+## Windows
+
+A Windows host (the hub itself, or a Windows agent) gets the harness through Node instead of bash. POSIX hosts keep `setup.sh` and the bash hooks unchanged.
+
+| | Linux / macOS | Windows |
+|---|---|---|
+| Setup | `harness/setup.sh` | `node harness/setup.mjs` (same options) |
+| Hooks | `hooks/azito-*.sh` (bash + curl) | `hooks/azito-hook.mjs <activity start\|activity stop\|interaction\|question\|session\|notify> [--prefix <name>]` |
+| Skills (`/azt-*`) | symlink into `~/.claude/skills/` | **directory junction** (no Developer Mode or administrator rights needed) |
+| Rules | symlink into `~/.claude/rules/` | **copy**; a copy is replaced on update only while it is still what was copied last time (hash in `~/.azito/harness-copies.json`), an edited file is left alone |
+| `azitoctl*.env`, `operator.env` | `KEY=<printf %q>`, mode 600 | `KEY="<JSON string>"`, one line each, only the current user can read them (a protected ACL, the same one the hub puts on its own secret files) |
+| Install from the hub | SSH + `setup.sh` | the agent's own file API + `node setup.mjs` (no SSH); the tokens go in the environment of the command, not its arguments |
+| Auto-update at hub start | over SSH | through the agent, like the install |
+
+What the Node hook does is what the bash hooks do: the same destination-profile rule (URL, token and server name come from the environment all together or from `~/.azito/azitoctl[-<prefix>].env` all together, never mixed), the same `misaoPaneId` for a misao pane, the same request bodies. The profile prefix is the `--prefix` argument, not an environment variable in front of the command. The request is sent by a detached copy of the script, so the hook returns at once and the token is never in an argument list. A test runs both versions against one HTTP server and compares the bodies.
+
+`setup.mjs` writes the hook commands as `node "C:/Users/<you>/.azito/harness/hooks/azito-hook.mjs" activity start` (forward slashes, double quotes): the same text means the same in Git Bash and in PowerShell, whichever Claude Code uses to run hooks. `node` has to be on `PATH`.
+
+Install the harness on a Windows agent from the UI (server detail -> Setup -> Install Harness) as for any server; to do it by hand on the Windows machine, run `node harness\setup.mjs --azito-url <url> --webhook-token <token> --server-name <name>` (add `--ui-token <token>` for the operator credential).
+
+A Windows agent cannot be declared an isolated server (`isolationIntent`) in this release (tracked in #464): the API answers 501 `unsupported_os` and the server form shows the reason. `codex` is started through the script its npm shim runs, with node, so paths with non-ASCII characters or parentheses work; the dependencies of `azt-mcp` installed with `npm install` are kept when the harness is updated.

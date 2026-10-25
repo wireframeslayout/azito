@@ -34,7 +34,7 @@ const REMAINING: Record<string, number> = {
   'modules/system/misao/MisaoAgentInstaller.ts': 10,
   'modules/git/hub-transfer/RemoteBundleOps.ts': 15,
   'modules/servers/isolationDoctor.ts': 1,
-  'modules/servers/routes.ts': 3, // the harness check, the Chromium check, apply-tmux-config: shell scripts
+  'modules/servers/routes.ts': 2, // the Chromium check, apply-tmux-config: shell scripts
   // the host's memory / load / disk measurement script (sh): not a process list, so it was not moved with the `ps` calls (#371 T1)
   'modules/servers/resources/ResourceGuard.ts': 1,
   // the sentinel wrapper for the remaining remote git commands (the distribution bundle code), and the shell route of a recorded-host-less agent's run()
