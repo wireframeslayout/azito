@@ -69,6 +69,16 @@ export class UpdateStateManager {
       return [];
     }
     const lines = content.split('\n').filter((l) => l.length > 0);
-    return lines.slice(-tailLines);
+    return currentRunLines(lines).slice(-tailLines);
   }
+}
+
+const RUN_START_LINE = /^\[[^\]]*\] Update started:/;
+
+/** update.log is cumulative across runs; the current run starts at the last "Update started" line. */
+export function currentRunLines(lines: string[]): string[] {
+  for (let i = lines.length - 1; i >= 0; i--) {
+    if (RUN_START_LINE.test(lines[i])) return lines.slice(i);
+  }
+  return lines;
 }
