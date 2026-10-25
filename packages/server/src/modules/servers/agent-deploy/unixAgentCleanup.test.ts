@@ -150,22 +150,23 @@ describe.skipIf(process.platform === 'win32')('the guard an install, update or r
   it('stops while the pid in the mark is alive, and leaves the mark', () => {
     fs.mkdirSync(lock());
     fs.writeFileSync(path.join(lock(), 'pid'), String(process.pid));
-    expect(guard()).toBe(`AZITO_CLEANUP_RUNNING:${process.pid}`);
-    expect(guard('echo AFTER')).toBe(`AZITO_CLEANUP_RUNNING:${process.pid}`);
+    expect(guard()).toBe(`AZITO_CLEANUP_MARK:${process.pid}:alive`);
+    expect(guard('echo AFTER')).toBe(`AZITO_CLEANUP_MARK:${process.pid}:alive`);
     expect(fs.existsSync(lock())).toBe(true);
   });
 
-  it('removes a stale mark (its pid is dead) and goes on', () => {
+  it('stops, and does not remove the mark, when its pid is dead (a person looks and removes it)', () => {
     const dead = spawnSync(process.execPath, ['-e', '']).pid!;
     fs.mkdirSync(lock());
     fs.writeFileSync(path.join(lock(), 'pid'), String(dead));
-    expect(guard('echo AFTER')).toBe('AFTER');
-    expect(fs.existsSync(lock())).toBe(false);
+    expect(guard('echo AFTER')).toBe(`AZITO_CLEANUP_MARK:${dead}:ended`);
+    expect(guard()).toBe(`AZITO_CLEANUP_MARK:${dead}:ended`);
+    expect(fs.existsSync(lock())).toBe(true);
   });
 
   it('stops, on the safe side, for a mark that has no pid yet', () => {
     fs.mkdirSync(lock());
-    expect(guard()).toBe('AZITO_CLEANUP_RUNNING:unknown');
+    expect(guard()).toBe('AZITO_CLEANUP_MARK:none:unknown');
     expect(fs.existsSync(lock())).toBe(true);
   });
 });

@@ -27,8 +27,8 @@ interface HostOptions {
   presenceThrows?: boolean;
   /** What the single cleanup script answers once the id matches (a line of its protocol; default REMOVED). */
   cleanupResult?: string;
-  /** A cleanup is still running on the host (its mark holds this pid and the pid is alive). */
-  cleanupRunning?: string;
+  /** The mark of a cleanup is on the host: `<pid>:<alive|ended|unknown>`. */
+  cleanupMark?: string;
   /** The unit cannot be started, so the agent is started with nohup. */
   nohup?: boolean;
   /** What the sighting of the nohup agent prints (default: pid 4242 with a start time). */
@@ -45,7 +45,7 @@ function makeSsh(opts: HostOptions = {}, host: FakeHost = { folderId: '', folder
   const commands: string[] = [];
   const execIsolated = vi.fn(async (_host: string, command: string) => {
     commands.push(command);
-    if (opts.cleanupRunning && (command === AGENT_PRESENCE_COMMAND || command.includes('echo AZITO_CLEANUP_IDLE'))) return { stdout: `AZITO_CLEANUP_RUNNING:${opts.cleanupRunning}\n`, stderr: '', code: 0 };
+    if (opts.cleanupMark && (command === AGENT_PRESENCE_COMMAND || command.includes('echo AZITO_CLEANUP_IDLE'))) return { stdout: `AZITO_CLEANUP_MARK:${opts.cleanupMark}\n`, stderr: '', code: 0 };
     if (command.includes('echo AZITO_CLEANUP_IDLE')) return { stdout: 'AZITO_CLEANUP_IDLE\n', stderr: '', code: 0 };
     if (opts.presenceThrows && command === AGENT_PRESENCE_COMMAND) throw new Error('connection reset');
     const written = /printf %s (\w+) > ~\/\.azito\/agent\/install\.id/.exec(command);
@@ -165,17 +165,20 @@ describe('AgentInstaller', () => {
     expect(result.error).toContain('its pid could not be read when it started');
   });
 
-  it('stops before changing anything while an earlier cleanup is still running on the host (install, update and recovery)', async () => {
-    const { installer, commands } = make(NO_MISAO, { tmux: '', cleanupRunning: '777' });
+  it.each([['777:alive', 'its pid 777 is alive: a cleanup is still running'], ['777:ended', 'its pid 777 has ended']])('stops before changing anything while the mark of a cleanup is on the host (%s), for install, update and recovery', async (mark, seen) => {
+    const { installer, commands } = make(NO_MISAO, { tmux: '', cleanupMark: mark });
     const install = await installer.install('user@host');
     expect(install.success).toBe(false);
-    expect(install.error).toContain('A previous cleanup of the agent on user@host is still running (pid 777), so nothing was changed.');
+    expect(install.error).toContain('The mark ~/.azito/agent-cleanup.lock of a previous cleanup of the agent on user@host is still there');
+    expect(install.error).toContain(seen);
+    expect(install.error).toContain('kill -0 777');
+    expect(install.error).toContain('rm -rf ~/.azito/agent-cleanup.lock');
     expect(commands.some((c) => c.includes('systemctl --user enable') || c.includes('printf %s'))).toBe(false);
 
     const update = await installer.update('user@host', '100.64.0.9', 'tok', null, 'system');
     expect(update).toMatchObject({ success: false });
-    expect(update.error).toContain('still running (pid 777)');
-    await expect(installer.recoverAgent('user@host', '100.64.0.9', 'tok', null)).rejects.toThrow(/still running \(pid 777\)/);
+    expect(update.error).toContain('is still there');
+    await expect(installer.recoverAgent('user@host', '100.64.0.9', 'tok', null)).rejects.toThrow(/is still there/);
     expect(commands.some((c) => c.includes('systemctl --user enable'))).toBe(false);
   });
 

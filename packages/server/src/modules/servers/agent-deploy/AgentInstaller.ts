@@ -10,7 +10,7 @@ import { HOST_OS_PROBE_COMMAND, parseHostOsProbe } from './hostOsProbe';
 import { buildWindowsPreflightCommand, checkWindowsPreflight, parseWindowsPreflight, type WindowsPreflightInfo } from './windowsPreflight';
 import { buildSha256VerifyCommand, buildSafeExtractCommand, readSha256FromSumsFile } from './integrityVerifier';
 import { KeyedMutex } from '../../../shared/keyedMutex';
-import { CLEANUP_LOCK_DIR, CLEANUP_TIMEOUT_MS, INSTALL_ID_FILE, MANUAL_STEPS_ANY_START, SYSTEMD_MANUAL_STEPS, buildCleanupGuardScript, buildCleanupScript, buildNohupSightingScript, cleanupRunningMessage, parseCleanupGuard, nohupManualSteps, parseCleanupOutcome, parseNohupSighting, type NohupSighting } from './unixAgentCleanup';
+import { CLEANUP_LOCK_DIR, CLEANUP_TIMEOUT_MS, INSTALL_ID_FILE, MANUAL_STEPS_ANY_START, SYSTEMD_MANUAL_STEPS, buildCleanupGuardScript, buildCleanupScript, buildNohupSightingScript, cleanupMarkMessage, parseCleanupGuard, nohupManualSteps, parseCleanupOutcome, parseNohupSighting, type NohupSighting } from './unixAgentCleanup';
 import { WindowsAgentDeployer, windowsAgentLayout, type WindowsDeployment } from './WindowsAgentDeployer';
 import { DEFAULT_WINDOWS_AGENT_OPTIONS, type WindowsAgentOptions } from './windowsAgentConfig';
 
@@ -75,13 +75,13 @@ const AGENT_PORT = 3002;
 const HEALTH_TIMEOUT_MS = 15000;
 const HEALTH_RETRY_INTERVAL_MS = 1000;
 
-/** Answers, in the install's first command on a Unix host, whether a cleanup is still running there (the mark it keeps outlasts the SSH call) and whether the host already has an agent (its unit or its folder), before this install touches anything. */
+/** Answers, in the install's first command on a Unix host, whether the mark of a cleanup is on the host (the mark outlasts the SSH call, and is removed only by the cleanup that made it or by a person) and whether the host already has an agent (its unit or its folder), before this install touches anything. */
 export const AGENT_PRESENCE_COMMAND = buildCleanupGuardScript('if [ -e ~/.config/systemd/user/azito-agent.service ] || [ -e ~/.azito/agent ]; then echo AZITO_AGENT_PRESENT; else echo AZITO_AGENT_ABSENT; fi');
 /** For an update or a recovery, which have no presence question: only whether a cleanup is still running. */
 const CLEANUP_GUARD_COMMAND = buildCleanupGuardScript();
 
-/** A cleanup of this host's agent is still running there: no install, update or recovery may start. */
-class CleanupRunningError extends Error {}
+/** The mark of a cleanup is on the host: no install, update or recovery may start until a person has looked and removed it. */
+class CleanupMarkError extends Error {}
 
 /** The error for a host that has no tmux and no misao: the same text is the API's `error` and what the UI shows. */
 function noMuxMessage(host: string, misaoError: string | undefined): string {
@@ -161,7 +161,7 @@ export class AgentInstaller {
     try {
       hadAgent = await this.hostHasAgent(sshHost);
     } catch (err) {
-      const msg = err instanceof CleanupRunningError ? err.message : `Could not check the host for an existing agent: ${(err as Error).message}`;
+      const msg = err instanceof CleanupMarkError ? err.message : `Could not check the host for an existing agent: ${(err as Error).message}`;
       report('transfer', 'error', msg);
       return { success: false, host: preflight.tailscaleIp, port: AGENT_PORT, token, version, startMethod: 'nohup', steps, error: msg };
     }
@@ -246,7 +246,7 @@ export class AgentInstaller {
     if (!result.ok) {
       // A timeout or a lost connection does not say whether the script finished (it may still be running on the host), and this hub has no
       // second way to ask while it holds the install lock: nothing is assumed.
-      return `The agent this install started could not be checked or removed (${result.error}); it may still be running on ${sshHost}, and the removal script may still be running there (while it runs, ${CLEANUP_LOCK_DIR} exists and installs, updates and recoveries of this host are refused). Check systemctl --user is-active azito-agent and whether ~/.azito/agent exists before doing anything, then: ${SYSTEMD_MANUAL_STEPS}`;
+      return `The agent this install started could not be checked or removed (${result.error}); it may still be running on ${sshHost}, and the removal script may still be running there (while ${CLEANUP_LOCK_DIR} exists, installs, updates and recoveries of this host are refused). Check systemctl --user is-active azito-agent and whether ~/.azito/agent exists before doing anything, then: ${SYSTEMD_MANUAL_STEPS}`;
     }
     const outcome = parseCleanupOutcome(result.stdout);
     switch (outcome.kind) {
@@ -286,22 +286,22 @@ export class AgentInstaller {
 
   /**
    * True when the host has an agent unit or folder. An answer that is not the expected one counts as "has one": nothing is removed on a
-   * guess. Throws {@link CleanupRunningError} while an earlier cleanup is still running on the host.
+   * guess. Throws {@link CleanupMarkError} while the mark of a cleanup is on the host.
    */
   private async hostHasAgent(sshHost: string): Promise<boolean> {
     const result = await this.sshClient.execIsolated(sshHost, AGENT_PRESENCE_COMMAND);
     if (result.code !== 0) return true;
-    const running = parseCleanupGuard(result.stdout, (line) => line === 'AZITO_AGENT_PRESENT' || line === 'AZITO_AGENT_ABSENT');
-    if (running) throw new CleanupRunningError(cleanupRunningMessage(sshHost, running.running));
+    const mark = parseCleanupGuard(result.stdout, (line) => line === 'AZITO_AGENT_PRESENT' || line === 'AZITO_AGENT_ABSENT');
+    if (mark) throw new CleanupMarkError(cleanupMarkMessage(sshHost, mark));
     return result.stdout.trim().split('\n').pop() !== 'AZITO_AGENT_ABSENT';
   }
 
-  /** Throws {@link CleanupRunningError} while an earlier cleanup is still running on the host. The first shell command of an update or a recovery. */
+  /** Throws {@link CleanupMarkError} while the mark of a cleanup is on the host. The first shell command of an update or a recovery. */
   private async assertNoCleanupRunning(sshHost: string): Promise<void> {
     const result = await this.sshClient.execIsolated(sshHost, CLEANUP_GUARD_COMMAND);
     if (result.code !== 0) throw new Error(`could not check the host for a running cleanup: ${result.stderr.trim() || `exit ${result.code}`}`);
-    const running = parseCleanupGuard(result.stdout, (line) => line === 'AZITO_CLEANUP_IDLE');
-    if (running) throw new CleanupRunningError(cleanupRunningMessage(sshHost, running.running));
+    const mark = parseCleanupGuard(result.stdout, (line) => line === 'AZITO_CLEANUP_IDLE');
+    if (mark) throw new CleanupMarkError(cleanupMarkMessage(sshHost, mark));
   }
 
   /**

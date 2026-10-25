@@ -75,35 +75,41 @@ export function parseCleanupOutcome(stdout: string): CleanupOutcome {
 }
 
 /**
- * Looks at the cleanup mark, and prints one line: `AZITO_CLEANUP_RUNNING:<pid>` when a cleanup is still running on the host (the pid in
- * the mark is alive; a mark with no pid yet counts as running: `unknown`), otherwise it removes a stale mark (its pid is dead) and, with
- * `thenPrint`, the shell that follows prints its own answer; without it the line is `AZITO_CLEANUP_IDLE`. A pid that was reused looks
- * alive: that errs on the side of stopping.
+ * Looks at the cleanup mark and prints one line: `AZITO_CLEANUP_MARK:<pid>:<alive|ended|unknown>` when the mark exists, otherwise (with
+ * `thenPrint`, the shell that follows prints its own answer; without it the line is `AZITO_CLEANUP_IDLE`). A mark stops the caller
+ * whether its pid is alive or not, and is never removed here: a dead pid does not prove the script finished its work (the pid may be
+ * a different process, and the reading and the removal would be two steps another cleanup can slip between), so a person looks and
+ * removes it. `unknown`: the mark has no pid yet.
  */
 export function buildCleanupGuardScript(thenPrint?: string): string {
   return [
     `l=${CLEANUP_LOCK_DIR}`,
     'if [ -d "$l" ]; then',
     '  p=$(cat "$l/pid" 2>/dev/null || true)',
-    '  if [ -n "$p" ] && ! kill -0 "$p" 2>/dev/null; then rm -rf "$l"; fi',
-    'fi',
-    'if [ -d "$l" ]; then echo "AZITO_CLEANUP_RUNNING:${p:-unknown}"',
+    '  s=unknown',
+    '  if [ -n "$p" ]; then if kill -0 "$p" 2>/dev/null; then s=alive; else s=ended; fi; fi',
+    '  echo "AZITO_CLEANUP_MARK:${p:-none}:$s"',
     thenPrint ? `else ${thenPrint}` : 'else echo AZITO_CLEANUP_IDLE',
     'fi',
   ].join('\n');
 }
 
-/** Parses the guard's line: the pid of the cleanup that is still running, or undefined when the host is idle; an unexpected answer throws. */
-export function parseCleanupGuard(stdout: string, idle: (line: string) => boolean): { running: string } | undefined {
+export interface CleanupMark { pid: string; state: 'alive' | 'ended' | 'unknown' }
+
+/** Parses the guard's line: the mark that is on the host, or undefined when there is none; an unexpected answer throws. */
+export function parseCleanupGuard(stdout: string, idle: (line: string) => boolean): CleanupMark | undefined {
   const line = stdout.trim().split('\n').pop() ?? '';
-  const m = /^AZITO_CLEANUP_RUNNING:(\S+)$/.exec(line);
-  if (m) return { running: m[1]! };
+  const m = /^AZITO_CLEANUP_MARK:(\S+):(alive|ended|unknown)$/.exec(line);
+  if (m) return { pid: m[1]!, state: m[2] as CleanupMark['state'] };
   if (idle(line)) return undefined;
   throw new Error(`the host gave an unexpected answer "${line}" when asked whether a cleanup is running`);
 }
 
-export function cleanupRunningMessage(host: string, pid: string): string {
-  return `A previous cleanup of the agent on ${host} is still running (pid ${pid}), so nothing was changed. Wait for it to finish, then try again. If it is not running (the mark ~/.azito/agent-cleanup.lock stays after its pid was reused), check with ps -p ${pid} and remove ${CLEANUP_LOCK_DIR} by hand.`;
+export function cleanupMarkMessage(host: string, mark: CleanupMark): string {
+  const seen = mark.state === 'alive' ? `its pid ${mark.pid} is alive: a cleanup is still running`
+    : mark.state === 'ended' ? `its pid ${mark.pid} has ended: the cleanup stopped, but may not have finished its work`
+      : 'it holds no pid yet';
+  return `The mark ${CLEANUP_LOCK_DIR} of a previous cleanup of the agent on ${host} is still there (${seen}), so nothing was changed. Check on ${host}${mark.pid === 'none' ? '' : ` with kill -0 ${mark.pid} that it has ended`}, look at ~/.azito/agent and the azito-agent unit if you need to, then remove the mark: rm -rf ${CLEANUP_LOCK_DIR}`;
 }
 
 /** What a nohup agent looked like right after it started. Information for the operator: nothing is decided on it. */
