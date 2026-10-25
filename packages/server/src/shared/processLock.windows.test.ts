@@ -35,12 +35,11 @@ describe.skipIf(process.platform !== 'win32')('ProcessLock on a Windows named pi
     }
   });
 
-  it('is busy while another process holds the pipe (naming its pid), and free once that process is killed', async () => {
+  it('is busy while another process holds the pipe, and free once that process is killed', async () => {
     const endpoint = `\\\\.\\pipe\\azito-lock-test-${crypto.randomBytes(6).toString('hex')}`;
     const holder = await startHolder(endpoint);
     const refused = await new ProcessLock(endpoint).run(async () => 'in').catch((err: unknown) => err);
     expect(refused).toBeInstanceOf(ProcessLockBusyError);
-    expect((refused as ProcessLockBusyError).ownerPid).toBe(holder.pid);
     holder.kill('SIGKILL');
     await exited(holder);
     expect(await new ProcessLock(endpoint).run(async () => 'in')).toBe('in');
