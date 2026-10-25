@@ -17,7 +17,7 @@ describe('assertHostFeature', () => {
 
   it('passes on Unix hosts and on a host whose OS is not recorded', () => {
     expect(() => assertHostFeature({ platform: 'linux' }, 'taskExecution', 'Running a task')).not.toThrow();
-    expect(() => assertHostFeature({ platform: 'darwin' }, 'harness', 'Installing the harness')).not.toThrow();
+    expect(() => assertHostFeature({ platform: 'darwin' }, 'isolation', 'Isolating a server')).not.toThrow();
     expect(() => assertHostFeature(null, 'taskExecution', 'Running a task')).not.toThrow();
     expect(() => assertHostFeature(undefined, 'taskExecution', 'Running a task')).not.toThrow();
   });
