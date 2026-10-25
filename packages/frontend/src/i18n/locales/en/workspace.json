@@ -72,7 +72,6 @@
     "pinTab": "Pin tab",
     "unpinTab": "Unpin tab",
     "closeTab": "Close tab",
-    "addAgentBlocked": "Add {{label}} to {{serverName}} (unavailable: {{reason}})",
     "addAgentToServer": "Add {{label}} to {{serverName}}",
     "addAgent": "Add {{label}}",
     "failedLoadAgents": "Failed to load agents: {{error}}",
@@ -88,7 +87,6 @@
     "quickAddTitle": "Add {{label}} — {{serverName}}"
   },
   "addWindow": {
-    "workerBlockedHint": "Choose the plain shell (no agent) to create just a window.",
     "title": "Add Window",
     "createAndAdd": "Create & Add",
     "addAllWindows": "Add All Windows",

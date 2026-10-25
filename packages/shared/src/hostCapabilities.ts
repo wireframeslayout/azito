@@ -11,6 +11,8 @@
  *  - file name search: `searchFileNames` over `IFileOps.walk`.
  *  - file content search: `GET /files/search` runs `rg` when the host has it, else the host's own search
  *    (`IFileOps.searchContent`, Node), and reports hit paths relative to the root with `/`.
+ *  - starting claude / codex / a command in a window (#371): a Windows host's worker is started by misao's `pane.open` with the program and its
+ *    arguments (no shell line is typed): `launchProgramInPane` -> `IMuxClient.replacePaneWithProgram`.
  *  - git (diff / commits / branches / worktree list / repository discovery): `runGit`, which asks the host for the `git.exe` of Git for
  *    Windows (`GitLocator`: PATH, then the standard install locations). Not installed there: the API answers `501 git_not_found` with
  *    the reason, which is not known in advance, so it is shown as the error of the call, not as a closed feature.
@@ -26,12 +28,11 @@ export interface HostPlatformInfo {
 
 export type HostFeature =
   | 'taskExecution'
-  | 'workerLaunch'
   | 'tmux'
   | 'browserRuntime'
   | 'harness';
 
-export const HOST_FEATURES: readonly HostFeature[] = ['taskExecution', 'workerLaunch', 'tmux', 'browserRuntime', 'harness'];
+export const HOST_FEATURES: readonly HostFeature[] = ['taskExecution', 'tmux', 'browserRuntime', 'harness'];
 
 export type HostFeatureSupport =
   | { available: true }
@@ -40,15 +41,13 @@ export type HostFeatureSupport =
 /**
  * The Windows rows: feature -> the issue that supports it (null: never, the host has no such program). Each row says
  * which path closes it.
- *  - taskExecution (#371): `ExecuteTaskUseCase` starts the worker in a pane with a command (`paneShell.commandArgs` is null on Windows -> `unsupported_os`).
- *  - workerLaunch (#371): a new window with claude / codex / a command: the same pane command (`MisaoServers`, `paneShell.ts`).
+ *  - taskExecution (#371): `ExecuteTaskUseCase` refuses first. What stays closed behind it is the harness and hooks (T5) and the task's signal, azitoctl and push scripts (T6).
  *  - tmux: not installed on Windows; `install-tmux` / `apply-tmux-config` answer `unsupported_os`.
  *  - browserRuntime (#372): `install-browser-runtime` is sh (`assertPosixHost`).
  *  - harness (#371): `harness/install` is `setup.sh` (`assertPosixHost`).
  */
 const WIN32_UNAVAILABLE: Record<HostFeature, number | null> = {
   taskExecution: 371,
-  workerLaunch: 371,
   tmux: null,
   browserRuntime: 372,
   harness: 371,

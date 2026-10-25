@@ -19,6 +19,12 @@ import type { IUnitRepository, Unit } from '../units/Unit';
 import type { IProjectServerRepository } from '../projects/ProjectServer';
 import type { IProjectRepository } from '../projects/Project';
 import type { TransportFactory } from '../servers/transport/TransportFactory';
+import { flag, type ProgramLaunch } from '../agents/WorkerLaunch';
+
+/** A program launch made of flags only, which a line renders as `file arg arg`. */
+function program(file: string, args: string[]): ProgramLaunch {
+  return { kind: 'program', file, args: args.map(flag) };
+}
 
 function makeWindow(overrides: Partial<Window> = {}): Window {
   return {
@@ -205,6 +211,7 @@ function buildService(opts: {
     }),
     splitPaneByHandle: vi.fn(async (_server: unknown, _handle: unknown, _dir: 'h' | 'v', _env?: Record<string, string>) => ({ handle: '%1', result: { stdout: '', stderr: '', code: 0 } })),
     resolvePane: vi.fn(async () => '%0'),
+    replacePaneWithProgram: vi.fn(async () => '%9'),
     supportsPaneLabels: false,
     labelWindowPanes: vi.fn(async () => undefined),
     listPanesByRef: vi.fn(async () => [{ ordinal: 1, handle: '%0', title: '', command: 'bash', active: true }]),
@@ -215,7 +222,7 @@ function buildService(opts: {
   const sessionStrategyFactory = {
     create: vi.fn(() => ({
       supportsSession: true,
-      buildRespawnCommand: vi.fn(() => 'claude --resume abc --dangerously-skip-permissions'),
+      buildRespawnLaunch: vi.fn(() => program('claude', ['--resume', 'abc', '--dangerously-skip-permissions'])),
     })),
   };
 
@@ -1722,7 +1729,7 @@ describe('WindowRespawnService.respawn — concurrent respawns for the same task
     const sessionStrategyFactory = {
       create: vi.fn(() => ({
         supportsSession: true,
-        buildRespawnCommand: vi.fn(() => 'claude --resume abc --dangerously-skip-permissions'),
+        buildRespawnLaunch: vi.fn(() => program('claude', ['--resume', 'abc', '--dangerously-skip-permissions'])),
       })),
     };
     const taskRepo: Pick<ITaskRepository, 'findById' | 'updateStatus' | 'update' | 'recordExecutionGateBlock'> = {
@@ -2371,9 +2378,10 @@ describe('WindowRespawnService — misao window identity', () => {
   });
 });
 
-describe('WindowRespawnService.respawn — a host that cannot run a worker in a pane (Windows, #371)', () => {
+describe('WindowRespawnService.respawn — a host that starts a worker as a program (Windows, #371)', () => {
   const win32Factory = (): Pick<TransportFactory, 'getTransport' | 'getFileOps' | 'hostProfileFor'> =>
     ({ getTransport: vi.fn(() => ({})), getFileOps: vi.fn(() => hostFiles), hostProfileFor: vi.fn(() => ({ platform: 'win32', arch: 'x64' })) }) as unknown as Pick<TransportFactory, 'getTransport' | 'getFileOps' | 'hostProfileFor'>;
+  const onePane = { layout: '', panes: [{ index: 0, command: null, workingDirectory: null, title: null }] };
   const twoPanes = {
     layout: '',
     panes: [
@@ -2382,13 +2390,45 @@ describe('WindowRespawnService.respawn — a host that cannot run a worker in a 
     ],
   };
 
+  it("starts the window's worker as a program in place of the new window's shell pane, with its directory and the window's env, and types nothing", async () => {
+    const { service, tmux, sentCommands } = buildService({
+      window: makeWindow({ id: 7, workerType: 'claude', workerModel: 'opus', agentSessionId: 'abc', workingDirectory: 'C:\\work\\app', muxRef: { kind: 'misao', workspace: 'azito', window: 'w_01' } }),
+      transportFactory: win32Factory(),
+    });
+    Object.assign(tmux, { windowExists: vi.fn(async () => false) });
+
+    await service.respawn(7, makeServer());
+
+    expect(tmux.replacePaneWithProgram).toHaveBeenCalledTimes(1);
+    const [, handle, program] = (tmux.replacePaneWithProgram.mock.calls[0] as unknown) as [unknown, string, { argv: string[]; cwd: string; cols: number; rows: number; extraEnv: Record<string, string> }];
+    expect(handle).toBe('%0');
+    expect(program.argv).toEqual(['claude', '--resume', 'abc', '--dangerously-skip-permissions']);
+    expect(program.cwd).toBe('C:\\work\\app');
+    expect(program).toMatchObject({ cols: 120, rows: 40 });
+    expect(program.extraEnv).toEqual({ AZITO_UI_TOKEN: 'ui-token-fixture' });
+    expect(sentCommands).toEqual([]);
+  });
+
+  it('a plain shell window without a directory is respawned as a bare window: nothing is started', async () => {
+    const { service, tmux, sentCommands } = buildService({
+      window: makeWindow({ id: 7, workerType: null, workingDirectory: null }),
+      transportFactory: win32Factory(),
+    });
+
+    await service.respawn(7, makeServer());
+
+    expect(tmux.openWindow).toHaveBeenCalled();
+    expect(tmux.replacePaneWithProgram).not.toHaveBeenCalled();
+    expect(sentCommands).toEqual([]);
+  });
+
   it.each([
-    ['a single pane', null],
-    ['several panes', twoPanes],
-  ])('refuses the respawn of %s as unsupported_os before the window, the rows or the pane are touched', async (_name, paneLayout) => {
+    ['a window with a saved pane layout (one pane)', { workerType: 'claude', paneLayout: onePane }],
+    ['a window with a saved pane layout (several panes)', { workerType: 'claude', paneLayout: twoPanes }],
+    ['a plain shell window with a directory to restore', { workerType: null, workingDirectory: 'C:\\work' }],
+  ])('refuses the respawn of %s as unsupported_os before the window, the rows or the pane are touched', async (_name, overrides) => {
     const { service, tmux, windowRepo, taskRepo, sentCommands } = buildService({
-      window: makeWindow({ id: 7, taskId: 5, paneLayout }),
-      task: makeTask({ id: 5 }),
+      window: makeWindow({ id: 7, ...overrides }),
       transportFactory: win32Factory(),
     });
 
@@ -2397,13 +2437,13 @@ describe('WindowRespawnService.respawn — a host that cannot run a worker in a 
     expect(tmux.closeWindow).not.toHaveBeenCalled();
     expect(tmux.openWindow).not.toHaveBeenCalled();
     expect(tmux.splitPaneByHandle).not.toHaveBeenCalled();
+    expect(tmux.replacePaneWithProgram).not.toHaveBeenCalled();
     expect(windowRepo.update).not.toHaveBeenCalled();
     expect(taskRepo.update).not.toHaveBeenCalled();
-    expect(taskRepo.updateStatus).not.toHaveBeenCalled();
     expect(sentCommands).toEqual([]);
   });
 
-  it('refuses a legacy session resume the same way', async () => {
+  it("a task's legacy session resume stays closed with task execution", async () => {
     const { service, tmux, sentCommands } = buildService({
       window: makeWindow(),
       task: makeTask({ id: 5, agentSessionId: 'abc' }),

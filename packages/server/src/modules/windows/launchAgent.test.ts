@@ -108,9 +108,9 @@ function claudeStrategy(): ISessionStrategy {
   return {
     supportsSession: true,
     needsPostLaunchScan: false,
-    buildNewSessionFlags: (id: string) => `--session-id ${id}`,
-    buildResumeFlags: (id: string) => `--resume ${id}`,
-    buildRespawnCommand: () => null,
+    buildNewSessionArgs: (id: string) => ['--session-id', id],
+    buildResumeArgs: (id: string) => ['--resume', id],
+    buildRespawnLaunch: () => null,
     scanSessionId: vi.fn().mockResolvedValue(null),
   };
 }
@@ -119,9 +119,9 @@ function codexStrategy(): ISessionStrategy {
   return {
     supportsSession: true,
     needsPostLaunchScan: true,
-    buildNewSessionFlags: () => '',
-    buildResumeFlags: (id: string) => `--resume ${id}`,
-    buildRespawnCommand: () => null,
+    buildNewSessionArgs: () => [],
+    buildResumeArgs: (id: string) => ['--resume', id],
+    buildRespawnLaunch: () => null,
     scanSessionId: vi.fn().mockResolvedValue(null),
   };
 }
@@ -133,6 +133,7 @@ describe('POST /api/windows/:id/launch-agent — MCP blocking', () => {
   let window: Window;
   let server: ServerConfig;
   let sendKeys: ReturnType<typeof vi.fn>;
+  let replacePaneWithProgram: ReturnType<typeof vi.fn>;
   let taskStore: Map<number, Task>;
 
   async function buildApp(opts: {
@@ -148,6 +149,7 @@ describe('POST /api/windows/:id/launch-agent — MCP blocking', () => {
     taskStore = new Map((opts.tasks ?? []).map(t => [t.id, t]));
 
     sendKeys = vi.fn().mockResolvedValue(undefined);
+    replacePaneWithProgram = vi.fn().mockResolvedValue('%1');
 
     const windowRepo: Partial<IWindowRepository> = {
       findById: (id: number) => (id === window.id ? window : undefined),
@@ -159,6 +161,7 @@ describe('POST /api/windows/:id/launch-agent — MCP blocking', () => {
     const mux = {
       sendKeysToHandle: sendKeys as unknown as TmuxClient['sendKeysToHandle'],
       resolvePane: vi.fn().mockResolvedValue('%0') as unknown as TmuxClient['resolvePane'],
+      replacePaneWithProgram,
     };
     const respawnService = {
       isTaskExecutionAllowed: vi.fn(() => false),
@@ -197,17 +200,52 @@ describe('POST /api/windows/:id/launch-agent — MCP blocking', () => {
     return keys[0];
   }
 
-  it('refuses a Windows host as unsupported_os (501) and types nothing into the pane: worker launch is #371', async () => {
-    app = await buildApp({ win: makeWindow(), hostProfile: { platform: 'win32', arch: 'x64' } });
-    const res = await app.inject({
-      method: 'POST',
-      url: `/api/windows/${window.id}/launch-agent`,
-      payload: { command: 'claude' },
+  describe('a Windows host (the mux starts the program, nothing is typed)', () => {
+    const win32 = { platform: 'win32' as const, arch: 'x64' as const };
+    // A Windows host has no tmux: its windows are misao's, which run no supervisor.
+    const misaoWindow = (overrides: Partial<Window> = {}): Window => makeWindow({ muxRef: { kind: 'misao', workspace: 'proj', window: 'w_01' }, ...overrides });
+
+    it('replaces the window\'s shell pane with the command split into arguments, in the window\'s directory, with the manual-window env', async () => {
+      app = await buildApp({ win: misaoWindow({ workingDirectory: 'C:\\work\\app' }), hostProfile: win32 });
+      const res = await app.inject({
+        method: 'POST',
+        url: `/api/windows/${window.id}/launch-agent`,
+        payload: { command: "claude --dangerously-skip-permissions --model 'claude-opus-4-6[1m]'" },
+      });
+      expect(res.statusCode).toBe(200);
+      expect(res.json()).toEqual({ ok: true, supervised: false });
+      expect(sendKeys).not.toHaveBeenCalled();
+      expect(replacePaneWithProgram).toHaveBeenCalledTimes(1);
+      const [, handle, program] = replacePaneWithProgram.mock.calls[0];
+      expect(handle).toBe('%0');
+      expect(program).toMatchObject({
+        argv: ['claude', '--dangerously-skip-permissions', '--model', 'claude-opus-4-6[1m]', '--session-id', expect.stringMatching(/^[0-9a-f-]{36}$/)],
+        cwd: 'C:\\work\\app',
+        cols: 120,
+        rows: 40,
+      });
+      expect(program.extraEnv).toMatchObject({ AZITO_UI_TOKEN: 'test-token' });
+      await app.close();
     });
-    expect(res.statusCode).toBe(501);
-    expect(res.json()).toEqual({ error: 'Launching an agent in a window is not available on Windows hosts yet (tracked in #371).', code: 'unsupported_os' });
-    expect(sendKeys).not.toHaveBeenCalled();
-    await app.close();
+
+    it("refuses a task's primary window like adding a pane (its token generation cannot be given to a replacement pane), touching nothing", async () => {
+      app = await buildApp({ win: misaoWindow({ ownerType: 'task', isPrimary: true, taskId: 10 }), hostProfile: win32, tasks: [makeTask({ id: 10 })] });
+      const res = await app.inject({ method: 'POST', url: `/api/windows/${window.id}/launch-agent`, payload: { command: 'claude --dangerously-skip-permissions' } });
+      expect(res.statusCode).toBe(409);
+      expect(res.json()).toMatchObject({ error: 'primary_task_window_pane_add_unsupported' });
+      expect(replacePaneWithProgram).not.toHaveBeenCalled();
+      await app.close();
+    });
+
+    it('refuses a command that cannot be split into arguments safely as unsupported_os (501), touching nothing', async () => {
+      app = await buildApp({ win: misaoWindow(), hostProfile: win32 });
+      const res = await app.inject({ method: 'POST', url: `/api/windows/${window.id}/launch-agent`, payload: { command: 'my-tool | tee log' } });
+      expect(res.statusCode).toBe(501);
+      expect(res.json()).toMatchObject({ code: 'unsupported_os' });
+      expect(replacePaneWithProgram).not.toHaveBeenCalled();
+      expect(sendKeys).not.toHaveBeenCalled();
+      await app.close();
+    });
   });
 
   it('(a) isPrimary=true, claude, no session-id → both --strict-mcp-config and --session-id present', async () => {

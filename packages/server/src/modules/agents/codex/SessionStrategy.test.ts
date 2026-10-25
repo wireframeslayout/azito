@@ -6,6 +6,7 @@ import type { ServerConfig } from '../../servers/Server';
 import type { TransportFactory } from '../../servers/transport/TransportFactory';
 import { CodexSessionStrategy } from './SessionStrategy';
 import { posixDialect } from '../../../shared/os/shellDialect';
+import { renderLaunchLine } from '../WorkerLaunch';
 import { LocalFileOps, localFileOpsHost } from '../../../shared/fs/LocalFileOps';
 
 const server: ServerConfig = {
@@ -56,13 +57,18 @@ function meta(sessionId: string, cwd: string | null, originator: string | null):
   return JSON.stringify({ type: 'session_meta', payload: { session_id: sessionId, cwd, originator } });
 }
 
-describe('CodexSessionStrategy.buildRespawnCommand (Issue #28 third-party review: respawn MCP-bypass fix)', () => {
+/** The line the respawn launch is typed as. */
+function respawnLine(strategy: CodexSessionStrategy, sessionId: string | null, model: string | null, extraArgs: string | null, blockMcp = true): string {
+  return renderLaunchLine(strategy.buildRespawnLaunch(sessionId, model, extraArgs, blockMcp), posixDialect);
+}
+
+describe('CodexSessionStrategy.buildRespawnLaunch (Issue #28 third-party review: respawn MCP-bypass fix)', () => {
   it('includes the azt-mcp disable override on a resume respawn, same as a fresh launch', () => {
     const strategy = createStrategy();
-    const fresh = strategy.buildRespawnCommand(null, null, null, posixDialect);
-    const resumed = strategy.buildRespawnCommand('session-1', null, null, posixDialect);
+    const fresh = respawnLine(strategy, null, null, null);
+    const resumed = respawnLine(strategy, 'session-1', null, null);
     expect(fresh).toContain('-c mcp_servers.azt-mcp.enabled=false');
-    // This is the exact gap the review caught: buildRespawnCommand's
+    // This is the exact gap the review caught: the respawn builder's
     // `codex resume` branch previously hand-rolled its own command string
     // and omitted the MCP-disable override that buildCodexLaunchCommand
     // applies to a fresh launch — a respawned codex worker could load the
@@ -76,7 +82,7 @@ describe('CodexSessionStrategy.buildRespawnCommand (Issue #28 third-party review
 
   it('forwards model and extraArgs on a resume respawn, same as a fresh launch', () => {
     const strategy = createStrategy();
-    const resumed = strategy.buildRespawnCommand('session-2', 'gpt-5.6-sol', '--verbose', posixDialect);
+    const resumed = respawnLine(strategy, 'session-2', 'gpt-5.6-sol', '--verbose');
     expect(resumed).toBe(
       "codex resume session-2 --dangerously-bypass-approvals-and-sandbox -c mcp_servers.azt-mcp.enabled=false --model 'gpt-5.6-sol' '--verbose'",
     );
@@ -84,14 +90,14 @@ describe('CodexSessionStrategy.buildRespawnCommand (Issue #28 third-party review
 
   it('omits MCP disable flag when blockMcp is false (Issue #471)', () => {
     const strategy = createStrategy();
-    const fresh = strategy.buildRespawnCommand(null, null, null, posixDialect, false);
+    const fresh = respawnLine(strategy, null, null, null, false);
     expect(fresh).not.toContain('mcp_servers.azt-mcp.enabled=false');
     expect(fresh).toBe('codex --dangerously-bypass-approvals-and-sandbox');
   });
 
   it('omits MCP disable flag on resume when blockMcp is false', () => {
     const strategy = createStrategy();
-    const resumed = strategy.buildRespawnCommand('session-3', null, null, posixDialect, false);
+    const resumed = respawnLine(strategy, 'session-3', null, null, false);
     expect(resumed).not.toContain('mcp_servers.azt-mcp.enabled=false');
     expect(resumed).toBe('codex resume session-3 --dangerously-bypass-approvals-and-sandbox');
   });

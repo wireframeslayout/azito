@@ -7,6 +7,7 @@ import type { AgentTurn } from '../../turns/AgentTurn';
 import type { PhaseSignalCapability } from '../../../prompt/executionEnvelope';
 import type { TaskTempServer } from '../../../../shared/os/taskTempFiles';
 import type { ShellDialect } from '../../../../shared/os/shellDialect';
+import type { WorkerLaunch } from '../../../agents/WorkerLaunch';
 
 export interface WorkerLaunchContext {
   server: ServerConfig;
@@ -20,9 +21,22 @@ export interface WorkerLaunchContext {
   windowKind: MuxDriverKind;
   windowType: string;
   workerExecutionMode: WorkerExecutionMode;
-  effectiveLaunchCommand: string;
-  /** The shell of the launched pane (the target host's), for the supervisor wrapper. */
+  /** What to start: the worker with its session arguments. */
+  launch: WorkerLaunch;
+  /** The shell of the launched pane (the target host's): the launch line and the supervisor wrapper are written in it. */
   dialect: ShellDialect;
+  /** The host starts the worker as a program in place of the pane's shell (Windows), rather than by a line typed into it. */
+  startsAsProgram: boolean;
+  /** Where the worker starts when it is started as a program (a typed line is preceded by the caller's own directory change). */
+  cwd: string | null;
+  /** The env the pane was created with, given again to the pane that replaces it; null when this call does not have it. */
+  paneEnv: Readonly<Record<string, string>> | null;
+}
+
+/** The result of starting a worker: the line or command it was started with (for the log), and the pane it runs in (a different pane when it replaced the shell's). */
+export interface WorkerLaunchResult {
+  command: string;
+  handle: PaneHandle;
 }
 
 export interface WorkerContext {
@@ -62,11 +76,11 @@ export interface EnvelopeBuildResult {
 export type FollowUpEnvelopeBuildContext = Omit<EnvelopeBuildContext, 'phase' | 'capability'>;
 
 export interface IWorkerRuntime {
-  /** Returns the actual command sent to the pane (may include supervisor wrap). */
-  launch(ctx: WorkerLaunchContext): Promise<string>;
+  /** Returns the actual command sent to the pane (may include supervisor wrap) and the pane the worker runs in. */
+  launch(ctx: WorkerLaunchContext): Promise<WorkerLaunchResult>;
   sendPrompt(ctx: WorkerContext, prompt: string): Promise<void>;
   buildEnvelope(ctx: EnvelopeBuildContext): EnvelopeBuildResult;
   buildFollowUpEnvelope(ctx: FollowUpEnvelopeBuildContext): EnvelopeBuildResult;
-  /** Returns the actual command sent to the pane (may include supervisor wrap). */
-  resume(ctx: WorkerLaunchContext): Promise<string>;
+  /** Returns the actual command sent to the pane (may include supervisor wrap) and the pane the worker runs in. */
+  resume(ctx: WorkerLaunchContext): Promise<WorkerLaunchResult>;
 }

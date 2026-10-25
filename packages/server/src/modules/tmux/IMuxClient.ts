@@ -14,6 +14,19 @@ export type PaneLocation =
   | { status: 'absent' }
   | { status: 'unknown' };
 
+/** A program to run in a pane directly, with no shell between the hub and it (a Windows host starts a worker this way, #371). */
+export interface PaneProgram {
+  /** The program and its arguments; the program is looked up by the host's own rules (PATH, PATHEXT on Windows). */
+  argv: readonly string[];
+  /** Where it starts. Omitted: the mux's own default. */
+  cwd?: string;
+  /** The size the program starts with: a Node TUI does not follow a later resize on Windows (a ConPTY limit), so it must be right at start. */
+  cols: number;
+  rows: number;
+  /** The env the pane carries (the same the window's first pane was given: the task token, the credential mask). */
+  extraEnv?: Record<string, string>;
+}
+
 export interface IMuxClient {
   readonly kind: MuxDriverKind;
   readonly caps: MuxCapabilities;
@@ -49,6 +62,12 @@ export interface IMuxClient {
   splitPaneByHandle(server: ServerConfig, handle: PaneHandle, dir: 'h' | 'v', env?: Record<string, string>): Promise<{ handle: PaneHandle; result: ExecResult }>;
   /** Opens a new shell pane in an existing window and types `command` into it. Only the misao driver supports it. */
   openPaneInWindow(server: ServerConfig, ref: MuxRef, opts?: { command?: string; extraEnv?: Record<string, string>; labels?: PaneWindowLabels }): Promise<PaneHandle>;
+  /**
+   * Replaces the pane `handle` (an untouched shell pane) by a pane of the same window that runs `program` directly, and returns the new
+   * pane's handle: the pane keeps its window and labels, but it is a different pane. The old pane is closed only once the new one is
+   * open; if that fails, nothing is left half-done. Only the misao driver supports it.
+   */
+  replacePaneWithProgram(server: ServerConfig, handle: PaneHandle, program: PaneProgram): Promise<PaneHandle>;
   closePane(server: ServerConfig, handle: PaneHandle): Promise<ExecResult>;
   captureScreen(server: ServerConfig, handle: PaneHandle, start?: number, end?: number): Promise<ExecResult>;
   sendKeysToHandle(server: ServerConfig, handle: PaneHandle, keys: string[]): Promise<void>;

@@ -462,7 +462,7 @@ What works on a Windows agent, and what does not yet. The hub reads the OS from 
 | Files (list, read, write, create, delete, rename: `IFileOps`), file name search, file content search (`rg` when installed, else the built-in search; result paths relative with `/`), directory completion. See `files.md` | Works | — |
 | Git diff, log, worktree switching, branch search and repository discovery (needs Git for Windows; without it the API answers `git_not_found` (501) and each screen shows the reason as its error) | Works | — |
 | Task and Unit execution | Disabled in the UI | #371 |
-| Starting claude / codex (or any command) in a new window | Disabled in the UI; choose the plain shell | #371 |
+| Starting claude / codex (or a command made of plain words) in a new window, and respawning that window | Works: misao starts the program itself (no shell line is typed; `claude` is found as `claude.cmd` through PATHEXT). A command with shell syntax (`"`, `$`, `\|`, `;`, `&`...) is refused with `unsupported_os`; respawning a window with a saved pane layout, or a plain shell window with a working directory, is not available yet | — |
 | tmux (default mux choice, tmux runtime, apply tmux config, install tmux) | Not offered: Windows has no tmux, misao is the only pane server | — |
 | AZITO Harness (setup.sh), its install-status row | Disabled in the UI | #371 |
 | Browser runtime (Chromium) install | Disabled in the UI | #372 |

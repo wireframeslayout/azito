@@ -11,6 +11,7 @@ AZITO はエージェント種別(claude / codex / generic など)を
 
    ```ts
    import type { AgentDefinition, IAgentProvider, LaunchOptions } from '../AgentProvider';
+   import { flag, value, type WorkerLaunch } from '../WorkerLaunch';
 
    const definition: AgentDefinition = {
      type: 'mytool',
@@ -22,14 +23,15 @@ AZITO はエージェント種別(claude / codex / generic など)を
      models: [],
    };
 
-   function buildLaunchCommand({ model, extraArgs }: LaunchOptions): string | null {
-     // tmux ペインでの対話起動コマンドを組み立てる
-     return `mytool${model ? ` --model ${model}` : ''}`;
+   function buildLaunch({ model }: LaunchOptions): WorkerLaunch {
+     // 対話起動を「プログラムと引数」で組み立てる。POSIX はシェルの行にして打ち込み、Windows はそのまま misao に渡す。
+     // flag(): このコードが書く語（そのまま打つ）、value(): データ（モデル名など。行では必ず引用される）
+     return { kind: 'program', file: 'mytool', args: model ? [flag('--model'), value(model)] : [] };
    }
 
    export const myToolProvider: IAgentProvider = {
      definition,
-     buildLaunchCommand,
+     buildLaunch,
      buildHeadlessCommand: () => null,      // ヘッドレス(subagent)実行に非対応なら null
      createSessionStrategy: () => null,     // セッション再開に非対応なら null
    };
@@ -52,7 +54,7 @@ AZITO はエージェント種別(claude / codex / generic など)を
 `IAgentProvider` の各メンバーは、対応しない場合は素直に `null`(または未実装)を返せばよい。
 
 - `definition`: `/api/agents` `/api/workers/types` `/api/workers/models/:type` で使われるカタログ情報。
-- `buildLaunchCommand(opts)`: tmux ペインでの対話起動コマンド(`--model` 等のフラグを組み立てる)。
+- `buildLaunch(opts)`: ペインでの対話起動(`--model` 等のフラグを組み立てる)。`WorkerLaunch`(`agents/WorkerLaunch.ts`)で返し、シェルの行にするか(POSIX)、プログラムと引数で mux に渡すか(Windows)は起動する側が決める。
 - `buildHeadlessCommand(model)`: ヘッドレス(subagent 委任)実行コマンド。非対応なら `null`。
 - `createSessionStrategy(deps)`: セッション再開(`--resume` 等)の戦略。非対応なら `null`
   (呼び出し側が自動的に `NullSessionStrategy` にフォールバックする)。

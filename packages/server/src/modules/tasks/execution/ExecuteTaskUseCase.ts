@@ -1,5 +1,5 @@
 import { EventEmitter } from 'events';
-import { assertHostFeature, workerLineDialect } from '../../../shared/os/hostFeature';
+import { assertHostFeature, workerStartsAsProgram } from '../../../shared/os/hostFeature';
 import { changeDirectoryLine } from '../../../shared/os/changeDirectoryLine';
 import { randomUUID, randomBytes } from 'crypto';
 import type { ITaskRepository, Task } from '../Task';
@@ -35,8 +35,9 @@ import type { IWindowRepository } from '../../windows/Window';
 import type { IPaneStreamFactory } from '../../tmux/PaneStream';
 import type { TaskTempFiles } from '../../../shared/os/taskTempFiles';
 import type { ISessionStrategyFactory } from '../../agents/SessionStrategy';
-import { buildWorkerLaunchCommand } from '../../agents/LaunchCommand';
-import { type ShellDialect } from '../../../shared/os/shellDialect';
+import { buildWorkerLaunch, buildWorkerLaunchCommand } from '../../agents/LaunchCommand';
+import { withFlags } from '../../agents/WorkerLaunch';
+import { shellDialectFor, type ShellDialect } from '../../../shared/os/shellDialect';
 import { expandTemplate } from './PromptExpander';
 import type { UnitTypeLoader } from '../../sidekicks/UnitTypeLoader';
 import { WorkerWaiter } from './WorkerWaiter';
@@ -257,14 +258,19 @@ export class ExecuteTaskUseCase {
     return this.muxDriverRegistry.resolve(server);
   }
 
-  /** Every use is a line typed into a pane for a worker (cd, launch, supervisor wrap): refused where a worker cannot run in a pane. */
+  /** The shell of the server's panes: what a line typed into one is written in (and what a window row shows as its launch command). */
   private dialectOf(server: ServerConfig): ShellDialect {
-    return workerLineDialect(this.transportFactory.hostProfileFor(server), 'Launching a worker in a pane');
+    return shellDialectFor(this.transportFactory.hostProfileFor(server));
   }
 
-  /** Refuses, before anything is changed, an operation that would resume a worker on a host that cannot run one (Windows, #371). */
+  /** Whether a worker is started as a program by the mux (Windows) rather than by a line typed into the pane's shell (see `workerStartsAsProgram`). */
+  private startsWorkerAsProgram(server: ServerConfig): boolean {
+    return workerStartsAsProgram(this.transportFactory.hostProfileFor(server));
+  }
+
+  /** Refuses, before anything is changed, an operation that would resume a task's worker on a host that cannot run tasks yet (Windows, #371). */
   assertCanLaunchWorker(server: ServerConfig): void {
-    assertHostFeature(this.transportFactory.hostProfileFor(server), 'workerLaunch', 'Resuming a worker');
+    assertHostFeature(this.transportFactory.hostProfileFor(server), 'taskExecution', 'Resuming a worker');
   }
 
   private getWorktreeService(server: ServerConfig): IWorktreeService {
@@ -890,6 +896,9 @@ export class ExecuteTaskUseCase {
     let windowLabel: string;
     let tokenId: number;
     let createdServer: ServerConfig;
+    // The env the window's first pane was created with (its task-token generation). A host that starts the worker as a program
+    // replaces that pane, and the plaintext token is not stored anywhere else, so the replacement is given this same env.
+    let windowPaneEnv: Record<string, string>;
     // Reassigned by reverifyGateInLock's preCheck below with the
     // project/projectServer snapshot the in-lock gate re-verification
     // actually ran against (Issue #87 16th-round review, Important finding
@@ -901,7 +910,7 @@ export class ExecuteTaskUseCase {
     let lockedProject = project;
     let lockedProjectServer = projectServer;
     try {
-      ({ windowName, windowLabel, tokenId, server: createdServer } = await runExclusiveForTask(taskId, async () => {
+      ({ windowName, windowLabel, tokenId, server: createdServer, paneEnv: windowPaneEnv } = await runExclusiveForTask(taskId, async () => {
         // Task/tmux state is re-read HERE, inside the lock (Issue #28
         // third-party review, TOCTOU finding) — not taken from the `task`
         // captured before this lock was even queued for. Without this, a
@@ -935,7 +944,7 @@ export class ExecuteTaskUseCase {
         // window creation both run inside its callback, against the same
         // `freshServer` row, so a mismatch now aborts before anything is
         // killed.
-        const { windowName: newWindowName, label: newWindowLabel, tokenId: newTokenId, server: newServer, ref: newWindowRef } = await withServerLock(this.serverIsolationLock, server, true, async (freshServer) => {
+        const { windowName: newWindowName, label: newWindowLabel, tokenId: newTokenId, server: newServer, ref: newWindowRef, env: newPaneEnv } = await withServerLock(this.serverIsolationLock, server, true, async (freshServer) => {
           if (currentTask.tmuxWindow) {
             const killDriver = this.resolveDriver(freshServer);
             const preWorkspaces = await killDriver.listWorkspaces(freshServer);
@@ -993,7 +1002,7 @@ export class ExecuteTaskUseCase {
         // (resolvePaneId, the worktree transport, the rollback's killWindow)
         // must keep using it, not the (possibly now-stale) `server` this
         // closure captured from its own outer scope.
-        return { windowName: newWindowName, windowLabel: newWindowLabel ?? newWindowName, tokenId: newTokenId, server: newServer };
+        return { windowName: newWindowName, windowLabel: newWindowLabel ?? newWindowName, tokenId: newTokenId, server: newServer, paneEnv: newPaneEnv };
       }));
     } catch (err) {
       if (this.failOnServerSnapshotMismatch(err, taskId, unitId)) throw err;
@@ -1011,7 +1020,7 @@ export class ExecuteTaskUseCase {
     const executeDriver = this.resolveDriver(server);
     const ref: MuxRef = { kind: executeDriver.kind, workspace: muxWorkspace, window: windowName };
     const windowTarget = muxWindowTarget(ref);
-    const handle = await executeDriver.resolvePane(server, ref, 1);
+    let handle = await executeDriver.resolvePane(server, ref, 1);
 
     // Issue #63: baseBranch was already detected and persisted BEFORE
     // enforceExecutionGate, but that used pre-lock snapshots. Re-resolve
@@ -1343,8 +1352,11 @@ export class ExecuteTaskUseCase {
         // metacharacters via a maliciously named directory/symlink inside
         // the allowed root (Issue #27 review finding: cd command injection).
         // `--` guards against a leading `-` being read as a cd option.
-        await this.resolveDriver(server).sendKeysToHandle(server, handle, [this.dialectOf(server).changeDirectory(effectiveDir), 'Enter']);
-        await sleep(500);
+        // A host that starts the worker as a program hands it this directory as the program's own (no shell line is typed).
+        if (!this.startsWorkerAsProgram(server)) {
+          await this.resolveDriver(server).sendKeysToHandle(server, handle, [this.dialectOf(server).changeDirectory(effectiveDir), 'Enter']);
+          await sleep(500);
+        }
       } catch {}
     }
 
@@ -1415,16 +1427,13 @@ export class ExecuteTaskUseCase {
     await labelAddedWindowOrRemove(this.resolveDriver(server), server, ref, { windowId: windowRowId, taskId }, this.windowRepo);
 
     // Launch worker command
-    const workerLaunchCommand = buildWorkerLaunchCommand(unit.workerType, unit.workerModel, unit.workerExtraArgs, this.dialectOf(server));
-    if (workerLaunchCommand) {
-      let effectiveLaunchCommand = workerLaunchCommand;
+    const workerLaunch = buildWorkerLaunch(unit.workerType, unit.workerModel, unit.workerExtraArgs);
+    if (workerLaunch) {
+      let effectiveLaunch = workerLaunch;
       const strategy = this.sessionStrategyFactory.create(unit.workerType);
       if (strategy.supportsSession) {
         const sessionId = randomUUID();
-        const sessionFlags = strategy.buildNewSessionFlags(sessionId);
-        if (sessionFlags) {
-          effectiveLaunchCommand = `${workerLaunchCommand} ${sessionFlags}`;
-        }
+        effectiveLaunch = withFlags(workerLaunch, strategy.buildNewSessionArgs(sessionId));
         this.taskRepo.update(taskId, { agentSessionId: sessionId } as Partial<Task>);
 
         const taskWindows = this.windowRepo.findByTask(taskId);
@@ -1469,16 +1478,20 @@ export class ExecuteTaskUseCase {
       }
       const launchPrimaryWin = this.windowRepo.findByTask(taskId).find((w) => w.isPrimary);
       try {
-        const actualCommand = await runtime.launch({
+        const launched = await runtime.launch({
           server, handle, driver: executeDriver, supervisorTarget: windowTarget, taskId, unitId,
           windowKind: ref.kind,
           windowId: launchPrimaryWin?.id,
           windowType,
           workerExecutionMode: unit.workerExecutionMode,
-          effectiveLaunchCommand,
+          launch: effectiveLaunch,
           dialect: this.dialectOf(server),
+          startsAsProgram: this.startsWorkerAsProgram(server),
+          cwd: effectiveDir || null,
+          paneEnv: windowPaneEnv,
         });
-        this.appendLog(taskId, unitId, 'command', { type: 'worker_launch', command: actualCommand });
+        handle = launched.handle;
+        this.appendLog(taskId, unitId, 'command', { type: 'worker_launch', command: launched.command });
       } catch (launchErr) {
         if (launchErr instanceof TuiNotReadyError && launchErr.trustDialogDetected) {
           this.appendLog(taskId, unitId, 'command', {
@@ -1489,6 +1502,9 @@ export class ExecuteTaskUseCase {
           return;
         }
         this.appendLog(taskId, unitId, 'command', { type: 'worker_launch_failed', message: (launchErr as Error).message });
+        // The run goes on with the window's pane. A host that starts the worker as a program may have replaced the pane before the
+        // launch failed (the TUI never became ready), so the pane is looked up again rather than kept as the closed one.
+        if (this.startsWorkerAsProgram(server)) handle = await executeDriver.resolvePane(server, ref, 1);
       }
     }
 
@@ -1757,6 +1773,8 @@ export class ExecuteTaskUseCase {
     let windowExists: boolean;
     let tokenId: number | null;
     let createdServer: ServerConfig;
+    // The env of the window created here (null for a window that already existed: its token generation is not available to this call).
+    let followUpPaneEnv: Record<string, string> | null;
     try {
       // The ENTIRE "read current window state -> decide whether to rotate ->
       // create -> persist" sequence now runs inside runExclusiveForTask, not
@@ -1765,13 +1783,13 @@ export class ExecuteTaskUseCase {
       // the lock, and re-checking tmux for it there too, means the decision
       // is always made against the latest state any prior queued rotation
       // for this task (execute()/followUp()/respawn()) actually persisted.
-      ({ windowName, windowKind, windowExists, tokenId, server: createdServer } = await runExclusiveForTask(taskId, async () => {
+      ({ windowName, windowKind, windowExists, tokenId, server: createdServer, paneEnv: followUpPaneEnv } = await runExclusiveForTask(taskId, async () => {
         // Issue #274: if a running session was found in a different window,
         // use that window directly.
         if (runningInWindow) {
           const parts = runningInWindow.tmuxTarget.split(':');
           const runningWindowName = parts[1]?.split('.')[0] || runningInWindow.tmuxTarget;
-          return { windowName: runningWindowName, windowKind: runningInWindow.kind, windowExists: true, tokenId: null, server };
+          return { windowName: runningWindowName, windowKind: runningInWindow.kind, windowExists: true, tokenId: null, server, paneEnv: null };
         }
 
         // Issue #274: if we woke a sleeping primary window, re-read the
@@ -1796,7 +1814,7 @@ export class ExecuteTaskUseCase {
 
               const wokenWindowName = wakeRef.window;
               this.taskRepo.update(taskId, { tmuxWindow: wokenWindowName } as Partial<Task>);
-              return { windowName: wokenWindowName, windowKind: wakeRef.kind, windowExists: false, tokenId: null, server };
+              return { windowName: wokenWindowName, windowKind: wakeRef.kind, windowExists: false, tokenId: null, server, paneEnv: null };
             }
           }
           // Wake result is stale — fall through to the standard path.
@@ -1831,7 +1849,7 @@ export class ExecuteTaskUseCase {
           if (currentTask.tmuxWindow !== candidateWindowName) {
             this.taskRepo.update(taskId, { tmuxWindow: candidateWindowName } as Partial<Task>);
           }
-          return { windowName: candidateWindowName, windowKind: candidateRef.kind, windowExists: true, tokenId: null, server };
+          return { windowName: candidateWindowName, windowKind: candidateRef.kind, windowExists: true, tokenId: null, server, paneEnv: null };
         }
 
         // Window generation point for a follow-up that has no window to
@@ -1891,7 +1909,7 @@ export class ExecuteTaskUseCase {
         }
 
         if (!created.ref) throw new Error(`Follow-up window for task ${taskId} was created without a ref`);
-        return { windowName: created.windowName, windowKind: created.ref.kind, windowExists: false, tokenId: created.tokenId, server: created.server };
+        return { windowName: created.windowName, windowKind: created.ref.kind, windowExists: false, tokenId: created.tokenId, server: created.server, paneEnv: created.env };
       }));
     } catch (err) {
       if (this.failOnServerSnapshotMismatch(err, taskId, unitId)) throw err;
@@ -1914,7 +1932,7 @@ export class ExecuteTaskUseCase {
     const fuMainDriver = this.resolveDriver(server);
     const ref: MuxRef = { kind: windowKind, workspace: muxWorkspace, window: windowName };
     const windowTarget = muxWindowTarget(ref);
-    const handle = await fuMainDriver.resolvePane(server, ref, 1);
+    let handle = await fuMainDriver.resolvePane(server, ref, 1);
 
     if (!windowExists) {
       // Use worktree path if available, otherwise fall back to working directory.
@@ -1967,23 +1985,22 @@ export class ExecuteTaskUseCase {
 
       if (followUpDir) {
         try {
-          await this.resolveDriver(server).sendKeysToHandle(server, handle, [await changeDirectoryLine(() => this.transportFactory.getFileOps(server), this.dialectOf(server), followUpDir), 'Enter']);
-          await sleep(500);
+          if (!this.startsWorkerAsProgram(server)) {
+            await this.resolveDriver(server).sendKeysToHandle(server, handle, [await changeDirectoryLine(() => this.transportFactory.getFileOps(server), this.dialectOf(server), followUpDir), 'Enter']);
+            await sleep(500);
+          }
         } catch (err) {
           this.appendLog(taskId, unitId, 'command', { type: 'cd_failed', directory: followUpDir, reason: err instanceof Error ? err.message : String(err) });
         }
       }
 
-      const followUpLaunchCommand = buildWorkerLaunchCommand(unit.workerType, unit.workerModel, unit.workerExtraArgs, this.dialectOf(server));
-      if (followUpLaunchCommand) {
-        let effectiveFollowUpCommand = followUpLaunchCommand;
+      const followUpLaunch = buildWorkerLaunch(unit.workerType, unit.workerModel, unit.workerExtraArgs);
+      if (followUpLaunch) {
+        let effectiveFollowUpLaunch = followUpLaunch;
         if (task.agentSessionId) {
           const followUpStrategy = this.sessionStrategyFactory.create(unit.workerType);
           if (followUpStrategy.supportsSession) {
-            const sessionFlags = followUpStrategy.buildResumeFlags(task.agentSessionId);
-            if (sessionFlags) {
-              effectiveFollowUpCommand = `${followUpLaunchCommand} ${sessionFlags}`;
-            }
+            effectiveFollowUpLaunch = withFlags(followUpLaunch, followUpStrategy.buildResumeArgs(task.agentSessionId));
           }
         }
         const runtime = this.runtimeRegistry.get(unit.workerRuntime);
@@ -1993,16 +2010,20 @@ export class ExecuteTaskUseCase {
           this.supervisorRegistry.clearExitMarker(server.name, windowTarget);
         }
         try {
-          const actualCommand = await runtime.resume({
+          const resumed = await runtime.resume({
             server, handle, driver: fuMainDriver, supervisorTarget: windowTarget, taskId, unitId,
             windowKind: ref.kind,
             windowId: primaryWin?.id,
             windowType: followUpWindowType,
             workerExecutionMode: unit.workerExecutionMode,
-            effectiveLaunchCommand: effectiveFollowUpCommand,
+            launch: effectiveFollowUpLaunch,
             dialect: this.dialectOf(server),
+            startsAsProgram: this.startsWorkerAsProgram(server),
+            cwd: followUpDir || null,
+            paneEnv: followUpPaneEnv,
           });
-          this.appendLog(taskId, unitId, 'command', { type: 'worker_launch', command: actualCommand });
+          handle = resumed.handle;
+          this.appendLog(taskId, unitId, 'command', { type: 'worker_launch', command: resumed.command });
         } catch (launchErr) {
           this.appendLog(taskId, unitId, 'command', { type: 'worker_launch_failed', message: (launchErr as Error).message });
           this.taskRepo.updateStatus(taskId, 'failed');

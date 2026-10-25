@@ -9,9 +9,12 @@ import { renderForStateMachine } from '../../../prompt/PhasePromptRenderer';
 import { FOLLOW_UP_CAPABILITY, stateMachineEnvelope } from '../../../prompt/executionEnvelope';
 import { shouldSupervise, wrapWithSupervisor } from '../../../supervisors/SupervisorLaunch';
 import type { SupervisorRegistry } from '../../../supervisors/SupervisorRegistry';
+import { launchProgramInPane } from '../../../agents/launchProgramInPane';
+import { renderLaunchLine } from '../../../agents/WorkerLaunch';
 import type {
   IWorkerRuntime,
   WorkerLaunchContext,
+  WorkerLaunchResult,
   WorkerContext,
   EnvelopeBuildContext,
   EnvelopeBuildResult,
@@ -65,32 +68,42 @@ export class TuiWorkerRuntime implements IWorkerRuntime {
     private harnessPrefix?: string,
   ) {}
 
-  async launch(ctx: WorkerLaunchContext): Promise<string> {
-    const sendCommand = shouldSupervise(ctx.server.type, ctx.windowType, ctx.windowKind)
-      ? wrapWithSupervisor(ctx.effectiveLaunchCommand, {
-          server: ctx.server,
-          dialect: ctx.dialect,
-          target: ctx.supervisorTarget,
-          taskId: ctx.taskId,
-          unitId: ctx.unitId,
-          harnessPrefix: this.harnessPrefix,
-          // Issue #28 Phase C — issueLaunch() returns undefined only when no
-          // DB-backed launch repository exists (see its doc comment); the
-          // spread then omits both flags and wrapWithSupervisor falls back to
-          // an unbound launch, exactly the pre-Phase-C command shape.
-          ...this.supervisorRegistry.issueLaunch({
-            serverName: ctx.server.name,
+  async launch(ctx: WorkerLaunchContext): Promise<WorkerLaunchResult> {
+    const line = renderLaunchLine(ctx.launch, ctx.dialect);
+    const supervised = shouldSupervise(ctx.server.type, ctx.windowType, ctx.windowKind);
+    let command = line;
+    let handle = ctx.handle;
+    if (ctx.startsAsProgram) {
+      // The mux starts the program itself; a supervisor wraps a typed line, so it has nothing to wrap here (and a windows host has no tmux pane to supervise).
+      if (supervised) throw new Error(`A worker started as a program cannot run under a supervisor (${ctx.server.name}, window kind ${ctx.windowKind}).`);
+      handle = await launchProgramInPane(ctx.driver, ctx.server, ctx.handle, ctx.launch, { cwd: ctx.cwd, paneEnv: ctx.paneEnv });
+    } else {
+      command = supervised
+        ? wrapWithSupervisor(line, {
+            server: ctx.server,
+            dialect: ctx.dialect,
             target: ctx.supervisorTarget,
-            taskId: ctx.taskId ?? null,
-            unitId: ctx.unitId ?? null,
-            windowId: ctx.windowId ?? null,
-          }),
-        })
-      : ctx.effectiveLaunchCommand;
-    await ctx.driver.sendKeysToHandle(ctx.server, ctx.handle, [sendCommand, 'Enter']);
-    const isClaudeWorker = isClaudeLaunchCommand(ctx.effectiveLaunchCommand);
-    await this.waitForTuiReady(ctx.driver, ctx.server, ctx.handle, isClaudeWorker);
-    return sendCommand;
+            taskId: ctx.taskId,
+            unitId: ctx.unitId,
+            harnessPrefix: this.harnessPrefix,
+            // Issue #28 Phase C — issueLaunch() returns undefined only when no
+            // DB-backed launch repository exists (see its doc comment); the
+            // spread then omits both flags and wrapWithSupervisor falls back to
+            // an unbound launch, exactly the pre-Phase-C command shape.
+            ...this.supervisorRegistry.issueLaunch({
+              serverName: ctx.server.name,
+              target: ctx.supervisorTarget,
+              taskId: ctx.taskId ?? null,
+              unitId: ctx.unitId ?? null,
+              windowId: ctx.windowId ?? null,
+            }),
+          })
+        : line;
+      await ctx.driver.sendKeysToHandle(ctx.server, ctx.handle, [command, 'Enter']);
+    }
+    const isClaudeWorker = isClaudeLaunchCommand(line);
+    await this.waitForTuiReady(ctx.driver, ctx.server, handle, isClaudeWorker);
+    return { command, handle };
   }
 
   private async waitForTuiReady(driver: IMuxClient, server: ServerConfig, handle: PaneHandle, strict: boolean): Promise<void> {
@@ -212,7 +225,7 @@ export class TuiWorkerRuntime implements IWorkerRuntime {
     return { markerizedPrompt, signalStream, httpSignalTurn: null };
   }
 
-  async resume(ctx: WorkerLaunchContext): Promise<string> {
+  async resume(ctx: WorkerLaunchContext): Promise<WorkerLaunchResult> {
     return this.launch(ctx);
   }
 }

@@ -13,7 +13,7 @@ function fakeProvider(type: string): IAgentProvider {
       headlessCommand: null,
       models: [],
     },
-    buildLaunchCommand: () => null,
+    buildLaunch: () => null,
     buildHeadlessCommand: () => null,
     createSessionStrategy: () => null,
   };

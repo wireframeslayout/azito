@@ -2,7 +2,7 @@ import { randomUUID } from 'node:crypto';
 import { type MuxCapabilities, type MuxDriverKind, type MuxPaneInfo, type MuxRef, type MuxWorkspace, type PaneHandle, type PaneOrdinal, asPaneHandle, isMisaoWindowId } from '@azito/shared';
 import type { ExecResult, ITerminalStream } from '../../servers/transport/ServerTransport';
 import type { ServerConfig } from '../../servers/Server';
-import type { IMuxClient, PaneLocation, PaneWindowLabels } from '../IMuxClient';
+import type { IMuxClient, PaneLocation, PaneProgram, PaneWindowLabels } from '../IMuxClient';
 import { MuxDriverUnavailableError, MuxOperationUnsupportedError } from '../MuxCapabilityError';
 import { splitPaneEnv } from '../../../shared/auth/paneSecretEnv';
 import { generateWindowName } from '../windowNameUtils';
@@ -252,6 +252,31 @@ export class MisaoMuxClient implements IMuxClient {
     const handle = asPaneHandle(paneId);
     if (opts?.command) await this.sendKeysToHandle(server, handle, [opts.command, 'Enter']);
     return handle;
+  }
+
+  /**
+   * A program is started by `pane.open`'s own argv and cwd, with no shell: misao looks the program up by the host's rules
+   * (PATH and PATHEXT on Windows, so `claude` is `claude.cmd`) and names the pane's profile after it. The new pane is opened beside the
+   * old one (same window, the old pane's labels), and only then is the old one closed, so a failure to start leaves the window as it was.
+   */
+  async replacePaneWithProgram(server: ServerConfig, handle: PaneHandle, program: PaneProgram): Promise<PaneHandle> {
+    const source = await this.rpc.request('pane.info', { paneId: handle });
+    const { paneId } = await this.rpc.request('pane.open', {
+      cmd: [...program.argv],
+      ...(program.cwd !== undefined ? { cwd: program.cwd } : {}),
+      cols: program.cols,
+      rows: program.rows,
+      windowId: source.window.id,
+      labels: inheritedLabels(source),
+      ...this.paneEnvParams(server, program.extraEnv),
+    });
+    const replacement = asPaneHandle(paneId);
+    const closed = await this.closePane(server, handle);
+    if (closed.code !== 0 && !closed.alreadyGone) {
+      await this.closePane(server, replacement);
+      throw new Error(`could not close the pane ${handle} that the program replaces: ${closed.stderr}`);
+    }
+    return replacement;
   }
 
   async closePane(_server: ServerConfig, handle: PaneHandle): Promise<ExecResult> {

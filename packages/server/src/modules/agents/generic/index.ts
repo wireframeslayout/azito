@@ -1,4 +1,5 @@
 import type { AgentDefinition, IAgentProvider, LaunchOptions } from '../AgentProvider';
+import { commandLineLaunch, type WorkerLaunch } from '../WorkerLaunch';
 
 const definition: AgentDefinition = {
   type: 'generic',
@@ -10,8 +11,9 @@ const definition: AgentDefinition = {
   models: [],
 };
 
-function buildLaunchCommand({ extraArgs }: LaunchOptions): string | null {
-  return extraArgs?.trim() || null;
+function buildLaunch({ extraArgs }: LaunchOptions): WorkerLaunch | null {
+  const line = extraArgs?.trim();
+  return line ? commandLineLaunch(line) : null;
 }
 
 function buildHeadlessCommand(): null {
@@ -24,7 +26,7 @@ function createSessionStrategy(): null {
 
 export const genericProvider: IAgentProvider = {
   definition,
-  buildLaunchCommand,
+  buildLaunch,
   buildHeadlessCommand,
   createSessionStrategy,
 };

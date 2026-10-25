@@ -7,7 +7,8 @@ export interface PaneShell {
   shell: string;
   /**
    * Put between the shell and the command: `[shell, ...commandArgs, command]`. Null for a shell that cannot be handed a command
-   * line safely yet (a Windows host's cmd.exe: the worker launch lines are #371): a pane with that shell can only be opened bare.
+   * line safely (a Windows host's cmd.exe): a pane with that shell is opened bare. A Windows host's worker is not a command line
+   * either: it is started as a program (`MisaoMuxClient.replacePaneWithProgram`, #371), which does not go through the shell.
    */
   commandArgs: readonly string[] | null;
 }
@@ -20,8 +21,8 @@ const POSIX_COMMAND_ARGS = ['-lc'] as const;
 
 /**
  * The hub's own misao: the hub's shell, as before. A Windows hub's shell is its command interpreter (`%ComSpec%`, the same
- * as a Windows agent's): a pane is opened bare, and running a command in it is `unsupported_os` until PowerShell panes
- * and worker launch exist (#371). A hub on an unknown OS is refused with that reason: the hub's Unix shell would be
+ * as a Windows agent's): a pane is opened bare, and a command line cannot be run in it (`unsupported_os`; a worker is started
+ * as a program instead, #371). A hub on an unknown OS is refused with that reason: the hub's Unix shell would be
  * passed to a host that has none.
  * `shell` is what the entry point found for this OS (`$SHELL`; `%ComSpec%` on Windows, null when it is not set).
  */
@@ -41,7 +42,7 @@ export function hubPaneShell(shell: string | null, hubHost: HubHostProfile): Pan
  * The pane shell of an agent server's misao: the default shell of the agent's own host, as the agent reports it
  * (`$SHELL` of the agent process, else its user's passwd login shell), not the hub's. The answer is kept once the agent has given it.
  * - A Windows host's shell is the command interpreter it reports (`%ComSpec%`, misao's own default); a pane is opened bare, and
- *   running a command in it is `unsupported_os` for now (see {@link PaneShell.commandArgs}).
+ *   a command line cannot be run in it (`unsupported_os`, see {@link PaneShell.commandArgs}); a worker is started as a program instead (#371).
  * - An agent that reports no default shell is an error that says so: there is no silent fall back to `/bin/sh`.
  * - An agent too old to report its host (no `GET /api/host`) is a Unix agent from before Windows support: it keeps getting
  *   the hub's shell, as it did before the shell was per node (a known limitation until the agent is updated).
@@ -93,8 +94,8 @@ function windowsNotSupported(where: string): HostProfileError {
   return new HostProfileError('unsupported_os', `misao panes on ${where} (win32) are not supported yet.`);
 }
 
-/** Running a command in a pane needs the shell's arguments for it; a shell without them (Windows' for now) is `unsupported_os`. */
+/** Running a command line in a pane needs the shell's arguments for it; a shell without them (Windows') is `unsupported_os`. */
 export function requireCommandArgs(paneShell: PaneShell, what: string): readonly string[] {
-  if (paneShell.commandArgs === null) throw new HostProfileError('unsupported_os', `${what} is not supported on this host yet: a pane running ${paneShell.shell} cannot be handed a command line (Windows worker launch is not implemented).`);
+  if (paneShell.commandArgs === null) throw new HostProfileError('unsupported_os', `${what} is not supported on this host yet: a pane running ${paneShell.shell} cannot be handed a command line (a Windows host starts a worker as a program, not as a command line).`);
   return paneShell.commandArgs;
 }

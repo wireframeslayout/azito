@@ -74,9 +74,9 @@ function buildService(overrides: {
     create: (workerType: string | null) => ({
       supportsSession: supportsSessionMap[workerType ?? ''] ?? (workerType !== 'generic'),
       needsPostLaunchScan: false,
-      buildNewSessionFlags: () => '',
-      buildResumeFlags: () => '',
-      buildRespawnCommand: () => null,
+      buildNewSessionArgs: () => [],
+      buildResumeArgs: () => [],
+      buildRespawnLaunch: () => null,
       scanSessionId: vi.fn().mockResolvedValue(null),
     }),
   };

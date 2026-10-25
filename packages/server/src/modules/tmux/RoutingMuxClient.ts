@@ -1,7 +1,7 @@
 import { muxKindOfPaneHandle, type MuxCapabilities, type MuxDriverKind, type MuxPaneInfo, type MuxRef, type MuxUnavailableKind, type MuxWorkspace, type PaneHandle, type PaneOrdinal } from '@azito/shared';
 import type { ExecResult, ITerminalStream, OpenTerminalOpts } from '../servers/transport/ServerTransport';
 import type { ServerConfig } from '../servers/Server';
-import type { IMuxClient, PaneLocation, PaneWindowLabels } from './IMuxClient';
+import type { IMuxClient, PaneLocation, PaneProgram, PaneWindowLabels } from './IMuxClient';
 import { MuxDriverUnavailableError, MUX_BINARY_MISSING, isMissingBinaryError, type MuxDriverUnavailableReason } from './MuxCapabilityError';
 
 /** What the routing driver needs from the registry. */
@@ -138,6 +138,7 @@ export class RoutingMuxClient implements IMuxClient {
   async probePane(server: ServerConfig, handle: PaneHandle) { return this.forHandle(server, handle).probePane(server, handle); }
   async splitPaneByHandle(server: ServerConfig, handle: PaneHandle, dir: 'h' | 'v', env?: Record<string, string>) { return this.forHandle(server, handle).splitPaneByHandle(server, handle, dir, env); }
   async openPaneInWindow(server: ServerConfig, ref: MuxRef, opts?: { command?: string; extraEnv?: Record<string, string>; labels?: PaneWindowLabels }): Promise<PaneHandle> { return this.forRef(server, ref).openPaneInWindow(server, ref, opts); }
+  async replacePaneWithProgram(server: ServerConfig, handle: PaneHandle, program: PaneProgram): Promise<PaneHandle> { return this.forHandle(server, handle).replacePaneWithProgram(server, handle, program); }
   async closePane(server: ServerConfig, handle: PaneHandle): Promise<ExecResult> { return this.forHandle(server, handle).closePane(server, handle); }
   async captureScreen(server: ServerConfig, handle: PaneHandle, start?: number, end?: number): Promise<ExecResult> { return this.forHandle(server, handle).captureScreen(server, handle, start, end); }
   async sendKeysToHandle(server: ServerConfig, handle: PaneHandle, keys: string[]): Promise<void> { return this.forHandle(server, handle).sendKeysToHandle(server, handle, keys); }

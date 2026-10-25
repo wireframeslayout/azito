@@ -19,8 +19,6 @@ import type { BrowserGroupInfo } from '../../hooks/useBrowserGroups';
 import type { PersistedTab } from '../../hooks/useTabPersistence';
 import type { Project, Session, Window, Task } from '../../pages/workspace/types';
 import { useToast } from '../../hooks/useToast';
-import { useHostFeatureBlock } from '../../hooks/useHostFeatureBlock';
-import { workerLaunchBlock } from '../../lib/workerLaunch';
 import type { ContextMenuItem } from '../ContextMenu';
 import { resolveWindowDisplay } from '../../lib/windowDisplay';
 import { buildWindowSearchText } from './objects/windowRowTitle';
@@ -940,8 +938,6 @@ function ServerGroup({
   onWindowsChanged,
 }: ServerGroupProps) {
   const { t } = useTranslation('workspace');
-  const hostFeatureBlock = useHostFeatureBlock();
-  const { showToast } = useToast();
   return (
     <div style={{ marginBottom: 4 }}>
       <div style={{ display: 'flex', alignItems: 'center', padding: '8px 12px 4px', gap: 4 }}>
@@ -953,24 +949,19 @@ function ServerGroup({
           const disabledTitle = agentDefsError
             ? t('windows.failedLoadAgents', { error: agentDefsError })
             : t('windows.loadingAgents');
-          // A Windows host cannot start an agent in a new window yet: the button stays focusable, says why, and tells why when pressed.
-          const blockedReason = isAgentButton ? workerLaunchBlock({ mode: 'new', serverName, agent: btn.type }, hostFeatureBlock) : null;
           return (
             <button
               key={btn.type}
-              onClick={() => (blockedReason ? showToast(blockedReason) : onOpenQuickAdd(serverName, btn.type))}
+              onClick={() => onOpenQuickAdd(serverName, btn.type)}
               disabled={isDisabled}
-              aria-disabled={blockedReason ? true : undefined}
-              title={blockedReason ?? (isDisabled ? disabledTitle : t('windows.addAgent', { label: btn.label }))}
-              aria-label={blockedReason
-                ? t('windows.addAgentBlocked', { label: btn.label, serverName, reason: blockedReason })
-                : t('windows.addAgentToServer', { label: btn.label, serverName })}
+              title={isDisabled ? disabledTitle : t('windows.addAgent', { label: btn.label })}
+              aria-label={t('windows.addAgentToServer', { label: btn.label, serverName })}
               style={{
                 background: 'none',
                 border: 'none',
                 color: 'var(--text-dim)',
-                cursor: isDisabled || blockedReason ? 'not-allowed' : 'pointer',
-                opacity: isDisabled || blockedReason ? 0.5 : 1,
+                cursor: isDisabled ? 'not-allowed' : 'pointer',
+                opacity: isDisabled ? 0.5 : 1,
                 padding: '3px 4px',
                 borderRadius: 'var(--radius-sm)',
                 display: 'flex',

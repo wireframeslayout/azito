@@ -14,6 +14,7 @@ import { MisaoConnection, connectDedicatedMisaoClient } from './MisaoConnection'
 import { MisaoMuxClient } from './MisaoMuxClient';
 import { CHANGE_COALESCE_MS } from './misaoChangeEvents';
 import { MISAO_CLI } from '../../../shared/misaoTestBinary';
+import { readFakeAgentReport, writeFakeAgent } from '../../../shared/misaoFakeAgent';
 import { hubPaneShell } from './paneShell';
 
 // Drives a real misao daemon started in a throwaway directory (never the resident ~/.misao one).
@@ -242,6 +243,52 @@ describe.skipIf(!fs.existsSync(MISAO_CLI))('MisaoMuxClient against a real misao 
     await client.openWindow(server, 'azm-ws2', 'third', { exactName: true });
     await vi.waitFor(() => expect(onChange).toHaveBeenCalledWith('local'), { timeout: CHANGE_COALESCE_MS * 10 + 2000, interval: 50 });
     client.uninstallChangeHooks(server);
+  });
+
+  it('starts a program in place of the shell pane: its arguments, directory, size and env arrive as given, and the window keeps its labels', async () => {
+    const agentDir = fs.mkdtempSync(path.join(os.tmpdir(), 'azm-agent-'));
+    const workDir = fs.realpathSync(fs.mkdtempSync(path.join(agentDir, 'work-')));
+    try {
+      const fake = writeFakeAgent(agentDir);
+      const { ref } = await client.openWorkspace(server, 'azm-ws-prog', { windowName: 'prog', exactName: true });
+      const shell = await client.resolvePane(server, ref, 1);
+      await client.labelWindowPanes(server, ref, { windowId: 42, taskId: 7 });
+
+      const program = await client.replacePaneWithProgram(server, shell, {
+        argv: [process.execPath, fake.script, '--flag', 'a b', "it's"],
+        cwd: workDir,
+        cols: 120,
+        rows: 40,
+        extraEnv: { AZITO_FAKE_ENV: 'from-the-window' },
+      });
+
+      expect(program).not.toBe(shell);
+      await vi.waitFor(async () => expect(readFakeAgentReport((await client.captureScreen(server, program)).stdout)).not.toBeNull(), { timeout: 15000, interval: 100 });
+      const report = readFakeAgentReport((await client.captureScreen(server, program)).stdout);
+      expect(report).toEqual({ cwd: workDir, args: ['--flag', 'a b', "it's"], env: 'from-the-window', cols: 120, rows: 40 });
+
+      // The shell pane is gone; the program is the window's first pane and carries the window's hub labels.
+      expect(await client.probePane(server, shell)).toEqual({ alive: false, verified: true });
+      expect(await client.resolvePane(server, ref, 1)).toBe(program);
+      expect(await client.listPanesByRef(server, ref)).toHaveLength(1);
+      const info = await connection.request('pane.info', { paneId: program });
+      expect(info.labels).toMatchObject({ origin: 'hub', name: 'prog', windowId: '42', task: '7' });
+
+      await client.closeWorkspace(server, 'azm-ws-prog');
+    } finally {
+      fs.rmSync(agentDir, { recursive: true, force: true });
+    }
+  });
+
+  it('leaves the shell pane as it was when the program cannot be started', async () => {
+    const { ref } = await client.openWorkspace(server, 'azm-ws-noprog', { windowName: 'noprog', exactName: true });
+    const shell = await client.resolvePane(server, ref, 1);
+
+    await expect(client.replacePaneWithProgram(server, shell, { argv: ['azito-no-such-program-xyz'], cols: 120, rows: 40 })).rejects.toThrow();
+
+    expect(await client.probePane(server, shell)).toEqual({ alive: true, verified: true });
+    expect(await client.listPanesByRef(server, ref)).toHaveLength(1);
+    await client.closeWorkspace(server, 'azm-ws-noprog');
   });
 
   it('closes a pane, a window and a workspace', async () => {

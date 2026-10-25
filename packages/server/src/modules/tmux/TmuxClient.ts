@@ -3,7 +3,7 @@ import type { TransportFactory } from '../servers/transport/TransportFactory';
 export { ServerConfig } from '../servers/Server';
 import type { ServerConfig } from '../servers/Server';
 import { generateWindowName, extractWindowId } from './windowNameUtils';
-import type { IMuxClient, PaneLocation, PaneWindowLabels } from './IMuxClient';
+import type { IMuxClient, PaneLocation, PaneProgram, PaneWindowLabels } from './IMuxClient';
 import { MuxOperationUnsupportedError } from './MuxCapabilityError';
 import { composePaneEnv, withIsolationMask, type HubPaneEnvConfig } from './hubPaneEnv';
 import { type MuxRef, type PaneHandle, type PaneOrdinal, type MuxCapabilities, type MuxDriverKind, asPaneHandle, muxRefFromTmuxTarget, tmuxTargetFromMuxRef } from '@azito/shared';
@@ -725,6 +725,10 @@ export class TmuxClient implements IMuxClient {
 
   async openPaneInWindow(_server: ServerConfig, _ref: MuxRef, _opts?: { command?: string; extraEnv?: Record<string, string>; labels?: PaneWindowLabels }): Promise<PaneHandle> {
     throw new MuxOperationUnsupportedError('tmux', 'openPaneInWindow');
+  }
+
+  async replacePaneWithProgram(_server: ServerConfig, _handle: PaneHandle, _program: PaneProgram): Promise<PaneHandle> {
+    throw new MuxOperationUnsupportedError('tmux', 'replacePaneWithProgram');
   }
 
   async closePane(server: ServerConfig, handle: PaneHandle) { return this.killPane(server, handle as string); }

@@ -1,13 +1,13 @@
 import { describe, it, expect } from 'vitest';
-import { assertHostFeature, workerLineDialect } from './hostFeature';
+import { assertHostFeature, workerStartsAsProgram } from './hostFeature';
 import { HostProfileError } from './hostProfile';
 
 describe('assertHostFeature', () => {
   it('refuses a feature a Windows host does not have yet, as unsupported_os that names the tracking issue', () => {
-    expect(() => assertHostFeature({ platform: 'win32' }, 'workerLaunch', 'Launching an agent')).toThrowError(HostProfileError);
-    expect(() => assertHostFeature({ platform: 'win32' }, 'workerLaunch', 'Launching an agent')).toThrowError(expect.objectContaining({
+    expect(() => assertHostFeature({ platform: 'win32' }, 'taskExecution', 'Running a task')).toThrowError(HostProfileError);
+    expect(() => assertHostFeature({ platform: 'win32' }, 'taskExecution', 'Running a task')).toThrowError(expect.objectContaining({
       code: 'unsupported_os',
-      message: 'Launching an agent is not available on Windows hosts yet (tracked in #371).',
+      message: 'Running a task is not available on Windows hosts yet (tracked in #371).',
     }));
   });
 
@@ -15,16 +15,20 @@ describe('assertHostFeature', () => {
     expect(() => assertHostFeature({ platform: 'win32' }, 'tmux', 'Installing tmux')).toThrow('Installing tmux is not available on Windows hosts.');
   });
 
-  it('workerLineDialect refuses before building any line on Windows, and gives the host dialect elsewhere', () => {
-    expect(() => workerLineDialect({ platform: 'win32' }, 'Resuming a worker')).toThrowError(expect.objectContaining({ code: 'unsupported_os' }));
-    expect(workerLineDialect({ platform: 'linux' }, 'Resuming a worker').changeDirectory('/tmp')).toContain('/tmp');
-    expect(workerLineDialect(null, 'Resuming a worker').changeDirectory('/tmp')).toContain('/tmp');
-  });
-
   it('passes on Unix hosts and on a host whose OS is not recorded', () => {
     expect(() => assertHostFeature({ platform: 'linux' }, 'taskExecution', 'Running a task')).not.toThrow();
-    expect(() => assertHostFeature({ platform: 'darwin' }, 'workerLaunch', 'Launching an agent')).not.toThrow();
+    expect(() => assertHostFeature({ platform: 'darwin' }, 'harness', 'Installing the harness')).not.toThrow();
     expect(() => assertHostFeature(null, 'taskExecution', 'Running a task')).not.toThrow();
     expect(() => assertHostFeature(undefined, 'taskExecution', 'Running a task')).not.toThrow();
+  });
+});
+
+describe('workerStartsAsProgram', () => {
+  it('is true for a Windows host only: a Unix host, and one whose OS is not recorded, type a line into the shell', () => {
+    expect(workerStartsAsProgram({ platform: 'win32' })).toBe(true);
+    expect(workerStartsAsProgram({ platform: 'linux' })).toBe(false);
+    expect(workerStartsAsProgram({ platform: 'darwin' })).toBe(false);
+    expect(workerStartsAsProgram(null)).toBe(false);
+    expect(workerStartsAsProgram(undefined)).toBe(false);
   });
 });

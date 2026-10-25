@@ -22,7 +22,8 @@ import type { IDistributionStateRepository } from '../git/hub-transfer/types';
 import { normalizeBranchRef } from '../git/assertSafeGitArgs';
 import { ensureGitIdentity, type GitIdentity } from '../git/ensureGitIdentity';
 import { buildWorkerLaunchCommand } from '../agents/LaunchCommand';
-import { assertHostFeature, workerLineDialect } from '../../shared/os/hostFeature';
+import { assertHostFeature, workerStartsAsProgram } from '../../shared/os/hostFeature';
+import { shellDialectFor } from '../../shared/os/shellDialect';
 import { changeDirectoryLine } from '../../shared/os/changeDirectoryLine';
 import { checkExecutionGate, ExecutionGateDeniedError, ExecutionGatePendingApprovalError, reverifyExecutionGateInLock } from './execution/ExecutionGate';
 import { resolveExecutionManifest, hashExecutionManifest } from './execution/ExecutionManifest';
@@ -138,8 +139,8 @@ export class TaskRestoreService {
     // `findByName`'s nullable return) so TS control-flow narrowing isn't
     // lost the moment this variable is captured by a nested closure below.
     let server: ServerConfig = serverAtStart;
-    // Before the worktree, the window or any row: a host that cannot run a worker in a pane (Windows, #371) restores nothing.
-    assertHostFeature(transportFactory.hostProfileFor(serverAtStart), 'workerLaunch', 'Restoring a task');
+    // Before the worktree, the window or any row: a host that cannot run tasks yet (Windows, #371) restores nothing.
+    assertHostFeature(transportFactory.hostProfileFor(serverAtStart), 'taskExecution', 'Restoring a task');
 
     const tmuxSession = resolveMuxWorkspace(task.projectId, serverName, projectServerRepo);
 
@@ -637,8 +638,11 @@ export class TaskRestoreService {
           // effectiveDir is a resolved (symlink-free) real path — must be
           // shell-quoted before being typed into the pane; see the matching
           // fix/comment in ExecuteTaskUseCase (Issue #27 cd injection).
-          await this.resolveDriver(server).sendKeysToHandle(server, handle, [await changeDirectoryLine(() => transportFactory.getFileOps(server), workerLineDialect(transportFactory.hostProfileFor(server), 'Restoring a task'), effectiveDir), 'Enter']);
-          await sleep(500);
+          // A host that starts the worker as a program (Windows) hands the directory to it when it is launched (follow-up, respawn): nothing is typed here.
+          if (!workerStartsAsProgram(transportFactory.hostProfileFor(server))) {
+            await this.resolveDriver(server).sendKeysToHandle(server, handle, [await changeDirectoryLine(() => transportFactory.getFileOps(server), shellDialectFor(transportFactory.hostProfileFor(server)), effectiveDir), 'Enter']);
+            await sleep(500);
+          }
         } catch (e) {
           log.warn(`[task-restore] Failed to cd into ${effectiveDir}: ${(e as Error).message}`);
         }
@@ -663,7 +667,7 @@ export class TaskRestoreService {
         workerType: unit?.workerType ?? null,
         workerModel: unit?.workerModel ?? null,
         agentSessionId: null,
-        launchCommand: unit ? buildWorkerLaunchCommand(unit.workerType, unit.workerModel, unit.workerExtraArgs, workerLineDialect(transportFactory.hostProfileFor(server), 'Restoring a task')) : null,
+        launchCommand: unit ? buildWorkerLaunchCommand(unit.workerType, unit.workerModel, unit.workerExtraArgs, shellDialectFor(transportFactory.hostProfileFor(server))) : null,
         workingDirectory: effectiveDir || null,
         paneLayout: null,
         sleeping: false,

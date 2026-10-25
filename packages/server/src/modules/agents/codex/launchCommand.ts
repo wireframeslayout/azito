@@ -1,5 +1,6 @@
 import { shellQuote } from '../../../shared/shellQuote';
 import type { LaunchOptions } from '../AgentProvider';
+import { extraArgValues, flag, value, type LaunchArg, type ProgramLaunch } from '../WorkerLaunch';
 
 /**
  * Third-party review (Issue #28 fix 2): a codex worker's tmux pane inherits
@@ -23,34 +24,38 @@ import type { LaunchOptions } from '../AgentProvider';
  * registered by hand under a different name (out of scope here — the review
  * finding is specifically about our own azt-mcp carrying the UI token).
  */
-const CODEX_MCP_DISABLE_FLAG = ` -c mcp_servers.azt-mcp.enabled=false`;
+const CODEX_MCP_DISABLE_ARGS: readonly LaunchArg[] = [flag('-c'), flag('mcp_servers.azt-mcp.enabled=false')];
 
 /**
  * Shared base builder for both a fresh `codex` launch and a `codex resume
  * <id>` relaunch (Issue #28 third-party review, respawn-MCP-bypass fix):
- * the two previously diverged (buildRespawnCommand in SessionStrategy.ts
+ * the two previously diverged (the respawn builder in SessionStrategy.ts
  * hand-rolled its own resume string), and the resume path silently missed
- * `CODEX_MCP_DISABLE_FLAG` — a respawned codex worker pane could load the
+ * `CODEX_MCP_DISABLE_ARGS` — a respawned codex worker pane could load the
  * operator's azt-mcp (full-power AZITO_UI_TOKEN) and bypass task-token
  * scoping. Both paths now go through this one function so the flag can't
  * drift out of sync again.
  */
-function buildCodexCommand(agentSessionId: string | null, { model, extraArgs, blockMcp = true, dialect }: LaunchOptions): string {
-  const resumePrefix = agentSessionId ? `resume ${agentSessionId} ` : '';
-  const mcpFlag = blockMcp ? CODEX_MCP_DISABLE_FLAG : '';
-  const modelFlag = model ? ` --model ${dialect.quote(model)}` : '';
-  const extra = extraArgs?.trim()
-    ? ' ' + extraArgs.trim().split(/\s+/).map((arg) => dialect.quote(arg)).join(' ')
-    : '';
-  return `codex ${resumePrefix}--dangerously-bypass-approvals-and-sandbox${mcpFlag}${modelFlag}${extra}`;
+function buildCodexProgram(agentSessionId: string | null, { model, extraArgs, blockMcp = true }: LaunchOptions): ProgramLaunch {
+  return {
+    kind: 'program',
+    file: 'codex',
+    args: [
+      ...(agentSessionId ? [flag('resume'), flag(agentSessionId)] : []),
+      flag('--dangerously-bypass-approvals-and-sandbox'),
+      ...(blockMcp ? CODEX_MCP_DISABLE_ARGS : []),
+      ...(model ? [flag('--model'), value(model)] : []),
+      ...extraArgValues(extraArgs),
+    ],
+  };
 }
 
-export function buildCodexLaunchCommand(opts: LaunchOptions): string {
-  return buildCodexCommand(null, opts);
+export function buildCodexLaunch(opts: LaunchOptions): ProgramLaunch {
+  return buildCodexProgram(null, opts);
 }
 
-export function buildCodexRespawnCommand(agentSessionId: string, opts: LaunchOptions): string {
-  return buildCodexCommand(agentSessionId, opts);
+export function buildCodexRespawnLaunch(agentSessionId: string, opts: LaunchOptions): ProgramLaunch {
+  return buildCodexProgram(agentSessionId, opts);
 }
 
 /**
