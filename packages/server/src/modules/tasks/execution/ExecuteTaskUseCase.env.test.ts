@@ -1,6 +1,6 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { EventEmitter } from 'events';
-import { mkdtempSync, mkdirSync, rmSync } from 'fs';
+import { mkdtempSync, mkdirSync, realpathSync, rmSync } from 'fs';
 import { tmpdir } from 'os';
 import * as path from 'path';
 import { ExecuteTaskUseCase } from './ExecuteTaskUseCase';
@@ -5141,7 +5141,8 @@ describe('ExecuteTaskUseCase on a host that starts the worker as the window\'s p
 
   beforeEach(() => {
     vi.clearAllMocks();
-    root = mkdtempSync(path.join(tmpdir(), 'azito-exec-win-'));
+    // realpath.native: the runner's temp folder is spelled with a short 8.3 name (RUNNER~1) that a resolved path does not have.
+    root = realpathSync.native(mkdtempSync(path.join(tmpdir(), 'azito-exec-win-')));
     worktreePath = path.join(root, '.worktrees', 'task-8');
     mkdirSync(worktreePath, { recursive: true });
   });

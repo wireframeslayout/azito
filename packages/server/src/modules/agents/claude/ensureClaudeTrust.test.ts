@@ -8,6 +8,9 @@ import { claudeProjectKey, ensureClaudeTrust } from './ensureClaudeTrust';
 
 let fakeHome: string;
 
+/** The key Claude Code files a project under on the machine running the test (backslashes on Windows, the path as it is elsewhere). */
+const K = (p: string): string => claudeProjectKey(process.platform === 'win32' ? 'win32' : 'linux', p);
+
 /** A transport whose host is this machine with `fakeHome` as its home directory: the file operations are the real ones. */
 function transportWithHome(homeDir: string): IServerTransport {
   const ops = new LocalFileOps(localFileOpsHost({ platform: process.platform, homeDir }));
@@ -29,12 +32,12 @@ describe('ensureClaudeTrust', () => {
   it('registers trust for a new project', async () => {
     writeFileSync(configPath(), JSON.stringify({ projects: {} }));
     expect(await ensureClaudeTrust(transportWithHome(fakeHome), '/wt')).toEqual({ action: 'registered' });
-    expect(readConfig().projects['/wt']).toEqual({ hasTrustDialogAccepted: true });
+    expect(readConfig().projects[K('/wt')]).toEqual({ hasTrustDialogAccepted: true });
     expect(readdirSync(fakeHome)).toEqual(['.claude.json']);
   });
 
   it('returns already_trusted without rewriting', async () => {
-    const original = JSON.stringify({ projects: { '/wt': { hasTrustDialogAccepted: true } } });
+    const original = JSON.stringify({ projects: { [K('/wt')]: { hasTrustDialogAccepted: true } } });
     writeFileSync(configPath(), original);
     expect(await ensureClaudeTrust(transportWithHome(fakeHome), '/wt')).toEqual({ action: 'already_trusted' });
     expect(readFileSync(configPath(), 'utf8')).toBe(original);
@@ -67,14 +70,14 @@ describe('ensureClaudeTrust', () => {
       configPath(),
       JSON.stringify({
         numStartups: 3,
-        projects: { '/wt': { allowedTools: ['Bash'], hasTrustDialogAccepted: false }, '/other': { x: 1 } },
+        projects: { [K('/wt')]: { allowedTools: ['Bash'], hasTrustDialogAccepted: false }, [K('/other')]: { x: 1 } },
       }),
     );
     expect(await ensureClaudeTrust(transportWithHome(fakeHome), '/wt')).toEqual({ action: 'registered' });
     const config = readConfig() as unknown as { numStartups: number; projects: Record<string, unknown> };
     expect(config.numStartups).toBe(3);
-    expect(config.projects['/other']).toEqual({ x: 1 });
-    expect(config.projects['/wt']).toEqual({ allowedTools: ['Bash'], hasTrustDialogAccepted: true });
+    expect(config.projects[K('/other')]).toEqual({ x: 1 });
+    expect(config.projects[K('/wt')]).toEqual({ allowedTools: ['Bash'], hasTrustDialogAccepted: true });
   });
 
   it('keeps both registrations when two projects register at the same time', async () => {
@@ -82,7 +85,7 @@ describe('ensureClaudeTrust', () => {
     const transport = transportWithHome(fakeHome);
     const results = await Promise.all(['/a', '/b', '/c'].map((p) => ensureClaudeTrust(transport, p)));
     expect(results.map((r) => r.action)).toEqual(['registered', 'registered', 'registered']);
-    expect(Object.keys(readConfig().projects).sort()).toEqual(['/a', '/b', '/c']);
+    expect(Object.keys(readConfig().projects).sort()).toEqual(['/a', '/b', '/c'].map(K).sort());
   });
 
   it('does not overwrite a file that changed after it was read', async () => {
