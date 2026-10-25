@@ -73,6 +73,25 @@ const AGENT_PORT = 3002;
 const HEALTH_TIMEOUT_MS = 15000;
 const HEALTH_RETRY_INTERVAL_MS = 1000;
 
+/** Answers whether the host already has an agent of this hub's kind (its unit or its folder), before this install touches anything. */
+export const AGENT_PRESENCE_COMMAND = 'if [ -e ~/.config/systemd/user/azito-agent.service ] || [ -e ~/.azito/agent ]; then echo AZITO_AGENT_PRESENT; else echo AZITO_AGENT_ABSENT; fi';
+
+/** What undoing a fresh Unix install runs, one command per thing so that each failure is named. Only this install's unit, process and folder. */
+const UNIX_CLEANUP_STEPS: ReadonlyArray<{ what: string; command: string }> = [
+  { what: 'stop the systemd unit', command: 'systemctl --user disable --now azito-agent 2>/dev/null; true' },
+  // The pid file names the process this install started; its children (the node under run.sh) go with it, nothing else.
+  { what: 'stop the nohup process', command: 'if [ -f ~/.azito/agent/agent.pid ]; then p=$(cat ~/.azito/agent/agent.pid); for c in $(pgrep -P "$p"); do kill "$c" 2>/dev/null; done; kill "$p" 2>/dev/null; fi; true' },
+  { what: 'remove the systemd unit file', command: 'rm -f ~/.config/systemd/user/azito-agent.service && (systemctl --user daemon-reload 2>/dev/null; true)' },
+  { what: 'remove ~/.azito/agent', command: 'rm -rf ~/.azito/agent' },
+];
+/** What to tell the operator to run when the undo did not finish. */
+const UNIX_MANUAL_CLEANUP = 'systemctl --user disable --now azito-agent; kill $(cat ~/.azito/agent/agent.pid); rm -f ~/.config/systemd/user/azito-agent.service; rm -rf ~/.azito/agent';
+
+/** The error for a host that has no tmux and no misao: the same text is the API's `error` and what the UI shows. */
+function noMuxMessage(host: string, misaoError: string | undefined): string {
+  return `no mux is available on ${host}: tmux is not installed and misao could not be installed (${misaoError ?? 'this hub has no misao to install'}).`;
+}
+
 export class AgentInstaller {
   constructor(
     private sshClient: SshClient,
@@ -119,6 +138,9 @@ export class AgentInstaller {
 
     if (preflight.windows) return this.installOnWindows(sshHost, version, token, preflight, preflight.windows, steps, report);
 
+    // Read before anything is changed: an agent that was already here is not this install's to remove.
+    const hadAgent = await this.hostHasAgent(sshHost);
+
     // ── Transfer & deploy ──
     report('transfer', 'running', 'Transferring agent bundle...');
     try {
@@ -159,14 +181,54 @@ export class AgentInstaller {
     // ── misao ──
     const misaoError = await this.installMisao(preflight.tailscaleIp, AGENT_PORT, token, preflight.hostProfile, report);
     const tmuxFound = preflight.tmuxVersion !== '';
-    // A host with neither tmux nor an installed misao has no mux at all: fail as before instead of registering a server nothing can run on.
+    // A host with neither tmux nor an installed misao has no mux at all: fail instead of registering a server nothing can run on.
     if (!tmuxFound && (!this.misaoInstaller || misaoError)) {
-      const msg = `tmux is required but not found${misaoError ? ` (misao could not be installed either: ${misaoError})` : ' and this hub has no misao to install'}`;
+      const cleanup = await this.discardUnregisteredAgent(sshHost, preflight.tailscaleIp, hadAgent);
+      const msg = `${noMuxMessage(sshHost, misaoError)} ${cleanup}`;
       report('misao', 'error', msg);
       return { success: false, host: preflight.tailscaleIp, port: AGENT_PORT, token, version, startMethod, steps, tmuxFound, error: msg };
     }
 
     return { success: true, host: preflight.tailscaleIp, port: AGENT_PORT, token, version, startMethod, steps, tmuxFound, hostProfile: preflight.hostProfile, ...(misaoError ? { misaoError } : {}) };
+  }
+
+  /**
+   * The agent this install started is not going to be registered (the host has no mux), so it is stopped and removed rather than
+   * left listening with a token nobody holds. Returns the sentence for the error. An agent that was on the host before this install
+   * is left alone: this install already replaced it (the Unix install keeps nothing of the previous unit, settings or folder, so
+   * unlike the Windows install, whose commit / rollback puts the previous one back, there is nothing to restore), and removing it
+   * would take away an agent the hub may still be using.
+   */
+  private async discardUnregisteredAgent(sshHost: string, ip: string, hadAgent: boolean): Promise<string> {
+    if (hadAgent) {
+      return 'An agent was already installed on this host before this install; it was replaced by the new one and left running, nothing was removed. The new agent holds a new token that the hub does not store: run the install again once a mux is available.';
+    }
+    const problems: string[] = [];
+    for (const { what, command } of UNIX_CLEANUP_STEPS) {
+      try {
+        const result = await this.sshClient.execIsolated(sshHost, command);
+        if (result.code !== 0) problems.push(`could not ${what}: ${result.stderr.trim() || `exit ${result.code}`}`);
+      } catch (err) {
+        problems.push(`could not ${what}: ${(err as Error).message}`);
+      }
+    }
+    if (await this.agentAnswers(ip, AGENT_PORT)) problems.push(`an agent still answers on ${ip}:${AGENT_PORT}`);
+    if (problems.length === 0) return 'The agent this install started was stopped and removed.';
+    return `The agent this install started could not be fully removed (${problems.join('; ')}). Remove what is left on ${sshHost} by hand: ${UNIX_MANUAL_CLEANUP}`;
+  }
+
+  /** True when the host has an agent unit or folder. An answer that is not the expected one counts as "has one": nothing is removed on a guess. */
+  private async hostHasAgent(sshHost: string): Promise<boolean> {
+    const result = await this.sshClient.execIsolated(sshHost, AGENT_PRESENCE_COMMAND);
+    return !(result.code === 0 && result.stdout.trim() === 'AZITO_AGENT_ABSENT');
+  }
+
+  private async agentAnswers(host: string, port: number): Promise<boolean> {
+    try {
+      return (await fetch(`http://${host}:${port}/health`, { signal: AbortSignal.timeout(3000) })).ok;
+    } catch {
+      return false;
+    }
   }
 
   /**
