@@ -85,7 +85,7 @@ describe('Unix-only install operations on a Windows server answer unsupported_os
     const { app, harnessInstaller, agentTransport } = await buildApp(win32);
     const installOnAgent = vi.spyOn(harnessInstaller, 'installOnAgent').mockResolvedValue({ success: true, steps: [] });
     const install = vi.spyOn(harnessInstaller, 'install');
-    const res = await app.inject({ method: 'POST', url: '/api/servers/srv/harness/install', payload: {} });
+    const res = await app.inject({ method: 'POST', url: '/api/servers/srv/harness/install', payload: { azito_url: 'http://hub.test:3001' } });
     expect(res.statusCode).toBe(200);
     expect(installOnAgent).toHaveBeenCalledWith(agentTransport, expect.objectContaining({ hostProfile: win32, serverName: 'srv' }), expect.any(Function));
     expect(install).not.toHaveBeenCalled();

@@ -43,6 +43,7 @@ describe('HarnessInstaller.install — --ui-token withholding for isolation_inte
 
     await installer.install('test-host', {
       hostProfile: null,
+      azitoUrl: 'http://hub.test:3001',
       webhookToken: 'wh-token',
       uiToken: 'ui-token-secret',
       serverName: 'srv-agent',
@@ -54,6 +55,7 @@ describe('HarnessInstaller.install — --ui-token withholding for isolation_inte
     expect(cmd).toContain('--ui-token');
     expect(cmd).toContain('ui-token-secret');
     expect(cmd).toContain('--webhook-token');
+    expect(cmd).toContain("--azito-url 'http://hub.test:3001'");
   });
 
   it('withholds --ui-token from setup.sh for a server with isolationIntent=true, but still passes --webhook-token', async () => {
@@ -63,6 +65,7 @@ describe('HarnessInstaller.install — --ui-token withholding for isolation_inte
 
     await installer.install('test-host', {
       hostProfile: null,
+      azitoUrl: 'http://hub.test:3001',
       webhookToken: 'wh-token',
       uiToken: 'ui-token-secret',
       serverName: 'srv-agent',
@@ -96,6 +99,7 @@ describe('HarnessInstaller.install — --ui-token withholding for isolation_inte
 
     const [, cmd] = (sshClient.execIsolated as ReturnType<typeof vi.fn>).mock.calls[0];
     expect(cmd).toContain('--purge-operator-token');
+    expect(cmd).not.toContain('--azito-url');
   });
 
   it('does not pass --purge-operator-token to setup.sh for a normal (non-isolated) server', async () => {
@@ -105,6 +109,7 @@ describe('HarnessInstaller.install — --ui-token withholding for isolation_inte
 
     await installer.install('test-host', {
       hostProfile: null,
+      azitoUrl: 'http://hub.test:3001',
       webhookToken: 'wh-token',
       uiToken: 'ui-token-secret',
       serverName: 'srv-agent',
@@ -153,6 +158,7 @@ describe('HarnessInstaller.installLocal — isolationIntent handling (local setu
 
     const result = await installer.installLocal({
       hostProfile: null,
+      azitoUrl: 'http://hub.test:3001',
       webhookToken: 'wh-token',
       uiToken: 'ui-token-secret',
       serverName: 'srv-local',
@@ -165,6 +171,7 @@ describe('HarnessInstaller.installLocal — isolationIntent handling (local setu
     expect(args).toContain('--ui-token');
     expect(args).toContain('ui-token-secret');
     expect(args).not.toContain('--purge-operator-token');
+    expect(args).toEqual(expect.arrayContaining(['--azito-url', 'http://hub.test:3001']));
   });
 
   it('withholds --ui-token and passes --purge-operator-token for an isolationIntent=true local install', async () => {
@@ -173,6 +180,7 @@ describe('HarnessInstaller.installLocal — isolationIntent handling (local setu
 
     const result = await installer.installLocal({
       hostProfile: null,
+      azitoUrl: 'http://hub.test:3001',
       webhookToken: 'wh-token',
       uiToken: 'ui-token-secret',
       serverName: 'srv-local',
@@ -196,7 +204,7 @@ describe('HarnessInstaller — Windows targets', () => {
     const installer = new HarnessInstaller(sshClient);
     const transfer = vi.spyOn(installer as unknown as { transferHarness: () => Promise<void> }, 'transferHarness').mockResolvedValue(undefined);
 
-    await expect(installer.install('test-host', { hostProfile: { platform: 'win32', arch: 'x64' } })).rejects.toMatchObject({ code: 'unsupported_os', message: expect.stringContaining('setup.sh') });
+    await expect(installer.install('test-host', { hostProfile: { platform: 'win32', arch: 'x64' }, azitoUrl: 'http://hub.test:3001' })).rejects.toMatchObject({ code: 'unsupported_os', message: expect.stringContaining('setup.sh') });
     expect(transfer).not.toHaveBeenCalled();
     expect(sshClient.execIsolated).not.toHaveBeenCalled();
   });
@@ -228,7 +236,7 @@ describe('HarnessInstaller — Windows targets', () => {
     const sshClient = makeSshClient();
     const installer = new HarnessInstaller(sshClient);
     vi.spyOn(installer as unknown as { transferHarness: () => Promise<void> }, 'transferHarness').mockResolvedValue(undefined);
-    const result = await installer.install('test-host', { hostProfile: null });
+    const result = await installer.install('test-host', { hostProfile: null, azitoUrl: 'http://hub.test:3001' });
     expect(result.success).toBe(true);
   });
 });

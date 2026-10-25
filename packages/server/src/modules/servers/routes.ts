@@ -926,10 +926,14 @@ const serversRoutes: FastifyPluginCallback<ServersRouteOptions> = (fastify, opts
       const srv = serverRepo.findByName(request.params.name);
       if (!srv) return reply.status(404).send({ error: 'Server not found' });
 
-      const { azito_url } = request.body as { azito_url?: string };
-
-      if (azito_url && !/^https?:\/\/[\w.:\-[\]]+\/?$/.test(azito_url)) {
-        return reply.status(400).send({ error: 'Invalid azito_url format' });
+      // Without the hub URL setup.sh / setup.mjs skip writing azitoctl's env and still succeed, so the
+      // task CLI and hooks never reach the hub and nothing says so (#498): refuse here instead.
+      const { azito_url } = (request.body ?? {}) as { azito_url?: unknown };
+      if (typeof azito_url !== 'string' || azito_url.trim() === '') {
+        return reply.status(400).send({ error: 'azito_url is required', code: 'azito_url_required' });
+      }
+      if (!/^https?:\/\/[\w.:\-[\]]+\/?$/.test(azito_url)) {
+        return reply.status(400).send({ error: 'Invalid azito_url format', code: 'azito_url_invalid' });
       }
 
       const steps: HarnessInstallProgress[] = [];

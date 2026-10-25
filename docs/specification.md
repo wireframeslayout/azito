@@ -345,7 +345,7 @@ Workspace 内タブ／パネルとして表示される主なもの:
 | GET | `/api/servers/:name/files/content` | ファイル内容取得 (画像 Base64 対応) |
 | GET | `/api/servers/:name/install-status` | 依存 (tmux / Node.js / harness / Tailscale) のインストール状況 |
 | POST | `/api/servers/:name/agent/install` | エージェントのインストール |
-| POST | `/api/servers/:name/harness/install` | harness のインストール |
+| POST | `/api/servers/:name/harness/install` | harness のインストール（本文 `azito_url` 必須。無い・空は 400 `azito_url_required`） |
 
 #### Projects
 | Method | Path | 説明 |
