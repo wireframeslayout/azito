@@ -251,7 +251,7 @@ describe.skipIf(process.platform !== 'win32')('removing the Windows agent from a
 
   it('leaves a firewall rule of the same name that is for another program (only an elevated session can make one)', async (ctx) => {
     if (!elevated) ctx.skip('this session is not elevated: a rule cannot be added here');
-    const other = path.join(fwDir, 'other-node.exe');
+    const other = path.join(fs.realpathSync.native(fwDir), 'other-node.exe'); // long form: the firewall refuses an 8.3 short path
     fs.copyFileSync(process.execPath, other);
     const name = firewallRuleName(OPTIONS.port);
     await ps(`Get-NetFirewallRule -DisplayName ${powershellDialect.quote(name)} -ErrorAction SilentlyContinue | Remove-NetFirewallRule`);
