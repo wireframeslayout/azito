@@ -18,7 +18,7 @@ export interface NodeSetupInvocation {
 }
 
 export interface NodeSetupOptions {
-  azitoUrl?: string;
+  azitoUrl: string;
   webhookToken?: string;
   uiToken?: string;
   serverName?: string;
@@ -29,7 +29,7 @@ export interface NodeSetupOptions {
 export function buildNodeSetupInvocation(options: NodeSetupOptions): NodeSetupInvocation {
   const { azitoUrl, webhookToken, uiToken, serverName, prefix, isolationIntent } = options;
   const args: string[] = [];
-  if (azitoUrl) args.push('--azito-url', azitoUrl);
+  args.push('--azito-url', azitoUrl);
   if (serverName) args.push('--server-name', serverName);
   if (prefix) args.push('--prefix', prefix);
   return {

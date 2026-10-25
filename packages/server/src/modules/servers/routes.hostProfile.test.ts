@@ -40,6 +40,7 @@ function makeOpts(servers: ServerConfig[]): ServersRouteOptions {
     } as unknown as ServersRouteOptions['transportFactory'],
     windowRepo: { findByServer: vi.fn(() => []) } as unknown as ServersRouteOptions['windowRepo'],
     webhookToken: 'wh',
+    publicUrl: 'http://hub.test:3001',
     uiToken: 'ui',
     harnessHash: 'testhash',
     harnessUpdater: { getLastResult: vi.fn() } as unknown as ServersRouteOptions['harnessUpdater'],

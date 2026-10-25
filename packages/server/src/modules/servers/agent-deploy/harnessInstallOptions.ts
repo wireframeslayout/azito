@@ -12,16 +12,16 @@ export function buildHarnessInstallOptions(
   srv: ServerConfig,
   hostProfile: HostProfile | null,
   ctx: HarnessInstallContext,
-  overrides?: { azitoUrl?: string; version?: string },
+  overrides: { azitoUrl: string; version?: string },
 ): HarnessInstallOptions {
   return {
     hostProfile,
-    azitoUrl: overrides?.azitoUrl,
+    azitoUrl: overrides.azitoUrl,
     webhookToken: ctx.webhookToken,
     uiToken: ctx.uiToken,
     serverName: srv.name,
     prefix: ctx.harnessPrefix,
     isolationIntent: srv.isolationIntent,
-    version: overrides?.version,
+    version: overrides.version,
   };
 }

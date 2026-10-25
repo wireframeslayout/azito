@@ -196,6 +196,8 @@ export interface ServersRouteOptions {
   webhookToken: string;
   uiToken: string;
   harnessPrefix?: string;
+  /** The hub URL a remote server reaches it by; handed to the isolation cleanup's `setup.sh --azito-url`. */
+  publicUrl: string;
   harnessHash: string;
   harnessUpdater: HarnessUpdater;
   // Issue #29 review (6th pass), Important finding 3: serializes the
@@ -242,7 +244,7 @@ export interface ServersRouteOptions {
 // ─── Plugin ───
 
 const serversRoutes: FastifyPluginCallback<ServersRouteOptions> = (fastify, opts, done) => {
-  const { serverRepo, serverAliasRepo, tmux, transportFactory, agentHostRecorder, agentInstaller, agentBundler, harnessInstaller, tmuxInstaller, projectRepo, projectServerRepo, windowRepo, webhookToken, uiToken, harnessPrefix, harnessHash, harnessUpdater, auditLogService, serverIsolationMutex, scopedAuthEnabled, muxDriverRegistry, repoDiscovery, onMuxChanged, onServerChanged, misaoDaemonStatus } = opts;
+  const { serverRepo, serverAliasRepo, tmux, transportFactory, agentHostRecorder, agentInstaller, agentBundler, harnessInstaller, tmuxInstaller, projectRepo, projectServerRepo, windowRepo, webhookToken, uiToken, harnessPrefix, publicUrl, harnessHash, harnessUpdater, auditLogService, serverIsolationMutex, scopedAuthEnabled, muxDriverRegistry, repoDiscovery, onMuxChanged, onServerChanged, misaoDaemonStatus } = opts;
 
   // Issue #29 review, Important finding 1: a false->true isolation_intent
   // transition must actually purge a previously-distributed operator token
@@ -280,6 +282,7 @@ const serversRoutes: FastifyPluginCallback<ServersRouteOptions> = (fastify, opts
         try {
           const result = await harnessInstaller.install(sshHost, {
             hostProfile: transportFactory.hostProfileFor(srv),
+            azitoUrl: publicUrl,
             webhookToken,
             uiToken,
             serverName: srv.name,
@@ -926,9 +929,13 @@ const serversRoutes: FastifyPluginCallback<ServersRouteOptions> = (fastify, opts
       const srv = serverRepo.findByName(request.params.name);
       if (!srv) return reply.status(404).send({ error: 'Server not found' });
 
-      const { azito_url } = request.body as { azito_url?: string };
-
-      if (azito_url && !/^https?:\/\/[\w.:\-[\]]+\/?$/.test(azito_url)) {
+      // Without the hub URL setup.sh / setup.mjs skip writing azitoctl's env and still succeed, so the
+      // task CLI and hooks never reach the hub and nothing says so (#498): refuse here instead.
+      const { azito_url } = (request.body ?? {}) as { azito_url?: unknown };
+      if (typeof azito_url !== 'string' || azito_url.trim() === '') {
+        return reply.status(400).send({ error: 'azito_url is required', code: 'azito_url_required' });
+      }
+      if (!/^https?:\/\/[\w.:\-[\]]+\/?$/.test(azito_url)) {
         return reply.status(400).send({ error: 'Invalid azito_url format' });
       }
 

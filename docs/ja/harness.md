@@ -129,7 +129,7 @@ AZITO のサーバー詳細パネルは、各サーバーの依存（tmux / Node
 
 ### UI からのインストール
 
-サーバー詳細パネル → Setup タブの「Install Harness」ボタン（`POST /api/servers/:name/harness/install`）から、CLI を使わずにハーネスをインストールすることもできます。ローカルサーバーの場合は直接インストール、Agent サーバーの場合は SSH 経由でリモートにインストールされます。
+サーバー詳細パネル → Setup タブの「Install Harness」ボタン（`POST /api/servers/:name/harness/install`）から、CLI を使わずにハーネスをインストールすることもできます。ローカルサーバーの場合は直接インストール、Agent サーバーの場合は SSH 経由でリモートにインストールされます。リクエスト本文の `azito_url`（エージェント／フックがハブへ届く URL、例 `http://100.64.0.1:3001`）は必須で、無い・空なら 400 `{ error: 'azito_url is required', code: 'azito_url_required' }` を返し、インストールは始めません（形式が不正な場合も 400）。
 
 ## Windows
 

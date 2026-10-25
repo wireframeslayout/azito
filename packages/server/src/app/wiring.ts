@@ -238,6 +238,8 @@ export interface SystemUpdateModule {
 export interface Wiring extends SharedInfra, Repositories, PushNotificationModule, ApplicationServices, SystemUpdateModule {
   uiToken: string;
   webhookToken: string;
+  /** The URL remote servers reach the hub by (`resolvePublicUrl`). */
+  publicUrl: string;
   agentBundler: AgentBundler;
   agentUpdater: AgentUpdater;
   agentRecoveryWatchdog: AgentRecoveryWatchdog;
@@ -776,6 +778,7 @@ export async function buildWiring(db: SqliteDatabase, publicUrl: string, localUr
   return {
     uiToken,
     webhookToken,
+    publicUrl,
     agentBundler,
     ...infra,
     ...repos,

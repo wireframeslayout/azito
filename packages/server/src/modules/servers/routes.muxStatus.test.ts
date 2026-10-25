@@ -23,6 +23,7 @@ async function statusOf(server: ServerConfig, exec: () => Promise<{ stdout: stri
     transportFactory: { getTransport: () => ({ execMux: exec }), invalidate: vi.fn() } as unknown as ServersRouteOptions['transportFactory'],
     windowRepo: { findByServer: vi.fn(() => []) } as unknown as ServersRouteOptions['windowRepo'],
     webhookToken: 'wh',
+    publicUrl: 'http://hub.test:3001',
     uiToken: 'ui',
     serverIsolationMutex: new KeyedMutex(),
     harnessHash: 'testhash',

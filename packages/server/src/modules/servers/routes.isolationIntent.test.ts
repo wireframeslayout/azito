@@ -94,6 +94,7 @@ function makeOpts(overrides: Partial<ServersRouteOptions> = {}): ServersRouteOpt
     // findByServer to return risky rows.
     windowRepo: { findByServer: vi.fn(() => []) } as unknown as ServersRouteOptions['windowRepo'],
     webhookToken: 'wh',
+    publicUrl: 'http://hub.test:3001',
     uiToken: 'ui',
     // Issue #29 review (6th pass), Important finding 3: a fresh instance per
     // test is fine here (this file never exercises cross-route serialization
@@ -377,6 +378,8 @@ describe('PUT /api/servers/:name — isolation cleanup on false->true (Issue #29
 
       expect(res.statusCode).toBe(200);
       expect(install).toHaveBeenCalledTimes(1);
+      // The cleanup also rewrites azitoctl's env, so it is handed the hub URL (#498).
+      expect(install).toHaveBeenCalledWith('user@host', expect.objectContaining({ azitoUrl: 'http://hub.test:3001', isolationIntent: true }));
       expect(res.json().isolationCleanup).toBe('done');
       // Retrying must not re-flip isolation_intent (it was already true) —
       // only attemptIsolationCleanup's own updateIsolationCleanupReport() write runs.
@@ -1167,7 +1170,7 @@ describe('POST /api/servers/:name/harness/install — serialized via serverIsola
     (opts.serverRepo.findByName as ReturnType<typeof vi.fn>).mockReturnValue(makeServer({ type: 'local' }));
     const app = await buildApp(opts);
 
-    const res = await app.inject({ method: 'POST', url: '/api/servers/srv/harness/install', payload: {} });
+    const res = await app.inject({ method: 'POST', url: '/api/servers/srv/harness/install', payload: { azito_url: 'http://hub.test:3001' } });
 
     expect(res.statusCode).toBe(200);
     expect(withLock).toHaveBeenCalledWith('srv', expect.any(Function));
@@ -1187,7 +1190,7 @@ describe('POST /api/servers/:name/harness/install — serialized via serverIsola
     );
     const app = await buildApp(opts);
 
-    const res = await app.inject({ method: 'POST', url: '/api/servers/srv/harness/install', payload: {} });
+    const res = await app.inject({ method: 'POST', url: '/api/servers/srv/harness/install', payload: { azito_url: 'http://hub.test:3001' } });
 
     expect(res.statusCode).toBe(200);
     expect(installLocal).toHaveBeenCalledWith(expect.objectContaining({ isolationIntent: true }));
@@ -1209,7 +1212,7 @@ describe('POST /api/servers/:name/harness/install — serialized via serverIsola
     );
     const app = await buildApp(opts);
 
-    const installPromise = app.inject({ method: 'POST', url: '/api/servers/srv/harness/install', payload: {} });
+    const installPromise = app.inject({ method: 'POST', url: '/api/servers/srv/harness/install', payload: { azito_url: 'http://hub.test:3001' } });
     // Give the install request a turn of the event loop to enter the lock
     // and start awaiting installGate before firing the PUT.
     await new Promise((resolve) => setImmediate(resolve));

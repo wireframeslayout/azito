@@ -34,6 +34,7 @@ async function buildApp(transport: AgentTransport, recordIfUnknown: () => Promis
     } as unknown as ServersRouteOptions['transportFactory'],
     windowRepo: { findByServer: vi.fn(() => []) } as unknown as ServersRouteOptions['windowRepo'],
     webhookToken: 'wh',
+    publicUrl: 'http://hub.test:3001',
     uiToken: 'ui',
     serverIsolationMutex: new KeyedMutex(),
     harnessHash: 'testhash',

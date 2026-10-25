@@ -157,7 +157,7 @@ describe('buildNodeSetupInvocation', () => {
     const { args, env } = buildNodeSetupInvocation({ azitoUrl: 'u', webhookToken: 'w', uiToken: 't', serverName: 's', prefix: 'p' });
     expect(args).toEqual(['--azito-url', 'u', '--server-name', 's', '--prefix', 'p']);
     expect(env).toEqual({ AZITO_URL: '', AZITO_SERVER_NAME: '', AZITO_PREFIX: '', AZITO_WEBHOOK_TOKEN: 'w', AZITO_UI_TOKEN: 't' });
-    expect(buildNodeSetupInvocation({}).env.AZITO_WEBHOOK_TOKEN).toBe('');
+    expect(buildNodeSetupInvocation({ azitoUrl: 'u' }).env.AZITO_WEBHOOK_TOKEN).toBe('');
   });
 });
 

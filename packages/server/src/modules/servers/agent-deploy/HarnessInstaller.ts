@@ -36,7 +36,8 @@ export interface HarnessInstallOptions {
    * SSH route refuses it with `unsupported_os` before anything is sent.
    */
   hostProfile: HostProfile | null;
-  azitoUrl?: string;
+  /** The hub URL the server's azitoctl / hooks reach it by. Required: without it setup.sh / setup.mjs skip writing azitoctl's env. */
+  azitoUrl: string;
   webhookToken?: string;
   uiToken?: string;
   serverName?: string;
@@ -246,7 +247,7 @@ export class HarnessInstaller {
     const { azitoUrl, webhookToken, uiToken, serverName, prefix, isolationIntent } = options;
     const harnessDir = remoteHarnessDir(prefix);
     let cmd = `bash ${harnessDir}/setup.sh`;
-    if (azitoUrl) cmd += ` --azito-url ${shellQuote(azitoUrl)}`;
+    cmd += ` --azito-url ${shellQuote(azitoUrl)}`;
     if (webhookToken) cmd += ` --webhook-token ${shellQuote(webhookToken)}`;
     // Withhold --ui-token for an isolation-intent server (see this option's
     // doc comment on HarnessInstallOptions.isolationIntent) — the one place
@@ -284,7 +285,7 @@ export class HarnessInstaller {
     const execFileAsync = promisify(execFile);
 
     const args: string[] = [setupScript];
-    if (azitoUrl) args.push('--azito-url', azitoUrl);
+    args.push('--azito-url', azitoUrl);
     if (webhookToken) args.push('--webhook-token', webhookToken);
     // Issue #29 review, Important finding 2: mirrors runSetup()'s handling
     // above — withhold --ui-token and force --purge-operator-token when the
