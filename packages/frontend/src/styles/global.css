@@ -105,6 +105,9 @@
   --space-5: 20px;
   --space-6: 24px;
 
+  /* line height of running text (descriptions, notices) */
+  --leading-body: 1.5;
+
   /* radius */
   --radius-sm: 6px;
   --radius-md: 9px;
@@ -863,6 +866,10 @@ button:focus-within .diff-open-btn {
 .toggle input:checked + .toggle-slider { background: var(--accent); }
 .toggle input:checked + .toggle-slider::before { transform: translateX(16px); }
 .toggle input:disabled + .toggle-slider { cursor: not-allowed; opacity: .55; }
+.toggle input:focus-visible + .toggle-slider { outline: 2px solid var(--accent); outline-offset: 2px; }
+
+/* 画面には出さず、スクリーンリーダーにだけ読ませる（aria-live の領域など） */
+.sr-only { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip: rect(0, 0, 0, 0); white-space: nowrap; border: 0; }
 
 /* ---- Theme: workspace-scope backdrop ----
    ワークスペースエリアのクローム面（サイドバー/タブバー）専用のサーフェス変数。

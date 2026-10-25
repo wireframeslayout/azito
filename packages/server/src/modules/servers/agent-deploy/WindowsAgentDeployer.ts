@@ -10,6 +10,8 @@ import { createSshCommandSpecRunner } from './windowsSshRunner';
 import { checkFirewall, describeFirewallProblem } from './windowsFirewall';
 import { MISAO_WINDOWS_DIR, type WindowsAgentOptions } from './windowsAgentConfig';
 import type { WindowsPreflightInfo } from './windowsPreflight';
+import { agentTaskAction } from './windowsAgentTask';
+import { uninstallWindowsAgent, type WindowsUninstallChoice, type WindowsUninstallResult } from './windowsAgentUninstall';
 
 /** Runs one command line on the Windows host through its SSH login shell. */
 export type WindowsSshExec = (sshHost: string, command: string, timeoutMs: number) => Promise<ExecResult>;
@@ -319,6 +321,24 @@ export class WindowsAgentDeployer {
     return parsePruneOutput(out);
   }
 
+  /**
+   * Takes the agent off the host (task, processes, firewall rule, folder, and with `removeMisao` the misao beside it). Every step reports
+   * its own outcome and a failure does not stop the steps that do not depend on it; see {@link uninstallWindowsAgent}.
+   */
+  async uninstall(sshHost: string, host: Pick<WindowsPreflightInfo, 'home' | 'systemRoot' | 'nodePath' | 'userId'>, choice: WindowsUninstallChoice): Promise<WindowsUninstallResult> {
+    const client = this.schtasks(sshHost, host);
+    return uninstallWindowsAgent(
+      {
+        tasks: client,
+        endTask: (taskName) => this.endTask(client, taskName),
+        script: (what, body, timeoutMs) => this.script(sshHost, what, body, timeoutMs),
+      },
+      { home: host.home, systemRoot: host.systemRoot, nodePath: host.nodePath, userId: host.userId },
+      this.options,
+      choice,
+    );
+  }
+
   /** What the Task Scheduler says about the task, for the message of a health check that failed. */
   async describeTask(sshHost: string, host: WindowsPreflightInfo): Promise<string> {
     try {
@@ -338,11 +358,12 @@ export class WindowsAgentDeployer {
    * `--headless` (Windows 10 1809 and later) gives the process a console that has no window.
    */
   private buildTask(input: WindowsDeployInput, layout: WindowsAgentLayout): string {
+    const action = agentTaskAction(input.host.systemRoot, input.nodePath, layout.envFile, layout.entry);
     return buildTaskXml({
       userId: input.host.userId,
       description: 'AZITO Agent: started at logon by the AZITO hub',
-      executable: path.win32.join(input.host.systemRoot, 'System32', 'conhost.exe'),
-      args: ['--headless', input.nodePath, `--env-file=${layout.envFile}`, layout.entry],
+      executable: action.executable,
+      args: action.args,
       workingDirectory: layout.versionDir,
       restartOnFailure: { intervalMinutes: RESTART_INTERVAL_MINUTES, count: RESTART_COUNT },
     });
@@ -362,7 +383,12 @@ export class WindowsAgentDeployer {
    * safety net for an agent that does not (an older one, or one whose parent watch has not fired yet).
    */
   private async stopTask(sshHost: string, client: SchtasksClient, envFile: string): Promise<void> {
-    const taskName = this.options.taskName;
+    await this.endTask(client, this.options.taskName);
+    await this.endStrayProcesses(sshHost, envFile);
+  }
+
+  /** Ends the running instance of a task (if there is one) and waits until the Task Scheduler no longer reports it running. */
+  private async endTask(client: SchtasksClient, taskName: string): Promise<void> {
     let state = await client.query(taskName);
     if (state.exists && state.running) {
       await client.stop(taskName);
@@ -373,7 +399,6 @@ export class WindowsAgentDeployer {
         state = await client.query(taskName);
       }
     }
-    await this.endStrayProcesses(sshHost, envFile);
   }
 
   /**

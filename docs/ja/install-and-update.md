@@ -479,7 +479,7 @@ Hub 起動時に、登録済みの Agent サーバーすべてのバージョン
 
 ## Windows ホストをエージェントとして追加する
 
-Servers → Add → Agent で、SSH 経由で Windows ホストを追加できます。agent のあとに、同梱の **misao** も入ります（タスクスケジューラのタスク `AzitoMisao`。詳しくは `misao.md`）。Windows には tmux が無いので、ペインサーバーは misao だけで、新しいサーバーの既定の mux は misao になります。misao だけが失敗しても agent は導入済みのままで、理由が `misaoError` として導入成功と並べて出ます。Windows のペインは cmd.exe で、ワーカー（claude / codex）の起動は #371 です。タスク実行は #371、Windows の agent は、ハブの起動時に版が違えば更新されます。削除は #372 です（Setup の行から再導入すると、その場で置き換わります）。
+Servers → Add → Agent で、SSH 経由で Windows ホストを追加できます。agent のあとに、同梱の **misao** も入ります（タスクスケジューラのタスク `AzitoMisao`。詳しくは `misao.md`）。Windows には tmux が無いので、ペインサーバーは misao だけで、新しいサーバーの既定の mux は misao になります。misao だけが失敗しても agent は導入済みのままで、理由が `misaoError` として導入成功と並べて出ます。Windows のペインは cmd.exe で、ワーカー（claude / codex）の起動は #371 です。タスク実行は #371、Windows の agent は、ハブの起動時に版が違えば更新されます。サーバーの削除で、ホストからも消せます（下記。Setup の行から再導入すると、その場で置き換わります）。
 
 Windows のエージェントで使える機能と、まだ使えない機能は次のとおりです。ハブはエージェントから OS（`hostProfile`）を受け取り、サーバー一覧とサーバーの概要に表示します。操作ごとに、いまのコードの経路で閉じるかどうかを決めます（判定は `@azito/shared` の `hostFeatureSupport` の 1 つの表で、各行を閉じる経路はコメントに書いてあります）。閉じた入口はフォーカスできる（`aria-disabled`）まま何もせず、理由を文字かツールチップで出し、`aria-describedby` で結び付けます。それでもハブに届いた操作は、理由付きの `unsupported_os`（501）で断られ、UI はその理由をそのまま出します。タスクは、実行先のサーバー（タスク自身のサーバー、無ければプロジェクトの唯一のサーバー。ハブと同じ規則）で判定します。
 
@@ -496,7 +496,7 @@ Windows のエージェントで使える機能と、まだ使えない機能は
 | tmux（既定の mux の選択・tmux の実行方式・tmux 設定の適用・tmux の導入） | 出さない（Windows には tmux が無く、ペインサーバーは misao だけ） | — |
 | AZITO ハーネス（`setup.mjs`）と、その install-status の行 | 使える | — |
 | ホスト上の agent の更新 | 使える（ハブの起動時に agent の版が違えば、導入と同じ手順（配置、起動、health 確認）で、今の agent のトークンのまま更新する。新しい agent が応答しなければ、前の版・設定・タスクに戻す。misao には触れない。直前の版より古い版は更新のあとに削除する（使用中のものは残し、次の更新で再び試す）） | — |
-| ホスト上の agent の削除 | 使えない（手作業で削除する。下記） | #372 |
+| ホスト上の agent の削除 | 使える（サーバーの削除の確認で「ホストからもエージェントを消す」（既定はオン）。タスクの終了と登録解除（導入が書いたとおりのタスクで、このホストの node.exe を使うものだけ）、`~\.azito\agent` の削除を行い、手順ごとの結果を返す。AZITO はプロセスを自分では止めない。例外は 1 つ: タスクを終了しても misao のデーモンは終わらないので、「misao も消す」では、そのタスクのパイプを提供しているプロセスを Windows に尋ね、それが自分のユーザーの `misao.exe` で、misao のフォルダーの下にあるときだけ、そのデーモン自身の停止（タスクが走らせる release の `misao.exe stop`。持っている窓は閉じる）を 1 回頼む。パイプを持つのがそれ以外のものなら触れず、理由を返す。それ以外は: タスクを終了したあともフォルダーから動いているプロセスが残っていれば、フォルダーは消さず、その pid とパスを返すので、手で止める。「フォルダーから動いている」は意図して広く読む: プログラムまたはコマンドラインが、フォルダーを（`/` と `\`、大文字小文字、長い名前と 8.3 名、ホームより下の部分のどれの綴りでも）含むプロセス。プログラムかコマンドラインをホストが返さない自分のプロセスがあれば、それも知らせる。ほかのユーザーのプロセスは SSH のセッションからは見えない。ファイアウォールの規則も消さず、Name と、確かめたうえで消すコマンドを一覧にして返す（サーバーを削除したあとも、同じ一覧をコピーできるコマンド付きのダイアログで見せる）。「misao も消す」（既定はオフ）を選ぶと misao のタスクとフォルダーも消す（窓はすべて閉じる。同じホストの Windows のハブの misao（タスク `AzitoHub` が持つフォルダー、またはタスク無しで動いているハブのプロセスがあるとき）や、タスクが起動したと確かめられない misao は消さず、理由を返す）。失敗したら行は消さず、「もう一度試す」「行だけ削除」「やめる」を選べる。ホストがオフラインなら、オフにして行だけ消せる。ハーネスは消さない（手作業） | — |
 | ブラウザ実行環境（Chromium）の導入 | UI で無効（v0.12.0 の範囲外） | #500 |
 
 OS がまだ記録されていないサーバー（OS を記録する前に登録された Unix の agent）は Unix として扱い、何も無効にしません。
@@ -538,7 +538,7 @@ OS の判定は、sh・cmd.exe・PowerShell で出力が変わる 1 本の `echo
 |---|---|
 | 再起動 | ハブが agent に届かないとき、タスクを再起動します（`schtasks /End` のあと `/Run`）。または Setup の行の「Reinstall」 |
 | 停止 | ホスト上か SSH で `schtasks /End /TN AzitoAgent`、またはタスクスケジューラの「終了」。agent はタスクが動かす `conhost.exe` に付き従い、それがいなくなって数秒で終わります（手で `node azito-agent.cjs` を起動したものは別です）。そのとき Windows が親のプロセス ID を別のプロセスに再利用していても、親の作成時刻を比べて約 30 秒以内に気づきます。それでも残る場合は、Setup の行から停止してください（ハブは `--env-file` の引数で agent を終わらせます）。次のログオンでまた起動します。起動させたくなければ `schtasks /Change /TN AzitoAgent /DISABLE` も） |
-| 削除（#372 まで） | `schtasks /End /TN AzitoAgent`、`schtasks /Delete /TN AzitoAgent /F`、`%USERPROFILE%\.azito\agent` を削除。導入が規則を追加していた場合は `Remove-NetFirewallRule -DisplayName "AZITO Agent (TCP 3002)"` |
+| 削除 | UI で行える（サーバーの削除の確認で「ホストからもエージェントを消す」）。ハーネス（`%USERPROFILE%\.azito\harness*`、`~\.claude\settings.json` のフック）は消さないので手作業で。ホストがオフラインだったり UI を使わなかったりしたときの手作業: `schtasks /End /TN AzitoAgent`、`schtasks /Delete /TN AzitoAgent /F`、`%USERPROFILE%\.azito\agent` を削除。導入が規則を追加していた場合は、管理者の PowerShell で `Get-NetFirewallRule -DisplayName "AZITO Agent (TCP 3002)"` を実行して一覧にし、導入が追加した規則（TCP 3002 の Allow、この agent の node.exe、100.64.0.0/10 から）であることを確かめて、Name で消す: `Remove-NetFirewallRule -Name '<Name>'`（UI からの削除の結果にも同じ一覧が出ます）。misao も消すなら `schtasks /Delete /TN AzitoMisao /F` と `%USERPROFILE%\.azito\misao`（窓はすべて閉じます） |
 
 本物の agent の隣で 2 つ目を試すときは、ハブの環境変数 `AZITO_WIN_AGENT_TASK_NAME`、`AZITO_WIN_AGENT_DIR`（ユーザーのホーム直下のフォルダー）、`AZITO_WIN_AGENT_PORT` を設定します。既定は `AzitoAgent`、`.azito\agent`、`3002` です。これは試験用です。サーバーごとには保存されないので、これらを付けずに起動したハブは既定のタスクを探します（使われているときはハブのログに 1 行出ます）。その一時ハブだけで使ってください。
 

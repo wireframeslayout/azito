@@ -2,6 +2,7 @@ import * as path from 'path';
 import { buildCommandSpec, type CommandResult, type CommandSpec } from '../../shared/exec/commandSpec';
 import { powershellDialect, powershellEncodedArgs } from '../../shared/os/shellDialect';
 import { buildTaskXml } from '../../shared/os/taskScheduler/taskDefinition';
+import { hubRootOfScript } from '../../shared/os/taskScheduler/taskXmlRead';
 import { joinWindowsArgs } from '../../shared/os/taskScheduler/windowsCommandLine';
 import { HUB_POINTER_VERSION_PATTERN } from './hubVersion';
 
@@ -176,10 +177,6 @@ function unescapeXml(value: string): string {
   return value.replace(/&(amp|lt|gt|quot|apos);/g, (_, name: string) => XML_ENTITIES[name]!);
 }
 
-/** The quote characters PowerShell reads as a single quote, which `powershellDialect.quote` doubles (the same set as the writer's). */
-const QUOTE_CHARS = "'‘’‚‛";
-const HUB_ROOT_LINE = new RegExp(`^\\$hubRoot = '((?:[^${QUOTE_CHARS}]|([${QUOTE_CHARS}])\\2)*)'\\r?$`, 'm');
-
 /** What a task's action runs: the program and its arguments as one command line. */
 export interface TaskExec {
   command: string;
@@ -230,9 +227,9 @@ export function inspectRegisteredHub(xml: string, systemRoot: string): { prefix:
   const argumentsLine = exec.argumentsLine;
   const encoded = /-EncodedCommand ([A-Za-z0-9+/=]+)/.exec(argumentsLine)?.[1];
   if (!encoded) return undefined;
-  const hubRoot = HUB_ROOT_LINE.exec(Buffer.from(encoded, 'base64').toString('utf16le'))?.[1];
+  const hubRoot = hubRootOfScript(Buffer.from(encoded, 'base64').toString('utf16le'));
   if (hubRoot === undefined) return undefined;
-  const prefix = path.win32.dirname(hubRoot.replace(new RegExp(`([${QUOTE_CHARS}])\\1`, 'g'), '$1'));
+  const prefix = path.win32.dirname(hubRoot);
   let layout: HubWindowsLayout;
   try {
     layout = hubWindowsLayout(prefix);

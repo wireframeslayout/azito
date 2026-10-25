@@ -6,6 +6,7 @@ import { AgentActivityProvider } from '../hooks/useAgentActivity';
 import { NotificationCenterProvider } from '../hooks/useNotificationCenter';
 import { ToastProvider } from '../hooks/useToast';
 import { ConfirmProvider } from '../hooks/useConfirm';
+import { LeftBehindProvider } from '../hooks/useLeftBehind';
 import { TerminalThemeProvider } from '../hooks/useTerminalTheme';
 import TerminalBackdrop from './TerminalBackdrop';
 import { isGlobalPagePath } from '../paths';
@@ -31,6 +32,7 @@ export default function Layout() {
     <TerminalThemeProvider>
     <ToastProvider>
     <ConfirmProvider>
+    <LeftBehindProvider>
     <WorkspaceTargetsProvider>
       <AgentActivityProvider>
       <NotificationCenterProvider>
@@ -102,6 +104,7 @@ export default function Layout() {
       </NotificationCenterProvider>
       </AgentActivityProvider>
     </WorkspaceTargetsProvider>
+    </LeftBehindProvider>
     </ConfirmProvider>
     </ToastProvider>
     </TerminalThemeProvider>

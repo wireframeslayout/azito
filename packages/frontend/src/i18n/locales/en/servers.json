@@ -214,7 +214,50 @@
     "deleteServer": "Delete Server",
     "deleteServerDesc": "Permanently removes this server from AZITO. Data on the remote server is not affected.",
     "deleteServerConfirm": "Delete server \"{{name}}\"?",
-    "deleting": "Deleting…"
+    "deleting": "Deleting…",
+    "leftBehind": {
+      "title": "Server \"{{name}}\" was deleted",
+      "intro": "The server entry is gone, but the removal left the following on the host on purpose. Check each one and remove it yourself if it is the install's.",
+      "commands": "Commands to run on the host (Administrator PowerShell), after checking"
+    },
+    "hostRemoval": {
+      "groupLabel": "Agent on the host",
+      "removeFromHost": "Also remove the agent from the host",
+      "removeFromHostDesc": "Before the server is deleted, removes the agent from the Windows host: it ends and unregisters its scheduled task and removes the ~\\.azito\\agent folder. AZITO stops no process itself and removes no firewall rule: a process still running from the folder stops the removal (you are told which), and a firewall rule is listed with the command to remove it. The server is deleted only if this works.",
+      "removeMisao": "Also remove misao (every window closes)",
+      "removeMisaoDesc": "Removes the misao task and the ~\\.azito\\misao folder. Every window running in misao on this host closes. A misao that belongs to a Windows hub on the same host is left in place.",
+      "removeMisaoNeedsHost": "Available when the agent is removed from the host.",
+      "unsupported": "Removing the agent from the host is only available for Windows agents in this release (#499). After the server is deleted, the agent keeps running on the host.",
+      "staysTitle": "What stays on the host",
+      "staysWindows": "The scheduled task AzitoAgent (the agent starts again at the next logon), its processes, the ~\\.azito\\agent folder (including the agent token) and the Windows Firewall rule stay, and so does misao.",
+      "staysUnix": "The agent process or service, its files under ~/.azito/agent (including the agent token) and misao stay.",
+      "staysHarness": "AZITO harness files and Claude Code hooks are never removed automatically.",
+      "manualSteps": "How to remove them by hand",
+      "removingHost": "Removing the agent from the host…",
+      "failedTitle": "The agent could not be completely removed from the host",
+      "failedNoAnswer": "The host could not be reached or refused the request, so nothing is known to have changed: {{reason}}",
+      "failedUnknown": "The host could not be reached or refused the request, so nothing is known to have changed.",
+      "failedKeepsServer": "The server is still registered. You can try again, or delete only the server entry and remove what is left on the host by hand.",
+      "retry": "Try again",
+      "deleteEntryOnly": "Delete server entry only",
+      "rowFailed": "The server entry could not be deleted: {{reason}}",
+      "stepsLabel": "What was done on the host",
+      "steps": {
+        "task": "Scheduled task",
+        "processes": "Agent processes",
+        "firewall": "Firewall rule",
+        "folder": "Agent folder",
+        "misaoTask": "misao task",
+        "misaoProcesses": "misao processes",
+        "misaoFolder": "misao folder"
+      },
+      "outcomes": {
+        "done": "Removed",
+        "absent": "Was not there",
+        "failed": "Failed",
+        "skipped": "Skipped"
+      }
+    }
   },
   "confirm": {
     "reinstallAgent": "Reinstall Agent",

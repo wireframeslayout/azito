@@ -1,4 +1,9 @@
 {
+  "copyCommand": {
+    "copy": "Copy",
+    "copied": "Copied",
+    "copyLabel": "Copy the command: {{command}}"
+  },
   "actions": {
     "confirm": "Confirm",
     "cancel": "Cancel",

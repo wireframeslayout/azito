@@ -576,4 +576,34 @@ describe('AgentInstaller on a Windows host', () => {
       expect(host.calls.some((c) => c.kind === 'schtasks' && c.schtasksArgs![0] === '/End')).toBe(false);
     });
   });
+
+  describe('removing the agent from the host', () => {
+    const TASK_XML = '<Task><Actions><Exec><Command>C:\\Windows\\System32\\conhost.exe</Command><Arguments>--headless "C:\\Program Files\\nodejs\\node.exe" --env-file=C:\\Users\\dev\\.azito\\agent\\agent.env C:\\Users\\dev\\.azito\\agent\\abc123abc123\\azito-agent.cjs</Arguments></Exec></Actions></Task>';
+
+    it('asks the host who it is, takes the task off, and reports each step; no install check (Tailscale) is needed', async () => {
+      const { installer, host } = make({ existingTask: 'running', tailscaleIp: '' });
+      host.registeredXml = TASK_XML;
+      const exec = host.exec;
+      // The comparison of the task's node.exe with the host's runs on the host; the fake answers that the two are one file.
+      Object.assign(host, {
+        exec: async (h: string, command: string) => {
+          const result = await exec(h, command);
+          return host.calls[host.calls.length - 1]?.text.includes('$a = Resolve-Long') ? { ...result, stdout: 'SAME\r\n' } : result;
+        },
+      });
+      const result = await installer.uninstallFromWindowsHost('user@win', { removeMisao: false });
+      expect(result.steps.find((s) => s.id === 'task')).toEqual({ id: 'task', outcome: 'done' });
+      expect(host.taskState).toBe('absent');
+      expect(host.calls.some((c) => c.kind === 'preflight')).toBe(true);
+      expect(host.calls.map((c) => c.text).join('\n')).not.toMatch(/nohup|systemctl|pkill/);
+    });
+
+    it('leaves the task when the host has no node.exe to compare the task\'s with', async () => {
+      const { installer, host } = make({ existingTask: 'running', nodePath: '' });
+      host.registeredXml = TASK_XML;
+      const result = await installer.uninstallFromWindowsHost('user@win', { removeMisao: false });
+      expect(result.steps.find((s) => s.id === 'task')).toMatchObject({ outcome: 'failed' });
+      expect(host.taskState).toBe('running');
+    });
+  });
 });

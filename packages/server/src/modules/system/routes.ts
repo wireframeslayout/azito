@@ -3,7 +3,8 @@ import type { SystemUpdateService } from './SystemUpdateService';
 import type { UpdateChannelResolver } from './UpdateChannelResolver';
 import type { MisaoServiceService } from './misao/MisaoServiceService';
 import { isReleaseTag } from './hubVersion';
-import { requireOperator, runMisaoOperation } from './misao/misaoRouteSupport';
+import { requireOperator } from '../../shared/auth/requireOperator';
+import { runMisaoOperation } from './misao/misaoRouteSupport';
 
 interface SystemRouteOptions {
   systemUpdateService: SystemUpdateService;

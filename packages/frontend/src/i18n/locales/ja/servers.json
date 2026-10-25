@@ -214,7 +214,50 @@
     "deleteServer": "サーバーを削除",
     "deleteServerDesc": "このサーバーを AZITO から完全に削除します。リモート側のデータは影響を受けません。",
     "deleteServerConfirm": "サーバー \"{{name}}\" を削除してもよいですか？",
-    "deleting": "削除中…"
+    "deleting": "削除中…",
+    "leftBehind": {
+      "title": "サーバー \"{{name}}\" を削除しました",
+      "intro": "サーバーの登録は消えましたが、次のものは意図してホストに残してあります。ひとつずつ確かめて、導入が作ったものなら手で消してください。",
+      "commands": "確かめたあとにホストで実行するコマンド（管理者の PowerShell）"
+    },
+    "hostRemoval": {
+      "groupLabel": "ホスト上のエージェント",
+      "removeFromHost": "ホストからもエージェントを消す",
+      "removeFromHostDesc": "サーバーを削除する前に、Windows ホストからエージェントを消します。タスクスケジューラのタスクを終了して登録解除し、~\\.azito\\agent フォルダーを消します。AZITO はプロセスを自分では止めず、ファイアウォールの規則も消しません。フォルダーから動いているプロセスが残っていれば消さずに知らせ（どれかを示します）、規則は一覧と消すコマンドを示します。消せたときだけサーバーを削除します。",
+      "removeMisao": "misao も消す（窓はすべて閉じます）",
+      "removeMisaoDesc": "misao のタスクと ~\\.azito\\misao フォルダーを消します。このホストの misao で動いている窓はすべて閉じます。同じホストの Windows のハブが使っている misao は消しません。",
+      "removeMisaoNeedsHost": "ホストからもエージェントを消すときに選べます。",
+      "unsupported": "ホストからエージェントを消せるのは、このリリースでは Windows のエージェントだけです（#499）。サーバーを削除したあとも、エージェントはホストで動き続けます。",
+      "staysTitle": "ホストに残るもの",
+      "staysWindows": "タスク AzitoAgent（次のログオンでエージェントが再び起動します）、そのプロセス、~\\.azito\\agent フォルダー（エージェントのトークンを含む）、Windows ファイアウォールの規則、misao が残ります。",
+      "staysUnix": "エージェントのプロセスまたはサービス、~/.azito/agent 以下のファイル（エージェントのトークンを含む）、misao が残ります。",
+      "staysHarness": "AZITO のハーネスのファイルと Claude Code のフックは、自動では消しません。",
+      "manualSteps": "手作業で消す手順",
+      "removingHost": "ホストからエージェントを消しています…",
+      "failedTitle": "ホストからエージェントを完全には消せませんでした",
+      "failedNoAnswer": "ホストに届かなかったか、要求を断られました。ホストは何も変わっていない可能性があります: {{reason}}",
+      "failedUnknown": "ホストに届かなかったか、要求を断られました。ホストは何も変わっていない可能性があります。",
+      "failedKeepsServer": "サーバーはまだ登録されています。もう一度試すか、サーバーの登録だけを削除して、ホストに残ったものを手作業で消してください。",
+      "retry": "もう一度試す",
+      "deleteEntryOnly": "サーバーの登録だけを削除",
+      "rowFailed": "サーバーの登録を削除できませんでした: {{reason}}",
+      "stepsLabel": "ホストで行ったこと",
+      "steps": {
+        "task": "タスクスケジューラのタスク",
+        "processes": "エージェントのプロセス",
+        "firewall": "ファイアウォールの規則",
+        "folder": "エージェントのフォルダー",
+        "misaoTask": "misao のタスク",
+        "misaoProcesses": "misao のプロセス",
+        "misaoFolder": "misao のフォルダー"
+      },
+      "outcomes": {
+        "done": "消しました",
+        "absent": "ありませんでした",
+        "failed": "失敗",
+        "skipped": "行いませんでした"
+      }
+    }
   },
   "confirm": {
     "reinstallAgent": "エージェント再インストール",

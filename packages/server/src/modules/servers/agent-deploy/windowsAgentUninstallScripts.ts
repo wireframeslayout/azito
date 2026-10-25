@@ -1,0 +1,327 @@
+import { powershellDialect } from '../../../shared/os/shellDialect';
+import { redactSecretText } from '../../../shared/redactSecretText';
+import { PIPE_HOLDER_HELPER } from '../../../shared/os/pipeHolderHelper';
+
+/**
+ * - `done`: it was there and is gone now (for the processes: they were running and are ended).
+ * - `absent`: there was nothing to remove (for the processes: none was running).
+ * - `failed`: it could not be removed, or the host could not be asked; `detail` says why and what to do.
+ * - `skipped`: not attempted or not removed on purpose; `detail` says why.
+ */
+export type UninstallOutcome = 'done' | 'absent' | 'failed' | 'skipped';
+
+/** What a step script answered, before it is worded: an outcome and the detail that goes with it. */
+export interface ScriptOutcome {
+  outcome: UninstallOutcome;
+  detail?: string;
+}
+
+export const lines = (output: string): string[] => output.replace(/\r/g, '').split('\n').map((l) => l.trim()).filter((l) => l !== '');
+
+export function unreadable(output: string): Error {
+  return new Error(`The host's answer could not be read: ${redactSecretText(output.trim()).slice(0, 300) || 'nothing'}`);
+}
+
+// ─── The folder ───
+
+/**
+ * Deletes the folder tree below `root` without following a link: the folder and EVERY folder above it, up to the drive's root, must be
+ * real folders that can be looked at (not a junction or symbolic link, whose target would be the thing deleted; not one that cannot be
+ * queried), and a link inside is removed as a link (its target is not entered). A file that cannot be deleted (in use) is reported; the rest goes.
+ * A folder that is not there is `ABSENT`; any other reason the folder cannot be looked at (access denied) is an error, never `ABSENT`.
+ * The same race as the old-version prune remains and is accepted: a folder can be swapped for a link between the check and the delete,
+ * which only the owner of the owner-only folder or an administrator can do, and either can already delete what the link reaches.
+ */
+export function folderScript(home: string, root: string): string {
+  const q = powershellDialect.quote;
+  return [
+    `$homeDir = ${q(home)}`,
+    `$root = ${q(root)}`,
+    'function Test-Link($path) { return [bool]((Get-Item -LiteralPath $path -Force).Attributes -band [System.IO.FileAttributes]::ReparsePoint) }',
+    'try { $null = Get-Item -LiteralPath $root -Force -ErrorAction Stop } catch { if ($_.CategoryInfo.Category -eq \'ObjectNotFound\') { Write-Output \'ABSENT\'; exit 0 } else { throw } }',
+    'if (-not $root.StartsWith($homeDir.TrimEnd([char]92) + [char]92, [System.StringComparison]::OrdinalIgnoreCase)) { throw ("The folder " + $root + " is not below the home folder " + $homeDir) }',
+    '$driveRoot = [System.IO.Path]::GetPathRoot($root)',
+    '$walk = $root',
+    'while ($walk.TrimEnd([char]92) -ne $driveRoot.TrimEnd([char]92)) {',
+    '  try { $isLink = Test-Link $walk } catch { throw ("Refusing to remove anything: " + $walk + " cannot be looked at (" + $_.Exception.Message + ")") }',
+    '  if ($isLink) { throw ("Refusing to remove anything: " + $walk + " is a link (junction or symbolic link), and removing below it could delete files elsewhere") }',
+    '  $parent = [System.IO.Path]::GetDirectoryName($walk)',
+    '  if ($null -eq $parent -or $parent -eq $walk) { break }',
+    '  $walk = $parent',
+    '}',
+    '$problems = New-Object System.Collections.ArrayList',
+    'function Remove-Tree([string]$dir) {',
+    '  foreach ($entry in [System.IO.Directory]::GetFileSystemEntries($dir)) {',
+    '    try {',
+    '      $attributes = [System.IO.File]::GetAttributes($entry)',
+    '      $isDirectory = [bool]($attributes -band [System.IO.FileAttributes]::Directory)',
+    '      if ([bool]($attributes -band [System.IO.FileAttributes]::ReparsePoint)) {',
+    '        if ($isDirectory) { [System.IO.Directory]::Delete($entry) } else { [System.IO.File]::Delete($entry) }',
+    '      } elseif ($isDirectory) {',
+    '        Remove-Tree $entry',
+    '      } else {',
+    '        [System.IO.File]::SetAttributes($entry, [System.IO.FileAttributes]::Normal)',
+    '        [System.IO.File]::Delete($entry)',
+    '      }',
+    '    } catch { [void]$problems.Add($entry + ": " + $_.Exception.Message) }',
+    '  }',
+    '  try { [System.IO.File]::SetAttributes($dir, [System.IO.FileAttributes]::Directory); [System.IO.Directory]::Delete($dir) } catch { [void]$problems.Add($dir + ": " + $_.Exception.Message) }',
+    '}',
+    'Remove-Tree $root',
+    'if ($problems.Count -gt 0) { Write-Output (\'FAILED \' + $problems.Count + \' item(s) could not be removed (a file in use? end the program that holds it, then delete the folder by hand): \' + ((@($problems | Select-Object -First 3) -join \'; \') -replace \'[\\r\\n]+\', \' \')) } else { Write-Output \'DONE\' }',
+  ].join('\n');
+}
+
+export function parseFolderOutput(output: string): ScriptOutcome {
+  const last = lines(output).pop() ?? '';
+  if (last === 'DONE') return { outcome: 'done' };
+  if (last === 'ABSENT') return { outcome: 'absent' };
+  const reason = /^FAILED (.*)$/.exec(last)?.[1];
+  if (reason !== undefined) return { outcome: 'failed', detail: redactSecretText(reason).slice(0, 600) };
+  throw unreadable(output);
+}
+
+// ─── Looking at the host ───
+
+/**
+ * Looks at what is on the HOST to decide whether something is this install's, so that it is never decided by how a path happens to be
+ * spelled (`C:\Users\RUNNER~1\...` and `C:\Users\runneradmin\...` are one folder). A path is put in its long form, with the case it has
+ * on disk, component by component. A path with a junction or symbolic link anywhere on the way is NOT resolved either (where it leads is
+ * not what its name says, and following it here would be a guess): it is `$null` like one that does not exist or cannot be read, and every
+ * caller treats "cannot resolve" as "may be the same", never as "different".
+ */
+export const RESOLVE_LONG = [
+  'function Resolve-Long([string]$p) {',
+  '  try {',
+  '    $full = [System.IO.Path]::GetFullPath([Environment]::ExpandEnvironmentVariables($p))',
+  '    $cur = [System.IO.Path]::GetPathRoot($full)',
+  '    foreach ($part in $full.Substring($cur.Length).Split([char]92)) {',
+  '      if ($part -eq \'\') { continue }',
+  '      $hit = @([System.IO.Directory]::GetFileSystemEntries($cur, $part))',
+  '      if ($hit.Count -ne 1) { return $null }',
+  '      $cur = $hit[0]',
+  '      if ([bool]([System.IO.File]::GetAttributes($cur) -band [System.IO.FileAttributes]::ReparsePoint)) { return $null }',
+  '    }',
+  '    return $cur',
+  '  } catch { return $null }',
+  '}',
+];
+
+/**
+ * Whether a process USES a folder, and the owner of a process, on the host (for scripts that set `$root` to the folder and `$tail` to the
+ * part of it below the user's home, e.g. `\.azito\agent`). It errs on the side of finding too many: a false find only keeps a folder.
+ * - A process uses the folder when its `ExecutablePath` or its `CommandLine` contains the folder as a path: with `/` read as `\`, in any
+ *   case, in the folder's own spelling, in its long form and in its 8.3 form (both as the host resolves them), or just its part below the
+ *   home (so that a home spelled another way still counts). A name mixing long and short parts of the folder itself is not found.
+ * - `Owner` is `mine`, `other` or `unknown` (the query failed or said nothing); a process of someone else is mostly `unknown` to a user
+ *   who is not an administrator, so those are out of reach and are left out: the limit of what a user's session can see.
+ * - `Blind` is a process whose `ExecutablePath` or `CommandLine` the host did not give. One that is `mine` and `Matters` is a process that
+ *   might use the folder and cannot be told. `Matters` is the processes that can run from, or hold, the folders of the install: the program
+ *   the tasks start (`node.exe`, `misao.exe`), what they are started under (`conhost.exe`, `cmd.exe`, `powershell.exe`, `pwsh.exe`). A
+ *   process of the user's own that hides its program and command line and is something else (measured on a Windows runner:
+ *   `DefenderSessionHelper.exe`, a protected process) is not counted, since it would stop every removal on such a machine for a process that
+ *   is not AZITO's to hold a folder; it is listed as `HIDDEN` instead, so that the result says what was not looked into.
+ */
+export const USES_FOLDER = [
+  ...RESOLVE_LONG,
+  '$me = [Security.Principal.WindowsIdentity]::GetCurrent().User.Value',
+  'function Norm($t) { if ($t) { ($t -replace \'/\', \'\\\').ToLowerInvariant() } else { \'\' } }',
+  '$needles = New-Object System.Collections.ArrayList',
+  'function Add-Needle($path) { if ($path) { $n = (Norm $path).TrimEnd([char]92) + [char]92; if (-not $needles.Contains($n)) { [void]$needles.Add($n) } } }',
+  'Add-Needle $root; Add-Needle (Resolve-Long $root); Add-Needle $tail',
+  'Add-Needle $(try { (New-Object -ComObject Scripting.FileSystemObject).GetFolder($root).ShortPath } catch { $null })',
+  'function Uses($p) { $text = (Norm $p.ExecutablePath) + "`n" + (Norm $p.CommandLine); foreach ($n in $needles) { if ($text.Contains($n)) { return $true } }; return $false }',
+  'function Blind($p) { (-not $p.ExecutablePath) -or (-not $p.CommandLine) }',
+  'function Matters($p) { @(\'node.exe\', \'misao.exe\', \'conhost.exe\', \'cmd.exe\', \'powershell.exe\', \'pwsh.exe\') -contains "$($p.Name)".ToLowerInvariant() }',
+  'function Owner($p) {',
+  '  try { $r = Invoke-CimMethod -InputObject $p -MethodName GetOwnerSid -ErrorAction Stop } catch { return \'unknown\' }',
+  '  if ($r.ReturnValue -ne 0 -or -not $r.Sid) { return \'unknown\' }',
+  '  if ($r.Sid -eq $me) { \'mine\' } else { \'other\' }',
+  '}',
+];
+
+/** The part of `root` below the user's home, with a leading `\` (`\.azito\agent`); the root itself when it is not below `home`. */
+export function tailBelow(home: string, root: string): string {
+  const prefix = home.replace(/[\\/]+$/, '');
+  return root.toLowerCase().startsWith(`${prefix.toLowerCase()}\\`) ? root.slice(prefix.length) : root;
+}
+
+// ─── The processes ───
+
+/**
+ * AZITO ends no process itself. The task is ended (`/End`: the Task Scheduler ends what it started), and this only LOOKS, afterwards, for
+ * what would be in the way of deleting the folder (see {@link USES_FOLDER} for what "uses the folder" means, and for its limits): it waits up
+ * to 10 s for them to go (the agent leaves with its parent), then prints `LEFT|pid|name|path` for each process that uses the folder and
+ * `BLIND|pid|name` for each process of the user's own whose path or command line the host did not give (it cannot be told whether it uses
+ * the folder); nothing is touched. Nothing at all is `CLEAR`. A process list that cannot be read is an error, never `CLEAR`.
+ */
+export function leftoverProcessesScript(root: string, home: string): string {
+  const q = powershellDialect.quote;
+  return [
+    `$root = ${q(root)}; $tail = ${q(tailBelow(home, root))}`,
+    ...USES_FOLDER,
+    'function All { @(Get-CimInstance Win32_Process -ErrorAction Stop | Where-Object { $_.ProcessId -ne $PID }) }',
+    'function Find-Left { @(All | Where-Object { Uses $_ }) }',
+    '$left = Find-Left',
+    'for ($i = 0; $i -lt 20 -and $left.Count -gt 0; $i++) { Start-Sleep -Milliseconds 500; $left = Find-Left }',
+    '$mineBlind = @(All | Where-Object { (Blind $_) -and -not (Uses $_) -and (Owner $_) -eq \'mine\' })',
+    '$blind = @($mineBlind | Where-Object { Matters $_ }); $hidden = @($mineBlind | Where-Object { -not (Matters $_) })',
+    'function Clean($t) { "$t" -replace \'[\\r\\n|]+\', \' \' }',
+    'foreach ($p in $left) { Write-Output (\'LEFT|\' + $p.ProcessId + \'|\' + (Clean $p.Name) + \'|\' + (Clean $p.ExecutablePath)) }',
+    'foreach ($p in $blind) { Write-Output (\'BLIND|\' + $p.ProcessId + \'|\' + (Clean $p.Name)) }',
+    'foreach ($p in $hidden) { Write-Output (\'HIDDEN|\' + $p.ProcessId + \'|\' + (Clean $p.Name)) }',
+    'if ($left.Count -eq 0 -and $blind.Count -eq 0 -and $hidden.Count -eq 0) { Write-Output \'CLEAR\' }',
+  ].join('\n');
+}
+
+export function parseLeftoverOutput(output: string, root: string, advice = ''): ScriptOutcome {
+  const all = lines(output);
+  if (all.length === 1 && all[0] === 'CLEAR') return { outcome: 'absent' };
+  const hidden = all.filter((l) => l.startsWith('HIDDEN|')).map((l) => {
+    const [, pid = '', name = ''] = l.split('|');
+    return `${redactSecretText(name).slice(0, 100)} (process ${pid})`;
+  });
+  const note = hidden.length === 0 ? undefined : `Not counted, since the host hides their program and command line and they are not programs that start from an AZITO folder: ${hidden.join('; ')}.`;
+  const left = all.filter((l) => l.startsWith('LEFT|')).map((l) => {
+    const [, pid = '', name = '', exe = ''] = l.split('|');
+    return { pid, name: redactSecretText(name).slice(0, 100), exe: redactSecretText(exe).slice(0, 300) };
+  });
+  const blind = all.filter((l) => l.startsWith('BLIND|')).map((l) => {
+    const [, pid = '', name = ''] = l.split('|');
+    return { pid, name: redactSecretText(name).slice(0, 100) };
+  });
+  if (left.length === 0 && blind.length === 0) {
+    if (note === undefined) throw unreadable(output);
+    return { outcome: 'absent', detail: note };
+  }
+  const parts: string[] = [];
+  if (left.length > 0) {
+    const listed = left.map((p) => `${p.name} (process ${p.pid}${p.exe ? `, ${p.exe}` : ''})`).join('; ');
+    parts.push(`The task was ended, but ${left.length === 1 ? 'a process is' : `${left.length} processes are`} still running from ${root}: ${listed}. AZITO does not stop ${left.length === 1 ? 'it' : 'them'}: check what ${left.length === 1 ? 'it is' : 'they are'} and stop ${left.length === 1 ? 'it' : 'them'} yourself (Stop-Process -Id <pid>).${advice === '' ? '' : ` ${advice}`}`);
+  }
+  if (blind.length > 0) {
+    const listed = blind.map((p) => `${p.name} (process ${p.pid})`).join('; ');
+    parts.push(`The host did not give the program or the command line of ${blind.length === 1 ? 'a process of yours' : `${blind.length} processes of yours`}, so it cannot be told whether ${blind.length === 1 ? 'it uses' : 'they use'} ${root}: ${listed}. Check ${blind.length === 1 ? 'it' : 'them'}.`);
+  }
+  return { outcome: 'failed', detail: `${parts.join(' ')} The folder was left; delete it, or remove the server again, once that is settled. (Processes of other users cannot be seen from this session.)${note === undefined ? '' : ` ${note}`}` };
+}
+
+// ─── Stopping a misao daemon that outlived its task ───
+
+/**
+ * Who serves the pipe of the misao task, asked of Windows (see `PIPE_HOLDER_HELPER`: not of the daemon). Prints `NOPIPE` when no pipe of
+ * that name exists (no daemon is running: nothing to stop), else `FORMS|<long form of root>|<8.3 form of root>` (either may be empty),
+ * `HOLDER|<pid>|<name>|<mine, other or unknown>|<program path>` for the process that serves it, or `ERROR|<why>` when that cannot be told.
+ */
+export function misaoHolderScript(root: string, pipe: string): string {
+  const q = powershellDialect.quote;
+  return [
+    `$root = ${q(root)}; $pipe = ${q(pipe)}`,
+    PIPE_HOLDER_HELPER,
+    ...RESOLVE_LONG,
+    'function Clean($t) { "$t" -replace \'[\\r\\n|]+\', \' \' }',
+    'if (-not (Test-Path -LiteralPath $pipe)) { Write-Output \'NOPIPE\'; exit 0 }',
+    '$short = try { (New-Object -ComObject Scripting.FileSystemObject).GetFolder($root).ShortPath } catch { $null }',
+    'Write-Output (\'FORMS|\' + (Clean (Resolve-Long $root)) + \'|\' + (Clean $short))',
+    'try { $id = [AzitoPipeHolder]::ServerProcessId($pipe.Substring(9)) } catch { Write-Output (\'ERROR|\' + (Clean $_.Exception.Message)); exit 0 }',
+    '$p = Get-CimInstance Win32_Process -Filter "ProcessId = $id"',
+    'if (-not $p) { Write-Output \'ERROR|the process that serves the pipe is gone\'; exit 0 }',
+    '$me = [Security.Principal.WindowsIdentity]::GetCurrent().User.Value; $owner = \'unknown\'',
+    'try { $r = Invoke-CimMethod -InputObject $p -MethodName GetOwnerSid -ErrorAction Stop; if ($r.ReturnValue -eq 0 -and $r.Sid) { $owner = if ($r.Sid -eq $me) { \'mine\' } else { \'other\' } } } catch { }',
+    'Write-Output (\'HOLDER|\' + $id + \'|\' + (Clean $p.Name) + \'|\' + $owner + \'|\' + (Clean $p.ExecutablePath))',
+  ].join('\n');
+}
+
+export type MisaoHolder =
+  | { kind: 'nopipe' }
+  | { kind: 'error'; message: string }
+  | { kind: 'holder'; pid: string; name: string; owner: string; exe: string; forms: string[] };
+
+export function parseMisaoHolderOutput(output: string): MisaoHolder {
+  const all = lines(output);
+  if (all.length === 1 && all[0] === 'NOPIPE') return { kind: 'nopipe' };
+  const forms = (all.find((l) => l.startsWith('FORMS|')) ?? '').split('|').slice(1).filter((f) => f !== '');
+  const error = all.find((l) => l.startsWith('ERROR|'));
+  if (error !== undefined) return { kind: 'error', message: redactSecretText(error.slice(6)).slice(0, 200) };
+  const holder = all.find((l) => l.startsWith('HOLDER|'));
+  if (holder === undefined) throw unreadable(output);
+  const [, pid = '', name = '', owner = '', ...exe] = holder.split('|');
+  return { kind: 'holder', pid, name, owner, exe: exe.join('|'), forms };
+}
+
+const normalizePath = (path: string): string => path.replace(/\//g, '\\').toLowerCase();
+
+/**
+ * Whether the daemon behind the task's pipe is the install's, so that its own `stop` may be asked for: the process Windows says serves
+ * the pipe is a `misao.exe`, the user's own, whose program lies under `root` (in the folder's own spelling, its long form or its 8.3 form,
+ * as the host resolved them). Anything else (nobody found, a misao.exe somewhere else, someone else's, a path that cannot be read) is
+ * a reason not to ask: that daemon is not shown to be the install's, and nothing is stopped.
+ */
+export function decideMisaoStop(root: string, holder: MisaoHolder): { stop: true } | { stop: false; reason: string } {
+  if (holder.kind === 'nopipe') return { stop: false, reason: 'no daemon is serving the pipe, so there is nothing to stop' };
+  if (holder.kind === 'error') return { stop: false, reason: `Windows did not say which process serves the pipe (${holder.message})` };
+  const what = `the process that serves the pipe (${holder.name || '?'}, process ${holder.pid})`;
+  if (holder.name.toLowerCase() !== 'misao.exe') return { stop: false, reason: `${what} is not a misao.exe` };
+  if (holder.owner !== 'mine') return { stop: false, reason: `${what} is not shown to be yours (its owner is ${holder.owner})` };
+  if (holder.exe === '') return { stop: false, reason: `the program of ${what} could not be read` };
+  const exe = normalizePath(holder.exe);
+  const under = [root, ...holder.forms].map((folder) => `${normalizePath(folder).replace(/\\+$/, '')}\\`);
+  if (!under.some((folder) => exe.startsWith(folder))) return { stop: false, reason: `${what} runs ${holder.exe}, which is not under ${root}` };
+  return { stop: true };
+}
+
+/**
+ * For the two paths a stop would rely on (the program of the process that serves the pipe, and the `misao.exe` that would be asked to
+ * stop it): prints `CHAIN|<state of the first>|<state of the second>`, each `ok` when every element of the path up to the drive's root is a
+ * real one that can be looked at, `link` when one is a junction or symbolic link (where it leads is not what the name says), `unreadable`
+ * otherwise. The same check the deletion of a folder makes.
+ */
+export function pathChainScript(first: string, second: string): string {
+  const q = powershellDialect.quote;
+  return [
+    `$first = ${q(first)}; $second = ${q(second)}`,
+    'function Chain($path) {',
+    '  if (-not $path) { return \'unreadable\' }',
+    '  $driveRoot = [System.IO.Path]::GetPathRoot($path).TrimEnd([char]92); $cur = $path',
+    '  while ($cur -and $cur.TrimEnd([char]92) -ne $driveRoot) {',
+    '    try { if ([bool]((Get-Item -LiteralPath $cur -Force -ErrorAction Stop).Attributes -band [System.IO.FileAttributes]::ReparsePoint)) { return \'link\' } } catch { return \'unreadable\' }',
+    '    $cur = [System.IO.Path]::GetDirectoryName($cur)',
+    '  }',
+    '  \'ok\'',
+    '}',
+    'Write-Output (\'CHAIN|\' + (Chain $first) + \'|\' + (Chain $second))',
+  ].join('\n');
+}
+
+export type PathChains = { first: string; second: string };
+
+/** A path chain that was not reported (or not understood) was not checked: it counts as `unreadable`. */
+export function parsePathChainOutput(output: string): PathChains {
+  const [, first = 'unreadable', second = 'unreadable'] = (lines(output).find((l) => l.startsWith('CHAIN|')) ?? '').split('|');
+  return { first, second };
+}
+
+/** Whether a stop may rely on the two paths: every element of both is a real one that can be looked at. `reason` otherwise. */
+export function decidePathChains(chains: PathChains, holderExe: string, stopExe: string): { stop: true } | { stop: false; reason: string } {
+  const fault = (state: string, path: string, what: string): string => `${what}, ${path}, ${state === 'link' ? 'has a junction or symbolic link on the way' : 'cannot be looked at all the way to the drive\'s root'}`;
+  if (chains.first !== 'ok') return { stop: false, reason: fault(chains.first, holderExe, 'the program of the process that serves the pipe') };
+  if (chains.second !== 'ok') return { stop: false, reason: fault(chains.second, stopExe, 'the misao.exe that would be asked to stop it') };
+  return { stop: true };
+}
+
+/**
+ * `misao stop` through the daemon's own pipe, once {@link decideMisaoStop} has said the daemon is the install's: the `misao.exe` of the
+ * recognised task, with that task's pipe, given 30 s. A daemon that stops closes every window it holds. Nothing is killed here; what is
+ * still running afterwards is {@link leftoverProcessesScript}'s to find.
+ */
+export function misaoStopScript(exe: string, pipe: string): string {
+  const q = powershellDialect.quote;
+  return [
+    `$exe = ${q(exe)}`,
+    'if (Test-Path -LiteralPath $exe -PathType Leaf) {',
+    `  $env:MISAO_SOCKET = ${q(pipe)}`,
+    '  try { $stop = Start-Process -FilePath $exe -ArgumentList \'stop\' -WindowStyle Hidden -PassThru; [void]$stop.WaitForExit(30000) } catch { }',
+    '}',
+    'Write-Output \'DONE\'',
+  ].join('\n');
+}

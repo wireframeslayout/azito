@@ -7,7 +7,8 @@ import type { MisaoServers } from '../../tmux/misao/MisaoServers';
 import type { KeyedMutex } from '../../../shared/keyedMutex';
 import type { MisaoAgentInstaller } from './MisaoAgentInstaller';
 import { MisaoServiceError } from './MisaoServiceError';
-import { MISAO_ERROR_STATUS, requireOperator } from './misaoRouteSupport';
+import { requireOperator } from '../../../shared/auth/requireOperator';
+import { MISAO_ERROR_STATUS } from './misaoRouteSupport';
 
 export interface AgentMisaoRoutesOptions {
   serverRepo: Pick<IServerRepository, 'findByName'>;
