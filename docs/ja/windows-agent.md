@@ -127,7 +127,7 @@ misao の更新は別です。agent の更新は misao に触れません（動�
 
 **残るもの。**
 
-- ファイアウォールの規則 `AZITO Agent (TCP 3002)`（導入が追加していた場合）: 管理者の PowerShell で `Get-NetFirewallRule -DisplayName "AZITO Agent (TCP 3002)"` を実行して一覧にし、導入が追加した規則（TCP 3002 の Allow、この agent の node.exe、100.64.0.0/10 から）であることを確かめて、Name で消します: `Remove-NetFirewallRule -Name '<Name>'`。
+- ファイアウォールの規則 `AZITO Agent (TCP 3002)`（導入が追加していた場合）: 管理者の PowerShell で `Get-NetFirewallRule -DisplayName "AZITO Agent (TCP 3002)"` を実行して一覧にし、導入が追加した規則（TCP 3002 の Allow、この agent の node.exe、100.64.0.0/10 から）であることを確かめて、Name で消します: `Remove-NetFirewallRule -Name '<Name>'`。この規則は消さなくても害はありません。agent を消したので、このポートを待ち受けるものはなく、規則が新しく開くものもありません。気になるときだけ消してください。
 - AZITO ハーネス（`%USERPROFILE%\.azito\harness*`、`~\.claude\settings.json` のフック）: 自動では消しません。手作業で消してください。
 - 「misao も消す」を選ばなかったときの misao（タスクとフォルダー）。
 

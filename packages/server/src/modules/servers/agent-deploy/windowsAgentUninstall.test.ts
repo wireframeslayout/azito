@@ -366,6 +366,8 @@ describe('uninstallWindowsAgent', () => {
       expect(outcomes(result)).toEqual({ task: 'done', processes: 'absent', firewall: 'skipped', folder: 'done' });
       const text = detail(result, 'firewall');
       expect(text).toContain('does not remove firewall rules by itself');
+      expect(text).toContain('does no harm');
+      expect(text).toContain('nothing listens on that port');
       expect(text).toContain('{1111-AAAA}');
       expect(text).toContain('port 3002');
       expect(text).toContain("Remove-NetFirewallRule -Name '{1111-AAAA}'");

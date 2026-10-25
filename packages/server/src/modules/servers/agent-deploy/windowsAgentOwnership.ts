@@ -39,7 +39,7 @@ export function parseFirewallOutput(output: string, displayName: string): Script
   const commands = rules.map((r) => `Remove-NetFirewallRule -Name '${r.name.replace(/'/g, "''")}'`).join('\n');
   return {
     outcome: 'skipped',
-    detail: `AZITO does not remove firewall rules by itself. ${rules.length} inbound rule(s) named "${displayName}" (the name the install gives its rule) ${rules.length === 1 ? 'was' : 'were'} found and left in place:\n${listed}\nCheck that one is the rule the install added (an Allow for TCP on the agent's port, for this agent's node.exe, from the Tailscale range 100.64.0.0/10), then remove it in an Administrator PowerShell:\n${commands}`,
+    detail: `AZITO does not remove firewall rules by itself. ${rules.length} inbound rule(s) named "${displayName}" (the name the install gives its rule) ${rules.length === 1 ? 'was' : 'were'} found and left in place:\n${listed}\nLeaving ${rules.length === 1 ? 'this rule' : 'these rules'} does no harm: the agent is removed, so nothing listens on that port and ${rules.length === 1 ? 'the rule opens' : 'the rules open'} nothing new. Only if you want ${rules.length === 1 ? 'it' : 'them'} gone, check that ${rules.length === 1 ? 'it is' : 'each is'} the rule the install added (an Allow for TCP on the agent's port, for this agent's node.exe, from the Tailscale range 100.64.0.0/10), then remove ${rules.length === 1 ? 'it' : 'them'} in an Administrator PowerShell:\n${commands}`,
   };
 }
 

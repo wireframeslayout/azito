@@ -218,6 +218,7 @@
     "leftBehind": {
       "title": "Server \"{{name}}\" was deleted",
       "intro": "The server entry is gone, but the removal left the following on the host on purpose. Check each one and remove it yourself if it is the install's.",
+      "harmless": "A leftover firewall rule does no harm if you do not remove it. The agent is gone, so nothing listens on its port and the rule opens nothing new. Remove it only if you want to.",
       "commands": "Commands to run on the host (Administrator PowerShell), after checking"
     },
     "hostRemoval": {

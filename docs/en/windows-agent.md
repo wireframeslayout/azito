@@ -127,7 +127,7 @@ What happens on the host (each step answers `removed` / `was not there` / `faile
 
 **What stays.**
 
-- The firewall rule `AZITO Agent (TCP 3002)` (if the install added it): in an Administrator PowerShell list it with `Get-NetFirewallRule -DisplayName "AZITO Agent (TCP 3002)"`, check that it is the one the install added (an Allow for TCP 3002, for this agent's node.exe, from 100.64.0.0/10), and remove it by its Name: `Remove-NetFirewallRule -Name '<the Name>'`.
+- The firewall rule `AZITO Agent (TCP 3002)` (if the install added it): in an Administrator PowerShell list it with `Get-NetFirewallRule -DisplayName "AZITO Agent (TCP 3002)"`, check that it is the one the install added (an Allow for TCP 3002, for this agent's node.exe, from 100.64.0.0/10), and remove it by its Name: `Remove-NetFirewallRule -Name '<the Name>'`. Leaving the rule does no harm: the agent is removed, so nothing listens on that port and the rule opens nothing new. Remove it only if you want to.
 - The AZITO harness (`%USERPROFILE%\.azito\harness*`, the hooks in `~\.claude\settings.json`): not removed automatically; remove it by hand.
 - misao (the task and the folder) when you did not choose "Also remove misao".
 
