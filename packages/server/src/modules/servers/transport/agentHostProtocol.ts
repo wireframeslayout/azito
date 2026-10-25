@@ -16,6 +16,8 @@ const agentHostInfoSchema = z.object({
   shell: z.string().min(1).nullable(),
   homeDir: z.string().min(1).optional(),
   tmpDir: z.string().min(1).optional(),
+  /** The agent process's own node executable (`process.execPath`): what a worker on the host can run a Node script with without `node` being on its PATH. */
+  execPath: z.string().min(1).optional(),
 });
 export type AgentHostInfo = z.infer<typeof agentHostInfoSchema>;
 

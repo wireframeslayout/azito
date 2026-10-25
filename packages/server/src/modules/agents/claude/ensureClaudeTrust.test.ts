@@ -4,14 +4,17 @@ import { tmpdir } from 'os';
 import { join } from 'path';
 import type { IServerTransport } from '../../servers/transport/ServerTransport';
 import { LocalFileOps, localFileOpsHost } from '../../../shared/fs/LocalFileOps';
-import { claudeProjectKey, ensureClaudeTrust } from './ensureClaudeTrust';
+import { claudeProjectKeys, ensureClaudeTrust } from './ensureClaudeTrust';
 
 let fakeHome: string;
 
-/** The key Claude Code files a project under on the machine running the test (backslashes on Windows, the path as it is elsewhere). */
-const K = (p: string): string => claudeProjectKey(process.platform === 'win32' ? 'win32' : 'linux', p);
+/** The keys Claude Code may file a project under on the machine running the test (both spellings on Windows, the path as it is elsewhere). */
+const keysOf = (p: string): string[] => claudeProjectKeys(process.platform === 'win32' ? 'win32' : 'linux', p);
+/** The registration of `p`, read back under every key (they are all the same entry). */
+const registered = (projects: Record<string, unknown>, p: string): unknown[] => keysOf(p).map((k) => projects[k]);
+const entriesFor = (p: string, value: unknown): Record<string, unknown> => Object.fromEntries(keysOf(p).map((k) => [k, value]));
 
-/** A transport whose host is this machine with `fakeHome` as its home directory: the file operations are the real ones. */
+/** A transport whose host is this machine with `homeDir` as its home directory: the file operations are the real ones. */
 function transportWithHome(homeDir: string): IServerTransport {
   const ops = new LocalFileOps(localFileOpsHost({ platform: process.platform, homeDir }));
   return { files: () => ops } as unknown as IServerTransport;
@@ -32,12 +35,12 @@ describe('ensureClaudeTrust', () => {
   it('registers trust for a new project', async () => {
     writeFileSync(configPath(), JSON.stringify({ projects: {} }));
     expect(await ensureClaudeTrust(transportWithHome(fakeHome), '/wt')).toEqual({ action: 'registered' });
-    expect(readConfig().projects[K('/wt')]).toEqual({ hasTrustDialogAccepted: true });
+    expect(registered(readConfig().projects, '/wt')).toEqual(keysOf('/wt').map(() => ({ hasTrustDialogAccepted: true })));
     expect(readdirSync(fakeHome)).toEqual(['.claude.json']);
   });
 
   it('returns already_trusted without rewriting', async () => {
-    const original = JSON.stringify({ projects: { [K('/wt')]: { hasTrustDialogAccepted: true } } });
+    const original = JSON.stringify({ projects: entriesFor('/wt', { hasTrustDialogAccepted: true }) });
     writeFileSync(configPath(), original);
     expect(await ensureClaudeTrust(transportWithHome(fakeHome), '/wt')).toEqual({ action: 'already_trusted' });
     expect(readFileSync(configPath(), 'utf8')).toBe(original);
@@ -70,14 +73,14 @@ describe('ensureClaudeTrust', () => {
       configPath(),
       JSON.stringify({
         numStartups: 3,
-        projects: { [K('/wt')]: { allowedTools: ['Bash'], hasTrustDialogAccepted: false }, [K('/other')]: { x: 1 } },
+        projects: { ...entriesFor('/wt', { allowedTools: ['Bash'], hasTrustDialogAccepted: false }), ...entriesFor('/other', { x: 1 }) },
       }),
     );
     expect(await ensureClaudeTrust(transportWithHome(fakeHome), '/wt')).toEqual({ action: 'registered' });
     const config = readConfig() as unknown as { numStartups: number; projects: Record<string, unknown> };
     expect(config.numStartups).toBe(3);
-    expect(config.projects[K('/other')]).toEqual({ x: 1 });
-    expect(config.projects[K('/wt')]).toEqual({ allowedTools: ['Bash'], hasTrustDialogAccepted: true });
+    expect(registered(config.projects, '/other')).toEqual(keysOf('/other').map(() => ({ x: 1 })));
+    expect(registered(config.projects, '/wt')).toEqual(keysOf('/wt').map(() => ({ allowedTools: ['Bash'], hasTrustDialogAccepted: true })));
   });
 
   it('keeps both registrations when two projects register at the same time', async () => {
@@ -85,7 +88,7 @@ describe('ensureClaudeTrust', () => {
     const transport = transportWithHome(fakeHome);
     const results = await Promise.all(['/a', '/b', '/c'].map((p) => ensureClaudeTrust(transport, p)));
     expect(results.map((r) => r.action)).toEqual(['registered', 'registered', 'registered']);
-    expect(Object.keys(readConfig().projects).sort()).toEqual(['/a', '/b', '/c'].map(K).sort());
+    expect(Object.keys(readConfig().projects).sort()).toEqual(['/a', '/b', '/c'].flatMap(keysOf).sort());
   });
 
   it('does not overwrite a file that changed after it was read', async () => {
@@ -110,23 +113,24 @@ describe('ensureClaudeTrust', () => {
   });
 });
 
-describe('claudeProjectKey', () => {
-  // Claude Code files a project under path.normalize(the repository's top level) / path.resolve(cwd): backslashes on Windows (2.0.50 cli.js).
-  it('is the backslash form on Windows, whichever way the path was written', () => {
-    expect(claudeProjectKey('win32', 'C:/Users/me/repo')).toBe('C:\\Users\\me\\repo');
-    expect(claudeProjectKey('win32', 'C:\\Users\\me\\repo')).toBe('C:\\Users\\me\\repo');
-    expect(claudeProjectKey('win32', 'C:\\Users\\me\\repo\\')).toBe('C:\\Users\\me\\repo');
-    expect(claudeProjectKey('win32', '\\\\?\\C:\\Users\\me\\repo')).toBe('C:\\Users\\me\\repo');
-    expect(claudeProjectKey('win32', 'C:\\Users\\me\\a b\\..\\日本語')).toBe('C:\\Users\\me\\日本語');
+describe('claudeProjectKeys', () => {
+  // 2.1.x files a Windows project under the forward-slash form (wq), 2.0.x under the backslash form: both are written.
+  it('is the forward-slash and the backslash form on Windows, whichever way the path was written', () => {
+    const both = ['C:/Users/me/repo', 'C:\\Users\\me\\repo'];
+    expect(claudeProjectKeys('win32', 'C:/Users/me/repo')).toEqual(both);
+    expect(claudeProjectKeys('win32', 'C:\\Users\\me\\repo')).toEqual(both);
+    expect(claudeProjectKeys('win32', 'C:\\Users\\me\\repo\\')).toEqual(both);
+    expect(claudeProjectKeys('win32', '\\\\?\\C:\\Users\\me\\repo')).toEqual(both);
+    expect(claudeProjectKeys('win32', 'C:\\Users\\me\\a b\\..\\日本語')).toEqual(['C:/Users/me/日本語', 'C:\\Users\\me\\日本語']);
   });
 
-  it('keeps a drive root and a UNC share as they are', () => {
-    expect(claudeProjectKey('win32', 'C:\\')).toBe('C:\\');
-    expect(claudeProjectKey('win32', '\\\\host\\share\\repo')).toBe('\\\\host\\share\\repo');
+  it('keeps a drive root and a UNC share', () => {
+    expect(claudeProjectKeys('win32', 'C:\\')).toEqual(['C:/', 'C:\\']);
+    expect(claudeProjectKeys('win32', '\\\\host\\share\\repo')).toEqual(['//host/share/repo', '\\\\host\\share\\repo']);
   });
 
   it('leaves a Unix path alone', () => {
-    expect(claudeProjectKey('linux', '/home/me/repo')).toBe('/home/me/repo');
-    expect(claudeProjectKey('darwin', '/Users/me/repo/')).toBe('/Users/me/repo/');
+    expect(claudeProjectKeys('linux', '/home/me/repo')).toEqual(['/home/me/repo']);
+    expect(claudeProjectKeys('darwin', '/Users/me/repo/')).toEqual(['/Users/me/repo/']);
   });
 });

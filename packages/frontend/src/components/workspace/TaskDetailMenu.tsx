@@ -35,7 +35,6 @@ interface TaskDetailMenuProps {
    * canExecute=false のうえで no-op な onExecute を渡す（Issue #338 T1）。 */
   onExecute: () => void;
   canExecute: boolean;
-  /** Why Execute is closed on the task's host (a Windows agent); null / absent: not closed that way. Shown under the buttons, and Execute stays focusable and points at it. */
   /** プライマリアクション行「停止」。onExecute と同様の契約。 */
   onStop: () => void;
   canStop: boolean;

@@ -1351,6 +1351,27 @@ describe('TaskRestoreService', () => {
       expect(deps.windowRepo.add).toHaveBeenCalledWith(expect.objectContaining({ agentSessionId: '7a8b0f9c-1d2e-4f30-8a45-6b7c8d9e0f12', workingDirectory: worktreeDir }));
     });
 
+    it('makes the worktree only after the gate was verified again (the token is built after that check), with the slug made first', async () => {
+      const order: string[] = [];
+      (deps.paneEnvService.buildEnvForNewWindow as ReturnType<typeof vi.fn>).mockImplementation(() => { order.push('env'); return { env: {}, tokenId: 101 }; });
+      (deps.worktreeServiceFactory.create as ReturnType<typeof vi.fn>).mockReturnValue({ create: vi.fn(async () => { order.push('worktree'); return { path: worktreeDir, branch: 'feat/test-task' }; }), remove: vi.fn(async () => {}) });
+      (deps.contentExtractor.generateSlug as ReturnType<typeof vi.fn>).mockImplementation(async () => { order.push('slug'); return 'slug'; });
+
+      await service.restore(makeTask({ serverName: 'test-server' }), log);
+
+      expect(order.filter((e) => ['slug', 'env', 'worktree'].includes(e))).toEqual(['slug', 'env', 'worktree']);
+    });
+
+    it('refuses a server that needs the code distribution before anything is created', async () => {
+      (deps.projectServerRepo.find as ReturnType<typeof vi.fn>).mockReturnValue({ projectId: 10, serverName: 'test-server', workingDirectory: rootDir, branch: 'main', tmuxSession: 'azito', inputPolicy: 'manual-approval', distributeCode: true, distributionRepositoryId: 1 });
+      (deps.serverRepo.findByName as ReturnType<typeof vi.fn>).mockReturnValue({ ...(deps.serverRepo.findByName as unknown as (n: string) => object)('test-server'), type: 'agent' });
+
+      await expect(service.restore(makeTask({ serverName: 'test-server' }), log)).rejects.toMatchObject({ code: 'unsupported_os' });
+
+      expect(mockDriver().openWindow).not.toHaveBeenCalled();
+      expect(deps.worktreeServiceFactory.create).not.toHaveBeenCalled();
+    });
+
     it('removes the worktree again when the window cannot be created', async () => {
       const remove = vi.fn(async () => {});
       (deps.worktreeServiceFactory.create as ReturnType<typeof vi.fn>).mockReturnValue({ create: vi.fn(async () => ({ path: worktreeDir, branch: 'feat/test-task' })), remove });

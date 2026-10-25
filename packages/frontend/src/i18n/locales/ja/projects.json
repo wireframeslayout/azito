@@ -118,7 +118,9 @@
       "distributionRepoLabel": "配信元リポジトリ",
       "distributionRepoRequired": "配信元リポジトリを入力してください",
       "distributionDirectoryLabel": "配信先ディレクトリ",
-      "distributionDirectoryHint": "配信先にすでにリポジトリがある場合、その origin が配信元リポジトリと一致している必要があります。一致しない場合、ハブは配信を中止します。"
+      "distributionDirectoryHint": "配信先にすでにリポジトリがある場合、その origin が配信元リポジトリと一致している必要があります。一致しない場合、ハブは配信を中止します。",
+      "undistributableTitle": "このサーバーにはコードを配信できません",
+      "undistributableBody": "このリリースでは、hub から Windows の agent へのコード配信は使えません（#464）。サーバー上にすでにあるディレクトリを使うか、あとで決めてください。"
     },
     "confirm": {
       "projectLabel": "プロジェクト",

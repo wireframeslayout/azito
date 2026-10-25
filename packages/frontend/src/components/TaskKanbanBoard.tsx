@@ -14,7 +14,6 @@ interface Task {
   projectId: number;
   unitId: number | null;
   /** Where the task would run, as the hub resolves it (its own server, else the project's only one); null: not known. */
-  executionServerName?: string | null;
   priority: number;
   createdAt: string;
   sourceRef?: string | null;

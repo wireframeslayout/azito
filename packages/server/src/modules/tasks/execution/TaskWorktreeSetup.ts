@@ -32,6 +32,8 @@ export interface TaskWorktreeRequest {
   allowedRoot: string | null;
   baseBranch: string;
   distStatus: 'distributed' | 'already_current' | null;
+  /** The slug of the branch name, made before this step by a caller that must not wait for the LLM inside a lock; null: made here. */
+  slug: string | null;
 }
 
 /**
@@ -68,7 +70,7 @@ export async function createTaskWorktree(
 
   let wt: WorktreeInfo;
   try {
-    const slug = await deps.contentExtractor.generateSlug(task.title);
+    const slug = request.slug ?? await deps.contentExtractor.generateSlug(task.title);
     // `task.branch` is a persisted value, not fresh API input: a fully-qualified ref saved before the API refused them is normalized
     // here, like the base branch.
     const branchName = task.branch ? normalizeBranchRef(task.branch) : undefined;
@@ -105,7 +107,8 @@ export async function createTaskWorktree(
   deps.appendLog(task.id, unitId, 'command', { type: 'worktree_created', worktreePath: wt.path, worktreeBranch: wt.branch, baseBranch });
 
   await applyGitIdentity(deps, server, task.id, unitId, wt.path);
-  if (request.workerType === 'claude') await registerClaudeTrust(deps, server, task.id, unitId, workingDir);
+  // On Windows both the project's directory and the worktree itself (see registerClaudeTrust): the worktree is a repository root of its own.
+  if (request.workerType === 'claude') await registerClaudeTrust(deps, server, task.id, unitId, workingDir, wt.path);
   return wt;
 }
 
@@ -122,10 +125,16 @@ async function applyGitIdentity(deps: TaskWorktreeDeps, server: ServerConfig, ta
   }
 }
 
-async function registerClaudeTrust(deps: TaskWorktreeDeps, server: ServerConfig, taskId: number, unitId: number, workingDir: string): Promise<void> {
+async function registerClaudeTrust(deps: TaskWorktreeDeps, server: ServerConfig, taskId: number, unitId: number, workingDir: string, worktreePath: string): Promise<void> {
+  // (A POSIX host keeps registering the project's directory only.)
+  const directories = deps.transportFactory.getFileOps(server).platform === 'win32' ? [workingDir, worktreePath] : [workingDir];
+  for (const directory of directories) await registerClaudeTrustFor(deps, server, taskId, unitId, directory);
+}
+
+async function registerClaudeTrustFor(deps: TaskWorktreeDeps, server: ServerConfig, taskId: number, unitId: number, directory: string): Promise<void> {
   try {
     const transport = deps.transportFactory.getTransport(server);
-    const resolvedWorkingDir = await transport.files().realpath(workingDir);
+    const resolvedWorkingDir = await transport.files().realpath(directory);
     const trustResult = await ensureClaudeTrust(transport, resolvedWorkingDir);
     if (trustResult.action === 'registered') {
       deps.appendLog(taskId, unitId, 'command', { type: 'claude_trust_registered', path: resolvedWorkingDir });

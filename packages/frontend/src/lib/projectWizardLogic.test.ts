@@ -780,3 +780,22 @@ describe('resolveDistributionSummary (confirm step must state delivery outright)
     expect(resolveDistributionSummary('unresolved', 'clone', 'https://github.com/acme/widgets').distributed).toBe(false);
   });
 });
+
+describe('a Windows agent cannot be a distribution target (#464)', () => {
+  const WIN_SERVERS = [
+    { name: 'win', type: 'agent', hostProfile: { platform: 'win32' as const } },
+    { name: 'lin', type: 'agent', hostProfile: { platform: 'linux' as const } },
+  ];
+
+  it('is its own variant, only for a non-isolated remote server of that OS', () => {
+    expect(resolveCodeStepVariant('win', WIN_SERVERS)).toBe('undistributable');
+    expect(resolveCodeStepVariant('lin', WIN_SERVERS)).toBe('remote');
+  });
+
+  it('offers no distribution: existing / later only, and a chosen clone is not acted on', () => {
+    expect(codeModeOptionsForVariant('undistributable')).toEqual(['existing', 'later']);
+    expect(effectiveCodeMode('undistributable', 'clone')).toBe('later');
+    expect(effectiveCodeMode('undistributable', 'existing')).toBe('existing');
+    expect(shouldPersistDistribution('undistributable', 'clone', 5)).toBe(false);
+  });
+});

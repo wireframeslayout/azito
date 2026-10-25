@@ -17,12 +17,12 @@ import type { TransportFactory } from '../servers/transport/TransportFactory';
 import type { IContentExtractor } from '../llm/ContentExtractor';
 import type { IExecutionLogRepository } from './ExecutionLog';
 import { resolveTaskServerName, resolveMuxWorkspace, resolveBaseBranch, resolveAndDetectBaseBranch, resolveWorktreeCreateBaseBranch } from './execution/TaskExecutionEnv';
-import { performDistribution, shouldClearRecordedDistributionRepository, type DistributionOutcome } from './execution/DistributionHelper';
+import { isDistributionRequired, performDistribution, shouldClearRecordedDistributionRepository, type DistributionOutcome } from './execution/DistributionHelper';
 import type { IDistributionStateRepository } from '../git/hub-transfer/types';
 import { normalizeBranchRef } from '../git/assertSafeGitArgs';
 import { ensureGitIdentity, type GitIdentity } from '../git/ensureGitIdentity';
 import { buildWorkerLaunchCommand } from '../agents/LaunchCommand';
-import { workerStartsAsProgram } from '../../shared/os/hostFeature';
+import { assertHostFeature, workerStartsAsProgram } from '../../shared/os/hostFeature';
 import { shellDialectFor } from '../../shared/os/shellDialect';
 import { programFor } from '../agents/workerProgram';
 import type { PaneProgram } from '../tmux/IMuxClient';
@@ -149,6 +149,8 @@ export class TaskRestoreService {
     const startsAsProgram = workerStartsAsProgram(transportFactory.hostProfileFor(serverAtStart));
 
     const tmuxSession = resolveMuxWorkspace(task.projectId, serverName, projectServerRepo);
+    // The branch name's slug comes from an LLM call: a Windows host makes the worktree under the server lock, so it is made before the lock.
+    const windowsSlug = startsAsProgram && !(task.branch || task.worktreeBranch) ? await contentExtractor.generateSlug(task.title) : null;
 
     // Untrusted-input execution gate (Issue #328), same
     // resolveExecutionManifest()+checkExecutionGate() pairing as
@@ -175,6 +177,10 @@ export class TaskRestoreService {
     // matches the approval screen's own resolution (resolvePendingApprovalManifest).
     const restoreProjectServer = projectServerRepo.find(task.projectId, serverName);
     const restoreProject = projectRepo.findById(task.projectId);
+    // The code distribution is closed on a Windows agent (#464): refused before the gate, the session or the worktree.
+    if (startsAsProgram && isDistributionRequired(serverAtStart, restoreProjectServer)) {
+      assertHostFeature(transportFactory.hostProfileFor(serverAtStart), 'codeDistribution', 'Restoring a task on a server that needs the code distribution');
+    }
     const restoreBaseBranch = await resolveAndDetectBaseBranch(
       task, restoreProjectServer, restoreProject,
       transportFactory.getTransport(serverAtStart), restoreProjectServer?.workingDirectory || null,
@@ -342,8 +348,8 @@ export class TaskRestoreService {
     return await runExclusiveForTask(task.id, async () => {
     try {
       // The directory, the base branch, the distribution and the worktree of the restored task: a host that types the worker into a shell pane
-      // runs this after its window exists (and then changes into the worktree); a host that starts the worker as a program runs it first,
-      // because the window starts in the worktree.
+      // runs this after its window exists (and then changes into the worktree); a host that starts the worker as a program runs it while
+      // the window is created, after the gate was verified again, because the window starts in the worktree.
       let workingDir: string | null = null;
       let effectiveDir: string | null = null;
       let worktreeBranch: string | null = null;
@@ -551,7 +557,7 @@ export class TaskRestoreService {
           // `restoreBranch`'s own comment above for the resolution precedence
           // (task.branch first, worktreeBranch fallback) and normalization.
           const branch = restoreBranch;
-          const slug = branch ? `task-${task.id}` : await contentExtractor.generateSlug(task.title);
+          const slug = branch ? `task-${task.id}` : (windowsSlug ?? await contentExtractor.generateSlug(task.title));
 
           const transport = transportFactory.getTransport(server);
           const worktreeService = worktreeServiceFactory.create(transport);
@@ -583,19 +589,8 @@ export class TaskRestoreService {
         }
       };
 
-      // A host that starts the worker as a program (Windows) creates the window with the worker as its first pane, in the worktree.
       let program: PaneProgram | undefined;
       let programSessionId: string | null = null;
-      if (startsAsProgram) {
-        await prepareEnvironment();
-        const launch = unit ? planResumeWorkerLaunch(unit, task.agentSessionId, this.deps.sessionStrategyFactory) : null;
-        if (launch) {
-          program = await programFor(launch, effectiveDir, () => transportFactory.getFileOps(server));
-          programSessionId = task.agentSessionId;
-        } else {
-          log.warn(`[task-restore] task ${task.id} has no worker to start: its window is opened with the shell's default directory`);
-        }
-      }
 
       // Window generation point — rotates the task token (design v3 §2/§6:
       // restore() always (re)creates the task's window from scratch, so it
@@ -612,6 +607,19 @@ export class TaskRestoreService {
       // on failure is correct — there is nothing left for the outer catch to
       // roll back.
       const created = await createRotatedWindow(paneEnvService, this.serverIsolationLock, server, task, 'restore_create_failed', async (freshServer, env) => {
+        // A host that starts the worker as a program (Windows) creates the window with the worker as its first pane, in the worktree: the
+        // worktree is made here, after the gate was verified again (`preCheck` below) and the project snapshot it locked in is in place.
+        if (startsAsProgram) {
+          server = freshServer;
+          await prepareEnvironment();
+          const launch = unit ? planResumeWorkerLaunch(unit, task.agentSessionId, this.deps.sessionStrategyFactory) : null;
+          if (launch) {
+            program = await programFor(launch, effectiveDir, () => transportFactory.getFileOps(freshServer));
+            programSessionId = task.agentSessionId;
+          } else {
+            log.warn(`[task-restore] task ${task.id} has no worker to start: its window is opened with the shell's default directory`);
+          }
+        }
         const opened = await this.resolveDriver(freshServer).openWindow(freshServer, tmuxSession, `task-${task.id}`, { extraEnv: env, ...(program ? { program } : {}) });
         return { result: opened.result, windowName: opened.ref.window, ref: opened.ref, label: opened.windowName ?? opened.ref.window };
       },

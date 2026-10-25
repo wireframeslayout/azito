@@ -21,8 +21,8 @@
 // Run it inside the worktree. git is `git` on PATH (Git for Windows puts git.exe there); gh / glab are optional.
 // Prints BRANCH / COMMIT_SHA / PR_URL lines on stdout. Exit codes: 0 done, 1 failed (git failed, detached HEAD, missing base), 2 bad environment.
 import { spawnSync } from 'node:child_process';
+import fs from 'node:fs';
 import { fileURLToPath } from 'node:url';
-import path from 'node:path';
 
 /** A failure that ends the script with a message on stderr. */
 export class PushError extends Error {
@@ -146,5 +146,6 @@ function findGitlabMergeRequest(branch, cwd) {
   }
 }
 
-const isMain = process.argv[1] !== undefined && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url);
+// Compared by real path: started through a link or a junction, the paths differ and a plain comparison would push nothing and exit 0.
+const isMain = process.argv[1] !== undefined && fs.realpathSync(process.argv[1]) === fs.realpathSync(fileURLToPath(import.meta.url));
 if (isMain) process.exitCode = push();

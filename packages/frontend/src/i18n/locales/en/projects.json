@@ -118,7 +118,9 @@
       "distributionRepoLabel": "Source repository",
       "distributionRepoRequired": "Enter the source repository",
       "distributionDirectoryLabel": "Delivery directory",
-      "distributionDirectoryHint": "If a repository already exists there, its origin must match the source repository. The hub aborts delivery when it does not."
+      "distributionDirectoryHint": "If a repository already exists there, its origin must match the source repository. The hub aborts delivery when it does not.",
+      "undistributableTitle": "Code distribution is not available for this server",
+      "undistributableBody": "The hub cannot distribute code to a Windows agent in this release (#464). Use a directory that already exists on the server, or decide later."
     },
     "confirm": {
       "projectLabel": "Project",

@@ -12,7 +12,7 @@
 //   node azitoctl.mjs output    --file <path>        (the content comes on stdin)
 //
 // The first four send the same request bodies to the same webhook as the bash `azitoctl` (agentSignalRoutes); the body is
-// built in one place (`buildBody`) and `azitoctlParity.test.ts` runs both versions against one HTTP server and compares them.
+// built in one place (`buildBody`) and `azitoctl.test.ts` runs both versions against one HTTP server and compares them.
 // `signal` appends one line to the signal file the hub watches (the file-signal mode of a task): `<marker>` for a completion,
 // `<marker>: <one-line JSON>` for questions. `output` writes the phase's output file as UTF-8 without a BOM.
 //
@@ -134,7 +134,8 @@ function readOutputFile(file) {
     throw new CliError(`azitoctl: cannot read ${file}: ${err.message}`, 2);
   }
   // The first 256 KB of bytes, as `head -c` cuts them: a character cut in the middle becomes U+FFFD (Buffer's decoder replaces it).
-  return data.toString('utf8');
+  // A BOM (PowerShell 5.1's `Set-Content -Encoding utf8` writes one) is not part of the text.
+  return data.toString('utf8').replace(/^\uFEFF/, '');
 }
 
 function parseQuestions(text) {
@@ -237,7 +238,8 @@ export async function run(argv, { env = process.env, homeDir = os.homedir(), rea
   return String(status);
 }
 
-const isMain = process.argv[1] !== undefined && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url);
+// Compared by real path: started through a link or a junction, the paths differ and a plain comparison would run nothing and exit 0.
+const isMain = process.argv[1] !== undefined && fs.realpathSync(process.argv[1]) === fs.realpathSync(fileURLToPath(import.meta.url));
 if (isMain) {
   run(process.argv.slice(2)).then(
     (line) => { if (line !== null) process.stdout.write(`${line}\n`); },

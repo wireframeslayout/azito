@@ -3,7 +3,7 @@ import type { ServerConfig } from '../../servers/Server';
 import type { TransportFactory } from '../../servers/transport/TransportFactory';
 import { harnessLocation, homeDirOf } from '../../servers/agent-deploy/harnessLocation';
 import type { EnvelopeHost } from '../../prompt/executionEnvelope';
-import { windowsPromptPath } from '../../../shared/os/windowsPromptPath';
+import { checkedWindowsPromptPath } from '../../../shared/os/windowsPromptPath';
 
 import { resolveRoot } from '../../../shared/releaseInfo';
 
@@ -34,23 +34,23 @@ export function resolveAzitoctlPath(server: Pick<ServerConfig, 'type'>): string 
 
 /**
  * The shell and azitoctl the worker's prompt is written for (#371). A POSIX host (and one whose OS is not recorded) gets the bash `azitoctl`'s path
- * as before. A Windows host gets `node "<home>/.azito/harness/bin/azitoctl.mjs"` — the hub's own harness for its local server, the
+ * as before. A Windows host gets `"<node.exe>" "<home>/.azito/harness/bin/azitoctl.mjs"` — the hub's own harness for its local server, the
  * agent's `~/.azito/harness` for an agent server, the home directory written out because nothing on Windows expands `~` in a quoted
  * word — with forward slashes (Git Bash and PowerShell both read them, and neither reads a backslash in a double-quoted word as text).
  */
 export async function resolveEnvelopeHost(
-  transportFactory: Pick<TransportFactory, 'hostProfileFor' | 'getFileOps'>,
+  transportFactory: Pick<TransportFactory, 'hostProfileFor' | 'getFileOps' | 'getAgentTransport'>,
   server: ServerConfig,
 ): Promise<EnvelopeHost> {
   if (transportFactory.hostProfileFor(server)?.platform !== 'win32') {
     return { os: 'posix', azitoctl: resolveAzitoctlPath(server) };
   }
-  const script = server.type === 'local'
-    ? LOCAL_AZITOCTL_NODE_PATH
-    : path.win32.join(harnessLocation('win32', await homeDirOf(transportFactory.getFileOps(server))).harnessDir, 'bin', 'azitoctl.mjs');
-  const quoted = windowsPromptPath(script);
-  if (/["$`]/.test(quoted)) {
-    throw new Error(`The path of azitoctl.mjs (${JSON.stringify(quoted)}) contains a double quote, $ or a backtick, which the worker's shell reads inside double quotes.`);
-  }
-  return { os: 'windows', azitoctl: `node "${quoted}"` };
+  // `node` is the host's own executable by its full path: a Windows host that has only the native Claude Code has no node on the worker's PATH.
+  const [node, script] = server.type === 'local'
+    ? [process.execPath, LOCAL_AZITOCTL_NODE_PATH]
+    : [
+        await transportFactory.getAgentTransport(server).fetchNodeExecPath(),
+        path.win32.join(harnessLocation('win32', await homeDirOf(transportFactory.getFileOps(server))).harnessDir, 'bin', 'azitoctl.mjs'),
+      ];
+  return { os: 'windows', azitoctl: `"${checkedWindowsPromptPath(node, 'The node executable')}" "${checkedWindowsPromptPath(script, 'The path of azitoctl.mjs')}"` };
 }

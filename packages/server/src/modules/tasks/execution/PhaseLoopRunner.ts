@@ -20,6 +20,7 @@ import { renderSidekickBody } from '../../sidekicks/renderSidekickBody';
 import type { SidekickSyncService } from '../../sidekicks/SidekickSyncService';
 import { resolveSidekickDirOnHost } from '../../sidekicks/SidekickSyncService';
 import { resolveEnvelopeHost } from './AzitoctlPath';
+import { windowsPromptPath } from '../../../shared/os/windowsPromptPath';
 import type { UnitTypeLoader } from '../../sidekicks/UnitTypeLoader';
 import type { UnitTypePhase } from '../../sidekicks/UnitType';
 import type { IWorktreeService } from '../../git/IWorktreeService';
@@ -477,6 +478,7 @@ export class PhaseLoopRunner {
       const nonce = randomBytes(16).toString('hex');
 
       const effectiveWorkerType = unit.workerType ?? 'generic';
+      const envelopeHost = await resolveEnvelopeHost(this.transportFactory, server);
       let prompt: string;
       let rulesFilePath: string | null = null;
       if (resolvedSubagentConfig?.enabled === true && phaseDef.subagentRole) {
@@ -497,7 +499,8 @@ export class PhaseLoopRunner {
           role,
           resolvedSubagentConfig,
           effectiveWorkerType,
-          rulesFilePath,
+          // The path the worker is told: forward slashes on a Windows host (the file itself is written under its own spelling above).
+          envelopeHost.os === 'windows' ? windowsPromptPath(rulesFilePath) : rulesFilePath,
         );
       } else {
         prompt = expandedPrompt;
@@ -524,7 +527,7 @@ export class PhaseLoopRunner {
         const envelopeResult = runtime.buildEnvelope({
           phase, capability, nonce,
           taskId: task.id, unitId: unit.id, workerExecutionMode: unit.workerExecutionMode,
-          server, host: await resolveEnvelopeHost(this.transportFactory, server), tempServer, handle, supervisorTarget: supervisorTarget, prompt, outputFilePath,
+          server, host: envelopeHost, tempServer, handle, supervisorTarget: supervisorTarget, prompt, outputFilePath,
           doneMarker, questionsMarker, testFailedMarker,
         });
         const phaseSignalStream = envelopeResult.signalStream;

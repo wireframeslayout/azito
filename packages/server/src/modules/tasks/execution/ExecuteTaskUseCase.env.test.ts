@@ -4,6 +4,7 @@ import { mkdtempSync, mkdirSync, realpathSync, rmSync } from 'fs';
 import { tmpdir } from 'os';
 import * as path from 'path';
 import { ExecuteTaskUseCase } from './ExecuteTaskUseCase';
+import { ExecutionGateDeniedError } from './ExecutionGate';
 vi.mock('../../git/ensureGitIdentity', () => ({ ensureGitIdentity: vi.fn(async () => ({ action: 'already_set' })) }));
 import { ensureGitIdentity } from '../../git/ensureGitIdentity';
 
@@ -5224,6 +5225,52 @@ describe('ExecuteTaskUseCase on a host that starts the worker as the window\'s p
     expect(tmux.openWorkspace).not.toHaveBeenCalled();
     expect(tmux.openWindow).not.toHaveBeenCalled();
     expect(worktreeServiceFactory.create).not.toHaveBeenCalled();
+  });
+
+  it('a run the gate refuses (verified again inside the lock) leaves the worktree as it was: it is not made at all', async () => {
+    const { useCase, tmux, worktreeServiceFactory } = build();
+    const worktreeCreate = vi.fn(async () => ({ path: worktreePath, branch: 'task/8-slug' }));
+    worktreeServiceFactory.create.mockReturnValue({ create: worktreeCreate, remove: vi.fn(async () => {}) });
+    vi.spyOn(useCase as unknown as { reverifyGateInLock: () => void }, 'reverifyGateInLock').mockImplementation(() => { throw new ExecutionGateDeniedError(8); });
+
+    await expect(useCase.execute(80, 8)).rejects.toBeInstanceOf(ExecutionGateDeniedError);
+
+    expect(worktreeCreate).not.toHaveBeenCalled();
+    expect(tmux.openWindow).not.toHaveBeenCalled();
+  });
+
+  it('the branch name\'s slug is made first, the worktree only after the gate was verified again', async () => {
+    const { useCase, worktreeServiceFactory, paneEnvService } = build();
+    const order: string[] = [];
+    worktreeServiceFactory.create.mockReturnValue({ create: vi.fn(async () => { order.push('worktree'); return { path: worktreePath, branch: 'task/8-slug' }; }), remove: vi.fn(async () => {}) });
+    (paneEnvService.buildEnvForNewWindow as ReturnType<typeof vi.fn>).mockImplementation(() => { order.push('env'); return { env: {}, tokenId: 101 }; });
+    const contentExtractor = (useCase as unknown as { contentExtractor: { generateSlug: ReturnType<typeof vi.fn> } }).contentExtractor;
+    contentExtractor.generateSlug.mockImplementation(async () => { order.push('slug'); return 'slug'; });
+
+    await useCase.execute(80, 8);
+
+    // slug (an LLM call, before the locks) -> the gate check and the token (env) -> the worktree.
+    expect(order.filter((e) => ['slug', 'env', 'worktree'].includes(e))).toEqual(['slug', 'env', 'worktree']);
+  });
+
+  it('cleans a failed run up inside the task\'s lock: a run queued behind it makes its worktree only after the cleanup finished', async () => {
+    const { useCase, tmux, worktreeServiceFactory } = build();
+    const events: string[] = [];
+    worktreeServiceFactory.create.mockReturnValue({
+      create: vi.fn(async () => { events.push('create'); return { path: worktreePath, branch: 'task/8-slug' }; }),
+      remove: vi.fn(async () => { events.push('remove-start'); await new Promise((r) => setTimeout(r, 80)); events.push('remove-end'); }),
+    });
+    let opened = 0;
+    tmux.openWindow.mockImplementation((async (_srv: unknown, ws: string) => {
+      opened++;
+      if (opened === 1) throw new Error('the program claude could not be started');
+      return { ref: { kind: 'tmux' as const, workspace: ws, window: 'w1' }, result: { stdout: '', stderr: '', code: 0 } };
+    }) as never);
+
+    const results = await Promise.allSettled([useCase.execute(80, 8), useCase.execute(80, 8)]);
+
+    expect(results[0].status).toBe('rejected');
+    expect(events.slice(0, 4)).toEqual(['create', 'remove-start', 'remove-end', 'create']);
   });
 
   it('follow-up: a lost window is created again with the worker resumed as its program, without waking a shell window', async () => {

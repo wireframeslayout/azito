@@ -1,6 +1,5 @@
 import { describe, it, expect } from 'vitest';
 import type { TFunction } from 'i18next';
-import { pickTaskExecutionServer } from '@azito/shared';
 import { hostFeatureBlockReason, isUnsupportedOsAnswer, describeUnsupportedOs, isGitNotFoundAnswer } from './hostFeature';
 
 const t = ((key: string, opts?: Record<string, unknown>) => `${key}${opts ? JSON.stringify(opts) : ''}`) as unknown as TFunction;
@@ -51,22 +50,5 @@ describe('unsupported_os answers', () => {
     expect(isUnsupportedOsAnswer({ error: 'boom' })).toBe(false);
     expect(isUnsupportedOsAnswer({ error: 'x', code: 'unsupported_host' })).toBe(false);
     expect(isUnsupportedOsAnswer(null)).toBe(false);
-  });
-});
-
-describe('a task without its own server runs where the project\'s only server is', () => {
-  const profiles: Record<string, { platform: 'win32' | 'linux' }> = { win: { platform: 'win32' }, lin: { platform: 'linux' } };
-  const reasonFor = (taskServer: string | null, projectServers: string[]): string | null => {
-    const server = pickTaskExecutionServer(taskServer, projectServers);
-    return server ? hostFeatureBlockReason(profiles[server], 'codeDistribution', t) : null;
-  };
-
-  it('serverName = null with one Windows server: code distribution is closed', () => {
-    expect(reasonFor(null, ['win'])).toBe('common:hostFeature.windowsDeferred{"issue":464}');
-  });
-
-  it('serverName = null with one Linux server, or an ambiguous project: not closed here', () => {
-    expect(reasonFor(null, ['lin'])).toBeNull();
-    expect(reasonFor(null, ['win', 'lin'])).toBeNull();
   });
 });

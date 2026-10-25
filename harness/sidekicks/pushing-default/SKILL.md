@@ -65,6 +65,7 @@ Git Bash:
 AZITO_GIT_PROVIDER="{{task.gitProvider}}" \
 AZITO_COMMIT_MESSAGE="<message>" \
 AZITO_WORK_BRANCH="{{task.branchName}}" \
+AZITO_PR_BASE="<base branch (only if specified in rules)>" \
 AZITO_SKIP_PR="0" \
 AZITO_PR_TITLE="<title>" \
 node "{{sidekick.dir}}/scripts/push.mjs"

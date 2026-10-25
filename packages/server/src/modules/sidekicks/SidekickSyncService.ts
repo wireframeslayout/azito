@@ -11,7 +11,7 @@ import { REMOTE_SIDEKICKS_BASE, type SidekickSyncContext } from './sidekickSyncS
 import { collectTreeEntries, packTarGz } from '../../shared/fs/tarGz';
 import type { TransportFactory } from '../servers/transport/TransportFactory';
 import { homeDirOf } from '../servers/agent-deploy/harnessLocation';
-import { windowsPromptPath } from '../../shared/os/windowsPromptPath';
+import { checkedWindowsPromptPath } from '../../shared/os/windowsPromptPath';
 
 export { REMOTE_SIDEKICKS_BASE } from './sidekickSyncShared';
 export { PAYLOAD_CHUNK_SIZE } from './shellSidekickSync';
@@ -82,9 +82,9 @@ export async function resolveSidekickDirOnHost(
   transportFactory: Pick<TransportFactory, 'hostProfileFor' | 'getFileOps'>,
 ): Promise<string> {
   if (transportFactory.hostProfileFor(server as ServerConfig)?.platform !== 'win32') return resolveSidekickDir(pkg, server);
-  if (server.type === 'local') return windowsPromptPath(pkg.dir);
+  if (server.type === 'local') return checkedWindowsPromptPath(pkg.dir, 'The sidekick directory');
   const home = await homeDirOf(transportFactory.getFileOps(server as ServerConfig));
-  return `${windowsPromptPath(home)}/${REMOTE_SIDEKICKS_BASE.slice(2)}/${pkg.name}`;
+  return checkedWindowsPromptPath(`${home}/${REMOTE_SIDEKICKS_BASE.slice(2)}/${pkg.name}`, 'The sidekick directory');
 }
 
 /**

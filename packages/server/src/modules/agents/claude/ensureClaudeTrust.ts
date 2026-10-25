@@ -16,20 +16,21 @@ export type EnsureClaudeTrustResult =
   | { action: 'failed'; reason: string };
 
 /**
- * The key Claude Code files a project under in `~/.claude.json` `projects`, for a path on a host of `platform`. Read from its code
- * (@anthropic-ai/claude-code 2.0.50 `cli.js`): the key of the directory it runs in is `path.normalize(<git rev-parse --show-toplevel>)`,
- * or `path.resolve(cwd)` outside a repository (`h_1`); the trust check looks that key up, then walks `path.resolve(dir, '..')`
- * from the cwd upwards (`EX`), and the accepted dialog writes under the first key (`bI`). On Windows `path` is `path.win32`: git
- * prints `C:/Users/me/repo`, and `normalize` turns it into `C:\Users\me\repo`; the parents are in the same backslash form.
- * So the key is the backslash path, without a trailing separator and without a `\\?\` prefix (neither is ever produced), and not
- * the forward-slash form. The keys are compared as they are (case included): the caller passes the directory in the spelling the
- * worker's own directory starts with. A Unix path is the key as it is.
+ * The keys Claude Code may file a project under in `~/.claude.json` `projects`, for a path on a host of `platform`.
+ *  - A Unix path is the key as it is.
+ *  - On Windows the spelling depends on the version, so both are written:
+ *    2.1.x (native 2.1.310, `wq`): `path.normalize(path)` with every `\` turned into `/`, used for the current directory's key, the
+ *    trust lookup and the write of an accepted dialog alike, so `C:/Users/me/repo`;
+ *    2.0.x (`cli.js` 2.0.50, `h_1` / `EX` / `bI`): `path.normalize(...)`, which is the backslash form `C:\Users\me\repo`.
+ * Neither form has a trailing separator or a `\\?\` prefix (neither is ever produced). Keys are compared as they are, case included: the
+ * caller passes the directory in the spelling the worker's own directory starts with.
  */
-export function claudeProjectKey(platform: HostPlatform, projectPath: string): string {
-  if (platform !== 'win32') return projectPath;
+export function claudeProjectKeys(platform: HostPlatform, projectPath: string): string[] {
+  if (platform !== 'win32') return [projectPath];
   const normalized = path.win32.normalize(projectPath.replace(/^\\\\\?\\/, ''));
   const root = path.win32.parse(normalized).root;
-  return root + normalized.slice(root.length).replace(/\\+$/, '');
+  const backslash = root + normalized.slice(root.length).replace(/\\+$/, '');
+  return [backslash.replaceAll('\\', '/'), backslash];
 }
 
 /**
@@ -42,10 +43,10 @@ export async function ensureClaudeTrust(transport: IServerTransport, projectPath
   const configPath = pathApiFor(ops.platform).join(await ops.realpath('~'), '.claude.json');
   // The whole read, update and save of one config file is one step for this process; the write's own check
   // (the hash of what was read) is the guard against anything else that changes the file.
-  return configLocks.withLock(configPath, () => registerTrust(ops, configPath, claudeProjectKey(ops.platform, projectPath)));
+  return configLocks.withLock(configPath, () => registerTrust(ops, configPath, claudeProjectKeys(ops.platform, projectPath)));
 }
 
-async function registerTrust(ops: IFileOps, configPath: string, projectKey: string): Promise<EnsureClaudeTrustResult> {
+async function registerTrust(ops: IFileOps, configPath: string, projectKeys: string[]): Promise<EnsureClaudeTrustResult> {
   let raw: Buffer;
   try {
     raw = (await ops.read(configPath)).data;
@@ -61,12 +62,15 @@ async function registerTrust(ops: IFileOps, configPath: string, projectKey: stri
     return { action: 'failed', reason: `~/.claude.json is not valid JSON: ${err instanceof Error ? err.message : String(err)}` };
   }
 
-  const existing = config.projects?.[projectKey];
-  if (existing?.hasTrustDialogAccepted === true) return { action: 'already_trusted' };
+  const missing = projectKeys.filter((key) => config.projects?.[key]?.hasTrustDialogAccepted !== true);
+  if (missing.length === 0) return { action: 'already_trusted' };
 
   const updated = {
     ...config,
-    projects: { ...config.projects, [projectKey]: { ...existing, hasTrustDialogAccepted: true } },
+    projects: {
+      ...config.projects,
+      ...Object.fromEntries(missing.map((key) => [key, { ...config.projects?.[key], hasTrustDialogAccepted: true }])),
+    },
   };
   try {
     await ops.write(configPath, Buffer.from(JSON.stringify(updated, null, 2), 'utf8'), {

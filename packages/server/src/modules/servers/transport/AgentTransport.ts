@@ -295,6 +295,18 @@ export class AgentTransport implements IServerTransport, IMuxTransport, IHostBou
     return this.taskTempHostLoad;
   }
 
+  /**
+   * The agent's own node executable, for a worker that is told to run a Node script (`azitoctl.mjs`) on a Windows host where `node` may not be on
+   * its PATH. An agent from before it was reported cannot say: that is an error (update the agent), not a guess.
+   */
+  async fetchNodeExecPath(): Promise<string> {
+    const info = await this.fetchHostInfo();
+    if (info.execPath === undefined) {
+      throw new Error(`Agent server "${this.serverName}" did not report its node executable (GET /api/host execPath); update the agent`);
+    }
+    return info.execPath;
+  }
+
   private async fetchTaskTempHost(): Promise<AgentTempHost> {
     if (this.hostProfile === null) return { platform: 'linux', tmpDir: LEGACY_UNIX_TMP_DIR };
     const info = await this.fetchHostInfo();

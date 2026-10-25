@@ -299,9 +299,9 @@ Specifying a "Working Directory" when creating a task overrides the project serv
 A task runs on a Windows agent the same way, with these differences:
 
 - The worker is the **first pane of the task's window**, started by misao from its program and arguments (no shell line, no `cd`). So the worktree is made *before* the window (after the old window is closed): execute, follow-up (a sleeping or lost window is created again, the session resumed), restore (the window is created with the worker resuming the saved session) and respawn all work this way. The size starts at 120x40.
-- The prompt's completion block has no shell syntax. The worker writes the output file as UTF-8 and signals with `node "<home>/.azito/harness/bin/azitoctl.mjs" signal --file "<signal file>" --marker <marker>` (file-signal mode) or `... complete --turn <token> --output-file "<file>"` (http-signal mode); questions are a JSON file passed with `--json-file`. Paths are forward-slash paths in double quotes.
+- The prompt's completion block has no shell syntax. The worker writes the output file as UTF-8 and signals with `"<node.exe>" "<home>/.azito/harness/bin/azitoctl.mjs" signal --file "<signal file>" --marker <marker>` (file-signal mode) or `... complete --turn <token> --output-file "<file>"` (http-signal mode); questions are a JSON file passed with `--json-file`. Paths are forward-slash paths in double quotes.
 - The pushing phase runs `scripts/push.mjs` (the same contract and variables as `push.sh`).
-- Claude Code's trust entry is written under the backslash form of the directory (`C:\Users\me\repo`), the key Claude Code itself uses.
+- Claude Code's trust entry is written for the project directory and the worktree, under both spellings Claude Code uses (`C:/Users/me/repo` since 2.1.x, `C:\Users\me\repo` before). The node executable in the commands is the host's own (the agent reports it in `GET /api/host` `execPath`; the hub's local server uses the hub's node), so `node` need not be on the worker's PATH; in PowerShell a command that starts with a quoted path needs `& ` in front.
 - Code distribution is not available on a Windows agent (#464).
 
 ## Task Logs

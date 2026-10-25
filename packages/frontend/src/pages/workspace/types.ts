@@ -87,7 +87,6 @@ export interface Task {
   id: number; title: string; description?: string; status: string; currentPhase?: string | null; projectId: number;
   unitId: number | null; serverName?: string | null;
   /** Where the task would run, as the hub resolves it (`serverName`, else the project's only server); null: not known. Host features are judged by this. */
-  executionServerName?: string | null;
   priority: number; tmuxWindow?: string;
   selfReviewMaxAttempts?: number;
   selfReviewCount?: number;

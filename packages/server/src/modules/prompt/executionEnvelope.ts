@@ -27,7 +27,7 @@
  * (e.g. wrapping the LLM orchestrator loop) means adding a third
  * `xxxEnvelope()` factory to this file, not extending its public surface.
  */
-import { windowsPromptPath } from '../../shared/os/windowsPromptPath';
+import { checkedWindowsPromptPath } from '../../shared/os/windowsPromptPath';
 
 export interface ExecutionEnvelope {
   /** Returns `body` with the execution protocol for this context appended. */
@@ -62,14 +62,8 @@ export type EnvelopeHost =
   | { readonly os: 'posix'; readonly azitoctl: string }
   | { readonly os: 'windows'; readonly azitoctl: string };
 
-// What a double-quoted word of Git Bash or PowerShell would read as more than text.
-const UNSAFE_IN_DOUBLE_QUOTES = /["$`]/;
-
 function quotedWindowsPath(filePath: string): string {
-  if (UNSAFE_IN_DOUBLE_QUOTES.test(filePath)) {
-    throw new Error(`The path ${JSON.stringify(filePath)} contains a double quote, $ or a backtick, which Git Bash and PowerShell read inside double quotes; use a temp directory without them.`);
-  }
-  return `"${windowsPromptPath(filePath)}"`;
+  return `"${checkedWindowsPromptPath(filePath)}"`;
 }
 
 /** The file the worker writes questions to, next to the phase's output file (task files of one task share a name prefix, so cleanup finds it). */
@@ -248,7 +242,7 @@ If tests fail, report the failures prefixed with "${testFailedMarker}:" in your 
   return {
     wrap(body: string): string {
       return `${body}\n\n<completion_signal>
-When you finish this phase, do BOTH steps in order:
+When you finish this phase, do BOTH steps in order (a command below starts with a quoted program path: in PowerShell write \`& \` in front of it, in Git Bash run it as it is):
 
 ${buildWindowsStep1Block(host, outputFilePath, phase)}
 
@@ -293,7 +287,7 @@ If tests fail, report the failures in your output for STEP 1 above, then instead
   return {
     wrap(body: string): string {
       return `${body}\n\n<completion_signal>
-When you finish this phase, do BOTH steps in order:
+When you finish this phase, do BOTH steps in order (a command below starts with a quoted program path: in PowerShell write \`& \` in front of it, in Git Bash run it as it is):
 
 ${buildWindowsStep1Block(host, outputFilePath, phaseLabel)}
 

@@ -6,7 +6,7 @@
 // the pure-logic side of a component (see distributeCodePolicy.ts,
 // repoDiscoveryDialogLogic.ts) rather than adding component tests.
 
-import type { HostPlatform, HostPlatformInfo } from '@azito/shared';
+import { hostFeatureSupport, type HostPlatform, type HostPlatformInfo } from '@azito/shared';
 import { platformOfServer, serverPathApi } from './serverPath';
 
 /**
@@ -516,15 +516,18 @@ export interface WizardServerRecord {
  *   there is nothing to choose, and offering "既存のディレクトリを使う" /
  *   "まだ決めない" produced an environment whose first task execution fails
  *   with `no_distribution_repository`.
+ * - `undistributable`: a remote server whose host cannot be a distribution target (a Windows agent, #464). Like `remote` without the
+ *   distribution choice: offering it ended in a 501 from the environment PUT after the project had been created.
  */
-export type CodeStepVariant = 'unresolved' | 'local' | 'remote' | 'isolated';
+export type CodeStepVariant = 'unresolved' | 'local' | 'remote' | 'isolated' | 'undistributable';
 
 export function resolveCodeStepVariant(selectedServer: string, serverList: WizardServerRecord[]): CodeStepVariant {
   if (!selectedServer.trim()) return 'unresolved';
   const record = serverList.find((sv) => sv.name === selectedServer);
   if (!record) return 'unresolved';
   if (clonesDirectlyOnServer(record.type)) return 'local';
-  return record.isolationIntent === true ? 'isolated' : 'remote';
+  if (record.isolationIntent === true) return 'isolated';
+  return hostFeatureSupport(record.hostProfile, 'codeDistribution').available ? 'remote' : 'undistributable';
 }
 
 /**
@@ -534,6 +537,7 @@ export function resolveCodeStepVariant(selectedServer: string, serverList: Wizar
  */
 export function codeModeOptionsForVariant(variant: CodeStepVariant): CodeMode[] {
   if (variant === 'isolated') return [];
+  if (variant === 'undistributable') return ['existing', 'later'];
   return ['existing', 'clone', 'later'];
 }
 
@@ -547,6 +551,7 @@ export function codeModeOptionsForVariant(variant: CodeStepVariant): CodeMode[] 
  * consumes this, never the raw selection.
  */
 export function effectiveCodeMode(variant: CodeStepVariant, codeMode: CodeMode): CodeMode {
+  if (variant === 'undistributable' && codeMode === 'clone') return 'later';
   return variant === 'isolated' ? 'clone' : codeMode;
 }
 

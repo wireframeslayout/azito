@@ -884,6 +884,8 @@ export class ExecuteTaskUseCase {
       if (launchPlan) launchArgv(launchPlan.launch);
     }
     const prepared: { worktree: WorktreeInfo | null } = { worktree: null };
+    // The branch name's slug comes from an LLM call: made here, not inside the per-server lock the worktree is made under.
+    const worktreeSlug = startedAsProgram && workingDir ? await this.contentExtractor.generateSlug(task.title) : null;
 
     // Ensure tmux session exists. This bootstrap window (if the session
     // doesn't exist yet) is immediately abandoned in favor of the real task
@@ -1028,28 +1030,37 @@ export class ExecuteTaskUseCase {
           // third-party review finding).
           const execDriver = this.resolveDriver(freshServer);
           // A host that starts the worker as a program makes the worktree first, after the old window is gone (a process still running in
-          // the old worktree would keep Windows from removing it) and before the new window (which starts in it).
-          let program: PaneProgram | undefined;
-          if (startedAsProgram) {
-            if (workingDir) {
-              const configuredBranch = resolveBaseBranch(task, projectServer, project);
-              prepared.worktree = await createTaskWorktree(this.worktreeDeps, {
-                server: freshServer, task, unitId, workerType: unit.workerType, workingDir, allowedRoot,
-                baseBranch: configuredBranch ? canonicalizeBaseBranch(configuredBranch) : detectedBaseBranch!, distStatus: null,
-              }, async () => {});
-            }
-            if (launchPlan) program = await programFor(launchPlan.launch, prepared.worktree?.path ?? null, () => this.transportFactory.getFileOps(freshServer));
-          }
-          return createRotatedWindowInLock(this.paneEnvService, freshServer, currentTask, 'execute_create_failed', async (fs, env) => {
-            const { ref: createdRef, result, windowName: displayName } = await execDriver.openWindow(fs, muxWorkspace, `task-${task.id}`, { extraEnv: env, ...(program ? { program } : {}) });
-            return { result, windowName: createdRef.window, ref: createdRef, label: displayName ?? createdRef.window };
-          },
-            (fs) => {
-              const locked = this.reverifyGateInLock(currentTask, unitId, 'execute', fs, detectedBaseBranch);
-              lockedProject = locked.project;
-              lockedProjectServer = locked.projectServer;
+          // the old worktree would keep Windows from removing it) and before the new window (which starts in it). It is made inside the
+          // window creation, after the gate was verified again against this locked server and its project snapshot (`preCheck` below), so a
+          // refused run leaves the worktree as it was. Still under the server lock: the old window's close, the gate's snapshot and the new
+          // window must see one server row, and a worktree made outside it could be removed or replaced by the next run in between.
+          try {
+            return await createRotatedWindowInLock(this.paneEnvService, freshServer, currentTask, 'execute_create_failed', async (fs, env) => {
+              let program: PaneProgram | undefined;
+              if (startedAsProgram) {
+                if (workingDir) {
+                  const configuredBranch = resolveBaseBranch(task, lockedProjectServer, lockedProject);
+                  prepared.worktree = await createTaskWorktree(this.worktreeDeps, {
+                    server: fs, task, unitId, workerType: unit.workerType, workingDir, allowedRoot,
+                    baseBranch: configuredBranch ? canonicalizeBaseBranch(configuredBranch) : detectedBaseBranch!, distStatus: null, slug: worktreeSlug,
+                  }, async () => {});
+                }
+                if (launchPlan) program = await programFor(launchPlan.launch, prepared.worktree?.path ?? null, () => this.transportFactory.getFileOps(fs));
+              }
+              const { ref: createdRef, result, windowName: displayName } = await execDriver.openWindow(fs, muxWorkspace, `task-${task.id}`, { extraEnv: env, ...(program ? { program } : {}) });
+              return { result, windowName: createdRef.window, ref: createdRef, label: displayName ?? createdRef.window };
             },
-          );
+              (fs) => {
+                const locked = this.reverifyGateInLock(currentTask, unitId, 'execute', fs, detectedBaseBranch);
+                lockedProject = locked.project;
+                lockedProjectServer = locked.projectServer;
+              },
+            );
+          } catch (err) {
+            // Still inside this task's lock: the worktree and its record are gone before the next run of the task can look at them.
+            await this.discardPreparedWorktree(taskId, unitId, freshServer, workingDir, prepared.worktree);
+            throw err;
+          }
         });
 
         // The window's identity is saved with the task in one synchronous step (no await between the two writes):
@@ -1066,9 +1077,11 @@ export class ExecuteTaskUseCase {
         return { windowName: newWindowName, windowLabel: newWindowLabel ?? newWindowName, tokenId: newTokenId, server: newServer };
       }));
     } catch (err) {
-      // The window never came to be: the worktree made for it (Windows) is not kept for a window that does not exist.
-      await this.discardPreparedWorktree(taskId, unitId, server, workingDir, prepared.worktree);
-      if (err instanceof TaskWorktreeError) throw err;
+      if (err instanceof TaskWorktreeError) {
+        // The same end a POSIX run's worktree failure has: the task failed (no window exists to roll back).
+        this.taskRepo.updateStatus(taskId, 'failed' as TaskStatus);
+        throw err;
+      }
       if (this.failOnServerSnapshotMismatch(err, taskId, unitId)) throw err;
       // Issue #29 Step 3a review, Important finding 2: reverifyGateInLock
       // (run as this window creation's `preCheck`, above) throws the SAME
@@ -1231,7 +1244,7 @@ export class ExecuteTaskUseCase {
       if (prepared.worktree) effectiveDir = prepared.worktree.path;
     } else if (workingDir) {
       const wt = await createTaskWorktree(this.worktreeDeps, {
-        server, task, unitId, workerType: unit.workerType, workingDir, allowedRoot, baseBranch, distStatus,
+        server, task, unitId, workerType: unit.workerType, workingDir, allowedRoot, baseBranch, distStatus, slug: null,
       }, async ({ reason }) => {
         // The window (and its token generation) exists already: it is rolled back with the worktree step's failure. A rejected path
         // also clears the worktree fields the task never got permission to keep.
