@@ -116,7 +116,8 @@ export function exactProcessesScript(input: { image: string; shape: ProcessShape
     '  if ($r.ReturnValue -ne 0 -or -not $r.Sid) { return \'unknown\' }',
     '  if ($r.Sid -eq $me) { \'mine\' } else { \'other\' }',
     '}',
-    'function Line($p) { if ($p.CommandLine) { $p.CommandLine.Replace(\'"\', \'\') } else { \'\' } }',
+    // Quotes out, and the blanks at the ends (cmd.exe leaves one where it cut the redirects off) trimmed.
+    'function Line($p) { if ($p.CommandLine) { $p.CommandLine.Replace(\'"\', \'\').Trim() } else { \'\' } }',
     'function Shaped($p) {',
     '  $e = $p.ExecutablePath; $l = Line $p',
     '  [bool]($e -and $e -match $exePattern -and $l.StartsWith($e + \' \', [System.StringComparison]::OrdinalIgnoreCase) -and $l.Substring($e.Length + 1) -match $tailPattern)',

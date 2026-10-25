@@ -89,6 +89,16 @@ async function daemonPids(root: string): Promise<number[]> {
   return Array.isArray(parsed) ? parsed : [parsed];
 }
 
+/** For the message of a failure: how the misao.exe processes of `root` look to the host (executable, command line, parent). */
+async function describeDaemons(root: string): Promise<string> {
+  return (await ps([
+    `$root = ${powershellDialect.quote(root)}`,
+    '$list = @(Get-CimInstance Win32_Process -Filter "Name = \'misao.exe\'" | Where-Object { $_.CommandLine -and $_.CommandLine.Contains($root) } | ForEach-Object { [ordered]@{ exe = $_.ExecutablePath; line = $_.CommandLine; parent = $_.ParentProcessId } })',
+    '$global:LASTEXITCODE = 0',
+    'ConvertTo-Json -InputObject @($list) -Compress',
+  ].join('\n'))).trim();
+}
+
 describe.skipIf(process.platform !== 'win32' || !fs.existsSync(MISAO_CLI))('removing the misao of a Windows agent, against a real misao daemon', () => {
   let host: WindowsPreflightInfo;
   let deployer: WindowsAgentDeployer;
@@ -179,10 +189,11 @@ describe.skipIf(process.platform !== 'win32' || !fs.existsSync(MISAO_CLI))('remo
     expect((await daemonPids(misaoRoot)).length).toBeGreaterThan(0);
     expect(await pipeUp(pipeOf(misaoRoot))).toBe(true);
 
+    const seen = await describeDaemons(misaoRoot);
     const result = await deployer.uninstall('ci', host, { removeMisao: true }, '127.0.0.1');
 
     const step = (id: string): string | undefined => result.steps.find((s) => s.id === id)?.outcome;
-    expect([step('misaoTask'), step('misaoProcesses'), step('misaoFolder')], JSON.stringify(result.steps)).toEqual(['done', 'done', 'done']);
+    expect([step('misaoTask'), step('misaoProcesses'), step('misaoFolder')], `${JSON.stringify(result.steps)}\nthe daemon as the host saw it: ${seen}`).toEqual(['done', 'done', 'done']);
     expect(await daemonPids(misaoRoot)).toEqual([]);
     await waitFor('the pipe to close', async () => !(await pipeUp(pipeOf(misaoRoot))), 15_000);
     expect((await schtasks(['/Query', '/TN', OPTIONS.misaoTaskName])).code).not.toBe(0);
