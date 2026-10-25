@@ -18,6 +18,8 @@ export interface UpdateState {
   startedAt: string;
   completedAt?: string;
   error?: string;
+  /** Something worth knowing about a run that did not fail (a stop that arrived after the update had completed). */
+  note?: string;
   steps: UpdateStepEntry[];
 }
 

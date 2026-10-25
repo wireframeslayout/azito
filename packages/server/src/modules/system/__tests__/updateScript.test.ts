@@ -178,7 +178,7 @@ describe('runUpdateSteps (the part of update-run that is the same on every OS)',
     });
     await run(b, undefined, abort.signal);
     expect(events).toEqual(['restart-start', 'restart-end', 'rollback']);
-    expect(state).toMatchObject({ status: 'failed', step: 'health-check', error: 'The update did not finish within 50 minutes' });
+    expect(state).toMatchObject({ status: 'failed', step: 'restart', error: 'The update did not finish within 50 minutes' });
     expect(b.rollback).toHaveBeenCalledWith('v1.0.0', true);
     expect(waitForHealthyVersion).not.toHaveBeenCalled();
   });
@@ -197,7 +197,7 @@ describe('runUpdateSteps (the part of update-run that is the same on every OS)',
     await run(b, undefined, abort.signal);
     expect(events).toEqual(['pointer-written', 'rollback(true)']);
     expect(b.restart).not.toHaveBeenCalled();
-    expect(state).toMatchObject({ status: 'failed', step: 'restart' });
+    expect(state).toMatchObject({ status: 'failed', step: 'switch', error: 'The update task was ended' });
   });
 
   it('a download cut short by the abort is a failed step, nothing was switched, and no stream error escapes', async () => {
@@ -221,5 +221,31 @@ describe('runUpdateSteps (the part of update-run that is the same on every OS)',
       process.off('unhandledRejection', unhandled);
       process.off('uncaughtException', unhandled);
     }
+  });
+
+  it('a stop that arrives during the health check does not undo an update that has completed: it stays a success and says so', async () => {
+    const abort = new AbortController();
+    vi.mocked(waitForHealthyVersion).mockImplementationOnce(async () => { abort.abort(new Error('The update task was ended')); });
+    const b = backend();
+    await run(b, undefined, abort.signal);
+    expect(state.status).toBe('success');
+    expect(state.note).toMatch(/arrived while the new version was being checked \(The update task was ended\).*kept/);
+    expect(b.rollback).not.toHaveBeenCalled();
+    expect(stateManager.readLog().join('\n')).toMatch(/arrived while the new version was being checked/);
+    expect(stateManager.read()?.note).toBe(state.note);
+  });
+
+  it('a run with no stop request has no note', async () => {
+    await run(backend());
+    expect(state.status).toBe('success');
+    expect(state.note).toBeUndefined();
+  });
+
+  it('a stop that arrived before the health check starts rolls back (the new version was never seen healthy)', async () => {
+    const abort = new AbortController();
+    const b = backend({ restart: vi.fn(async () => { abort.abort(new Error('stop')); }) });
+    await run(b, undefined, abort.signal);
+    expect(state).toMatchObject({ status: 'failed', step: 'restart' });
+    expect(b.rollback).toHaveBeenCalledWith('v1.0.0', true);
   });
 });

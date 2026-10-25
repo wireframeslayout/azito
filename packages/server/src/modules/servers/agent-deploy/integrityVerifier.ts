@@ -84,6 +84,7 @@ export async function computeLocalSha256(filePath: string): Promise<string> {
  * the rule the Windows zip extraction uses too).
  */
 export async function assertNoTraversal(tarballPath: string): Promise<void> {
-  const { stdout } = await execFileAsync('tar', ['tf', tarballPath]);
+  // A listing that has not finished by then fails the step; the child is killed and awaited, never left running.
+  const { stdout } = await execFileAsync('tar', ['tf', tarballPath], { timeout: 120_000, killSignal: 'SIGKILL', maxBuffer: 256 * 1024 * 1024 });
   assertSafeEntryNames(stdout.split('\n'));
 }

@@ -324,6 +324,32 @@ const PROCESS_PREAMBLE = [
 ];
 
 /**
+ * Splits a command line with Windows' own `CommandLineToArgvW`, called from PowerShell, rather than a re-implementation of its rules in
+ * TypeScript or PowerShell: the rule is the one `quoteWindowsArg` is written against, and what the OS gives back is what any program (node.exe
+ * included) sees as its arguments. Compiled in the PowerShell session; nothing is installed.
+ */
+export const ARGV_HELPER = `Add-Type -TypeDefinition @'
+using System;
+using System.Runtime.InteropServices;
+public static class AzitoArgv {
+  [DllImport("shell32.dll", SetLastError = true)]
+  static extern IntPtr CommandLineToArgvW([MarshalAs(UnmanagedType.LPWStr)] string commandLine, out int argc);
+  [DllImport("kernel32.dll")]
+  static extern IntPtr LocalFree(IntPtr handle);
+  public static string[] Split(string commandLine) {
+    int count;
+    IntPtr argv = CommandLineToArgvW(commandLine, out count);
+    if (argv == IntPtr.Zero) throw new System.ComponentModel.Win32Exception(Marshal.GetLastWin32Error());
+    try {
+      var result = new string[count];
+      for (int i = 0; i < count; i++) result[i] = Marshal.PtrToStringUni(Marshal.ReadIntPtr(argv, i * IntPtr.Size));
+      return result;
+    } finally { LocalFree(argv); }
+  }
+}
+'@`;
+
+/**
  * The hub processes of this install, to be found BEFORE the task is ended: a `node.exe` of this user whose command line has an
  * `azito-hub.cjs` of ANY version folder under `<prefix>\hub\` as one whole argument. Any version, because a restart after `current.txt`
  * was switched must still wait for the version that is running. `hubRoots` are the spellings of `<prefix>\hub` to match (the given
@@ -333,6 +359,7 @@ const PROCESS_PREAMBLE = [
  */
 export async function findHubProcesses(run: SpecRunner, systemRoot: string, hubRoots: readonly string[], excludePid: number, onlyWithArgument?: string): Promise<HubProcess[]> {
   const q = powershellDialect.quote;
+  if (onlyWithArgument !== undefined && !/^[A-Za-z0-9-]+$/.test(onlyWithArgument)) throw new Error(`Not a plain word: ${onlyWithArgument}`);
   const alternatives = hubRoots.map((root) => `[regex]::Escape(${q(`${root.replace(/[\\/]+$/, '')}\\`)})`).join(" + '|' + ");
   // Per candidate: the Process is opened FIRST (the handle keeps its id from being handed to another process), THEN the command line,
   // owner and creation date of that id are read, and the creation date must agree with the opened process's start time (WMI keeps
@@ -342,6 +369,7 @@ export async function findHubProcesses(run: SpecRunner, systemRoot: string, hubR
   // something is wrong (a protected process, a changed security setup) and the stop must not claim success.
   const script = [
     ...PROCESS_PREAMBLE,
+    ...(onlyWithArgument === undefined ? [] : [ARGV_HELPER]),
     `$roots = ${alternatives}`,
     "$pattern = '(^|[\\s\"])(' + $roots + ')[^\\\\\"\\s]+\\\\azito-hub\\.cjs([\\s\"]|$)'",
     `foreach ($p in @(Get-Process -Name node -ErrorAction SilentlyContinue)) {`,
@@ -350,7 +378,14 @@ export async function findHubProcesses(run: SpecRunner, systemRoot: string, hubR
     '  try { $null = $p.Handle; $started = $p.StartTime } catch { $openError = $_.Exception.Message }',
     '  $cim = Get-CimInstance Win32_Process -Filter "ProcessId = $($p.Id)"',
     '  if (-not $cim -or -not $cim.CommandLine -or $cim.CommandLine -notmatch $pattern) { continue }',
-    ...(onlyWithArgument === undefined ? [] : [`  if ($cim.CommandLine -notmatch ${q(`(^|[\\s"])${onlyWithArgument.replace(/[^A-Za-z0-9-]/g, '')}([\\s"]|$)`)}) { continue }`]),
+    ...(onlyWithArgument === undefined ? [] : [
+      // The command line is split by the OS's own rule (CommandLineToArgvW, the inverse of `quoteWindowsArg`), and the argument right after the
+      // bundle's azito-hub.cjs must be exactly this word: a path or another argument that merely contains it is not a match.
+      '  $argv = [AzitoArgv]::Split($cim.CommandLine)',
+      '  $given = $false',
+      `  for ($i = 0; $i -lt $argv.Count - 1; $i++) { if ($argv[$i].EndsWith('\\azito-hub.cjs', [StringComparison]::OrdinalIgnoreCase) -and $argv[$i + 1] -ceq ${q(onlyWithArgument)}) { $given = $true } }`,
+      '  if (-not $given) { continue }',
+    ]),
     // Only a process whose command line is this hub's gets its owner looked at: an unrelated node.exe of another user is skipped above.
     '  $owner = Get-Owner $cim',
     '  if ($null -eq $owner.Mine) { throw "Cannot tell whose hub process $($p.Id) is (GetOwnerSid: $($owner.Reason))" }',

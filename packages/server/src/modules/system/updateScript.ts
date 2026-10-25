@@ -211,10 +211,14 @@ export async function runUpdateSteps(
   stateManager: UpdateStateManager,
   signal: AbortSignal,
 ): Promise<void> {
-  // A run that is told to end (the deadline, or its task being ended) stops at the NEXT step: a step that is working is waited for, each one
+  // A run that is told to end (the deadline, or its task being ended) stops at a step BOUNDARY: a step that is working is waited for, each one
   // having a limit of its own (the download, the tool runs, the restart's grace, the health wait). The switch and the restart are never cut
-  // in the middle, and the rollback starts only when nothing else is running.
-  const runStep = async (step: UpdateStep, message: string, fn: () => Promise<void>): Promise<void> => {
+  // in the middle, and the rollback starts only when nothing else is running. The signal is looked at before a step starts and after it has
+  // completed, so a stop that arrived during a step ends the run (and rolls back, if it had switched) as soon as that step is done.
+  // The one exception is the LAST step, the health check: when the new version has answered, the update is complete, and putting the old
+  // version back "because a stop came late" would stop a hub that is running well. That run stays a success, and says (in the state's
+  // `note` and the log) that the stop arrived too late, so that it is not silently a success.
+  const runStep = async (step: UpdateStep, message: string, fn: () => Promise<void>, isLast = false): Promise<void> => {
     state.step = step;
     state.steps.push({ step, status: 'running', message });
     stateManager.write(state);
@@ -222,6 +226,7 @@ export async function runUpdateSteps(
     try {
       signal.throwIfAborted();
       await fn();
+      if (!isLast) signal.throwIfAborted();
       state.steps[state.steps.length - 1] = { step, status: 'ok', message };
       stateManager.write(state);
     } catch (err) {
@@ -266,8 +271,13 @@ export async function runUpdateSteps(
 
     await runStep('restart', 'Restarting azito service', () => backend.restart());
 
-    await runStep('health-check', 'Waiting for healthy restart', () => waitForHealthyVersion(healthUrl, args.version, backend.healthTimeoutMs));
+    await runStep('health-check', 'Waiting for healthy restart', () => waitForHealthyVersion(healthUrl, args.version, backend.healthTimeoutMs), true);
 
+    if (signal.aborted) {
+      const late = `A request to stop the update arrived while the new version was being checked (${(signal.reason as Error).message}); the update had already completed, so it was kept`;
+      state.note = late;
+      stateManager.appendLog(late);
+    }
     state.status = 'success';
     state.completedAt = new Date().toISOString();
     stateManager.write(state);
