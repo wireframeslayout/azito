@@ -112,14 +112,16 @@ export class AgentUpdater {
     // The server may have been reinstalled (a new token), edited or deleted while this waited for the lock: what is updated, with
     // which token and where, is what is registered once the lock is held, never what was read before.
     const outcome = await this.serverLock.withLock(server.name, () => this.updateRegistered(server, localBundleHash));
-    if (outcome.kind === 'result') return outcome.result;
+    if (outcome.kind === 'result') {
+      if (outcome.result.status === 'skipped') this.logger.warn(`${outcome.result.name}: ${outcome.result.message}`);
+      return outcome.result;
+    }
     const { fresh, update } = outcome;
     if (update.warning) this.logger.warn(`${fresh.name}: the agent was updated, but: ${update.warning}`);
     if (update.success) {
       // The new agent may be the first to know how to report its host: ask again.
       return this.withHostRecorded(fresh, { name: fresh.name, status: 'updated', currentVersion: update.version, ...(update.warning ? { message: update.warning } : {}) }, true);
     }
-    this.logger.warn(`${fresh.name}: the agent update failed: ${update.error}`);
     return { name: fresh.name, status: 'error', currentVersion: remoteVersion, message: update.error };
   }
 

@@ -240,9 +240,10 @@ describe('AgentUpdater', () => {
   it('updates with the token registered once the lock is held, and not at all when it changed while waiting (a reinstall wrote a new one)', async () => {
     const mocks = makeMocks('new-sha');
     const lock = new KeyedMutex();
+    const logger = { warn: vi.fn() };
     const updater = new AgentUpdater(
       mocks.bundler as any, mocks.installer as any,
-      mocks.serverRepo as any, mocks.taskRepo as any, mocks.hostRecorder as any, lock, { warn: vi.fn() },
+      mocks.serverRepo as any, mocks.taskRepo as any, mocks.hostRecorder as any, lock, logger,
     );
     vi.stubGlobal('fetch', vi.fn(() => Promise.resolve({ ok: true, json: async () => ({ version: 'old-sha' }) })));
     const seen = makeServer({ agentToken: 'old-token' });
@@ -259,6 +260,9 @@ describe('AgentUpdater', () => {
 
     expect(result.status).toBe('skipped');
     expect(result.message).toContain('reinstalled');
+    // A skipped update is said in the log (here, once: the caller of checkAllServers does not print it).
+    expect(logger.warn).toHaveBeenCalledTimes(1);
+    expect(logger.warn).toHaveBeenCalledWith(expect.stringContaining('Update skipped'));
     expect(mocks.installer.update).not.toHaveBeenCalled();
     expect(mocks.serverRepo.updateAgentVersion).not.toHaveBeenCalled();
     vi.unstubAllGlobals();

@@ -19,8 +19,7 @@ function make(options: { previousVersion?: string; previousWasRunning?: boolean;
     pruneOldVersions: vi.fn(options.prune ?? (async () => { log.push('prune'); return { removed: [], failed: [] }; })),
   };
   const checkHealth = vi.fn(async (expected: string | undefined) => { log.push(`health:${expected}`); await options.health?.(expected); });
-  const logger = { warn: vi.fn() };
-  return { deps: { deployer: deployer as unknown as WindowsUpdateDeployer, checkHealth, logger }, deployer, deployment, checkHealth, logger, log };
+  return { deps: { deployer: deployer as unknown as WindowsUpdateDeployer, checkHealth }, deployer, deployment, checkHealth, log };
 }
 
 describe('updateWindowsAgent', () => {
@@ -73,7 +72,7 @@ describe('updateWindowsAgent', () => {
     const m = make({ previousWasRunning: false, start: async () => { throw new Error('x'); } });
     const result = await updateWindowsAgent(m.deps, INPUT, 3002, 'agent.log');
     expect(result.error).toMatch(/Rolled back: restored the previous task definition. the previous agent was not running, so it was not started$/);
-    expect(result.previousAgent).toBe('not_running');
+    expect(result.error).toContain('the previous agent was not running, so it was not started');
     expect(m.checkHealth).not.toHaveBeenCalled();
   });
 
@@ -84,12 +83,11 @@ describe('updateWindowsAgent', () => {
     expect(result.warning).toContain('The previous install could not be removed (access denied)');
   });
 
-  it('logs and reports old releases that are in use (they are tried again at the next update), and still succeeds', async () => {
+  it('reports old releases that are in use (they are tried again at the next update), and still succeeds', async () => {
     const m = make({ prune: async () => ({ removed: ['cccccccccccc'], failed: [{ version: 'aaaaaaaaaaaa', reason: 'in use' }] }) });
     const result = await updateWindowsAgent(m.deps, INPUT, 3002, 'agent.log');
     expect(result.success).toBe(true);
     expect(result.warning).toBe('Old releases left in place (tried again at the next update): aaaaaaaaaaaa (in use).');
-    expect(m.logger.warn).toHaveBeenCalledWith(expect.stringContaining('aaaaaaaaaaaa (in use)'));
   });
 
   it('reports a clean-up that failed as a whole, and removes nothing when the previous release is not known', async () => {
@@ -108,11 +106,11 @@ describe('updateWindowsAgent', () => {
       m.deployer.deploy.mockRejectedValue(new WindowsDeployError('Extracting the agent bundle failed (the previous agent was started again)', stopped));
     };
 
-    it('checks that the previous agent answers, and returns that as a state', async () => {
+    it('checks that the previous agent answers', async () => {
       const m = make();
       failDeploy(m, { wasRunning: true, version: 'old000000000' });
       const result = await updateWindowsAgent(m.deps, INPUT, 3002, 'agent.log');
-      expect(result).toMatchObject({ success: false, previousAgent: 'answers' });
+      expect(result.success).toBe(false);
       expect(result.error).toContain('Transfer failed: Extracting the agent bundle failed');
       expect(result.error).toContain('the previous agent answers again');
       expect(m.checkHealth).toHaveBeenCalledWith('old000000000');
@@ -122,27 +120,21 @@ describe('updateWindowsAgent', () => {
       const m = make({ health: async () => { throw new Error('ECONNREFUSED'); } });
       failDeploy(m, { wasRunning: true, version: 'old000000000' });
       const result = await updateWindowsAgent(m.deps, INPUT, 3002, 'agent.log');
-      expect(result.previousAgent).toBe('not_answering');
+      
       expect(result.error).toContain('the previous agent does NOT answer (ECONNREFUSED)');
     });
 
     it('does not look at health when the previous agent was not running, nor when nothing on the host had been touched', async () => {
       const stopped = make();
       failDeploy(stopped, { wasRunning: false, version: undefined });
-      expect((await updateWindowsAgent(stopped.deps, INPUT, 3002, 'agent.log')).previousAgent).toBe('not_running');
+      expect((await updateWindowsAgent(stopped.deps, INPUT, 3002, 'agent.log')).error).toContain('was not running');
       expect(stopped.checkHealth).not.toHaveBeenCalled();
 
       const untouched = make();
       failDeploy(untouched, undefined);
       const result = await updateWindowsAgent(untouched.deps, INPUT, 3002, 'agent.log');
-      expect(result.previousAgent).toBeUndefined();
+      expect(result.error).not.toContain('answers again');
       expect(untouched.checkHealth).not.toHaveBeenCalled();
     });
-  });
-
-  it('logs a failed commit (a *.prev that blocks the next update) itself', async () => {
-    const m = make({ commit: async () => { throw new Error('access denied'); } });
-    await updateWindowsAgent(m.deps, INPUT, 3002, 'agent.log');
-    expect(m.logger.warn).toHaveBeenCalledWith(expect.stringContaining('access denied'));
   });
 });

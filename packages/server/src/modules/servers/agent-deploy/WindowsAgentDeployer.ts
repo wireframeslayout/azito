@@ -284,6 +284,12 @@ export class WindowsAgentDeployer {
    * Removes the release folders (`<12 hex digits>`) of this install other than the ones in `keep`. Folders of anything else
    * (`*.prev`, scratch folders, a folder somebody made) are not touched. A folder that cannot be removed (a file in it is in use) is
    * left, reported in `failed` with the reason, and tried again by the next call; the others are still removed.
+   *
+   * Links are not followed: the agent folder and every folder up to the home, and each candidate, must not be a reparse point.
+   * A race remains and is accepted: a folder can be swapped for a link between that check and the `Remove-Item` that follows. Only the
+   * owner of the (owner-only) agent folder or an administrator can do the swap, and either can already delete anything that link could
+   * reach, so no boundary is crossed. Closing it would need a recursive delete that holds the folder's handle, which neither Node nor
+   * Windows PowerShell 5.1 offers; it is not attempted.
    */
   async pruneOldVersions(sshHost: string, host: Pick<WindowsPreflightInfo, 'home'>, keep: readonly string[]): Promise<PruneResult> {
     const q = powershellDialect.quote;

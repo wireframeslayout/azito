@@ -461,7 +461,7 @@ export class AgentInstaller {
     }
     const port = this.windowsAgent.port;
     return updateWindowsAgent(
-      { deployer: this.windowsDeployer(), checkHealth: (expected) => this.healthCheck(tailscaleIp, port, expected), logger: console },
+      { deployer: this.windowsDeployer(), checkHealth: (expected) => this.healthCheck(tailscaleIp, port, expected) },
       { sshHost, host, nodePath: host.nodePath!, version, tarballPath, expectedSha256, token, bindAddress: tailscaleIp },
       port,
       windowsAgentLayout(host.home, this.windowsAgent, version).logFile,
