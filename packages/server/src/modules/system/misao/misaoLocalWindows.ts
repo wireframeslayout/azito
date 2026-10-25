@@ -4,6 +4,7 @@ import type { CommandSpec } from '../../../shared/exec/commandSpec';
 import { runCommandSpec, runHostOf } from '../../../shared/exec/runCommandSpec';
 import { LocalFileOps, localFileOpsHost } from '../../../shared/fs/LocalFileOps';
 import type { HostEnv } from '../../../shared/os/hostEnv';
+import type { SecretFileGuard } from '../../../shared/os/secretFileGuard';
 import { rawRunnerOf, SchtasksClient } from '../../../shared/os/taskScheduler/schtasks';
 import { readMisaoSocketStatus, stageMisaoReleaseFile, type AgentMisaoHost } from '../../servers/transport/agentMisaoSocket';
 import { MisaoWindowsInstaller, type WindowsTarget } from './MisaoWindowsInstaller';
@@ -50,7 +51,7 @@ function localAgentHost(hostEnv: LocalWindowsHostEnv, paths: MisaoPaths, userNam
   };
 }
 
-export function createLocalMisaoWindows(hostEnv: LocalWindowsHostEnv, paths: MisaoPaths, userName: string, env: NodeJS.ProcessEnv): LocalMisaoWindows {
+export function createLocalMisaoWindows(hostEnv: LocalWindowsHostEnv, paths: MisaoPaths, userName: string, env: NodeJS.ProcessEnv, secretFileGuard: SecretFileGuard): LocalMisaoWindows {
   const host = localAgentHost(hostEnv, paths, userName, env);
   const runHost = runHostOf(hostEnv);
   const files = new LocalFileOps(localFileOpsHost(hostEnv));
@@ -68,7 +69,7 @@ export function createLocalMisaoWindows(hostEnv: LocalWindowsHostEnv, paths: Mis
     target,
     tasks: new SchtasksClient(rawRunnerOf((command) => runCommandSpec(command, { ...runHost, rawOutput: true })), hostEnv),
     taskName: MISAO_SERVICE.windowsTaskName,
-    operationLock: createMisaoRootLock(paths.root),
+    operationLock: createMisaoRootLock(paths.root, secretFileGuard),
   };
 }
 

@@ -264,9 +264,9 @@ export interface Wiring extends SharedInfra, Repositories, PushNotificationModul
 
 // ─── Per-module factories ───
 
-function buildSharedInfra(agentBundler: AgentBundler, publicUrl: string, localUrl: string, dataPaths: DataPaths, uiToken: string, webhookToken: string, scopedAuthEnabled: boolean, misaoRuntime: MisaoRuntime, hostEnv: HostEnv, hubHost: HubHostProfile, windowsAgent: WindowsAgentOptions, findServer: (name: string) => ServerConfig | null, db?: SqliteDatabase, fingerprintStore?: FingerprintStore, auditLogService?: AuditLogService): SharedInfra {
+function buildSharedInfra(agentBundler: AgentBundler, publicUrl: string, localUrl: string, dataPaths: DataPaths, uiToken: string, webhookToken: string, scopedAuthEnabled: boolean, misaoRuntime: MisaoRuntime, hostEnv: HostEnv, secretFileGuard: SecretFileGuard, hubHost: HubHostProfile, windowsAgent: WindowsAgentOptions, findServer: (name: string) => ServerConfig | null, db?: SqliteDatabase, fingerprintStore?: FingerprintStore, auditLogService?: AuditLogService): SharedInfra {
   const sshClient = new SshClient(resolveSshClientEnv(hostEnv, process.env), fingerprintStore);
-  const misaoAgentInstaller = new MisaoAgentInstaller(readMisaoBundle(getBundleRoot()), { windowsTaskName: windowsAgent.misaoTaskName, ...optionalLocalMisao(localWindowsMisaoRoot(hostEnv)) });
+  const misaoAgentInstaller = new MisaoAgentInstaller(readMisaoBundle(getBundleRoot()), { windowsTaskName: windowsAgent.misaoTaskName, ...optionalLocalMisao(localWindowsMisaoRoot(hostEnv), secretFileGuard) });
   // A hub with no bundled misao installs agents without it (instead of reporting a failed misao step on every install).
   const agentInstaller = new AgentInstaller(sshClient, agentBundler, windowsAgent, misaoAgentInstaller.bundledVersion !== undefined ? misaoAgentInstaller : undefined);
   const harnessInstaller = new HarnessInstaller(sshClient);
@@ -609,8 +609,8 @@ function localWindowsMisaoRoot(hostEnv: HostEnv): string | undefined {
   }
 }
 
-function optionalLocalMisao(root: string | undefined): { localMisao?: { root: string; lock: ProcessLock } } {
-  return root === undefined ? {} : { localMisao: { root, lock: createMisaoRootLock(root) } };
+function optionalLocalMisao(root: string | undefined, guard: SecretFileGuard): { localMisao?: { root: string; lock: ProcessLock } } {
+  return root === undefined ? {} : { localMisao: { root, lock: createMisaoRootLock(root, guard) } };
 }
 
 function buildMisaoService(misao: MisaoHandle, hostEnv: HostEnv, secretFileGuard: SecretFileGuard): MisaoServiceService {
@@ -636,7 +636,7 @@ function buildMisaoService(misao: MisaoHandle, hostEnv: HostEnv, secretFileGuard
     env: process.env,
     homeDir: hostEnv.homeDir,
     secretFileGuard,
-    ...(windowsUser && paths ? { windows: createLocalMisaoWindows(hostEnv, paths, windowsUser.userName, process.env) } : {}),
+    ...(windowsUser && paths ? { windows: createLocalMisaoWindows(hostEnv, paths, windowsUser.userName, process.env, secretFileGuard) } : {}),
     hub: { probeDaemon: () => probeMisaoDaemon(misao.connection), socketPath: misao.socketPath },
   });
 }
@@ -739,7 +739,7 @@ export async function buildWiring(db: SqliteDatabase, publicUrl: string, localUr
   // resolved flag instead of re-reading process.env itself.
   const scopedAuthEnabled = resolveScopedAuthEnabled();
   const harnessPrefix = process.env.AZITO_HARNESS_PREFIX || undefined;
-  const infra = buildSharedInfra(agentBundler, publicUrl, localUrl, dataPaths, uiToken, webhookToken, scopedAuthEnabled, misaoRuntime, hostEnv, hubHost, resolveWindowsAgentOptions(process.env), (name) => repos.serverRepo.findByName(name), db, fingerprintStore, repos.auditLogService);
+  const infra = buildSharedInfra(agentBundler, publicUrl, localUrl, dataPaths, uiToken, webhookToken, scopedAuthEnabled, misaoRuntime, hostEnv, secretFileGuard, hubHost, resolveWindowsAgentOptions(process.env), (name) => repos.serverRepo.findByName(name), db, fingerprintStore, repos.auditLogService);
   const pushNotification = buildPushNotificationModule(repos.pushSubRepo);
   const agentHostRecorder = new AgentHostRecorder(repos.serverRepo, infra.transportFactory, Date.now, console);
   const agentUpdater = buildAgentUpdater(agentBundler, infra, repos, agentHostRecorder);

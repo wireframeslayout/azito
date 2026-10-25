@@ -491,6 +491,26 @@ describe('MisaoAgentInstaller on a Windows agent', () => {
       expect(duringUpdate).toBe('busy');
     });
 
+    it('fails the operation, rather than run it unlocked, when the first read of the agent\'s status fails (the operation would read it again and could succeed)', async () => {
+      const lock = new ProcessLock(endpoint(), 7);
+      const agent = new FakeWindowsAgent(bundle);
+      agent.seedInstalled(OLD_VERSION, true);
+      const target = agent.asTarget();
+      const original = target.fetchMisaoStatus;
+      let calls = 0;
+      target.fetchMisaoStatus = async () => {
+        calls += 1;
+        if (calls === 1) throw new Error('agent unreachable for a moment');
+        return original();
+      };
+      await expect(sharing(lock, ROOT).update(target)).rejects.toMatchObject({ code: 'unsupported_host', message: expect.stringContaining('agent unreachable for a moment') });
+      expect(calls).toBe(1); // the operation never asked again
+      expect(agent.schtasks()).toEqual([]);
+      expect(agent.uploads).toEqual([]);
+      calls = 0;
+      await expect(sharing(lock, ROOT).reviveWindowsDaemon(target, false)).rejects.toMatchObject({ code: 'unsupported_host' });
+    });
+
     it('leaves an agent with another folder (another machine) to the per-server mutex alone', async () => {
       const lock = new ProcessLock(endpoint(), 7);
       const agent = new FakeWindowsAgent(bundle);

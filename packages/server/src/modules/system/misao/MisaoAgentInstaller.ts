@@ -134,8 +134,10 @@ export class MisaoAgentInstaller {
     let reported: string | undefined;
     try {
       reported = (await target.fetchMisaoStatus()).host.windows?.misaoRoot;
-    } catch {
-      return operation(); // an agent that cannot say gets the refusal the operation itself gives
+    } catch (err) {
+      // Whether the slot is needed cannot be told, and the operation reads the status again on its own (it could get an answer this time and
+      // run beside the hub's watchdog): it is not run at all.
+      throw new MisaoServiceError('unsupported_host', `Could not read the agent's misao status, so it cannot be told whether the hub's own misao is the one being changed (an agent older than this hub has no such route: update the agent first): ${describeError(err)}`);
     }
     if (reported === undefined || !sameWindowsPath(reported, local.root)) return operation();
     return underMisaoRootLock(local.lock, operation);

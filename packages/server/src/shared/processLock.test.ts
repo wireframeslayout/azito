@@ -2,6 +2,7 @@ import os from 'os';
 import path from 'path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import fs from 'fs';
+import net from 'net';
 import { ProcessLock, ProcessLockBusyError, misaoRootLockEndpoint } from './processLock';
 
 /** On Windows the lock is a named pipe; a unix socket path has the same "one listener" rule and serves these tests elsewhere. */
@@ -59,11 +60,40 @@ describe('ProcessLock', () => {
   });
 });
 
+describe('ProcessLock with a client that never reads', () => {
+  it('does not keep the release waiting: the answer to a connection is cut off, and release destroys every connection', async () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'azlock-'));
+    const endpoint = process.platform === 'win32' ? `\\\\.\\pipe\\azito-lock-test-${path.basename(dir)}` : path.join(dir, 'l.sock');
+    const sockets: net.Socket[] = [];
+    try {
+      const started = Date.now();
+      await new ProcessLock(endpoint, 1).run(async () => {
+        for (let i = 0; i < 3; i += 1) {
+          const client = net.connect(endpoint);
+          client.pause(); // connected, and never reads
+          client.on('error', () => undefined);
+          sockets.push(client);
+        }
+        await new Promise((resolve) => setTimeout(resolve, 300));
+      });
+      expect(Date.now() - started).toBeLessThan(5000);
+      // and the lock is free again at once
+      expect(await new ProcessLock(endpoint, 2).run(async () => 'free')).toBe('free');
+    } finally {
+      for (const client of sockets) client.destroy();
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  }, 30_000);
+});
+
 describe('misaoRootLockEndpoint', () => {
   it('is one pipe per folder: the same for another letter case or a trailing separator, different for another folder', () => {
-    const a = misaoRootLockEndpoint('C:\\Users\\Me\\.azito\\misao');
-    expect(a).toMatch(/^\\\\\.\\pipe\\azito-lock-[0-9a-f]{16}$/);
-    expect(misaoRootLockEndpoint('c:\\users\\me\\.azito\\MISAO\\')).toBe(a);
-    expect(misaoRootLockEndpoint('C:\\Users\\Other\\.azito\\misao')).not.toBe(a);
+    const key = 'a'.repeat(64);
+    const a = misaoRootLockEndpoint('C:\\Users\\Me\\.azito\\misao', key);
+    expect(a).toMatch(/^\\\\\.\\pipe\\azito-lock-[0-9a-f]{32}$/);
+    expect(misaoRootLockEndpoint('c:\\users\\me\\.azito\\MISAO\\', key)).toBe(a);
+    expect(misaoRootLockEndpoint('C:\\Users\\Other\\.azito\\misao', key)).not.toBe(a);
+    // Without the secret key the name is another one: nobody who cannot read the key can name (hence take first) the pipe.
+    expect(misaoRootLockEndpoint('C:\\Users\\Me\\.azito\\misao', 'b'.repeat(64))).not.toBe(a);
   });
 });
