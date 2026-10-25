@@ -1388,7 +1388,15 @@ export class ExecuteTaskUseCase {
         });
         this.appendLog(taskId, unitId, 'command', { type: 'worker_launch', command: actualCommand });
       } catch (launchErr) {
-        if (launchErr instanceof TuiNotReadyError && launchErr.trustDialogDetected) {
+        if (launchErr instanceof TuiNotReadyError && launchErr.reason === 'bypass_permissions_dialog') {
+          this.appendLog(taskId, unitId, 'command', {
+            type: 'bypass_permissions_dialog',
+            message: 'Claude Code の Bypass Permissions mode の確認ダイアログで起動が停止しました。対象ホストで claude --dangerously-skip-permissions を一度起動して受け入れるか、~/.claude/settings.json に "skipDangerousModePermissionPrompt": true を追加してください',
+          });
+          this.taskRepo.updateStatus(taskId, 'failed' as TaskStatus);
+          return;
+        }
+        if (launchErr instanceof TuiNotReadyError && launchErr.reason === 'trust_dialog') {
           this.appendLog(taskId, unitId, 'command', {
             type: 'claude_trust_dialog_detected',
             message: `Claude Code の信頼確認ダイアログで起動が停止しました。作業ディレクトリ ${effectiveDir || workingDir} を信頼済みにしてください`,
