@@ -250,7 +250,6 @@
   },
   "hostFeature": {
     "windowsDeferred": "Windows のエージェントでは、このリリースでは使えません（#{{issue}} で扱います）",
-    "windowsPending": "Windows のエージェントでは、まだ使えません（v0.12.x で対応予定。#{{issue}}）",
     "windowsNoTmux": "Windows には tmux がありません。ペインサーバーは misao を使います",
     "apiRefused": "このサーバーの OS では、まだ使えない操作です: {{reason}}"
   }

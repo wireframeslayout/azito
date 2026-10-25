@@ -17,7 +17,7 @@ describe('hostFeatureSupport', () => {
 
   it('names the issue that brings each feature to Windows', () => {
     const win32 = { platform: 'win32' as const };
-    expect(hostFeatureSupport(win32, 'browserRuntime')).toEqual({ available: false, issue: 372 });
+    expect(hostFeatureSupport(win32, 'browserRuntime')).toEqual({ available: false, issue: 500 });
     expect(hostFeatureSupport(win32, 'isolation')).toEqual({ available: false, issue: 464 });
     expect(hostFeatureSupport(win32, 'codeDistribution')).toEqual({ available: false, issue: 464 });
   });

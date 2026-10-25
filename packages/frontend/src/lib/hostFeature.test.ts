@@ -11,11 +11,8 @@ describe('hostFeatureBlockReason', () => {
     expect(hostFeatureBlockReason(null, 'browserRuntime', t)).toBeNull();
   });
 
-  it('says the feature is pending, with its issue, on Windows', () => {
-    expect(hostFeatureBlockReason({ platform: 'win32' }, 'browserRuntime', t)).toBe('common:hostFeature.windowsPending{"issue":372}');
-  });
-
-  it('says isolation is deferred, not planned for v0.12.x, on Windows', () => {
+  it('says isolation, the code distribution and the browser runtime are deferred, not planned for v0.12.x, on Windows', () => {
+    expect(hostFeatureBlockReason({ platform: 'win32' }, 'browserRuntime', t)).toBe('common:hostFeature.windowsDeferred{"issue":500}');
     expect(hostFeatureBlockReason({ platform: 'win32' }, 'isolation', t)).toBe('common:hostFeature.windowsDeferred{"issue":464}');
     expect(hostFeatureBlockReason({ platform: 'win32' }, 'codeDistribution', t)).toBe('common:hostFeature.windowsDeferred{"issue":464}');
     expect(hostFeatureBlockReason({ platform: 'linux' }, 'isolation', t)).toBeNull();
