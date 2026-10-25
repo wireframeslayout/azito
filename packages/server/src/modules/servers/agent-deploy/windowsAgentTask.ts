@@ -48,6 +48,8 @@ export function agentTaskIdentity(action: TaskExecAction, systemRoot: string, ro
   const [, nodeToken, tail] = split as unknown as [string, string, string];
   const nodePath = nodeToken.startsWith('"') ? nodeToken.slice(1, -1) : nodeToken;
   if (joinWindowsArgs([nodePath]) !== nodeToken) return undefined;
+  // A program that is not an absolute path to a file called node.exe is not the install's, however well the rest fits.
+  if (!/^[A-Za-z]:\\/.test(nodePath) || path.win32.basename(nodePath).toLowerCase() !== 'node.exe') return undefined;
   const version = AGENT_VERSION_IN_ENTRY.exec(tail)?.[1];
   if (version === undefined) return undefined;
   const expected = agentTaskAction(systemRoot, nodePath, envFile, path.win32.join(root, version, 'azito-agent.cjs'));
@@ -78,48 +80,4 @@ export function misaoTaskVersion(action: TaskExecAction, systemRoot: string, roo
     }
   }
   return undefined;
-}
-
-// ─── The processes the tasks start ───
-
-/** Where the install's folder goes in the patterns of a {@link ProcessShape}: the host puts it in once (escaped), so a long path costs the script once. */
-export const ROOT_TOKEN = '{ROOT}';
-
-/**
- * What a process has to look like to be the one the install's task starts: regular expressions (as the host reads them) with
- * {@link ROOT_TOKEN} for the install's folder `root`.
- */
-export interface ProcessShape {
-  root: string;
-  /** For `ExecutablePath`, as a whole. */
-  exe: string;
-  /** For the command line with its quotes removed and its leading `<ExecutablePath> ` taken off, as a whole. */
-  tail: string;
-}
-
-/** The patterns of a shape with the folder put in, as the host does it (for the tests, and for whoever reads them). */
-export function expandShape(shape: ProcessShape): { exe: string; tail: string } {
-  const put = (pattern: string): string => pattern.split(ROOT_TOKEN).join(escapeRegExp(shape.root));
-  return { exe: put(shape.exe), tail: put(shape.tail) };
-}
-
-/**
- * The agent: `node.exe --env-file=<root>\agent.env <root>\<version>\azito-agent.cjs`, which is what `conhost.exe --headless <that line>`
- * starts. The version is the task's when the task was recognised, any release folder of the install otherwise.
- */
-export function agentProcessShape(root: string, version: string | undefined): ProcessShape {
-  return {
-    root,
-    exe: '^.+\\\\node\\.exe$',
-    tail: `--env-file=${ROOT_TOKEN}\\\\agent\\.env ${ROOT_TOKEN}\\\\${version === undefined ? RELEASE_NAME : escapeRegExp(version)}\\\\azito-agent\\.cjs`,
-  };
-}
-
-/** The misao daemon: `<root>\<version>\misao.exe serve --socket <pipe> --data <root>` (what cmd.exe makes of the task's line). */
-export function misaoProcessShape(root: string, userName: string, version: string | undefined): ProcessShape {
-  return {
-    root,
-    exe: `^${ROOT_TOKEN}\\\\${version === undefined ? RELEASE_NAME : escapeRegExp(version)}\\\\misao\\.exe$`,
-    tail: `serve --socket ${escapeRegExp(windowsMisaoPipe(root, userName))} --data ${ROOT_TOKEN}`,
-  };
 }

@@ -28,45 +28,24 @@ const RESOLVE_LONG = [
 
 // ─── The firewall rule ───
 
-const TAILNET_REMOTE = '^100\\.64\\.0\\.0/(10|255\\.192\\.0\\.0)$';
-
 /**
- * The rule the install adds: `New-NetFirewallRule -DisplayName "AZITO Agent (TCP <port>)" -Direction Inbound -Action Allow -Protocol TCP
- * -LocalPort <port> -Program <node.exe> -LocalAddress <the address the agent listens on> -RemoteAddress 100.64.0.0/10 -Profile Any` (see
- * `firewallRuleCommand`); it has no name of its own, so Windows gives it a GUID. The display name is built from the port only, so it
- * is not enough to know a rule is ours: a rule is removed only when EVERY condition the install sets holds (direction, action, profile,
- * protocol, local port, local address, remote address, and the program being the same FILE as one of `programs`, both sides resolved on
- * the host, see {@link RESOLVE_LONG}) and every filter the install leaves open is open (any remote port, no package, no service, any
- * interface type, edge traversal blocked). A condition that is different, or that cannot be read, leaves the rule. `localAddress`
- * undefined (not known) leaves every rule. Any other rule of that name is left, and reported with its program.
+ * Looks for the rule the install adds (`New-NetFirewallRule -DisplayName "AZITO Agent (TCP <port>)" -Direction Inbound ...`, see
+ * `firewallRuleCommand`; it has no name of its own, so Windows gives it a GUID) and REPORTS it. Nothing is removed: a display name built
+ * from the port says what the install called the rule, not that this rule is the install's, and there are more conditions on a rule than
+ * a person or a script can be sure to have compared. Each rule found is printed as `RULE|name|action|profile|program|protocol|port|local|remote`
+ * and the person is told how to remove the one that is the install's. A list that cannot be read is an error, never "no rule".
  */
-export function firewallScript(displayName: string, port: number, programs: readonly string[], localAddress: string | undefined): string {
+export function firewallInspectScript(displayName: string): string {
   const q = powershellDialect.quote;
   return [
     `$name = ${q(displayName)}`,
-    `$port = ${q(String(port))}`,
-    `$localAddress = ${q(localAddress ?? '')}`,
-    `$programs = @(${programs.map(q).join(', ')})`,
-    ...RESOLVE_LONG,
-    '$candidates = @($programs | ForEach-Object { Resolve-Long $_ } | Where-Object { $_ })',
     'function Join-All($values) { (@($values) | ForEach-Object { "$_" }) -join \',\' }',
-    '$elevated = ([Security.Principal.WindowsPrincipal][Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)',
+    'function Clean($text) { ("$text" -replace \'[\\r\\n|]+\', \' \') }',
     '$rules = @(Get-NetFirewallRule -Direction Inbound -ErrorAction Stop | Where-Object { $_.DisplayName -eq $name })',
     'if ($rules.Count -eq 0) { Write-Output \'ABSENT\'; exit 0 }',
     'foreach ($rule in $rules) {',
-    '  $app = $rule | Get-NetFirewallApplicationFilter; $service = $rule | Get-NetFirewallServiceFilter; $ports = $rule | Get-NetFirewallPortFilter',
-    '  $address = $rule | Get-NetFirewallAddressFilter; $interface = $rule | Get-NetFirewallInterfaceTypeFilter',
-    '  $program = "$($app.Program)"; $resolved = Resolve-Long $program',
-    '  $checks = @(',
-    '    ("$($rule.Action)" -eq \'Allow\'), ("$($rule.Profile)" -eq \'Any\'), ("$($rule.EdgeTraversalPolicy)" -eq \'Block\'),',
-    '    ("$($ports.Protocol)" -match \'^(TCP|6)$\'), ("$($ports.LocalPort)" -eq $port), ("$($ports.RemotePort)" -eq \'Any\'),',
-    '    ($localAddress -ne \'\' -and (Join-All $address.LocalAddress) -eq $localAddress), ((Join-All $address.RemoteAddress) -match \'' + TAILNET_REMOTE + '\'),',
-    '    (@(\'\', \'Any\') -contains "$($app.Package)"), (@(\'\', \'Any\') -contains "$($service.Service)"), ("$($interface.InterfaceType)" -eq \'Any\'),',
-    '    ($null -ne $resolved -and @($candidates | Where-Object { $_ -ieq $resolved }).Count -gt 0)',
-    '  )',
-    '  if ($checks -contains $false) { Write-Output (\'KEPT \' + $program); continue }',
-    '  try { $rule | Remove-NetFirewallRule -ErrorAction Stop; Write-Output \'REMOVED\' }',
-    '  catch { Write-Output (\'FAILED|\' + $rule.Name + \'|\' + [int]$elevated + \'|\' + ($_.Exception.Message -replace \'[\\r\\n|]+\', \' \')) }',
+    '  $app = $rule | Get-NetFirewallApplicationFilter; $ports = $rule | Get-NetFirewallPortFilter; $address = $rule | Get-NetFirewallAddressFilter',
+    '  Write-Output (\'RULE|\' + (Clean $rule.Name) + \'|\' + (Clean $rule.Action) + \'|\' + (Clean $rule.Profile) + \'|\' + (Clean $app.Program) + \'|\' + (Clean $ports.Protocol) + \'|\' + (Clean (Join-All $ports.LocalPort)) + \'|\' + (Clean (Join-All $address.LocalAddress)) + \'|\' + (Clean (Join-All $address.RemoteAddress)))',
     '}',
   ].join('\n');
 }
@@ -75,27 +54,38 @@ export function parseFirewallOutput(output: string, displayName: string): Script
   const all = lines(output);
   if (all.length === 0) throw unreadable(output);
   if (all.length === 1 && all[0] === 'ABSENT') return { outcome: 'absent' };
-  const failures = all.filter((l) => l.startsWith('FAILED|')).map((l) => {
-    const [, name = '', elevated = '1', ...reason] = l.split('|');
-    return { name: name.replace(/'/g, "''"), elevated: elevated === '1', reason: redactSecretText(reason.join('|')).slice(0, 300) };
+  const rules = all.filter((l) => l.startsWith('RULE|')).map((l) => {
+    const [, name = '', action = '', profile = '', program = '', protocol = '', port = '', local = '', remote = ''] = l.split('|').map((v) => redactSecretText(v).slice(0, 200));
+    return { name, action, profile, program, protocol, port, local, remote };
   });
-  if (failures.length > 0) {
-    const notElevated = failures.some((f) => !f.elevated);
-    const how = notElevated
-      ? 'This SSH session is not elevated (the user is not an administrator, or the session has a filtered token), so AZITO cannot remove it.'
-      : 'The host refused.';
-    // By the rule's own Name, so that the command cannot reach another rule of the same display name that was left on purpose.
-    const commands = failures.map((f) => `Remove-NetFirewallRule -Name '${f.name}'`).join('; ');
-    return { outcome: 'failed', detail: `The Windows Firewall rule "${displayName}" was not removed (${failures[0]!.reason}). ${how} Run this once in an Administrator PowerShell on the host: ${commands}` };
-  }
-  const removed = all.filter((l) => l === 'REMOVED').length;
-  const kept = all.filter((l) => l.startsWith('KEPT ')).map((l) => redactSecretText(l.slice(5)).slice(0, 200));
-  if (kept.length === 0) {
-    if (removed === 0) throw unreadable(output);
-    return { outcome: 'done' };
-  }
-  const left = `${kept.length} other rule(s) named "${displayName}" were left in place because they are not known to be this install's (not an inbound TCP Allow for this port, from the tailnet, for the same node.exe file, to this address and in every profile, with no other restriction; their program: ${kept.map((k) => k || '(none)').join(', ')}). If one is yours to remove, delete it by hand (by its Name, not by the display name: Get-NetFirewallRule -DisplayName "${displayName}" lists them).`;
-  return removed > 0 ? { outcome: 'done', detail: left } : { outcome: 'skipped', detail: left };
+  if (rules.length === 0) throw unreadable(output);
+  const listed = rules.map((r) => `- Name ${r.name}: ${r.action} ${r.protocol} port ${r.port}, program ${r.program || '(any)'}, local address ${r.local || '(any)'}, remote ${r.remote || '(any)'}, profile ${r.profile}`).join('\n');
+  const commands = rules.map((r) => `Remove-NetFirewallRule -Name '${r.name.replace(/'/g, "''")}'`).join('\n');
+  return {
+    outcome: 'skipped',
+    detail: `AZITO does not remove firewall rules by itself. ${rules.length} inbound rule(s) named "${displayName}" (the name the install gives its rule) ${rules.length === 1 ? 'was' : 'were'} found and left in place:\n${listed}\nCheck that one is the rule the install added (an Allow for TCP on the agent's port, for this agent's node.exe, from the Tailscale range 100.64.0.0/10), then remove it in an Administrator PowerShell:\n${commands}`,
+  };
+}
+
+/**
+ * Whether two paths on the host are the same file, each put in its long form (see {@link RESOLVE_LONG}): `SAME`, `DIFFERENT`, or `UNKNOWN`
+ * when either cannot be resolved (it does not exist, cannot be read, or a junction or symbolic link is on the way to it).
+ */
+export function sameFileScript(a: string, b: string): string {
+  const q = powershellDialect.quote;
+  return [
+    ...RESOLVE_LONG,
+    `$a = Resolve-Long ${q(a)}; $b = Resolve-Long ${q(b)}`,
+    'if ($null -eq $a -or $null -eq $b) { Write-Output \'UNKNOWN\' } elseif ($a -ieq $b) { Write-Output \'SAME\' } else { Write-Output \'DIFFERENT\' }',
+  ].join('\n');
+}
+
+export function parseSameFileOutput(output: string): 'same' | 'different' | 'unknown' {
+  const last = lines(output).pop() ?? '';
+  if (last === 'SAME') return 'same';
+  if (last === 'DIFFERENT') return 'different';
+  if (last === 'UNKNOWN') return 'unknown';
+  throw unreadable(output);
 }
 
 // ─── Who runs the misao ───

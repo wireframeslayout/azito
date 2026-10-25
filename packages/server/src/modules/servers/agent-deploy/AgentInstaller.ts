@@ -377,11 +377,11 @@ export class AgentInstaller {
    * host's lock like an install or an update, so none of them runs in the middle. Only the host is changed: the caller owns the server row.
    * The host is asked who it is (home folder, SystemRoot), not checked for what an install needs (node, Tailscale): a half-installed agent is removable.
    */
-  uninstallFromWindowsHost(sshHost: string, choice: WindowsUninstallChoice, bindAddress: string | undefined): Promise<WindowsUninstallResult> {
+  uninstallFromWindowsHost(sshHost: string, choice: WindowsUninstallChoice): Promise<WindowsUninstallResult> {
     return this.hostLocks.withLock(this.lockKey(sshHost), async () => {
       const probe = await this.sshClient.execIsolated(sshHost, buildWindowsPreflightCommand());
       const host = parseWindowsPreflight(probe.stdout, probe.stderr, probe.code);
-      return this.windowsDeployer().uninstall(sshHost, host, choice, bindAddress);
+      return this.windowsDeployer().uninstall(sshHost, host, choice);
     });
   }
 

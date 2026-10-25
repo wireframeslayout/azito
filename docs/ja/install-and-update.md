@@ -496,7 +496,7 @@ Windows のエージェントで使える機能と、まだ使えない機能は
 | tmux（既定の mux の選択・tmux の実行方式・tmux 設定の適用・tmux の導入） | 出さない（Windows には tmux が無く、ペインサーバーは misao だけ） | — |
 | AZITO ハーネス（`setup.mjs`）と、その install-status の行 | 使える | — |
 | ホスト上の agent の更新 | 使える（ハブの起動時に agent の版が違えば、導入と同じ手順（配置、起動、health 確認）で、今の agent のトークンのまま更新する。新しい agent が応答しなければ、前の版・設定・タスクに戻す。misao には触れない。直前の版より古い版は更新のあとに削除する（使用中のものは残し、次の更新で再び試す）） | — |
-| ホスト上の agent の削除 | 使える（サーバーの削除の確認で「ホストからもエージェントを消す」（既定はオン）。タスクの停止と登録解除、agent のプロセス、ファイアウォールの規則、`~\.azito\agent` を消し、手順ごとの結果を返す。「misao も消す」（既定はオフ）を選ぶと misao のタスクとフォルダーも消す（窓はすべて閉じる。同じホストの Windows のハブの misao（タスク `AzitoHub` が持つフォルダー、またはタスク無しで動いているハブのプロセスがあるとき）や、タスクが起動したと確かめられない misao は消さず、理由を返す）。失敗したら行は消さず、「もう一度試す」「行だけ削除」「やめる」を選べる。ホストがオフラインなら、オフにして行だけ消せる。ハーネスは消さない（手作業） | — |
+| ホスト上の agent の削除 | 使える（サーバーの削除の確認で「ホストからもエージェントを消す」（既定はオン）。タスクの終了と登録解除（導入が書いたとおりのタスクで、このホストの node.exe を使うものだけ）、`~\.azito\agent` の削除を行い、手順ごとの結果を返す。AZITO はプロセスを自分では止めない: タスクを終了したあともフォルダーから動いているプロセスが残っていれば、フォルダーは消さず、その pid とパスを返すので、手で止める。ファイアウォールの規則も消さず、Name と、確かめたうえで消すコマンドを一覧にして返す。「misao も消す」（既定はオフ）を選ぶと misao のタスクとフォルダーも消す（窓はすべて閉じる。同じホストの Windows のハブの misao（タスク `AzitoHub` が持つフォルダー、またはタスク無しで動いているハブのプロセスがあるとき）や、タスクが起動したと確かめられない misao は消さず、理由を返す）。失敗したら行は消さず、「もう一度試す」「行だけ削除」「やめる」を選べる。ホストがオフラインなら、オフにして行だけ消せる。ハーネスは消さない（手作業） | — |
 | ブラウザ実行環境（Chromium）の導入 | UI で無効（v0.12.0 の範囲外） | #500 |
 
 OS がまだ記録されていないサーバー（OS を記録する前に登録された Unix の agent）は Unix として扱い、何も無効にしません。
@@ -538,7 +538,7 @@ OS の判定は、sh・cmd.exe・PowerShell で出力が変わる 1 本の `echo
 |---|---|
 | 再起動 | ハブが agent に届かないとき、タスクを再起動します（`schtasks /End` のあと `/Run`）。または Setup の行の「Reinstall」 |
 | 停止 | ホスト上か SSH で `schtasks /End /TN AzitoAgent`、またはタスクスケジューラの「終了」。agent はタスクが動かす `conhost.exe` に付き従い、それがいなくなって数秒で終わります（手で `node azito-agent.cjs` を起動したものは別です）。そのとき Windows が親のプロセス ID を別のプロセスに再利用していても、親の作成時刻を比べて約 30 秒以内に気づきます。それでも残る場合は、Setup の行から停止してください（ハブは `--env-file` の引数で agent を終わらせます）。次のログオンでまた起動します。起動させたくなければ `schtasks /Change /TN AzitoAgent /DISABLE` も） |
-| 削除 | UI で行える（サーバーの削除の確認で「ホストからもエージェントを消す」）。ハーネス（`%USERPROFILE%\.azito\harness*`、`~\.claude\settings.json` のフック）は消さないので手作業で。ホストがオフラインだったり UI を使わなかったりしたときの手作業: `schtasks /End /TN AzitoAgent`、`schtasks /Delete /TN AzitoAgent /F`、`%USERPROFILE%\.azito\agent` を削除。導入が規則を追加していた場合は管理者の PowerShell で `Remove-NetFirewallRule -DisplayName "AZITO Agent (TCP 3002)"`。misao も消すなら `schtasks /Delete /TN AzitoMisao /F` と `%USERPROFILE%\.azito\misao`（窓はすべて閉じます） |
+| 削除 | UI で行える（サーバーの削除の確認で「ホストからもエージェントを消す」）。ハーネス（`%USERPROFILE%\.azito\harness*`、`~\.claude\settings.json` のフック）は消さないので手作業で。ホストがオフラインだったり UI を使わなかったりしたときの手作業: `schtasks /End /TN AzitoAgent`、`schtasks /Delete /TN AzitoAgent /F`、`%USERPROFILE%\.azito\agent` を削除。導入が規則を追加していた場合は、管理者の PowerShell で `Get-NetFirewallRule -DisplayName "AZITO Agent (TCP 3002)"` を実行して一覧にし、導入が追加した規則（TCP 3002 の Allow、この agent の node.exe、100.64.0.0/10 から）であることを確かめて、Name で消す: `Remove-NetFirewallRule -Name '<Name>'`（UI からの削除の結果にも同じ一覧が出ます）。misao も消すなら `schtasks /Delete /TN AzitoMisao /F` と `%USERPROFILE%\.azito\misao`（窓はすべて閉じます） |
 
 本物の agent の隣で 2 つ目を試すときは、ハブの環境変数 `AZITO_WIN_AGENT_TASK_NAME`、`AZITO_WIN_AGENT_DIR`（ユーザーのホーム直下のフォルダー）、`AZITO_WIN_AGENT_PORT` を設定します。既定は `AzitoAgent`、`.azito\agent`、`3002` です。これは試験用です。サーバーごとには保存されないので、これらを付けずに起動したハブは既定のタスクを探します（使われているときはハブのログに 1 行出ます）。その一時ハブだけで使ってください。
 

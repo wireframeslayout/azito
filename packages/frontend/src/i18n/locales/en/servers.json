@@ -218,7 +218,7 @@
     "hostRemoval": {
       "groupLabel": "Agent on the host",
       "removeFromHost": "Also remove the agent from the host",
-      "removeFromHostDesc": "Before the server is deleted, removes the agent from the Windows host: its scheduled task, its processes, its Windows Firewall rule and the ~\\.azito\\agent folder. The server is deleted only if this works.",
+      "removeFromHostDesc": "Before the server is deleted, removes the agent from the Windows host: it ends and unregisters its scheduled task and removes the ~\\.azito\\agent folder. AZITO stops no process itself and removes no firewall rule: a process still running from the folder stops the removal (you are told which), and a firewall rule is listed with the command to remove it. The server is deleted only if this works.",
       "removeMisao": "Also remove misao (every window closes)",
       "removeMisaoDesc": "Removes the misao task and the ~\\.azito\\misao folder. Every window running in misao on this host closes. A misao that belongs to a Windows hub on the same host is left in place.",
       "removeMisaoNeedsHost": "Available when the agent is removed from the host.",

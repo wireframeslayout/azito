@@ -1,11 +1,12 @@
 import * as path from 'path';
 import type { SchtasksClient } from '../../../shared/os/taskScheduler/schtasks';
-import { hubRootOfScript, taskExecActions } from '../../../shared/os/taskScheduler/taskXmlRead';
+import { hubRootOfScript, soleExecAction, taskExecActions } from '../../../shared/os/taskScheduler/taskXmlRead';
 import { firewallRuleName } from './windowsFirewall';
-import { agentProcessShape, agentTaskIdentity, misaoProcessShape, misaoTaskVersion, type AgentTaskIdentity } from './windowsAgentTask';
+import { agentTaskIdentity, misaoTaskVersion, type AgentTaskIdentity } from './windowsAgentTask';
 import type { WindowsAgentOptions } from './windowsAgentConfig';
-import { exactProcessesScript, folderScript, parseFolderOutput, parseProcessesOutput, type ScriptOutcome, type UninstallOutcome } from './windowsAgentUninstallScripts';
-import { firewallScript, misaoGuardScript, parseFirewallOutput, parseMisaoGuardOutput } from './windowsAgentOwnership';
+import { folderScript, leftoverProcessesScript, misaoStopScript, parseFolderOutput, parseLeftoverOutput, type ScriptOutcome, type UninstallOutcome } from './windowsAgentUninstallScripts';
+import { firewallInspectScript, misaoGuardScript, parseFirewallOutput, parseMisaoGuardOutput, parseSameFileOutput, sameFileScript } from './windowsAgentOwnership';
+import { windowsMisaoPipe } from '../transport/agentMisaoSocket';
 
 /** The Task Scheduler task of a Windows hub (`HUB_SERVICE.windowsTaskName`, fixed: there is no setting for it; a test keeps the two in step). */
 export const WINDOWS_HUB_TASK_NAME = 'AzitoHub';
@@ -27,16 +28,14 @@ export interface WindowsUninstallResult {
 }
 
 /**
- * What the host reports of itself (the SSH preflight), and the address the agent was installed to listen on: the user's home,
- * `%SystemRoot%`, the node.exe found now (null: none), the account (`DOMAIN\user`) and `bindAddress` (the Tailscale address the install
- * gave the firewall rule; undefined: not known, so no rule can be shown to be the install's).
+ * What the host reports of itself (the SSH preflight): the user's home, `%SystemRoot%`, the node.exe found now (null: none) and the
+ * account (`DOMAIN\user`).
  */
 export interface HostFacts {
   home: string;
   systemRoot: string;
   nodePath: string | null;
   userId: string;
-  bindAddress: string | undefined;
 }
 
 export interface WindowsUninstallChoice {
@@ -68,18 +67,19 @@ async function step(id: UninstallStepId, action: () => Promise<ScriptOutcome>): 
 }
 
 /**
- * The node.exe and release folder the agent's task runs, when the task is exactly the one the install writes for this install (one program
- * action, equal to what `agentTaskAction` makes; see `agentTaskIdentity`); undefined when it is not known to be the install's.
+ * The node.exe and release folder the agent's task runs, when the task has ONE action, an Exec equal to what `agentTaskAction` makes (see
+ * `agentTaskIdentity`); undefined when it is not known to be the install's. A task with any other action beside it (a COM handler, a
+ * message) is not the install's.
  */
 function agentTaskOf(xml: string, facts: HostFacts, root: string, envFile: string): AgentTaskIdentity | undefined {
-  const actions = taskExecActions(xml);
-  return actions.length === 1 ? agentTaskIdentity(actions[0]!, facts.systemRoot, root, envFile) : undefined;
+  const action = soleExecAction(xml);
+  return action === undefined ? undefined : agentTaskIdentity(action, facts.systemRoot, root, envFile);
 }
 
-/** The release folder the misao task runs, when the task is exactly the one the install writes for the misao in `root` (see `misaoTaskVersion`). */
+/** The release folder the misao task runs, when the task has ONE action, an Exec equal to what the install writes for the misao in `root` (see `misaoTaskVersion`). */
 function misaoTaskOf(xml: string, facts: HostFacts, root: string): string | undefined {
-  const actions = taskExecActions(xml);
-  return actions.length === 1 ? misaoTaskVersion(actions[0]!, facts.systemRoot, root, userNameOf(facts.userId)) : undefined;
+  const action = soleExecAction(xml);
+  return action === undefined ? undefined : misaoTaskVersion(action, facts.systemRoot, root, userNameOf(facts.userId));
 }
 
 /** `DOMAIN\user` -> `user`: the account name the misao pipe is made from. */
@@ -88,11 +88,11 @@ const userNameOf = (userId: string): string => userId.slice(userId.lastIndexOf('
 type TaskRemoval = { step: ScriptOutcome; foreign: boolean };
 
 /** Ends and unregisters a task, if `isOurs` says its definition is the install's. Another definition under the same name is left alone and reported (`foreign`). */
-async function removeTask(host: WindowsUninstallHost, taskName: string, isOurs: (xml: string) => boolean, whose: string): Promise<TaskRemoval> {
+async function removeTask(host: WindowsUninstallHost, taskName: string, isOurs: (xml: string) => boolean | Promise<boolean>, whose: string): Promise<TaskRemoval> {
   const state = await host.tasks.query(taskName);
   if (!state.exists) return { step: { outcome: 'absent' }, foreign: false };
   const xml = await host.tasks.exportXml(taskName);
-  if (!isOurs(xml)) {
+  if (!(await isOurs(xml))) {
     return {
       foreign: true,
       step: { outcome: 'failed', detail: `The task "${taskName}" does not look like the one AZITO registered (its action does not ${whose}), so it was left alone. If it is not needed, delete it by hand: schtasks /Delete /TN ${taskName} /F` },
@@ -105,32 +105,29 @@ async function removeTask(host: WindowsUninstallHost, taskName: string, isOurs: 
 }
 
 /**
- * Takes the Windows agent off its host: the task, the agent's processes, the firewall rule and the agent folder; with
- * `removeMisao`, also the misao task, its processes and its folder. It never stops at a failure: each step reports what it did, and a step
- * that depends on an earlier one (the folder needs the task gone and the processes ended; otherwise something would start the agent
- * again, or hold files open) is skipped with the reason. The steps that do not depend on each other (the firewall rule, misao) still run.
+ * Takes the Windows agent off its host: the task, the agent folder, and with `removeMisao` the misao task and folder. AZITO ends no process
+ * itself: it ends the task (`/End`, which ends what the Task Scheduler started), and then only LOOKS for a process still running from the
+ * folder; one that is there stops the deletion, with its pid and path, for the person to deal with. A firewall rule is only REPORTED (its
+ * Name and what it allows), with the command to remove it once checked. Each step reports what it did; a step that depends on an earlier one
+ * (the folder needs the task gone and nothing running from it) is skipped with the reason, and what does not depend on it still runs.
  * The hub's server row is not touched: that is `DELETE /api/servers/:name`.
  *
- * Everything is found by what AZITO created: the task is removed only if its program action passes this install's settings file as the
- * whole argument `--env-file=<home>\<dir>\agent.env`; a task of another install is left, and so is its firewall rule; the processes are
- * the ones that have that exact argument; the firewall rule must match what the install adds, not only its name; the folders are not
- * entered through a link. Harness files and hooks are not touched.
- *
- * `hostNodePath` is the node.exe found on the host now: with the one the task runs, it is what the firewall rule's program is compared with.
+ * A task is removed only when it has ONE action and that action is exactly what the install writes (`agentTaskAction`), with a node.exe that
+ * is the same file as the one found on the host now; anything else is left. The folders are not entered through a link (every folder up to
+ * the drive's root must be a real one). Harness files and hooks are not touched.
  */
 export async function uninstallWindowsAgent(host: WindowsUninstallHost, facts: HostFacts, options: WindowsAgentOptions, choice: WindowsUninstallChoice): Promise<WindowsUninstallResult> {
-  const { home, nodePath: hostNodePath } = facts;
+  const { home } = facts;
   const steps: UninstallStep[] = [];
   const agentRoot = path.win32.join(home, options.dir);
   const envFile = path.win32.join(agentRoot, 'agent.env');
 
-  let identity: AgentTaskIdentity | undefined;
   let removal: TaskRemoval;
   try {
-    removal = await removeTask(host, options.taskName, (xml) => {
-      identity = agentTaskOf(xml, facts, agentRoot, envFile);
-      return identity !== undefined;
-    }, `have the form the AZITO install writes for ${envFile}`);
+    removal = await removeTask(host, options.taskName, async (xml) => {
+      const identity = agentTaskOf(xml, facts, agentRoot, envFile);
+      return identity !== undefined && await isHostNode(host, identity.nodePath, facts.nodePath);
+    }, `have the form the AZITO install writes for ${envFile}, with this host's node.exe`);
   } catch (err) {
     removal = { step: { outcome: 'failed', detail: err instanceof Error ? err.message : String(err) }, foreign: false };
   }
@@ -138,14 +135,13 @@ export async function uninstallWindowsAgent(host: WindowsUninstallHost, facts: H
 
   steps.push(removal.step.outcome === 'failed'
     ? skipped('processes', 'the task is still registered, so it would start the agent again')
-    : await step('processes', async () => parseProcessesOutput(await host.script('Ending the agent processes', exactProcessesScript({ image: 'node.exe', shape: agentProcessShape(agentRoot, (identity as AgentTaskIdentity | undefined)?.version), label: 'agent', endParentConhost: true }), QUICK_MS))));
+    : await step('processes', async () => parseLeftoverOutput(await host.script('Looking for processes still running from the agent folder', leftoverProcessesScript(agentRoot), QUICK_MS), agentRoot)));
 
   if (removal.foreign) {
     steps.push(skipped('firewall', 'the task belongs to another install, so its firewall rule was not looked at'));
   } else {
-    const programs = [...new Set([(identity as AgentTaskIdentity | undefined)?.nodePath, hostNodePath].filter((p): p is string => typeof p === 'string' && p !== ''))];
     const name = firewallRuleName(options.port);
-    steps.push(await step('firewall', async () => parseFirewallOutput(await host.script('Removing the Windows Firewall rule', firewallScript(name, options.port, programs, facts.bindAddress), QUICK_MS), name)));
+    steps.push(await step('firewall', async () => parseFirewallOutput(await host.script('Looking for the Windows Firewall rule', firewallInspectScript(name), QUICK_MS), name)));
   }
 
   const stopped = steps.every((s) => s.id === 'firewall' || s.outcome !== 'failed');
@@ -155,6 +151,15 @@ export async function uninstallWindowsAgent(host: WindowsUninstallHost, facts: H
 
   if (choice.removeMisao) steps.push(...await removeMisao(host, facts, options));
   return { ok: steps.every((s) => s.outcome !== 'failed'), steps };
+}
+
+/**
+ * The node.exe a recognised task runs is accepted only when it is the same file (each put in its long form on the host, no junction on the
+ * way) as the node.exe found on the host now. A host with no node.exe, or paths that cannot be resolved, accepts nothing.
+ */
+async function isHostNode(host: WindowsUninstallHost, taskNode: string, hostNode: string | null): Promise<boolean> {
+  if (hostNode === null) return false;
+  return parseSameFileOutput(await host.script('Comparing the node.exe of the task with the one of the host', sameFileScript(taskNode, hostNode), QUICK_MS)) === 'same';
 }
 
 /** The misao beside the agent: its task, its processes, its folder. A misao that belongs to a hub of this host, or that cannot be shown to be the agent's, is left in place. */
@@ -178,8 +183,13 @@ async function removeMisao(host: WindowsUninstallHost, facts: HostFacts, options
     const why = 'the misao task is still registered, so it would start the daemon again';
     return [task, skipped('misaoProcesses', why), skipped('misaoFolder', why)];
   }
-  // The daemon is found by its whole command line, the one the task makes it run with.
-  const processes = await step('misaoProcesses', async () => parseProcessesOutput(await host.script('Ending the misao processes', exactProcessesScript({ image: 'misao.exe', shape: misaoProcessShape(root, userNameOf(facts.userId), version as string | undefined), label: 'misao', endParentConhost: false }), QUICK_MS)));
+  // The task is ended; the daemon is asked to stop through its own pipe (the one stop AZITO asks of it), and then only a look at what is left.
+  const processes = await step('misaoProcesses', async () => {
+    if (version !== undefined) {
+      await host.script('Asking the misao daemon to stop', misaoStopScript(path.win32.join(root, version as string, 'misao.exe'), windowsMisaoPipe(root, userNameOf(facts.userId))), 60_000);
+    }
+    return parseLeftoverOutput(await host.script('Looking for processes still running from the misao folder', leftoverProcessesScript(root), QUICK_MS), root);
+  });
   const folder = processes.outcome === 'failed'
     ? skipped('misaoFolder', 'the misao daemon may still be running: its folder is left so that nothing breaks underneath it')
     : await step('misaoFolder', async () => parseFolderOutput(await host.script(`Removing ${root}`, folderScript(home, root), FOLDER_MS)));

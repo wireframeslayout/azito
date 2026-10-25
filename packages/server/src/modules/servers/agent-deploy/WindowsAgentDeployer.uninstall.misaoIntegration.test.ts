@@ -190,10 +190,10 @@ describe.skipIf(process.platform !== 'win32' || !fs.existsSync(MISAO_CLI))('remo
     expect(await pipeUp(pipeOf(misaoRoot))).toBe(true);
 
     const seen = await describeDaemons(misaoRoot);
-    const result = await deployer.uninstall('ci', host, { removeMisao: true }, '127.0.0.1');
+    const result = await deployer.uninstall('ci', host, { removeMisao: true });
 
     const step = (id: string): string | undefined => result.steps.find((s) => s.id === id)?.outcome;
-    expect([step('misaoTask'), step('misaoProcesses'), step('misaoFolder')], `${JSON.stringify(result.steps)}\nthe daemon as the host saw it: ${seen}`).toEqual(['done', 'done', 'done']);
+    expect([step('misaoTask'), step('misaoProcesses'), step('misaoFolder')], `${JSON.stringify(result.steps)}\nthe daemon as the host saw it: ${seen}`).toEqual(['done', 'absent', 'done']);
     expect(await daemonPids(misaoRoot)).toEqual([]);
     await waitFor('the pipe to close', async () => !(await pipeUp(pipeOf(misaoRoot))), 15_000);
     expect((await schtasks(['/Query', '/TN', OPTIONS.misaoTaskName])).code).not.toBe(0);

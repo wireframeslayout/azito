@@ -19,6 +19,20 @@ export function taskExecActions(xml: string): TaskExecAction[] {
   return [...xml.matchAll(/<Exec>([\s\S]*?)<\/Exec>/g)].map((m) => ({ command: tag(m[1]!, 'Command'), argumentsLine: tag(m[1]!, 'Arguments') }));
 }
 
+/**
+ * The program action of a task that has exactly ONE action and that action is an `<Exec>`; undefined for anything else. A task's
+ * `<Actions>` can hold `<Exec>`, `<ComHandler>`, `<SendEmail>` and `<ShowMessage>` together: a task that does something besides the
+ * program it is known by (or whose actions cannot be read as plain elements) is not read as that program's.
+ */
+export function soleExecAction(xml: string): TaskExecAction | undefined {
+  const inner = /<Actions\b[^>]*>([\s\S]*?)<\/Actions>/.exec(xml)?.[1];
+  if (inner === undefined) return undefined;
+  const kinds: string[] = [];
+  const rest = inner.replace(/<(Exec|ComHandler|SendEmail|ShowMessage)\b[^>]*>[\s\S]*?<\/\1>/g, (_, kind: string) => { kinds.push(kind); return ''; });
+  if (rest.trim() !== '' || kinds.length !== 1 || kinds[0] !== 'Exec') return undefined;
+  return taskExecActions(inner)[0];
+}
+
 /** The quote characters PowerShell reads as a single quote, which `powershellDialect.quote` doubles (the same set as the writer's). */
 const QUOTE_CHARS = "'‘’‚‛";
 const HUB_ROOT_LINE = new RegExp(`^\\$hubRoot = '((?:[^${QUOTE_CHARS}]|([${QUOTE_CHARS}])\\2)*)'\\r?$`, 'm');
