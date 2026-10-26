@@ -26,7 +26,7 @@ const resourceGuardRoutes: FastifyPluginCallback<ResourceGuardRouteOptions> = (f
   // 全サーバーの現在実測値を並列取得する
   fastify.get('/api/servers/resources', async () => {
     const servers = serverRepo.findAll();
-    const measurements = await Promise.all(servers.map((s) => resourceGuard.measure(s)));
+    const results = await Promise.all(servers.map((s) => resourceGuard.measure(s)));
     const settings = settingsRepo.get();
     return {
       enabled: settings.enabled,
@@ -35,7 +35,8 @@ const resourceGuardRoutes: FastifyPluginCallback<ResourceGuardRouteOptions> = (f
       servers: servers.map((s, i) => ({
         serverName: s.name,
         type: s.type,
-        measurement: measurements[i],
+        measurement: results[i].measurement,
+        unavailable: results[i].unavailable,
       })),
     };
   });
@@ -45,7 +46,7 @@ const resourceGuardRoutes: FastifyPluginCallback<ResourceGuardRouteOptions> = (f
     const server = serverRepo.findByName(request.params.name);
     if (!server) return reply.status(404).send({ error: 'Server not found' });
 
-    const measurement = await resourceGuard.measure(server);
+    const { measurement, unavailable } = await resourceGuard.measure(server);
     const settings = settingsRepo.get();
 
     let windows: WindowResource[] | undefined;
@@ -65,6 +66,7 @@ const resourceGuardRoutes: FastifyPluginCallback<ResourceGuardRouteOptions> = (f
       serverName: server.name,
       type: server.type,
       measurement,
+      unavailable,
       ...(windows !== undefined ? { windows } : {}),
     };
   });

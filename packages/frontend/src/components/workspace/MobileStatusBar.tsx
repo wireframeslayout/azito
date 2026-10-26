@@ -229,17 +229,19 @@ export function MobileStatusBar({ allTasks, openTask, connectPane }: MobileStatu
             <div style={{ display: 'flex', alignItems: 'center', flexWrap: 'wrap', justifyContent: 'space-between', gap: 4, padding: '4px 8px 6px' }}>
               <span style={{ ...sectionHeaderStyle, padding: 0, whiteSpace: 'nowrap' }}>{t('workspace:mobile.serverHealth')}</span>
               <span style={{ fontSize: 'var(--font-2xs)', fontWeight: 600, color: memTextColor, flexShrink: 0, whiteSpace: 'nowrap' }}>
-                {healthReasonText(worstHealth, worstMemUsedPercent, t)}
+                {healthReasonText(worstHealth, worstMemUsedPercent, worstServer?.unavailable ?? null, t)}
               </span>
             </div>
             {worstMeasurement && (
               <div style={{ display: 'flex', flexDirection: 'column', gap: 6, padding: '0 8px 8px' }}>
                 <MiniHealthRow label="MEM" value={worstMemUsedPercent ?? 0} warning={(worstMemUsedPercent ?? 0) >= 60} />
-                <MiniHealthRow
-                  label="CPU"
-                  value={Math.min(100, worstMeasurement.loadPerCore * 100)}
-                  warning={worstMeasurement.loadPerCore > 1.5}
-                />
+                {worstMeasurement.loadPerCore !== null && (
+                  <MiniHealthRow
+                    label="CPU"
+                    value={Math.min(100, worstMeasurement.loadPerCore * 100)}
+                    warning={worstMeasurement.loadPerCore > 1.5}
+                  />
+                )}
               </div>
             )}
             <button

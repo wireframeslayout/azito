@@ -1,3 +1,4 @@
+import type { HostResourceSample } from '../../../shared/os/hostResources';
 import type { TaskTempServer } from '../../../shared/os/taskTempFiles';
 import type { EventEmitter } from 'events';
 import type { MuxRef, PaneHandle, PaneOrdinal, MuxExecRequest } from '@azito/shared';
@@ -47,6 +48,13 @@ export interface IServerTransport {
    * that cannot list them rejects; it is never an empty list.
    */
   listProcesses(options?: ListProcessesOptions): Promise<ProcessEntry[]>;
+
+  /**
+   * Memory and disk of the server's host measured by Node, without a shell (no load: see `HostResourceSample`). It is how a
+   * Windows host is measured; a Unix host is measured with the sh command of the resource guard. Rejects when the host cannot be
+   * measured; an agent without the endpoint rejects with `AgentResourcesOutdatedError`.
+   */
+  measureHostResources(): Promise<HostResourceSample>;
 
   /**
    * シェルコマンド実行（現行 TmuxClient.execCommand 相当）

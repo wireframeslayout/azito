@@ -156,7 +156,7 @@
     "serverColumn": "サーバー",
     "memColumn": "空きメモリ",
     "loadColumn": "負荷/コア",
-    "notMeasurable": "計測不可",
+    "loadNotMeasured": "負荷は計測しない",
     "fetchFailed": "最新の実測値を取得できませんでした（表示は前回値）",
     "server": "サーバー",
     "freeMemory": "空きメモリ",

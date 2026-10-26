@@ -28,6 +28,7 @@ import { createMisaoRelay } from './misaoRelay';
 import misaoRoutes from './misaoRoutes';
 import hostRoutes from './hostRoutes';
 import processRoutes from './processRoutes';
+import hostResourcesRoutes from './hostResourcesRoutes';
 import fileOpsRoutes from './fileOpsRoutes';
 import { LocalFileOps, localFileOpsHost } from '../shared/fs/LocalFileOps';
 import transcriptRoutes from './transcriptRoutes';
@@ -41,6 +42,7 @@ import { serializeRequestForLog } from '../shared/redactUrlSecrets';
 import { toHostProfile } from '../shared/os/hostProfile';
 import { runCommandSpec, runHostOf } from '../shared/exec/runCommandSpec';
 import { listProcessesWith } from '../shared/os/processList';
+import { measureHostResources, systemDriveOf } from '../shared/os/hostResources';
 import { resolveLoginShell } from '../shared/os/loginShell';
 
 // ─── Fatal errors ───
@@ -195,6 +197,9 @@ async function main(): Promise<void> {
   // The processes of this host, for the hub's agent detection and resource measurement (one list for every OS).
   const processRunHost = runHostOf(hostEnv);
   await app.register(processRoutes, { listProcesses: () => listProcessesWith(hostEnv.platform, (spec) => runCommandSpec(spec, processRunHost)) });
+  // Memory and disk of this host from Node, for the hub's resource guard on a Windows agent (no shell, no loadavg). The disk is the system drive.
+  const resourceDiskPath = systemDriveOf(hostEnv.systemRoot);
+  await app.register(hostResourcesRoutes, { measure: () => measureHostResources(resourceDiskPath) });
   // File operations on this host (list / read / write / create / remove / rename / realpath / which), the hub's files API for an agent server.
   await app.register(fileOpsRoutes, { ops: new LocalFileOps(localFileOpsHost(hostEnv)) });
 

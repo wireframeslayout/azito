@@ -11,6 +11,7 @@ export const HEALTH_COLOR_VAR: Record<DotLevel, string> = {
   healthy: 'var(--success)',
   warning: 'var(--warning)',
   critical: 'var(--danger)',
+  unknown: 'var(--text-dim)',
   update: 'var(--accent)',
   active: 'var(--accent)',
   inactive: 'var(--text-dim)',
@@ -25,12 +26,14 @@ export const HEALTH_CHIP_TOKENS: Record<HealthLevel, { bg: string; fg: string }>
   healthy: { bg: 'var(--success-a15)', fg: 'var(--success)' },
   warning: { bg: 'var(--warning-a15)', fg: 'var(--warning)' },
   critical: { bg: 'var(--danger-a15)', fg: 'var(--danger)' },
+  unknown: { bg: 'var(--bg-hover)', fg: 'var(--text-dim)' },
 };
 
 const DOT_LABEL_KEY: Record<DotLevel, string> = {
   healthy: 'statusbar.healthy',
   warning: 'statusbar.warning',
   critical: 'statusbar.critical',
+  unknown: 'statusbar.unknown',
   update: 'statusbar.updateAvailable',
   active: 'statusbar.activityEventDriven',
   inactive: 'statusbar.activityFallback',

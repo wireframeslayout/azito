@@ -1,5 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
+import { unavailableText } from '../../statusbar/ResourceDropdown';
+import type { ResourceUnavailable } from '../../../hooks/useServerResources';
 import { api } from '../../../api/client';
 import FormField from '../../FormField';
 import { FormInput, Button, LoadingState, EmptyState } from '../../ui';
@@ -13,7 +15,8 @@ interface ResourceGuardSettingsData {
 interface ServerResourceEntry {
   serverName: string;
   type: 'local' | 'agent';
-  measurement: { memAvailablePercent: number; loadPerCore: number } | null;
+  measurement: { memAvailablePercent: number; loadPerCore: number | null } | null;
+  unavailable: ResourceUnavailable | null;
 }
 
 interface AllServersResourceData {
@@ -182,7 +185,7 @@ export default function ResourceGuardSection() {
           </div>
           {servers.map((s) => {
             const memExceeded = s.measurement != null && s.measurement.memAvailablePercent < memAvailablePercentMin;
-            const loadExceeded = s.measurement != null && s.measurement.loadPerCore > loadPerCoreMax;
+            const loadExceeded = s.measurement?.loadPerCore != null && s.measurement.loadPerCore > loadPerCoreMax;
             return (
               <div
                 key={s.serverName}
@@ -198,13 +201,17 @@ export default function ResourceGuardSection() {
                     <span style={{ color: memExceeded ? 'var(--danger)' : 'var(--success)', textAlign: 'right' }}>
                       {s.measurement.memAvailablePercent.toFixed(1)}%
                     </span>
-                    <span style={{ color: loadExceeded ? 'var(--danger)' : 'var(--success)', textAlign: 'right' }}>
-                      {s.measurement.loadPerCore.toFixed(2)}
-                    </span>
+                    {s.measurement.loadPerCore !== null ? (
+                      <span style={{ color: loadExceeded ? 'var(--danger)' : 'var(--success)', textAlign: 'right' }}>
+                        {s.measurement.loadPerCore.toFixed(2)}
+                      </span>
+                    ) : (
+                      <span style={{ color: 'var(--text-dim)', textAlign: 'right' }} title={t('resourceGuard.loadNotMeasured')}>—</span>
+                    )}
                   </>
                 ) : (
                   <span style={{ color: 'var(--text-dim)', gridColumn: '2 / span 2', textAlign: 'right' }}>
-                    {t('resourceGuard.notMeasurable')}
+                    {unavailableText(s.unavailable, t)}
                   </span>
                 )}
               </div>

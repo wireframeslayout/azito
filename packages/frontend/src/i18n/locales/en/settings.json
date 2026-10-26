@@ -156,7 +156,7 @@
     "serverColumn": "Server",
     "memColumn": "Free memory",
     "loadColumn": "Load/core",
-    "notMeasurable": "Not measurable",
+    "loadNotMeasured": "Load is not measured",
     "fetchFailed": "Could not fetch latest measurements (showing previous values)",
     "server": "Server",
     "freeMemory": "Free memory",

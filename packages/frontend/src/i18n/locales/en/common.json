@@ -221,9 +221,9 @@
     "healthy": "Healthy",
     "warning": "Warning",
     "critical": "Critical",
+    "unknown": "Not measurable",
     "updateAvailable": "Update available",
     "updateAvailableWithCount": "Update available ({{count}})",
-    "disconnected": "Disconnected",
     "criticalMemory": "Critical (Memory {{percent}}%)",
     "warningMemory": "Warning (Memory {{percent}}%)",
     "fetchingResources": "Fetching resource information…",
@@ -231,7 +231,16 @@
     "activityDiagnostics": "Activity",
     "activityEventDriven": "Event-driven detection active",
     "activityFallback": "Fallback detection only",
-    "activityNone": "No activity"
+    "activityNone": "No activity",
+    "unavailable": "Not measurable ({{reason}})",
+    "unavailableReason": {
+      "unsupported_os": "this OS is not supported",
+      "agent_outdated": "agent needs an update",
+      "unreachable": "cannot connect",
+      "timeout": "no response",
+      "failed": "measurement failed"
+    },
+    "loadNotMeasured": "Load is not measured"
   },
   "globalPages": {
     "backToWorkspace": "Back to workspace",

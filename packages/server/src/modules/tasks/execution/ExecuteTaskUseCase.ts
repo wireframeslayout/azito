@@ -842,6 +842,9 @@ export class ExecuteTaskUseCase {
         this.appendLog(taskId, unitId, 'command', { type: 'resource_guard_blocked', resources: resourceStatus });
         throw new ResourceExhaustedError(server.name, resourceStatus);
       }
+      if (resourceStatus.skipped) {
+        this.appendLog(taskId, unitId, 'command', { type: 'resource_guard_skipped', reason: resourceStatus.skipped.reason });
+      }
     }
 
     // Change to project working directory (use worktree if possible)

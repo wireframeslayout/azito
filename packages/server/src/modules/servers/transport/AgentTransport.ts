@@ -1,3 +1,4 @@
+import { AGENT_HOST_RESOURCES_PATH, AgentResourcesOutdatedError, parseHostResourceSample, type HostResourceSample } from '../../../shared/os/hostResources';
 import { EventEmitter } from 'events';
 import WebSocket, { createWebSocketStream } from 'ws';
 import type { Duplex } from 'stream';
@@ -106,6 +107,8 @@ class AgentTerminalStream extends EventEmitter implements ITerminalStream {
   }
 }
 
+const HOST_RESOURCES_TIMEOUT_MS = 8_000;
+
 export class AgentTransport implements IServerTransport, IMuxTransport, IHostBoundTransport {
   private baseUrl: string;
   private wsBaseUrl: string;
@@ -198,6 +201,18 @@ export class AgentTransport implements IServerTransport, IMuxTransport, IHostBou
     }
     if (status < 200 || status >= 300) throw new Error(`Agent ${AGENT_PROCESSES_PATH} failed (${status}): ${text}`);
     return parseProcessList(JSON.parse(text));
+  }
+
+  /**
+   * Memory and disk of the agent's host (`GET /api/host/resources`). An agent without the endpoint (`404`) is older than this hub
+   * and rejects with `AgentResourcesOutdatedError`; there is nothing to fall back to, since its host has no sh to measure with.
+   */
+  async measureHostResources(): Promise<HostResourceSample> {
+    this.assertCircuitClosed();
+    const { status, text } = await this.send(AGENT_HOST_RESOURCES_PATH, { method: 'GET', headers: { authorization: this.authHeader } }, HOST_RESOURCES_TIMEOUT_MS);
+    if (status === 404) throw new AgentResourcesOutdatedError(this.serverName);
+    if (status < 200 || status >= 300) throw new Error(`Agent ${AGENT_HOST_RESOURCES_PATH} failed (${status}): ${text}`);
+    return parseHostResourceSample(JSON.parse(text));
   }
 
   /** Performs one file operation on the agent's host (`POST /api/fileops`) and returns the response body, which says how it ended (see `RemoteFileOps`). */

@@ -22,7 +22,7 @@ describe('ResourceGuard with a misao local server', () => {
     const measurement = await guard.measure(misao);
 
     expect(exec).toHaveBeenCalled();
-    expect(measurement?.memAvailablePercent).toBeCloseTo(50, 5);
+    expect(measurement.measurement?.memAvailablePercent).toBeCloseTo(50, 5);
     exec.mockRestore();
   });
 });

@@ -1,4 +1,5 @@
 import type { FastifyPluginCallback } from 'fastify';
+import { resourceCheckBody, type ResourceGuard, type ResourceUnavailable } from '../servers/resources/ResourceGuard';
 import { workerStartsAsProgram } from '../../shared/os/hostFeature';
 import { HostProfileError } from '../../shared/os/hostProfile';
 import { isAgentSessionId } from '../agents/agentSessionId';
@@ -17,7 +18,6 @@ import type { WindowRespawnService } from './WindowRespawnService';
 import type { WindowSleepService } from './WindowSleepService';
 import type { ISessionStrategyFactory } from '../agents/SessionStrategy';
 import type { NotificationBus } from '../notifications/NotificationBus';
-import type { ResourceGuard } from '../servers/resources/ResourceGuard';
 import type { SupervisorRegistry } from '../supervisors/SupervisorRegistry';
 import type { TransportFactory } from '../servers/transport/TransportFactory';
 import { shouldSupervise, wrapWithSupervisor } from '../supervisors/SupervisorLaunch';
@@ -455,10 +455,12 @@ const windowsRoutes: FastifyPluginCallback<WindowsRouteOptions> = (fastify, opts
       if (!command)
         return reply.status(400).send({ error: 'command required' });
 
+      let resourceSkipped: ResourceUnavailable | null = null;
       if (opts.resourceGuard && body['force'] !== true) {
         const status = await opts.resourceGuard.check(srv);
         if (!status.ok)
           return reply.status(409).send({ error: 'insufficient_resources', resources: status });
+        resourceSkipped = status.skipped;
       }
 
       // Issue #471: enforce MCP blocking for task worker windows, but not
@@ -512,7 +514,7 @@ const windowsRoutes: FastifyPluginCallback<WindowsRouteOptions> = (fastify, opts
         supervisorRegistry.clearExitMarker(srv.name, win.tmuxTarget);
       }
       await driverFor(srv).sendKeysToHandle(srv, paneHandle, [cmd, 'Enter']);
-      return { ok: true, supervised };
+      return { ok: true, supervised, ...resourceCheckBody(resourceSkipped) };
     },
   );
 
@@ -528,10 +530,12 @@ const windowsRoutes: FastifyPluginCallback<WindowsRouteOptions> = (fastify, opts
       if (!srv) return reply.status(404).send({ error: 'Server not found' });
 
       const force = (request.body as Record<string, unknown> | null)?.['force'] === true;
+      let resourceSkipped: ResourceUnavailable | null = null;
       if (opts.resourceGuard && !force) {
         const status = await opts.resourceGuard.check(srv);
         if (!status.ok)
           return reply.status(409).send({ error: 'insufficient_resources', resources: status });
+        resourceSkipped = status.skipped;
       }
 
       // respawnService.respawn() runs the untrusted-input execution gate
@@ -553,7 +557,7 @@ const windowsRoutes: FastifyPluginCallback<WindowsRouteOptions> = (fastify, opts
         opts.invalidateSessionCache?.(srv.name);
       }
       notifyWindowsChanged(srv.name);
-      return { ok: true, tmuxTarget: result.tmuxTarget, windowId: id };
+      return { ok: true, tmuxTarget: result.tmuxTarget, windowId: id, ...resourceCheckBody(resourceSkipped) };
     },
   );
 

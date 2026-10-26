@@ -166,33 +166,31 @@ export default function OverviewSection({
   const isOnline = status?.status === 'online';
   const memUsedPercent = measurement ? 100 - measurement.memAvailablePercent : null;
 
-  let heroTone: HealthLevel | 'unknown' = 'unknown';
+  let heroTone: HealthLevel = 'unknown';
   let heroTitle = t('status.checking');
   if (!isChecking) {
     if (isOnline) {
       if (resourcesLoading) {
         heroTone = 'unknown';
         heroTitle = t('overview.onlineMeasuring');
-      } else if (measurement === null) {
-        heroTone = 'unknown';
-        heroTitle = t('overview.onlineNoMeasurement');
       } else {
         heroTone = getHealthLevel(measurement);
-        heroTitle = heroTone === 'healthy' ? t('overview.onlineHealthy') : t('overview.onlineWithReason', { reason: healthReasonText(heroTone, memUsedPercent, t) });
+        heroTitle = heroTone === 'healthy' ? t('overview.onlineHealthy') : t('overview.onlineWithReason', { reason: healthReasonText(heroTone, memUsedPercent, resourceEntry.unavailable, t) });
       }
     } else {
       heroTone = 'critical';
       heroTitle = t('overview.cannotConnect');
     }
   }
-  const heroColorVar = heroTone === 'unknown' ? 'var(--text-dim)' : HEALTH_COLOR_VAR[heroTone];
+  const heroColorVar = HEALTH_COLOR_VAR[heroTone];
 
   const sessionCount = sessions.length;
   const windowCount = sessions.reduce((sum, s) => sum + s.windowCount, 0);
   const sessionsSummary = t('overview.sessionsSummary', { sessionCount, windowCount });
 
   const memUsedBytes = measurement ? measurement.memTotalBytes - measurement.memAvailableBytes : null;
-  const cpuPercent = measurement ? Math.min(100, measurement.loadPerCore * 100) : null;
+  const loadPerCore = measurement?.loadPerCore ?? null;
+  const cpuPercent = loadPerCore !== null ? Math.min(100, loadPerCore * 100) : null;
   const diskPercent = measurement?.diskUsedPercent ?? null;
 
   return (
@@ -230,9 +228,7 @@ export default function OverviewSection({
                 : `0 0 0 4px color-mix(in srgb, ${heroColorVar} 18%, transparent), 0 0 14px 2px color-mix(in srgb, ${heroColorVar} 55%, transparent)`,
             }}
           >
-            {heroTone === 'unknown'
-              ? <span style={{ display: 'inline-block', width: 14, height: 14, borderRadius: '50%', background: 'var(--text-dim)' }} />
-              : <HealthDot level={heroTone} size={14} />}
+            <HealthDot level={heroTone} size={14} />
           </span>
           <div style={{ minWidth: 0 }}>
             <div style={{ fontSize: 'var(--font-lg)', fontWeight: 700, color: heroColorVar }}>
@@ -392,8 +388,8 @@ export default function OverviewSection({
           label="CPU"
           loading={resourcesLoading}
           value={cpuPercent}
-          warning={measurement !== null && measurement.loadPerCore > 1.5}
-          detail={measurement ? `load ${measurement.loadPerCore.toFixed(2)}/core` : t('overview.notMeasurable')}
+          warning={loadPerCore !== null && loadPerCore > 1.5}
+          detail={loadPerCore !== null ? `load ${loadPerCore.toFixed(2)}/core` : measurement ? t('overview.loadNotMeasured') : t('overview.notMeasurable')}
           measuringLabel={t('overview.measuring')}
         />
         <GaugeTile

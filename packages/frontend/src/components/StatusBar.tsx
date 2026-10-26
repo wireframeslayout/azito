@@ -90,7 +90,7 @@ export function StatusBar({ servers }: StatusBarProps) {
         id: hubServer.serverName,
         label: 'Hub',
         dot: health,
-        renderDropdown: () => <ResourceDropdownContent serverName={hubServer.serverName} health={health} />,
+        renderDropdown: () => <ResourceDropdownContent serverName={hubServer.serverName} health={health} unavailable={hubServer.unavailable} />,
       });
       seen.add(hubServer.serverName);
     }
@@ -120,7 +120,7 @@ export function StatusBar({ servers }: StatusBarProps) {
           id: entry.serverName,
           label: entry.serverName,
           dot: health,
-          renderDropdown: () => <ResourceDropdownContent serverName={entry.serverName} health={health} />,
+          renderDropdown: () => <ResourceDropdownContent serverName={entry.serverName} health={health} unavailable={entry.unavailable} />,
         });
       }
     }

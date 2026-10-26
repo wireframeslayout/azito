@@ -1,6 +1,9 @@
 import type { ServerConfig } from '../Server';
 import type { TransportFactory } from '../transport/TransportFactory';
 import type { IResourceGuardSettingsRepository } from './SqliteResourceGuardSettingsRepository';
+import { AgentUnreachableError } from '../transport/AgentUnreachableError';
+import { AgentResourcesOutdatedError, type HostResourceSample } from '../../../shared/os/hostResources';
+import { HostProfileError } from '../../../shared/os/hostProfile';
 
 /** 1回の exec でメモリ・コア数・loadavg・ディスクをまとめて取得する */
 const LINUX_MEASURE = "free -b | awk '/^Mem:/{print $2, $7}'; nproc; cat /proc/loadavg; df -B1 --output=used,size / 2>/dev/null | tail -1";
@@ -29,13 +32,26 @@ const MEASURE_TIMEOUT_MS = 10000;
 
 export interface ResourceMeasurement {
   memAvailablePercent: number;
-  loadPerCore: number;
+  /** Null: the host has no load average (Windows), so the load is not judged. */
+  loadPerCore: number | null;
   memTotalBytes: number;
   memAvailableBytes: number;
   diskUsedPercent: number | null;
   diskUsedBytes: number | null;
   diskTotalBytes: number | null;
 }
+
+/** Why a server could not be measured. `unsupported_os`: no way to measure that OS (an ssh Windows server); `agent_outdated`: the agent has no resources endpoint; `unreachable`: the agent cannot be reached; `timeout`: no answer in time; `failed`: the measurement ran but failed or could not be read. */
+export type ResourceUnavailableReason = 'unsupported_os' | 'agent_outdated' | 'unreachable' | 'timeout' | 'failed';
+
+export interface ResourceUnavailable {
+  reason: ResourceUnavailableReason;
+}
+
+/** The result of measuring a server: a measurement, or the reason there is none. */
+export type MeasureResult =
+  | { measurement: ResourceMeasurement; unavailable: null }
+  | { measurement: null; unavailable: ResourceUnavailable };
 
 export interface ResourceStatus {
   ok: boolean;
@@ -45,6 +61,13 @@ export interface ResourceStatus {
   loadPerCore: number | null;
   memAvailablePercentMin: number;
   loadPerCoreMax: number;
+  /** Set when the check could not be made (the server could not be measured) and was let through (fail-open). Null: it was made, or the guard is disabled. */
+  skipped: ResourceUnavailable | null;
+}
+
+/** The `resourceCheck` field of a creation response: present only when the resource check was skipped (see `ResourceStatus.skipped`), so the UI can say it was not made. */
+export function resourceCheckBody(skipped: ResourceUnavailable | null): { resourceCheck?: { skipped: ResourceUnavailable } } {
+  return skipped ? { resourceCheck: { skipped } } : {};
 }
 
 export class ResourceExhaustedError extends Error {
@@ -61,14 +84,22 @@ export class ResourceExhaustedError extends Error {
   }
 }
 
+/** Thrown inside a measurement when the sh command ran but its result is unusable (non-zero exit, unparsable output). */
+class MeasurementFailedError extends Error {}
+
+class MeasurementTimeoutError extends Error {}
+
 /**
  * ウィンドウ作成・エージェント起動前のリソース事前チェック。
- * 計測はサーバー単位で5秒キャッシュし、取得・パース失敗時は fail-open
- * （ガード機能の障害で本来の操作を止めない）。
+ * 計測はサーバー単位で5秒キャッシュし、計測できないときは fail-open
+ * （ガード機能の障害で本来の操作を止めない。ただし「飛ばした」ことと理由は ResourceStatus.skipped で返す）。
+ * 計測の出どころはホストの OS で決める: Unix（OS 未記録の agent を含む）は sh、Windows は Node の os（agent は /api/host/resources）。
  */
 export class ResourceGuard {
-  private measureCache = new Map<string, { measurement: ResourceMeasurement | null; ts: number }>();
-  private readonly inflight = new Map<string, Promise<ResourceMeasurement | null>>();
+  private measureCache = new Map<string, { result: MeasureResult; ts: number }>();
+  private readonly inflight = new Map<string, Promise<MeasureResult>>();
+  /** The reason last logged for a server, so a server that stays unmeasurable is logged once per reason, not on every check. */
+  private readonly warnedReason = new Map<string, ResourceUnavailableReason>();
 
   constructor(
     private transportFactory: TransportFactory,
@@ -77,49 +108,41 @@ export class ResourceGuard {
 
   async check(server: ServerConfig): Promise<ResourceStatus> {
     const settings = this.settingsRepo.get();
+    const thresholds = {
+      memAvailablePercentMin: settings.memAvailablePercentMin,
+      loadPerCoreMax: settings.loadPerCoreMax,
+    };
     if (!settings.enabled) {
-      return {
-        ok: true,
-        reasons: [],
-        memAvailablePercent: null,
-        loadPerCore: null,
-        memAvailablePercentMin: settings.memAvailablePercentMin,
-        loadPerCoreMax: settings.loadPerCoreMax,
-      };
+      return { ok: true, reasons: [], memAvailablePercent: null, loadPerCore: null, ...thresholds, skipped: null };
     }
 
-    const measurement = await this.measure(server);
+    const { measurement, unavailable } = await this.measure(server);
     if (!measurement) {
-      // fail-open: 計測できない環境（コマンド不在等）ではチェックをスキップ
-      console.warn(`[resource-guard] measurement failed on server '${server.name}', skipping check (fail-open)`);
-      return {
-        ok: true,
-        reasons: [],
-        memAvailablePercent: null,
-        loadPerCore: null,
-        memAvailablePercentMin: settings.memAvailablePercentMin,
-        loadPerCoreMax: settings.loadPerCoreMax,
-      };
+      // fail-open: 計測できない環境ではチェックを飛ばす（飛ばしたことは skipped で呼び出し元に伝える）
+      this.warnSkipped(server.name, unavailable.reason);
+      return { ok: true, reasons: [], memAvailablePercent: null, loadPerCore: null, ...thresholds, skipped: unavailable };
     }
+    this.warnedReason.delete(server.name);
 
     const reasons: Array<'memory' | 'load'> = [];
     if (measurement.memAvailablePercent < settings.memAvailablePercentMin) reasons.push('memory');
-    if (measurement.loadPerCore > settings.loadPerCoreMax) reasons.push('load');
+    // 負荷を計測しないホスト（Windows）では負荷の判定だけを行わない
+    if (measurement.loadPerCore !== null && measurement.loadPerCore > settings.loadPerCoreMax) reasons.push('load');
 
     return {
       ok: reasons.length === 0,
       reasons,
       memAvailablePercent: measurement.memAvailablePercent,
       loadPerCore: measurement.loadPerCore,
-      memAvailablePercentMin: settings.memAvailablePercentMin,
-      loadPerCoreMax: settings.loadPerCoreMax,
+      ...thresholds,
+      skipped: null,
     };
   }
 
-  /** 実測値を返す（設定に依らない）。取得失敗時は null（5秒キャッシュ） */
-  async measure(server: ServerConfig): Promise<ResourceMeasurement | null> {
+  /** 実測値を返す（設定に依らない）。計測できないときは measurement=null と理由（5秒キャッシュ） */
+  async measure(server: ServerConfig): Promise<MeasureResult> {
     const cached = this.measureCache.get(server.name);
-    if (cached && Date.now() - cached.ts < MEASURE_CACHE_TTL) return cached.measurement;
+    if (cached && Date.now() - cached.ts < MEASURE_CACHE_TTL) return cached.result;
 
     const existing = this.inflight.get(server.name);
     if (existing) return existing;
@@ -133,25 +156,64 @@ export class ResourceGuard {
     }
   }
 
-  private async doMeasure(server: ServerConfig): Promise<ResourceMeasurement | null> {
-    let measurement: ResourceMeasurement | null = null;
+  private warnSkipped(serverName: string, reason: ResourceUnavailableReason): void {
+    if (this.warnedReason.get(serverName) === reason) return;
+    this.warnedReason.set(serverName, reason);
+    console.warn(`[resource-guard] cannot measure server '${serverName}' (${reason}), skipping check (fail-open)`);
+  }
+
+  private async doMeasure(server: ServerConfig): Promise<MeasureResult> {
+    let result: MeasureResult;
     let timer: ReturnType<typeof setTimeout> | undefined;
     try {
-      const execPromise = this.transportFactory.getTransport(server).exec(MEASURE_COMMAND);
       const timeoutPromise = new Promise<never>((_, reject) => {
-        timer = setTimeout(() => reject(new Error('resource measurement timed out')), MEASURE_TIMEOUT_MS);
+        timer = setTimeout(() => reject(new MeasurementTimeoutError('resource measurement timed out')), MEASURE_TIMEOUT_MS);
       });
-      const result = await Promise.race([execPromise, timeoutPromise]);
-      if (result.code === 0) measurement = parseMeasurement(result.stdout);
-    } catch {
-      measurement = null;
+      const measurement = await Promise.race([this.measureOnHost(server), timeoutPromise]);
+      result = { measurement, unavailable: null };
+    } catch (err) {
+      result = { measurement: null, unavailable: { reason: classifyFailure(err) } };
     } finally {
       if (timer) clearTimeout(timer);
     }
 
-    this.measureCache.set(server.name, { measurement, ts: Date.now() });
+    this.measureCache.set(server.name, { result, ts: Date.now() });
+    return result;
+  }
+
+  /** The host's OS decides where the values come from. Rejects when they cannot be had. */
+  private async measureOnHost(server: ServerConfig): Promise<ResourceMeasurement> {
+    const profile = this.transportFactory.hostProfileFor(server);
+    if (profile?.platform === 'win32') {
+      // exec は POSIX 専用なので sh では測れない。Node で測る
+      return measurementFromSample(await this.transportFactory.getTransport(server).measureHostResources());
+    }
+    const result = await this.transportFactory.getTransport(server).exec(MEASURE_COMMAND);
+    const measurement = result.code === 0 ? parseMeasurement(result.stdout) : null;
+    if (!measurement) throw new MeasurementFailedError(`measurement command failed (exit ${result.code})`);
     return measurement;
   }
+}
+
+function classifyFailure(err: unknown): ResourceUnavailableReason {
+  if (err instanceof MeasurementTimeoutError) return 'timeout';
+  if (err instanceof AgentResourcesOutdatedError) return 'agent_outdated';
+  if (err instanceof AgentUnreachableError) return 'unreachable';
+  if (err instanceof HostProfileError && err.code === 'unsupported_os') return 'unsupported_os';
+  return 'failed';
+}
+
+/** A Node-measured host has no load average, so `loadPerCore` is null (not 0: an idle host and an unmeasured one differ). */
+export function measurementFromSample(sample: HostResourceSample): ResourceMeasurement {
+  return {
+    memAvailablePercent: (sample.memAvailableBytes / sample.memTotalBytes) * 100,
+    loadPerCore: null,
+    memTotalBytes: sample.memTotalBytes,
+    memAvailableBytes: sample.memAvailableBytes,
+    diskUsedPercent: sample.disk ? (sample.disk.usedBytes / sample.disk.totalBytes) * 100 : null,
+    diskUsedBytes: sample.disk?.usedBytes ?? null,
+    diskTotalBytes: sample.disk?.totalBytes ?? null,
+  };
 }
 
 /**
