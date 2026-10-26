@@ -87,7 +87,7 @@ terminal.
 
 Agent processes launched in a task's worker window (`is_primary = 1`) receive flags that block
 access to the `azt-mcp` MCP server (Claude: `--strict-mcp-config`, Codex:
-`-c mcp_servers.azt-mcp.enabled=false`). This prevents a task agent from reaching the
+`-c mcp_servers.azt-mcp.enabled=false -c mcp_servers.azt-mcp.command=azt-mcp-disabled`; the second keeps a host without a registered azt-mcp loadable, #522). This prevents a task agent from reaching the
 full-authority API surface through the operator's `AZITO_UI_TOKEN`-carrying MCP server.
 
 User-added windows (`is_primary = 0`) do **not** receive these blocking flags. These windows
@@ -95,6 +95,13 @@ are interactive development sessions that need MCP server access. However, non-p
 attached to a task with `inputTrust = 'untrusted'` are blocked until execution is approved
 (`approve-execution` with a matching fingerprint). If the task or its settings cannot be
 resolved, blocking is applied (fail-closed).
+
+Note (Codex): on a host where `azt-mcp` was registered by hand with a `url` (streamable_http)
+transport, the `command` override above conflicts with it and Codex fails to load its config with
+`url is not supported for stdio`, so task workers do not start (`azt-mcp` stays unusable; the
+failure is on the safe side). To fix it, remove the `url`-style `[mcp_servers.azt-mcp]` from
+`~/.codex/config.toml` (under `CODEX_HOME` if set) and, if needed, register it again in the
+harness's stdio form (what `harness/setup.sh` / `setup.mjs` add with `codex mcp add`).
 
 ### `~/.azito/operator.env`
 

@@ -240,7 +240,7 @@ describe('POST /api/windows/:id/launch-agent — MCP blocking', () => {
     });
     expect(res.statusCode).toBe(200);
     const cmd = sentCommand();
-    expect(cmd).toContain('-c mcp_servers.azt-mcp.enabled=false');
+    expect(cmd).toContain('-c mcp_servers.azt-mcp.enabled=false -c mcp_servers.azt-mcp.command=azt-mcp-disabled');
     await app.close();
   });
 

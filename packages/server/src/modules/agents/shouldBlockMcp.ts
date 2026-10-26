@@ -1,7 +1,7 @@
 /**
  * MCP blocking policy (Issue #471): determine whether a window's agent
  * launch should include MCP blocking flags (`--strict-mcp-config` for
- * claude, `-c mcp_servers.azt-mcp.enabled=false` for codex).
+ * claude, the `-c mcp_servers.azt-mcp.*` overrides in `CODEX_MCP_DISABLE_TEXTS` for codex).
  *
  * Blocking is mandatory for task worker panes (`isPrimary`) but
  * optional for user-added windows (`isPrimary === false`).  When a
@@ -11,6 +11,8 @@
  * The function is **fail-closed**: ambiguous inputs (`isPrimary`
  * undefined, task lookup failure) result in blocking.
  */
+
+import { CODEX_MCP_DISABLE_TEXTS } from './codex/launchCommand';
 
 // ─── Types ───
 
@@ -46,7 +48,7 @@ export function shouldBlockMcp({ isPrimary, linkedTask }: ShouldBlockMcpInput): 
 // ─── Command-level flag helpers ───
 
 const STRICT_MCP_CONFIG_TOKEN = '--strict-mcp-config';
-const CODEX_MCP_DISABLE_TOKEN = '-c mcp_servers.azt-mcp.enabled=false';
+const CODEX_MCP_DISABLE_TOKENS = CODEX_MCP_DISABLE_TEXTS.map((text) => `-c ${text}`);
 
 /** Ensure the claude `--strict-mcp-config` flag is present in `command`. */
 export function ensureClaudeMcpBlock(command: string): string {
@@ -54,10 +56,9 @@ export function ensureClaudeMcpBlock(command: string): string {
   return `${command} ${STRICT_MCP_CONFIG_TOKEN}`;
 }
 
-/** Ensure the codex `-c mcp_servers.azt-mcp.enabled=false` flag is present in `command`. */
+/** Ensure every codex azt-mcp disabling `-c` override (see CODEX_MCP_DISABLE_TEXTS) is present in `command`. */
 export function ensureCodexMcpBlock(command: string): string {
-  if (command.includes(CODEX_MCP_DISABLE_TOKEN)) return command;
-  return `${command} ${CODEX_MCP_DISABLE_TOKEN}`;
+  return CODEX_MCP_DISABLE_TOKENS.reduce((acc, token) => (acc.includes(token) ? acc : `${acc} ${token}`), command);
 }
 
 /**

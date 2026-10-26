@@ -71,6 +71,7 @@ describe('catalog helpers (default registry)', () => {
     const codex = defs.find((d) => d.type === 'codex')!;
     expect(claude.launchCommand).not.toContain('--strict-mcp-config');
     expect(codex.launchCommand).not.toContain('mcp_servers.azt-mcp.enabled=false');
+    expect(codex.launchCommand).not.toContain('mcp_servers.azt-mcp.command=');
   });
 
   it('getAgentsForContext filters by context', () => {

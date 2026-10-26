@@ -50,16 +50,21 @@ describe('ensureClaudeMcpBlock', () => {
 describe('ensureCodexMcpBlock', () => {
   it('appends codex MCP disable flag when absent', () => {
     expect(ensureCodexMcpBlock('codex --dangerously-bypass-approvals-and-sandbox'))
-      .toBe('codex --dangerously-bypass-approvals-and-sandbox -c mcp_servers.azt-mcp.enabled=false');
+      .toBe('codex --dangerously-bypass-approvals-and-sandbox -c mcp_servers.azt-mcp.enabled=false -c mcp_servers.azt-mcp.command=azt-mcp-disabled');
   });
 
   it('does not duplicate when already present', () => {
-    const cmd = 'codex --dangerously-bypass-approvals-and-sandbox -c mcp_servers.azt-mcp.enabled=false';
+    const cmd = 'codex --dangerously-bypass-approvals-and-sandbox -c mcp_servers.azt-mcp.enabled=false -c mcp_servers.azt-mcp.command=azt-mcp-disabled';
     expect(ensureCodexMcpBlock(cmd)).toBe(cmd);
   });
 
+  it('adds only the missing command override to a line that already disables azt-mcp (#522)', () => {
+    expect(ensureCodexMcpBlock('codex -c mcp_servers.azt-mcp.enabled=false'))
+      .toBe('codex -c mcp_servers.azt-mcp.enabled=false -c mcp_servers.azt-mcp.command=azt-mcp-disabled');
+  });
+
   it('handles empty string', () => {
-    expect(ensureCodexMcpBlock('')).toBe(' -c mcp_servers.azt-mcp.enabled=false');
+    expect(ensureCodexMcpBlock('')).toBe(' -c mcp_servers.azt-mcp.enabled=false -c mcp_servers.azt-mcp.command=azt-mcp-disabled');
   });
 });
 
@@ -71,7 +76,7 @@ describe('ensureMcpBlockByCommand', () => {
 
   it('applies codex MCP block when command starts with codex', () => {
     expect(ensureMcpBlockByCommand('codex --dangerously-bypass-approvals-and-sandbox'))
-      .toBe('codex --dangerously-bypass-approvals-and-sandbox -c mcp_servers.azt-mcp.enabled=false');
+      .toBe('codex --dangerously-bypass-approvals-and-sandbox -c mcp_servers.azt-mcp.enabled=false -c mcp_servers.azt-mcp.command=azt-mcp-disabled');
   });
 
   it('returns command unchanged for unrecognised CLI tool', () => {
