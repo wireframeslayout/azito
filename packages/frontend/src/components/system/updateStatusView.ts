@@ -15,6 +15,12 @@ export const STATUS_LABEL_KEYS: Record<SystemUpdateStatus, string> = {
   'blocked': 'system.statusBlocked',
 };
 
+/** The chip text: the translated label, or the status name itself when the hub reports one this build does not know (a newer hub), so the chip is never empty. */
+export function updateStatusLabel(status: string, translate: (key: string) => string): string {
+  const key = (STATUS_LABEL_KEYS as Record<string, string | undefined>)[status];
+  return key === undefined ? status : translate(key);
+}
+
 export type UpdateStatusTone = 'green' | 'accent' | 'red' | 'orange' | 'default';
 
 export function updateStatusTone(status: SystemUpdateStatus): UpdateStatusTone {

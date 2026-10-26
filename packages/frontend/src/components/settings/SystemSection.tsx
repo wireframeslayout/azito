@@ -5,7 +5,7 @@ import { Spinner } from '../ui/Spinner';
 import { useSystemUpdate } from '../../hooks/useSystemUpdate';
 import { useConfirm } from '../../hooks/useConfirm';
 import ActivityDiagnosticsPanel from './sections/ActivityDiagnosticsPanel';
-import { STATUS_LABEL_KEYS, updateStatusNotice, updateStatusTone } from '../system/updateStatusView';
+import { updateStatusLabel, updateStatusNotice, updateStatusTone } from '../system/updateStatusView';
 import type { DeployMode, VersionEntry } from '../../hooks/useSystemUpdate';
 
 const DEPLOY_MODE_LABEL: Record<DeployMode, string> = {
@@ -104,7 +104,7 @@ export default function SystemSection() {
           </span>
         </SectionRow>
         <SectionRow label={t('system.status')}>
-          <Chip tone={updateStatusTone(status.status)}>{t(STATUS_LABEL_KEYS[status.status])}</Chip>
+          <Chip tone={updateStatusTone(status.status)}>{updateStatusLabel(status.status, t)}</Chip>
         </SectionRow>
         {isServiceInstall && (
           <SectionRow label={t('system.devChannel')}>

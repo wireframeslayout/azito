@@ -319,6 +319,44 @@ describe('SystemUpdateService', () => {
       await expect(service.checkForUpdate()).resolves.toMatchObject({ status: 'no-asset', missingAsset: 'azito-hub-v1.1.0-linux-x64.tar.gz' });
     });
 
+    describe('rc channel', () => {
+      function stubReleases(releases: Array<{ tag: string; assets: string[] }>): void {
+        vi.stubGlobal('fetch', vi.fn(() => Promise.resolve({
+          ok: true,
+          json: () => Promise.resolve(releases.map((r) => ({
+            tag_name: r.tag, body: null, published_at: '2026-01-01T00:00:00Z', draft: false, prerelease: true,
+            assets: r.assets.map(releaseAsset),
+          }))),
+        } as Response)));
+      }
+      const linux = (): SystemUpdateService => new SystemUpdateService(channelResolver, stateManager, deployModeDetector, dataPaths, makeTaskRepoStub(0), null, { platform: 'linux', arch: 'x64', bundleRoot: host.bundleRoot });
+
+      beforeEach(() => channelResolver.updateChannelKind('rc'));
+
+      it('takes the newest release that has the asset when a newer one lacks it', async () => {
+        stubReleases([
+          { tag: 'v1.2.0-rc.1', assets: ['azito-hub-v1.2.0-rc.1-win32-x64.zip', 'SHA256SUMS'] },
+          { tag: 'v1.1.0', assets: ['azito-hub-v1.1.0-linux-x64.tar.gz', 'SHA256SUMS'] },
+        ]);
+        await expect(linux().checkForUpdate()).resolves.toMatchObject({ status: 'update-available', latestVersion: 'v1.1.0', missingAsset: null });
+      });
+
+      it('reports no-asset for the newest release when none has the asset', async () => {
+        stubReleases([
+          { tag: 'v1.1.0', assets: ['azito-hub-v1.1.0-win32-x64.zip', 'SHA256SUMS'] },
+          { tag: 'v1.2.0-rc.1', assets: ['azito-hub-v1.2.0-rc.1-win32-x64.zip', 'SHA256SUMS'] },
+        ]);
+        await expect(linux().checkForUpdate()).resolves.toMatchObject({
+          status: 'no-asset', latestVersion: 'v1.2.0-rc.1', missingAsset: 'azito-hub-v1.2.0-rc.1-linux-x64.tar.gz',
+        });
+      });
+
+      it('reports check-failed when there is no release at all', async () => {
+        stubReleases([]);
+        await expect(linux().checkForUpdate()).resolves.toMatchObject({ status: 'check-failed' });
+      });
+    });
+
     it('names the checksum file when only that is missing', async () => {
       stubRelease(['azito-hub-v1.1.0-linux-x64.tar.gz']);
       const service = new SystemUpdateService(channelResolver, stateManager, deployModeDetector, dataPaths, makeTaskRepoStub(0), null, { platform: 'linux', arch: 'x64', bundleRoot: host.bundleRoot });

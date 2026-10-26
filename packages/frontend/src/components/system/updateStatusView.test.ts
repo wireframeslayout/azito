@@ -2,7 +2,7 @@ import { describe, it, expect } from 'vitest';
 import enSettings from '../../i18n/locales/en/settings.json';
 import jaSettings from '../../i18n/locales/ja/settings.json';
 import type { SystemUpdateStatus } from '../../hooks/useSystemUpdate';
-import { STATUS_LABEL_KEYS, updateStatusNotice, updateStatusTone } from './updateStatusView';
+import { STATUS_LABEL_KEYS, updateStatusLabel, updateStatusNotice, updateStatusTone } from './updateStatusView';
 
 function lookup(tree: unknown, dotted: string): unknown {
   return dotted.split('.').reduce<unknown>((node, part) => {
@@ -47,5 +47,11 @@ describe('update status view', () => {
 
   it('refuses a no-asset status that lacks its details instead of inventing text', () => {
     expect(() => updateStatusNotice({ status: 'no-asset', latestVersion: null, missingAsset: null })).toThrow();
+  });
+
+  it('translates a known status and shows an unknown one by its name instead of an empty chip', () => {
+    const translate = (key: string): string => `t:${key}`;
+    expect(updateStatusLabel('no-asset', translate)).toBe('t:system.statusNoAsset');
+    expect(updateStatusLabel('something-new', translate)).toBe('something-new');
   });
 });

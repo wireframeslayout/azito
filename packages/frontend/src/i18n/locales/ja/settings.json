@@ -94,7 +94,6 @@
     "statusDisabled": "無効",
     "statusBlocked": "ブロック中",
     "statusNoAsset": "配布物なし",
-    "checkFailed": "更新確認に失敗しました。ネットワーク接続やリポジトリ設定を確認してください。",
     "runningTasks": "実行中のタスクが {{count}} 件あります。完了後に更新してください。",
     "updateAndRestart": "更新して再起動",
     "checkForUpdates": "更新を確認",

@@ -94,7 +94,6 @@
     "statusDisabled": "Disabled",
     "statusBlocked": "Blocked",
     "statusNoAsset": "No build for this OS",
-    "checkFailed": "Update check failed. Please check network connectivity and repository settings.",
     "runningTasks": "{{count}} tasks are running. Please update after they complete.",
     "updateAndRestart": "Update and restart",
     "checkForUpdates": "Check for updates",
