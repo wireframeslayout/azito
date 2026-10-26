@@ -146,50 +146,93 @@ export function blockingWorkerDialog(kind: TuiAgentKind, output: string): Worker
   return isWorkerScreenReady(kind, output) ? null : detectWorkerDialog(kind, output);
 }
 
-/** The start of the one line a prompt is delivered as (see PromptFileDelivery), as `squash` writes it. */
-const PROMPT_LINE_START = 'azitopromptfile.';
-/** The prompt file's name inside that line. */
-const PROMPT_FILE_NAME = /azito-prompt-\d+-[0-9a-f]+\.md/;
-/** The most text that can follow the end of our line on a screen whose input still holds it: the footer / status lines. */
-const PENDING_TAIL_CHARS = 400;
+/**
+ * What the worker's input box holds right now (Issue #532). `empty`: the box is there and has nothing in it (Claude: only the `❯`, or its
+ * `Try "..."` hint; codex: its placeholder). `filled`: there is text in it (a draft, or the line we typed). `disabled`: codex shows
+ * "Input disabled". `unknown`: no box of a known shape is on the screen: that is never taken for empty.
+ */
+export type InputBox =
+  | { state: 'empty' }
+  | { state: 'filled'; text: string }
+  | { state: 'disabled' }
+  | { state: 'unknown' };
 
-/** Lower-cased with every whitespace gone: the pane wraps a long line wherever it likes, so a line is only comparable without its breaks. */
-function squash(output: string): string {
-  return flatten(output).replace(/ /g, '');
+const UNKNOWN: InputBox = { state: 'unknown' };
+
+function screenLines(output: string): string[] {
+  return stripAnsi(output).split('\n').map((line) => line.replace(/\s+$/, ''));
+}
+
+function boxOf(text: string, isEmpty: (text: string) => boolean): InputBox {
+  const trimmed = text.trim();
+  return trimmed === '' || isEmpty(trimmed) ? { state: 'empty' } : { state: 'filled', text: trimmed };
+}
+
+const RULE_LINE = /^─{10,}$/;
+/** codex's lines below the composer: the model line is after a blank line, the shortcuts / context line carries these. */
+const CODEX_FOOTER_LINE = /\? for shortcuts|context left|esc to interrupt/i;
+
+/**
+ * Claude Code 2.1.x: the box is the lines between the last two horizontal rules (`────`), first line `❯ <text>`, the rest wrapped
+ * continuation. Claude Code 2.0.x: a frame (`╭──╮ │ > <text> │ ╰──╯`). Anything else is `unknown`: the lines between the rules must
+ * start with the prompt, and only a few status lines may follow the lower rule.
+ */
+function readClaudeInput(lines: string[]): InputBox {
+  const rules = lines.map((line, i) => (RULE_LINE.test(line.trim()) ? i : -1)).filter((i) => i >= 0);
+  if (rules.length >= 2) {
+    const upper = rules[rules.length - 2];
+    const lower = rules[rules.length - 1];
+    const inside = lines.slice(upper + 1, lower).filter((line) => line.trim() !== '');
+    const below = lines.slice(lower + 1).filter((line) => line.trim() !== '');
+    if (inside.length > 0 && /^[❯>]/.test(inside[0].trim()) && below.length <= 4) {
+      return boxOf([inside[0].trim().replace(/^[❯>]\s?/, ''), ...inside.slice(1).map((line) => line.trim())].join(''), (text) => text.startsWith('Try "'));
+    }
+    if (inside.length === 0 && below.length <= 4) return UNKNOWN;
+  }
+  const top = lines.map((line, i) => (line.trim().startsWith('╭') ? i : -1)).filter((i) => i >= 0).pop();
+  const bottom = lines.map((line, i) => (line.trim().startsWith('╰') ? i : -1)).filter((i) => i >= 0).pop();
+  if (top !== undefined && bottom !== undefined && bottom > top + 1) {
+    const inside = lines.slice(top + 1, bottom).map((line) => line.trim().replace(/^│\s?/, '').replace(/\s?│$/, '').trim()).filter((line) => line !== '');
+    if (inside.length > 0 && /^[❯>]/.test(inside[0])) {
+      return boxOf([inside[0].replace(/^[❯>]\s?/, ''), ...inside.slice(1)].join(''), (text) => text.startsWith('Try "'));
+    }
+  }
+  return UNKNOWN;
 }
 
 /**
- * Whether the worker's input still holds our one-line prompt instruction: typed, not submitted (Issue #532: an Enter that was taken for
- * part of a paste, so the line sits in the input box and nothing runs). With `instruction`, that very line (its file name); without, any
- * such line (what an earlier prompt left behind). The line is in the input, not in the conversation, when the screen below it has nothing
- * but the footer: no working line ("esc to interrupt"), no reply, and for codex not its empty-composer placeholder.
- * Claude is told from the conversation by the same measure alone (its echo of a submitted message is followed by the working line almost
- * at once), so a stale line is only looked for in codex's input before a prompt is sent (`checkStale`).
+ * codex: the composer starts at the last line that begins with `›` and runs to the first blank line or footer line (a wrapped draft goes
+ * on indented lines, without a blank). Its empty form is the placeholder "Ask Codex to do anything"; "Input disabled..." is its refusal of input.
  */
-export function isPromptPendingInInput(kind: TuiAgentKind, output: string, instruction?: string): boolean {
-  const text = squash(output);
-  const start = text.lastIndexOf(PROMPT_LINE_START);
-  if (start < 0) return false;
-  let end = start + PROMPT_LINE_START.length;
-  if (instruction) {
-    const name = PROMPT_FILE_NAME.exec(instruction)?.[0];
-    if (name === undefined) return false;
-    const at = text.lastIndexOf(squash(name));
-    if (at < start) return false;
-    end = at + squash(name).length;
-  } else {
-    const md = text.indexOf('.md', start);
-    if (md >= 0) end = md + 3;
+function readCodexInput(lines: string[]): InputBox {
+  const start = lines.map((line, i) => (line.startsWith('›') ? i : -1)).filter((i) => i >= 0).pop();
+  if (start === undefined) return UNKNOWN;
+  const composer = [lines[start].replace(/^›\s?/, '')];
+  for (const line of lines.slice(start + 1)) {
+    if (line.trim() === '' || CODEX_FOOTER_LINE.test(line)) break;
+    composer.push(line.trim());
   }
-  const tail = text.slice(end);
-  if (tail.includes('esctointerrupt')) return false;
-  if (kind === 'codex' && tail.includes('askcodextodoanything')) return false;
-  const prefix = text.slice(Math.max(0, start - 3), start);
-  if (!(kind === 'codex' ? prefix.includes('›') : /[>❯]/.test(prefix))) return false;
-  return tail.length < PENDING_TAIL_CHARS;
+  const text = composer.join(' ').trim();
+  if (/^input disabled/i.test(text)) return { state: 'disabled' };
+  return boxOf(composer.join(''), (t) => t.toLowerCase().startsWith('ask codex to do anything'));
 }
 
-/** A line of an earlier prompt left in codex's input box (Claude's input is not read for this: see {@link isPromptPendingInInput}). */
-export function hasStalePromptInInput(kind: TuiAgentKind, output: string): boolean {
-  return kind === 'codex' && isPromptPendingInInput(kind, output);
+/** What the input box of `kind`'s worker holds on this screen. */
+export function readInputBox(kind: TuiAgentKind, output: string): InputBox {
+  const lines = screenLines(output);
+  return kind === 'claude' ? readClaudeInput(lines) : readCodexInput(lines);
+}
+
+/** The file name of the prompt file in a prompt instruction line (what tells our line from any other text in the input). */
+export function promptFileNameOf(instruction: string): string {
+  const name = /azito-prompt-\d+-[0-9a-f]+\.md/.exec(instruction)?.[0];
+  if (name === undefined) throw new Error(`Not a prompt instruction: ${instruction}`);
+  return name;
+}
+
+/** Whether the input holds our instruction line, whatever the pane did to wrap it (the file name is compared without white space). */
+export function inputHoldsLine(box: InputBox, instruction: string): boolean {
+  if (box.state !== 'filled') return false;
+  const squashed = box.text.toLowerCase().replace(/\s+/g, '');
+  return squashed.includes('azitopromptfile.') && squashed.includes(promptFileNameOf(instruction).replace(/\s+/g, ''));
 }

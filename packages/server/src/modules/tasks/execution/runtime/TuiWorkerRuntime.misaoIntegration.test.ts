@@ -112,7 +112,17 @@ describe.skipIf(!fs.existsSync(MISAO_CLI))('TuiWorkerRuntime.sendPrompt on a rea
 
   it('a ready worker gets one line that names the file; the prompt is in the file', async () => {
     const fed = path.join(dir, `fed-${windowSeq}.txt`);
-    const handle = await paneRunning(`echo "› Ask Codex to do anything"; echo "  ? for shortcuts"\nIFS= read -r -t 10 line; printf '%s' "$line" > ${fed}\nsleep 5`);
+    // A scripted codex: a composer that redraws as characters arrive, and takes Enter as a submit only when it comes as a key of its own.
+    const handle = await paneRunning([
+      'draft=""',
+      'draw() { printf "\\033[H\\033[2J"; echo "› ${draft:-Ask Codex to do anything}"; echo; echo "  ? for shortcuts   100% context left"; }',
+      'draw',
+      'while IFS= read -rsn1 ch; do',
+      '  if [ -z "$ch" ]; then printf "%s" "$draft" > ' + fed + '; draft=""; draw; break; fi',
+      '  draft="$draft$ch"; draw',
+      'done',
+      'sleep 5',
+    ].join('\n'));
     await vi.waitFor(async () => expect(await screenOf(handle)).toContain('Ask Codex'), { timeout: 10000, interval: 100 });
     await runtime.sendPrompt(ctxFor(handle), HOSTILE_PROMPT);
     await vi.waitFor(() => expect(fs.existsSync(fed)).toBe(true), { timeout: 10000, interval: 100 });

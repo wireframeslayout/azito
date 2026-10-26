@@ -3,7 +3,7 @@ import type { IMuxClient } from '../../../tmux/IMuxClient';
 import { WorkerNotRunningError, type WorkerInputService } from '../WorkerInputService';
 import type { PromptFileDelivery } from '../PromptFileDelivery';
 import { getAgentTranscriptProfile } from '../../../transcripts/sources/profiles';
-import { blockingWorkerDialog, detectWorkerDialog, hasStalePromptInInput, isPromptPendingInInput, isWorkerScreenReady, tuiAgentKindOf, type TuiAgentKind, type WorkerDialog } from './workerScreen';
+import { blockingWorkerDialog, detectWorkerDialog, inputHoldsLine, isWorkerScreenReady, readInputBox, tuiAgentKindOf, type TuiAgentKind, type WorkerDialog } from './workerScreen';
 import type { WorkerWaiter } from '../WorkerWaiter';
 import type { HttpSignalTurnCoordinator } from '../HttpSignalTurnCoordinator';
 import type { ServerConfig } from '../../../servers/Server';
@@ -27,7 +27,7 @@ function sleep(ms: number): Promise<void> {
 }
 
 /** Why the worker's screen did not take a prompt: a dialog that waits for a person, the worker back at a shell, or nothing recognisable within the time allowed. */
-export type TuiNotReadyReason = WorkerDialog | 'worker_exited_to_shell' | 'not_ready' | 'input_not_empty' | 'prompt_not_submitted' | 'timeout';
+export type TuiNotReadyReason = WorkerDialog | 'worker_exited_to_shell' | 'not_ready' | 'input_not_empty' | 'prompt_not_typed' | 'prompt_not_submitted' | 'input_state_unknown' | 'timeout';
 
 const NOT_READY_MESSAGES: Record<TuiNotReadyReason, string> = {
   trust_dialog: 'Claude Code の信頼確認ダイアログが出ているため、プロンプトを送らずにタスクを止めました',
@@ -36,8 +36,10 @@ const NOT_READY_MESSAGES: Record<TuiNotReadyReason, string> = {
   codex_trust_prompt: 'Codex のフォルダー信頼の確認画面が出ているため、プロンプトを送らずにタスクを止めました',
   worker_exited_to_shell: 'ワーカーが終了してシェルに戻っているため、プロンプトを送らずにタスクを止めました',
   not_ready: 'ワーカーの画面が入力待ちになっていない（既知の入力欄が見えない）ため、プロンプトを送らずにタスクを止めました',
-  input_not_empty: 'ワーカーの入力欄に前のプロンプトの 1 行が残っているため、プロンプトを送らずにタスクを止めました',
+  input_not_empty: 'ワーカーの入力欄に文字（前の 1 行や利用者の下書き）が残っているため、プロンプトを送らずにタスクを止めました',
+  prompt_not_typed: '送った 1 行がワーカーの入力欄に描かれなかったため、Enter を送らずにタスクを止めました',
   prompt_not_submitted: 'ワーカーの入力欄に送った 1 行が残ったままで、Enter を再送しても送信されなかったため、タスクを止めました',
+  input_state_unknown: 'ワーカーの入力欄の状態を読み取れないまま時間切れになったため、送信できたと判断せずにタスクを止めました',
   timeout: 'ワーカーの画面が 30 秒以内に入力待ちにならなかったため、プロンプトを送らずにタスクを止めました',
 };
 
@@ -73,8 +75,10 @@ const SCREEN_CAPTURE_LINES = -50;
 const SEND_READY_GRACE_MS = 5000;
 const SEND_READY_POLL_MS = 500;
 
-/** How long, after the Enter, the line may stay in the input before the Enter is sent once more (and, after that, the task is stopped). */
-const SUBMIT_CONFIRM_MS = 3000;
+/** How long the typed line gets to show in the input (the pane relays it, on Windows through ConPTY) before Enter, and the Enter to take it. */
+const LINE_DRAW_MS = 5000;
+const LINE_DRAW_POLL_MS = 200;
+const SUBMIT_CONFIRM_MS = 5000;
 const SUBMIT_CONFIRM_POLL_MS = 300;
 
 export class TuiWorkerRuntime implements IWorkerRuntime {
@@ -143,68 +147,101 @@ export class TuiWorkerRuntime implements IWorkerRuntime {
   }
 
   /**
-   * Types the instruction to read the prompt's file into the worker, never the prompt (Issue #532). The worker has to be at its input:
-   * its screen is read and must show it (a dialog, a shell, an empty or unknown screen all stop the task with a reason and nothing is
-   * sent, not even the prompt file). Order: input screen confirmed (given a few seconds to finish drawing) -> prompt file written ->
-   * input screen confirmed again just before the line is typed -> the line. A worker that has gone back to a shell is refused earlier
-   * and, for a supervised pane, by WorkerInputService.sendPrompt (`WorkerNotRunningError`).
+   * Delivers the prompt as one instruction line that names its file (Issue #532), and sees that the worker took it:
+   *   1. the input is empty and the worker is at it (a dialog, a shell, a draft, an unknown screen: stopped, nothing sent, no file);
+   *   2. the prompt file is written; the input is looked at again;
+   *   3. the line is typed (no Enter), and waited for until the input shows it (`prompt_not_typed`): an Enter that reaches codex before
+   *      the text is drawn is not a submit;
+   *   4. after the agent's submit delay, Enter;
+   *   5. the line is gone from the input (submitted). If it is still there, Enter once more; still there: `prompt_not_submitted`.
+   * A pane under a supervisor takes the line and Enter as one command, so only 1, 2 and 5 apply. A generic worker has no screen to read:
+   * the line and Enter are sent together, and a key that did not arrive shows as the wait for completion running out.
    */
   async sendPrompt(ctx: WorkerContext, prompt: string): Promise<void> {
-    if (ctx.agentKind !== null) await this.awaitInputScreen(ctx, ctx.agentKind);
+    const kind = ctx.agentKind;
+    const logCtx = { taskId: ctx.taskId, unitId: ctx.unitId };
+    if (kind !== null) await this.awaitEmptyInput(ctx, kind);
     const instruction = await this.promptFiles.stage(ctx.server, ctx.taskId, ctx.unitId, prompt);
-    if (ctx.agentKind !== null) await this.assertInputScreenNow(ctx, ctx.agentKind);
-    await this.workerInput.sendPrompt(
-      ctx.server,
-      ctx.handle,
-      instruction,
-      { taskId: ctx.taskId, unitId: ctx.unitId },
-      ctx.supervisorTarget,
-      submitDelayMsOf(ctx.agentKind),
-    );
-    if (ctx.agentKind !== null) await this.confirmSubmitted(ctx, ctx.agentKind, instruction);
-  }
-
-  /**
-   * The line was typed and Enter pressed; the worker has taken it when it is no longer in the input. If it is still there the Enter was
-   * not a submit (codex read the keys as a paste): Enter is sent once more, not the prompt again. Still there after that, the task is
-   * stopped (`prompt_not_submitted`): going on would send the next phase's line after this one.
-   */
-  private async confirmSubmitted(ctx: WorkerContext, kind: TuiAgentKind, instruction: string): Promise<void> {
-    let screen = '';
-    for (const resendEnter of [true, false]) {
-      const deadline = Date.now() + SUBMIT_CONFIRM_MS;
-      for (;;) {
-        screen = (await ctx.driver.captureScreen(ctx.server, ctx.handle, SCREEN_CAPTURE_LINES)).stdout;
-        if (!isPromptPendingInInput(kind, screen, instruction)) return;
-        if (Date.now() >= deadline) break;
-        await sleep(SUBMIT_CONFIRM_POLL_MS);
-      }
-      if (resendEnter) await ctx.driver.sendKeysToHandle(ctx.server, ctx.handle, ['Enter']);
+    if (kind === null) {
+      await this.workerInput.sendPrompt(ctx.server, ctx.handle, instruction, logCtx, ctx.supervisorTarget);
+      return;
     }
-    throw new TuiNotReadyError('prompt_not_submitted', screen);
+    await this.assertEmptyInputNow(ctx, kind);
+    if (this.workerInput.isSupervised(ctx.server, ctx.handle, ctx.supervisorTarget)) {
+      await this.workerInput.sendPrompt(ctx.server, ctx.handle, instruction, logCtx, ctx.supervisorTarget);
+    } else {
+      await this.workerInput.typePrompt(ctx.server, ctx.handle, instruction, logCtx);
+      await this.awaitLineDrawn(ctx, kind, instruction);
+      const submitDelayMs = submitDelayMsOf(kind);
+      if (submitDelayMs > 0) await sleep(submitDelayMs);
+      await this.workerInput.submitPrompt(ctx.server, ctx.handle);
+    }
+    await this.confirmSubmitted(ctx, kind, instruction);
   }
 
-  private async awaitInputScreen(ctx: WorkerContext, kind: TuiAgentKind): Promise<void> {
+  private async captureScreen(ctx: WorkerContext): Promise<string> {
+    return (await ctx.driver.captureScreen(ctx.server, ctx.handle, SCREEN_CAPTURE_LINES)).stdout;
+  }
+
+  /** The worker is at its input and the input is empty; a screen that is still drawing gets a few seconds. */
+  private async awaitEmptyInput(ctx: WorkerContext, kind: TuiAgentKind): Promise<void> {
     const deadline = Date.now() + SEND_READY_GRACE_MS;
     for (;;) {
-      const screen = (await ctx.driver.captureScreen(ctx.server, ctx.handle, SCREEN_CAPTURE_LINES)).stdout;
-      // A line an earlier prompt left in the input would be sent together with this one.
-      if (hasStalePromptInInput(kind, screen)) throw new TuiNotReadyError('input_not_empty', screen);
-      if (isWorkerScreenReady(kind, screen)) return;
-      const dialog = detectWorkerDialog(kind, screen);
-      if (dialog) throw new TuiNotReadyError(dialog, screen);
+      const screen = await this.captureScreen(ctx);
+      // A pane that went back to a shell can still show the agent's last screen; nothing is written for it, and nothing typed.
       const foreground = await ctx.driver.paneCommandByHandle(ctx.server, ctx.handle);
       if (foreground !== null && isBareShellCommand(foreground)) throw new TuiNotReadyError('worker_exited_to_shell', screen);
+      const dialog = detectWorkerDialog(kind, screen);
+      if (dialog) throw new TuiNotReadyError(dialog, screen);
+      const box = readInputBox(kind, screen);
+      // Text in the input (the line of an earlier prompt, a person's draft) would be sent together with ours.
+      if (box.state === 'filled') throw new TuiNotReadyError('input_not_empty', screen);
+      if (box.state === 'empty' && isWorkerScreenReady(kind, screen)) return;
       if (Date.now() >= deadline) throw new TuiNotReadyError('not_ready', screen);
       await sleep(SEND_READY_POLL_MS);
     }
   }
 
-  private async assertInputScreenNow(ctx: WorkerContext, kind: TuiAgentKind): Promise<void> {
-    const screen = (await ctx.driver.captureScreen(ctx.server, ctx.handle, SCREEN_CAPTURE_LINES)).stdout;
-    if (hasStalePromptInInput(kind, screen)) throw new TuiNotReadyError('input_not_empty', screen);
-    if (isWorkerScreenReady(kind, screen)) return;
-    throw new TuiNotReadyError(detectWorkerDialog(kind, screen) ?? 'not_ready', screen);
+  private async assertEmptyInputNow(ctx: WorkerContext, kind: TuiAgentKind): Promise<void> {
+    const screen = await this.captureScreen(ctx);
+    const dialog = detectWorkerDialog(kind, screen);
+    if (dialog) throw new TuiNotReadyError(dialog, screen);
+    const box = readInputBox(kind, screen);
+    if (box.state === 'filled') throw new TuiNotReadyError('input_not_empty', screen);
+    if (box.state !== 'empty' || !isWorkerScreenReady(kind, screen)) throw new TuiNotReadyError('not_ready', screen);
+  }
+
+  private async awaitLineDrawn(ctx: WorkerContext, kind: TuiAgentKind, instruction: string): Promise<void> {
+    const deadline = Date.now() + LINE_DRAW_MS;
+    let screen = '';
+    for (;;) {
+      screen = await this.captureScreen(ctx);
+      if (inputHoldsLine(readInputBox(kind, screen), instruction)) return;
+      if (Date.now() >= deadline) throw new TuiNotReadyError('prompt_not_typed', screen);
+      await sleep(LINE_DRAW_POLL_MS);
+    }
+  }
+
+  /**
+   * Submitted = our line is no longer in the input. Still in it after the wait: Enter is sent once more (the prompt is not sent again);
+   * still in it after that: `prompt_not_submitted`. An input that cannot be read until the end is not a success either (`input_state_unknown`).
+   */
+  private async confirmSubmitted(ctx: WorkerContext, kind: TuiAgentKind, instruction: string): Promise<void> {
+    let screen = '';
+    let box = readInputBox(kind, screen);
+    for (const resendEnter of [true, false]) {
+      const deadline = Date.now() + SUBMIT_CONFIRM_MS;
+      for (;;) {
+        screen = await this.captureScreen(ctx);
+        box = readInputBox(kind, screen);
+        if (box.state !== 'unknown' && !inputHoldsLine(box, instruction)) return;
+        if (Date.now() >= deadline) break;
+        await sleep(SUBMIT_CONFIRM_POLL_MS);
+      }
+      if (box.state === 'unknown') throw new TuiNotReadyError('input_state_unknown', screen);
+      if (resendEnter) await this.workerInput.submitPrompt(ctx.server, ctx.handle);
+    }
+    throw new TuiNotReadyError('prompt_not_submitted', screen);
   }
 
   buildEnvelope(ctx: EnvelopeBuildContext): EnvelopeBuildResult {

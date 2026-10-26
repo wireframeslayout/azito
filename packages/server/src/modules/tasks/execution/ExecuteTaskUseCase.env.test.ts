@@ -29,6 +29,7 @@ import type { Unit, IUnitRepository } from '../../units/Unit';
 import type { ServerConfig, IServerRepository } from '../../servers/Server';
 import type { ProjectDetail, IProjectRepository } from '../../projects/Project';
 import type { IProjectServerRepository } from '../../projects/ProjectServer';
+import { createFakeWorkerPane } from './runtime/fakeWorkerScreen';
 import { pushKeyForLogEntry } from '../../notifications/push/taskStatusPush';
 import { TaskTempFiles } from '../../../shared/os/taskTempFiles';
 import { LocalFileOps, localFileOpsHost } from '../../../shared/fs/LocalFileOps';
@@ -369,6 +370,7 @@ function buildUseCase(opts: {
   };
 
 
+  const fakePane = createFakeWorkerPane();
   const tmux = {
     kind: 'tmux' as const,
     caps: { changeEvents: true, agentState: false, independentClients: true, copyMode: true },
@@ -383,14 +385,15 @@ function buildUseCase(opts: {
     killPane: vi.fn(async () => ({ stdout: '', stderr: '', code: 0 })),
     closeWindow: vi.fn(async () => ({ stdout: '', stderr: '', code: 0 })),
     closePane: vi.fn(async () => ({ stdout: '', stderr: '', code: 0 })),
-    sendKeysToHandle: vi.fn(async () => {}),
+    // The pane takes keys the way a TUI's input does (#532: a prompt is typed, seen in the input, then submitted).
+    sendKeysToHandle: vi.fn(async (_server: unknown, _target: unknown, keys: string[]) => { fakePane.sendKeys(keys); }),
     paneCommandByHandle: vi.fn(async () => 'claude'),
     checkPaneExists: vi.fn(async () => true),
     windowExists: vi.fn(async () => true),
     listPanesByRef: vi.fn(async () => [{ ordinal: 1, handle: '%0', title: '', command: 'bash', active: true }]),
     uiTokenEnvForServer: vi.fn(() => ({})),
     execCommand: vi.fn(async (_server: unknown, _cmd: string) => ({ stdout: '', stderr: '', code: 0 })),
-    captureScreen: vi.fn(async () => ({ stdout: 'bypass permissions /help â€º Ask Codex to do anything', stderr: '', code: 0 })),
+    captureScreen: vi.fn(async () => ({ stdout: fakePane.screen(), stderr: '', code: 0 })),
     refFromPaneHandle: vi.fn(async () => null),
     startOutputStream: vi.fn(async () => {}),
     stopOutputStream: vi.fn(async () => {}),
@@ -1706,6 +1709,7 @@ describe('ExecuteTaskUseCase.followUp http-signal execution mode (Issue: AZITOç›
     // windowExists=true (tmux.listSessions returns the task's window already
     // present) so followUp skips the create-window/launch-worker branch and
     // goes straight to sending the follow-up prompt + waiting.
+    const fakePane = createFakeWorkerPane();
     const tmux = {
       kind: 'tmux' as const,
       caps: { changeEvents: true, agentState: false, independentClients: true, copyMode: true },
@@ -1720,7 +1724,7 @@ describe('ExecuteTaskUseCase.followUp http-signal execution mode (Issue: AZITOç›
       killPane: vi.fn(async () => ({ stdout: '', stderr: '', code: 0 })),
       closeWindow: vi.fn(async () => ({ stdout: '', stderr: '', code: 0 })),
       closePane: vi.fn(async () => ({ stdout: '', stderr: '', code: 0 })),
-      sendKeysToHandle: vi.fn(async (_server: unknown, _target: string, _keys: string[]) => {}),
+      sendKeysToHandle: vi.fn(async (_server: unknown, _target: string, keys: string[]) => { fakePane.sendKeys(keys); }),
       paneCommandByHandle: vi.fn(async () => 'claude'),
       startPipePane: vi.fn(async () => {}),
       stopPipePane: vi.fn(async () => {}),
@@ -1728,7 +1732,7 @@ describe('ExecuteTaskUseCase.followUp http-signal execution mode (Issue: AZITOç›
       stopOutputStream: vi.fn(async () => {}),
       getWindowActivity: vi.fn(async () => null),
       capturePane: vi.fn(async () => ({ stdout: '' })),
-      captureScreen: vi.fn(async () => ({ stdout: 'bypass permissions /help â€º Ask Codex to do anything', stderr: '', code: 0 })),
+      captureScreen: vi.fn(async () => ({ stdout: fakePane.screen(), stderr: '', code: 0 })),
       execCommand: vi.fn(async () => ({ stdout: '' })),
       windowExists: vi.fn(async () => true),
       listPanesByRef: vi.fn(async () => [{ ordinal: 1, handle: '%0', title: '', command: 'bash', active: true }]),
@@ -2953,6 +2957,7 @@ describe('ExecuteTaskUseCase.execute() execution-gate self-invalidation regressi
       })),
     };
 
+    const fakePane = createFakeWorkerPane();
     const tmux = {
       kind: 'tmux' as const,
       caps: { changeEvents: true, agentState: false, independentClients: true, copyMode: true },
@@ -2967,7 +2972,7 @@ describe('ExecuteTaskUseCase.execute() execution-gate self-invalidation regressi
       killPane: vi.fn(async () => ({ stdout: '', stderr: '', code: 0 })),
       closeWindow: vi.fn(async () => ({ stdout: '', stderr: '', code: 0 })),
       closePane: vi.fn(async () => ({ stdout: '', stderr: '', code: 0 })),
-      sendKeysToHandle: vi.fn(async () => {}),
+      sendKeysToHandle: vi.fn(async (_server: unknown, _target: unknown, keys: string[]) => { fakePane.sendKeys(keys); }),
       paneCommandByHandle: vi.fn(async () => 'claude'),
       checkPaneExists: vi.fn(async () => true),
       windowExists: vi.fn(async () => true),
@@ -2978,7 +2983,7 @@ describe('ExecuteTaskUseCase.execute() execution-gate self-invalidation regressi
       startOutputStream: vi.fn(async () => {}),
       stopOutputStream: vi.fn(async () => {}),
       execCommand: vi.fn(async () => ({ stdout: '' })),
-      captureScreen: vi.fn(async () => ({ stdout: 'Thinking... (esc to interrupt)', stderr: '', code: 0 })),
+      captureScreen: vi.fn(async () => ({ stdout: fakePane.screen(), stderr: '', code: 0 })),
       capturePane: vi.fn(async () => ({ stdout: 'Thinking... (esc to interrupt)' })),
       refFromPaneHandle: vi.fn(async () => null),
       probePane: vi.fn(async () => ({ alive: true, verified: true })),

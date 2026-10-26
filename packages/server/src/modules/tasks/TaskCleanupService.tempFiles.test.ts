@@ -167,6 +167,26 @@ describe('TaskCleanupService temp files', () => {
       expect(unlink).toHaveBeenCalledWith(winPath);
     });
 
+    it('still completes the cleanup, with one warning, when the agent is offline (its temp folder cannot be asked for)', async () => {
+      const logs = [recordedPromptFile('/tmp/azito-prompt-5-0123456789abcdef.md')];
+      const warn = vi.fn();
+      const offline = service('agent', logs, { platform: 'linux', unlink: vi.fn() });
+      (offline as unknown as { deps: { transportFactory: { taskTempServer: () => Promise<never> } } }).deps.transportFactory.taskTempServer = async () => { throw new Error('agent unreachable'); };
+      await expect(offline.cleanup(task, { warn })).resolves.toBeUndefined();
+      expect(warn).toHaveBeenCalledTimes(1);
+      expect(warn.mock.calls[0][0]).toMatch(/agent unreachable/);
+    });
+
+    it('still completes the cleanup, with one warning, when the real path of the temp folder cannot be read', async () => {
+      const logs = [recordedPromptFile('/tmp/azito-prompt-5-0123456789abcdef.md')];
+      const warn = vi.fn();
+      const unlink = vi.fn();
+      const realpath = vi.fn(async () => { throw new FileOpsError('FAILED', 'agent timed out'); });
+      await expect(service('agent', logs, { platform: 'linux', unlink, realpath }).cleanup(task, { warn })).resolves.toBeUndefined();
+      expect(warn).toHaveBeenCalledTimes(1);
+      expect(unlink).not.toHaveBeenCalled();
+    });
+
     it('does not warn about a file that is already gone, and warns (and goes on) when one cannot be removed', async () => {
       const realpath = async (p: string) => p;
       const gone = vi.fn(async (_path: string) => { throw new FileOpsError('NOT_FOUND', 'gone'); });

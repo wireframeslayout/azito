@@ -151,12 +151,21 @@ export class TaskCleanupService {
     const files = this.deps.transportFactory.getTransport(server).files();
     const recorded = recordedTempFilePathsOnHost(this.deps.logRepo.findByTask(task.id), task.id, files.platform);
     if (recorded.length === 0) return;
-    const tempServer = await this.deps.transportFactory.taskTempServer(server);
-    if (tempServer.type !== 'agent') return;
+    // Asking the agent for its temp folder needs the agent: one that is offline must not stop the task from being deleted or archived,
+    // as the worktree's removal above does not. The files are left (and said so) in that case.
+    let tempServer: Awaited<ReturnType<TransportFactory['taskTempServer']>>;
+    let tempDir: string | null;
+    try {
+      tempServer = await this.deps.transportFactory.taskTempServer(server);
+      if (tempServer.type !== 'agent') return;
+      tempDir = await realpathIfExists(files, tempServer.tmpDir);
+    } catch (e) {
+      log.warn(`[task-cleanup] Not removing the temp files of task ${task.id} on ${server.name}: the temp folder could not be read (${(e as Error).message})`);
+      return;
+    }
+    if (tempDir === null) return;
     const pathApi = pathApiFor(files.platform);
     const sameDirectory = (a: string, b: string): boolean => (files.platform === 'win32' ? a.toLowerCase() === b.toLowerCase() : a === b);
-    const tempDir = await realpathIfExists(files, tempServer.tmpDir);
-    if (tempDir === null) return;
     const namePattern = new RegExp(`^azito-(?:prompt|pipe|output|rules)-${task.id}-[A-Za-z0-9._-]+$`);
     for (const filePath of recorded) {
       try {

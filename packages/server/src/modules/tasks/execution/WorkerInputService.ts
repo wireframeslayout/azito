@@ -1,4 +1,5 @@
 import type { PaneHandle } from '@azito/shared';
+import type { IMuxClient } from '../../tmux/IMuxClient';
 import type { MuxDriverRegistry } from '../../tmux/MuxDriverRegistry';
 import type { ServerConfig } from '../../servers/Server';
 import type { SupervisorRegistry } from '../../supervisors/SupervisorRegistry';
@@ -51,7 +52,6 @@ export class WorkerInputService {
     text: string,
     ctx?: WorkerInputContext,
     supervisorTarget?: string,
-    submitDelayMs = 0,
   ): Promise<void> {
     const driver = this.muxDriverRegistry.resolve(server);
     const supervisorKey = supervisorTarget ?? handle;
@@ -70,26 +70,29 @@ export class WorkerInputService {
 
     // Guard against sending to a bare shell — covers both the supervisor
     // fallback path (sendCommand failed) and the no-supervisor path.
-    const foreground = await driver.paneCommandByHandle(server, handle);
-    if (foreground !== null && isBareShellCommand(foreground)) {
-      if (ctx) {
-        this.appendLog(ctx.taskId, ctx.unitId, 'command', {
-          type: 'send_aborted_dead_worker',
-          foreground,
-        });
-      }
-      throw new WorkerNotRunningError(foreground);
-    }
+    await this.assertNotAtShell(driver, server, handle, ctx);
 
-    if (submitDelayMs > 0) {
-      // Keys that arrive together are a paste to codex, and an Enter inside a paste is a newline: the text goes first, and the Enter
-      // after the agent's own submit delay (its transcript profile), as the chat's input does.
-      await driver.sendKeysToHandle(server, handle, [text]);
-      await new Promise<void>((resolve) => setTimeout(resolve, submitDelayMs));
-      await driver.sendKeysToHandle(server, handle, ['Enter']);
-      return;
-    }
     await driver.sendKeysToHandle(server, handle, [text, 'Enter']);
+  }
+
+  /** Whether input to this pane goes through a bound supervisor (which types and submits in one command) rather than as keys. */
+  isSupervised(server: ServerConfig, handle: PaneHandle, supervisorTarget?: string): boolean {
+    return this.registry.isBoundConnected(server.name, supervisorTarget ?? handle);
+  }
+
+  /**
+   * Types `text` into the pane without submitting it (for a pane that is not supervised): the Enter is `submitPrompt`, sent when the text
+   * has been seen in the worker's input, because an Enter that reaches codex before its input has drawn the text is not a submit.
+   * Refused, with nothing typed, for a pane that is at a bare shell.
+   */
+  async typePrompt(server: ServerConfig, handle: PaneHandle, text: string, ctx?: WorkerInputContext): Promise<void> {
+    const driver = this.muxDriverRegistry.resolve(server);
+    await this.assertNotAtShell(driver, server, handle, ctx);
+    await driver.sendKeysToHandle(server, handle, [text]);
+  }
+
+  async submitPrompt(server: ServerConfig, handle: PaneHandle): Promise<void> {
+    await this.muxDriverRegistry.resolve(server).sendKeysToHandle(server, handle, ['Enter']);
   }
 
   async sendKeys(
@@ -114,6 +117,19 @@ export class WorkerInputService {
       }
     }
     await driver.sendKeysToHandle(server, handle, keys);
+  }
+
+  private async assertNotAtShell(driver: IMuxClient, server: ServerConfig, handle: PaneHandle, ctx?: WorkerInputContext): Promise<void> {
+    const foreground = await driver.paneCommandByHandle(server, handle);
+    if (foreground !== null && isBareShellCommand(foreground)) {
+      if (ctx) {
+        this.appendLog(ctx.taskId, ctx.unitId, 'command', {
+          type: 'send_aborted_dead_worker',
+          foreground,
+        });
+      }
+      throw new WorkerNotRunningError(foreground);
+    }
   }
 
   private isAckTimeout(err: unknown): err is SupervisorCommandError {

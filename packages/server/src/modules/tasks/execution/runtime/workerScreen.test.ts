@@ -1,5 +1,7 @@
 import { describe, it, expect } from 'vitest';
-import { blockingWorkerDialog, detectWorkerDialog, hasStalePromptInInput, isPromptPendingInInput, isWorkerScreenReady, tuiAgentKindOf, tuiAgentKindOfWorkerType } from './workerScreen';
+import { readFileSync } from 'node:fs';
+import { join } from 'node:path';
+import { blockingWorkerDialog, detectWorkerDialog, inputHoldsLine, isWorkerScreenReady, readInputBox, tuiAgentKindOf, tuiAgentKindOfWorkerType } from './workerScreen';
 
 describe('tuiAgentKindOf', () => {
   it('reads the agent from the launch line', () => {
@@ -121,36 +123,74 @@ describe('claude screens', () => {
   });
 });
 
-describe('a one-line prompt instruction left in the input (#532)', () => {
-  const LINE = 'AZITO prompt file. Read the file named at the end of this line and carry out every instruction in it exactly: /tmp/azito-prompt-4-0123456789abcdef.md';
-  const footer = '  ? for shortcuts                                   100% context left';
+/** A screen taken from a real pane (see fixtures/): Claude Code 2.1.310 on Linux and Windows, codex 0.164.0 on Windows. */
+const fixture = (name: string): string => readFileSync(join(__dirname, 'fixtures', name), 'utf8');
 
-  it('is found in codex\'s input, also when the pane wrapped the long line anywhere', () => {
-    expect(isPromptPendingInInput('codex', `› ${LINE}\n\n${footer}`, LINE)).toBe(true);
-    const wrapped = `› AZITO prompt file. Read the file named at the end of this li\n  ne and carry out every instruction in it exactly: /tmp/azito-prom\n  pt-4-0123456789abcdef.md\n\n${footer}`;
-    expect(isPromptPendingInInput('codex', wrapped, LINE)).toBe(true);
-    expect(isPromptPendingInInput('codex', wrapped)).toBe(true);
+describe('readInputBox on the screens of real panes (#532)', () => {
+  const LINE = 'AZITO prompt file. Read the file named at the end of this line and carry out every instruction in it exactly: C:/Users/SERVER~1/AppData/Local/Temp/azito-prompt-99-0123456789abcdef.md';
+
+  describe('codex 0.164.0', () => {
+    it('an empty composer is empty, also after a reply and right after a submit (the echo above it is history)', () => {
+      expect(readInputBox('codex', fixture('codex-0.164-win-idle.txt'))).toEqual({ state: 'empty' });
+      expect(readInputBox('codex', fixture('codex-0.164-win-after-reply.txt'))).toEqual({ state: 'empty' });
+      expect(readInputBox('codex', fixture('codex-0.164-win-just-submitted.txt'))).toEqual({ state: 'empty' });
+    });
+
+    it('a person\'s draft is filled', () => {
+      expect(readInputBox('codex', fixture('codex-0.164-win-draft.txt'))).toEqual({ state: 'filled', text: 'please check the logs' });
+    });
+
+    it('our line left in the input is filled, wrapped over three lines, and is told from other text by its file name', () => {
+      const box = readInputBox('codex', fixture('codex-0.164-win-pending.txt'));
+      expect(box.state).toBe('filled');
+      expect(inputHoldsLine(box, LINE)).toBe(true);
+      expect(inputHoldsLine(box, LINE.replace('0123456789abcdef', 'fedcba9876543210'))).toBe(false);
+      expect(inputHoldsLine(readInputBox('codex', fixture('codex-0.164-win-draft.txt')), LINE)).toBe(false);
+    });
+
+    it('is ready when the composer is empty and not ready while our line sits in it (the footer is gone then)', () => {
+      expect(isWorkerScreenReady('codex', fixture('codex-0.164-win-idle.txt'))).toBe(true);
+      expect(isWorkerScreenReady('codex', fixture('codex-0.164-win-just-submitted.txt'))).toBe(true);
+      expect(isWorkerScreenReady('codex', fixture('codex-0.164-win-pending.txt'))).toBe(false);
+    });
+
+    it('knows "Input disabled", and an unknown screen is unknown, not empty', () => {
+      expect(readInputBox('codex', '› Input disabled while the agent works\n\n  ? for shortcuts')).toEqual({ state: 'disabled' });
+      expect(readInputBox('codex', 'some screen without a composer\nat all')).toEqual({ state: 'unknown' });
+      expect(readInputBox('codex', '')).toEqual({ state: 'unknown' });
+    });
   });
 
-  it('is found in claude\'s input box', () => {
-    expect(isPromptPendingInInput('claude', `╭──────╮\n│ > ${LINE} │\n╰──────╯\n  bypass permissions on (shift+tab to cycle)`, LINE)).toBe(true);
-  });
+  describe('Claude Code 2.1.310', () => {
+    it('the box between the last two rules is empty at rest, while working, and after it finished (a long history above it)', () => {
+      for (const name of ['claude-2.1.310-win-idle-after-done.txt', 'claude-2.1.310-linux-working.txt', 'claude-2.1.310-linux-done.txt', 'claude-2.1.310-linux-after-submit.txt', 'claude-2.1.310-linux-just-submitted.txt']) {
+        expect(readInputBox('claude', fixture(name)), name).toEqual({ state: 'empty' });
+      }
+    });
 
-  it('is not found once the worker works on it, or answered it and shows its empty composer', () => {
-    expect(isPromptPendingInInput('codex', `› ${LINE}\n\n• Working (2s • esc to interrupt)\n${footer}`, LINE)).toBe(false);
-    expect(isPromptPendingInInput('codex', `› ${LINE}\n\n• Done.\n\n› Ask Codex to do anything\n${footer}`, LINE)).toBe(false);
-    expect(isPromptPendingInInput('claude', `> ${LINE}\n\n● Reading the file\n  esc to interrupt\n  bypass permissions on`, LINE)).toBe(false);
-  });
+    it('the echo of a submitted message (it starts with ❯ too) is history, not the input', () => {
+      const after = fixture('claude-2.1.310-linux-after-submit.txt');
+      expect(after).toContain('❯ AZITO prompt file.');
+      expect(readInputBox('claude', after)).toEqual({ state: 'empty' });
+    });
 
-  it('is not found for another prompt\'s line, for no line, or for a line far above a long reply', () => {
-    expect(isPromptPendingInInput('codex', `› ${LINE}\n\n${footer}`, LINE.replace('0123456789abcdef', 'fedcba9876543210'))).toBe(false);
-    expect(isPromptPendingInInput('codex', `${LINE.slice(0, 20)} but nothing else\n${footer}`, LINE)).toBe(false);
-    expect(isPromptPendingInInput('codex', `› ${LINE}\n${'The plan has many steps and each is described in detail. '.repeat(20)}\n${footer}`, LINE)).toBe(false);
-  });
+    it('our line typed and not submitted is filled', () => {
+      const box = readInputBox('claude', fixture('claude-2.1.310-linux-typed-not-submitted.txt'));
+      expect(box.state).toBe('filled');
+      expect(inputHoldsLine(box, 'AZITO prompt file. x: /tmp/azito-prompt-4-0123456789abcdef.md')).toBe(true);
+    });
 
-  it('is looked for as a stale line in codex\'s input only', () => {
-    expect(hasStalePromptInInput('codex', `› ${LINE}\n\n${footer}`)).toBe(true);
-    expect(hasStalePromptInInput('codex', `› Ask Codex to do anything\n${footer}`)).toBe(false);
-    expect(hasStalePromptInInput('claude', `> ${LINE}\n  bypass permissions on`)).toBe(false);
+    it('the hint of an empty input ("Try ...") is empty, a draft is filled, a screen without a box is unknown', () => {
+      const rule = '─'.repeat(60);
+      expect(readInputBox('claude', `${rule}\n❯ Try "fix lint errors"\n${rule}\n  bypass permissions on (shift+tab to cycle)`)).toEqual({ state: 'empty' });
+      expect(readInputBox('claude', `${rule}\n❯ check the logs\n${rule}\n  bypass permissions on (shift+tab to cycle)`)).toEqual({ state: 'filled', text: 'check the logs' });
+      expect(readInputBox('claude', 'bypass permissions on (shift+tab to cycle)')).toEqual({ state: 'unknown' });
+      expect(readInputBox('claude', '')).toEqual({ state: 'unknown' });
+    });
+
+    it('reads Claude Code 2.0.x\'s framed box', () => {
+      expect(readInputBox('claude', '╭────────╮\n│ >        │\n╰────────╯\n  bypass permissions on')).toEqual({ state: 'empty' });
+      expect(readInputBox('claude', '╭────────╮\n│ > hello  │\n╰────────╯\n  bypass permissions on')).toEqual({ state: 'filled', text: 'hello' });
+    });
   });
 });

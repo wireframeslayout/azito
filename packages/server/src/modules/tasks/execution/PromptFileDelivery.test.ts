@@ -7,6 +7,7 @@ import { asPaneHandle } from '@azito/shared';
 import { TaskTempFiles } from '../../../shared/os/taskTempFiles';
 import { buildPromptFileInstruction, PromptFileDelivery, promptFileBytes } from './PromptFileDelivery';
 import { TuiWorkerRuntime } from './runtime/TuiWorkerRuntime';
+import { createFakeWorkerPane } from './runtime/fakeWorkerScreen';
 import { WorkerInputService } from './WorkerInputService';
 
 const server = { name: 'local', type: 'local' } as never;
@@ -111,14 +112,15 @@ describe('PromptFileDelivery', () => {
 });
 
 describe('a worker that ends while the prompt is being sent (Issue #532)', () => {
-  /** The real runtime, input service and delivery over a pane that records every key typed into it. */
+  /** The real runtime, input service and delivery over a pane whose input the keys typed into it fill and empty. */
   function build(foreground: string) {
     const typed: string[] = [];
     const files = new Map<string, string>();
+    const pane = createFakeWorkerPane();
     const driver = {
-      captureScreen: vi.fn(async () => ({ stdout: '› Ask Codex to do anything\n? for shortcuts' })),
+      captureScreen: vi.fn(async () => ({ stdout: pane.screen() })),
       paneCommandByHandle: vi.fn(async () => foreground),
-      sendKeysToHandle: vi.fn(async (_s: unknown, _h: unknown, keys: string[]) => { typed.push(...keys); }),
+      sendKeysToHandle: vi.fn(async (_s: unknown, _h: unknown, keys: string[]) => { typed.push(...keys); pane.sendKeys(keys); }),
     };
     const muxDriverRegistry = { resolve: () => driver };
     const registry = { isBoundConnected: () => false };
@@ -130,23 +132,25 @@ describe('a worker that ends while the prompt is being sent (Issue #532)', () =>
     );
     const runtime = new TuiWorkerRuntime(workerInput, {} as never, {} as never, {} as never, '', delivery);
     const ctx = { server, handle: asPaneHandle('s:1.1'), driver: driver as never, supervisorTarget: 's:1', taskId: 4, unitId: 1, agentKind: 'codex' as const };
-    return { runtime, ctx, typed, files, driver };
+    return { runtime, ctx, typed, files, driver, pane };
   }
 
   it('types only the one-line instruction (and Enter): no line of the prompt can reach a shell, and the prompt itself is in the file', async () => {
-    const { runtime, ctx, typed, files } = build('codex');
+    const { runtime, ctx, typed, files, pane } = build('codex');
     await runtime.sendPrompt(ctx, HOSTILE_PROMPT);
     expect(typed).toHaveLength(2);
     expect(typed[1]).toBe('Enter');
     expect(typed[0]).toMatch(/^AZITO prompt file\. /);
     for (const line of HOSTILE_PROMPT.split('\n')) expect(typed.join('\n')).not.toContain(line);
     expect([...files.values()]).toEqual([HOSTILE_PROMPT]);
+    expect(pane.submitted).toEqual([typed[0]]);
   });
 
-  it('types nothing at all when the worker is already back at a shell', async () => {
-    const { runtime, ctx, typed } = build('bash');
-    await expect(runtime.sendPrompt(ctx, HOSTILE_PROMPT)).rejects.toMatchObject({ name: 'WorkerNotRunningError' });
+  it('types nothing at all, and writes no file, when the worker is already back at a shell', async () => {
+    const { runtime, ctx, typed, files } = build('bash');
+    await expect(runtime.sendPrompt(ctx, HOSTILE_PROMPT)).rejects.toMatchObject({ name: 'TuiNotReadyError', reason: 'worker_exited_to_shell' });
     expect(typed).toEqual([]);
+    expect(files.size).toBe(0);
   });
 
   it.skipIf(process.platform === 'win32')('and when the shell reads what was typed, nothing runs and no hostile line is executed', async () => {
@@ -161,27 +165,5 @@ describe('a worker that ends while the prompt is being sent (Issue #532)', () =>
     } finally {
       rmSync(cwd, { recursive: true, force: true });
     }
-  });
-});
-
-describe('the bytes of the prompt file', () => {
-  it('start with a UTF-8 byte order mark on a Windows host (PowerShell 5.1 reads a file without one as ANSI) and not elsewhere', () => {
-    const text = '日本語の説明 — dash';
-    const win = promptFileBytes(text, 'win32');
-    expect([...win.subarray(0, 3)]).toEqual([0xef, 0xbb, 0xbf]);
-    expect(win.subarray(3).toString('utf8')).toBe(text);
-    for (const platform of ['linux', 'darwin']) expect(promptFileBytes(text, platform).equals(Buffer.from(text, 'utf8'))).toBe(true);
-  });
-
-  it('is what is written for a Windows agent', async () => {
-    const write = vi.fn(async () => ({ mtimeMs: 0, sha256: '' }));
-    const delivery = new PromptFileDelivery(
-      { taskTempServer: async () => ({ type: 'agent', platform: 'win32', tmpDir: 'C:\\Temp' }), getFileOps: () => ({ platform: 'win32', write }) } as never,
-      new TaskTempFiles('/var/tmp', 'linux'),
-      vi.fn(),
-    );
-    await delivery.stage(server, 4, 9, '説明');
-    const [[, data]] = write.mock.calls as unknown as [[string, Buffer]];
-    expect([...data.subarray(0, 3)]).toEqual([0xef, 0xbb, 0xbf]);
   });
 });

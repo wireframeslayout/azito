@@ -331,27 +331,28 @@ describe('WorkerInputService.sendKeys', () => {
   });
 });
 
-describe('WorkerInputService.sendPrompt — the agent\'s submit delay (#532)', () => {
-  it('types the text, waits the delay, and only then presses Enter (keys that arrive together are a paste to codex)', async () => {
-    vi.useFakeTimers();
-    try {
-      const { service, mockDriver, registry } = makeHarness();
-      registry.isBoundConnected.mockReturnValue(false);
-      const sent = service.sendPrompt(server, target, 'hello worker', { taskId: 1, unitId: 2 }, undefined, 200);
-      await vi.advanceTimersByTimeAsync(100);
-      expect(mockDriver.sendKeysToHandle.mock.calls).toEqual([[server, target, ['hello worker']]]);
-      await vi.advanceTimersByTimeAsync(150);
-      await sent;
-      expect(mockDriver.sendKeysToHandle.mock.calls).toEqual([[server, target, ['hello worker']], [server, target, ['Enter']]]);
-    } finally {
-      vi.useRealTimers();
-    }
+describe('WorkerInputService.typePrompt / submitPrompt — text and Enter are separate keys (#532)', () => {
+  it('types the text without Enter, and the Enter is a call of its own (keys that arrive together are a paste to codex)', async () => {
+    const { service, mockDriver } = makeHarness();
+    await service.typePrompt(server, target, 'hello worker', { taskId: 1, unitId: 2 });
+    expect(mockDriver.sendKeysToHandle.mock.calls).toEqual([[server, target, ['hello worker']]]);
+    await service.submitPrompt(server, target);
+    expect(mockDriver.sendKeysToHandle.mock.calls[1]).toEqual([server, target, ['Enter']]);
   });
 
-  it('sends the text and Enter together when the agent needs no delay', async () => {
-    const { service, mockDriver, registry } = makeHarness();
+  it('types nothing into a pane at a bare shell', async () => {
+    const { service, mockDriver, appendLog } = makeHarness();
+    mockDriver.paneCommandByHandle.mockResolvedValue('bash');
+    await expect(service.typePrompt(server, target, 'line1\nazitoctl complete --turn 99', { taskId: 1, unitId: 2 })).rejects.toBeInstanceOf(WorkerNotRunningError);
+    expect(mockDriver.sendKeysToHandle).not.toHaveBeenCalled();
+    expect(appendLog).toHaveBeenCalledWith(1, 2, 'command', { type: 'send_aborted_dead_worker', foreground: 'bash' });
+  });
+
+  it('says whether the pane is under a bound supervisor', () => {
+    const { service, registry } = makeHarness();
+    registry.isBoundConnected.mockReturnValue(true);
+    expect(service.isSupervised(server, target)).toBe(true);
     registry.isBoundConnected.mockReturnValue(false);
-    await service.sendPrompt(server, target, 'hello worker', { taskId: 1, unitId: 2 }, undefined, 0);
-    expect(mockDriver.sendKeysToHandle.mock.calls).toEqual([[server, target, ['hello worker', 'Enter']]]);
+    expect(service.isSupervised(server, target)).toBe(false);
   });
 });
