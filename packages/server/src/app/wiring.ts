@@ -544,7 +544,7 @@ function buildExecuteTaskUseCase(
   dataPaths: DataPaths,
   hubGitSupport: HubGitSupport,
   hubGitIdentity: GitIdentity | null,
-  harnessPrefix?: string,
+  harnessPrefix: string,
 ): ExecuteTaskUseCase {
 
   const sftpService = new SftpService(infra.sshClient);
@@ -751,7 +751,8 @@ export async function buildWiring(db: SqliteDatabase, publicUrl: string, localUr
   // SupervisorRegistry — constructed inside it — can be given the same
   // resolved flag instead of re-reading process.env itself.
   const scopedAuthEnabled = resolveScopedAuthEnabled();
-  const harnessPrefix = process.env.AZITO_HARNESS_PREFIX || undefined;
+  // '' = no prefix. Resolved once here and handed to everything that names the harness folder (install, prompt azitoctl path).
+  const harnessPrefix = process.env.AZITO_HARNESS_PREFIX ?? '';
   const infra = buildSharedInfra(agentBundler, publicUrl, localUrl, dataPaths, uiToken, webhookToken, scopedAuthEnabled, misaoRuntime, hostEnv, secretFileGuard, hubHost, resolveWindowsAgentOptions(process.env), (name) => repos.serverRepo.findByName(name), db, fingerprintStore, repos.auditLogService);
   const pushNotification = buildPushNotificationModule(repos.pushSubRepo);
   const agentHostRecorder = new AgentHostRecorder(repos.serverRepo, infra.transportFactory, Date.now, console);

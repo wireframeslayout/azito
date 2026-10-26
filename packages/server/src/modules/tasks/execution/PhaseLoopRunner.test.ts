@@ -1,3 +1,4 @@
+import { harnessLocation } from '../../servers/agent-deploy/harnessLocation';
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { asPaneHandle } from '@azito/shared';
 import { PhaseLoopRunner } from './PhaseLoopRunner';
@@ -71,6 +72,7 @@ function makeRunner(overrides: {
   sleepTaskWindows?: (...args: unknown[]) => Promise<number[]>;
   pushNotaryService?: Record<string, unknown> | null;
   transportFactory?: Record<string, unknown>;
+  harnessPrefix?: string;
 } = {}) {
   const taskRepo = {
     findById: vi.fn(() => ({
@@ -214,6 +216,7 @@ function makeRunner(overrides: {
     (overrides.pushNotaryService ?? null) as any,
     sleepTaskWindows,
     new TaskTempFiles('/tmp', 'linux'),
+    overrides.harnessPrefix ?? '',
   );
 
   return { runner, taskRepo, projectRepo, projectServerRepo, serverRepo, projectSecretRepo, unitRepo, unitTypeLoader, sidekickLoader, workerInput, workerWaiter, appendLog, getWorktreeService, transportFactory, sidekickSyncService, httpSignalCoordinator, pushVerifier, gitProvider, pullRequestCreator, sleepTaskWindows };
@@ -419,6 +422,24 @@ describe('PhaseLoopRunner http-signal execution mode (Issue: AZITO監視強化 P
     }));
     expect(workerWaiter.startSignalStream).not.toHaveBeenCalled();
     expect(workerInput.sendPrompt.mock.calls[0][2]).toBe('http-signal prompt');
+  });
+
+  it.each(['', 'w806rc'])("hands the worker's prompt the azitoctl.mjs the harness install put on a Windows agent (harness prefix %j)", async (harnessPrefix) => {
+    const windowsAgent = { name: 'win', type: 'agent' } as any;
+    const transportFactory = {
+      hostProfileFor: vi.fn(() => ({ platform: 'win32', arch: 'x64' })),
+      getFileOps: vi.fn(() => ({ realpath: vi.fn(async () => 'C:\\Users\\me') })),
+      getAgentTransport: vi.fn(() => ({ fetchNodeExecPath: vi.fn(async () => 'C:\\Program Files\\nodejs\\node.exe') })),
+    };
+    const { runner, httpSignalCoordinator } = makeRunner({ harnessPrefix, transportFactory });
+    const unit = makeUnitForRun({ workerExecutionMode: 'http-signal' });
+
+    await runner.stateMachineLoop(unit, 'win', task, windowsAgent, asPaneHandle('sess:1.1'), {} as any, new AbortController().signal, 'sess:1', null, false);
+
+    const installed = harnessLocation('win32', 'C:\\Users\\me', harnessPrefix || undefined).harnessDir.replace(/\\/g, '/');
+    expect(httpSignalCoordinator.start).toHaveBeenCalledWith(expect.objectContaining({
+      host: { os: 'windows', azitoctl: `"C:/Program Files/nodejs/node.exe" "${installed}/bin/azitoctl.mjs"` },
+    }));
   });
 
   it('advances to the next phase on an explicit azitoctl completion even when the output payload/file is empty', async () => {

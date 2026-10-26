@@ -189,7 +189,7 @@ export class ExecuteTaskUseCase {
     // windows is forbidden). Wired as an adapter in wiring.ts.
     private primaryWindowWaker: IPrimaryWindowWaker,
     private taskTempFiles: TaskTempFiles,
-    private harnessPrefix?: string,
+    private harnessPrefix: string,
     private hubGitIdentity: GitIdentity | null = null,
   ) {
     this.gitInfoCollector = new GitInfoCollector(this.transportFactory);
@@ -243,6 +243,7 @@ export class ExecuteTaskUseCase {
       this.pushNotaryService,
       this.sleepTaskWindows,
       this.taskTempFiles,
+      this.harnessPrefix,
     );
   }
 
@@ -2001,7 +2002,7 @@ export class ExecuteTaskUseCase {
       const runtime = this.runtimeRegistry.get(unit.workerRuntime);
       const envelopeResult = runtime.buildFollowUpEnvelope({
         nonce, taskId, unitId, workerExecutionMode: unit.workerExecutionMode,
-        server, host: await resolveEnvelopeHost(this.transportFactory, server), tempServer, handle, supervisorTarget: windowTarget, prompt: expandedComment, outputFilePath,
+        server, host: await resolveEnvelopeHost(this.transportFactory, server, this.harnessPrefix), tempServer, handle, supervisorTarget: windowTarget, prompt: expandedComment, outputFilePath,
         doneMarker, questionsMarker, testFailedMarker,
       });
       const followUpSignalStream = envelopeResult.signalStream;
