@@ -221,9 +221,9 @@
     "healthy": "正常",
     "warning": "注意",
     "critical": "危険",
+    "unknown": "計測できない",
     "updateAvailable": "更新あり",
     "updateAvailableWithCount": "更新あり ({{count}})",
-    "disconnected": "接続断",
     "criticalMemory": "危険（メモリ {{percent}}%）",
     "warningMemory": "注意（メモリ {{percent}}%）",
     "fetchingResources": "リソース情報を取得中…",
@@ -231,7 +231,15 @@
     "activityDiagnostics": "稼働検知",
     "activityEventDriven": "イベント駆動で検知中",
     "activityFallback": "フォールバック判定のみ",
-    "activityNone": "稼働なし"
+    "activityNone": "稼働なし",
+    "unavailable": "計測できない（{{reason}}）",
+    "unavailableReason": {
+      "agent_outdated": "agent が古いため更新が必要",
+      "unreachable": "接続できない",
+      "timeout": "応答がない",
+      "failed": "計測に失敗"
+    },
+    "loadNotMeasured": "負荷は計測しない"
   },
   "globalPages": {
     "backToWorkspace": "ワークスペースに戻る",

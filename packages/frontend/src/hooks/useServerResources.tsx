@@ -3,11 +3,20 @@ import { useTranslation } from 'react-i18next';
 import { api } from '../api/client';
 import { useToast } from './useToast';
 
-export type HealthLevel = 'healthy' | 'warning' | 'critical';
+/** `unknown`: the server could not be measured (see `ResourceUnavailable`). It is not a fault of the server, so it is not `critical`. */
+export type HealthLevel = 'healthy' | 'warning' | 'critical' | 'unknown';
+
+/** Why the hub could not measure a server (the `unavailable.reason` of `/api/servers/resources`). */
+export type ResourceUnavailableReason = 'agent_outdated' | 'unreachable' | 'timeout' | 'failed';
+
+export interface ResourceUnavailable {
+  reason: ResourceUnavailableReason;
+}
 
 interface ResourceMeasurement {
   memAvailablePercent: number;
-  loadPerCore: number;
+  /** Null: the host has no load average (Windows), so the load is not measured. */
+  loadPerCore: number | null;
   memTotalBytes: number;
   memAvailableBytes: number;
   diskUsedPercent: number | null;
@@ -19,6 +28,8 @@ export interface ServerResourceEntry {
   serverName: string;
   type: string;
   measurement: ResourceMeasurement | null;
+  /** Set exactly when `measurement` is null. */
+  unavailable: ResourceUnavailable | null;
 }
 
 interface AllServersResourceData {
@@ -39,11 +50,12 @@ export interface ServerResourceDetail {
   serverName: string;
   type: string;
   measurement: ResourceMeasurement | null;
+  unavailable: ResourceUnavailable | null;
   windows?: ServerResourceWindow[];
 }
 
 export function getHealthLevel(measurement: ResourceMeasurement | null): HealthLevel {
-  if (!measurement) return 'critical';
+  if (!measurement) return 'unknown';
   const memUsedPercent = 100 - measurement.memAvailablePercent;
   if (memUsedPercent >= 85) return 'critical';
   if (memUsedPercent >= 60) return 'warning';
@@ -53,6 +65,8 @@ export function getHealthLevel(measurement: ResourceMeasurement | null): HealthL
 export function getWorstHealth(levels: HealthLevel[]): HealthLevel {
   if (levels.includes('critical')) return 'critical';
   if (levels.includes('warning')) return 'warning';
+  // 計測できないサーバーがある間は「正常」と言わない。ただし実際に測れた critical / warning は隠さない。
+  if (levels.includes('unknown')) return 'unknown';
   return 'healthy';
 }
 

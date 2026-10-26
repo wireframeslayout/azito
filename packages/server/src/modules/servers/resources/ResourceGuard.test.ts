@@ -1,5 +1,8 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { ResourceGuard, parseMeasurement } from './ResourceGuard';
+import { ResourceGuard, ResourceExhaustedError, parseMeasurement, resourceCheckBody, measurementFromSample } from './ResourceGuard';
+import { AgentResourcesOutdatedError, type HostResourceSample } from '../../../shared/os/hostResources';
+import { AgentUnreachableError } from '../transport/AgentUnreachableError';
+import { HostProfileError } from '../../../shared/os/hostProfile';
 import type { ServerConfig } from '../Server';
 
 const server = { name: 'local', type: 'local' } as ServerConfig;
@@ -15,7 +18,7 @@ function makeGuard(opts: {
   const exec = opts.execError
     ? vi.fn(async () => { throw new Error('exec failed'); })
     : vi.fn(async () => ({ stdout: opts.stdout ?? '', stderr: '', code: opts.code ?? 0 }));
-  const transportFactory = { getTransport: vi.fn(() => ({ exec })) };
+  const transportFactory = { hostProfileFor: () => null, getTransport: vi.fn(() => ({ exec })) };
   const settingsRepo = {
     get: vi.fn(() => ({
       enabled: opts.enabled ?? true,
@@ -141,7 +144,9 @@ describe('ResourceGuard.check', () => {
     const status = await guard.check(server);
     expect(status.ok).toBe(true);
     expect(status.memAvailablePercent).toBeNull();
+    expect(warn).toHaveBeenCalledWith(expect.stringContaining('failed'));
     expect(warn).toHaveBeenCalledWith(expect.stringContaining('fail-open'));
+    expect(status.skipped).toEqual({ reason: 'failed' });
     warn.mockRestore();
   });
 
@@ -179,8 +184,8 @@ describe('ResourceGuard.measure cache', () => {
 
   it('caches null results (failed measurement) too', async () => {
     const { guard, exec } = makeGuard({ execError: true });
-    expect(await guard.measure(server)).toBeNull();
-    expect(await guard.measure(server)).toBeNull();
+    expect((await guard.measure(server)).measurement).toBeNull();
+    expect((await guard.measure(server)).measurement).toBeNull();
     expect(exec).toHaveBeenCalledTimes(1);
   });
 
@@ -189,7 +194,7 @@ describe('ResourceGuard.measure cache', () => {
     const exec = vi.fn(() => new Promise<{ stdout: string; stderr: string; code: number }>((resolve) => {
       resolveExec = resolve;
     }));
-    const transportFactory = { getTransport: vi.fn(() => ({ exec })) };
+    const transportFactory = { hostProfileFor: () => null, getTransport: vi.fn(() => ({ exec })) };
     const settingsRepo = {
       get: vi.fn(() => ({ enabled: true, memAvailablePercentMin: 10, loadPerCoreMax: 2.0 })),
       update: vi.fn(),
@@ -206,7 +211,7 @@ describe('ResourceGuard.measure cache', () => {
 
   it('returns null after 10s when exec never resolves', async () => {
     const exec = vi.fn(() => new Promise(() => {})); // never resolves
-    const transportFactory = { getTransport: vi.fn(() => ({ exec })) };
+    const transportFactory = { hostProfileFor: () => null, getTransport: vi.fn(() => ({ exec })) };
     const settingsRepo = {
       get: vi.fn(() => ({ enabled: true, memAvailablePercentMin: 10, loadPerCoreMax: 2.0 })),
       update: vi.fn(),
@@ -215,6 +220,142 @@ describe('ResourceGuard.measure cache', () => {
 
     const promise = guard.measure(server);
     await vi.advanceTimersByTimeAsync(10000);
-    expect(await promise).toBeNull();
+    expect(await promise).toEqual({ measurement: null, unavailable: { reason: 'timeout' } });
+  });
+});
+
+
+describe('ResourceGuard.check skipped', () => {
+  it('has no skipped when the check was made or the guard is disabled', async () => {
+    expect((await makeGuard({ stdout: HEALTHY_STDOUT }).guard.check(server)).skipped).toBeNull();
+    expect((await makeGuard({ enabled: false }).guard.check(server)).skipped).toBeNull();
+  });
+
+  it('names the reason of a skipped check, still fail-open', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const status = await makeGuard({ stdout: 'command not found' }).guard.check(server);
+    expect(status).toMatchObject({ ok: true, reasons: [], skipped: { reason: 'failed' } });
+    warn.mockRestore();
+  });
+
+  it('logs a server that stays unmeasurable once per reason', async () => {
+    vi.useFakeTimers();
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const { guard } = makeGuard({ execError: true });
+    await guard.check(server);
+    vi.advanceTimersByTime(6000);
+    await guard.check(server);
+    expect(warn).toHaveBeenCalledTimes(1);
+    warn.mockRestore();
+    vi.useRealTimers();
+  });
+
+  it('logs again when the same reason comes back after a measurement succeeded', async () => {
+    vi.useFakeTimers();
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    let failing = true;
+    const exec = vi.fn(async () => ({ stdout: failing ? 'garbage' : HEALTHY_STDOUT, stderr: '', code: 0 }));
+    const guard = new ResourceGuard({ hostProfileFor: () => null, getTransport: () => ({ exec }) } as never, { get: () => ({ enabled: true, memAvailablePercentMin: 10, loadPerCoreMax: 2 }) } as never);
+    await guard.check(server);
+    expect(warn).toHaveBeenCalledTimes(1);
+    failing = false;
+    vi.advanceTimersByTime(6000);
+    expect((await guard.measure(server)).measurement).not.toBeNull(); // a poll, not a check
+    failing = true;
+    vi.advanceTimersByTime(6000);
+    await guard.check(server);
+    expect(warn).toHaveBeenCalledTimes(2);
+    warn.mockRestore();
+    vi.useRealTimers();
+  });
+
+  it('writes an unmeasured load as n/a in the exhausted error', () => {
+    const status = { ok: false, reasons: ['memory'], memAvailablePercent: 5, loadPerCore: null, memAvailablePercentMin: 10, loadPerCoreMax: 2, skipped: null } as const;
+    expect(new ResourceExhaustedError('h', { ...status, reasons: ['memory'] }).message).toContain('loadPerCore=n/a');
+  });
+
+  it('resourceCheckBody carries only a skipped check', () => {
+    expect(resourceCheckBody(null)).toEqual({});
+    expect(resourceCheckBody({ reason: 'unreachable' })).toEqual({ resourceCheck: { skipped: { reason: 'unreachable' } } });
+  });
+});
+
+const SAMPLE: HostResourceSample = { memTotalBytes: 16_000, memAvailableBytes: 8_000, disk: { usedBytes: 100, totalBytes: 400 } };
+
+function makeHostGuard(opts: { platform: 'win32' | 'linux' | 'darwin' | null; type?: 'local' | 'agent'; measureHostResources?: () => Promise<HostResourceSample>; memMin?: number; loadMax?: number }) {
+  const exec = vi.fn(async () => ({ stdout: HEALTHY_STDOUT, stderr: '', code: 0 }));
+  const measureHostResources = vi.fn(opts.measureHostResources ?? (async () => SAMPLE));
+  const transportFactory = {
+    hostProfileFor: vi.fn(() => (opts.platform ? { platform: opts.platform, arch: 'x64' } : null)),
+    getTransport: vi.fn(() => ({ exec, measureHostResources })),
+  };
+  const settingsRepo = { get: vi.fn(() => ({ enabled: true, memAvailablePercentMin: opts.memMin ?? 10, loadPerCoreMax: opts.loadMax ?? 2.0 })), update: vi.fn() };
+  const guard = new ResourceGuard(transportFactory as never, settingsRepo as never);
+  const srv = { name: 'h', type: opts.type ?? 'local' } as ServerConfig;
+  return { guard, exec, measureHostResources, srv };
+}
+
+describe('ResourceGuard by the host OS', () => {
+  it('measures a win32 local host with Node (no sh), without a load', async () => {
+    const { guard, exec, measureHostResources, srv } = makeHostGuard({ platform: 'win32' });
+    const result = await guard.measure(srv);
+    expect(exec).not.toHaveBeenCalled();
+    expect(measureHostResources).toHaveBeenCalledTimes(1);
+    expect(result.measurement).toEqual({
+      memAvailablePercent: 50, loadPerCore: null, memTotalBytes: 16_000, memAvailableBytes: 8_000,
+      diskUsedPercent: 25, diskUsedBytes: 100, diskTotalBytes: 400,
+    });
+    expect(result.unavailable).toBeNull();
+  });
+
+  it('measures a win32 agent through the agent API', async () => {
+    const { guard, exec, measureHostResources, srv } = makeHostGuard({ platform: 'win32', type: 'agent' });
+    expect((await guard.measure(srv)).measurement?.memAvailablePercent).toBe(50);
+    expect(measureHostResources).toHaveBeenCalled();
+    expect(exec).not.toHaveBeenCalled();
+  });
+
+  it('reports a 404 of the agent API as agent_outdated', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const { guard, srv } = makeHostGuard({ platform: 'win32', type: 'agent', measureHostResources: async () => { throw new AgentResourcesOutdatedError('h'); } });
+    expect(await guard.measure(srv)).toEqual({ measurement: null, unavailable: { reason: 'agent_outdated' } });
+    expect((await guard.check(srv)).skipped).toEqual({ reason: 'agent_outdated' });
+    warn.mockRestore();
+  });
+
+  it('reports an unreachable agent as unreachable', async () => {
+    const { guard, srv } = makeHostGuard({ platform: 'win32', type: 'agent', measureHostResources: async () => { throw new AgentUnreachableError('h', 'circuit_open'); } });
+    expect((await guard.measure(srv)).unavailable).toEqual({ reason: 'unreachable' });
+  });
+
+  it('reports the agent client giving up on its own deadline as timeout', async () => {
+    const { guard, srv } = makeHostGuard({ platform: 'win32', type: 'agent', measureHostResources: async () => { throw new AgentUnreachableError('h', 'timeout'); } });
+    expect((await guard.measure(srv)).unavailable).toEqual({ reason: 'timeout' });
+  });
+
+  it('reports any other failure of the host as failed', async () => {
+    const { guard, srv } = makeHostGuard({ platform: 'win32', measureHostResources: async () => { throw new HostProfileError('unsupported_os', 'no'); } });
+    expect((await guard.measure(srv)).unavailable).toEqual({ reason: 'failed' });
+  });
+
+  it.each(['linux', 'darwin', null] as const)('keeps the sh measurement on %s (and on an agent with no recorded OS)', async (platform) => {
+    const { guard, exec, measureHostResources, srv } = makeHostGuard({ platform });
+    const result = await guard.measure(srv);
+    expect(exec).toHaveBeenCalledTimes(1);
+    expect(measureHostResources).not.toHaveBeenCalled();
+    expect(result.measurement?.loadPerCore).toBeCloseTo(0.5, 5);
+  });
+
+  it('judges only the memory when the host has no load', async () => {
+    const low = makeHostGuard({ platform: 'win32', measureHostResources: async () => ({ ...SAMPLE, memAvailableBytes: 800 }) });
+    expect((await low.guard.check(low.srv)).reasons).toEqual(['memory']);
+    // a load limit that would trip on any real load never trips without one
+    const ok = makeHostGuard({ platform: 'win32', loadMax: 0.0001 });
+    const status = await ok.guard.check(ok.srv);
+    expect(status).toMatchObject({ ok: true, reasons: [], loadPerCore: null, skipped: null });
+  });
+
+  it('measurementFromSample leaves the disk null when it was not read', () => {
+    expect(measurementFromSample({ ...SAMPLE, disk: null })).toMatchObject({ diskUsedPercent: null, diskUsedBytes: null, diskTotalBytes: null });
   });
 });

@@ -228,6 +228,8 @@ function buildUseCase(opts: {
   projectServersList?: Array<{ projectId: number; serverName: string; workingDirectory: string | null; branch: string | null; tmuxSession: string; inputPolicy?: 'deny' | 'manual-approval' | 'allow'; distributeCode?: boolean; distributionRepositoryId?: number | null }>;
   /** When set, overrides the server returned by serverRepo.findByName (default: makeServer(), type 'local'). */
   server?: ServerConfig;
+  /** When set, the resource guard answers this instead of an unchecked ok (a check that was skipped carries `skipped`). */
+  resourceStatus?: Record<string, unknown>;
   /** Issue #87 Phase 2: stubs projectRepo.findRepositoryById — a repository row with a token, for fetch-distribution gate tests. */
   repository?: { id: number; url: string; provider: 'github' | 'gitlab'; owner: string | null; repoName: string | null; token: string | null };
   /** Issue #87 Phase 2: injected as the constructor's fetchDistributionService param — when set, the fetch-distribution gate can actually run. */
@@ -470,7 +472,7 @@ function buildUseCase(opts: {
     turnSignalHub as any,
     supervisorRegistry as any,
     unitTypeLoader as any,
-    { check: vi.fn(async () => ({ ok: true, reasons: [], memAvailablePercent: null, loadPerCore: null, memAvailablePercentMin: 10, loadPerCoreMax: 2 })) } as any,
+    { check: vi.fn(async () => opts.resourceStatus ?? ({ ok: true, reasons: [], memAvailablePercent: null, loadPerCore: null, memAvailablePercentMin: 10, loadPerCoreMax: 2, skipped: null })) } as any,
     projectSecretRepo as any,
     new EventEmitter(),
     paneEnvService as any,
@@ -493,6 +495,22 @@ function buildUseCase(opts: {
 describe('ExecuteTaskUseCase execution-env resolution', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+  });
+
+  it('logs a skipped resource check with its reason and goes on', async () => {
+    const unit = makeUnit({ id: 42, workerType: 'claude', workerModel: 'opus' });
+    const task = makeTask({ serverName: 'local-server', unitId: 42 });
+    const { useCase, logRepo, windowRepo } = buildUseCase({
+      task,
+      project: makeProject({ defaultUnitId: null }),
+      units: [unit],
+      resourceStatus: { ok: true, reasons: [], memAvailablePercent: null, loadPerCore: null, memAvailablePercentMin: 10, loadPerCoreMax: 2, skipped: { reason: 'agent_outdated' } },
+    });
+
+    await useCase.execute(42, 1);
+
+    expect(logRepo.append).toHaveBeenCalledWith(1, 42, 'command', { type: 'resource_guard_skipped', reason: 'agent_outdated' });
+    expect(windowRepo.add).toHaveBeenCalled();
   });
 
   it('resolves the Unit from task.unitId when set', async () => {

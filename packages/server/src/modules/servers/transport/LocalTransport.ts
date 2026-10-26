@@ -1,3 +1,4 @@
+import { measureHostResources, systemDriveOf, type HostResourceSample } from '../../../shared/os/hostResources';
 import { EventEmitter } from 'events';
 import { hostRunsTmux } from '../muxKinds';
 import { MuxDriverUnavailableError } from '../../tmux/MuxCapabilityError';
@@ -86,6 +87,11 @@ export class LocalTransport implements IServerTransport, IMuxTransport, IHostBou
 
   listProcesses(options?: ListProcessesOptions): Promise<ProcessEntry[]> {
     return listProcessesWith(this.host.platform, (spec) => this.run(spec), options);
+  }
+
+  /** Node's `os` / `fs` on the hub itself; the disk is the system drive of a Windows hub. */
+  measureHostResources(): Promise<HostResourceSample> {
+    return measureHostResources(systemDriveOf(this.host.systemRoot));
   }
 
   /** @deprecated POSIX-only: runs `command` with `/bin/sh -c`. Rejects on a win32 host. */

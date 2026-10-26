@@ -9,6 +9,7 @@ import { useTerminalTheme } from '../hooks/useTerminalTheme';
 import { buildWsUrl } from '../api/wsUrl';
 import { useToast } from '../hooks/useToast';
 import { useTranslation } from 'react-i18next';
+import { classify } from '../lib/taskLogClassify';
 
 interface PhasePrompt {
   id: number;
@@ -40,39 +41,6 @@ interface TaskLogViewProps {
 
 function parseContent(raw: string): any {
   try { return JSON.parse(raw); } catch { return raw; }
-}
-
-/** Classify a log entry into a visual style bucket */
-function classify(type: string, parsed: any): 'system' | 'orchestrator' | 'worker-prompt' | 'terminal' | 'done' | 'error' | 'launch' | 'auto-approve' | 'user-comment' | 'session-resumed' | 'warning' | 'info-identity' | null {
-  if (type === 'user_comment') return 'user-comment';
-  if (type === 'status_change') {
-    if (typeof parsed === 'object' && parsed !== null) {
-      if (parsed.status === 'done') return 'done';
-      if (parsed.status === 'failed') return 'error';
-      if (parsed.status === 'session_resumed') return 'session-resumed';
-    }
-    return 'system';
-  }
-  if (type === 'llm_request') return 'orchestrator';
-  if (type === 'llm_response') {
-    if (typeof parsed === 'object' && parsed?.action === 'done') return 'done';
-    if (typeof parsed === 'object' && parsed?.action === 'error') return 'error';
-    // prompt responses are shown via the subsequent 'command' log entry, skip here
-    return 'orchestrator';
-  }
-  if (type === 'command') {
-    if (typeof parsed === 'object' && parsed !== null) {
-      if (parsed.type === 'git_identity_missing' || parsed.type === 'git_identity_failed') return 'warning';
-      if (parsed.type === 'git_identity_applied') return 'info-identity';
-      if (parsed.type === 'wait_poll' || parsed.type === 'wait_start' || parsed.type === 'llm_classify') return null;
-      if (parsed.type === 'worker_prompt') return 'worker-prompt';
-      if (parsed.type === 'worker_launch') return 'launch';
-      if (parsed.type === 'auto_approve') return 'auto-approve';
-    }
-    return 'system';
-  }
-  if (type === 'output') return 'terminal';
-  return 'system';
 }
 
 // ── Bubble renderers ──
@@ -337,6 +305,7 @@ function GitIdentityAppliedBubble({ parsed, time }: { parsed: any; time: string 
 // ── Render a single log entry ──
 
 function ChatBubble({ log }: { log: LogEntry }) {
+  const { t } = useTranslation('tasks');
   const parsed = parseContent(log.content);
   const kind = classify(log.type, parsed);
   if (kind === null) return null;
@@ -355,6 +324,12 @@ function ChatBubble({ log }: { log: LogEntry }) {
       }
       return <SystemBubble time={log.createdAt}>{msg}</SystemBubble>;
     }
+    case 'resource-skipped':
+      return (
+        <WarningBubble time={log.createdAt}>
+          {t('log.resourceGuardSkipped', { reason: t(`common:statusbar.unavailableReason.${parsed.reason}`) })}
+        </WarningBubble>
+      );
     case 'orchestrator':
       return <OrchestratorBubble parsed={parsed} time={log.createdAt} logType={log.type} />;
     case 'worker-prompt':

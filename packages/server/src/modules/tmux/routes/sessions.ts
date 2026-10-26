@@ -1,4 +1,5 @@
 import type { FastifyPluginCallback, FastifyReply } from 'fastify';
+import { resourceCheckBody, type ResourceGuard, type ResourceUnavailable } from '../../servers/resources/ResourceGuard';
 import type { IServerRepository, ServerConfig } from '../../servers/Server';
 import type { ExecResult } from '../../servers/transport/ServerTransport';
 import type { TmuxClient, TmuxSession } from '../TmuxClient';
@@ -6,7 +7,6 @@ import { uiTokenEnvForServer } from '../../../shared/auth/uiTokenEnv';
 import type { SqliteWindowRepository } from '../../windows/SqliteWindowRepository';
 import { isPrimaryTaskWindow } from '../../windows/SqliteWindowRepository';
 import type { NotificationBus } from '../../notifications/NotificationBus';
-import type { ResourceGuard } from '../../servers/resources/ResourceGuard';
 import { resolveKillOutcome, type KillOutcome } from '../killOutcome';
 import type { KeyedMutex } from '../../../shared/keyedMutex';
 import { formatMuxRef, parseMuxRef, muxRefFromTmuxTarget, tmuxTargetFromMuxRef, asPaneHandle, type MuxDriverKind, type MuxRef, type MuxUnavailableKind, type PaneOrdinal } from '@azito/shared';
@@ -407,10 +407,12 @@ const sessionsRoutes: FastifyPluginCallback<SessionsRouteOptions> = (fastify, op
         const freshSrv = serverRepo.findByName(request.params.name);
         if (!freshSrv) return reply.status(404).send({ error: 'Server not found' });
         if (!requireTmuxDriver(freshSrv, reply)) return;
+        let resourceSkipped: ResourceUnavailable | null = null;
         if (opts.resourceGuard && force !== true) {
           const status = await opts.resourceGuard.check(freshSrv);
           if (!status.ok)
             return reply.status(409).send({ error: 'insufficient_resources', resources: status });
+          resourceSkipped = status.skipped;
         }
         try {
           // Manual, human-facing terminal session — intentionally uses
@@ -424,7 +426,7 @@ const sessionsRoutes: FastifyPluginCallback<SessionsRouteOptions> = (fastify, op
           if (result.code !== 0)
             return reply.status(500).send({ error: `new-session failed: ${result.stderr || result.stdout}` });
           notifySessionsChanged(request.params.name);
-          return { ok: true, windowName };
+          return { ok: true, windowName, ...resourceCheckBody(resourceSkipped) };
         } catch (err: unknown) {
           return replyRouteError(reply, err);
         }
@@ -447,10 +449,12 @@ const sessionsRoutes: FastifyPluginCallback<SessionsRouteOptions> = (fastify, op
         const freshSrv = serverRepo.findByName(request.params.name);
         if (!freshSrv) return reply.status(404).send({ error: 'Server not found' });
         if (!requireTmuxDriver(freshSrv, reply)) return;
+        let resourceSkipped: ResourceUnavailable | null = null;
         if (opts.resourceGuard && force !== true) {
           const status = await opts.resourceGuard.check(freshSrv);
           if (!status.ok)
             return reply.status(409).send({ error: 'insufficient_resources', resources: status });
+          resourceSkipped = status.skipped;
         }
         try {
           // Manual, human-facing window creation — see the `uiTokenEnvForServer`
@@ -460,7 +464,7 @@ const sessionsRoutes: FastifyPluginCallback<SessionsRouteOptions> = (fastify, op
             return reply.status(500).send({ error: `new-window failed: ${result.stderr || result.stdout}` });
           notifySessionsChanged(request.params.name);
           const createdRef: MuxRef = { kind: 'tmux', workspace: request.params.session, window: windowName };
-          return { ok: true, windowName, windowId: null, ref: formatMuxRef(createdRef) };
+          return { ok: true, windowName, windowId: null, ref: formatMuxRef(createdRef), ...resourceCheckBody(resourceSkipped) };
         } catch (err: unknown) {
           return replyRouteError(reply, err);
         }
@@ -1169,10 +1173,12 @@ const sessionsRoutes: FastifyPluginCallback<SessionsRouteOptions> = (fastify, op
         if (!requested.ok) return reply.status(requested.status).send(requested.body);
         const kind = requested.kind;
         const driver: IMuxClient = opts.muxDriverRegistry?.resolve(freshSrv) ?? tmux;
+        let resourceSkipped: ResourceUnavailable | null = null;
         if (opts.resourceGuard && force !== true) {
           const status = await opts.resourceGuard.check(freshSrv);
           if (!status.ok)
             return reply.status(409).send({ error: 'insufficient_resources', resources: status });
+          resourceSkipped = status.skipped;
         }
         try {
           const planned = await planLaunch(launch, freshSrv);
@@ -1184,7 +1190,7 @@ const sessionsRoutes: FastifyPluginCallback<SessionsRouteOptions> = (fastify, op
           }
           notifySessionsChanged(request.params.name);
           // `target` is the canonical window target; `windowName` is the display name only (a misao ref.window is an id).
-          return { ok: true, ref: formatMuxRef(ref), workspaceName: name, target: muxWindowTarget(ref), windowName: createdName ?? ref.window, ...(planned ? { agentSessionId: planned.agentSessionId } : {}) };
+          return { ok: true, ref: formatMuxRef(ref), workspaceName: name, target: muxWindowTarget(ref), windowName: createdName ?? ref.window, ...(planned ? { agentSessionId: planned.agentSessionId } : {}), ...resourceCheckBody(resourceSkipped) };
         } catch (err: unknown) {
           if (err instanceof WindowExistsError) return reply.status(409).send({ error: 'window_exists', windowName: err.windowName });
           return replyCreateError(reply, kind ?? freshSrv.defaultMux, err);
@@ -1209,10 +1215,12 @@ const sessionsRoutes: FastifyPluginCallback<SessionsRouteOptions> = (fastify, op
         if (!requested.ok) return reply.status(requested.status).send(requested.body);
         const kind = requested.kind;
         const driver: IMuxClient = opts.muxDriverRegistry?.resolve(freshSrv) ?? tmux;
+        let resourceSkipped: ResourceUnavailable | null = null;
         if (opts.resourceGuard && force !== true) {
           const status = await opts.resourceGuard.check(freshSrv);
           if (!status.ok)
             return reply.status(409).send({ error: 'insufficient_resources', resources: status });
+          resourceSkipped = status.skipped;
         }
         try {
           const workspace = decodeURIComponent(request.params.workspace);
@@ -1224,7 +1232,7 @@ const sessionsRoutes: FastifyPluginCallback<SessionsRouteOptions> = (fastify, op
             return reply.status(failure.status).send(failure.body);
           }
           notifySessionsChanged(request.params.name);
-          return { ok: true, ref: formatMuxRef(created.ref), target: muxWindowTarget(created.ref), windowName: created.windowName ?? created.ref.window, ...(planned ? { agentSessionId: planned.agentSessionId } : {}) };
+          return { ok: true, ref: formatMuxRef(created.ref), target: muxWindowTarget(created.ref), windowName: created.windowName ?? created.ref.window, ...(planned ? { agentSessionId: planned.agentSessionId } : {}), ...resourceCheckBody(resourceSkipped) };
         } catch (err: unknown) {
           if (err instanceof WindowExistsError) return reply.status(409).send({ error: 'window_exists', windowName: err.windowName });
           return replyCreateError(reply, kind ?? freshSrv.defaultMux, err);

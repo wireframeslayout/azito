@@ -512,6 +512,69 @@ describe('POST /api/windows/:id/respawn — execution gate (Issue #328 second-ro
   });
 });
 
+describe('resource check in the answers of launch-agent and respawn (#531)', () => {
+  const window = makeWindow();
+  const server = makeServer();
+
+  async function setup(check: ReturnType<typeof vi.fn>): Promise<FastifyInstance> {
+    const tmux: Partial<TmuxClient> = {
+      sendKeysToHandle: vi.fn().mockResolvedValue(undefined) as unknown as TmuxClient['sendKeysToHandle'],
+      resolvePane: vi.fn().mockResolvedValue('%0') as unknown as TmuxClient['resolvePane'],
+    };
+    const instance = Fastify();
+    await instance.register(windowsRoutes, {
+      harnessPrefix: '',
+      windowRepo: { findById: () => window, updateAgentSessionIdByWindow: vi.fn() } as unknown as IWindowRepository,
+      projectRepo: {} as IProjectRepository,
+      taskRepo: {} as ITaskRepository,
+      tmux: tmux as TmuxClient,
+      muxDriverRegistry: { resolve: () => tmux } as any,
+      serverRepo: { findByName: () => server } as unknown as IServerRepository,
+      transportFactory: { hostProfileFor: () => null },
+      respawnService: { respawn: vi.fn(async () => ({ tmuxTarget: window.tmuxTarget })) } as unknown as WindowRespawnService,
+      sleepService: { canSleep: vi.fn(() => false), sleep: vi.fn() } as unknown as WindowSleepService,
+      sessionStrategyFactory: {
+        create: () => ({
+          supportsSession: true,
+          needsPostLaunchScan: false,
+          buildNewSessionArgs: (id: string) => ['--session-id', id],
+          buildResumeArgs: (id: string) => ['--resume', id],
+          buildRespawnLaunch: () => null,
+          scanSessionId: vi.fn().mockResolvedValue(null),
+        }),
+      } as unknown as ISessionStrategyFactory,
+      sessionCaptureService: { scheduleInitialScan: vi.fn() } as unknown as SessionCaptureService,
+      supervisorRegistry: makeSupervisorRegistry(),
+      windowActivityStatusService: makeWindowActivityStatusService(),
+      resourceGuard: { check } as unknown as import('../servers/resources/ResourceGuard').ResourceGuard,
+      uiToken: 'test-token', serverIsolationMutex: new KeyedMutex(), buildSecondaryWindowEnv: () => ({}),
+    });
+    await instance.ready();
+    return instance;
+  }
+
+  const routes = [
+    { name: 'launch-agent', url: `/api/windows/${window.id}/launch-agent`, payload: { command: 'claude' } },
+    { name: 'respawn', url: `/api/windows/${window.id}/respawn`, payload: {} },
+  ];
+
+  it.each(routes)('$name says in the answer that the check was skipped, and why', async ({ url, payload }) => {
+    const app = await setup(vi.fn(async () => ({ ok: true, skipped: { reason: 'agent_outdated' } })));
+    const res = await app.inject({ method: 'POST', url, payload });
+    expect(res.statusCode).toBe(200);
+    expect(res.json().resourceCheck).toEqual({ skipped: { reason: 'agent_outdated' } });
+    await app.close();
+  });
+
+  it.each(routes)('$name has no resourceCheck when the check was made', async ({ url, payload }) => {
+    const app = await setup(vi.fn(async () => ({ ok: true, skipped: null })));
+    const res = await app.inject({ method: 'POST', url, payload });
+    expect(res.statusCode).toBe(200);
+    expect(res.json()).not.toHaveProperty('resourceCheck');
+    await app.close();
+  });
+});
+
 describe('GET /api/windows/activity-status (Issue #338 フォロー: process-based liveness supplement)', () => {
   it('proxies the WindowActivityStatusService snapshot as-is', async () => {
     const entries = [

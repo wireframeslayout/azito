@@ -3,7 +3,7 @@ import type { TFunction } from 'i18next';
 import { HealthDot } from './HealthDot';
 import { ResourceMeter } from './ResourceMeter';
 import { useServerResourceDetail } from '../../hooks/useServerResources';
-import type { HealthLevel, ServerResourceDetail, ServerResourceWindow } from '../../hooks/useServerResources';
+import type { HealthLevel, ResourceUnavailable, ServerResourceDetail, ServerResourceWindow } from '../../hooks/useServerResources';
 import { Icon } from '../ui/Icon';
 
 export function formatBytes(bytes: number): string {
@@ -13,22 +13,28 @@ export function formatBytes(bytes: number): string {
   return `${(bytes / 1024).toFixed(0)} KB`;
 }
 
-export function healthReasonText(level: HealthLevel, memUsedPercent: number | null, t: TFunction): string {
+/** 「計測できない（理由）」。理由が分からないときは理由なしの文言。 */
+export function unavailableText(unavailable: ResourceUnavailable | null, t: TFunction): string {
+  if (!unavailable) return t('common:statusbar.unknown');
+  return t('common:statusbar.unavailable', { reason: t(`common:statusbar.unavailableReason.${unavailable.reason}`) });
+}
+
+export function healthReasonText(level: HealthLevel, memUsedPercent: number | null, unavailable: ResourceUnavailable | null, t: TFunction): string {
   if (level === 'healthy') return t('common:statusbar.healthy');
-  if (level === 'critical') {
-    if (memUsedPercent === null) return t('common:statusbar.disconnected');
-    return t('common:statusbar.criticalMemory', { percent: Math.round(memUsedPercent) });
-  }
+  if (level === 'unknown') return unavailableText(unavailable, t);
+  if (level === 'critical') return t('common:statusbar.criticalMemory', { percent: Math.round(memUsedPercent ?? 0) });
   return t('common:statusbar.warningMemory', { percent: Math.round(memUsedPercent ?? 0) });
 }
 
 interface ResourceDropdownContentProps {
   serverName: string;
   health: HealthLevel;
+  /** Why the server could not be measured; null when it was. */
+  unavailable: ResourceUnavailable | null;
   meterWidth?: number;
 }
 
-export function ResourceDropdownContent({ serverName, health, meterWidth = 110 }: ResourceDropdownContentProps) {
+export function ResourceDropdownContent({ serverName, health, unavailable, meterWidth = 110 }: ResourceDropdownContentProps) {
   const { t } = useTranslation('common');
   const { detail, deleteLoading, handleDeleteWindow } = useServerResourceDetail(serverName);
 
@@ -50,7 +56,7 @@ export function ResourceDropdownContent({ serverName, health, meterWidth = 110 }
         <span style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
           <HealthDot level={health} />
           <span style={{ textTransform: 'uppercase' }}>{serverName}</span>
-          <span style={{ letterSpacing: 0 }}>— {healthReasonText(health, memUsedPercent, t)}</span>
+          <span style={{ letterSpacing: 0 }}>— {healthReasonText(health, memUsedPercent, unavailable, t)}</span>
         </span>
         <span>{detail?.type ?? ''}</span>
       </div>
@@ -83,10 +89,11 @@ export function ServerHealthDetailBody({ detail, meterWidth, onDeleteWindow, del
   const memUsedPercent = m ? 100 - m.memAvailablePercent : null;
   const memUsedBytes = m ? m.memTotalBytes - m.memAvailableBytes : null;
 
+  // 取得中（detail 未到着）と、取得したが計測できなかった（理由つき）を区別する。
   if (!m) {
     return (
-      <div style={{ padding: '12px 10px', color: 'var(--text-dim)', fontSize: 'var(--font-sm)' }}>
-        {t('statusbar.fetchingResources')}
+      <div role="status" style={{ padding: '12px 10px', color: 'var(--text-dim)', fontSize: 'var(--font-sm)' }}>
+        {detail ? unavailableText(detail.unavailable, t) : t('statusbar.fetchingResources')}
       </div>
     );
   }
@@ -108,13 +115,20 @@ export function ServerHealthDetailBody({ detail, meterWidth, onDeleteWindow, del
           warning={memUsedPercent !== null && memUsedPercent >= 60}
           meterWidth={meterWidth}
         />
-        <MetricRow
-          label="CPU"
-          value={Math.min(100, m.loadPerCore * 100)}
-          detail={`${Math.round(m.loadPerCore * 100)}% · load ${m.loadPerCore.toFixed(1)}`}
-          warning={m.loadPerCore > 1.5}
-          meterWidth={meterWidth}
-        />
+        {m.loadPerCore !== null ? (
+          <MetricRow
+            label="CPU"
+            value={Math.min(100, m.loadPerCore * 100)}
+            detail={`${Math.round(m.loadPerCore * 100)}% · load ${m.loadPerCore.toFixed(1)}`}
+            warning={m.loadPerCore > 1.5}
+            meterWidth={meterWidth}
+          />
+        ) : (
+          <div style={{ display: 'flex', alignItems: 'center', gap: 8, fontFamily: 'var(--mono)', fontSize: 'var(--font-xs)', color: 'var(--text-dim)' }}>
+            <b style={{ color: 'var(--text)', fontWeight: 600, minWidth: 34 }}>CPU</b>
+            <span>— {t('statusbar.loadNotMeasured')}</span>
+          </div>
+        )}
         {m.diskUsedPercent !== null && (
           <MetricRow
             label="DISK"

@@ -751,6 +751,29 @@ describe('POST /api/servers/:name/sessions', () => {
     expect(resourceGuardCheck).toHaveBeenCalledWith(srvV2);
     expect(createSession).toHaveBeenCalledWith(srvV2, 'newsess', expect.anything());
   });
+
+  it('says in the answer that the resource check was skipped, and why', async () => {
+    const windowRepo = makeWindowRepo();
+    const resourceGuardCheck = vi.fn(async () => ({ ok: true, skipped: { reason: 'unreachable' } }));
+    const createSession = vi.fn(async () => ({ result: { stdout: '', stderr: '', code: 0 }, windowName: 'win' }));
+    app = await buildApp({ tmux: { createSession }, windowRepo, resourceGuard: { check: resourceGuardCheck } });
+
+    const res = await app.inject({ method: 'POST', url: '/api/servers/srv1/sessions', payload: { name: 'newsess' } });
+
+    expect(res.statusCode).toBe(200);
+    expect(res.json().resourceCheck).toEqual({ skipped: { reason: 'unreachable' } });
+  });
+
+  it('has no resourceCheck in the answer when the check was made', async () => {
+    const windowRepo = makeWindowRepo();
+    const resourceGuardCheck = vi.fn(async () => ({ ok: true, skipped: null }));
+    const createSession = vi.fn(async () => ({ result: { stdout: '', stderr: '', code: 0 }, windowName: 'win' }));
+    app = await buildApp({ tmux: { createSession }, windowRepo, resourceGuard: { check: resourceGuardCheck } });
+
+    const res = await app.inject({ method: 'POST', url: '/api/servers/srv1/sessions', payload: { name: 'newsess' } });
+
+    expect(res.json()).not.toHaveProperty('resourceCheck');
+  });
 });
 
 describe('POST /api/servers/:name/sessions/:session/windows', () => {

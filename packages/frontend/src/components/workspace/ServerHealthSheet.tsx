@@ -116,7 +116,7 @@ export function ServerHealthSheet({ open, onClose }: ServerHealthSheetProps) {
             fontSize: 'var(--font-xs)', fontWeight: 600, padding: '3px 9px', borderRadius: 'var(--radius-full)',
             background: chipTokens.bg, color: chipTokens.fg, flexShrink: 0,
           }}>
-            {healthReasonText(worstHealth, worstMemUsedPercent, tCommon)}
+            {healthReasonText(worstHealth, worstMemUsedPercent, worstServer?.unavailable ?? null, tCommon)}
           </span>
         </div>
 

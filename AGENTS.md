@@ -338,6 +338,15 @@ packages/
   Git is open on Windows (#370 R5b; no host feature, no `assertGitSupported`): `runCommandSpec` resolves a bare `git` on a Windows host by itself (`shared/exec/windowsGit.ts` `GitLocator`, on the host that runs the spec: the hub for a local server, the agent for `POST /api/run`): PATH with the PATHEXT extensions, then `%ProgramFiles%` / `%ProgramFiles(x86)%\Git\cmd\git.exe` and `%LOCALAPPDATA%\Programs\Git\cmd\git.exe` (only `cmd\git.exe`; the PATH of a Task Scheduler agent is minimal and a winget install is not in a running process's PATH). A found path is kept (re-checked per call), a miss for 30 s. No Git for Windows: `GitNotFoundError` (`GIT_NOT_FOUND` over the agent wire), which `mapAppError` answers as 501 `{ error: <reason with `winget install --id Git.Git -e` and the searched places>, code: 'git_not_found' }`; the git routes that catch errors (`git/routes.ts`, `servers/routes.ts` branches / discover-repositories, `projects/routes.ts` discover-repositories) rethrow it. The UI shows that reason as the error of each git screen (`isGitNotFoundAnswer`). A restored file tab whose first `/servers` fetch fails shows the reason with a retry (`ServerStatusProvider.serversError`) instead of loading forever.
 - New code that touches files on a server uses `transport.files()`, not `transport.exec(<sh string>)` (`execStringRatchet.test.ts` counts what is left).
 
+### Resource guard (#531)
+- `modules/servers/resources/ResourceGuard`: `measure()` returns `{ measurement, unavailable }` (5 s cache, shared in-flight). Where the values come from is decided by the host's OS (`hostProfileFor`):
+  linux / darwin / an agent with no recorded OS keep the sh `MEASURE_COMMAND` (darwin's "available" is the reclaimable set, not `os.freemem()`); a **win32** host (the hub itself, or an agent) is measured with
+  Node (`shared/os/hostResources.ts`: `os.totalmem/freemem`, `fs.statfs` of the `%SystemRoot%` drive). An agent serves it at `GET /api/host/resources` (`agent/hostResourcesRoutes.ts`, behind the token, not in `/health`);
+  an older agent's 404 is `agent_outdated`. Windows has no loadavg, so `loadPerCore` is `null` there and only the load judgement is skipped (the memory one still runs; thresholds are unchanged).
+- A server that cannot be measured has `measurement: null` and `unavailable.reason`: `agent_outdated` / `unreachable` / `timeout` / `failed`. `check()` still lets the operation through (fail-open), but
+  `ResourceStatus.skipped` carries the reason: it is logged once per reason per server, appended to the task's execution log (`resource_guard_skipped`, shown by `TaskLogView`), and returned as `resourceCheck: { skipped }` by the window / session creation APIs.
+  The UI shows it as the grey `unknown` health level ("not measurable (reason)"), never as red; `getWorstHealth` orders critical > warning > unknown > healthy.
+
 ### Agent Server Type
 - Lightweight Node.js agent deployed to remote servers via SSH bootstrap
 - Auto-install: bundles server code, copies via SSH, runs via nohup
