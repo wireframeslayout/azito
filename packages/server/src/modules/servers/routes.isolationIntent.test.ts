@@ -97,6 +97,7 @@ function makeOpts(overrides: Partial<ServersRouteOptions> = {}): ServersRouteOpt
     windowRepo: { findByServer: vi.fn(() => []) } as unknown as ServersRouteOptions['windowRepo'],
     webhookToken: 'wh',
     uiToken: 'ui',
+    harnessPrefix: '',
     // Issue #29 review (6th pass), Important finding 3: a fresh instance per
     // test is fine here (this file never exercises cross-route serialization
     // against sessions.ts — that's covered by sessions.test.ts's own

@@ -31,9 +31,18 @@ import type { ProjectDetail, IProjectRepository } from '../../projects/Project';
 import type { IProjectServerRepository } from '../../projects/ProjectServer';
 import { TaskTempFiles } from '../../../shared/os/taskTempFiles';
 import { LocalFileOps, localFileOpsHost } from '../../../shared/fs/LocalFileOps';
+import type { IFileOps } from '../../../shared/fs/fileOps';
 
 // Containment resolves real paths through the host's file operations: here the real ones, on this machine.
-const hostFiles = new LocalFileOps(localFileOpsHost({ platform: process.platform, homeDir: '/' }));
+const localFiles = new LocalFileOps(localFileOpsHost({ platform: process.platform, homeDir: '/' }));
+// A host on which the hub's harness is installed: the azitoctl the phase prompt names (resolveEnvelopeHost) exists; every other path is the real file system.
+const hostFiles: IFileOps = new Proxy(localFiles, {
+  get: (target, prop, receiver) => (prop === 'realpath'
+    ? async (p: string) => (p === '~' ? '/home/test' : target.realpath(p))
+    : prop === 'stat'
+    ? async (p: string, o?: Parameters<IFileOps['stat']>[1]) => (/[\\/]\.azito[\\/]harness[^\\/]*[\\/]bin[\\/]/.test(p) ? ({} as Awaited<ReturnType<IFileOps['stat']>>) : target.stat(p, o))
+    : Reflect.get(target, prop, receiver)),
+});
 
 // ─── Fixtures ───
 

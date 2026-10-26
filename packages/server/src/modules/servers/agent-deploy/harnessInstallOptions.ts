@@ -5,7 +5,7 @@ import type { HostProfile } from '../../../shared/os/hostProfile';
 interface HarnessInstallContext {
   webhookToken: string;
   uiToken: string;
-  harnessPrefix?: string;
+  harnessPrefix: string;
 }
 
 export function buildHarnessInstallOptions(

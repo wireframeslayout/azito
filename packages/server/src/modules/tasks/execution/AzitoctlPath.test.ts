@@ -2,14 +2,15 @@ import { describe, expect, it, vi } from 'vitest';
 import type { ServerConfig } from '../../servers/Server';
 import { resolveAzitoctlPath, resolveEnvelopeHost } from './AzitoctlPath';
 import { harnessLocation } from '../../servers/agent-deploy/harnessLocation';
+import { remoteHarnessDir } from '../../servers/agent-deploy/HarnessInstaller';
 
 const agent = { name: 'srv', type: 'agent' } as ServerConfig;
 const local = { name: 'local', type: 'local' } as ServerConfig;
 
-function factory(platform: 'linux' | 'win32' | null, home = '/home/me', nodePath = 'C:\\Program Files\\nodejs\\node.exe') {
+function factory(platform: 'linux' | 'win32' | null, home = '/home/me', nodePath = 'C:\\Program Files\\nodejs\\node.exe', exists: (p: string) => boolean = () => true) {
   return {
     hostProfileFor: vi.fn(() => (platform ? { platform, arch: 'x64' as const } : null)),
-    getFileOps: vi.fn(() => ({ realpath: vi.fn(async () => home) })),
+    getFileOps: vi.fn(() => ({ platform: platform ?? 'linux', realpath: vi.fn(async () => home), stat: vi.fn(async (p: string) => (exists(p) ? {} : null)) })),
     getAgentTransport: vi.fn(() => ({ fetchNodeExecPath: vi.fn(async () => nodePath) })),
   } as unknown as Parameters<typeof resolveEnvelopeHost>[0];
 }
@@ -24,6 +25,27 @@ describe('resolveEnvelopeHost', () => {
   it("a POSIX agent's azitoctl is in the prefixed harness folder the SSH install (remoteHarnessDir) wrote", async () => {
     expect(await resolveEnvelopeHost(factory('linux'), agent, 'w806rc')).toEqual({ os: 'posix', azitoctl: '~/.azito/harness-w806rc/bin/azitoctl' });
     expect(await resolveEnvelopeHost(factory(null), agent, 'w806rc')).toEqual({ os: 'posix', azitoctl: '~/.azito/harness-w806rc/bin/azitoctl' });
+    // the install and the prompt name the same folder, from the real functions
+    for (const prefix of ['', 'w806rc']) {
+      expect(resolveAzitoctlPath(agent, prefix)).toBe(`${remoteHarnessDir(prefix || undefined)}/bin/azitoctl`);
+    }
+  });
+
+  it.each([
+    ['a POSIX agent', 'linux' as const, '/home/me', 'azitoctl'],
+    ['a Windows agent', 'win32' as const, 'C:\\Users\\me', 'azitoctl.mjs'],
+  ])('%s that has only the unprefixed harness fails at once, telling to install it again (no fallback to the unprefixed folder)', async (_name, platform, home, script) => {
+    const onlyUnprefixed = (p: string) => /[\\/]harness[\\/]/.test(p);
+    const tf = factory(platform, home, undefined, onlyUnprefixed);
+    await expect(resolveEnvelopeHost(tf, agent, 'w806rc')).rejects.toThrow(new RegExp(`prefix "w806rc".*"srv".*harness-w806rc.*${script.replace('.', '\\.')} is missing.*Install the harness again from Setup`));
+    // the same host is fine for a hub without a prefix
+    await expect(resolveEnvelopeHost(tf, agent, '')).resolves.toMatchObject({ os: platform === 'win32' ? 'windows' : 'posix' });
+  });
+
+  it('the hub\'s own server is not checked (no prefixed copy is ever installed there)', async () => {
+    const tf = factory('linux', '/home/me', undefined, () => false);
+    await expect(resolveEnvelopeHost(tf, local, 'w806rc')).resolves.toMatchObject({ os: 'posix' });
+    expect(tf.getFileOps).not.toHaveBeenCalled();
   });
 
   it("the hub's own server runs the hub's harness whatever the prefix is (setup there is never copied to a prefixed folder)", async () => {

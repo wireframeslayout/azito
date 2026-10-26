@@ -3,6 +3,8 @@ import type { ServerConfig } from '../../servers/Server';
 import type { TransportFactory } from '../../servers/transport/TransportFactory';
 import { harnessLocation, homeDirOf } from '../../servers/agent-deploy/harnessLocation';
 import type { EnvelopeHost } from '../../prompt/executionEnvelope';
+import type { IFileOps } from '../../../shared/fs/fileOps';
+import { pathApiFor } from '../../../shared/os/hostPath';
 import { checkedWindowsPromptPath } from '../../../shared/os/windowsPromptPath';
 
 import { resolveRoot } from '../../../shared/releaseInfo';
@@ -32,6 +34,19 @@ export function resolveAzitoctlPath(server: Pick<ServerConfig, 'type'>, harnessP
 }
 
 /**
+ * Fails at once, with the way out, when the harness folder this hub names in the prompt is not on the host (a host that has only the
+ * unprefixed `~/.azito/harness`, or none): the worker would otherwise run a missing azitoctl and the phase would be noticed only after the idle timeout.
+ * There is no fallback to the unprefixed folder: it belongs to another hub.
+ */
+async function assertHarnessInstalled(files: IFileOps, serverName: string, harnessPrefix: string, script: 'azitoctl' | 'azitoctl.mjs'): Promise<void> {
+  const { harnessDir } = harnessLocation(files.platform, await homeDirOf(files), harnessPrefix);
+  const scriptPath = pathApiFor(files.platform).join(harnessDir, 'bin', script);
+  if (await files.stat(scriptPath) !== null) return;
+  const hub = harnessPrefix ? `this hub's harness (prefix "${harnessPrefix}")` : "this hub's harness";
+  throw new Error(`${hub} is not installed on server "${serverName}" (${scriptPath} is missing). Install the harness again from Setup.`);
+}
+
+/**
  * The shell and azitoctl the worker's prompt is written for (#371). A POSIX host (and one whose OS is not recorded) gets the bash `azitoctl`'s path
  * as before. A Windows host gets `"<node.exe>" "<home>/.azito/harness/bin/azitoctl.mjs"` — the hub's own harness for its local server, the
  * agent's `~/.azito/harness[-<prefix>]` for an agent server (`harnessPrefix` is the hub's, '' = none: the value the install used), the home directory written out because nothing on Windows expands `~` in a quoted
@@ -42,7 +57,12 @@ export async function resolveEnvelopeHost(
   server: ServerConfig,
   harnessPrefix: string,
 ): Promise<EnvelopeHost> {
-  if (transportFactory.hostProfileFor(server)?.platform !== 'win32') {
+  const isWindows = transportFactory.hostProfileFor(server)?.platform === 'win32';
+  // The hub's own server runs the hub's checkout / bundle (nothing prefixed is installed there), so only another host can lack the harness.
+  if (server.type !== 'local') {
+    await assertHarnessInstalled(transportFactory.getFileOps(server), server.name, harnessPrefix, isWindows ? 'azitoctl.mjs' : 'azitoctl');
+  }
+  if (!isWindows) {
     return { os: 'posix', azitoctl: resolveAzitoctlPath(server, harnessPrefix) };
   }
   // `node` is the host's own executable by its full path: a Windows host that has only the native Claude Code has no node on the worker's PATH.

@@ -24,7 +24,7 @@ export interface HarnessUpdateResult {
 export interface HarnessUpdaterOptions {
   webhookToken: string;
   uiToken: string;
-  harnessPrefix?: string;
+  harnessPrefix: string;
 }
 
 interface Logger {

@@ -259,7 +259,7 @@ export interface Wiring extends SharedInfra, Repositories, PushNotificationModul
   fetchDistributionService: FetchDistributionService;
   /** Issue #28 Phase A: resolved once here (the composition root boundary) via shared/auth/scopedAuthFlag.ts, then threaded through — see that file's doc comment for why buildServer.ts reads this instead of process.env directly. */
   scopedAuthEnabled: boolean;
-  harnessPrefix?: string;
+  harnessPrefix: string;
   /** GIT_ASKPASS launcher and the empty hooks directory for the git commands that run on the hub's own machine. */
   hubGitSupport: HubGitSupport;
 }

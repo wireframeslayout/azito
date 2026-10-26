@@ -1,3 +1,4 @@
+import { buildHarnessInstallOptions } from '../../servers/agent-deploy/harnessInstallOptions';
 import { harnessLocation } from '../../servers/agent-deploy/harnessLocation';
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { asPaneHandle } from '@azito/shared';
@@ -171,7 +172,7 @@ function makeRunner(overrides: {
   const pullRequestCreator = { ensureCreated: vi.fn(async () => {}), ...overrides.pullRequestCreator };
   const getWorktreeService = vi.fn(() => ({ exists: vi.fn(async () => false), getBranch: vi.fn(async () => null) }));
   const appendLog = vi.fn();
-  const transportFactory = { taskTempServer: vi.fn(async () => ({ type: 'local' as const })), hostProfileFor: vi.fn(() => null), getFileOps: vi.fn(), getTransport: vi.fn(() => ({ exec: vi.fn() })), invalidate: vi.fn(), ...overrides.transportFactory };
+  const transportFactory = { taskTempServer: vi.fn(async () => ({ type: 'local' as const })), hostProfileFor: vi.fn(() => null), getFileOps: vi.fn(() => ({ platform: 'linux', realpath: vi.fn(async () => '/home/me'), stat: vi.fn(async () => ({})) })), getTransport: vi.fn(() => ({ exec: vi.fn() })), invalidate: vi.fn(), ...overrides.transportFactory };
   const sidekickSyncService = { sync: vi.fn(async () => {}), ...overrides.sidekickSyncService };
   const httpSignalCoordinator = {
     start: vi.fn(() => ({
@@ -428,7 +429,7 @@ describe('PhaseLoopRunner http-signal execution mode (Issue: AZITO監視強化 P
     const windowsAgent = { name: 'win', type: 'agent' } as any;
     const transportFactory = {
       hostProfileFor: vi.fn(() => ({ platform: 'win32', arch: 'x64' })),
-      getFileOps: vi.fn(() => ({ realpath: vi.fn(async () => 'C:\\Users\\me') })),
+      getFileOps: vi.fn(() => ({ platform: 'win32', realpath: vi.fn(async () => 'C:\\Users\\me'), stat: vi.fn(async () => ({})) })),
       getAgentTransport: vi.fn(() => ({ fetchNodeExecPath: vi.fn(async () => 'C:\\Program Files\\nodejs\\node.exe') })),
     };
     const { runner, httpSignalCoordinator } = makeRunner({ harnessPrefix, transportFactory });
@@ -436,7 +437,9 @@ describe('PhaseLoopRunner http-signal execution mode (Issue: AZITO監視強化 P
 
     await runner.stateMachineLoop(unit, 'win', task, windowsAgent, asPaneHandle('sess:1.1'), {} as any, new AbortController().signal, 'sess:1', null, false);
 
-    const installed = harnessLocation('win32', 'C:\\Users\\me', harnessPrefix || undefined).harnessDir.replace(/\\/g, '/');
+    // the very value the harness install is handed for this hub
+    const installOptions = buildHarnessInstallOptions(windowsAgent, { platform: 'win32', arch: 'x64' }, { webhookToken: 't', uiToken: 'u', harnessPrefix }, { azitoUrl: 'http://hub' });
+    const installed = harnessLocation('win32', 'C:\\Users\\me', installOptions.prefix).harnessDir.replace(/\\/g, '/');
     expect(httpSignalCoordinator.start).toHaveBeenCalledWith(expect.objectContaining({
       host: { os: 'windows', azitoctl: `"C:/Program Files/nodejs/node.exe" "${installed}/bin/azitoctl.mjs"` },
     }));

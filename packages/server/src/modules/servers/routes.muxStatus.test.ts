@@ -24,6 +24,7 @@ async function statusOf(server: ServerConfig, exec: () => Promise<{ stdout: stri
     windowRepo: { findByServer: vi.fn(() => []) } as unknown as ServersRouteOptions['windowRepo'],
     webhookToken: 'wh',
     uiToken: 'ui',
+    harnessPrefix: '',
     serverIsolationMutex: new KeyedMutex(),
     harnessHash: 'testhash',
     harnessUpdater: { getLastResult: vi.fn() } as unknown as ServersRouteOptions['harnessUpdater'],
