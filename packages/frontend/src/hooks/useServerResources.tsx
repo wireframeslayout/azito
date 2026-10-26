@@ -7,7 +7,7 @@ import { useToast } from './useToast';
 export type HealthLevel = 'healthy' | 'warning' | 'critical' | 'unknown';
 
 /** Why the hub could not measure a server (the `unavailable.reason` of `/api/servers/resources`). */
-export type ResourceUnavailableReason = 'unsupported_os' | 'agent_outdated' | 'unreachable' | 'timeout' | 'failed';
+export type ResourceUnavailableReason = 'agent_outdated' | 'unreachable' | 'timeout' | 'failed';
 
 export interface ResourceUnavailable {
   reason: ResourceUnavailableReason;

@@ -198,6 +198,7 @@
     "created": "Created"
   },
   "log": {
+    "resourceGuardSkipped": "Resource check skipped ({{reason}})",
     "gitIdentityMissing": "Git commit author is not configured. Please set git config --global user.name / user.email on the hub.",
     "gitIdentityApplied": "Git author identity applied from hub",
     "gitIdentityFailed": "Failed to set commit author: {{reason}}. Please check git config on the hub.",

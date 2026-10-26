@@ -343,8 +343,8 @@ packages/
   linux / darwin / an agent with no recorded OS keep the sh `MEASURE_COMMAND` (darwin's "available" is the reclaimable set, not `os.freemem()`); a **win32** host (the hub itself, or an agent) is measured with
   Node (`shared/os/hostResources.ts`: `os.totalmem/freemem`, `fs.statfs` of the `%SystemRoot%` drive). An agent serves it at `GET /api/host/resources` (`agent/hostResourcesRoutes.ts`, behind the token, not in `/health`);
   an older agent's 404 is `agent_outdated`. Windows has no loadavg, so `loadPerCore` is `null` there and only the load judgement is skipped (the memory one still runs; thresholds are unchanged).
-- A server that cannot be measured has `measurement: null` and `unavailable.reason`: `unsupported_os` / `agent_outdated` / `unreachable` / `timeout` / `failed`. `check()` still lets the operation through (fail-open), but
-  `ResourceStatus.skipped` carries the reason: it is logged once per reason per server, appended to the task's execution log (`resource_guard_skipped`), and returned as `resourceCheck: { skipped }` by the window / session creation APIs.
+- A server that cannot be measured has `measurement: null` and `unavailable.reason`: `agent_outdated` / `unreachable` / `timeout` / `failed`. `check()` still lets the operation through (fail-open), but
+  `ResourceStatus.skipped` carries the reason: it is logged once per reason per server, appended to the task's execution log (`resource_guard_skipped`, shown by `TaskLogView`), and returned as `resourceCheck: { skipped }` by the window / session creation APIs.
   The UI shows it as the grey `unknown` health level ("not measurable (reason)"), never as red; `getWorstHealth` orders critical > warning > unknown > healthy.
 
 ### Agent Server Type

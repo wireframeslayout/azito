@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { ResourceGuard, parseMeasurement, resourceCheckBody, measurementFromSample } from './ResourceGuard';
+import { ResourceGuard, ResourceExhaustedError, parseMeasurement, resourceCheckBody, measurementFromSample } from './ResourceGuard';
 import { AgentResourcesOutdatedError, type HostResourceSample } from '../../../shared/os/hostResources';
 import { AgentUnreachableError } from '../transport/AgentUnreachableError';
 import { HostProfileError } from '../../../shared/os/hostProfile';
@@ -250,6 +250,30 @@ describe('ResourceGuard.check skipped', () => {
     vi.useRealTimers();
   });
 
+  it('logs again when the same reason comes back after a measurement succeeded', async () => {
+    vi.useFakeTimers();
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    let failing = true;
+    const exec = vi.fn(async () => ({ stdout: failing ? 'garbage' : HEALTHY_STDOUT, stderr: '', code: 0 }));
+    const guard = new ResourceGuard({ hostProfileFor: () => null, getTransport: () => ({ exec }) } as never, { get: () => ({ enabled: true, memAvailablePercentMin: 10, loadPerCoreMax: 2 }) } as never);
+    await guard.check(server);
+    expect(warn).toHaveBeenCalledTimes(1);
+    failing = false;
+    vi.advanceTimersByTime(6000);
+    expect((await guard.measure(server)).measurement).not.toBeNull(); // a poll, not a check
+    failing = true;
+    vi.advanceTimersByTime(6000);
+    await guard.check(server);
+    expect(warn).toHaveBeenCalledTimes(2);
+    warn.mockRestore();
+    vi.useRealTimers();
+  });
+
+  it('writes an unmeasured load as n/a in the exhausted error', () => {
+    const status = { ok: false, reasons: ['memory'], memAvailablePercent: 5, loadPerCore: null, memAvailablePercentMin: 10, loadPerCoreMax: 2, skipped: null } as const;
+    expect(new ResourceExhaustedError('h', { ...status, reasons: ['memory'] }).message).toContain('loadPerCore=n/a');
+  });
+
   it('resourceCheckBody carries only a skipped check', () => {
     expect(resourceCheckBody(null)).toEqual({});
     expect(resourceCheckBody({ reason: 'unreachable' })).toEqual({ resourceCheck: { skipped: { reason: 'unreachable' } } });
@@ -304,9 +328,14 @@ describe('ResourceGuard by the host OS', () => {
     expect((await guard.measure(srv)).unavailable).toEqual({ reason: 'unreachable' });
   });
 
-  it('reports a host the transport refuses to measure as unsupported_os', async () => {
+  it('reports the agent client giving up on its own deadline as timeout', async () => {
+    const { guard, srv } = makeHostGuard({ platform: 'win32', type: 'agent', measureHostResources: async () => { throw new AgentUnreachableError('h', 'timeout'); } });
+    expect((await guard.measure(srv)).unavailable).toEqual({ reason: 'timeout' });
+  });
+
+  it('reports any other failure of the host as failed', async () => {
     const { guard, srv } = makeHostGuard({ platform: 'win32', measureHostResources: async () => { throw new HostProfileError('unsupported_os', 'no'); } });
-    expect((await guard.measure(srv)).unavailable).toEqual({ reason: 'unsupported_os' });
+    expect((await guard.measure(srv)).unavailable).toEqual({ reason: 'failed' });
   });
 
   it.each(['linux', 'darwin', null] as const)('keeps the sh measurement on %s (and on an agent with no recorded OS)', async (platform) => {

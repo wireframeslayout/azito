@@ -51,7 +51,7 @@ describe('getWorstHealth', () => {
 
 describe('unavailable reasons in the locales', () => {
   it('every reason the hub can give has a sentence in ja and en', async () => {
-    const reasons: ResourceUnavailableReason[] = ['unsupported_os', 'agent_outdated', 'unreachable', 'timeout', 'failed'];
+    const reasons: ResourceUnavailableReason[] = ['agent_outdated', 'unreachable', 'timeout', 'failed'];
     const ja = (await import('../i18n/locales/ja/common.json')).default.statusbar;
     const en = (await import('../i18n/locales/en/common.json')).default.statusbar;
     for (const reason of reasons) {

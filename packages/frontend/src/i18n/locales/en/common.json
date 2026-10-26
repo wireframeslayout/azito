@@ -234,7 +234,6 @@
     "activityNone": "No activity",
     "unavailable": "Not measurable ({{reason}})",
     "unavailableReason": {
-      "unsupported_os": "this OS is not supported",
       "agent_outdated": "agent needs an update",
       "unreachable": "cannot connect",
       "timeout": "no response",

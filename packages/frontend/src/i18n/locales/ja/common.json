@@ -234,7 +234,6 @@
     "activityNone": "稼働なし",
     "unavailable": "計測できない（{{reason}}）",
     "unavailableReason": {
-      "unsupported_os": "この OS は計測に未対応",
       "agent_outdated": "agent が古いため更新が必要",
       "unreachable": "接続できない",
       "timeout": "応答がない",

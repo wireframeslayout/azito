@@ -3,7 +3,6 @@ import type { TransportFactory } from '../transport/TransportFactory';
 import type { IResourceGuardSettingsRepository } from './SqliteResourceGuardSettingsRepository';
 import { AgentUnreachableError } from '../transport/AgentUnreachableError';
 import { AgentResourcesOutdatedError, type HostResourceSample } from '../../../shared/os/hostResources';
-import { HostProfileError } from '../../../shared/os/hostProfile';
 
 /** 1回の exec でメモリ・コア数・loadavg・ディスクをまとめて取得する */
 const LINUX_MEASURE = "free -b | awk '/^Mem:/{print $2, $7}'; nproc; cat /proc/loadavg; df -B1 --output=used,size / 2>/dev/null | tail -1";
@@ -41,8 +40,8 @@ export interface ResourceMeasurement {
   diskTotalBytes: number | null;
 }
 
-/** Why a server could not be measured. `unsupported_os`: no way to measure that OS (an ssh Windows server); `agent_outdated`: the agent has no resources endpoint; `unreachable`: the agent cannot be reached; `timeout`: no answer in time; `failed`: the measurement ran but failed or could not be read. */
-export type ResourceUnavailableReason = 'unsupported_os' | 'agent_outdated' | 'unreachable' | 'timeout' | 'failed';
+/** Why a server could not be measured. `agent_outdated`: the agent has no resources endpoint; `unreachable`: the agent cannot be reached; `timeout`: no answer in time; `failed`: the measurement ran but failed or could not be read. */
+export type ResourceUnavailableReason = 'agent_outdated' | 'unreachable' | 'timeout' | 'failed';
 
 export interface ResourceUnavailable {
   reason: ResourceUnavailableReason;
@@ -78,7 +77,7 @@ export class ResourceExhaustedError extends Error {
     super(
       `Insufficient resources on server '${serverName}': ` +
       `memAvailable=${status.memAvailablePercent}% (min ${status.memAvailablePercentMin}%), ` +
-      `loadPerCore=${status.loadPerCore} (max ${status.loadPerCoreMax})`,
+      `loadPerCore=${status.loadPerCore ?? 'n/a'} (max ${status.loadPerCoreMax})`,
     );
     this.name = 'ResourceExhaustedError';
   }
@@ -122,7 +121,6 @@ export class ResourceGuard {
       this.warnSkipped(server.name, unavailable.reason);
       return { ok: true, reasons: [], memAvailablePercent: null, loadPerCore: null, ...thresholds, skipped: unavailable };
     }
-    this.warnedReason.delete(server.name);
 
     const reasons: Array<'memory' | 'load'> = [];
     if (measurement.memAvailablePercent < settings.memAvailablePercentMin) reasons.push('memory');
@@ -171,6 +169,7 @@ export class ResourceGuard {
       });
       const measurement = await Promise.race([this.measureOnHost(server), timeoutPromise]);
       result = { measurement, unavailable: null };
+      this.warnedReason.delete(server.name);
     } catch (err) {
       result = { measurement: null, unavailable: { reason: classifyFailure(err) } };
     } finally {
@@ -198,8 +197,8 @@ export class ResourceGuard {
 function classifyFailure(err: unknown): ResourceUnavailableReason {
   if (err instanceof MeasurementTimeoutError) return 'timeout';
   if (err instanceof AgentResourcesOutdatedError) return 'agent_outdated';
-  if (err instanceof AgentUnreachableError) return 'unreachable';
-  if (err instanceof HostProfileError && err.code === 'unsupported_os') return 'unsupported_os';
+  // The agent client gives up after its own deadline (shorter than ours): that is a timeout, not a lost connection.
+  if (err instanceof AgentUnreachableError) return err.reason === 'timeout' ? 'timeout' : 'unreachable';
   return 'failed';
 }
 

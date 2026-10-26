@@ -49,7 +49,7 @@
     "reconnect": "⟳ 再接続",
     "edit": "✎ 編集",
     "measuring": "計測中…",
-    "notMeasurable": "計測不可",
+    "notMeasurable": "計測できない",
     "loadNotMeasured": "負荷は計測しない",
     "connectionTitle": "接続",
     "runtimeTitle": "実行環境",
