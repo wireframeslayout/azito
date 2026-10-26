@@ -442,6 +442,10 @@ packages/
 - Long text (>500 bytes) sent via `tmux load-buffer` + `paste-buffer`
 - Auto-approve confirmation prompts (y/n, Continue?, etc.)
 - Worker types: claude (--dangerously-skip-permissions), codex (--dangerously-bypass-approvals-and-sandbox), generic
+- The prompt body never goes through the pane (#532): `PromptFileDelivery` writes it to a task temp file (`azito-prompt-<taskId>-<nonce>.md`, through the host's `files()`) and
+  `TuiWorkerRuntime.sendPrompt` types one shell-harmless line that names the file (`AZITO prompt file. ...: <path>`; a path with any shell-special character is refused). Before that the
+  screen is read (`runtime/workerScreen.ts`): a Claude/Codex dialog (trust, bypass, Codex update prompt) or a pane back at a shell stops the task with `worker_not_ready: <reason>` and nothing is typed.
+  Codex is launched with `-c check_for_update_on_startup=false`, and its worktree is trusted in `$CODEX_HOME/config.toml` (`agents/codex/ensureCodexTrust.ts`, appended section only) when the worktree is made
 
 ### Worktree Service
 - `IWorktreeService` interface abstracts git worktree operations (create/exists/remove/getBranch/getDiff/getPrUrl)

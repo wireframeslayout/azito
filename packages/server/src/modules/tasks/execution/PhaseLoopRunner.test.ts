@@ -206,7 +206,7 @@ function makeRunner(overrides: {
     workerInput as any,
     unitTypeLoader as any,
     (() => {
-      const tuiRuntime = new TuiWorkerRuntime(workerInput as any, workerWaiter as any, httpSignalCoordinator as any, { issueLaunch: vi.fn(() => undefined) } as any, '');
+      const tuiRuntime = new TuiWorkerRuntime(workerInput as any, workerWaiter as any, httpSignalCoordinator as any, { issueLaunch: vi.fn(() => undefined) } as any, '', { stage: vi.fn(async (_server: unknown, _taskId: number, _unitId: number, prompt: string) => prompt) } as any);
       const registry = new WorkerRuntimeRegistry();
       registry.register('tui', tuiRuntime);
       return registry;

@@ -8,6 +8,8 @@ import type { SubagentConfig, WorkerExecutionMode, WorkerRuntime } from '../../u
 import { usesHttpSignalPath } from '../../units/Unit';
 import type { WorkerRuntimeRegistry } from './runtime/WorkerRuntimeRegistry';
 import type { IWorkerRuntime, WorkerContext } from './runtime/IWorkerRuntime';
+import { workerNotReadyReason } from './runtime/TuiWorkerRuntime';
+import { tuiAgentKindOfWorkerType } from './runtime/workerScreen';
 import type { IProjectRepository } from '../../projects/Project';
 import type { IProjectServerRepository } from '../../projects/ProjectServer';
 import { resolveEffectiveInputPolicy } from '../../projects/ProjectServer';
@@ -544,7 +546,7 @@ export class PhaseLoopRunner {
           ...(rulesFilePath ? { rulesFilePath } : {}),
         });
 
-        const workerContext: WorkerContext = { server, handle, driver, supervisorTarget: supervisorTarget, taskId: task.id, unitId: unit.id };
+        const workerContext: WorkerContext = { server, handle, driver, supervisorTarget: supervisorTarget, taskId: task.id, unitId: unit.id, agentKind: tuiAgentKindOfWorkerType(unit.workerType) };
         // A pane stream that already failed (e.g. an agent too old to register it) cannot see the answer: fail with the reason, do not prompt.
         const streamFailure = this.workerWaiter.streamFailure(phaseStream) ?? this.workerWaiter.streamFailure(phaseSignalStream);
         if (streamFailure) {
@@ -557,7 +559,12 @@ export class PhaseLoopRunner {
           await runtime.sendPrompt(workerContext, markerizedPromptWithSignal);
         } catch (err: unknown) {
           phaseSignalStream.stop();
-          this.appendLog(task.id, unit.id, 'status_change', { status: 'send_error', message: (err as Error).message });
+          const notReady = workerNotReadyReason(err);
+          this.appendLog(task.id, unit.id, 'status_change', {
+            status: notReady ? 'worker_not_ready' : 'send_error',
+            ...(notReady ? { reason: notReady } : {}),
+            message: (err as Error).message,
+          });
           this.taskRepo.updateStatus(task.id, 'failed');
           return;
         }

@@ -18,10 +18,10 @@ describe('one launch, two ways to start it', () => {
   it('codex: the same, with the MCP override as two words', () => {
     const launch = buildWorkerLaunch('codex', 'gpt-5.6-sol', null);
     expect(renderLaunchLine(launch!, posixDialect)).toBe(
-      "codex --dangerously-bypass-approvals-and-sandbox -c mcp_servers.azt-mcp.enabled=false -c mcp_servers.azt-mcp.command=azt-mcp-disabled --model 'gpt-5.6-sol'",
+      "codex --dangerously-bypass-approvals-and-sandbox -c check_for_update_on_startup=false -c mcp_servers.azt-mcp.enabled=false -c mcp_servers.azt-mcp.command=azt-mcp-disabled --model 'gpt-5.6-sol'",
     );
     expect(launchArgv(launch!)).toEqual([
-      'codex', '--dangerously-bypass-approvals-and-sandbox', '-c', 'mcp_servers.azt-mcp.enabled=false', '-c', 'mcp_servers.azt-mcp.command=azt-mcp-disabled', '--model', 'gpt-5.6-sol',
+      'codex', '--dangerously-bypass-approvals-and-sandbox', '-c', 'check_for_update_on_startup=false', '-c', 'mcp_servers.azt-mcp.enabled=false', '-c', 'mcp_servers.azt-mcp.command=azt-mcp-disabled', '--model', 'gpt-5.6-sol',
     ]);
   });
 

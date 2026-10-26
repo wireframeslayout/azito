@@ -36,9 +36,17 @@ import type { IFileOps } from '../../../shared/fs/fileOps';
 // Containment resolves real paths through the host's file operations: here the real ones, on this machine.
 const localFiles = new LocalFileOps(localFileOpsHost({ platform: process.platform, homeDir: '/' }));
 // A host on which the hub's harness is installed: the azitoctl the phase prompt names (resolveEnvelopeHost) exists; every other path is the real file system.
+// The prompt files (#532: a prompt is a file on the host, only one line is typed) are kept here instead of in the real /tmp.
+const writtenPromptFiles = new Map<string, string>();
 const hostFiles: IFileOps = new Proxy(localFiles, {
   get: (target, prop, receiver) => (prop === 'realpath'
     ? async (p: string) => (p === '~' ? '/home/test' : target.realpath(p))
+    : prop === 'write'
+    ? async (p: string, data: Buffer, o?: Parameters<IFileOps['write']>[2]) => {
+        if (!/azito-prompt-/.test(p)) return target.write(p, data, o);
+        writtenPromptFiles.set(p, data.toString('utf8'));
+        return { mtimeMs: 0, sha256: '' };
+      }
     : prop === 'stat'
     ? async (p: string, o?: Parameters<IFileOps['stat']>[1]) => (/[\\/]\.azito[\\/]harness[^\\/]*[\\/]bin[\\/]/.test(p) ? ({} as Awaited<ReturnType<IFileOps['stat']>>) : target.stat(p, o))
     : Reflect.get(target, prop, receiver)),
@@ -381,7 +389,7 @@ function buildUseCase(opts: {
     listPanesByRef: vi.fn(async () => [{ ordinal: 1, handle: '%0', title: '', command: 'bash', active: true }]),
     uiTokenEnvForServer: vi.fn(() => ({})),
     execCommand: vi.fn(async (_server: unknown, _cmd: string) => ({ stdout: '', stderr: '', code: 0 })),
-    captureScreen: vi.fn(async () => ({ stdout: 'bypass permissions /help', stderr: '', code: 0 })),
+    captureScreen: vi.fn(async () => ({ stdout: 'bypass permissions /help â€º Ask Codex to do anything', stderr: '', code: 0 })),
     refFromPaneHandle: vi.fn(async () => null),
     startOutputStream: vi.fn(async () => {}),
     stopOutputStream: vi.fn(async () => {}),
@@ -577,6 +585,42 @@ describe('ExecuteTaskUseCase execution-env resolution', () => {
       expect(taskRepo.updateStatus).toHaveBeenCalledWith(6, 'failed');
       expect(logRepo.append).toHaveBeenCalledWith(6, 63, 'command', expect.objectContaining({ type: 'bypass_permissions_dialog' }));
       expect(logRepo.append).not.toHaveBeenCalledWith(6, 63, 'command', expect.objectContaining({ type: 'worker_launch_failed' }));
+    }, 15_000);
+
+    // Issue #532: a codex worker that is stopped at one of its onboarding screens is not given the prompt (the screen would take it as an answer,
+    // and once codex ends the rest of the prompt is read by the shell under it).
+    it.each([
+      ['codex_update_prompt', 'Update available! 0.149.1 -> 0.164.0\n1. Update now (runs `sh -c ...`)\n2. Skip\n3. Skip until next version'],
+      ['codex_trust_prompt', 'Do you trust the contents of this directory?\n1. Yes, continue\n2. No, quit'],
+    ])('a codex worker stopped at %s fails the task with worker_not_ready and no prompt is sent', async (reason, screen) => {
+      const unit = makeUnit({ id: 64, workerType: 'codex', workerModel: null });
+      const task = makeTask({ id: 6, serverName: 'local-server', unitId: 64 });
+      const { useCase, tmux, taskRepo, logRepo } = buildUseCase({ task, project: makeProject({ defaultUnitId: null }), units: [unit] });
+      tmux.captureScreen.mockResolvedValue({ stdout: screen, stderr: '', code: 0 });
+      writtenPromptFiles.clear();
+
+      await useCase.execute(64, 6);
+
+      expect(taskRepo.updateStatus).toHaveBeenCalledWith(6, 'failed');
+      expect(logRepo.append).toHaveBeenCalledWith(6, 64, 'command', expect.objectContaining({ type: 'worker_not_ready', reason: `worker_not_ready: ${reason}` }));
+      expect(writtenPromptFiles.size).toBe(0);
+      const typed = (tmux.sendKeysToHandle.mock.calls as unknown as unknown[][]).map((c) => c[2]).flat();
+      expect(typed.some((k) => typeof k === 'string' && k.startsWith('AZITO prompt file.'))).toBe(false);
+    }, 15_000);
+
+    it('a worker that went back to a shell fails the task with worker_exited_to_shell and no prompt is sent', async () => {
+      const unit = makeUnit({ id: 65, workerType: 'codex', workerModel: null });
+      const task = makeTask({ id: 6, serverName: 'local-server', unitId: 65 });
+      const { useCase, tmux, taskRepo, logRepo } = buildUseCase({ task, project: makeProject({ defaultUnitId: null }), units: [unit] });
+      tmux.captureScreen.mockResolvedValue({ stdout: 'user@host:~/wt$ ', stderr: '', code: 0 });
+      tmux.paneCommandByHandle.mockResolvedValue('bash');
+      writtenPromptFiles.clear();
+
+      await useCase.execute(65, 6);
+
+      expect(taskRepo.updateStatus).toHaveBeenCalledWith(6, 'failed');
+      expect(logRepo.append).toHaveBeenCalledWith(6, 65, 'command', expect.objectContaining({ type: 'worker_not_ready', reason: 'worker_not_ready: worker_exited_to_shell' }));
+      expect(writtenPromptFiles.size).toBe(0);
     }, 15_000);
   });
 
@@ -1662,7 +1706,7 @@ describe('ExecuteTaskUseCase.followUp http-signal execution mode (Issue: AZITOç›
       stopOutputStream: vi.fn(async () => {}),
       getWindowActivity: vi.fn(async () => null),
       capturePane: vi.fn(async () => ({ stdout: '' })),
-      captureScreen: vi.fn(async () => ({ stdout: 'bypass permissions /help', stderr: '', code: 0 })),
+      captureScreen: vi.fn(async () => ({ stdout: 'bypass permissions /help â€º Ask Codex to do anything', stderr: '', code: 0 })),
       execCommand: vi.fn(async () => ({ stdout: '' })),
       windowExists: vi.fn(async () => true),
       listPanesByRef: vi.fn(async () => [{ ordinal: 1, handle: '%0', title: '', command: 'bash', active: true }]),
@@ -1754,11 +1798,13 @@ describe('ExecuteTaskUseCase.followUp http-signal execution mode (Issue: AZITOç›
     expect(turnRepo.turns).toHaveLength(1);
     expect(turnRepo.turns[0]).toMatchObject({ taskId: 1, unitId: 42, kind: 'follow_up', phase: null, status: 'running' });
 
-    const sentPrompt = tmux.sendKeysToHandle.mock.calls.find(
-      (c) => typeof c[2]?.[0] === 'string' && (c[2][0] as string).includes('completion_signal'),
-    )?.[2]?.[0] as string | undefined;
+    // The prompt is a file on the host; the pane gets one line that names it (#532).
+    const sentPrompt = [...writtenPromptFiles.values()].find((text) => text.includes('completion_signal'));
     expect(sentPrompt).toBeDefined();
     expect(sentPrompt).toContain('azitoctl complete --turn');
+    const typedLines = (tmux.sendKeysToHandle.mock.calls as unknown as unknown[][]).map((c) => (c[2] as string[] | undefined)?.[0]).filter((k): k is string => typeof k === 'string');
+    expect(typedLines.some((line) => line.startsWith('AZITO prompt file.') && line.includes('azito-prompt-1-'))).toBe(true);
+    expect(typedLines.some((line) => line.includes('completion_signal'))).toBe(false);
     expect(sentPrompt).not.toContain('echo "AZITO_DONE_'); // not the tmux-pipe marker mechanism
 
     // Abort to unblock the wait deterministically (bypasses the quiescence wait).
@@ -4209,7 +4255,7 @@ describe('ExecuteTaskUseCase.followUp state-machine continuation uses the task-r
       });
       (built.unitTypeLoader.get as ReturnType<typeof vi.fn>).mockReturnValue(makeUnitTypeWithImplementingPhase());
       (built.tmux.listSessions as ReturnType<typeof vi.fn>).mockResolvedValue([{ name: 'azito', windows: [{ name: 'task-1', index: 1 }] }]);
-      if (files) (built.transportFactory.getFileOps as ReturnType<typeof vi.fn>).mockReturnValue({ platform: 'linux', realpath: async () => '/home/test', ...files });
+      if (files) (built.transportFactory.getFileOps as ReturnType<typeof vi.fn>).mockReturnValue({ platform: 'linux', realpath: async () => '/home/test', write: async () => ({ mtimeMs: 0, sha256: '' }), ...files });
       const stream = { stop: vi.fn(), getBuffer: () => '', getFilePath: () => '/tmp/pane' };
       const waiter = (built.useCase as any).workerWaiter;
       waiter.startPaneStream = vi.fn(() => stream);

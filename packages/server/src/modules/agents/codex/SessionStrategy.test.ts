@@ -76,7 +76,7 @@ describe('CodexSessionStrategy.buildRespawnLaunch (Issue #28 third-party review:
     // scoping.
     expect(resumed).toContain('-c mcp_servers.azt-mcp.enabled=false -c mcp_servers.azt-mcp.command=azt-mcp-disabled');
     expect(resumed).toBe(
-      'codex resume session-1 --dangerously-bypass-approvals-and-sandbox -c mcp_servers.azt-mcp.enabled=false -c mcp_servers.azt-mcp.command=azt-mcp-disabled',
+      'codex resume session-1 --dangerously-bypass-approvals-and-sandbox -c check_for_update_on_startup=false -c mcp_servers.azt-mcp.enabled=false -c mcp_servers.azt-mcp.command=azt-mcp-disabled',
     );
   });
 
@@ -84,7 +84,7 @@ describe('CodexSessionStrategy.buildRespawnLaunch (Issue #28 third-party review:
     const strategy = createStrategy();
     const resumed = respawnLine(strategy, 'session-2', 'gpt-5.6-sol', '--verbose');
     expect(resumed).toBe(
-      "codex resume session-2 --dangerously-bypass-approvals-and-sandbox -c mcp_servers.azt-mcp.enabled=false -c mcp_servers.azt-mcp.command=azt-mcp-disabled --model 'gpt-5.6-sol' '--verbose'",
+      "codex resume session-2 --dangerously-bypass-approvals-and-sandbox -c check_for_update_on_startup=false -c mcp_servers.azt-mcp.enabled=false -c mcp_servers.azt-mcp.command=azt-mcp-disabled --model 'gpt-5.6-sol' '--verbose'",
     );
   });
 
@@ -92,14 +92,14 @@ describe('CodexSessionStrategy.buildRespawnLaunch (Issue #28 third-party review:
     const strategy = createStrategy();
     const fresh = respawnLine(strategy, null, null, null, false);
     expect(fresh).not.toContain('mcp_servers.azt-mcp.enabled=false');
-    expect(fresh).toBe('codex --dangerously-bypass-approvals-and-sandbox');
+    expect(fresh).toBe('codex --dangerously-bypass-approvals-and-sandbox -c check_for_update_on_startup=false');
   });
 
   it('omits MCP disable flag on resume when blockMcp is false', () => {
     const strategy = createStrategy();
     const resumed = respawnLine(strategy, 'session-3', null, null, false);
     expect(resumed).not.toContain('mcp_servers.azt-mcp.enabled=false');
-    expect(resumed).toBe('codex resume session-3 --dangerously-bypass-approvals-and-sandbox');
+    expect(resumed).toBe('codex resume session-3 --dangerously-bypass-approvals-and-sandbox -c check_for_update_on_startup=false');
   });
 });
 

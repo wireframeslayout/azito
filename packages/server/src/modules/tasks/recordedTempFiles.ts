@@ -6,6 +6,7 @@ import { TaskTempFiles } from '../../shared/os/taskTempFiles';
 const RECORDING_LOGS: Record<string, readonly string[]> = {
   phase_prompt: ['outputFilePath', 'signalFilePath', 'rulesFilePath'],
   follow_up_prompt: ['outputFilePath', 'signalFilePath'],
+  prompt_file: ['promptFilePath'],
   wait_start_pipe: ['filePath', 'signalFilePath'],
 };
 

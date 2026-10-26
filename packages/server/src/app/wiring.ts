@@ -598,6 +598,7 @@ function buildExecuteTaskUseCase(
     infra.taskTempFiles,
     harnessPrefix,
     hubGitIdentity,
+    localAgentHomesFromEnv(process.env),
   );
 }
 

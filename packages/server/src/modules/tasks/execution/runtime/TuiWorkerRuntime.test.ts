@@ -1,12 +1,14 @@
 import { describe, it, expect, vi } from 'vitest';
 import { asPaneHandle } from '@azito/shared';
-import { TuiWorkerRuntime } from './TuiWorkerRuntime';
+import { TuiNotReadyError, TuiWorkerRuntime, workerNotReadyReason } from './TuiWorkerRuntime';
+import { WorkerNotRunningError } from '../WorkerInputService';
 import { posixDialect } from '../../../../shared/os/shellDialect';
 
-function makeRuntime(capturePaneResponses: string[]) {
+function makeRuntime(capturePaneResponses: string[], foreground: string | null = 'claude') {
   let callIndex = 0;
   const tmux = {
     sendKeysToHandle: vi.fn(async () => {}),
+    paneCommandByHandle: vi.fn(async () => foreground),
     captureScreen: vi.fn(async () => {
       const stdout = capturePaneResponses[callIndex] ?? capturePaneResponses[capturePaneResponses.length - 1];
       callIndex++;
@@ -14,11 +16,12 @@ function makeRuntime(capturePaneResponses: string[]) {
     }),
   };
   const workerInput = { sendPrompt: vi.fn(async () => {}) };
+  const promptFiles = { stage: vi.fn(async () => 'AZITO prompt file. Read the file named at the end of this line and carry out every instruction in it exactly: /tmp/azito-prompt-1-ab.md') };
   const workerWaiter = { startSignalStream: vi.fn() };
   const httpSignalCoordinator = { start: vi.fn() };
   const supervisorRegistry = { issueLaunch: vi.fn(() => undefined) };
-  const runtime = new TuiWorkerRuntime(workerInput as any, workerWaiter as any, httpSignalCoordinator as any, supervisorRegistry as any, '');
-  return { runtime, tmux };
+  const runtime = new TuiWorkerRuntime(workerInput as any, workerWaiter as any, httpSignalCoordinator as any, supervisorRegistry as any, '', promptFiles as any);
+  return { runtime, tmux, workerInput, promptFiles };
 }
 
 const server = { name: 'local', type: 'local' } as any;
@@ -53,12 +56,39 @@ describe('TuiWorkerRuntime.launch — waitForTuiReady', () => {
     expect(tmux.captureScreen.mock.calls.length).toBeGreaterThanOrEqual(3);
   }, 15_000);
 
-  it('does NOT poll or throw for codex worker — returns after fixed 3s sleep', async () => {
-    const { runtime, tmux } = makeRuntime([]);
-    const ctx = { ...makeLaunchCtx(tmux), effectiveLaunchCommand: 'codex --dangerously-bypass-approvals-and-sandbox' };
+  it('waits for the composer of a codex worker (rust-v0.149 / v0.164 placeholder and footer)', async () => {
+    const { runtime, tmux } = makeRuntime(['', '› Ask Codex to do anything\n  ? for shortcuts                100% context left'], 'codex');
+    const ctx = { ...makeLaunchCtx(tmux), effectiveLaunchCommand: 'codex --dangerously-bypass-approvals-and-sandbox -c check_for_update_on_startup=false' };
     await expect(runtime.launch(ctx)).resolves.toBeDefined();
-    expect(tmux.captureScreen).not.toHaveBeenCalled();
-  }, 10_000);
+    expect(tmux.captureScreen.mock.calls.length).toBeGreaterThanOrEqual(2);
+  }, 15_000);
+
+  it('stops on the codex update prompt with the reason (its default answer would run the update)', async () => {
+    const { runtime, tmux } = makeRuntime([[
+      '✨ Update available! 0.149.1 -> 0.164.0',
+      '1. Update now (runs `sh -c \'curl -fsSL https://chatgpt.com/codex/install.sh | sh\'`)',
+      '2. Skip',
+      '3. Skip until next version',
+      'Press enter to continue',
+    ].join('\n')], 'codex');
+    const ctx = { ...makeLaunchCtx(tmux), effectiveLaunchCommand: 'codex --dangerously-bypass-approvals-and-sandbox' };
+    await expect(runtime.launch(ctx)).rejects.toMatchObject({ name: 'TuiNotReadyError', reason: 'codex_update_prompt' });
+  }, 15_000);
+
+  it.each([
+    ['rust-v0.149', 'Do you trust the contents of this directory? Working with untrusted contents comes with higher risk of prompt injection.\n› 1. Yes, continue\n  2. No, quit'],
+    ['rust-v0.164', '  Folder access\n  Trust this folder? Codex can read, edit, and run files here, subject to your permission settings.\n› 1. Trust and continue\n  2. Quit'],
+  ])('stops on the codex folder trust screen (%s)', async (_version, screen) => {
+    const { runtime, tmux } = makeRuntime([screen], 'codex');
+    const ctx = { ...makeLaunchCtx(tmux), effectiveLaunchCommand: 'codex --dangerously-bypass-approvals-and-sandbox' };
+    await expect(runtime.launch(ctx)).rejects.toMatchObject({ name: 'TuiNotReadyError', reason: 'codex_trust_prompt' });
+  }, 15_000);
+
+  it('stops with worker_exited_to_shell when the agent ended and the pane is back at a shell', async () => {
+    const { runtime, tmux } = makeRuntime(['user@host:~/wt$ '], 'bash');
+    const ctx = { ...makeLaunchCtx(tmux), effectiveLaunchCommand: 'codex --dangerously-bypass-approvals-and-sandbox' };
+    await expect(runtime.launch(ctx)).rejects.toMatchObject({ name: 'TuiNotReadyError', reason: 'worker_exited_to_shell' });
+  }, 15_000);
 
   it('does NOT poll or throw for generic worker', async () => {
     const { runtime, tmux } = makeRuntime([]);
@@ -124,11 +154,47 @@ describe('TuiWorkerRuntime.launch — the Bypass Permissions mode dialog (Claude
     const ctx = { ...makeLaunchCtx(tmux), effectiveLaunchCommand: 'claude --dangerously-skip-permissions' };
     await expect(runtime.launch(ctx)).resolves.toBeDefined();
   }, 15_000);
+});
 
-  it('does not look at the screen of a codex worker', async () => {
-    const { runtime, tmux } = makeRuntime([dialog]);
-    const ctx = { ...makeLaunchCtx(tmux), effectiveLaunchCommand: 'codex --dangerously-bypass-approvals-and-sandbox' };
-    await expect(runtime.launch(ctx)).resolves.toBeDefined();
+describe('TuiWorkerRuntime.sendPrompt — nothing of the prompt is typed into a worker that cannot take it (#532)', () => {
+  const ctxFor = (tmux: any, agentKind: 'claude' | 'codex' | null) => ({ server, handle: asPaneHandle('sess:1.1'), driver: tmux, supervisorTarget: 'sess:1', taskId: 1, unitId: 1, agentKind });
+  const PROMPT = 'do the task\n$(rm -rf ~)\n`id`; echo pwned';
+
+  it('types only the one-line instruction, never the prompt, and writes the prompt to the file', async () => {
+    const { runtime, tmux, workerInput, promptFiles } = makeRuntime(['› Ask Codex to do anything\n? for shortcuts'], 'codex');
+    await runtime.sendPrompt(ctxFor(tmux, 'codex'), PROMPT);
+    expect(promptFiles.stage).toHaveBeenCalledWith(server, 1, 1, PROMPT);
+    expect(workerInput.sendPrompt).toHaveBeenCalledTimes(1);
+    const typed = (workerInput.sendPrompt.mock.calls[0] as unknown as unknown[])[2] as string;
+    expect(typed).not.toContain('rm -rf');
+    expect(typed).not.toContain('\n');
+  });
+
+  it.each([
+    ['codex', 'codex_update_prompt', 'Update available! 0.149.1 -> 0.164.0\n1. Update now\n3. Skip until next version'],
+    ['codex', 'codex_trust_prompt', 'Do you trust the contents of this directory?\n1. Yes, continue\n2. No, quit'],
+    ['claude', 'trust_dialog', 'Do you trust this folder?'],
+    ['claude', 'bypass_permissions_dialog', 'WARNING: Claude Code running in Bypass Permissions mode\n1. No, exit\n2. Yes, I accept'],
+  ] as const)('a %s worker showing %s: fails with the reason and sends nothing', async (kind, reason, screen) => {
+    const { runtime, tmux, workerInput, promptFiles } = makeRuntime([screen], kind);
+    await expect(runtime.sendPrompt(ctxFor(tmux, kind), PROMPT)).rejects.toMatchObject({ name: 'TuiNotReadyError', reason });
+    expect(workerInput.sendPrompt).not.toHaveBeenCalled();
+    expect(tmux.sendKeysToHandle).not.toHaveBeenCalled();
+    expect(promptFiles.stage).not.toHaveBeenCalled();
+  });
+
+  it('does not read the screen of a generic worker', async () => {
+    const { runtime, tmux, workerInput } = makeRuntime([''], 'some-tool');
+    await runtime.sendPrompt(ctxFor(tmux, null), PROMPT);
     expect(tmux.captureScreen).not.toHaveBeenCalled();
-  }, 10_000);
+    expect(workerInput.sendPrompt).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe('workerNotReadyReason', () => {
+  it('names a dialog, a worker back at a shell, and nothing else', () => {
+    expect(workerNotReadyReason(new TuiNotReadyError('codex_update_prompt', ''))).toBe('worker_not_ready: codex_update_prompt');
+    expect(workerNotReadyReason(new WorkerNotRunningError('bash'))).toBe('worker_not_ready: worker_exited_to_shell');
+    expect(workerNotReadyReason(new Error('boom'))).toBeNull();
+  });
 });

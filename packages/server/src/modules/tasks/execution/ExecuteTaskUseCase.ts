@@ -38,13 +38,14 @@ import { launchArgv, renderLaunchLine } from '../../agents/WorkerLaunch';
 import { programFor } from '../../agents/workerProgram';
 import type { PaneProgram } from '../../tmux/IMuxClient';
 import { resolveEnvelopeHost } from './AzitoctlPath';
+import type { LocalAgentHomes } from '../../agents/agentHomes';
 import { createTaskWorktree, TaskWorktreeError, type TaskWorktreeDeps } from './TaskWorktreeSetup';
 import { planNewWorkerLaunch, planResumeWorkerLaunch } from './WorkerLaunchPlan';
 import { shellDialectFor, type ShellDialect } from '../../../shared/os/shellDialect';
 import { expandTemplate } from './PromptExpander';
 import type { UnitTypeLoader } from '../../sidekicks/UnitTypeLoader';
 import { WorkerWaiter } from './WorkerWaiter';
-import { WorkerInputService, WorkerNotRunningError } from './WorkerInputService';
+import { WorkerInputService } from './WorkerInputService';
 import { PushVerifier } from './PushVerifier';
 import { GitInfoCollector, type GitInfo } from './GitInfoCollector';
 import { PullRequestCreator } from './PullRequestCreator';
@@ -56,7 +57,9 @@ import { shouldSupervise } from '../../supervisors/SupervisorLaunch';
 import { ResourceExhaustedError, type ResourceGuard } from '../../servers/resources/ResourceGuard';
 import { checkExecutionGate, ExecutionGateDeniedError, ExecutionGatePendingApprovalError, reverifyExecutionGateInLock } from './ExecutionGate';
 import { resolveExecutionManifest, hashExecutionManifest } from './ExecutionManifest';
-import { TuiWorkerRuntime, TuiNotReadyError } from './runtime/TuiWorkerRuntime';
+import { TuiWorkerRuntime, TuiNotReadyError, workerNotReadyReason } from './runtime/TuiWorkerRuntime';
+import { PromptFileDelivery } from './PromptFileDelivery';
+import { tuiAgentKindOfWorkerType } from './runtime/workerScreen';
 import { prepareClaudeLaunch } from '../../agents/claude/prepareClaudeLaunch';
 import { WorkerRuntimeRegistry } from './runtime/WorkerRuntimeRegistry';
 import { labelRegisteredWindow, labelAddedWindowOrRemove } from '../../tmux/labelRegisteredWindow';
@@ -191,6 +194,7 @@ export class ExecuteTaskUseCase {
     private taskTempFiles: TaskTempFiles,
     private harnessPrefix: string,
     private hubGitIdentity: GitIdentity | null = null,
+    private localHomes: LocalAgentHomes = { claudeConfigDir: null, codexHome: null },
   ) {
     this.gitInfoCollector = new GitInfoCollector(this.transportFactory);
     this.pushVerifier = new PushVerifier(this.transportFactory, this.gitProvider);
@@ -215,7 +219,8 @@ export class ExecuteTaskUseCase {
       this.workerInput,
     );
     this.httpSignalCoordinator = new HttpSignalTurnCoordinator(this.turnRepo, this.turnSignalHub);
-    const tuiRuntime = new TuiWorkerRuntime(this.workerInput, this.workerWaiter, this.httpSignalCoordinator, this.supervisorRegistry, this.harnessPrefix);
+    const promptFiles = new PromptFileDelivery(this.transportFactory, this.taskTempFiles, (taskId, unitId, type, content) => this.appendLog(taskId, unitId, type, content));
+    const tuiRuntime = new TuiWorkerRuntime(this.workerInput, this.workerWaiter, this.httpSignalCoordinator, this.supervisorRegistry, this.harnessPrefix, promptFiles);
     this.runtimeRegistry = new WorkerRuntimeRegistry();
     this.runtimeRegistry.register('tui', tuiRuntime);
     this.phaseLoopRunner = new PhaseLoopRunner(
@@ -276,6 +281,7 @@ export class ExecuteTaskUseCase {
       transportFactory: this.transportFactory,
       worktreeServiceFactory: this.worktreeServiceFactory,
       hubGitIdentity: this.hubGitIdentity,
+      localHomes: this.localHomes,
       appendLog: (taskId, unitId, type, content) => this.appendLog(taskId, unitId, type, content),
     };
   }
@@ -1415,6 +1421,13 @@ export class ExecuteTaskUseCase {
           this.taskRepo.updateStatus(taskId, 'failed' as TaskStatus);
           return;
         }
+        const notReady = workerNotReadyReason(launchErr);
+        if (notReady) {
+          // The worker is not at its input screen (back at a shell, a dialog this does not name, never ready): no prompt is sent.
+          this.appendLog(taskId, unitId, 'command', { type: 'worker_not_ready', reason: notReady, message: (launchErr as Error).message });
+          this.taskRepo.updateStatus(taskId, 'failed' as TaskStatus);
+          return;
+        }
         this.appendLog(taskId, unitId, 'command', { type: 'worker_launch_failed', message: (launchErr as Error).message });
       }
     }
@@ -1914,7 +1927,8 @@ export class ExecuteTaskUseCase {
           });
           this.appendLog(taskId, unitId, 'command', { type: 'worker_launch', command: actualCommand });
         } catch (launchErr) {
-          this.appendLog(taskId, unitId, 'command', { type: 'worker_launch_failed', message: (launchErr as Error).message });
+          const notReady = workerNotReadyReason(launchErr);
+          this.appendLog(taskId, unitId, 'command', { type: 'worker_launch_failed', message: (launchErr as Error).message, ...(notReady ? { reason: notReady } : {}) });
           this.taskRepo.updateStatus(taskId, 'failed');
           if (tokenId) {
             try {
@@ -2036,13 +2050,14 @@ export class ExecuteTaskUseCase {
         return;
       }
       try {
-        await runtime.sendPrompt({ server, handle, driver: fuMainDriver, supervisorTarget: windowTarget, taskId, unitId }, commentWithMarkers);
+        await runtime.sendPrompt({ server, handle, driver: fuMainDriver, supervisorTarget: windowTarget, taskId, unitId, agentKind: tuiAgentKindOfWorkerType(unit.workerType) }, commentWithMarkers);
       } catch (err: unknown) {
         followUpStream.stop();
         followUpSignalStream.stop();
-        const isDeadWorker = err instanceof WorkerNotRunningError;
+        const notReady = workerNotReadyReason(err);
         this.appendLog(taskId, unitId, 'status_change', {
-          status: isDeadWorker ? 'worker_not_running' : 'send_error',
+          status: notReady ? 'worker_not_ready' : 'send_error',
+          ...(notReady ? { reason: notReady } : {}),
           message: (err as Error).message,
         });
         this.taskRepo.updateStatus(taskId, 'failed');

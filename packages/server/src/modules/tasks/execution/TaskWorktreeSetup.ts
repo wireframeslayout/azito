@@ -9,6 +9,8 @@ import { assertDirectoryContained } from '../../git/PathContainment';
 import { normalizeBranchRef } from '../../git/assertSafeGitArgs';
 import { ensureGitIdentity, type GitIdentity } from '../../git/ensureGitIdentity';
 import { ensureClaudeTrust } from '../../agents/claude/ensureClaudeTrust';
+import { ensureCodexTrust } from '../../agents/codex/ensureCodexTrust';
+import type { LocalAgentHomes } from '../../agents/agentHomes';
 import { resolveWorktreeCreateBaseBranch } from './TaskExecutionEnv';
 
 /** What a task's worktree step needs from the use case that runs it (the collaborators, not the use case itself). */
@@ -18,6 +20,8 @@ export interface TaskWorktreeDeps {
   transportFactory: TransportFactory;
   worktreeServiceFactory: WorktreeServiceFactory;
   hubGitIdentity: GitIdentity | null;
+  /** Where the hub's own machine keeps codex's config (`CODEX_HOME`); resolved once at the composition root. */
+  localHomes: LocalAgentHomes;
   appendLog(taskId: number, unitId: number, type: LogType, content: unknown): void;
 }
 
@@ -109,6 +113,8 @@ export async function createTaskWorktree(
   await applyGitIdentity(deps, server, task.id, unitId, wt.path);
   // On Windows both the project's directory and the worktree itself (see registerClaudeTrust): the worktree is a repository root of its own.
   if (request.workerType === 'claude') await registerClaudeTrust(deps, server, task.id, unitId, workingDir, wt.path);
+  // codex looks the directory it runs in up first, so the worktree is what to register (the project's directory is not needed for it).
+  if (request.workerType === 'codex') await registerCodexTrust(deps, server, task.id, unitId, wt.path);
   return wt;
 }
 
@@ -145,5 +151,22 @@ async function registerClaudeTrustFor(deps: TaskWorktreeDeps, server: ServerConf
     }
   } catch (err) {
     deps.appendLog(taskId, unitId, 'command', { type: 'claude_trust_failed', reason: err instanceof Error ? err.message : String(err) });
+  }
+}
+
+async function registerCodexTrust(deps: TaskWorktreeDeps, server: ServerConfig, taskId: number, unitId: number, worktreePath: string): Promise<void> {
+  try {
+    const transport = deps.transportFactory.getTransport(server);
+    const resolved = await transport.files().realpath(worktreePath);
+    const result = await ensureCodexTrust(transport, resolved, deps.localHomes, server.type === 'local');
+    if (result.action === 'registered') {
+      deps.appendLog(taskId, unitId, 'command', { type: 'codex_trust_registered', path: result.key });
+    } else if (result.action === 'skipped') {
+      deps.appendLog(taskId, unitId, 'command', { type: 'codex_trust_skipped', reason: result.reason });
+    } else if (result.action === 'failed') {
+      deps.appendLog(taskId, unitId, 'command', { type: 'codex_trust_failed', reason: result.reason });
+    }
+  } catch (err) {
+    deps.appendLog(taskId, unitId, 'command', { type: 'codex_trust_failed', reason: err instanceof Error ? err.message : String(err) });
   }
 }

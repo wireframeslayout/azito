@@ -1,6 +1,8 @@
 import { type PaneHandle } from '@azito/shared';
 import type { IMuxClient } from '../../../tmux/IMuxClient';
-import type { WorkerInputService } from '../WorkerInputService';
+import { WorkerNotRunningError, type WorkerInputService } from '../WorkerInputService';
+import type { PromptFileDelivery } from '../PromptFileDelivery';
+import { blockingWorkerDialog, isWorkerScreenReady, tuiAgentKindOf, type TuiAgentKind, type WorkerDialog } from './workerScreen';
 import type { WorkerWaiter } from '../WorkerWaiter';
 import type { HttpSignalTurnCoordinator } from '../HttpSignalTurnCoordinator';
 import type { ServerConfig } from '../../../servers/Server';
@@ -8,6 +10,7 @@ import { usesHttpSignalPath } from '../../../units/Unit';
 import { renderForStateMachine } from '../../../prompt/PhasePromptRenderer';
 import { FOLLOW_UP_CAPABILITY, stateMachineEnvelope } from '../../../prompt/executionEnvelope';
 import { shouldSupervise, wrapWithSupervisor } from '../../../supervisors/SupervisorLaunch';
+import { isBareShellCommand } from '../../../../shared/os/shellCommands';
 import type { SupervisorRegistry } from '../../../supervisors/SupervisorRegistry';
 import type {
   IWorkerRuntime,
@@ -22,66 +25,37 @@ function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
-function isClaudeLaunchCommand(command: string): boolean {
-  return /\bclaude\b/i.test(command) && !/\bcodex\b/i.test(command);
-}
+/** Why the worker's screen did not take a prompt: a dialog that waits for a person, the worker back at a shell, or nothing recognisable within the time allowed. */
+export type TuiNotReadyReason = WorkerDialog | 'worker_exited_to_shell' | 'timeout';
 
-/** Why the Claude TUI did not become ready: a dialog that waits for a person, or nothing recognisable within the time allowed. */
-export type TuiNotReadyReason = 'trust_dialog' | 'bypass_permissions_dialog' | 'timeout';
+const NOT_READY_MESSAGES: Record<TuiNotReadyReason, string> = {
+  trust_dialog: 'Claude Code の信頼確認ダイアログで起動が停止しました',
+  bypass_permissions_dialog: 'Claude Code の Bypass Permissions mode の確認ダイアログで起動が停止しました',
+  codex_update_prompt: 'Codex の更新の確認画面で起動が停止しました',
+  codex_trust_prompt: 'Codex のフォルダー信頼の確認画面で起動が停止しました',
+  worker_exited_to_shell: 'ワーカーが終了してシェルに戻っています',
+  timeout: 'The worker TUI did not become ready within 30s',
+};
 
 export class TuiNotReadyError extends Error {
   constructor(public readonly reason: TuiNotReadyReason, public readonly lastScreen: string) {
-    super(
-      reason === 'trust_dialog'
-        ? 'Claude Code の信頼確認ダイアログで起動が停止しました'
-        : reason === 'bypass_permissions_dialog'
-          ? 'Claude Code の Bypass Permissions mode の確認ダイアログで起動が停止しました'
-          : 'Claude Code TUI did not become ready within 30s',
-    );
+    super(NOT_READY_MESSAGES[reason]);
     this.name = 'TuiNotReadyError';
   }
 }
 
-function stripAnsi(output: string): string {
-  return output.replace(/\x1B\[[0-9;]*[a-zA-Z]/g, '');
-}
-
-function hasTrustDialog(output: string): boolean {
-  const stripped = stripAnsi(output).toLowerCase();
-  return stripped.includes('trust this folder') ||
-    (stripped.includes('no,') && stripped.includes('exit') && stripped.includes('yes,') && stripped.includes('trust'));
-}
-
 /**
- * The "Bypass Permissions mode" confirmation `claude --dangerously-skip-permissions` shows until `skipDangerousModePermissionPrompt` is
- * set. Read from the shipped binary of 2.1.310 (`BypassPermissionsModeDialog`; the 2.0.50 `cli.js` has the same texts): the title is
- * "WARNING: Claude Code running in Bypass Permissions mode", the body ends "By proceeding, you accept all responsibility for actions taken
- * while running in Bypass Permissions mode.", the choices are "No, exit" / "Yes, I accept". The body also contains "bypass permissions",
- * which is why the ready check below must exclude this screen.
- * The screen is the pane's last lines, which can also hold a conversation that quotes any one of these sentences, next to the ready status
- * line "bypass permissions on": only the title and both choices together (what no running session shows) are taken as the dialog.
- * Box-drawing characters and whitespace are collapsed because the pane wraps the dialog's lines inside a frame.
+ * `worker_not_ready: <reason>` when `err` is the worker not being able to take input (a dialog on its screen, back at a shell, never
+ * ready), else null. The task is stopped with this reason and nothing is typed into the pane.
  */
-function hasBypassPermissionsDialog(output: string): boolean {
-  const text = stripAnsi(output).toLowerCase().replace(/[\u2500-\u257f]/g, ' ').replace(/\s+/g, ' ');
-  return text.includes('warning: claude code running in bypass permissions mode') &&
-    text.includes('yes, i accept') &&
-    text.includes('no, exit');
+export function workerNotReadyReason(err: unknown): string | null {
+  if (err instanceof TuiNotReadyError) return `worker_not_ready: ${err.reason}`;
+  if (err instanceof WorkerNotRunningError) return 'worker_not_ready: worker_exited_to_shell';
+  return null;
 }
 
-function isTuiReady(output: string): boolean {
-  if (hasBypassPermissionsDialog(output)) return false;
-  const stripped = stripAnsi(output);
-  const lower = stripped.toLowerCase();
-  if (
-    lower.includes('bypass permissions') ||
-    lower.includes('shift+tab to cycle') ||
-    lower.includes('esc to interrupt')
-  ) {
-    return true;
-  }
-  return stripped.includes('/help') && /Claude/i.test(stripped);
-}
+/** The screen the readiness checks read: the pane's last lines. */
+const SCREEN_CAPTURE_LINES = -50;
 
 export class TuiWorkerRuntime implements IWorkerRuntime {
   constructor(
@@ -90,12 +64,13 @@ export class TuiWorkerRuntime implements IWorkerRuntime {
     private httpSignalCoordinator: HttpSignalTurnCoordinator,
     private supervisorRegistry: Pick<SupervisorRegistry, 'issueLaunch'>,
     private harnessPrefix: string,
+    private promptFiles: PromptFileDelivery,
   ) {}
 
   async launch(ctx: WorkerLaunchContext): Promise<string> {
     if (ctx.startedAsProgram) {
       // The window was created with the worker as its pane: there is nothing to type, only the TUI to wait for.
-      await this.waitForTuiReady(ctx.driver, ctx.server, ctx.handle, isClaudeLaunchCommand(ctx.effectiveLaunchCommand));
+      await this.waitForTuiReady(ctx.driver, ctx.server, ctx.handle, tuiAgentKindOf(ctx.effectiveLaunchCommand));
       return ctx.effectiveLaunchCommand;
     }
     const sendCommand = shouldSupervise(ctx.server.type, ctx.windowType, ctx.windowKind)
@@ -120,35 +95,49 @@ export class TuiWorkerRuntime implements IWorkerRuntime {
         })
       : ctx.effectiveLaunchCommand;
     await ctx.driver.sendKeysToHandle(ctx.server, ctx.handle, [sendCommand, 'Enter']);
-    const isClaudeWorker = isClaudeLaunchCommand(ctx.effectiveLaunchCommand);
-    await this.waitForTuiReady(ctx.driver, ctx.server, ctx.handle, isClaudeWorker);
+    await this.waitForTuiReady(ctx.driver, ctx.server, ctx.handle, tuiAgentKindOf(ctx.effectiveLaunchCommand));
     return sendCommand;
   }
 
-  private async waitForTuiReady(driver: IMuxClient, server: ServerConfig, handle: PaneHandle, strict: boolean): Promise<void> {
+  /** Waits until the agent's input screen is up; a dialog on it, or no sign of it within 30s, is a {@link TuiNotReadyError}. A generic worker has no screen to read. */
+  private async waitForTuiReady(driver: IMuxClient, server: ServerConfig, handle: PaneHandle, kind: TuiAgentKind | null): Promise<void> {
     await sleep(3000);
 
-    if (!strict) return;
+    if (kind === null) return;
 
     let lastScreen = '';
     const deadline = Date.now() + 27000;
     while (Date.now() < deadline) {
-      const result = await driver.captureScreen(server, handle, -50);
+      const result = await driver.captureScreen(server, handle, SCREEN_CAPTURE_LINES);
       lastScreen = result.stdout;
-      if (isTuiReady(lastScreen)) return;
-      if (hasTrustDialog(lastScreen)) throw new TuiNotReadyError('trust_dialog', lastScreen);
-      if (hasBypassPermissionsDialog(lastScreen)) throw new TuiNotReadyError('bypass_permissions_dialog', lastScreen);
+      if (isWorkerScreenReady(kind, lastScreen)) return;
+      const dialog = blockingWorkerDialog(kind, lastScreen);
+      if (dialog) throw new TuiNotReadyError(dialog, lastScreen);
+      // The agent ended and left the pane at a shell: nothing will ever be ready, and a prompt typed now would be read by the shell.
+      const foreground = await driver.paneCommandByHandle(server, handle);
+      if (foreground !== null && isBareShellCommand(foreground)) throw new TuiNotReadyError('worker_exited_to_shell', lastScreen);
       await sleep(1000);
     }
 
     throw new TuiNotReadyError('timeout', lastScreen);
   }
 
+  /**
+   * Types the instruction to read the prompt's file into the worker, never the prompt (Issue #532). Before that the screen is read: a
+   * dialog on it (the worker would take the line as an answer to it) stops the task with a reason and nothing is sent. A worker that
+   * has gone back to a shell is refused by WorkerInputService.sendPrompt (`WorkerNotRunningError`), also before anything is typed.
+   */
   async sendPrompt(ctx: WorkerContext, prompt: string): Promise<void> {
+    if (ctx.agentKind !== null) {
+      const screen = (await ctx.driver.captureScreen(ctx.server, ctx.handle, SCREEN_CAPTURE_LINES)).stdout;
+      const dialog = blockingWorkerDialog(ctx.agentKind, screen);
+      if (dialog) throw new TuiNotReadyError(dialog, screen);
+    }
+    const instruction = await this.promptFiles.stage(ctx.server, ctx.taskId, ctx.unitId, prompt);
     await this.workerInput.sendPrompt(
       ctx.server,
       ctx.handle,
-      prompt,
+      instruction,
       { taskId: ctx.taskId, unitId: ctx.unitId },
       ctx.supervisorTarget,
     );

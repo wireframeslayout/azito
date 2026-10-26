@@ -42,6 +42,16 @@ export const CODEX_MCP_DISABLE_TEXTS = [
 const CODEX_MCP_DISABLE_ARGS: readonly LaunchArg[] = CODEX_MCP_DISABLE_TEXTS.flatMap((text) => [flag('-c'), flag(text)]);
 
 /**
+ * Issue #532: a worker has no one to answer codex's "Update available" screen ("1. Update now" is the default, Enter runs
+ * `sh -c 'curl ... | sh'`), and a prompt typed over it ends the TUI. `check_for_update_on_startup` is a top-level boolean of
+ * config.toml that codex's TUI reads before it shows that screen: `get_upgrade_version` returns `None` when it is false
+ * (codex-rs/tui/src/updates.rs; the field is `Option<bool>` in codex-rs/config/src/config_toml.rs and defaults to true in
+ * codex-rs/core/src/config/mod.rs — the same in rust-v0.149.0 and rust-v0.164.0). `false` is valid TOML, so `-c` takes it as a boolean
+ * and no quote has to survive the shell or cmd.exe. Independent of `blockMcp`: every worker launch carries it.
+ */
+export const CODEX_NO_UPDATE_CHECK_TEXT = 'check_for_update_on_startup=false';
+
+/**
  * Shared base builder for both a fresh `codex` launch and a `codex resume
  * <id>` relaunch (Issue #28 third-party review, respawn-MCP-bypass fix):
  * the two previously diverged (the respawn builder in SessionStrategy.ts
@@ -58,6 +68,8 @@ function buildCodexProgram(agentSessionId: string | null, { model, extraArgs, bl
     args: [
       ...(agentSessionId ? [flag('resume'), flag(agentSessionId)] : []),
       flag('--dangerously-bypass-approvals-and-sandbox'),
+      flag('-c'),
+      flag(CODEX_NO_UPDATE_CHECK_TEXT),
       ...(blockMcp ? CODEX_MCP_DISABLE_ARGS : []),
       ...(model ? [flag('--model'), value(model)] : []),
       ...extraArgValues(extraArgs),
