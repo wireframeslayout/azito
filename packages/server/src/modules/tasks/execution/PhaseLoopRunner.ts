@@ -48,14 +48,6 @@ import { isDistributionRequiredButRepositoryUnresolved } from './DistributionHel
 import type { ProjectRepository } from '../../projects/Project';
 import type { TaskTempFiles } from '../../../shared/os/taskTempFiles';
 
-function sleep(ms: number): Promise<void> {
-  return new Promise((resolve) => setTimeout(resolve, ms));
-}
-
-function isPromptDelivered(text: string): boolean {
-  return /Thinking|Mulling|Hyperspacing|Deepening|esc to interrupt|AZITO_DONE_|<\/completion_signal>|⏺/i.test(text);
-}
-
 /** The subset of Unit fields the phase loop needs; selfReviewMaxAttempts may be overridden per-run by the caller. */
 export interface UnitForRun {
   id: number;
@@ -292,31 +284,6 @@ export class PhaseLoopRunner {
     await this.sidekickSyncService.sync(server.name, transport, this.sidekickLoader.list());
   }
 
-  private async verifyPromptDelivery(
-    runtime: IWorkerRuntime,
-    workerContext: WorkerContext,
-    prompt: string,
-    phase: string,
-  ): Promise<void> {
-    await sleep(3000);
-    const firstPaneText = await this.workerWaiter.capturePaneText(workerContext.server, workerContext.handle);
-    if (isPromptDelivered(firstPaneText)) return;
-
-    this.appendLog(workerContext.taskId, workerContext.unitId, 'command', { type: 'prompt_retry', phase });
-    try {
-      await runtime.sendPrompt(workerContext, prompt);
-    } catch {
-      this.appendLog(workerContext.taskId, workerContext.unitId, 'command', { type: 'prompt_delivery_failed', phase });
-      return;
-    }
-
-    await sleep(3000);
-    const retryPaneText = await this.workerWaiter.capturePaneText(workerContext.server, workerContext.handle);
-    if (!isPromptDelivered(retryPaneText)) {
-      this.appendLog(workerContext.taskId, workerContext.unitId, 'command', { type: 'prompt_delivery_failed', phase });
-    }
-  }
-
   // ─── State Machine Loop ───
 
   async stateMachineLoop(
@@ -377,7 +344,6 @@ export class PhaseLoopRunner {
 
     let selfReviewCount = 0;
     const maxSelfReview = unit.selfReviewMaxAttempts ?? 2;
-    let isFirstPromptSent = false;
 
     // Shared with ExecutionManifest.ts's approval-manifest resolution
     // (resolveCurrentPhaseIndex) so the phase a human approves is guaranteed
@@ -567,10 +533,6 @@ export class PhaseLoopRunner {
           });
           this.taskRepo.updateStatus(task.id, 'failed');
           return;
-        }
-        if (!isFirstPromptSent) {
-          await this.verifyPromptDelivery(runtime, workerContext, markerizedPromptWithSignal, phase);
-          isFirstPromptSent = true;
         }
 
         if (phaseDef.pushVerify && !(currentIsolationIntent && this.pushNotaryService)) {

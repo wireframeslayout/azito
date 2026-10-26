@@ -1941,6 +1941,9 @@ export class ExecuteTaskUseCase {
         } catch (launchErr) {
           const notReady = workerNotReadyReason(launchErr);
           this.appendLog(taskId, unitId, 'command', { type: 'worker_launch_failed', message: (launchErr as Error).message, ...(notReady ? { reason: notReady } : {}) });
+          // Announced as a status_change like the first run's: the notification of a failed task follows that entry, and the caller of a
+          // follow-up (answer, plan approval) only turns the thrown error into its own failure.
+          if (notReady) this.logWorkerNotReady(taskId, unitId, launchErr);
           this.taskRepo.updateStatus(taskId, 'failed');
           if (tokenId) {
             try {

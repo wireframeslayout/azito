@@ -51,6 +51,7 @@ export class WorkerInputService {
     text: string,
     ctx?: WorkerInputContext,
     supervisorTarget?: string,
+    submitDelayMs = 0,
   ): Promise<void> {
     const driver = this.muxDriverRegistry.resolve(server);
     const supervisorKey = supervisorTarget ?? handle;
@@ -80,6 +81,14 @@ export class WorkerInputService {
       throw new WorkerNotRunningError(foreground);
     }
 
+    if (submitDelayMs > 0) {
+      // Keys that arrive together are a paste to codex, and an Enter inside a paste is a newline: the text goes first, and the Enter
+      // after the agent's own submit delay (its transcript profile), as the chat's input does.
+      await driver.sendKeysToHandle(server, handle, [text]);
+      await new Promise<void>((resolve) => setTimeout(resolve, submitDelayMs));
+      await driver.sendKeysToHandle(server, handle, ['Enter']);
+      return;
+    }
     await driver.sendKeysToHandle(server, handle, [text, 'Enter']);
   }
 

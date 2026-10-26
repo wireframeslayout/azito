@@ -5,7 +5,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { asPaneHandle } from '@azito/shared';
 import { TaskTempFiles } from '../../../shared/os/taskTempFiles';
-import { buildPromptFileInstruction, PromptFileDelivery } from './PromptFileDelivery';
+import { buildPromptFileInstruction, PromptFileDelivery, promptFileBytes } from './PromptFileDelivery';
 import { TuiWorkerRuntime } from './runtime/TuiWorkerRuntime';
 import { WorkerInputService } from './WorkerInputService';
 
@@ -161,5 +161,27 @@ describe('a worker that ends while the prompt is being sent (Issue #532)', () =>
     } finally {
       rmSync(cwd, { recursive: true, force: true });
     }
+  });
+});
+
+describe('the bytes of the prompt file', () => {
+  it('start with a UTF-8 byte order mark on a Windows host (PowerShell 5.1 reads a file without one as ANSI) and not elsewhere', () => {
+    const text = '日本語の説明 — dash';
+    const win = promptFileBytes(text, 'win32');
+    expect([...win.subarray(0, 3)]).toEqual([0xef, 0xbb, 0xbf]);
+    expect(win.subarray(3).toString('utf8')).toBe(text);
+    for (const platform of ['linux', 'darwin']) expect(promptFileBytes(text, platform).equals(Buffer.from(text, 'utf8'))).toBe(true);
+  });
+
+  it('is what is written for a Windows agent', async () => {
+    const write = vi.fn(async () => ({ mtimeMs: 0, sha256: '' }));
+    const delivery = new PromptFileDelivery(
+      { taskTempServer: async () => ({ type: 'agent', platform: 'win32', tmpDir: 'C:\\Temp' }), getFileOps: () => ({ platform: 'win32', write }) } as never,
+      new TaskTempFiles('/var/tmp', 'linux'),
+      vi.fn(),
+    );
+    await delivery.stage(server, 4, 9, '説明');
+    const [[, data]] = write.mock.calls as unknown as [[string, Buffer]];
+    expect([...data.subarray(0, 3)]).toEqual([0xef, 0xbb, 0xbf]);
   });
 });

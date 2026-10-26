@@ -330,3 +330,28 @@ describe('WorkerInputService.sendKeys', () => {
     expect(appendLog).not.toHaveBeenCalled();
   });
 });
+
+describe('WorkerInputService.sendPrompt — the agent\'s submit delay (#532)', () => {
+  it('types the text, waits the delay, and only then presses Enter (keys that arrive together are a paste to codex)', async () => {
+    vi.useFakeTimers();
+    try {
+      const { service, mockDriver, registry } = makeHarness();
+      registry.isBoundConnected.mockReturnValue(false);
+      const sent = service.sendPrompt(server, target, 'hello worker', { taskId: 1, unitId: 2 }, undefined, 200);
+      await vi.advanceTimersByTimeAsync(100);
+      expect(mockDriver.sendKeysToHandle.mock.calls).toEqual([[server, target, ['hello worker']]]);
+      await vi.advanceTimersByTimeAsync(150);
+      await sent;
+      expect(mockDriver.sendKeysToHandle.mock.calls).toEqual([[server, target, ['hello worker']], [server, target, ['Enter']]]);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('sends the text and Enter together when the agent needs no delay', async () => {
+    const { service, mockDriver, registry } = makeHarness();
+    registry.isBoundConnected.mockReturnValue(false);
+    await service.sendPrompt(server, target, 'hello worker', { taskId: 1, unitId: 2 }, undefined, 0);
+    expect(mockDriver.sendKeysToHandle.mock.calls).toEqual([[server, target, ['hello worker', 'Enter']]]);
+  });
+});

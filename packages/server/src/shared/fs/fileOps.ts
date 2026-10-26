@@ -33,6 +33,11 @@ export interface IFileOps {
   create(path: string, kind: 'file' | 'directory', options?: { recursive?: boolean }): Promise<{ created: boolean }>;
   /** Removes a file, or a directory with everything in it. A missing path is `NOT_FOUND`. Never follows a symbolic link. */
   remove(path: string): Promise<void>;
+  /**
+   * Removes one file, or one symbolic link (the link itself), and nothing else: never recursive, never through a link. A directory is
+   * `NOT_A_FILE` and is left as it is; a missing path is `NOT_FOUND`. For a name that must only ever mean a single file (a task's temp file).
+   */
+  unlink(path: string): Promise<void>;
   /** Moves `from` to `to` in the same filesystem. A missing source is `NOT_FOUND`, an existing destination `ALREADY_EXISTS`. */
   rename(from: string, to: string): Promise<void>;
   /**

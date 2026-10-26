@@ -605,3 +605,41 @@ describe('LocalFileOps.write ownerOnly (#532)', () => {
     rmSync(root, { recursive: true, force: true });
   });
 });
+
+describe('LocalFileOps.unlink (#532)', () => {
+  let root: string;
+  let ops: LocalFileOps;
+  beforeEach(() => {
+    root = realpathSync.native(mkdtempSync(path.join(tmpdir(), 'azito-unlink-')));
+    ops = new LocalFileOps(localFileOpsHost({ platform: process.platform, homeDir: root }));
+  });
+  afterEach(() => {
+    rmSync(root, { recursive: true, force: true });
+  });
+
+  it('removes a file', async () => {
+    writeFileSync(path.join(root, 'a.txt'), 'x');
+    await ops.unlink(path.join(root, 'a.txt'));
+    expect(existsSync(path.join(root, 'a.txt'))).toBe(false);
+  });
+
+  it('refuses a directory (NOT_A_FILE) and leaves it and what is in it', async () => {
+    mkdirSync(path.join(root, 'd'));
+    writeFileSync(path.join(root, 'd', 'inside.txt'), 'x');
+    await expect(ops.unlink(path.join(root, 'd'))).rejects.toMatchObject({ code: 'NOT_A_FILE' });
+    expect(readFileSync(path.join(root, 'd', 'inside.txt'), 'utf8')).toBe('x');
+  });
+
+  it('says NOT_FOUND for a missing path', async () => {
+    await expect(ops.unlink(path.join(root, 'missing'))).rejects.toMatchObject({ code: 'NOT_FOUND' });
+  });
+
+  it.skipIf(process.platform === 'win32')('removes a symbolic link itself, never what it points at', async () => {
+    mkdirSync(path.join(root, 'd'));
+    writeFileSync(path.join(root, 'd', 'inside.txt'), 'x');
+    symlinkSync(path.join(root, 'd'), path.join(root, 'link'));
+    await ops.unlink(path.join(root, 'link'));
+    expect(existsSync(path.join(root, 'link'))).toBe(false);
+    expect(readFileSync(path.join(root, 'd', 'inside.txt'), 'utf8')).toBe('x');
+  });
+});

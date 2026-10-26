@@ -262,7 +262,74 @@ describe('TuiWorkerRuntime.sendPrompt — the worker has to be at its input (pos
     tmux.captureScreen.mockImplementation(async () => { order.push('screen'); return { stdout: READY.codex }; });
     promptFiles.stage.mockImplementation(async () => { order.push('stage'); return 'AZITO prompt file. x: /tmp/azito-prompt-1-ab.md'; });
     await runtime.sendPrompt(ctxFor(tmux, 'codex'), 'the prompt');
-    expect(order).toEqual(['screen', 'stage', 'screen']);
+    // confirmation, file, confirmation just before the line, then the check that the line was taken
+    expect(order).toEqual(['screen', 'stage', 'screen', 'screen']);
+  });
+});
+
+describe('TuiWorkerRuntime.sendPrompt — the line has to be taken by the worker (#532)', () => {
+  const ctxFor = (tmux: any, agentKind: 'claude' | 'codex') => ({ server, handle: asPaneHandle('sess:1.1'), driver: tmux, supervisorTarget: 'sess:1', taskId: 1, unitId: 1, agentKind });
+  const LINE = 'AZITO prompt file. Read the file named at the end of this line and carry out every instruction in it exactly: /tmp/azito-prompt-1-ab12cd.md';
+  const READY = '› Ask Codex to do anything\n  ? for shortcuts   100% context left';
+  /** The input still holds the line: typed, not submitted. */
+  const PENDING = `› ${LINE}\n\n  ? for shortcuts   100% context left`;
+  /** Taken: the worker is working on it. */
+  const TAKEN = `› ${LINE}\n\n• Working (1s • esc to interrupt)\n  ? for shortcuts`;
+
+  async function run(screens: string[], kind: 'claude' | 'codex' = 'codex') {
+    vi.useFakeTimers();
+    try {
+      const made = makeRuntime(screens, kind);
+      made.promptFiles.stage.mockResolvedValue(LINE);
+      const settled = made.runtime.sendPrompt(ctxFor(made.tmux, kind), 'the prompt').then(() => null, (err: unknown) => err);
+      await vi.advanceTimersByTimeAsync(20_000);
+      return { ...made, err: await settled };
+    } finally {
+      vi.useRealTimers();
+    }
+  }
+
+  it('hands the agent its submit delay (codex waits before the Enter, claude does not)', async () => {
+    const codex = await run([READY, READY, TAKEN], 'codex');
+    expect((codex.workerInput.sendPrompt.mock.calls as unknown as unknown[][])[0]).toEqual([server, asPaneHandle('sess:1.1'), LINE, { taskId: 1, unitId: 1 }, 'sess:1', 200]);
+    const claude = await run(['bypass permissions on (shift+tab to cycle)', 'bypass permissions on (shift+tab to cycle)', `> ${LINE}\nesc to interrupt\nbypass permissions on`], 'claude');
+    expect((claude.workerInput.sendPrompt.mock.calls as unknown as unknown[][])[0][5]).toBe(0);
+  });
+
+  it('is done as soon as the line is no longer in the input', async () => {
+    const { err, tmux } = await run([READY, READY, TAKEN]);
+    expect(err).toBeNull();
+    expect(tmux.sendKeysToHandle).not.toHaveBeenCalled();
+  });
+
+  it('presses Enter once more (not the prompt again) when the line stays in the input, and is done when that submits it', async () => {
+    const { err, tmux, workerInput } = await run([READY, READY, ...Array<string>(12).fill(PENDING), TAKEN]);
+    expect(err).toBeNull();
+    expect((tmux.sendKeysToHandle.mock.calls as unknown as unknown[][]).map((c) => c[2])).toEqual([['Enter']]);
+    expect(workerInput.sendPrompt).toHaveBeenCalledTimes(1);
+  });
+
+  it.each(['codex', 'claude'] as const)('stops the task with prompt_not_submitted when a %s input still holds the line after the second Enter', async (kind) => {
+    const ready = kind === 'codex' ? READY : 'bypass permissions on (shift+tab to cycle)';
+    const pending = kind === 'codex' ? PENDING : `> ${LINE}\n\nbypass permissions on (shift+tab to cycle)`;
+    const { err, tmux } = await run([ready, ready, pending], kind);
+    expect(err).toMatchObject({ name: 'TuiNotReadyError', reason: 'prompt_not_submitted' });
+    expect((tmux.sendKeysToHandle.mock.calls as unknown as unknown[][]).map((c) => c[2])).toEqual([['Enter']]);
+    expect(workerNotReadyReason(err)).toBe('worker_not_ready: prompt_not_submitted');
+  });
+
+  it('does not take the echo of a line that was submitted and answered for a line still in the input', async () => {
+    const answered = `› ${LINE}\n\n• Done. The task is finished and everything was written.\n\n› Ask Codex to do anything\n  ? for shortcuts`;
+    const { err, tmux } = await run([READY, READY, answered]);
+    expect(err).toBeNull();
+    expect(tmux.sendKeysToHandle).not.toHaveBeenCalled();
+  });
+
+  it('refuses to send while a line of an earlier prompt is still in codex\'s input (it would be sent together with the next one), writing no file', async () => {
+    const { err, workerInput, promptFiles } = await run([PENDING]);
+    expect(err).toMatchObject({ name: 'TuiNotReadyError', reason: 'input_not_empty' });
+    expect(promptFiles.stage).not.toHaveBeenCalled();
+    expect(workerInput.sendPrompt).not.toHaveBeenCalled();
   });
 });
 

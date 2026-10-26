@@ -562,6 +562,21 @@ describe('ExecuteTaskUseCase execution-env resolution', () => {
       expect(prepareClaudeLaunch).not.toHaveBeenCalled();
     });
 
+    // The worker is started again by a follow-up (an answer, a plan approval): the failure has to reach the status_change a notification follows.
+    it('followUp() restarting a codex worker that stops at its update prompt fails with worker_not_ready as a status_change, and sends nothing', async () => {
+      const unit = makeUnit({ id: 66, workerType: 'codex', workerModel: null });
+      const task = makeTask({ id: 6, serverName: 'local-server', unitId: 66, tmuxWindow: null, agentSessionId: '7a8b0f9c-1d2e-4f30-8a45-6b7c8d9e0f12' });
+      const { useCase, tmux, logRepo } = buildUseCase({ task, project: makeProject({ defaultUnitId: null }), units: [unit] });
+      tmux.captureScreen.mockResolvedValue({ stdout: 'Update available! 0.149.1 -> 0.164.0\n1. Update now\n2. Skip\n3. Skip until next version', stderr: '', code: 0 });
+      writtenPromptFiles.clear();
+
+      await expect(useCase.followUp(66, 6, 'please continue')).rejects.toThrow(/Follow-up worker launch failed/);
+
+      expect(logRepo.append).toHaveBeenCalledWith(6, 66, 'status_change', expect.objectContaining({ status: 'worker_not_ready', reason: 'worker_not_ready: codex_update_prompt' }));
+      expect(pushKeyForLogEntry({ type: 'status_change', content: { status: 'worker_not_ready' } })).toBe('task.sendError');
+      expect(writtenPromptFiles.size).toBe(0);
+    }, 15_000);
+
     it('followUp() prepares it before the worker is resumed', async () => {
       const unit = makeUnit({ id: 62, workerType: 'claude', workerModel: 'opus' });
       const task = makeTask({ id: 6, serverName: 'local-server', unitId: 62, tmuxWindow: null });

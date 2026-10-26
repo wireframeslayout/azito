@@ -33,11 +33,12 @@ function flatten(output: string): string {
   return stripAnsi(output).toLowerCase().replace(/[─-╿]/g, ' ').replace(/\s+/g, ' ');
 }
 
-function hasClaudeTrustDialog(output: string): boolean {
-  const stripped = stripAnsi(output).toLowerCase();
-  return stripped.includes('trust this folder') ||
-    (stripped.includes('no,') && stripped.includes('exit') && stripped.includes('yes,') && stripped.includes('trust'));
-}
+/**
+ * What Claude Code shows only while it runs: the permission-mode status line (every launch carries --dangerously-skip-permissions, so it
+ * is "bypass permissions on (shift+tab to cycle)", at the bottom of the screen at all times) and, while it works, "esc to interrupt".
+ * Neither is on a dialog. Used for the position of a dialog against the live screen.
+ */
+const CLAUDE_STATUS_MARKERS = ['bypass permissions on', 'shift+tab to cycle', 'esc to interrupt'] as const;
 
 /**
  * The "Bypass Permissions mode" confirmation `claude --dangerously-skip-permissions` shows until `skipDangerousModePermissionPrompt` is
@@ -45,14 +46,21 @@ function hasClaudeTrustDialog(output: string): boolean {
  * "WARNING: Claude Code running in Bypass Permissions mode", the body ends "By proceeding, you accept all responsibility for actions taken
  * while running in Bypass Permissions mode.", the choices are "No, exit" / "Yes, I accept". The body also contains "bypass permissions",
  * which is why the ready check must exclude this screen.
- * The screen is the pane's last lines, which can also hold a conversation that quotes any one of these sentences, next to the ready status
- * line "bypass permissions on": only the title and both choices together (what no running session shows) are taken as the dialog.
+ * The screen is the pane's last lines, which can also hold a conversation that quotes the whole dialog: it is the dialog only when the
+ * title and both choices are there and nothing of the live screen (status line, working line) shows below them. Box-drawing characters
+ * and whitespace are collapsed because the pane wraps the dialog's lines inside a frame.
  */
-function hasBypassPermissionsDialog(output: string): boolean {
+function bypassDialogAt(output: string): number {
   const text = flatten(output);
-  return text.includes('warning: claude code running in bypass permissions mode') &&
-    text.includes('yes, i accept') &&
-    text.includes('no, exit');
+  const at = lastIndexOfChoiceSet(text, ['warning: claude code running in bypass permissions mode', 'yes, i accept', 'no, exit']);
+  return at > lastIndexOfAny(text, CLAUDE_STATUS_MARKERS) ? at : -1;
+}
+
+/** Claude Code's folder trust screen ("Do you trust this folder?", choices "Yes, proceed" / "No, exit"), when nothing of the live screen is below it. */
+function claudeTrustDialogAt(output: string): number {
+  const text = flatten(output);
+  const at = Math.max(text.lastIndexOf('trust this folder'), (text.includes('no,') && text.includes('exit') && text.includes('yes,') && text.includes('trust')) ? text.lastIndexOf('trust') : -1);
+  return at > lastIndexOfAny(text, CLAUDE_STATUS_MARKERS) ? at : -1;
 }
 
 /**
@@ -108,12 +116,12 @@ function detectCodexDialog(output: string): WorkerDialog | null {
 /** The dialog `kind`'s screen shows, or null when it shows none this knows. */
 export function detectWorkerDialog(kind: TuiAgentKind, output: string): WorkerDialog | null {
   if (kind === 'codex') return detectCodexDialog(output);
-  if (hasBypassPermissionsDialog(output)) return 'bypass_permissions_dialog';
-  return hasClaudeTrustDialog(output) ? 'trust_dialog' : null;
+  if (bypassDialogAt(output) >= 0) return 'bypass_permissions_dialog';
+  return claudeTrustDialogAt(output) >= 0 ? 'trust_dialog' : null;
 }
 
 function isClaudeReady(output: string): boolean {
-  if (hasBypassPermissionsDialog(output)) return false;
+  if (bypassDialogAt(output) >= 0 || claudeTrustDialogAt(output) >= 0) return false;
   const stripped = stripAnsi(output);
   const lower = stripped.toLowerCase();
   if (lower.includes('bypass permissions') || lower.includes('shift+tab to cycle') || lower.includes('esc to interrupt')) return true;
@@ -126,8 +134,8 @@ function isCodexReady(output: string): boolean {
 }
 
 /**
- * The agent's input screen is up. A Claude screen that shows its ready status line is ready even if the conversation above it quotes the
- * words of a dialog (only the bypass dialog's own title and both choices, which no running session shows, rule it out).
+ * The agent's input screen is up. A screen that shows the live status line (Claude) or composer (Codex) below any dialog-like text is
+ * ready: the text above it is the conversation quoting a dialog. A dialog with nothing live below it is not.
  */
 export function isWorkerScreenReady(kind: TuiAgentKind, output: string): boolean {
   return kind === 'claude' ? isClaudeReady(output) : isCodexReady(output);
@@ -136,4 +144,52 @@ export function isWorkerScreenReady(kind: TuiAgentKind, output: string): boolean
 /** The dialog that stops the worker taking a prompt: one of `kind`'s dialogs on a screen that is not ready. */
 export function blockingWorkerDialog(kind: TuiAgentKind, output: string): WorkerDialog | null {
   return isWorkerScreenReady(kind, output) ? null : detectWorkerDialog(kind, output);
+}
+
+/** The start of the one line a prompt is delivered as (see PromptFileDelivery), as `squash` writes it. */
+const PROMPT_LINE_START = 'azitopromptfile.';
+/** The prompt file's name inside that line. */
+const PROMPT_FILE_NAME = /azito-prompt-\d+-[0-9a-f]+\.md/;
+/** The most text that can follow the end of our line on a screen whose input still holds it: the footer / status lines. */
+const PENDING_TAIL_CHARS = 400;
+
+/** Lower-cased with every whitespace gone: the pane wraps a long line wherever it likes, so a line is only comparable without its breaks. */
+function squash(output: string): string {
+  return flatten(output).replace(/ /g, '');
+}
+
+/**
+ * Whether the worker's input still holds our one-line prompt instruction: typed, not submitted (Issue #532: an Enter that was taken for
+ * part of a paste, so the line sits in the input box and nothing runs). With `instruction`, that very line (its file name); without, any
+ * such line (what an earlier prompt left behind). The line is in the input, not in the conversation, when the screen below it has nothing
+ * but the footer: no working line ("esc to interrupt"), no reply, and for codex not its empty-composer placeholder.
+ * Claude is told from the conversation by the same measure alone (its echo of a submitted message is followed by the working line almost
+ * at once), so a stale line is only looked for in codex's input before a prompt is sent (`checkStale`).
+ */
+export function isPromptPendingInInput(kind: TuiAgentKind, output: string, instruction?: string): boolean {
+  const text = squash(output);
+  const start = text.lastIndexOf(PROMPT_LINE_START);
+  if (start < 0) return false;
+  let end = start + PROMPT_LINE_START.length;
+  if (instruction) {
+    const name = PROMPT_FILE_NAME.exec(instruction)?.[0];
+    if (name === undefined) return false;
+    const at = text.lastIndexOf(squash(name));
+    if (at < start) return false;
+    end = at + squash(name).length;
+  } else {
+    const md = text.indexOf('.md', start);
+    if (md >= 0) end = md + 3;
+  }
+  const tail = text.slice(end);
+  if (tail.includes('esctointerrupt')) return false;
+  if (kind === 'codex' && tail.includes('askcodextodoanything')) return false;
+  const prefix = text.slice(Math.max(0, start - 3), start);
+  if (!(kind === 'codex' ? prefix.includes('›') : /[>❯]/.test(prefix))) return false;
+  return tail.length < PENDING_TAIL_CHARS;
+}
+
+/** A line of an earlier prompt left in codex's input box (Claude's input is not read for this: see {@link isPromptPendingInInput}). */
+export function hasStalePromptInInput(kind: TuiAgentKind, output: string): boolean {
+  return kind === 'codex' && isPromptPendingInInput(kind, output);
 }

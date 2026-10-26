@@ -346,6 +346,15 @@ export class LocalFileOps implements IFileOps {
     });
   }
 
+  async unlink(path: string): Promise<void> {
+    const target = this.checked(path);
+    return guarded(async () => {
+      const entry = await fs.promises.lstat(target);
+      if (entry.isDirectory()) throw new FileOpsError('NOT_A_FILE', `Not a file: ${target}`);
+      await fs.promises.unlink(target);
+    });
+  }
+
   async remove(path: string): Promise<void> {
     const target = this.checked(path);
     // "." and ".." as the last element name something other than the path that was checked (the parent of the root, or `.git`

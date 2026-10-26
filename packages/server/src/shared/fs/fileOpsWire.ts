@@ -59,6 +59,8 @@ export const fileOpRequestSchema = z.discriminatedUnion('op', [
   }),
   z.object({ op: z.literal('create'), path: filePath, kind: z.enum(['file', 'directory']), recursive: z.boolean().optional() }),
   z.object({ op: z.literal('remove'), path: filePath }),
+  // Not a flag on `remove`: an agent that predates it rejects the request instead of ignoring the flag and removing a directory tree.
+  z.object({ op: z.literal('unlink'), path: filePath }),
   z.object({ op: z.literal('rename'), from: filePath, to: filePath }),
   z.object({ op: z.literal('replaceDirectory'), staging: filePath, target: filePath }),
   z.object({
@@ -108,6 +110,7 @@ const resultSchemas = {
   writeOwnerOnly: z.object({ mtimeMs: z.number(), sha256 }),
   create: z.object({ created: z.boolean() }),
   remove: z.null(),
+  unlink: z.null(),
   rename: z.null(),
   replaceDirectory: z.null(),
   walk: z.object({ entries: z.array(z.object({ path: z.string(), mtimeMs: z.number() })), truncated: z.boolean() }),
@@ -143,6 +146,7 @@ async function perform(ops: IFileOps, request: FileOpRequest): Promise<unknown> 
     }
     case 'create': return ops.create(request.path, request.kind, { recursive: request.recursive });
     case 'remove': await ops.remove(request.path); return null;
+    case 'unlink': await ops.unlink(request.path); return null;
     case 'rename': await ops.rename(request.from, request.to); return null;
     case 'replaceDirectory': await ops.replaceDirectory(request.staging, request.target); return null;
     case 'walk': return ops.walk(request.path, { excludeNames: request.excludeNames, maxEntries: request.maxEntries, timeBudgetMs: request.timeBudgetMs });
@@ -198,6 +202,10 @@ export class RemoteFileOps implements IFileOps {
 
   create(path: string, kind: 'file' | 'directory', options: { recursive?: boolean } = {}): Promise<{ created: boolean }> {
     return this.call('create', { op: 'create', path, kind, recursive: options.recursive });
+  }
+
+  async unlink(path: string): Promise<void> {
+    await this.call('unlink', { op: 'unlink', path });
   }
 
   async remove(path: string): Promise<void> {

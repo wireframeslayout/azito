@@ -27,6 +27,18 @@ export function buildPromptFileInstruction(promptFilePath: string): string {
   return line;
 }
 
+const UTF8_BOM = Buffer.from([0xef, 0xbb, 0xbf]);
+
+/**
+ * The bytes of the prompt file. On a Windows host with a byte order mark: PowerShell 5.1's `Get-Content` (what codex reads a file with)
+ * takes a file without one as the ANSI code page and garbles every non-ASCII character of the task's text, and the BOM is what makes it,
+ * and Claude's Read, take the file as UTF-8. A POSIX host reads UTF-8 as it is.
+ */
+export function promptFileBytes(prompt: string, platform: string): Buffer {
+  const body = Buffer.from(prompt, 'utf8');
+  return platform === 'win32' ? Buffer.concat([UTF8_BOM, body]) : body;
+}
+
 type AppendLog = (taskId: number, unitId: number, type: LogType, content: unknown) => void;
 
 /**
@@ -49,7 +61,7 @@ export class PromptFileDelivery {
     const told = files.platform === 'win32' ? windowsPromptPath(filePath) : filePath;
     const instruction = buildPromptFileInstruction(told);
     // Owner-only from the moment it exists: the prompt holds the task's text (an agent that cannot do this refuses the write).
-    await files.write(filePath, Buffer.from(prompt, 'utf8'), { ownerOnly: true });
+    await files.write(filePath, promptFileBytes(prompt, files.platform), { ownerOnly: true });
     this.appendLog(taskId, unitId, 'command', { type: 'prompt_file', promptFilePath: filePath });
     return instruction;
   }

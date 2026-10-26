@@ -197,6 +197,15 @@ export class ShellFileOps implements IFileOps {
     return { created: true };
   }
 
+  async unlink(path: string): Promise<void> {
+    const q = sq(this.checked(path));
+    // One step on the host: a link (whatever it points at) and a file are removed with `rm -f`, a real directory is left alone.
+    const outcome = (await this.out(`if [ ! -e ${q} ] && [ ! -L ${q} ]; then echo none; elif [ ! -L ${q} ] && [ -d ${q} ]; then echo dir; elif rm -f ${q}; then echo ok; else echo failed; fi`)).trim();
+    if (outcome === 'none') throw new FileOpsError('NOT_FOUND', `No such file or directory: ${path}`);
+    if (outcome === 'dir') throw new FileOpsError('NOT_A_FILE', `Not a file: ${path}`);
+    if (outcome !== 'ok') throw new FileOpsError('FAILED', 'Delete failed');
+  }
+
   async remove(path: string): Promise<void> {
     const q = sq(this.checked(path));
     if ((await this.out(`test -e ${q} && echo yes || echo no`)).trim() !== 'yes') throw new FileOpsError('NOT_FOUND', `No such file or directory: ${path}`);

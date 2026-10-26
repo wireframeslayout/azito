@@ -2,7 +2,8 @@ import { type PaneHandle } from '@azito/shared';
 import type { IMuxClient } from '../../../tmux/IMuxClient';
 import { WorkerNotRunningError, type WorkerInputService } from '../WorkerInputService';
 import type { PromptFileDelivery } from '../PromptFileDelivery';
-import { blockingWorkerDialog, detectWorkerDialog, isWorkerScreenReady, tuiAgentKindOf, type TuiAgentKind, type WorkerDialog } from './workerScreen';
+import { getAgentTranscriptProfile } from '../../../transcripts/sources/profiles';
+import { blockingWorkerDialog, detectWorkerDialog, hasStalePromptInInput, isPromptPendingInInput, isWorkerScreenReady, tuiAgentKindOf, type TuiAgentKind, type WorkerDialog } from './workerScreen';
 import type { WorkerWaiter } from '../WorkerWaiter';
 import type { HttpSignalTurnCoordinator } from '../HttpSignalTurnCoordinator';
 import type { ServerConfig } from '../../../servers/Server';
@@ -26,16 +27,18 @@ function sleep(ms: number): Promise<void> {
 }
 
 /** Why the worker's screen did not take a prompt: a dialog that waits for a person, the worker back at a shell, or nothing recognisable within the time allowed. */
-export type TuiNotReadyReason = WorkerDialog | 'worker_exited_to_shell' | 'not_ready' | 'timeout';
+export type TuiNotReadyReason = WorkerDialog | 'worker_exited_to_shell' | 'not_ready' | 'input_not_empty' | 'prompt_not_submitted' | 'timeout';
 
 const NOT_READY_MESSAGES: Record<TuiNotReadyReason, string> = {
-  trust_dialog: 'Claude Code の信頼確認ダイアログで起動が停止しました',
-  bypass_permissions_dialog: 'Claude Code の Bypass Permissions mode の確認ダイアログで起動が停止しました',
-  codex_update_prompt: 'Codex の更新の確認画面で起動が停止しました',
-  codex_trust_prompt: 'Codex のフォルダー信頼の確認画面で起動が停止しました',
-  worker_exited_to_shell: 'ワーカーが終了してシェルに戻っています',
-  not_ready: 'ワーカーの画面が入力待ちになっていません（既知の入力欄が見えません）',
-  timeout: 'The worker TUI did not become ready within 30s',
+  trust_dialog: 'Claude Code の信頼確認ダイアログが出ているため、プロンプトを送らずにタスクを止めました',
+  bypass_permissions_dialog: 'Claude Code の Bypass Permissions mode の確認ダイアログが出ているため、プロンプトを送らずにタスクを止めました',
+  codex_update_prompt: 'Codex の更新の確認画面が出ているため、プロンプトを送らずにタスクを止めました',
+  codex_trust_prompt: 'Codex のフォルダー信頼の確認画面が出ているため、プロンプトを送らずにタスクを止めました',
+  worker_exited_to_shell: 'ワーカーが終了してシェルに戻っているため、プロンプトを送らずにタスクを止めました',
+  not_ready: 'ワーカーの画面が入力待ちになっていない（既知の入力欄が見えない）ため、プロンプトを送らずにタスクを止めました',
+  input_not_empty: 'ワーカーの入力欄に前のプロンプトの 1 行が残っているため、プロンプトを送らずにタスクを止めました',
+  prompt_not_submitted: 'ワーカーの入力欄に送った 1 行が残ったままで、Enter を再送しても送信されなかったため、タスクを止めました',
+  timeout: 'ワーカーの画面が 30 秒以内に入力待ちにならなかったため、プロンプトを送らずにタスクを止めました',
 };
 
 export class TuiNotReadyError extends Error {
@@ -55,12 +58,24 @@ export function workerNotReadyReason(err: unknown): string | null {
   return null;
 }
 
+/** How long the agent wants between its text and the Enter that submits it (its transcript profile; the chat's input waits the same). */
+function submitDelayMsOf(kind: TuiAgentKind | null): number {
+  if (kind === null) return 0;
+  const profile = getAgentTranscriptProfile(kind);
+  if (!profile) throw new Error(`No transcript profile for the ${kind} worker`);
+  return profile.submitDelayMs;
+}
+
 /** The screen the readiness checks read: the pane's last lines. */
 const SCREEN_CAPTURE_LINES = -50;
 
 /** How long a screen that shows neither the input nor a known dialog (a worker still drawing it) gets before the prompt is refused. */
 const SEND_READY_GRACE_MS = 5000;
 const SEND_READY_POLL_MS = 500;
+
+/** How long, after the Enter, the line may stay in the input before the Enter is sent once more (and, after that, the task is stopped). */
+const SUBMIT_CONFIRM_MS = 3000;
+const SUBMIT_CONFIRM_POLL_MS = 300;
 
 export class TuiWorkerRuntime implements IWorkerRuntime {
   constructor(
@@ -144,13 +159,37 @@ export class TuiWorkerRuntime implements IWorkerRuntime {
       instruction,
       { taskId: ctx.taskId, unitId: ctx.unitId },
       ctx.supervisorTarget,
+      submitDelayMsOf(ctx.agentKind),
     );
+    if (ctx.agentKind !== null) await this.confirmSubmitted(ctx, ctx.agentKind, instruction);
+  }
+
+  /**
+   * The line was typed and Enter pressed; the worker has taken it when it is no longer in the input. If it is still there the Enter was
+   * not a submit (codex read the keys as a paste): Enter is sent once more, not the prompt again. Still there after that, the task is
+   * stopped (`prompt_not_submitted`): going on would send the next phase's line after this one.
+   */
+  private async confirmSubmitted(ctx: WorkerContext, kind: TuiAgentKind, instruction: string): Promise<void> {
+    let screen = '';
+    for (const resendEnter of [true, false]) {
+      const deadline = Date.now() + SUBMIT_CONFIRM_MS;
+      for (;;) {
+        screen = (await ctx.driver.captureScreen(ctx.server, ctx.handle, SCREEN_CAPTURE_LINES)).stdout;
+        if (!isPromptPendingInInput(kind, screen, instruction)) return;
+        if (Date.now() >= deadline) break;
+        await sleep(SUBMIT_CONFIRM_POLL_MS);
+      }
+      if (resendEnter) await ctx.driver.sendKeysToHandle(ctx.server, ctx.handle, ['Enter']);
+    }
+    throw new TuiNotReadyError('prompt_not_submitted', screen);
   }
 
   private async awaitInputScreen(ctx: WorkerContext, kind: TuiAgentKind): Promise<void> {
     const deadline = Date.now() + SEND_READY_GRACE_MS;
     for (;;) {
       const screen = (await ctx.driver.captureScreen(ctx.server, ctx.handle, SCREEN_CAPTURE_LINES)).stdout;
+      // A line an earlier prompt left in the input would be sent together with this one.
+      if (hasStalePromptInInput(kind, screen)) throw new TuiNotReadyError('input_not_empty', screen);
       if (isWorkerScreenReady(kind, screen)) return;
       const dialog = detectWorkerDialog(kind, screen);
       if (dialog) throw new TuiNotReadyError(dialog, screen);
@@ -163,6 +202,7 @@ export class TuiWorkerRuntime implements IWorkerRuntime {
 
   private async assertInputScreenNow(ctx: WorkerContext, kind: TuiAgentKind): Promise<void> {
     const screen = (await ctx.driver.captureScreen(ctx.server, ctx.handle, SCREEN_CAPTURE_LINES)).stdout;
+    if (hasStalePromptInInput(kind, screen)) throw new TuiNotReadyError('input_not_empty', screen);
     if (isWorkerScreenReady(kind, screen)) return;
     throw new TuiNotReadyError(detectWorkerDialog(kind, screen) ?? 'not_ready', screen);
   }

@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, statSync, writeFileSync } from 'fs';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, statSync, writeFileSync } from 'fs';
 import { tmpdir } from 'os';
 import * as path from 'path';
 import { FileOpsError } from './fileOps';
@@ -173,5 +173,17 @@ describe('RemoteFileOps ownerOnly write (#532)', () => {
       return { ok: true, result: null };
     });
     await expect(old.write(path.join(dir, 'private.md'), Buffer.from('x'), { ownerOnly: true })).rejects.toThrow(/400/);
+  });
+});
+
+describe('RemoteFileOps unlink (#532)', () => {
+  it('is its own op, removes a file and refuses a directory', async () => {
+    const file = path.join(dir, 'f.txt');
+    writeFileSync(file, 'x');
+    mkdirSync(path.join(dir, 'd'));
+    await remote.unlink(file);
+    expect(existsSync(file)).toBe(false);
+    await expect(remote.unlink(path.join(dir, 'd'))).rejects.toMatchObject({ code: 'NOT_A_FILE' });
+    expect(sent.map((r) => r.op)).toEqual(['unlink', 'unlink']);
   });
 });

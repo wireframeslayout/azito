@@ -24,7 +24,7 @@ import { AGENT_FILE_OPS_PATH, RemoteFileOps, type FileOpRequest } from '../../..
 import type { IFileOps } from '../../../shared/fs/fileOps';
 import { AGENT_PROCESSES_PATH, listProcessesWith, parseProcessList, type ListProcessesOptions, type ProcessEntry } from '../../../shared/os/processList';
 import { ShellFileOps } from './ShellFileOps';
-import { AgentFileOpOutdatedError, rejectsOperationName } from './agentFileOpsProtocol';
+import { AgentFileOpOutdatedError, FILE_OPS_ADDED_LATER, rejectsOperationName } from './agentFileOpsProtocol';
 import type { MisaoReleaseFile, MisaoSocketStatus } from './agentMisaoSocket';
 import { type MuxRef, type PaneHandle, type PaneOrdinal, type MuxExecRequest, formatMuxRef, tmuxTargetFromMuxRef } from '@azito/shared';
 
@@ -209,7 +209,7 @@ export class AgentTransport implements IServerTransport, IMuxTransport, IHostBou
       body: JSON.stringify(request),
     }, FILE_OPS_TIMEOUT_MS);
     // An agent that has /api/fileops but not this operation rejects the request because its schema has no such `op`; any other 400 is a request it understood and refused.
-    if (status === 400 && request.op === 'searchContent' && rejectsOperationName(text)) throw new AgentFileOpOutdatedError(this.serverName, request.op);
+    if (status === 400 && FILE_OPS_ADDED_LATER.has(request.op) && rejectsOperationName(text)) throw new AgentFileOpOutdatedError(this.serverName, request.op);
     if (status < 200 || status >= 300) throw new Error(`Agent ${AGENT_FILE_OPS_PATH} failed (${status}): ${text}`);
     return JSON.parse(text);
   }

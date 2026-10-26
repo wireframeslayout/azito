@@ -58,6 +58,14 @@ describe('AgentTransport.files: the route is chosen by whether the agent host is
         await expect(make().files().searchContent('/work', options)).rejects.toBeInstanceOf(AgentFileOpOutdatedError);
       });
 
+      it.each([
+        ['an owner-only write', () => make().files().write('/work/a.md', Buffer.from('x'), { ownerOnly: true })],
+        ['an unlink', () => make().files().unlink('/work/azito-prompt-1-a.md')],
+      ])('says agent_outdated for %s too, so that nothing is written readable by others or removed recursively', async (_name, run) => {
+        fetchSpy.mockResolvedValue(json({ error: 'invalid_file_op', message: issues(['op'], 'Invalid discriminator value') }, 400));
+        await expect(run()).rejects.toBeInstanceOf(AgentFileOpOutdatedError);
+      });
+
       it('does not blame the agent\'s age when it refused a field of the operation it knows', async () => {
         fetchSpy.mockResolvedValue(json({ error: 'invalid_file_op', message: issues(['exclude'], 'Too big') }, 400));
         const err = await make().files().searchContent('/work', options).catch((e: unknown) => e);
