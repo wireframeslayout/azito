@@ -112,6 +112,14 @@ setup.sh performs the following:
 
 If the Codex CLI is installed (the `codex` command or `~/.codex` exists), the same skills and rules are also placed under `~/.codex/` and azt-mcp is registered via `codex mcp add`, so the same harness is available from both Claude Code and Codex.
 
+### How the env file is chosen (`azitoctl` / `azs` / `azitoctl.mjs`)
+
+The env file is selected by the environment variable `AZITO_PREFIX`: `~/.azito/azitoctl${AZITO_PREFIX:+-$AZITO_PREFIX}.env` (`azitoctl.env` when `AZITO_PREFIX` is empty). The hooks (`azito-activity.sh` and the others) use the same rule. The hub hands its own harness prefix (`AZITO_HARNESS_PREFIX`, empty if none) to every task worker pane as `AZITO_PREFIX`.
+
+- A value given by the pane environment is never overwritten; the env file only supplies what is missing (`azitoctl`: `AZITO_URL` / `AZITO_WEBHOOK_TOKEN`, `azs`: `AZITO_SERVER_NAME` / `AZITO_SUPERVISOR_PATH` / `AZITO_SUPERVISOR_RUNNER`).
+- When a prefix is set but `azitoctl-<prefix>.env` does not exist, there is no fallback to the unprefixed `azitoctl.env` (another hub's). `azitoctl` sends to `AZITO_URL` if the environment has it and otherwise exits with code 3; `azs` launches the command without a supervisor.
+- The hooks differ in how they fill gaps: unless all three values are present they discard the environment's values and take the whole set from the file (the file selection is the same).
+
 ### First-time azt-mcp Setup
 
 To use azt-mcp, install the MCP server's dependencies first.

@@ -112,6 +112,14 @@ setup.sh は次の処理を行います。
 
 Codex CLI がインストールされている環境（`codex` コマンドまたは `~/.codex` が存在）では、同じ skills / rules を `~/.codex/` 配下にも配置し、`codex mcp add` で azt-mcp を登録します。Claude Code と Codex の両方から同じハーネスを利用できます。
 
+### env ファイルの選び方（`azitoctl` / `azs` / `azitoctl.mjs`）
+
+読む env ファイルは環境変数 `AZITO_PREFIX` で決まります: `~/.azito/azitoctl${AZITO_PREFIX:+-$AZITO_PREFIX}.env`（`AZITO_PREFIX` が空なら `azitoctl.env`）。フック（`azito-activity.sh` など）と同じ規則です。ハブは、タスクのワーカーの pane に自分のハーネスのプレフィックス（`AZITO_HARNESS_PREFIX`、無ければ空）を `AZITO_PREFIX` として渡します。
+
+- pane の環境で与えられた値は上書きしません。env ファイルは足りない値だけを補います（`azitoctl`: `AZITO_URL` / `AZITO_WEBHOOK_TOKEN`、`azs`: `AZITO_SERVER_NAME` / `AZITO_SUPERVISOR_PATH` / `AZITO_SUPERVISOR_RUNNER`）。
+- プレフィックスが指定されているのに `azitoctl-<prefix>.env` が無いとき、無印の `azitoctl.env`（別のハブのもの）にはフォールバックしません。`azitoctl` は `AZITO_URL` が環境にあればそのまま送信し、無ければ終了コード 3 で終了します。`azs` は supervisor 無しでコマンドをそのまま起動します。
+- フックは「3 つの値が揃っていなければ環境の値を捨て、ファイルから一式を読む」規則で、`azitoctl` / `azs` とは補完の仕方が異なります（ファイルの選び方は同じ）。
+
 ### azt-mcp の初回準備
 
 azt-mcp を利用するには、MCP サーバーの依存パッケージをインストールしておきます。

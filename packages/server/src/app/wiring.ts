@@ -481,7 +481,7 @@ function buildFetchDistributionService(infra: SharedInfra, hubGitSupport: HubGit
   return new FetchDistributionService(hubRepoCache, remoteBundleOps, sftpService, distributionStateRepo, infra.sshClient, hubGitIdentity);
 }
 
-function buildApplicationServices(infra: SharedInfra, repos: Repositories, uiToken: string, scopedAuthEnabled: boolean, fetchDistributionService: FetchDistributionService, distributionStateRepo: SqliteDistributionStateRepository, hubGitIdentity: GitIdentity | null, harnessPrefix?: string): ApplicationServices {
+function buildApplicationServices(infra: SharedInfra, repos: Repositories, uiToken: string, scopedAuthEnabled: boolean, fetchDistributionService: FetchDistributionService, distributionStateRepo: SqliteDistributionStateRepository, hubGitIdentity: GitIdentity | null, harnessPrefix: string): ApplicationServices {
   const sessionStrategyFactory = new SessionStrategyFactory(infra.agentRegistry, infra.transportFactory, localAgentHomesFromEnv(process.env));
   const sessionCaptureService = new SessionCaptureService(repos.windowRepo, repos.taskRepo, repos.serverRepo, sessionStrategyFactory);
   // Constructed here (ahead of ExecuteTaskUseCase, built later in
@@ -489,7 +489,7 @@ function buildApplicationServices(infra: SharedInfra, repos: Repositories, uiTok
   // own doc comment for why this must be ONE instance, not one per class.
   const taskEvents = new EventEmitter();
   const originationService = new TaskOriginationService(repos.taskRepo, repos.auditLogService);
-  const taskPaneEnvironmentService = new TaskPaneEnvironmentService(repos.taskTokenRepo, repos.projectSecretRepo, uiToken, scopedAuthEnabled, repos.auditLogService);
+  const taskPaneEnvironmentService = new TaskPaneEnvironmentService(repos.taskTokenRepo, repos.projectSecretRepo, uiToken, scopedAuthEnabled, harnessPrefix, repos.auditLogService);
   const uiTokenEnvFn = (server: ServerConfig) => uiTokenEnvForServer(uiToken, server);
   const windowRespawnService = new WindowRespawnService(repos.windowRepo, infra.muxDriverRegistry, sessionStrategyFactory, repos.taskRepo, repos.unitRepo, infra.supervisorRegistry, repos.projectServerRepo, repos.projectRepo, infra.transportFactory, repos.logRepo, infra.unitTypeLoader, infra.sidekickPackageLoader, repos.serverRepo, repos.projectSecretRepo, taskEvents, taskPaneEnvironmentService, infra.serverIsolationMutex, scopedAuthEnabled, uiTokenEnvFn, sessionCaptureService, harnessPrefix);
   const windowSleepService = new WindowSleepService(repos.windowRepo, infra.muxDriverRegistry, sessionStrategyFactory, repos.serverRepo);

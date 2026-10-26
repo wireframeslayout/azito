@@ -75,7 +75,7 @@ describe('TaskPaneEnvironmentService x real tmux: session-env leak', () => {
     };
     const projectSecretRepo = { findByProjectWithValues: vi.fn(() => []) };
     // scopedAuthEnabled = true: the masking branch under test.
-    const paneEnvService = new TaskPaneEnvironmentService(taskTokenRepo as ITaskTokenRepository, projectSecretRepo as any, 'ui-token-should-never-appear', true);
+    const paneEnvService = new TaskPaneEnvironmentService(taskTokenRepo as ITaskTokenRepository, projectSecretRepo as any, 'ui-token-should-never-appear', true, '');
     const task = { id: 42, projectId: 1 } as Task;
     const { env } = paneEnvService.buildEnvForNewWindow(task, LOCAL_SERVER);
     expect(env.AZITO_UI_TOKEN).toBe('');

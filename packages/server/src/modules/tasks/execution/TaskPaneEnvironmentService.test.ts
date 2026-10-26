@@ -71,7 +71,7 @@ function makeServer(overrides: Partial<ServerConfig> = {}): ServerConfig {
   };
 }
 
-function makeDeps(scopedAuthEnabled: boolean) {
+function makeDeps(scopedAuthEnabled: boolean, harnessPrefix = '') {
   const taskTokenRepo: Pick<ITaskTokenRepository, 'issueNextGeneration' | 'revokeAllForTask' | 'revoke'> = {
     issueNextGeneration: vi.fn(() => ({ id: 1, token: 'azt.task.1.' + 'a'.repeat(64) })),
     revokeAllForTask: vi.fn(() => 1),
@@ -82,7 +82,7 @@ function makeDeps(scopedAuthEnabled: boolean) {
   };
   const auditLogService = { record: vi.fn() };
   const service = new TaskPaneEnvironmentService(
-    taskTokenRepo as ITaskTokenRepository, projectSecretRepo as any, 'ui-token-123', scopedAuthEnabled, auditLogService as any,
+    taskTokenRepo as ITaskTokenRepository, projectSecretRepo as any, 'ui-token-123', scopedAuthEnabled, harnessPrefix, auditLogService as any,
   );
   return { service, taskTokenRepo, projectSecretRepo, auditLogService };
 }
@@ -281,7 +281,7 @@ describe('TaskPaneEnvironmentService.buildEnvForNewWindow', () => {
       revoke: vi.fn(() => 1),
     };
     const projectSecretRepo = { findByProjectWithValues: vi.fn(() => []) };
-    const service = new TaskPaneEnvironmentService(taskTokenRepo as ITaskTokenRepository, projectSecretRepo as any, 'ui-token-123', false);
+    const service = new TaskPaneEnvironmentService(taskTokenRepo as ITaskTokenRepository, projectSecretRepo as any, 'ui-token-123', false, '');
 
     expect(() => service.buildEnvForNewWindow(makeTask(), makeServer())).not.toThrow();
   });
@@ -402,5 +402,29 @@ describe('TaskPaneEnvironmentService.revokeGeneration', () => {
     service.revokeGeneration(7, 'execute_create_failed');
 
     expect(auditLogService.record).not.toHaveBeenCalled();
+  });
+});
+
+// #528: harness/bin/azitoctl and azs choose azitoctl[-<prefix>].env from AZITO_PREFIX, so every task pane carries the hub's prefix.
+// Every launch path (execute, follow-up, restore, respawn, Windows program) takes its env from these two builders.
+describe('TaskPaneEnvironmentService — AZITO_PREFIX (#528)', () => {
+  it.each([
+    ['primary window', (s: TaskPaneEnvironmentService, server: ServerConfig) => s.buildEnvForNewWindow(makeTask(), server).env],
+    ['secondary window', (s: TaskPaneEnvironmentService, server: ServerConfig) => s.buildEnvForSecondaryWindow(makeTask(), server)],
+  ])('%s gets the hub harness prefix', (_name, build) => {
+    const { service } = makeDeps(false, 'dev');
+    expect(build(service, makeServer()).AZITO_PREFIX).toBe('dev');
+  });
+
+  it('passes an empty value (not an absent key) when the hub has no prefix, so a prefix inherited from the tmux session is masked', () => {
+    const { service } = makeDeps(false, '');
+    const env = service.buildEnvForNewWindow(makeTask(), makeServer()).env;
+    expect('AZITO_PREFIX' in env).toBe(true);
+    expect(env.AZITO_PREFIX).toBe('');
+  });
+
+  it('is still passed to an isolated server and with scoped auth on (it is not a credential)', () => {
+    const isolated = makeDeps(true, 'dev').service.buildEnvForNewWindow(makeTask(), makeServer({ isolationIntent: true })).env;
+    expect(isolated.AZITO_PREFIX).toBe('dev');
   });
 });

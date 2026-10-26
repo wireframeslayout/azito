@@ -83,21 +83,33 @@ if [[ "$SUBCOMMAND" == "fail" ]]; then
   [[ -n "$REASON" ]] || usage_exit
 fi
 
-# ── env解決: 環境変数優先、欠けていれば ~/.azito/azitoctl.env を source ──
+# ── env解決: 環境変数優先、欠けた値だけ azitoctl[-<prefix>].env で補う ──
+# 読むファイルは AZITO_PREFIX で決まる (~/.azito/azitoctl${AZITO_PREFIX:+-$AZITO_PREFIX}.env。
+# harness/lib/envFiles.mjs の azitoctlEnvName / azitoctl.mjs / フックと同じ規則)。ハブは
+# タスクの pane に自分のハーネスのプレフィックスを AZITO_PREFIX として渡す。同じホストに
+# 別のハブのハーネスがあっても、無印のファイルへは決してフォールバックしない (#528)。
+# pane の環境で与えられた値は上書きしない (source の後で戻す)。
 # AZITO_WEBHOOK_TOKEN はもはや必須ではない（Issue #28 Phase C）:
 # /api/agent-signals は強化 turnToken（crypto.randomBytes(16)、--turn で
 # 渡される）単独でも認証を受理するため、webhook トークンの読み込みに失敗
 # しても送信自体は試みる。AZITO_URL だけは送信先そのものなので必須のまま。
+ENV_FILE="$HOME/.azito/azitoctl${AZITO_PREFIX:+-$AZITO_PREFIX}.env"
 if [[ -z "${AZITO_URL:-}" || -z "${AZITO_WEBHOOK_TOKEN:-}" ]]; then
-  ENV_FILE="$HOME/.azito/azitoctl.env"
   if [[ -f "$ENV_FILE" ]]; then
+    _pane_url="${AZITO_URL:-}"
+    _pane_token="${AZITO_WEBHOOK_TOKEN:-}"
     # shellcheck disable=SC1090
     source "$ENV_FILE"
+    AZITO_URL="${_pane_url:-${AZITO_URL:-}}"
+    AZITO_WEBHOOK_TOKEN="${_pane_token:-${AZITO_WEBHOOK_TOKEN:-}}"
+  elif [[ -n "${AZITO_PREFIX:-}" && -z "${AZITO_URL:-}" ]]; then
+    echo "azitoctl: AZITO_PREFIX=$AZITO_PREFIX but $ENV_FILE does not exist (not falling back to the unprefixed azitoctl.env of another hub)" >&2
+    exit 3
   fi
 fi
 
 if [[ -z "${AZITO_URL:-}" ]]; then
-  echo "azitoctl: AZITO_URL not set (env or ~/.azito/azitoctl.env)" >&2
+  echo "azitoctl: AZITO_URL not set (env or $ENV_FILE)" >&2
   exit 3
 fi
 

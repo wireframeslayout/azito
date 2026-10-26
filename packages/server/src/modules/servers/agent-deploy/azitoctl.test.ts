@@ -211,3 +211,79 @@ describe.skipIf(process.platform === 'win32')('azitoctl.mjs sends what the bash 
     await sameBody(['progress', '--turn', TURN], { AZITO_URL: baseUrl });
   });
 });
+
+// #528: which azitoctl[-<prefix>].env is read. Both implementations follow the same rules: AZITO_PREFIX selects the file (never the
+// unprefixed one of another hub), the pane's environment wins, and the file only supplies what is missing.
+describe.skipIf(process.platform === 'win32')('azitoctl env file selection (bash and node)', { timeout: 30_000 }, () => {
+  const DEAD_HUB = 'http://127.0.0.1:9'; // the "other hub": anything sent here never arrives, and the test would see no request
+  const impls: Array<[string, (args: string[], env: Record<string, string>) => Promise<Ran>]> = [
+    ['bash', (args, env) => run('bash', [BASH_CTL, ...args], env)],
+    ['node', (args, env) => node(args, env)],
+  ];
+  const envFile = (name: string, url: string, token: string): void => {
+    fs.mkdirSync(path.join(home, '.azito'), { recursive: true });
+    fs.writeFileSync(path.join(home, '.azito', name), `AZITO_URL=${JSON.stringify(url)}\nAZITO_WEBHOOK_TOKEN=${JSON.stringify(token)}\n`);
+  };
+  const args = ['progress', '--turn', TURN];
+
+  describe.each(impls)('%s', (_name, ctl) => {
+    it('AZITO_PREFIX selects azitoctl-<prefix>.env even when the unprefixed file of another hub exists', async () => {
+      envFile('azitoctl.env', DEAD_HUB, 'tok-other');
+      envFile('azitoctl-dev.env', baseUrl, 'tok-dev');
+
+      const ran = await ctl(args, { AZITO_PREFIX: 'dev' });
+
+      expect(ran.code).toBe(0);
+      expect(received).toHaveLength(1);
+      expect(received[0].authorization).toBe('Bearer tok-dev');
+    });
+
+    it('without a prefix, reads the unprefixed azitoctl.env and leaves the prefixed one alone', async () => {
+      envFile('azitoctl.env', baseUrl, 'tok-plain');
+      envFile('azitoctl-dev.env', DEAD_HUB, 'tok-dev');
+
+      expect((await ctl(args, {})).code).toBe(0);
+      expect((await ctl(args, { AZITO_PREFIX: '' })).code).toBe(0);
+      expect(received.map((r) => r.authorization)).toEqual(['Bearer tok-plain', 'Bearer tok-plain']);
+    });
+
+    it('the pane environment wins: a URL given by the pane is kept and only the missing token is filled in', async () => {
+      envFile('azitoctl-dev.env', DEAD_HUB, 'tok-dev');
+
+      const ran = await ctl(args, { AZITO_PREFIX: 'dev', AZITO_URL: baseUrl });
+
+      expect(ran.code).toBe(0);
+      expect(received).toHaveLength(1);
+      expect(received[0].authorization).toBe('Bearer tok-dev');
+    });
+
+    it('the pane environment wins: a token given by the pane is kept and only the missing URL is filled in', async () => {
+      envFile('azitoctl-dev.env', baseUrl, 'tok-file');
+
+      const ran = await ctl(args, { AZITO_PREFIX: 'dev', AZITO_WEBHOOK_TOKEN: 'tok-pane' });
+
+      expect(ran.code).toBe(0);
+      expect(received[0].authorization).toBe('Bearer tok-pane');
+    });
+
+    it('a prefix whose env file is missing is an error that names it, not a fallback to the unprefixed file', async () => {
+      envFile('azitoctl.env', baseUrl, 'tok-other');
+
+      const ran = await ctl(args, { AZITO_PREFIX: 'dev' });
+
+      expect(ran.code).toBe(3);
+      expect(ran.stderr).toContain('azitoctl-dev.env');
+      expect(received).toHaveLength(0);
+    });
+
+    it('a prefix whose env file is missing still sends when the pane gave the URL (no token, nothing taken from another file)', async () => {
+      envFile('azitoctl.env', DEAD_HUB, 'tok-other');
+
+      const ran = await ctl(args, { AZITO_PREFIX: 'dev', AZITO_URL: baseUrl });
+
+      expect(ran.code).toBe(0);
+      expect(received).toHaveLength(1);
+      expect(received[0].authorization).toBeUndefined();
+    });
+  });
+});
