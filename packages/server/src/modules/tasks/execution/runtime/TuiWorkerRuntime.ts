@@ -89,7 +89,7 @@ export class TuiWorkerRuntime implements IWorkerRuntime {
     private workerWaiter: WorkerWaiter,
     private httpSignalCoordinator: HttpSignalTurnCoordinator,
     private supervisorRegistry: Pick<SupervisorRegistry, 'issueLaunch'>,
-    private harnessPrefix?: string,
+    private harnessPrefix: string,
   ) {}
 
   async launch(ctx: WorkerLaunchContext): Promise<string> {

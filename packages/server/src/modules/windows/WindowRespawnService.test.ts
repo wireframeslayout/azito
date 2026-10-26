@@ -324,7 +324,7 @@ function buildService(opts: {
     new KeyedMutex(),
     true,
     () => ({ AZITO_UI_TOKEN: 'ui-token-fixture' }),
-    undefined,
+    '',
   );
 
   return { service, windowRepo, tmux, muxDriverRegistry, sentCommands, clearExitMarker, taskRepo, logRepo, serverRepo, projectSecretRepo, events, paneEnvService };
@@ -1841,7 +1841,7 @@ describe('WindowRespawnService.respawn — concurrent respawns for the same task
       new KeyedMutex(),
       true,
       () => ({ AZITO_UI_TOKEN: 'ui-token-fixture' }),
-      undefined,
+      '',
     );
 
     const server = makeServer();

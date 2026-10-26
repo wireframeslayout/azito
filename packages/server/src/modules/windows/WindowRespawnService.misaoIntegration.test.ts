@@ -111,7 +111,7 @@ describe.skipIf(!fs.existsSync(MISAO_CLI))('WindowRespawnService against a real 
       new KeyedMutex(),
       true,
       () => ({}),
-      undefined,
+      '',
     );
   });
 

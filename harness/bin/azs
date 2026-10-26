@@ -85,8 +85,10 @@ if [[ "$DEST_COMPLETE" -eq 0 || -z "${AZITO_SUPERVISOR_PATH:-}" ]]; then
       AZITO_WEBHOOK_TOKEN=""
       AZITO_SERVER_NAME=""
     fi
+    set +u
     # shellcheck disable=SC1090
     source "$AZITOCTL_ENV_FILE"
+    set -u
     [[ -z "$_pane_path" ]] || AZITO_SUPERVISOR_PATH="$_pane_path"
     [[ -z "$_pane_runner" ]] || AZITO_SUPERVISOR_RUNNER="$_pane_runner"
     if [[ "$DEST_COMPLETE" -eq 1 ]]; then

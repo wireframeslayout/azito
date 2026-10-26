@@ -114,7 +114,7 @@ Codex CLI がインストールされている環境（`codex` コマンドま�
 
 ### env ファイルの選び方（`azitoctl` / `azs` / `azitoctl.mjs`）
 
-読む env ファイルは環境変数 `AZITO_PREFIX` で決まります: `~/.azito/azitoctl${AZITO_PREFIX:+-$AZITO_PREFIX}.env`（`AZITO_PREFIX` が空なら `azitoctl.env`）。フック（`azito-activity.sh` など）と、supervisor（`tui-supervisor`）も同じ選び方です（形の不正なプレフィックスは、無印のファイルに戻らず、ファイルを読みません）。ハブは、すべての pane（タスクの窓も、手動で開いた窓も、tmux / misao を問わず）に自分のハーネスのプレフィックス（`AZITO_HARNESS_PREFIX`、無ければ空の値）を `AZITO_PREFIX` として渡します。
+読む env ファイルは環境変数 `AZITO_PREFIX` で決まります: `~/.azito/azitoctl${AZITO_PREFIX:+-$AZITO_PREFIX}.env`（`AZITO_PREFIX` が空なら `azitoctl.env`）。フック（`azito-activity.sh` など）と、supervisor（`tui-supervisor`）も同じ選び方です（`AZITO_HARNESS_PREFIX` は小文字・数字・ハイフンだけで、それ以外はハブの起動時にエラーになります。supervisor は不正な形の `AZITO_PREFIX` を受けても無印のファイルに戻らず、ファイルを読みません）。ハブは、すべての pane（タスクの窓も、手動で開いた窓も、tmux / misao を問わず）に自分のハーネスのプレフィックス（`AZITO_HARNESS_PREFIX`、無ければ空の値）を `AZITO_PREFIX` として渡します。
 
 宛先（`azitoctl`: `AZITO_URL` と `AZITO_WEBHOOK_TOKEN`、`azs`: `AZITO_URL` / `AZITO_WEBHOOK_TOKEN` / `AZITO_SERVER_NAME`）は組として扱います（フックと同じ規則）。
 

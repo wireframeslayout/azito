@@ -5,7 +5,7 @@ import type { ServerConfig } from '../servers/Server';
 import { generateWindowName, extractWindowId } from './windowNameUtils';
 import type { IMuxClient, PaneLocation, PaneProgram, PaneWindowLabels } from './IMuxClient';
 import { MuxOperationUnsupportedError } from './MuxCapabilityError';
-import { composePaneEnv, withIsolationMask, type HubPaneEnvConfig } from './hubPaneEnv';
+import { composePaneEnv, type HubPaneEnvConfig } from './hubPaneEnv';
 import { type MuxRef, type PaneHandle, type PaneOrdinal, type MuxCapabilities, type MuxDriverKind, asPaneHandle, muxRefFromTmuxTarget, tmuxTargetFromMuxRef } from '@azito/shared';
 import { windowSpecMatches, type TmuxPane, type TmuxWindow, type TmuxSession, type TmuxPaneInfo, type MuxWorkspace, type MuxWindowInfo, type MuxPane, type MuxPaneInfo } from './types';
 import { HOOK_EVENTS, buildHookValue, buildHookSetArgs, buildHookUnsetArgs } from './tmuxHooks';
@@ -135,9 +135,9 @@ export class TmuxClient implements IMuxClient {
     return Object.entries(composePaneEnv(this.hubEnvConfig, server, extraEnv)).flatMap(([k, v]) => ['-e', `${k}=${v}`]);
   }
 
-  /** A split inherits the session env, so it gets only what the caller passes, plus the isolation mask on an isolated server. */
+  /** A split gets the hub env explicitly (it must not depend on the session env or the tmux version), the caller's on top, the isolation mask last. */
   private splitEnv(server: ServerConfig, extraEnv: Record<string, string> | undefined): Record<string, string> {
-    return withIsolationMask(server, extraEnv ?? {});
+    return composePaneEnv(this.hubEnvConfig, server, extraEnv);
   }
 
   private async runTmuxCommand(server: ServerConfig, args: string[]): Promise<ExecResult> {

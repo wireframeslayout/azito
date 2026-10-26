@@ -180,8 +180,8 @@ export class WindowRespawnService {
     // sessionCaptureService (required params must precede optional ones).
     private scopedAuthEnabled: boolean,
     private uiTokenEnvFn: (server: ServerConfig) => Record<string, string>,
+    private harnessPrefix: string,
     private sessionCaptureService?: SessionCaptureService,
-    private harnessPrefix?: string,
   ) {}
 
   private get serverIsolationLock(): ServerIsolationLock {

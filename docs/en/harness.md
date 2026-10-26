@@ -114,7 +114,7 @@ If the Codex CLI is installed (the `codex` command or `~/.codex` exists), the sa
 
 ### How the env file is chosen (`azitoctl` / `azs` / `azitoctl.mjs`)
 
-The env file is selected by the environment variable `AZITO_PREFIX`: `~/.azito/azitoctl${AZITO_PREFIX:+-$AZITO_PREFIX}.env` (`azitoctl.env` when `AZITO_PREFIX` is empty). The hooks (`azito-activity.sh` and the others) and the supervisor (`tui-supervisor`) choose it the same way (a prefix of an invalid shape does not fall back to the unprefixed file; no file is read). The hub hands its own harness prefix (`AZITO_HARNESS_PREFIX`, an empty value if none) to every pane as `AZITO_PREFIX`: task windows and windows opened by hand, tmux and misao alike.
+The env file is selected by the environment variable `AZITO_PREFIX`: `~/.azito/azitoctl${AZITO_PREFIX:+-$AZITO_PREFIX}.env` (`azitoctl.env` when `AZITO_PREFIX` is empty). The hooks (`azito-activity.sh` and the others) and the supervisor (`tui-supervisor`) choose it the same way (`AZITO_HARNESS_PREFIX` may use only lowercase letters, digits and hyphens, and the hub refuses to start with anything else; the supervisor, given an `AZITO_PREFIX` of an invalid shape, does not fall back to the unprefixed file and reads none). The hub hands its own harness prefix (`AZITO_HARNESS_PREFIX`, an empty value if none) to every pane as `AZITO_PREFIX`: task windows and windows opened by hand, tmux and misao alike.
 
 The destination (`azitoctl`: `AZITO_URL` and `AZITO_WEBHOOK_TOKEN`; `azs`: `AZITO_URL`, `AZITO_WEBHOOK_TOKEN` and `AZITO_SERVER_NAME`) is handled as a set (the same rule as the hooks).
 

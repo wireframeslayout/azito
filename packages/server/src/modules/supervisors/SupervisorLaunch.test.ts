@@ -60,6 +60,7 @@ describe('wrapWithSupervisor', () => {
       server: { name: 'local-server', type: 'local' },
       dialect: posixDialect,
       target: 'azito:task-1.1',
+      harnessPrefix: '',
     });
 
     // Should start with the resolved supervisor command (node <dist> or npx tsx <src>)
@@ -78,6 +79,7 @@ describe('wrapWithSupervisor', () => {
       target: 'azito:task-2.1',
       taskId: 7,
       unitId: 3,
+      harnessPrefix: '',
     });
 
     expect(wrapped).toContain('--task-id 7');
@@ -90,6 +92,7 @@ describe('wrapWithSupervisor', () => {
       server: { name: 'srv', type: 'local' },
       dialect: posixDialect,
       target: 'azito:task-3.1',
+      harnessPrefix: '',
     });
 
     // shellQuote wraps in single quotes and escapes embedded single quotes as '\''
@@ -103,6 +106,7 @@ describe('wrapWithSupervisor', () => {
       target: 'azito:task-9.1',
       launchId: 'launch-abc',
       bootstrapToken: 'secret-xyz',
+      harnessPrefix: '',
     });
 
     expect(wrapped).toMatch(/^AZITO_PREFIX='' AZITO_SUPERVISOR_LAUNCH_ID='launch-abc' AZITO_SUPERVISOR_BOOTSTRAP='secret-xyz' /);
@@ -116,6 +120,7 @@ describe('wrapWithSupervisor', () => {
       dialect: posixDialect,
       target: 'azito:task-9.2',
       launchId: 'launch-abc',
+      harnessPrefix: '',
     });
 
     expect(wrapped).not.toContain('AZITO_SUPERVISOR_LAUNCH_ID');
@@ -153,6 +158,7 @@ describe('wrapWithSupervisor', () => {
       unitId: 2,
       launchId: 'launch-abc',
       bootstrapToken: 'secret-xyz',
+      harnessPrefix: '',
     });
 
     // The hub types `wrapped` into the pane's shell via tmux send-keys; the
@@ -184,6 +190,7 @@ describe('wrapWithSupervisor', () => {
       server: { name: 'local-server', type: 'local' },
       dialect: posixDialect,
       target: 'azito:task-10.2',
+      harnessPrefix: '',
     });
 
     expect(wrapped).toContain("AZITO_PREFIX=''");
@@ -213,6 +220,7 @@ describe('wrapWithSupervisor', () => {
       server: { name: 'agent-server', type: 'agent' },
       dialect: posixDialect,
       target: 'azito:task-5.1',
+      harnessPrefix: '',
     });
 
     expect(wrapped).toMatch(/^AZITO_PREFIX='' node ~\/\.azito\/agent\/current\/azito-supervisor\.cjs /);

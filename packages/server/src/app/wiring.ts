@@ -88,6 +88,7 @@ import { resolveScopedAuthEnabled } from '../shared/auth/scopedAuthFlag';
 import { KeyedMutex } from '../shared/keyedMutex';
 import { TaskOriginationService } from '../modules/tasks/origination/TaskOriginationService';
 import { TaskPaneEnvironmentService } from '../modules/tasks/execution/TaskPaneEnvironmentService';
+import { resolveHarnessPrefix } from './harnessPrefix';
 import { ResourceGuard } from '../modules/servers/resources/ResourceGuard';
 import { TurnSignalHub } from '../modules/tasks/turns/TurnSignalHub';
 import { AgentSignalService } from '../modules/tasks/turns/AgentSignalService';
@@ -481,7 +482,7 @@ function buildFetchDistributionService(infra: SharedInfra, hubGitSupport: HubGit
   return new FetchDistributionService(hubRepoCache, remoteBundleOps, sftpService, distributionStateRepo, infra.sshClient, hubGitIdentity);
 }
 
-function buildApplicationServices(infra: SharedInfra, repos: Repositories, uiToken: string, scopedAuthEnabled: boolean, fetchDistributionService: FetchDistributionService, distributionStateRepo: SqliteDistributionStateRepository, hubGitIdentity: GitIdentity | null, harnessPrefix?: string): ApplicationServices {
+function buildApplicationServices(infra: SharedInfra, repos: Repositories, uiToken: string, scopedAuthEnabled: boolean, fetchDistributionService: FetchDistributionService, distributionStateRepo: SqliteDistributionStateRepository, hubGitIdentity: GitIdentity | null, harnessPrefix: string): ApplicationServices {
   const sessionStrategyFactory = new SessionStrategyFactory(infra.agentRegistry, infra.transportFactory, localAgentHomesFromEnv(process.env));
   const sessionCaptureService = new SessionCaptureService(repos.windowRepo, repos.taskRepo, repos.serverRepo, sessionStrategyFactory);
   // Constructed here (ahead of ExecuteTaskUseCase, built later in
@@ -491,7 +492,7 @@ function buildApplicationServices(infra: SharedInfra, repos: Repositories, uiTok
   const originationService = new TaskOriginationService(repos.taskRepo, repos.auditLogService);
   const taskPaneEnvironmentService = new TaskPaneEnvironmentService(repos.taskTokenRepo, repos.projectSecretRepo, uiToken, scopedAuthEnabled, repos.auditLogService);
   const uiTokenEnvFn = (server: ServerConfig) => uiTokenEnvForServer(uiToken, server);
-  const windowRespawnService = new WindowRespawnService(repos.windowRepo, infra.muxDriverRegistry, sessionStrategyFactory, repos.taskRepo, repos.unitRepo, infra.supervisorRegistry, repos.projectServerRepo, repos.projectRepo, infra.transportFactory, repos.logRepo, infra.unitTypeLoader, infra.sidekickPackageLoader, repos.serverRepo, repos.projectSecretRepo, taskEvents, taskPaneEnvironmentService, infra.serverIsolationMutex, scopedAuthEnabled, uiTokenEnvFn, sessionCaptureService, harnessPrefix);
+  const windowRespawnService = new WindowRespawnService(repos.windowRepo, infra.muxDriverRegistry, sessionStrategyFactory, repos.taskRepo, repos.unitRepo, infra.supervisorRegistry, repos.projectServerRepo, repos.projectRepo, infra.transportFactory, repos.logRepo, infra.unitTypeLoader, infra.sidekickPackageLoader, repos.serverRepo, repos.projectSecretRepo, taskEvents, taskPaneEnvironmentService, infra.serverIsolationMutex, scopedAuthEnabled, uiTokenEnvFn, harnessPrefix, sessionCaptureService);
   const windowSleepService = new WindowSleepService(repos.windowRepo, infra.muxDriverRegistry, sessionStrategyFactory, repos.serverRepo);
   const taskRestoreService = new TaskRestoreService({
     taskRepo: repos.taskRepo,
@@ -752,7 +753,7 @@ export async function buildWiring(db: SqliteDatabase, publicUrl: string, localUr
   // resolved flag instead of re-reading process.env itself.
   const scopedAuthEnabled = resolveScopedAuthEnabled();
   // '' = no prefix. Resolved once here and handed to everything that names the harness folder (install, prompt azitoctl path).
-  const harnessPrefix = process.env.AZITO_HARNESS_PREFIX ?? '';
+  const harnessPrefix = resolveHarnessPrefix(process.env.AZITO_HARNESS_PREFIX);
   const infra = buildSharedInfra(agentBundler, publicUrl, localUrl, dataPaths, uiToken, webhookToken, scopedAuthEnabled, harnessPrefix, misaoRuntime, hostEnv, secretFileGuard, hubHost, resolveWindowsAgentOptions(process.env), (name) => repos.serverRepo.findByName(name), db, fingerprintStore, repos.auditLogService);
   const pushNotification = buildPushNotificationModule(repos.pushSubRepo);
   const agentHostRecorder = new AgentHostRecorder(repos.serverRepo, infra.transportFactory, Date.now, console);

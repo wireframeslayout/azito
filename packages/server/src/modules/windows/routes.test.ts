@@ -104,6 +104,7 @@ describe('POST /api/windows/:id/launch-agent', () => {
 
     app = Fastify();
     await app.register(windowsRoutes, {
+      harnessPrefix: '',
       windowRepo: windowRepo as IWindowRepository,
       projectRepo: {} as IProjectRepository,
       taskRepo: {} as ITaskRepository,
@@ -237,6 +238,7 @@ describe('POST /api/windows/:id/launch-agent', () => {
     window = makeWindow({ workerType: 'codex' });
     const codexApp = Fastify();
     await codexApp.register(windowsRoutes, {
+      harnessPrefix: '',
       windowRepo: {
         findById: (id: number) => (id === window.id ? window : undefined),
         updateAgentSessionIdByWindow: codexUpdateByWindowFn,
@@ -300,6 +302,7 @@ describe('GET /api/windows/pane-loading-state', () => {
     };
     const instance = Fastify();
     await instance.register(windowsRoutes, {
+      harnessPrefix: '',
       windowRepo: windowRepo as IWindowRepository,
       projectRepo: {} as IProjectRepository,
       taskRepo: {} as ITaskRepository,
@@ -424,6 +427,7 @@ describe('POST /api/windows/:id/respawn — execution gate (Issue #328 second-ro
     // The hub's own error mapping, so a host-OS refusal is answered as it is in the app.
     instance.setErrorHandler((err, _request, reply) => { const mapped = mapAppError(err); if (!mapped) throw err; return reply.status(mapped.status).send(mapped.body); });
     await instance.register(windowsRoutes, {
+      harnessPrefix: '',
       windowRepo: windowRepo as IWindowRepository,
       projectRepo: {} as IProjectRepository,
       taskRepo: {} as ITaskRepository,
@@ -515,6 +519,7 @@ describe('GET /api/windows/activity-status (Issue #338 フォロー: process-bas
     ];
     const app = Fastify();
     await app.register(windowsRoutes, {
+      harnessPrefix: '',
       windowRepo: {} as IWindowRepository,
       projectRepo: {} as IProjectRepository,
       taskRepo: {} as ITaskRepository,
@@ -546,6 +551,7 @@ describe('POST /api/windows/:id/sleep', () => {
     const sleepFn = opts.sleepFn ?? vi.fn(async () => {});
     const app = Fastify();
     app.register(windowsRoutes, {
+      harnessPrefix: '',
       windowRepo: {
         findById: (id: number) => (win && id === win.id ? win : undefined),
       } as unknown as IWindowRepository,
