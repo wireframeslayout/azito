@@ -3,7 +3,7 @@ import { api } from '../api/client';
 
 export type SystemUpdateStatus = 'up-to-date' | 'checking' | 'update-available' | 'check-failed'
   | 'confirming' | 'running' | 'restarting' | 'success' | 'failed'
-  | 'disabled' | 'blocked';
+  | 'disabled' | 'blocked' | 'no-asset';
 
 export type DeployMode = 'systemd' | 'launchd' | 'taskscheduler' | 'source';
 
@@ -26,6 +26,8 @@ export interface UpdateStatusResponse {
   runningTasks: number;
   disabledReason: string | null;
   channel: 'stable' | 'rc';
+  /** `no-asset` のとき、最新の版にあるべきなのに無かったこの OS 向けの配布物の名前（それ以外は null）。 */
+  missingAsset: string | null;
   /** 稼働検知診断の導線（Settings の診断節・ステータスバーのアイテム）を出してよいか。 */
   diagnosticsEnabled: boolean;
 }

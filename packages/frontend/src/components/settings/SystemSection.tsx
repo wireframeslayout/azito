@@ -5,7 +5,8 @@ import { Spinner } from '../ui/Spinner';
 import { useSystemUpdate } from '../../hooks/useSystemUpdate';
 import { useConfirm } from '../../hooks/useConfirm';
 import ActivityDiagnosticsPanel from './sections/ActivityDiagnosticsPanel';
-import type { DeployMode, SystemUpdateStatus, VersionEntry } from '../../hooks/useSystemUpdate';
+import { STATUS_LABEL_KEYS, updateStatusNotice, updateStatusTone } from '../system/updateStatusView';
+import type { DeployMode, VersionEntry } from '../../hooks/useSystemUpdate';
 
 const DEPLOY_MODE_LABEL: Record<DeployMode, string> = {
   systemd: 'systemd',
@@ -13,27 +14,6 @@ const DEPLOY_MODE_LABEL: Record<DeployMode, string> = {
   taskscheduler: 'Task Scheduler',
   source: 'source (dev)',
 };
-
-const STATUS_KEYS: Record<string, string> = {
-  'up-to-date': 'system.statusUpToDate',
-  'checking': 'system.statusChecking',
-  'update-available': 'system.statusUpdateAvailable',
-  'check-failed': 'system.statusCheckFailed',
-  'confirming': 'system.statusConfirming',
-  'running': 'system.statusRunning',
-  'restarting': 'system.statusRestarting',
-  'success': 'system.statusSuccess',
-  'failed': 'system.statusFailed',
-  'disabled': 'system.statusDisabled',
-  'blocked': 'system.statusBlocked',
-};
-
-function statusTone(status: SystemUpdateStatus): 'green' | 'accent' | 'red' | 'default' {
-  if (status === 'up-to-date' || status === 'success') return 'green';
-  if (status === 'update-available') return 'accent';
-  if (status === 'check-failed' || status === 'failed') return 'red';
-  return 'default';
-}
 
 function shortSha(sha: string | null): string {
   if (!sha) return '—';
@@ -103,6 +83,8 @@ export default function SystemSection() {
     );
   }
 
+  const notice = updateStatusNotice(status);
+
   return (
     <div>
       <p style={{ fontSize: 'var(--font-md)', color: 'var(--text-dim)', marginBottom: 20, lineHeight: 1.5 }}>
@@ -122,7 +104,7 @@ export default function SystemSection() {
           </span>
         </SectionRow>
         <SectionRow label={t('system.status')}>
-          <Chip tone={statusTone(status.status)}>{STATUS_KEYS[status.status] ? t(STATUS_KEYS[status.status]) : status.status}</Chip>
+          <Chip tone={updateStatusTone(status.status)}>{t(STATUS_LABEL_KEYS[status.status])}</Chip>
         </SectionRow>
         {isServiceInstall && (
           <SectionRow label={t('system.devChannel')}>
@@ -196,13 +178,13 @@ export default function SystemSection() {
           </div>
         )}
 
-        {status.status === 'check-failed' && (
-          <div style={{
+        {notice && (
+          <div role="status" style={{
             marginTop: 12, padding: '8px 10px', borderRadius: 'var(--radius-sm)',
-            background: 'var(--danger-a08)', border: '1px solid var(--danger-a35)',
-            color: 'var(--danger)', fontSize: 'var(--font-sm)',
+            background: `var(--${notice.severity}-a08)`, border: `1px solid var(--${notice.severity}-a35)`,
+            color: `var(--${notice.severity})`, fontSize: 'var(--font-sm)',
           }}>
-            {t('system.checkFailedDetail')}
+            {t(notice.key, notice.values)}
           </div>
         )}
 
