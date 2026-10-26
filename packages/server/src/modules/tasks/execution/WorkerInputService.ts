@@ -76,9 +76,11 @@ export class WorkerInputService {
   }
 
   /**
-   * Types `text` into the pane without submitting it (for a pane that is not supervised): the Enter is `submitPrompt`, sent when the text
-   * has been seen in the worker's input, because an Enter that reaches codex before its input has drawn the text is not a submit.
-   * Refused, with nothing typed, for a pane that is at a bare shell.
+   * Types `text` into the pane without submitting it: pasted by the supervisor (`inject_prompt` with `submit: false`) when the pane has a
+   * bound one, else as keys. The Enter is `submitPrompt`, sent when the text has been seen in the worker's input, because an Enter that
+   * reaches codex before its input has drawn the text is not a submit. A supervisor's ack timeout is taken as typed (the screen says);
+   * a failed supervisor falls back to keys. The keys path is refused, with nothing typed, for a pane at a bare shell (the supervisor path has
+   * no such check here: the runtime looks at the pane before it writes anything).
    */
   async typePrompt(server: ServerConfig, handle: PaneHandle, text: string, ctx?: WorkerInputContext, supervisorTarget?: string): Promise<void> {
     const driver = this.muxDriverRegistry.resolve(server);

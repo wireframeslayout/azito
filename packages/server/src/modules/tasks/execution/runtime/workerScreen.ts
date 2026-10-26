@@ -174,9 +174,11 @@ function boxOf(text: string, isEmpty: (text: string) => boolean): InputBox {
 }
 
 const RULE_LINE = /^─{10,}$/;
+/** A line made of rule characters and spaces: a rule, or one that is not a clean run of them (broken by the pane). */
+const ROUGH_RULE = /^[─\s]*─[─\s]*$/;
 /** codex's lines below the composer: the model line is after a blank line, the shortcuts / context line carries these. */
 /** A row of codex's footer: the model line (`<model> default · <dir>`), the shortcuts / context row, the warning row. */
-const CODEX_FOOTER_ROW = /·|\? for shortcuts|context left|esc to interrupt|warning|\bf\d to /i;
+const CODEX_FOOTER_ROW = /·|\? for shortcuts|context left|esc to interrupt|warning|\bf\d to |tab to queue|queued message/i;
 const CODEX_FOOTER_LINE = /\? for shortcuts|context left|esc to interrupt/i;
 
 /**
@@ -191,17 +193,20 @@ function readClaudeInput(lines: string[]): InputBox {
     const lower = rules[rules.length - 1];
     const inside = lines.slice(upper + 1, lower).filter((line) => line.trim() !== '');
     const below = lines.slice(lower + 1).filter((line) => line.trim() !== '');
-    if (inside.length > 0 && /^[❯>]/.test(inside[0].trim()) && below.length <= 4) {
+    // The pair is the current input only when it is the bottom of the screen: no other prompt line and no rule-like line (a rule that could
+    // not be read as one, since the pair would then be an old one of the history) below the lower rule, and none inside.
+    const isCurrent = below.length <= 4 && [...below, ...inside.slice(1)].every((line) => !ROUGH_RULE.test(line.trim())) && below.every((line) => !/^[❯>]/.test(line.trim()));
+    if (isCurrent && inside.length > 0 && /^[❯>]/.test(inside[0].trim())) {
       return boxOf([inside[0].trim().replace(/^[❯>]\s?/, ''), ...inside.slice(1).map((line) => line.trim())].join(''), isClaudePlaceholder);
     }
-    if (inside.length === 0 && below.length <= 4) return UNKNOWN;
+    if (isCurrent && inside.length === 0) return UNKNOWN;
   }
   const top = lines.map((line, i) => (line.trim().startsWith('╭') ? i : -1)).filter((i) => i >= 0).pop();
   const bottom = lines.map((line, i) => (line.trim().startsWith('╰') ? i : -1)).filter((i) => i >= 0).pop();
   // The 2.0.x frame is the input only when it is the bottom of the screen: a status line or two below it, and no rule or prompt line
   // (a current input of the 2.1.x layout whose rules could not be read, for one) that would make it an old frame of the history.
   const belowFrame = bottom === undefined ? [] : lines.slice(bottom + 1).filter((line) => line.trim() !== '');
-  const frameIsCurrent = belowFrame.length <= 4 && belowFrame.every((line) => !/^[─\s]*─[─\s]*$/.test(line.trim()) && !/^[❯>]/.test(line.trim()) && !line.trim().startsWith('╭'));
+  const frameIsCurrent = belowFrame.length <= 4 && belowFrame.every((line) => !ROUGH_RULE.test(line.trim()) && !/^[❯>]/.test(line.trim()) && !line.trim().startsWith('╭'));
   if (top !== undefined && bottom !== undefined && bottom > top + 1 && frameIsCurrent) {
     const inside = lines.slice(top + 1, bottom).map((line) => line.trim().replace(/^│\s?/, '').replace(/\s?│$/, '').trim()).filter((line) => line !== '');
     if (inside.length > 0 && /^[❯>]/.test(inside[0])) {
@@ -221,7 +226,8 @@ function readCodexInput(lines: string[]): InputBox {
   const composer = [lines[start].replace(/^›\s?/, '')];
   let end = start + 1;
   for (; end < lines.length; end++) {
-    if (lines[end].trim() === '' || CODEX_FOOTER_LINE.test(lines[end])) break;
+    // (while a turn runs there is no blank line between the composer and the model line)
+    if (lines[end].trim() === '' || CODEX_FOOTER_LINE.test(lines[end]) || CODEX_FOOTER_ROW.test(lines[end])) break;
     composer.push(lines[end].trim());
   }
   // Codex's history marks a person's message with `›` too, so a `›` line is the input only at the bottom of the screen: after it only a
@@ -251,4 +257,31 @@ export function inputHoldsLine(box: InputBox, instruction: string): boolean {
   if (box.state !== 'filled') return false;
   const squashed = box.text.toLowerCase().replace(/\s+/g, '');
   return squashed.includes('azitopromptfile.') && squashed.includes(promptFileNameOf(instruction).replace(/\s+/g, ''));
+}
+
+/** Lines above the input box / composer in which a running turn shows (its working line sits right above the input). */
+const BUSY_LOOKBACK_LINES = 10;
+/** Claude Code's spinner: a glyph, one word and an ellipsis (`✽ Spinning…`, `· Wrangling… (5s · ↓ 77 tokens)`); a finished turn reads `✻ Baked for 4s`. */
+const CLAUDE_SPINNER = /^[·✻✽✶✢*]\s+[^\s…]+…(\s|$)/;
+
+/**
+ * Whether a turn is running in the worker: codex's working line ("Working (3s • esc to interrupt)") or Claude's spinner line, among the lines
+ * just above the input. A prompt typed into the input of a running turn is queued behind it (codex: "tab to queue message") or interrupts it,
+ * so a next prompt is not sent until the turn is over. False for a screen whose input cannot be found.
+ */
+export function isWorkerBusy(kind: TuiAgentKind, output: string): boolean {
+  const lines = screenLines(output);
+  const inputAt = kind === 'codex' ? lastCodexInputLine(lines) : lastClaudeUpperRule(lines);
+  if (inputAt === undefined) return false;
+  const above = lines.slice(0, inputAt).filter((line) => line.trim() !== '').slice(-BUSY_LOOKBACK_LINES);
+  return above.some((line) => (kind === 'codex' ? /esc to interrupt/i.test(line) : CLAUDE_SPINNER.test(line.trim()) || /esc to interrupt/i.test(line)));
+}
+
+function lastCodexInputLine(lines: string[]): number | undefined {
+  return lines.map((line, i) => (line.startsWith('›') ? i : -1)).filter((i) => i >= 0).pop();
+}
+
+function lastClaudeUpperRule(lines: string[]): number | undefined {
+  const rules = lines.map((line, i) => (RULE_LINE.test(line.trim()) ? i : -1)).filter((i) => i >= 0);
+  return rules.length >= 2 ? rules[rules.length - 2] : undefined;
 }

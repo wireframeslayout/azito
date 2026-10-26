@@ -1,0 +1,40 @@
+
+ ▐▛███▛█   Claude Code v2.1.310
+▝▜██████▀  Opus 5.5 · Claude Max
+ ▝▝   ▝▝   /tmp/azr5
+
+
+❯ AZITO prompt file. Read the file named at the end of this line and
+  carry out every instruction in it exactly:
+  /tmp/azr5/azito-prompt-9-eb4afd8652943839.md
+
+  Read 1 file
+
+● OK
+
+✻ Sautéed for 8s · done 7:13
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+──────────────────────────────────────────────────────────────────────
+❯ AZITO prompt file. Read the file named at the end of this line and
+  carry out every instruction in it exactly:
+  /tmp/azr5/azito-prompt-9-eb4afd8652943839.md
+──────────────────────────────────────────────────────────────────────
+  server01@win-server-001 | /tmp/azr5  Opus 5.5 | ctx:95% | 5h:7%
+  ⏵⏵ bypass permissions on (shift+tab to cycle)

@@ -3,7 +3,7 @@ import type { IMuxClient } from '../../../tmux/IMuxClient';
 import { WorkerNotRunningError, type WorkerInputService } from '../WorkerInputService';
 import type { PromptFileDelivery } from '../PromptFileDelivery';
 import { getAgentTranscriptProfile } from '../../../transcripts/sources/profiles';
-import { blockingWorkerDialog, detectWorkerDialog, inputHoldsLine, isWorkerScreenReady, readInputBox, tuiAgentKindOf, type TuiAgentKind, type WorkerDialog } from './workerScreen';
+import { blockingWorkerDialog, detectWorkerDialog, inputHoldsLine, isWorkerBusy, isWorkerScreenReady, readInputBox, tuiAgentKindOf, type TuiAgentKind, type WorkerDialog } from './workerScreen';
 import type { WorkerWaiter } from '../WorkerWaiter';
 import type { HttpSignalTurnCoordinator } from '../HttpSignalTurnCoordinator';
 import type { ServerConfig } from '../../../servers/Server';
@@ -27,7 +27,7 @@ function sleep(ms: number): Promise<void> {
 }
 
 /** Why the worker's screen did not take a prompt: a dialog that waits for a person, the worker back at a shell, or nothing recognisable within the time allowed. */
-export type TuiNotReadyReason = WorkerDialog | 'worker_exited_to_shell' | 'not_ready' | 'input_not_empty' | 'prompt_not_typed' | 'prompt_not_submitted' | 'input_state_unknown' | 'timeout';
+export type TuiNotReadyReason = WorkerDialog | 'worker_exited_to_shell' | 'not_ready' | 'input_not_empty' | 'prompt_not_typed' | 'prompt_not_submitted' | 'input_state_unknown' | 'worker_busy' | 'timeout';
 
 const NOT_READY_MESSAGES: Record<TuiNotReadyReason, string> = {
   trust_dialog: 'Claude Code の信頼確認ダイアログが出ているため、プロンプトを送らずにタスクを止めました',
@@ -40,6 +40,7 @@ const NOT_READY_MESSAGES: Record<TuiNotReadyReason, string> = {
   prompt_not_typed: '送った 1 行がワーカーの入力欄に描かれなかったため、Enter を送らずにタスクを止めました',
   prompt_not_submitted: 'ワーカーの入力欄に送った 1 行が残ったままで、Enter を再送しても送信されなかったため、タスクを止めました',
   input_state_unknown: 'ワーカーの入力欄の状態を読み取れないまま時間切れになったため、送信できたと判断せずにタスクを止めました',
+  worker_busy: 'ワーカーの前のターンが 60 秒待っても終わらなかったため、プロンプトを割り込ませずにタスクを止めました',
   timeout: 'ワーカーの画面が 30 秒以内に入力待ちにならなかったため、プロンプトを送らずにタスクを止めました',
 };
 
@@ -84,8 +85,12 @@ const LINE_DRAW_MS = 5000;
 const LINE_DRAW_POLL_MS = 200;
 const SUBMIT_CONFIRM_MS = 5000;
 const SUBMIT_CONFIRM_POLL_MS = 300;
-const CLEAR_CONFIRM_MS = 2000;
+/** Ctrl+U clears one display line of a wrapped input on some agents (Claude Code): it is sent up to this many times, until the input is empty. */
+const CLEAR_MAX_KEYS = 5;
 const CLEAR_POLL_MS = 200;
+/** A turn that is still running when the next prompt is due is waited for this long. */
+const BUSY_WAIT_MS = 60_000;
+const BUSY_POLL_MS = 1000;
 
 export class TuiWorkerRuntime implements IWorkerRuntime {
   constructor(
@@ -187,7 +192,8 @@ export class TuiWorkerRuntime implements IWorkerRuntime {
 
   /** The worker is at its input and the input is empty; a screen that is still drawing gets a few seconds. */
   private async awaitEmptyInput(ctx: WorkerContext, kind: TuiAgentKind): Promise<void> {
-    const deadline = Date.now() + SEND_READY_GRACE_MS;
+    let deadline = Date.now() + SEND_READY_GRACE_MS;
+    let busySince: number | null = null;
     for (;;) {
       const screen = await this.captureScreen(ctx);
       // A pane that went back to a shell can still show the agent's last screen; nothing is written for it, and nothing typed.
@@ -198,7 +204,16 @@ export class TuiWorkerRuntime implements IWorkerRuntime {
       const box = readInputBox(kind, screen);
       // Text in the input (the line of an earlier prompt, a person's draft) would be sent together with ours. It is waited on for the
       // grace like any screen that is not settled: a wording of an empty input that is not known yet reads as text, and goes away.
-      if (box.state === 'empty' && isWorkerScreenReady(kind, screen)) return;
+      if (box.state === 'empty' && isWorkerScreenReady(kind, screen)) {
+        if (!isWorkerBusy(kind, screen)) return;
+        // The turn before is still running (the done marker is written in the middle of it): a prompt typed now would queue behind it or
+        // cut into it. Wait for it to end; the screen's grace starts again after.
+        busySince ??= Date.now();
+        if (Date.now() - busySince >= BUSY_WAIT_MS) throw new TuiNotReadyError('worker_busy', screen);
+        deadline = Date.now() + SEND_READY_GRACE_MS;
+        await sleep(BUSY_POLL_MS);
+        continue;
+      }
       if (Date.now() >= deadline) throw new TuiNotReadyError(box.state === 'filled' ? 'input_not_empty' : 'not_ready', screen);
       await sleep(SEND_READY_POLL_MS);
     }
@@ -211,6 +226,7 @@ export class TuiWorkerRuntime implements IWorkerRuntime {
     const box = readInputBox(kind, screen);
     if (box.state === 'filled') throw new TuiNotReadyError('input_not_empty', screen);
     if (box.state !== 'empty' || !isWorkerScreenReady(kind, screen)) throw new TuiNotReadyError('not_ready', screen);
+    if (isWorkerBusy(kind, screen)) throw new TuiNotReadyError('worker_busy', screen);
   }
 
   private async awaitLineDrawn(ctx: WorkerContext, kind: TuiAgentKind, instruction: string): Promise<void> {
@@ -219,7 +235,7 @@ export class TuiWorkerRuntime implements IWorkerRuntime {
     for (;;) {
       screen = await this.captureScreen(ctx);
       if (inputHoldsLine(readInputBox(kind, screen), instruction)) return;
-      if (Date.now() >= deadline) throw await this.stoppedWithInputCleared(ctx, kind, instruction, 'prompt_not_typed', screen);
+      if (Date.now() >= deadline) throw await this.stoppedWithInputCleared(ctx, kind, instruction, 'prompt_not_typed');
       await sleep(LINE_DRAW_POLL_MS);
     }
   }
@@ -243,25 +259,28 @@ export class TuiWorkerRuntime implements IWorkerRuntime {
       if (box.state === 'unknown') throw new TuiNotReadyError('input_state_unknown', screen);
       if (resendEnter) await this.workerInput.submitPrompt(ctx.server, ctx.handle, { taskId: ctx.taskId, unitId: ctx.unitId }, ctx.supervisorTarget);
     }
-    throw await this.stoppedWithInputCleared(ctx, kind, instruction, 'prompt_not_submitted', screen);
+    throw await this.stoppedWithInputCleared(ctx, kind, instruction, 'prompt_not_submitted');
   }
 
   /**
-   * The error that stops the task after the line was typed. If the line is in the input, it is taken back first (Ctrl+U) so that a person's
-   * Enter or the chat cannot submit a prompt the task was stopped for; a draft of someone else is never touched: the line is only cleared
-   * when it is seen to be ours. If it could not be cleared, the message says to clear it before resuming.
+   * The error that stops the task after the line was typed. The screen is looked at again first. If the input holds the task's line, it is
+   * taken back (Ctrl+U, repeated while text is left: Claude Code clears one display line of a wrapped input per key) so that a person's Enter or
+   * the chat cannot submit a prompt the task was stopped for. A draft of someone else is never cleared: only a line seen to be ours. If the
+   * input is not seen empty at the end (our line could not be removed, or something else is in it, or it cannot be read), the message says
+   * to clear it before resuming.
    */
-  private async stoppedWithInputCleared(ctx: WorkerContext, kind: TuiAgentKind, instruction: string, reason: TuiNotReadyReason, screen: string): Promise<TuiNotReadyError> {
-    if (!inputHoldsLine(readInputBox(kind, screen), instruction)) return new TuiNotReadyError(reason, screen);
-    await this.workerInput.clearInputLine(ctx.server, ctx.handle);
-    const deadline = Date.now() + CLEAR_CONFIRM_MS;
-    let latest = screen;
-    for (;;) {
-      await sleep(CLEAR_POLL_MS);
-      latest = await this.captureScreen(ctx);
-      if (!inputHoldsLine(readInputBox(kind, latest), instruction)) return new TuiNotReadyError(reason, latest);
-      if (Date.now() >= deadline) return new TuiNotReadyError(reason, latest, true);
+  private async stoppedWithInputCleared(ctx: WorkerContext, kind: TuiAgentKind, instruction: string, reason: TuiNotReadyReason): Promise<TuiNotReadyError> {
+    let screen = await this.captureScreen(ctx);
+    let box = readInputBox(kind, screen);
+    if (inputHoldsLine(box, instruction)) {
+      for (let keys = 0; keys < CLEAR_MAX_KEYS && box.state !== 'empty'; keys++) {
+        await this.workerInput.clearInputLine(ctx.server, ctx.handle);
+        await sleep(CLEAR_POLL_MS);
+        screen = await this.captureScreen(ctx);
+        box = readInputBox(kind, screen);
+      }
     }
+    return new TuiNotReadyError(reason, screen, box.state !== 'empty');
   }
 
   buildEnvelope(ctx: EnvelopeBuildContext): EnvelopeBuildResult {

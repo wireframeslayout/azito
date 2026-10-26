@@ -176,13 +176,16 @@ interface HarnessOptions {
   enterIgnored?: number;
   /** Ctrl+U does not clear the input. */
   cannotClear?: boolean;
+  /** The pane wraps its input at this width, and Ctrl+U clears one display line of it (Claude Code). */
+  wrapWidth?: number;
+  clearsOneLine?: boolean;
   /** The first captures, whatever else is set (a screen that is still changing). */
   firstScreens?: string[];
 }
 
 /** The real runtime over a pane that reacts to the keys the way a TUI does, under fake timers. */
 function sendHarness(kind: 'claude' | 'codex', options: HarnessOptions = {}) {
-  const pane = createFakeWorkerPane();
+  const pane = createFakeWorkerPane({ wrapWidth: options.wrapWidth, clearsOneLine: options.clearsOneLine, onlyClaude: options.wrapWidth !== undefined });
   const events: Array<{ what: string; at: number }> = [];
   const state = { typedAt: -1, submits: 0, enterIgnored: options.enterIgnored ?? 0 };
   const note = (what: string) => events.push({ what, at: Date.now() });
@@ -218,7 +221,7 @@ function sendHarness(kind: 'claude' | 'codex', options: HarnessOptions = {}) {
     vi.useFakeTimers();
     try {
       const settled = runtime.sendPrompt(ctx, 'the prompt').then(() => null, (err: unknown) => err);
-      await vi.advanceTimersByTimeAsync(40_000);
+      await vi.advanceTimersByTimeAsync(120_000);
       return await settled;
     } finally {
       vi.useRealTimers();
@@ -290,10 +293,50 @@ describe('TuiWorkerRuntime.sendPrompt — the worker has to be at an empty input
     expect(h.workerInput.typePrompt).not.toHaveBeenCalled();
   });
 
-  it('a Claude input that shows "Press up to edit queued messages" is empty: a message of a person waits for the turn, ours is sent', async () => {
-    const h = sendHarness('claude', { idle: fixture('claude-2.1.310-linux-queued-placeholder.txt') });
+  it('a Claude input that shows "Press up to edit queued messages" is empty, but the turn is still running: ours waits for the turn to end', async () => {
+    const queued = fixture('claude-2.1.310-linux-queued-placeholder.txt');
+    const h = sendHarness('claude', { firstScreens: [queued, queued, queued] });
     expect(await h.send()).toBeNull();
     expect(h.workerInput.typePrompt).toHaveBeenCalledTimes(1);
+    expect(h.tmux.captureScreen.mock.calls.length).toBeGreaterThan(3);
+  });
+
+  it.each([
+    ['codex', 'codex-0.163-linux-working-empty.txt'],
+    ['codex', 'codex-0.163-linux-working-queued.txt'],
+    ['claude', 'claude-2.1.310-linux-working.txt'],
+    ['claude', 'claude-2.1.310-linux-queued-placeholder.txt'],
+  ] as const)('a %s worker whose turn does not end (%s): stops with worker_busy after 60 s, sending and writing nothing', async (kind, file) => {
+    const h = sendHarness(kind, { idle: fixture(file) });
+    expect(await h.send()).toMatchObject({ name: 'TuiNotReadyError', reason: 'worker_busy' });
+    expect(h.promptFiles.stage).not.toHaveBeenCalled();
+    expect(h.workerInput.typePrompt).not.toHaveBeenCalled();
+  });
+
+  it('a codex worker whose turn ends while it is waited for gets the prompt', async () => {
+    const working = fixture('codex-0.163-linux-working-empty.txt');
+    const h = sendHarness('codex', { firstScreens: [working, working, working, working] });
+    expect(await h.send()).toBeNull();
+    expect(h.pane.submitted).toEqual([LINE]);
+  });
+
+  it('the turn starting between the file and the line (a busy screen at the second look) stops the task before anything is typed', async () => {
+    const h = sendHarness('codex', {});
+    const normal = h.tmux.captureScreen.getMockImplementation()!;
+    let calls = 0;
+    h.tmux.captureScreen.mockImplementation(async () => (++calls === 1 ? normal() : { stdout: fixture('codex-0.163-linux-working-empty.txt') }));
+    expect(await h.send()).toMatchObject({ reason: 'worker_busy' });
+    expect(h.workerInput.typePrompt).not.toHaveBeenCalled();
+  });
+
+  it('Claude: a broken lower rule after Enter (right until the line was drawn) does not end the check as a success', async () => {
+    // seen before Enter: a clean pair of rules holding our line; after Enter: the history's old rule pair + a past message are all that can be read
+    const rule = '─'.repeat(60);
+    const broken = `${rule}\n❯ an earlier message\n${rule}\n\n● reply\n\n${rule}\n❯ ${LINE}\n${'─'.repeat(25)} ${'─'.repeat(25)}\n  bypass permissions on (shift+tab to cycle)`;
+    const h = sendHarness('claude', { submitted: broken });
+    const err = await h.send();
+    expect(err).toMatchObject({ name: 'TuiNotReadyError', reason: 'input_state_unknown' });
+    expect(h.workerInput.submitPrompt).toHaveBeenCalledTimes(1);
   });
 
   it('an input that reads as text for a moment (a wording not known yet) gets the grace before the task is stopped', async () => {
@@ -385,7 +428,35 @@ describe('TuiWorkerRuntime.sendPrompt — the line has to be drawn, submitted an
     const err = await h.send();
     expect(err).toMatchObject({ name: 'TuiNotReadyError', reason: 'prompt_not_submitted', inputLeft: true });
     expect((err as Error).message).toMatch(/入力欄に残った 1 行を消してから再開してください/);
-    expect(h.workerInput.clearInputLine).toHaveBeenCalledTimes(1);
+    expect(h.workerInput.clearInputLine).toHaveBeenCalledTimes(5);
+  });
+
+  it('keeps clearing while text is left: Claude Code clears one display line of a wrapped input per Ctrl+U', async () => {
+    const h = sendHarness('claude', { enterIgnored: 99, wrapWidth: 40, clearsOneLine: true });
+    const err = await h.send();
+    expect(err).toMatchObject({ reason: 'prompt_not_submitted', inputLeft: false });
+    expect((err as Error).message).not.toMatch(/消してから再開/);
+    expect(h.workerInput.clearInputLine.mock.calls.length).toBeGreaterThan(1);
+    expect(h.pane.screen()).toContain('❯ \n');
+  });
+
+  it('gives up after five Ctrl+U and says to clear the rest when the input is still not empty', async () => {
+    const h = sendHarness('claude', { enterIgnored: 99, wrapWidth: 10, clearsOneLine: true });
+    const err = await h.send();
+    expect(err).toMatchObject({ reason: 'prompt_not_submitted', inputLeft: true });
+    expect(h.workerInput.clearInputLine).toHaveBeenCalledTimes(5);
+  });
+
+  it('prompt_not_typed: the screen is read again, and an input that is not empty (or cannot be read) is reported as left', async () => {
+    // never drawn into the first look; a draft of a person is in the input on the second look
+    const h = sendHarness('codex', { typed: fixture('codex-0.164-win-draft.txt') });
+    const err = await h.send();
+    expect(err).toMatchObject({ reason: 'prompt_not_typed', inputLeft: true });
+    expect(h.workerInput.clearInputLine).not.toHaveBeenCalled();
+    const empty = sendHarness('codex', { typed: workerScreenWith('') });
+    expect(await empty.send()).toMatchObject({ reason: 'prompt_not_typed', inputLeft: false });
+    const unreadable = sendHarness('codex', { typed: 'a screen without any composer' });
+    expect(await unreadable.send()).toMatchObject({ reason: 'prompt_not_typed', inputLeft: true });
   });
 
   it('does not clear an input that does not hold the task\'s line (a person\'s draft is never touched)', async () => {

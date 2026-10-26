@@ -1,7 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { blockingWorkerDialog, detectWorkerDialog, inputHoldsLine, isWorkerScreenReady, readInputBox, tuiAgentKindOf, tuiAgentKindOfWorkerType } from './workerScreen';
+import { blockingWorkerDialog, detectWorkerDialog, inputHoldsLine, isWorkerBusy, isWorkerScreenReady, readInputBox, tuiAgentKindOf, tuiAgentKindOfWorkerType } from './workerScreen';
 
 describe('tuiAgentKindOf', () => {
   it('reads the agent from the launch line', () => {
@@ -218,5 +218,49 @@ describe('readInputBox on the screens of real panes (#532)', () => {
       expect(readInputBox('claude', '╭────────╮\n│ >        │\n╰────────╯\n  bypass permissions on')).toEqual({ state: 'empty' });
       expect(readInputBox('claude', '╭────────╮\n│ > hello  │\n╰────────╯\n  bypass permissions on')).toEqual({ state: 'filled', text: 'hello' });
     });
+  });
+});
+
+describe('a turn that is still running (#532)', () => {
+  const LINE = 'AZITO prompt file. Read the file named at the end of this line and carry out every instruction in it exactly: /tmp/azr5/azito-prompt-9-83de1b3fccacce11.md';
+
+  it('codex: the composer of a running turn is empty, a line typed into it is filled and ours (the hint row "tab to queue message" is part of the footer)', () => {
+    expect(readInputBox('codex', fixture('codex-0.163-linux-working-empty.txt'))).toEqual({ state: 'empty' });
+    expect(readInputBox('codex', fixture('codex-0.163-linux-working-queued.txt'))).toEqual({ state: 'empty' });
+    expect(readInputBox('codex', fixture('codex-0.163-linux-working-draft.txt'))).toEqual({ state: 'filled', text: 'second message draft' });
+    const typed = readInputBox('codex', fixture('codex-0.163-linux-working-typed-line.txt'));
+    expect(typed.state).toBe('filled');
+    expect(inputHoldsLine(typed, LINE)).toBe(true);
+  });
+
+  it('is busy while codex shows its working line above the composer, and not at rest, after the reply, or with a quoted line', () => {
+    expect(isWorkerBusy('codex', fixture('codex-0.163-linux-working-empty.txt'))).toBe(true);
+    expect(isWorkerBusy('codex', fixture('codex-0.163-linux-working-queued.txt'))).toBe(true);
+    expect(isWorkerBusy('codex', fixture('codex-0.163-linux-working-typed-line.txt'))).toBe(true);
+    expect(isWorkerBusy('codex', fixture('codex-0.164-win-idle.txt'))).toBe(false);
+    expect(isWorkerBusy('codex', fixture('codex-0.164-win-after-reply.txt'))).toBe(false);
+    expect(isWorkerBusy('codex', '• The worker prints "esc to interrupt" in a long answer\n' + Array.from({ length: 12 }, (_, i) => `  line ${i}`).join('\n') + '\n\n› Ask Codex to do anything\n\n  ? for shortcuts')).toBe(false);
+  });
+
+  it('is busy while Claude shows its spinner above the input (it has no "esc to interrupt" in 2.1.310), and not when the turn is done', () => {
+    expect(isWorkerBusy('claude', fixture('claude-2.1.310-linux-working.txt'))).toBe(true);
+    expect(isWorkerBusy('claude', fixture('claude-2.1.310-linux-queued-placeholder.txt'))).toBe(true);
+    expect(isWorkerBusy('claude', fixture('claude-2.1.310-linux-after-submit.txt'))).toBe(true);
+    expect(isWorkerBusy('claude', fixture('claude-2.1.310-linux-done.txt'))).toBe(false);
+    expect(isWorkerBusy('claude', fixture('claude-2.1.310-win-idle-after-done.txt'))).toBe(false);
+    expect(isWorkerBusy('claude', fixture('claude-2.1.310-linux-narrow-typed-wrapped.txt'))).toBe(false);
+  });
+
+  it('Claude: a lower rule that is not one clean run makes the pair unreadable (unknown), not a pair of the history', () => {
+    const rule = '─'.repeat(60);
+    const screen = `${rule}\n❯ an earlier message\n${rule}\n\n● reply\n\n${rule}\n❯ ${LINE}\n${'─'.repeat(25)} ${'─'.repeat(25)}\n  bypass permissions on (shift+tab to cycle)`;
+    expect(readInputBox('claude', screen)).toEqual({ state: 'unknown' });
+    expect(readInputBox('claude', fixture('claude-2.1.310-linux-typed-not-submitted.txt')).state).toBe('filled');
+  });
+
+  it('Claude: the wrapped line of a narrow pane is one input, and one Ctrl+U leaves its first lines', () => {
+    const typed = readInputBox('claude', fixture('claude-2.1.310-linux-narrow-typed-wrapped.txt'));
+    expect(typed.state).toBe('filled');
+    expect(readInputBox('claude', fixture('claude-2.1.310-linux-narrow-after-one-ctrl-u.txt')).state).toBe('filled');
   });
 });
