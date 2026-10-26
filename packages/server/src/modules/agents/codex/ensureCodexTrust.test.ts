@@ -25,18 +25,22 @@ describe('ensureCodexTrust', () => {
     fakeHome = realpathSync.native(mkdtempSync(join(tmpdir(), 'codex-trust-')));
     mkdirSync(join(fakeHome, '.codex'));
   });
+  // Paths of this machine: a Windows runner writes them with backslashes, so the expected section is built the way the module spells it.
+  const dirOf = (name: string): string => join(fakeHome, name);
+  const keyOf = (path: string): string => codexProjectKey(process.platform === 'win32' ? 'win32' : 'posix', path);
+  const section = (path: string, level = 'trusted'): string => `[projects.${JSON.stringify(keyOf(path))}]\ntrust_level = "${level}"\n`;
   afterEach(() => {
     rmSync(fakeHome, { recursive: true, force: true });
   });
 
   it('creates config.toml with the project\'s section when the file does not exist', async () => {
-    expect(await trust('/wt/task-1')).toEqual({ action: 'registered', key: '/wt/task-1' });
-    expect(readFileSync(configPath(), 'utf8')).toBe('[projects."/wt/task-1"]\ntrust_level = "trusted"\n');
+    expect(await trust(dirOf('wt'))).toEqual({ action: 'registered', key: keyOf(dirOf('wt')) });
+    expect(readFileSync(configPath(), 'utf8')).toBe(section(dirOf('wt')));
   });
 
   it('creates the codex home too when it is missing', async () => {
     rmSync(join(fakeHome, '.codex'), { recursive: true });
-    expect((await trust('/wt')).action).toBe('registered');
+    expect((await trust(dirOf('wt'))).action).toBe('registered');
     expect(existsSync(configPath())).toBe(true);
   });
 
@@ -48,32 +52,31 @@ describe('ensureCodexTrust', () => {
       '[mcp_servers.azt-mcp]',
       'command = "azt-mcp"   # keep this comment',
       '',
-      '[projects."/other"]',
-      'trust_level = "untrusted"',
+      section(dirOf('other'), 'untrusted').trimEnd(),
       '',
     ].join('\n');
     writeFileSync(configPath(), original);
-    expect((await trust('/wt')).action).toBe('registered');
-    expect(readFileSync(configPath(), 'utf8')).toBe(`${original}\n[projects."/wt"]\ntrust_level = "trusted"\n`);
+    expect((await trust(dirOf('wt'))).action).toBe('registered');
+    expect(readFileSync(configPath(), 'utf8')).toBe(`${original}\n${section(dirOf('wt'))}`);
   });
 
   it('separates the new section from a file that does not end with a newline', async () => {
     writeFileSync(configPath(), 'model = "x"');
-    expect((await trust('/wt')).action).toBe('registered');
-    expect(readFileSync(configPath(), 'utf8')).toBe('model = "x"\n\n[projects."/wt"]\ntrust_level = "trusted"\n');
+    expect((await trust(dirOf('wt'))).action).toBe('registered');
+    expect(readFileSync(configPath(), 'utf8')).toBe(`model = "x"\n\n${section(dirOf('wt'))}`);
   });
 
   it('returns already_trusted without rewriting', async () => {
-    const original = '[projects."/wt"]\ntrust_level = "trusted"\n';
+    const original = section(dirOf('wt'));
     writeFileSync(configPath(), original);
-    expect(await trust('/wt')).toEqual({ action: 'already_trusted' });
+    expect(await trust(dirOf('wt'))).toEqual({ action: 'already_trusted' });
     expect(readFileSync(configPath(), 'utf8')).toBe(original);
   });
 
   it('does not override a person\'s "untrusted"', async () => {
-    const original = '[projects."/wt"]\ntrust_level = "untrusted"\n';
+    const original = section(dirOf('wt'), 'untrusted');
     writeFileSync(configPath(), original);
-    expect(await trust('/wt')).toMatchObject({ action: 'skipped' });
+    expect(await trust(dirOf('wt'))).toMatchObject({ action: 'skipped' });
     expect(readFileSync(configPath(), 'utf8')).toBe(original);
   });
 
@@ -85,20 +88,20 @@ describe('ensureCodexTrust', () => {
   });
 
   it('does not write when the project already has a table without a trust level (a duplicate table would break the file)', async () => {
-    const original = '[projects."/wt"]\nnote = "x"\n';
+    const original = `[projects.${JSON.stringify(keyOf(dirOf('wt')))}]\nnote = "x"\n`;
     writeFileSync(configPath(), original);
-    expect(await trust('/wt')).toMatchObject({ action: 'failed' });
+    expect(await trust(dirOf('wt'))).toMatchObject({ action: 'failed' });
     expect(readFileSync(configPath(), 'utf8')).toBe(original);
   });
 
   it('does not write when projects is an inline table it cannot extend', async () => {
     const original = 'projects = { "/a" = { trust_level = "trusted" } }\n';
     writeFileSync(configPath(), original);
-    expect(await trust('/wt')).toMatchObject({ action: 'failed' });
+    expect(await trust(dirOf('wt'))).toMatchObject({ action: 'failed' });
     expect(readFileSync(configPath(), 'utf8')).toBe(original);
   });
 
-  it('escapes a path with a quote or a backslash so the section stays valid TOML', async () => {
+  it.skipIf(process.platform === 'win32')('escapes a path with a quote or a backslash so the section stays valid TOML', async () => {
     writeFileSync(configPath(), '');
     expect((await trust('/wt/a"b\\c')).action).toBe('registered');
     // read back through codex's own reading of the file (smol-toml, as the module does)
@@ -110,27 +113,28 @@ describe('ensureCodexTrust', () => {
   it.skipIf(process.platform === 'win32')('keeps the file\'s permission bits and leaves no temporary file behind', async () => {
     writeFileSync(configPath(), 'model = "x"\n', { mode: 0o600 });
     chmodSync(configPath(), 0o600);
-    await trust('/wt');
+    await trust(dirOf('wt'));
     expect(statSync(configPath()).mode & 0o777).toBe(0o600);
     expect(readdirSync(join(fakeHome, '.codex'))).toEqual(['config.toml']);
   });
 
   it('keeps both registrations when two tasks register at the same time', async () => {
     writeFileSync(configPath(), 'model = "x"\n');
-    const results = await Promise.all(['/a', '/b', '/c'].map((p) => trust(p)));
+    const dirs = ['a', 'b', 'c'].map(dirOf);
+    const results = await Promise.all(dirs.map((p) => trust(p)));
     expect(results.map((r) => r.action)).toEqual(['registered', 'registered', 'registered']);
     const text = readFileSync(configPath(), 'utf8');
-    for (const p of ['/a', '/b', '/c']) expect(text).toContain(`[projects."${p}"]`);
+    for (const p of dirs) expect(text).toContain(section(p));
   });
 
   it('writes under CODEX_HOME for the hub\'s own server, and under ~/.codex for any other', async () => {
     const codexHome = join(fakeHome, 'elsewhere');
     mkdirSync(codexHome);
-    await trust('/local-wt', { claudeConfigDir: null, codexHome }, true);
-    expect(readFileSync(join(codexHome, 'config.toml'), 'utf8')).toContain('[projects."/local-wt"]');
+    await trust(dirOf('local-wt'), { claudeConfigDir: null, codexHome }, true);
+    expect(readFileSync(join(codexHome, 'config.toml'), 'utf8')).toContain(section(dirOf('local-wt')));
     expect(existsSync(configPath())).toBe(false);
-    await trust('/agent-wt', { claudeConfigDir: null, codexHome }, false);
-    expect(readFileSync(configPath(), 'utf8')).toContain('[projects."/agent-wt"]');
+    await trust(dirOf('agent-wt'), { claudeConfigDir: null, codexHome }, false);
+    expect(readFileSync(configPath(), 'utf8')).toContain(section(dirOf('agent-wt')));
   });
 
   it('does not overwrite a file that changed after it was read', async () => {
@@ -149,7 +153,7 @@ describe('ensureCodexTrust', () => {
         },
       }),
     } as unknown as IServerTransport;
-    expect((await ensureCodexTrust(racing, '/wt', noHomes, false)).action).toBe('failed');
+    expect((await ensureCodexTrust(racing, dirOf('wt'), noHomes, false)).action).toBe('failed');
     expect(readFileSync(configPath(), 'utf8')).toBe('model = "theirs"\n');
   });
 });
