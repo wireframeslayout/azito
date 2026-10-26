@@ -73,7 +73,10 @@ export class ShellFileOps implements IFileOps {
     return (await this.statPrecise(path, options.followLinks !== false, options.withAge === true))?.stat ?? null;
   }
 
-  /** The stat, with whether the mtime has sub-second precision (GNU `%.Y`) or is whole seconds (older / BSD `stat`). */
+  /**
+   * The stat, with whether the mtime has sub-second precision (GNU `%.Y`) or is whole seconds (older / BSD `stat`). `null` only for a path
+   * that does not exist; a query that failed (no usable output from `stat`) is a `FAILED` FileOpsError, never a "missing".
+   */
   private async statPrecise(path: string, followLinks: boolean, withAge = false): Promise<{ stat: FileStat; precise: boolean } | null> {
     const q = sq(this.checked(path));
     // Without following links, a symbolic link is reported as one before anything is looked through.
@@ -88,7 +91,9 @@ export class ShellFileOps implements IFileOps {
     const size = parseInt(fields[0], 10);
     const seconds = parseFloat(fields[1]);
     const nowSeconds = withAge ? parseInt(fields[3], 10) : 0;
-    if (fields.length !== (withAge ? 4 : 3) || isNaN(size) || isNaN(seconds) || isNaN(nowSeconds)) return null;
+    if (fields.length !== (withAge ? 4 : 3) || isNaN(size) || isNaN(seconds) || isNaN(nowSeconds)) {
+      throw new FileOpsError('FAILED', `Could not read the file status of ${path} (unusable output from stat)`);
+    }
     const stat: FileStat = { kind, size, mtimeMs: seconds * 1000, mode: parseInt(fields[2], 8) || 0 };
     if (withAge) stat.ageMs = nowSeconds * 1000 - stat.mtimeMs;
     return { stat, precise: fields[1].includes('.') };
@@ -160,7 +165,11 @@ export class ShellFileOps implements IFileOps {
 
   /** Fails closed: an mtime that cannot be read, or no hash tool when a hash was asked for, is a conflict, not a pass. */
   private async assertUnchanged(target: string, expect: NonNullable<WriteOptions['expect']>): Promise<void> {
-    const current = await this.statPrecise(target, true);
+    // An unreadable status is a conflict here (fail closed), not an error of its own.
+    const current = await this.statPrecise(target, true).catch((err: unknown) => {
+      if (err instanceof FileOpsError && err.code === 'FAILED') return null;
+      throw err;
+    });
     if (expect.mtimeMs !== undefined) {
       // Whole-second mtimes cannot tell two edits within a second apart, hence the tolerance (the hash below covers that).
       const tolerance = current?.precise ? 1 : 999;

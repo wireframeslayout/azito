@@ -499,6 +499,12 @@ The in-app updater has limits:
 
 To switch by hand, run steps 1–4 of "Manual install (tarball)" and restart the service. The misao service is not restarted (use `azito misao update` to update it). `~/.azito/hub/.env` and your data live outside the versioned directory, so they carry over untouched.
 
+### Notes when updating (v0.12.0)
+
+- If the hub runs with `AZITO_HARNESS_PREFIX`, from v0.12.0 the worker's prompt uses `~/.azito/harness-<prefix>/bin/azitoctl` (`azitoctl.mjs` on Windows). On an agent / SSH server that has the harness only in the unprefixed `~/.azito/harness`, running a phase fails at once with the reason that this hub's harness (prefix `<prefix>`) is not installed on the server and must be installed again from Setup.
+- Fix: after updating, install the harness again from each server's Setup (or `POST /api/servers/:name/harness/install`) with this hub.
+- A hub that does not use a prefix (the default) needs nothing.
+
 ### Update Channels
 
 AZITO has two update channels:

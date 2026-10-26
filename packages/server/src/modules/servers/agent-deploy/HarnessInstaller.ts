@@ -80,8 +80,9 @@ function validatePrefix(prefix: string): void {
   }
 }
 
-function remoteHarnessDir(prefix?: string): string {
-  return `~/.azito/harness${prefix ? `-${prefix}` : ''}`;
+/** `~/.azito/harness[-<prefix>]` on a POSIX host: the same `harnessLocation` the worker's prompt path (`resolveAzitoctlPath`) is built from. */
+export function remoteHarnessDir(prefix?: string): string {
+  return harnessLocation('linux', '~', prefix).harnessDir;
 }
 
 export class HarnessInstaller {

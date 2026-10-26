@@ -37,7 +37,7 @@ function localSupervisorSrcPath(repoRoot: string): string {
  * (staged alongside `azito-agent.cjs`/`run.sh` at `~/.azito/agent/<version>/`,
  * symlinked to `~/.azito/agent/current/` — see AgentInstaller.ts). The `~` is
  * intentionally left for the remote shell to expand, mirroring
- * REMOTE_AZITOCTL_PATH in AzitoctlPath.ts: this string is rendered into a
+ * resolveAzitoctlPath in AzitoctlPath.ts: this string is rendered into a
  * command that is typed into the target pane's own interactive shell (via
  * tmux send-keys / the agent transport's PTY), never through our exec layer,
  * so tilde expansion is always safe there. Unlike the local paths below, it

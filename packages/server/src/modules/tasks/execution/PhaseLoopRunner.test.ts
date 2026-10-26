@@ -1,3 +1,5 @@
+import { buildHarnessInstallOptions } from '../../servers/agent-deploy/harnessInstallOptions';
+import { harnessLocation } from '../../servers/agent-deploy/harnessLocation';
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { asPaneHandle } from '@azito/shared';
 import { PhaseLoopRunner } from './PhaseLoopRunner';
@@ -71,6 +73,7 @@ function makeRunner(overrides: {
   sleepTaskWindows?: (...args: unknown[]) => Promise<number[]>;
   pushNotaryService?: Record<string, unknown> | null;
   transportFactory?: Record<string, unknown>;
+  harnessPrefix?: string;
 } = {}) {
   const taskRepo = {
     findById: vi.fn(() => ({
@@ -169,7 +172,7 @@ function makeRunner(overrides: {
   const pullRequestCreator = { ensureCreated: vi.fn(async () => {}), ...overrides.pullRequestCreator };
   const getWorktreeService = vi.fn(() => ({ exists: vi.fn(async () => false), getBranch: vi.fn(async () => null) }));
   const appendLog = vi.fn();
-  const transportFactory = { taskTempServer: vi.fn(async () => ({ type: 'local' as const })), hostProfileFor: vi.fn(() => null), getFileOps: vi.fn(), getTransport: vi.fn(() => ({ exec: vi.fn() })), invalidate: vi.fn(), ...overrides.transportFactory };
+  const transportFactory = { taskTempServer: vi.fn(async () => ({ type: 'local' as const })), hostProfileFor: vi.fn(() => null), getFileOps: vi.fn(() => ({ platform: 'linux', realpath: vi.fn(async () => '/home/me'), stat: vi.fn(async () => ({})) })), getTransport: vi.fn(() => ({ exec: vi.fn() })), invalidate: vi.fn(), ...overrides.transportFactory };
   const sidekickSyncService = { sync: vi.fn(async () => {}), ...overrides.sidekickSyncService };
   const httpSignalCoordinator = {
     start: vi.fn(() => ({
@@ -214,6 +217,7 @@ function makeRunner(overrides: {
     (overrides.pushNotaryService ?? null) as any,
     sleepTaskWindows,
     new TaskTempFiles('/tmp', 'linux'),
+    overrides.harnessPrefix ?? '',
   );
 
   return { runner, taskRepo, projectRepo, projectServerRepo, serverRepo, projectSecretRepo, unitRepo, unitTypeLoader, sidekickLoader, workerInput, workerWaiter, appendLog, getWorktreeService, transportFactory, sidekickSyncService, httpSignalCoordinator, pushVerifier, gitProvider, pullRequestCreator, sleepTaskWindows };
@@ -419,6 +423,49 @@ describe('PhaseLoopRunner http-signal execution mode (Issue: AZITO監視強化 P
     }));
     expect(workerWaiter.startSignalStream).not.toHaveBeenCalled();
     expect(workerInput.sendPrompt.mock.calls[0][2]).toBe('http-signal prompt');
+  });
+
+  it.each(['', 'w806rc'])("hands the worker's prompt the azitoctl.mjs the harness install put on a Windows agent (harness prefix %j)", async (harnessPrefix) => {
+    const windowsAgent = { name: 'win', type: 'agent' } as any;
+    const transportFactory = {
+      hostProfileFor: vi.fn(() => ({ platform: 'win32', arch: 'x64' })),
+      getFileOps: vi.fn(() => ({ platform: 'win32', realpath: vi.fn(async () => 'C:\\Users\\me'), stat: vi.fn(async () => ({})) })),
+      getAgentTransport: vi.fn(() => ({ fetchNodeExecPath: vi.fn(async () => 'C:\\Program Files\\nodejs\\node.exe') })),
+    };
+    const { runner, httpSignalCoordinator } = makeRunner({ harnessPrefix, transportFactory });
+    const unit = makeUnitForRun({ workerExecutionMode: 'http-signal' });
+
+    await runner.stateMachineLoop(unit, 'win', task, windowsAgent, asPaneHandle('sess:1.1'), {} as any, new AbortController().signal, 'sess:1', null, false);
+
+    // the very value the harness install is handed for this hub
+    const installOptions = buildHarnessInstallOptions(windowsAgent, { platform: 'win32', arch: 'x64' }, { webhookToken: 't', uiToken: 'u', harnessPrefix }, { azitoUrl: 'http://hub' });
+    const installed = harnessLocation('win32', 'C:\\Users\\me', installOptions.prefix).harnessDir.replace(/\\/g, '/');
+    expect(httpSignalCoordinator.start).toHaveBeenCalledWith(expect.objectContaining({
+      host: { os: 'windows', azitoctl: `"C:/Program Files/nodejs/node.exe" "${installed}/bin/azitoctl.mjs"` },
+    }));
+  });
+
+  it.each([
+    ['not found', async () => null, /not found or cannot be read on server "win".*Install the harness again from Setup/],
+    ['a failed query', async () => { throw new Error('stat gave no usable output'); }, /Could not check whether this hub's harness is installed on server "win".*stat gave no usable output/],
+  ])('rejects with the reason, before any output stream or prompt, when the hub harness is %s on the server (#523)', async (_name, stat, reason) => {
+    const windowsAgent = { name: 'win', type: 'agent' } as any;
+    const transportFactory = {
+      hostProfileFor: vi.fn(() => ({ platform: 'win32', arch: 'x64' })),
+      getFileOps: vi.fn(() => ({ platform: 'win32', realpath: vi.fn(async () => 'C:\\Users\\me'), stat })),
+      getAgentTransport: vi.fn(() => ({ fetchNodeExecPath: vi.fn(async () => 'C:\\Program Files\\nodejs\\node.exe') })),
+    };
+    const { runner, workerInput, workerWaiter, httpSignalCoordinator } = makeRunner({ harnessPrefix: 'w806rc', transportFactory });
+    const unit = makeUnitForRun({ workerExecutionMode: 'http-signal' });
+
+    await expect(
+      runner.stateMachineLoop(unit, 'win', task, windowsAgent, asPaneHandle('sess:1.1'), {} as any, new AbortController().signal, 'sess:1', null, false),
+    ).rejects.toThrow(reason);
+
+    expect(workerWaiter.startPaneStream).not.toHaveBeenCalled();
+    expect(workerWaiter.startSignalStream).not.toHaveBeenCalled();
+    expect(httpSignalCoordinator.start).not.toHaveBeenCalled();
+    expect(workerInput.sendPrompt).not.toHaveBeenCalled();
   });
 
   it('advances to the next phase on an explicit azitoctl completion even when the output payload/file is empty', async () => {

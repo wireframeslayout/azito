@@ -91,6 +91,13 @@ describe.skipIf(process.platform === 'win32')('ShellFileOps against a real shell
       expect((await ops.stat(dir))?.kind).toBe('directory');
     });
 
+    it('is a FAILED error, not null, when the file is there but stat gives no usable output', async () => {
+      writeFileSync(path.join(dir, 'f'), 'abc');
+      const broken = new ShellFileOps({ exec: async (command: string) => (command.includes('stat ') ? { stdout: '', stderr: '', code: 1 } : sh.exec(command)) } as unknown as ConstructorParameters<typeof ShellFileOps>[0]);
+      expect(await codeOf(broken.stat(path.join(dir, 'f')))).toBe('FAILED');
+      expect(await broken.stat(path.join(dir, 'missing'))).toBeNull();
+    });
+
     it('is null for a missing path, and a link is followed unless asked not to', async () => {
       expect(await ops.stat(path.join(dir, 'missing'))).toBeNull();
       writeFileSync(path.join(dir, 't'), 'abc');

@@ -195,7 +195,7 @@ export interface ServersRouteOptions {
   windowRepo: IWindowRepository;
   webhookToken: string;
   uiToken: string;
-  harnessPrefix?: string;
+  harnessPrefix: string;
   harnessHash: string;
   harnessUpdater: HarnessUpdater;
   // Issue #29 review (6th pass), Important finding 3: serializes the

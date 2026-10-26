@@ -118,6 +118,8 @@ export class PhaseLoopRunner {
     private pushNotaryService: PushNotaryService | null,
     private sleepTaskWindows: (taskId: number) => Promise<number[]>,
     private taskTempFiles: TaskTempFiles,
+    // The hub's harness prefix ('' = none): names the harness folder the worker's azitoctl path points into (same value the install used).
+    private harnessPrefix: string,
     private activitySource: { isKeyWorking(serverName: string, target: string): boolean } | null = null,
   ) {}
 
@@ -479,7 +481,7 @@ export class PhaseLoopRunner {
       const nonce = randomBytes(16).toString('hex');
 
       const effectiveWorkerType = unit.workerType ?? 'generic';
-      const envelopeHost = await resolveEnvelopeHost(this.transportFactory, server);
+      const envelopeHost = await resolveEnvelopeHost(this.transportFactory, server, this.harnessPrefix);
       let prompt: string;
       let rulesFilePath: string | null = null;
       if (resolvedSubagentConfig?.enabled === true && phaseDef.subagentRole) {

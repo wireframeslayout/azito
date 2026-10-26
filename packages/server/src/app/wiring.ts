@@ -259,7 +259,7 @@ export interface Wiring extends SharedInfra, Repositories, PushNotificationModul
   fetchDistributionService: FetchDistributionService;
   /** Issue #28 Phase A: resolved once here (the composition root boundary) via shared/auth/scopedAuthFlag.ts, then threaded through — see that file's doc comment for why buildServer.ts reads this instead of process.env directly. */
   scopedAuthEnabled: boolean;
-  harnessPrefix?: string;
+  harnessPrefix: string;
   /** GIT_ASKPASS launcher and the empty hooks directory for the git commands that run on the hub's own machine. */
   hubGitSupport: HubGitSupport;
 }
@@ -544,7 +544,7 @@ function buildExecuteTaskUseCase(
   dataPaths: DataPaths,
   hubGitSupport: HubGitSupport,
   hubGitIdentity: GitIdentity | null,
-  harnessPrefix?: string,
+  harnessPrefix: string,
 ): ExecuteTaskUseCase {
 
   const sftpService = new SftpService(infra.sshClient);
@@ -751,7 +751,8 @@ export async function buildWiring(db: SqliteDatabase, publicUrl: string, localUr
   // SupervisorRegistry — constructed inside it — can be given the same
   // resolved flag instead of re-reading process.env itself.
   const scopedAuthEnabled = resolveScopedAuthEnabled();
-  const harnessPrefix = process.env.AZITO_HARNESS_PREFIX || undefined;
+  // '' = no prefix. Resolved once here and handed to everything that names the harness folder (install, prompt azitoctl path).
+  const harnessPrefix = process.env.AZITO_HARNESS_PREFIX ?? '';
   const infra = buildSharedInfra(agentBundler, publicUrl, localUrl, dataPaths, uiToken, webhookToken, scopedAuthEnabled, misaoRuntime, hostEnv, secretFileGuard, hubHost, resolveWindowsAgentOptions(process.env), (name) => repos.serverRepo.findByName(name), db, fingerprintStore, repos.auditLogService);
   const pushNotification = buildPushNotificationModule(repos.pushSubRepo);
   const agentHostRecorder = new AgentHostRecorder(repos.serverRepo, infra.transportFactory, Date.now, console);

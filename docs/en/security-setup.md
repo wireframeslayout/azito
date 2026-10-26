@@ -50,7 +50,7 @@ Both are git-ignored. Templates live in `.env.example`.
 | `AZITO_PUBLIC_URL` | No | none | URL that supervisors and remote agents use to reach the hub. Set to `https://<MagicDNS>` when using `tailscale serve` |
 | `AZITO_MUX_RUNTIME` | No | `system` | Server's tmux runtime (`system` / `managed`) |
 | `AZITO_UNIT_TYPES_DIR` | No | `data/unit-types` | User-layer UnitType TOML definition directory (the built-in layer `harness/unit-types/` is always loaded) |
-| `AZITO_HARNESS_PREFIX` | No | none | Identifier appended to the remote harness path when installed via the UI (`~/.azito/harness-<prefix>`) |
+| `AZITO_HARNESS_PREFIX` | No | none | Identifier appended to the remote harness path when installed via the UI (`~/.azito/harness-<prefix>`). With a prefix, install the harness with that prefix on every POSIX agent / SSH server and every Windows agent; a host that has only the unprefixed `~/.azito/harness` stops the task with an error asking you to install the harness again from Setup |
 | `AZITO_RELEASE_REPO` | No | `wireframeslayout/azito` | GitHub repository used for update checks and downloads |
 | `AZITO_GITHUB_TOKEN` | No | none | GitHub PAT to avoid API rate limits during update checks |
 | `PORT` | No | `3001` | Server port |

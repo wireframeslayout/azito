@@ -189,7 +189,7 @@ export class ExecuteTaskUseCase {
     // windows is forbidden). Wired as an adapter in wiring.ts.
     private primaryWindowWaker: IPrimaryWindowWaker,
     private taskTempFiles: TaskTempFiles,
-    private harnessPrefix?: string,
+    private harnessPrefix: string,
     private hubGitIdentity: GitIdentity | null = null,
   ) {
     this.gitInfoCollector = new GitInfoCollector(this.transportFactory);
@@ -243,6 +243,7 @@ export class ExecuteTaskUseCase {
       this.pushNotaryService,
       this.sleepTaskWindows,
       this.taskTempFiles,
+      this.harnessPrefix,
     );
   }
 
@@ -1952,6 +1953,9 @@ export class ExecuteTaskUseCase {
       const outputFilePath = this.taskTempFiles.outputFile(tempServer, taskId, nonce);
       const httpSignalMode = usesHttpSignalPath(unit.workerExecutionMode);
 
+      // Resolved (and the harness checked) BEFORE any stream is opened: a throw here has nothing to release.
+      const envelopeHost = await resolveEnvelopeHost(this.transportFactory, server, this.harnessPrefix);
+
       // Start pipe-pane BEFORE sending to capture all output — this capture runs
       // in BOTH execution modes (see PhaseLoopRunner.stateMachineLoop's identical note).
       const followUpStream = this.workerWaiter.startPaneStream(server, tempServer, handle, taskId, unitId);
@@ -1999,11 +2003,18 @@ export class ExecuteTaskUseCase {
       // follow-up has no fixed TaskPhase of its own; both branches cover this
       // via `phase: null`/`'follow_up'` (see executionEnvelope.ts).
       const runtime = this.runtimeRegistry.get(unit.workerRuntime);
-      const envelopeResult = runtime.buildFollowUpEnvelope({
-        nonce, taskId, unitId, workerExecutionMode: unit.workerExecutionMode,
-        server, host: await resolveEnvelopeHost(this.transportFactory, server), tempServer, handle, supervisorTarget: windowTarget, prompt: expandedComment, outputFilePath,
-        doneMarker, questionsMarker, testFailedMarker,
-      });
+      let envelopeResult: ReturnType<typeof runtime.buildFollowUpEnvelope>;
+      try {
+        envelopeResult = runtime.buildFollowUpEnvelope({
+          nonce, taskId, unitId, workerExecutionMode: unit.workerExecutionMode,
+          server, host: envelopeHost, tempServer, handle, supervisorTarget: windowTarget, prompt: expandedComment, outputFilePath,
+          doneMarker, questionsMarker, testFailedMarker,
+        });
+      } catch (err) {
+        // Nothing owns the output stream yet (the waiter takes it later): release it before the failure propagates.
+        followUpStream.stop();
+        throw err;
+      }
       const followUpSignalStream = envelopeResult.signalStream;
       const commentWithMarkers = envelopeResult.markerizedPrompt;
       let httpSignalTurn = envelopeResult.httpSignalTurn;

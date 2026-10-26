@@ -50,7 +50,7 @@
 | `AZITO_PUBLIC_URL` | 任意 | なし | supervisor・リモート Agent がハブへ到達するための URL。`tailscale serve` 利用時は `https://<MagicDNS>` を設定 |
 | `AZITO_MUX_RUNTIME` | 任意 | `system` | サーバーの tmux 実行系統（`system` / `managed`） |
 | `AZITO_UNIT_TYPES_DIR` | 任意 | `data/unit-types` | ユーザー層 UnitType TOML 定義の読み込みディレクトリ（ビルトイン層 `harness/unit-types/` は常に読まれる） |
-| `AZITO_HARNESS_PREFIX` | 任意 | なし | UI 経由の harness リモート配置で `~/.azito/harness-<prefix>` のように識別子として付加される |
+| `AZITO_HARNESS_PREFIX` | 任意 | なし | UI 経由の harness リモート配置で `~/.azito/harness-<prefix>` のように識別子として付加される。プレフィックス付きのハブでは、POSIX の agent / SSH と Windows の agent のそれぞれに、そのプレフィックスでハーネスを導入する。無印の `~/.azito/harness` だけのホストは、Setup からの再導入を求めるエラーでタスクが止まる |
 | `AZITO_RELEASE_REPO` | 任意 | `wireframeslayout/azito` | 更新チェック・ダウンロードに使う GitHub リポジトリ |
 | `AZITO_GITHUB_TOKEN` | 任意 | なし | GitHub API レート制限を回避するための PAT（更新チェック時に使用） |
 | `PORT` | 任意 | `3001` | サーバーのポート |

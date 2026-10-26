@@ -50,6 +50,7 @@ async function build(stored: ServerConfig, profile: HostProfile | null, onRun: (
     projectServerRepo: { find: () => ({ workingDirectory: '/work' }) } as unknown as ServersRouteOptions['projectServerRepo'],
     webhookToken: 'wh',
     uiToken: 'ui',
+    harnessPrefix: '',
     harnessHash: 'testhash',
     harnessUpdater: { getLastResult: vi.fn() } as unknown as ServersRouteOptions['harnessUpdater'],
     serverIsolationMutex: new KeyedMutex(),
