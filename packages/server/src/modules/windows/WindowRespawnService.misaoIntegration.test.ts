@@ -66,7 +66,7 @@ describe.skipIf(!fs.existsSync(MISAO_CLI))('WindowRespawnService against a real 
 
     const sdk = await import('@misao/sdk');
     connection = new MisaoConnection({ socketPath, sdk, log: { warn } });
-    driver = new MisaoMuxClient(connection, { paneShell: hubPaneShell('/bin/bash', { platform: 'linux', arch: 'x64' }), onChange: vi.fn(), log: { warn }, hubEnv: { publicUrl: 'http://hub.example', localUrl: 'http://127.0.0.1:3001', webhookToken: 'wh-token' }, connectAttachClient: () => connectDedicatedMisaoClient(sdk, { socketPath }) });
+    driver = new MisaoMuxClient(connection, { paneShell: hubPaneShell('/bin/bash', { platform: 'linux', arch: 'x64' }), onChange: vi.fn(), log: { warn }, hubEnv: { publicUrl: 'http://hub.example', localUrl: 'http://127.0.0.1:3001', webhookToken: 'wh-token', harnessPrefix: '' }, connectAttachClient: () => connectDedicatedMisaoClient(sdk, { socketPath }) });
     await connection.start();
     const registry = new MuxDriverRegistry();
     registry.register('misao', driver, () => connection.availability());
@@ -111,7 +111,7 @@ describe.skipIf(!fs.existsSync(MISAO_CLI))('WindowRespawnService against a real 
       new KeyedMutex(),
       true,
       () => ({}),
-      undefined,
+      '',
     );
   });
 

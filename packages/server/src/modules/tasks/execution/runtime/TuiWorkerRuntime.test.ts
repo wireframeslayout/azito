@@ -17,7 +17,7 @@ function makeRuntime(capturePaneResponses: string[]) {
   const workerWaiter = { startSignalStream: vi.fn() };
   const httpSignalCoordinator = { start: vi.fn() };
   const supervisorRegistry = { issueLaunch: vi.fn(() => undefined) };
-  const runtime = new TuiWorkerRuntime(workerInput as any, workerWaiter as any, httpSignalCoordinator as any, supervisorRegistry as any);
+  const runtime = new TuiWorkerRuntime(workerInput as any, workerWaiter as any, httpSignalCoordinator as any, supervisorRegistry as any, '');
   return { runtime, tmux };
 }
 

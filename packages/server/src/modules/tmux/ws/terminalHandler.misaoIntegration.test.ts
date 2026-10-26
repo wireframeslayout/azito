@@ -87,7 +87,7 @@ describe.skipIf(!fs.existsSync(MISAO_CLI))('browser terminal against a real misa
 
     const sdk = await import('@misao/sdk');
     registry = new MuxDriverRegistry();
-    const handle = registerMisaoDriver(registry, { sdk, socketPath, paneShell: hubPaneShell('/bin/bash', { platform: 'linux', arch: 'x64' }) }, () => {}, { warn: () => {} }, { publicUrl: 'http://hub.example', localUrl: 'http://127.0.0.1:3001', webhookToken: 'wh' }, NO_AGENT_MISAO);
+    const handle = registerMisaoDriver(registry, { sdk, socketPath, paneShell: hubPaneShell('/bin/bash', { platform: 'linux', arch: 'x64' }) }, () => {}, { warn: () => {} }, { publicUrl: 'http://hub.example', localUrl: 'http://127.0.0.1:3001', webhookToken: 'wh', harnessPrefix: '' }, NO_AGENT_MISAO);
     connection = handle.connection;
     driver = handle.driver;
     await connection.start();

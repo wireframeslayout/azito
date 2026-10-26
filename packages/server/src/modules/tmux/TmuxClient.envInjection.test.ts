@@ -21,7 +21,7 @@ function makeClient(
   const factory = {
     getTransport: () => ({ execMux }),
   } as unknown as TransportFactory;
-  return new TmuxClient(factory, PUBLIC_URL, uiToken, LOCAL_URL, webhookToken);
+  return new TmuxClient(factory, PUBLIC_URL, uiToken, LOCAL_URL, webhookToken, '');
 }
 
 function envValue(args: string[], key: string): string | undefined {
@@ -214,13 +214,14 @@ describe('uiTokenEnvForServer (shared/auth/uiTokenEnv)', () => {
     expect(envValue(args, 'AZITO_AGENT_TOKEN')).toBe('');
   });
 
-  it('lays the isolation mask over a tmux split on an isolated server only', async () => {
+  it('lays the isolation mask over a tmux split on an isolated server, and gives a non-isolated one the hub env explicitly', async () => {
     const calls: string[][] = [];
     const client = makeClient(async (args) => { calls.push(args); return { stdout: '', stderr: '', code: 0 }; });
     await client.splitPane({ ...srv, isolationIntent: true }, 's:1', 'v', { AZITO_UI_TOKEN: 'leak' });
     for (const key of ['AZITO_UI_TOKEN', 'AZITO_AGENT_TOKEN', 'AZITO_WEBHOOK_TOKEN']) expect(envValue(calls[0], key)).toBe('');
     await client.splitPane(srv, 's:1', 'v');
-    expect(calls[1]).toEqual(['split-window', '-v', '-t', 's:1']);
+    expect(envValue(calls[1], 'AZITO_URL')).toBe(LOCAL_URL);
+    expect(envValue(calls[1], 'AZITO_WEBHOOK_TOKEN')).toBe(WEBHOOK_TOKEN);
   });
   it('createWindow targets the session with a trailing colon so a window named like the session cannot capture the index', async () => {
     const calls: string[][] = [];
@@ -234,5 +235,33 @@ describe('uiTokenEnvForServer (shared/auth/uiTokenEnv)', () => {
     // `-t azito` would be resolved as a target-window and prefix-match a window
     // named `azito-rc`, making tmux try that window's index ("index 1 in use").
     expect(newWindowCall[tIdx + 1]).toBe('azito:');
+  });
+});
+
+// #528: AZITO_PREFIX is part of the env every pane gets (hubPaneEnv), so a window opened by hand (Add Window, a new session) selects
+// this hub's azitoctl[-<prefix>].env in azs just like a task window, and an inherited value is overridden even when the prefix is empty.
+describe('TmuxClient AZITO_PREFIX injection (#528)', () => {
+  function clientWithPrefix(harnessPrefix: string, calls: string[][]): TmuxClient {
+    const execMux = vi.fn(async (req: { kind: string; args: string[] }) => { calls.push(req.args); return { stdout: '', stderr: '', code: 0 }; });
+    return new TmuxClient({ getTransport: () => ({ execMux }) } as unknown as TransportFactory, PUBLIC_URL, UI_TOKEN, LOCAL_URL, WEBHOOK_TOKEN, harnessPrefix);
+  }
+
+  it.each([
+    ['createWindow (Add Window)', (c: TmuxClient, s: ServerConfig) => c.createWindow(s, 'sess', 'win')],
+    ['createSession', (c: TmuxClient, s: ServerConfig) => c.createSession(s, 'sess', { windowName: 'win' })],
+    ['splitPane (a pane added by hand)', (c: TmuxClient, s: ServerConfig) => c.splitPane(s, 'sess:1', 'v')],
+    ['splitPaneByHandle (secondary pane, respawn)', (c: TmuxClient, s: ServerConfig) => c.splitPaneByHandle(s, '%1' as never, 'h')],
+  ])('%s gets the hub harness prefix, on a local, a remote and an isolated server', async (_name, open) => {
+    for (const server of [srv, remoteSrv, { ...srv, isolationIntent: true } as ServerConfig]) {
+      const calls: string[][] = [];
+      await open(clientWithPrefix('dev', calls), server);
+      expect(envValue(calls[0], 'AZITO_PREFIX')).toBe('dev');
+    }
+  });
+
+  it('passes an empty value, not an absent key, when the hub has no prefix', async () => {
+    const calls: string[][] = [];
+    await clientWithPrefix('', calls).createWindow(srv, 'sess', 'win');
+    expect(envValue(calls[0], 'AZITO_PREFIX')).toBe('');
   });
 });

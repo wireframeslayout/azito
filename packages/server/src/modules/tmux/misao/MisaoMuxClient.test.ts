@@ -14,9 +14,9 @@ import type { IServerRepository } from '../../servers/Server';
 import { hubPaneShell } from './paneShell';
 
 const server = { name: 'local', type: 'local', defaultMux: 'misao' as const, muxRuntime: 'system' } as ServerConfig;
-const HUB_ENV = { publicUrl: 'http://hub.example', localUrl: 'http://127.0.0.1:3001', webhookToken: 'wh-token' };
+const HUB_ENV = { publicUrl: 'http://hub.example', localUrl: 'http://127.0.0.1:3001', webhookToken: 'wh-token', harnessPrefix: 'dev' };
 /** What every misao pane gets from hubPaneEnv on a non-isolated local server. */
-const HUB_PANE_ENV = { AZITO_URL: 'http://127.0.0.1:3001', AZITO_WEBHOOK_TOKEN: 'wh-token' };
+const HUB_PANE_ENV = { AZITO_URL: 'http://127.0.0.1:3001', AZITO_WEBHOOK_TOKEN: 'wh-token', AZITO_PREFIX: 'dev' };
 
 class FakeConnectionError extends Error {}
 
@@ -467,7 +467,7 @@ describe('MisaoMuxClient writes', () => {
     });
 
     it('is not a tmux operation: a window is never silently opened bare', async () => {
-      const tmux = new TmuxClient({} as TransportFactory, HUB_ENV.publicUrl, 'ui-secret', HUB_ENV.localUrl, HUB_ENV.webhookToken);
+      const tmux = new TmuxClient({} as TransportFactory, HUB_ENV.publicUrl, 'ui-secret', HUB_ENV.localUrl, HUB_ENV.webhookToken, HUB_ENV.harnessPrefix);
       await expect(tmux.openWorkspace(server, 'proj', { program })).rejects.toBeInstanceOf(MuxOperationUnsupportedError);
       await expect(tmux.openWindow(server, 'proj', 'win', { program })).rejects.toBeInstanceOf(MuxOperationUnsupportedError);
     });
@@ -620,13 +620,13 @@ describe('MisaoMuxClient pane env (hub env a misao pane does not inherit)', () =
   it('lets the caller env override the hub env', async () => {
     const { daemon, client } = setup();
     await client.openWorkspace(server, 'ws', { extraEnv: { AZITO_WEBHOOK_TOKEN: 'override' } });
-    expect(daemon.callsTo('pane.open')[0].ephemeralEnv).toEqual({ AZITO_URL: HUB_PANE_ENV.AZITO_URL, AZITO_WEBHOOK_TOKEN: 'override' });
+    expect(daemon.callsTo('pane.open')[0].ephemeralEnv).toEqual({ AZITO_URL: HUB_PANE_ENV.AZITO_URL, AZITO_PREFIX: HUB_PANE_ENV.AZITO_PREFIX, AZITO_WEBHOOK_TOKEN: 'override' });
   });
 
   it('does not hand the webhook token to an isolated server, and keeps the mask env the caller passes', async () => {
     const { daemon, client } = setup();
     await client.openWorkspace(isolated, 'ws', { extraEnv: { AZITO_UI_TOKEN: '', AZITO_AGENT_TOKEN: '' } });
-    expect(daemon.callsTo('pane.open')[0].ephemeralEnv).toEqual({ AZITO_URL: HUB_PANE_ENV.AZITO_URL, AZITO_UI_TOKEN: '', AZITO_AGENT_TOKEN: '', AZITO_WEBHOOK_TOKEN: '' });
+    expect(daemon.callsTo('pane.open')[0].ephemeralEnv).toEqual({ AZITO_URL: HUB_PANE_ENV.AZITO_URL, AZITO_PREFIX: HUB_PANE_ENV.AZITO_PREFIX, AZITO_UI_TOKEN: '', AZITO_AGENT_TOKEN: '', AZITO_WEBHOOK_TOKEN: '' });
   });
 
   it('keeps the hub webhook token on a non-isolated server when the caller passes the scoped-auth mask (UI and agent token only)', async () => {
@@ -640,7 +640,7 @@ describe('MisaoMuxClient pane env (hub env a misao pane does not inherit)', () =
     const w = daemon.addWindow('proj', 'main');
     const source = daemon.addPane(w, {});
     const leak = { AZITO_UI_TOKEN: 'ui', AZITO_AGENT_TOKEN: 'agent', AZITO_WEBHOOK_TOKEN: 'wh' };
-    const blank = { AZITO_URL: HUB_PANE_ENV.AZITO_URL, AZITO_UI_TOKEN: '', AZITO_AGENT_TOKEN: '', AZITO_WEBHOOK_TOKEN: '' };
+    const blank = { AZITO_URL: HUB_PANE_ENV.AZITO_URL, AZITO_PREFIX: HUB_PANE_ENV.AZITO_PREFIX, AZITO_UI_TOKEN: '', AZITO_AGENT_TOKEN: '', AZITO_WEBHOOK_TOKEN: '' };
     await client.openWorkspace(isolated, 'ws', { extraEnv: leak });
     await client.openWindow(isolated, 'proj', 'x', { extraEnv: leak });
     await client.openPaneInWindow(isolated, refOf('proj', w));
@@ -658,7 +658,7 @@ describe('MisaoMuxClient pane env (hub env a misao pane does not inherit)', () =
     const extraEnv = { AZITO_UI_TOKEN: srv.isolationIntent ? '' : 'ui-secret' };
     const tmuxArgs: string[][] = [];
     const factory = { getTransport: () => ({ execMux: async (req: { args: string[] }) => { tmuxArgs.push(req.args); return { stdout: '', stderr: '', code: 0 }; } }) } as unknown as TransportFactory;
-    await new TmuxClient(factory, HUB_ENV.publicUrl, 'ui-secret', HUB_ENV.localUrl, HUB_ENV.webhookToken).createWindow(srv, 'sess', 'win', { extraEnv });
+    await new TmuxClient(factory, HUB_ENV.publicUrl, 'ui-secret', HUB_ENV.localUrl, HUB_ENV.webhookToken, HUB_ENV.harnessPrefix).createWindow(srv, 'sess', 'win', { extraEnv });
     const tmuxEnv: Record<string, string> = {};
     const newWindow = tmuxArgs.find((a) => a[0] === 'new-window')!;
     newWindow.forEach((arg, i) => { if (arg === '-e') { const [k, ...v] = newWindow[i + 1].split('='); tmuxEnv[k] = v.join('='); } });

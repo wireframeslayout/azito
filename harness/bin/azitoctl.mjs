@@ -98,23 +98,33 @@ export function validateCli({ command, options, positional }) {
   if (command === 'fail' && !options.reason) throw usageError('fail needs --reason');
 }
 
-/** Hub URL and webhook token: the environment, else the env file the prefix selects (all or nothing is not required: the token is optional). */
+/**
+ * Hub URL and webhook token: the environment when it holds both; otherwise the whole set from the env file the prefix selects
+ * (azitoctl[-<prefix>].env, the same name as envFiles.mjs azitoctlEnvName and the bash azitoctl, and the same rule as the hooks: the
+ * file's token is never sent to a URL that is not the file's). Only when that file does not exist is the environment's URL used as is;
+ * a prefix whose file is missing never falls back to the unprefixed file (another hub's). The token is optional.
+ */
 export function resolveConfig({ env, homeDir, readFile }) {
   let url = env.AZITO_URL ?? '';
   let token = env.AZITO_WEBHOOK_TOKEN ?? '';
+  const prefix = env.AZITO_PREFIX ?? '';
+  const envFile = path.join(homeDir, '.azito', `azitoctl${prefix ? `-${prefix}` : ''}.env`);
   if (!url || !token) {
-    const prefix = env.AZITO_PREFIX ?? '';
     let file = {};
+    let fileExists = false;
     try {
-      file = parseEnvFile(readFile(path.join(homeDir, '.azito', `azitoctl${prefix ? `-${prefix}` : ''}.env`)));
+      file = parseEnvFile(readFile(envFile));
+      fileExists = true;
     } catch (err) {
       if (err?.code !== 'ENOENT') throw new CliError(`azitoctl: cannot read the env file: ${err.message}`, 3);
+      if (prefix && !url) throw new CliError(`azitoctl: AZITO_PREFIX=${prefix} but ${envFile} does not exist (not falling back to the unprefixed azitoctl.env of another hub)`, 3);
     }
-    // Like the bash version, which sources the file: what it holds wins over a half-set environment.
-    url = file.AZITO_URL ?? url;
-    token = file.AZITO_WEBHOOK_TOKEN ?? token;
+    if (fileExists) {
+      url = file.AZITO_URL ?? '';
+      token = file.AZITO_WEBHOOK_TOKEN ?? '';
+    }
   }
-  if (!url) throw new CliError(`azitoctl: AZITO_URL not set (env or ~/.azito/azitoctl${env.AZITO_PREFIX ? `-${env.AZITO_PREFIX}` : ''}.env)`, 3);
+  if (!url) throw new CliError(`azitoctl: AZITO_URL not set (env or ${envFile})`, 3);
   return { url, token };
 }
 

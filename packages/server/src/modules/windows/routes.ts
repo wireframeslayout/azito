@@ -52,7 +52,7 @@ export interface WindowsRouteOptions {
   windowActivityStatusService: WindowActivityStatusService;
   notificationBus?: NotificationBus;
   resourceGuard?: ResourceGuard;
-  harnessPrefix?: string;
+  harnessPrefix: string;
   /** Drops the cached GET /sessions list of a server, so a client re-reading it after a respawn sees the new window. */
   invalidateSessionCache?: (serverName: string) => void;
   destroyPrimaryTaskWindow?: KillWindowDeps['destroyPrimaryTaskWindow'];

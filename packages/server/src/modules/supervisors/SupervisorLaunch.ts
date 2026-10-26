@@ -24,9 +24,9 @@ export interface WrapWithSupervisorOptions {
    */
   launchId?: string;
   bootstrapToken?: string;
-  /** When the hub runs with `--prefix`, pass it so the supervisor resolves
-   *  `~/.azito/azitoctl-<prefix>.env` instead of the default `azitoctl.env`. */
-  harnessPrefix?: string;
+  /** The hub harness prefix (empty = none). Always passed, empty included, so the supervisor resolves
+   *  `~/.azito/azitoctl-<prefix>.env` of this hub and a value left in the pane session cannot select another hub's file. */
+  harnessPrefix: string;
 }
 
 /**
@@ -41,11 +41,8 @@ export interface WrapWithSupervisorOptions {
 export function wrapWithSupervisor(cmd: string, opts: WrapWithSupervisorOptions): string {
   const { dialect } = opts;
   const supervisorCmd = resolveSupervisorCommand(opts.server, dialect);
-  const env: Record<string, string> = {};
-
-  if (opts.harnessPrefix) {
-    env.AZITO_PREFIX = opts.harnessPrefix;
-  }
+  // Passed even when empty: an empty value overrides an AZITO_PREFIX left in the pane's session/shell.
+  const env: Record<string, string> = { AZITO_PREFIX: opts.harnessPrefix };
 
   if (opts.launchId !== undefined && opts.bootstrapToken !== undefined) {
     // Launch binding is passed via env vars prefixed onto the command line

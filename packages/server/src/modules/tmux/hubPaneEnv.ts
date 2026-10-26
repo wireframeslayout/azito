@@ -8,6 +8,11 @@ export interface HubPaneEnvConfig {
   /** Loopback URL of this hub (`http://127.0.0.1:<port>`). */
   localUrl: string;
   webhookToken: string;
+  /**
+   * The hub's harness prefix ('' = none), resolved once at the boundary (app/wiring.ts). Every pane gets it as AZITO_PREFIX so that
+   * harness/bin/azitoctl and azs read azitoctl[-<prefix>].env of THIS hub, not the unprefixed one of another hub on the same host (#528).
+   */
+  harnessPrefix: string;
 }
 
 /**
@@ -31,7 +36,8 @@ export function hubUrlForServer(config: HubPaneEnvConfig, server: Pick<ServerCon
  * A misao pane does not get the hub's env (only what is passed here), but it does inherit the misao daemon's own env.
  */
 export function hubPaneEnv(config: HubPaneEnvConfig, server: Pick<ServerConfig, 'type' | 'isolationIntent'>): Record<string, string> {
-  const env: Record<string, string> = { AZITO_URL: hubUrlForServer(config, server) };
+  // AZITO_PREFIX is passed even when empty: an empty value overrides one inherited from the tmux session / the misao daemon.
+  const env: Record<string, string> = { AZITO_URL: hubUrlForServer(config, server), AZITO_PREFIX: config.harnessPrefix };
   if (!server.isolationIntent) env.AZITO_WEBHOOK_TOKEN = config.webhookToken;
   return env;
 }

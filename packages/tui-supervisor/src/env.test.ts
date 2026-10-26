@@ -1,6 +1,7 @@
 import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
+import { pathToFileURL } from 'node:url';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { parseEnvFile, resolveEnvFilePath, resolveHubEnv, resolveMuxPaneRef } from './env';
 
@@ -30,10 +31,21 @@ describe('env', () => {
     expect(result.ok && result.env.token).toBe('a b$c"d');
   });
 
-  it('prefers process env over the file', () => {
+  it('prefers a complete process env over the file', () => {
     fs.writeFileSync(file, 'AZITO_URL=http://from-file\nAZITO_WEBHOOK_TOKEN=file-token\n');
-    const result = resolveHubEnv({ AZITO_URL: 'http://from-env' }, file);
-    expect(result).toEqual({ ok: true, env: { url: 'http://from-env', token: 'file-token' } });
+    const result = resolveHubEnv({ AZITO_URL: 'http://from-env', AZITO_WEBHOOK_TOKEN: 'env-token' }, file);
+    expect(result).toEqual({ ok: true, env: { url: 'http://from-env', token: 'env-token' } });
+  });
+
+  it('takes the pair from the file when the env has only one of them (the file token never goes to the env URL)', () => {
+    fs.writeFileSync(file, 'AZITO_URL=http://from-file\nAZITO_WEBHOOK_TOKEN=file-token\n');
+    expect(resolveHubEnv({ AZITO_URL: 'http://from-env' }, file)).toEqual({ ok: true, env: { url: 'http://from-file', token: 'file-token' } });
+    expect(resolveHubEnv({ AZITO_WEBHOOK_TOKEN: 'env-token' }, file)).toEqual({ ok: true, env: { url: 'http://from-file', token: 'file-token' } });
+  });
+
+  it('does not complete a file that lacks a value with the env\'s (no mixing)', () => {
+    fs.writeFileSync(file, 'AZITO_URL=http://from-file\n');
+    expect(resolveHubEnv({ AZITO_WEBHOOK_TOKEN: 'env-token' }, file)).toEqual({ ok: false, missing: ['AZITO_WEBHOOK_TOKEN'] });
   });
 
   it('reports both missing when the file is missing and env is empty', () => {
@@ -80,19 +92,31 @@ describe('resolveEnvFilePath', () => {
     expect(p).toBe(path.join(os.homedir(), '.azito', 'azitoctl-staging-2.env'));
   });
 
-  it('ignores path-traversal prefix (../x)', () => {
+  it('selects no file for a path-traversal prefix (../x) (never the unprefixed one)', () => {
     const p = resolveEnvFilePath({ AZITO_PREFIX: '../x' });
-    expect(p).toBe(path.join(os.homedir(), '.azito', 'azitoctl.env'));
+    expect(p).toBeNull();
   });
 
-  it('ignores prefix with uppercase letters', () => {
-    const p = resolveEnvFilePath({ AZITO_PREFIX: 'Dev' });
-    expect(p).toBe(path.join(os.homedir(), '.azito', 'azitoctl.env'));
+  it.each(['prod.eu', 'Dev', 'dev_1'])('accepts %j, a prefix setup.sh / setup.mjs install', (prefix) => {
+    expect(resolveEnvFilePath({ AZITO_PREFIX: prefix })).toBe(path.join(os.homedir(), '.azito', `azitoctl-${prefix}.env`));
   });
 
-  it('ignores prefix with spaces', () => {
+  it.each(['a/b', '.x', 'a..b', '-x'])('selects no file for %j (never the unprefixed one)', (prefix) => {
+    expect(resolveEnvFilePath({ AZITO_PREFIX: prefix })).toBeNull();
+  });
+
+  it('is the same rule as setup.mjs (PREFIX_PATTERN and its ".." check) and as the hub', async () => {
+    const file = path.resolve(__dirname, '..', '..', '..', 'harness', 'lib', 'claudeSettings.mjs');
+    const { PREFIX_PATTERN } = (await import(pathToFileURL(file).href)) as { PREFIX_PATTERN: RegExp };
+    for (const value of ['dev', 'prod.eu', 'Dev', 'dev_1', '../x', 'a/b', '.x', 'a..b', 'a b', '-x', '_x']) {
+      const accepted = resolveEnvFilePath({ AZITO_PREFIX: value }) !== null;
+      expect(accepted, value).toBe(PREFIX_PATTERN.test(value) && !value.includes('..'));
+    }
+  });
+
+  it('selects no file for a prefix with spaces (never the unprefixed one)', () => {
     const p = resolveEnvFilePath({ AZITO_PREFIX: 'a b' });
-    expect(p).toBe(path.join(os.homedir(), '.azito', 'azitoctl.env'));
+    expect(p).toBeNull();
   });
 
   it('ignores empty string prefix', () => {
@@ -119,18 +143,19 @@ describe('resolveHubEnv with AZITO_PREFIX', () => {
     expect(result).toEqual({ ok: true, env: { url: 'http://dev-hub', token: 'dev-token' } });
   });
 
-  it('falls back to azitoctl.env when AZITO_PREFIX is invalid', () => {
-    const defaultFile = path.join(dir, 'azitoctl.env');
-    fs.writeFileSync(defaultFile, 'AZITO_URL=http://default-hub\nAZITO_WEBHOOK_TOKEN=default-token\n');
-    const result = resolveHubEnv({ AZITO_PREFIX: '../x' }, defaultFile);
-    expect(result).toEqual({ ok: true, env: { url: 'http://default-hub', token: 'default-token' } });
+  it('does not fall back to azitoctl.env when AZITO_PREFIX is invalid', () => {
+    // resolveEnvFilePath yields no file for it, whatever azitoctl.env holds
+    const result = resolveHubEnv({ AZITO_PREFIX: '../x' });
+    expect(result).toEqual({ ok: false, missing: ['AZITO_URL', 'AZITO_WEBHOOK_TOKEN'] });
   });
 
-  it('process env AZITO_URL still takes priority over env file with prefix', () => {
+  it('a complete process env takes priority over the env file with prefix; a partial one does not mix with it', () => {
     const prefixFile = path.join(dir, 'azitoctl-dev.env');
     fs.writeFileSync(prefixFile, 'AZITO_URL=http://file-url\nAZITO_WEBHOOK_TOKEN=file-token\n');
-    const result = resolveHubEnv({ AZITO_PREFIX: 'dev', AZITO_URL: 'http://env-url' }, prefixFile);
-    expect(result).toEqual({ ok: true, env: { url: 'http://env-url', token: 'file-token' } });
+    expect(resolveHubEnv({ AZITO_PREFIX: 'dev', AZITO_URL: 'http://env-url', AZITO_WEBHOOK_TOKEN: 'env-token' }, prefixFile))
+      .toEqual({ ok: true, env: { url: 'http://env-url', token: 'env-token' } });
+    expect(resolveHubEnv({ AZITO_PREFIX: 'dev', AZITO_URL: 'http://env-url' }, prefixFile))
+      .toEqual({ ok: true, env: { url: 'http://file-url', token: 'file-token' } });
   });
 });
 

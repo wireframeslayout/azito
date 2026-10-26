@@ -41,6 +41,7 @@ describe('POST /api/windows/:id/panes', () => {
     mutex.withLock = (async (key: string, fn: () => Promise<unknown>) => withLock(key, async () => { lockHeld = true; try { return await fn(); } finally { lockHeld = false; } })) as typeof mutex.withLock;
     app = Fastify();
     await app.register(windowsRoutes, {
+      harnessPrefix: '',
       windowRepo: { findById: (id: number) => (id === window.id ? window : undefined) } as unknown as IWindowRepository,
       projectRepo: {} as IProjectRepository,
       taskRepo: {} as ITaskRepository,
@@ -131,6 +132,7 @@ describe('DELETE /api/windows/:id/panes/:ordinal', () => {
   beforeEach(async () => {
     app = Fastify();
     await app.register(windowsRoutes, {
+      harnessPrefix: '',
       windowRepo: { findById: (id: number) => (id === 5 ? makeWindow() : undefined) } as unknown as IWindowRepository,
       projectRepo: {} as IProjectRepository, taskRepo: {} as ITaskRepository, tmux: {} as TmuxClient,
       muxDriverRegistry: { resolve: () => driver } as never,
@@ -185,6 +187,7 @@ describe('windows change notification', () => {
     calls.length = 0;
     app = Fastify();
     await app.register(windowsRoutes, {
+      harnessPrefix: '',
       windowRepo: { findById: (id: number) => (id === 5 ? makeWindow() : undefined) } as unknown as IWindowRepository,
       projectRepo: {} as IProjectRepository, taskRepo: {} as ITaskRepository, tmux: {} as TmuxClient,
       transportFactory: { hostProfileFor: () => null } as never,

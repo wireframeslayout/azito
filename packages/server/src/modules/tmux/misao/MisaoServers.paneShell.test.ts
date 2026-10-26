@@ -35,7 +35,7 @@ function build(hostInfo: (server: ServerConfig) => Promise<{ platform: string; a
   const servers = new MisaoServers({
     sdk: {} as never,
     hubPaneShell: hubPaneShell('/bin/hubsh', { platform: 'linux', arch: 'x64' }),
-    hubEnv: { publicUrl: 'http://hub', localUrl: 'http://127.0.0.1:3001', webhookToken: 'wh' },
+    hubEnv: { publicUrl: 'http://hub', localUrl: 'http://127.0.0.1:3001', webhookToken: 'wh', harnessPrefix: '' },
     onChange: vi.fn(),
     log,
     local: { connection: {} as never, driver: {} as never },
