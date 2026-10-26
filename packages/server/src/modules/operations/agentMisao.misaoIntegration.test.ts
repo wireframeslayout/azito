@@ -29,7 +29,7 @@ import { testLocalHost } from '../../shared/os/testing/testLocalHost';
 const SOCKET_BYTES_MAX = 107;
 const AGENT_MAIN = path.resolve(__dirname, '../../agent/main.ts');
 const TSX_CLI = path.join(path.dirname(require.resolve('tsx/package.json')), 'dist', 'cli.mjs');
-const HUB_ENV = { publicUrl: 'http://hub.example:3001', localUrl: 'http://127.0.0.1:3001', webhookToken: 'wh-token-secret' };
+const HUB_ENV = { publicUrl: 'http://hub.example:3001', localUrl: 'http://127.0.0.1:3001', webhookToken: 'wh-token-secret', harnessPrefix: '' };
 const DAEMON_LEAK = 'daemon-inherited-secret';
 
 async function freePort(): Promise<number> {

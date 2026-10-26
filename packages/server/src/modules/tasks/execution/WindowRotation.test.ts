@@ -387,7 +387,7 @@ describe('createRotatedWindow: server snapshot mismatch (Issue #29 review, 12th 
   function makeServices() {
     const tokenRepo = new FakeTaskTokenRepo();
     const projectSecretRepo = { findByProjectWithValues: vi.fn(() => []) } as any;
-    const paneEnvService = new TaskPaneEnvironmentService(tokenRepo, projectSecretRepo, 'ui-token', true, '');
+    const paneEnvService = new TaskPaneEnvironmentService(tokenRepo, projectSecretRepo, 'ui-token', true);
     return { tokenRepo, paneEnvService };
   }
 
@@ -441,7 +441,7 @@ describe('createRotatedWindow + rollbackWindowReference under runExclusiveForTas
   function makeServices() {
     const tokenRepo = new FakeTaskTokenRepo();
     const projectSecretRepo = { findByProjectWithValues: vi.fn(() => []) } as any;
-    const paneEnvService = new TaskPaneEnvironmentService(tokenRepo, projectSecretRepo, 'ui-token', true, '');
+    const paneEnvService = new TaskPaneEnvironmentService(tokenRepo, projectSecretRepo, 'ui-token', true);
     return { tokenRepo, paneEnvService };
   }
 
@@ -560,7 +560,7 @@ describe('rollbackWindowReference: onGone throwing must not skip the revoke', ()
   function makeServices() {
     const tokenRepo = new FakeTaskTokenRepo();
     const projectSecretRepo = { findByProjectWithValues: vi.fn(() => []) } as any;
-    const paneEnvService = new TaskPaneEnvironmentService(tokenRepo, projectSecretRepo, 'ui-token', true, '');
+    const paneEnvService = new TaskPaneEnvironmentService(tokenRepo, projectSecretRepo, 'ui-token', true);
     return { tokenRepo, paneEnvService };
   }
 

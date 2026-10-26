@@ -100,8 +100,10 @@ if [[ -z "${AZITO_URL:-}" || -z "${AZITO_WEBHOOK_TOKEN:-}" ]]; then
   if [[ -f "$ENV_FILE" ]]; then
     AZITO_URL=""
     AZITO_WEBHOOK_TOKEN=""
+    set +u
     # shellcheck disable=SC1090
     source "$ENV_FILE"
+    set -u
   elif [[ -n "${AZITO_PREFIX:-}" && -z "${AZITO_URL:-}" ]]; then
     echo "azitoctl: AZITO_PREFIX=$AZITO_PREFIX but $ENV_FILE does not exist (not falling back to the unprefixed azitoctl.env of another hub)" >&2
     exit 3

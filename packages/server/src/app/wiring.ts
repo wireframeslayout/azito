@@ -266,7 +266,7 @@ export interface Wiring extends SharedInfra, Repositories, PushNotificationModul
 
 // ─── Per-module factories ───
 
-function buildSharedInfra(agentBundler: AgentBundler, publicUrl: string, localUrl: string, dataPaths: DataPaths, uiToken: string, webhookToken: string, scopedAuthEnabled: boolean, misaoRuntime: MisaoRuntime, hostEnv: HostEnv, secretFileGuard: SecretFileGuard, hubHost: HubHostProfile, windowsAgent: WindowsAgentOptions, findServer: (name: string) => ServerConfig | null, db?: SqliteDatabase, fingerprintStore?: FingerprintStore, auditLogService?: AuditLogService): SharedInfra {
+function buildSharedInfra(agentBundler: AgentBundler, publicUrl: string, localUrl: string, dataPaths: DataPaths, uiToken: string, webhookToken: string, scopedAuthEnabled: boolean, harnessPrefix: string, misaoRuntime: MisaoRuntime, hostEnv: HostEnv, secretFileGuard: SecretFileGuard, hubHost: HubHostProfile, windowsAgent: WindowsAgentOptions, findServer: (name: string) => ServerConfig | null, db?: SqliteDatabase, fingerprintStore?: FingerprintStore, auditLogService?: AuditLogService): SharedInfra {
   const sshClient = new SshClient(resolveSshClientEnv(hostEnv, process.env), fingerprintStore);
   const misaoAgentInstaller = new MisaoAgentInstaller(readMisaoBundle(getBundleRoot()), { windowsTaskName: windowsAgent.misaoTaskName, ...optionalLocalMisao(localWindowsMisaoRoot(hostEnv), secretFileGuard, hostEnv.systemRoot) });
   // A hub with no bundled misao installs agents without it (instead of reporting a failed misao step on every install).
@@ -277,7 +277,7 @@ function buildSharedInfra(agentBundler: AgentBundler, publicUrl: string, localUr
   const taskTempFiles = TaskTempFiles.fromHostEnv(hostEnv);
   taskTempFiles.assertHubDirShellSafe();
   const transportFactory = new TransportFactory(publicUrl, hostEnv, taskTempFiles, hubHost);
-  const tmuxClient = new TmuxClient(transportFactory, publicUrl, uiToken, localUrl, webhookToken);
+  const tmuxClient = new TmuxClient(transportFactory, publicUrl, uiToken, localUrl, webhookToken, harnessPrefix);
   registerTmuxDriver(muxDriverRegistry, tmuxClient);
   const llmClient: ILlmClient = new CodexExecClient();
   const agentRegistry = createDefaultRegistry();
@@ -290,7 +290,7 @@ function buildSharedInfra(agentBundler: AgentBundler, publicUrl: string, localUr
   const misao = registerMisaoDriver(muxDriverRegistry, misaoRuntime, (serverName) => {
     invalidateSessionCache(serverName);
     notificationBus.emit({ type: 'sessions:updated', payload: { serverName } });
-  }, console, { publicUrl, localUrl, webhookToken }, {
+  }, console, { publicUrl, localUrl, webhookToken, harnessPrefix }, {
     // The server is read again on every (re)connect, so an edited host / token is used by the next attempt even when
     // the node was built from an older config.
     target: (server) => ({ connect: ({ signal }) => transportFactory.getAgentTransport(findServer(server.name) ?? server).connectMisaoRelay(signal) }),
@@ -481,7 +481,7 @@ function buildFetchDistributionService(infra: SharedInfra, hubGitSupport: HubGit
   return new FetchDistributionService(hubRepoCache, remoteBundleOps, sftpService, distributionStateRepo, infra.sshClient, hubGitIdentity);
 }
 
-function buildApplicationServices(infra: SharedInfra, repos: Repositories, uiToken: string, scopedAuthEnabled: boolean, fetchDistributionService: FetchDistributionService, distributionStateRepo: SqliteDistributionStateRepository, hubGitIdentity: GitIdentity | null, harnessPrefix: string): ApplicationServices {
+function buildApplicationServices(infra: SharedInfra, repos: Repositories, uiToken: string, scopedAuthEnabled: boolean, fetchDistributionService: FetchDistributionService, distributionStateRepo: SqliteDistributionStateRepository, hubGitIdentity: GitIdentity | null, harnessPrefix?: string): ApplicationServices {
   const sessionStrategyFactory = new SessionStrategyFactory(infra.agentRegistry, infra.transportFactory, localAgentHomesFromEnv(process.env));
   const sessionCaptureService = new SessionCaptureService(repos.windowRepo, repos.taskRepo, repos.serverRepo, sessionStrategyFactory);
   // Constructed here (ahead of ExecuteTaskUseCase, built later in
@@ -489,7 +489,7 @@ function buildApplicationServices(infra: SharedInfra, repos: Repositories, uiTok
   // own doc comment for why this must be ONE instance, not one per class.
   const taskEvents = new EventEmitter();
   const originationService = new TaskOriginationService(repos.taskRepo, repos.auditLogService);
-  const taskPaneEnvironmentService = new TaskPaneEnvironmentService(repos.taskTokenRepo, repos.projectSecretRepo, uiToken, scopedAuthEnabled, harnessPrefix, repos.auditLogService);
+  const taskPaneEnvironmentService = new TaskPaneEnvironmentService(repos.taskTokenRepo, repos.projectSecretRepo, uiToken, scopedAuthEnabled, repos.auditLogService);
   const uiTokenEnvFn = (server: ServerConfig) => uiTokenEnvForServer(uiToken, server);
   const windowRespawnService = new WindowRespawnService(repos.windowRepo, infra.muxDriverRegistry, sessionStrategyFactory, repos.taskRepo, repos.unitRepo, infra.supervisorRegistry, repos.projectServerRepo, repos.projectRepo, infra.transportFactory, repos.logRepo, infra.unitTypeLoader, infra.sidekickPackageLoader, repos.serverRepo, repos.projectSecretRepo, taskEvents, taskPaneEnvironmentService, infra.serverIsolationMutex, scopedAuthEnabled, uiTokenEnvFn, sessionCaptureService, harnessPrefix);
   const windowSleepService = new WindowSleepService(repos.windowRepo, infra.muxDriverRegistry, sessionStrategyFactory, repos.serverRepo);
@@ -753,7 +753,7 @@ export async function buildWiring(db: SqliteDatabase, publicUrl: string, localUr
   const scopedAuthEnabled = resolveScopedAuthEnabled();
   // '' = no prefix. Resolved once here and handed to everything that names the harness folder (install, prompt azitoctl path).
   const harnessPrefix = process.env.AZITO_HARNESS_PREFIX ?? '';
-  const infra = buildSharedInfra(agentBundler, publicUrl, localUrl, dataPaths, uiToken, webhookToken, scopedAuthEnabled, misaoRuntime, hostEnv, secretFileGuard, hubHost, resolveWindowsAgentOptions(process.env), (name) => repos.serverRepo.findByName(name), db, fingerprintStore, repos.auditLogService);
+  const infra = buildSharedInfra(agentBundler, publicUrl, localUrl, dataPaths, uiToken, webhookToken, scopedAuthEnabled, harnessPrefix, misaoRuntime, hostEnv, secretFileGuard, hubHost, resolveWindowsAgentOptions(process.env), (name) => repos.serverRepo.findByName(name), db, fingerprintStore, repos.auditLogService);
   const pushNotification = buildPushNotificationModule(repos.pushSubRepo);
   const agentHostRecorder = new AgentHostRecorder(repos.serverRepo, infra.transportFactory, Date.now, console);
   const agentUpdater = buildAgentUpdater(agentBundler, infra, repos, agentHostRecorder);

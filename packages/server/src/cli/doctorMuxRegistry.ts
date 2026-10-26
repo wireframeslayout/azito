@@ -28,7 +28,7 @@ export async function openDoctorMux(hostEnv: HostEnv, taskTempFiles: TaskTempFil
   const { homeDir } = hostEnv;
   const hubHost = resolveHubHostProfile(hostEnv);
   const registry = new MuxDriverRegistry();
-  registerTmuxDriver(registry, new TmuxClient(new TransportFactory('', hostEnv, taskTempFiles, hubHost), '', '', '', ''));
+  registerTmuxDriver(registry, new TmuxClient(new TransportFactory('', hostEnv, taskTempFiles, hubHost), '', '', '', '', ''));
 
   const configuredSocket = process.env.MISAO_SOCKET || readEnvValue(resolveServerEnvPath(), 'MISAO_SOCKET');
   const runtime = await resolveMisaoRuntimeForHub(
@@ -38,7 +38,7 @@ export async function openDoctorMux(hostEnv: HostEnv, taskTempFiles: TaskTempFil
   );
   // An agent server's misao daemon is not opened from here (no node is ever made for it), so a misao window on an agent
   // server reads as unverified, never as gone.
-  const misao = registerMisaoDriver(registry, runtime, () => undefined, console, { publicUrl: '', localUrl: '', webhookToken: '' }, NO_AGENT_MISAO);
+  const misao = registerMisaoDriver(registry, runtime, () => undefined, console, { publicUrl: '', localUrl: '', webhookToken: '', harnessPrefix: '' }, NO_AGENT_MISAO);
   let connecting: Promise<void> | undefined;
   return {
     registry,

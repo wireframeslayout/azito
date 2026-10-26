@@ -114,11 +114,15 @@ Codex CLI がインストールされている環境（`codex` コマンドま�
 
 ### env ファイルの選び方（`azitoctl` / `azs` / `azitoctl.mjs`）
 
-読む env ファイルは環境変数 `AZITO_PREFIX` で決まります: `~/.azito/azitoctl${AZITO_PREFIX:+-$AZITO_PREFIX}.env`（`AZITO_PREFIX` が空なら `azitoctl.env`）。フック（`azito-activity.sh` など）と同じ規則です。ハブは、タスクのワーカーの pane に自分のハーネスのプレフィックス（`AZITO_HARNESS_PREFIX`、無ければ空）を `AZITO_PREFIX` として渡します。
+読む env ファイルは環境変数 `AZITO_PREFIX` で決まります: `~/.azito/azitoctl${AZITO_PREFIX:+-$AZITO_PREFIX}.env`（`AZITO_PREFIX` が空なら `azitoctl.env`）。フック（`azito-activity.sh` など）と、supervisor（`tui-supervisor`）も同じ選び方です（形の不正なプレフィックスは、無印のファイルに戻らず、ファイルを読みません）。ハブは、すべての pane（タスクの窓も、手動で開いた窓も、tmux / misao を問わず）に自分のハーネスのプレフィックス（`AZITO_HARNESS_PREFIX`、無ければ空の値）を `AZITO_PREFIX` として渡します。
 
-- 環境に一式（`azitoctl`: `AZITO_URL` と `AZITO_WEBHOOK_TOKEN`、`azs`: `AZITO_SERVER_NAME` / `AZITO_SUPERVISOR_PATH` / `AZITO_SUPERVISOR_RUNNER`）がそろっていれば、それをそのまま使い、env ファイルは読みません。
-- 一式がそろっていなければ、環境の値は使わず、env ファイルから一式を読みます（フックと同じ規則）。ファイルの token を、そのファイルの URL 以外へ送らないためです。例えば環境に URL しかないとき、その URL にファイルの token は送られません。
-- プレフィックスが指定されているのに `azitoctl-<prefix>.env` が無いとき、無印の `azitoctl.env`（別のハブのもの）にはフォールバックしません。`azitoctl` は環境に `AZITO_URL` があればそのまま送信し（token は付けません）、無ければ終了コード 3 で終了します。`azs` は supervisor 無しでコマンドをそのまま起動します。
+宛先（`azitoctl`: `AZITO_URL` と `AZITO_WEBHOOK_TOKEN`、`azs`: `AZITO_URL` / `AZITO_WEBHOOK_TOKEN` / `AZITO_SERVER_NAME`）は組として扱います（フックと同じ規則）。
+
+- 環境に組がそろっていれば、それをそのまま使い、env ファイルから宛先は読みません。
+- 組がそろっていなければ、環境の宛先の値は使わず、env ファイルから組を読みます。ファイルの token を、そのファイルの URL 以外へ送らないためです。例えば環境に URL しかないとき、その URL にファイルの token は送られません。
+- `azs` の `AZITO_SUPERVISOR_PATH` と `AZITO_SUPERVISOR_RUNNER` は宛先ではないので組に入れません。環境の値が先で、無いときだけファイルから補います（`setup.sh` はファイルに `AZITO_SUPERVISOR_RUNNER` を書きません）。
+- プレフィックスが指定されているのに `azitoctl-<prefix>.env` が無いとき、無印の `azitoctl.env`（別のハブのもの）にはフォールバックしません。`azitoctl` は環境に `AZITO_URL` があればそのまま送信し（token は付けません）、無ければ終了コード 3 で終了します。`azs` は宛先がそろっていなければ supervisor 無しでコマンドをそのまま起動します。
+- フックとの違いは、ファイルが無いときだけです。フックは何も送りませんが、`azitoctl` は環境の `AZITO_URL` で token 無しで送ります。
 
 ### azt-mcp の初回準備
 

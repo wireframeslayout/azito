@@ -63,7 +63,7 @@ describe('wrapWithSupervisor', () => {
     });
 
     // Should start with the resolved supervisor command (node <dist> or npx tsx <src>)
-    expect(wrapped).toMatch(/^(node|npx tsx) .*supervisor/);
+    expect(wrapped).toMatch(/^AZITO_PREFIX='' (node|npx tsx) .*supervisor/);
     expect(wrapped).toContain("--server 'local-server'");
     expect(wrapped).toContain("--target 'azito:task-1.1'");
     expect(wrapped).toContain("-- 'claude --dangerously-skip-permissions'");
@@ -105,7 +105,7 @@ describe('wrapWithSupervisor', () => {
       bootstrapToken: 'secret-xyz',
     });
 
-    expect(wrapped).toMatch(/^AZITO_SUPERVISOR_LAUNCH_ID='launch-abc' AZITO_SUPERVISOR_BOOTSTRAP='secret-xyz' /);
+    expect(wrapped).toMatch(/^AZITO_PREFIX='' AZITO_SUPERVISOR_LAUNCH_ID='launch-abc' AZITO_SUPERVISOR_BOOTSTRAP='secret-xyz' /);
     expect(wrapped).not.toContain('--launch-id');
     expect(wrapped).not.toContain('--bootstrap-token');
   });
@@ -179,14 +179,14 @@ describe('wrapWithSupervisor', () => {
     expect(wrapped).toContain("AZITO_PREFIX='dev'");
   });
 
-  it('omits AZITO_PREFIX when harnessPrefix is not provided', () => {
+  it('passes an empty AZITO_PREFIX when there is no harness prefix (overrides a value left in the pane session)', () => {
     const wrapped = wrapWithSupervisor('claude', {
       server: { name: 'local-server', type: 'local' },
       dialect: posixDialect,
       target: 'azito:task-10.2',
     });
 
-    expect(wrapped).not.toContain('AZITO_PREFIX');
+    expect(wrapped).toContain("AZITO_PREFIX=''");
   });
 
   it('includes AZITO_PREFIX alongside launch binding env vars when both are provided', () => {
@@ -215,7 +215,7 @@ describe('wrapWithSupervisor', () => {
       target: 'azito:task-5.1',
     });
 
-    expect(wrapped).toMatch(/^node ~\/\.azito\/agent\/current\/azito-supervisor\.cjs /);
+    expect(wrapped).toMatch(/^AZITO_PREFIX='' node ~\/\.azito\/agent\/current\/azito-supervisor\.cjs /);
   });
 });
 

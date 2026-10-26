@@ -29,7 +29,7 @@ describe('labelRegisteredWindow', () => {
   });
 
   it('is a no-op for the tmux driver, whose labelWindowPanes is explicitly unsupported', async () => {
-    const tmux = new TmuxClient({ getTransport: () => { throw new Error('tmux must not be touched'); } } as never, '', '', '', '');
+    const tmux = new TmuxClient({ getTransport: () => { throw new Error('tmux must not be touched'); } } as never, '', '', '', '', '');
     expect(tmux.supportsPaneLabels).toBe(false);
     await expect(labelRegisteredWindow(tmux, server, { kind: 'tmux', workspace: 's', window: 'w' }, { windowId: 1 })).resolves.toBeUndefined();
     await expect(tmux.labelWindowPanes(server, ref, { windowId: 1 })).rejects.toBeInstanceOf(MuxOperationUnsupportedError);

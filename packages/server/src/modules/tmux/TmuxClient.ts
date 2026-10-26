@@ -125,8 +125,9 @@ export class TmuxClient implements IMuxClient {
     /** Loopback URL of this hub (`http://127.0.0.1:<port>`). */
     private localUrl: string,
     private webhookToken: string,
+    harnessPrefix: string,
   ) {
-    this.hubEnvConfig = { publicUrl, localUrl, webhookToken };
+    this.hubEnvConfig = { publicUrl, localUrl, webhookToken, harnessPrefix };
   }
 
   // Env args injected into every new-session / new-window via `-e` (the rule is shared with every mux driver: hubPaneEnv).

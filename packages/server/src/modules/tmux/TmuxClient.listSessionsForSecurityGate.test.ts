@@ -10,7 +10,7 @@ function makeClient(execMux: (args: string[]) => Promise<{ stdout: string; stder
   const factory = {
     getTransport: () => ({ execMux: vi.fn(execMux) }),
   } as unknown as TransportFactory;
-  return new TmuxClient(factory, '', '', '', 'wh-tok');
+  return new TmuxClient(factory, '', '', '', 'wh-tok', '');
 }
 
 function paneLine(sessionName: string): string {

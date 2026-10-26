@@ -114,11 +114,15 @@ If the Codex CLI is installed (the `codex` command or `~/.codex` exists), the sa
 
 ### How the env file is chosen (`azitoctl` / `azs` / `azitoctl.mjs`)
 
-The env file is selected by the environment variable `AZITO_PREFIX`: `~/.azito/azitoctl${AZITO_PREFIX:+-$AZITO_PREFIX}.env` (`azitoctl.env` when `AZITO_PREFIX` is empty). The hooks (`azito-activity.sh` and the others) use the same rule. The hub hands its own harness prefix (`AZITO_HARNESS_PREFIX`, empty if none) to every task worker pane as `AZITO_PREFIX`.
+The env file is selected by the environment variable `AZITO_PREFIX`: `~/.azito/azitoctl${AZITO_PREFIX:+-$AZITO_PREFIX}.env` (`azitoctl.env` when `AZITO_PREFIX` is empty). The hooks (`azito-activity.sh` and the others) and the supervisor (`tui-supervisor`) choose it the same way (a prefix of an invalid shape does not fall back to the unprefixed file; no file is read). The hub hands its own harness prefix (`AZITO_HARNESS_PREFIX`, an empty value if none) to every pane as `AZITO_PREFIX`: task windows and windows opened by hand, tmux and misao alike.
 
-- When the environment holds the whole set (`azitoctl`: `AZITO_URL` and `AZITO_WEBHOOK_TOKEN`; `azs`: `AZITO_SERVER_NAME`, `AZITO_SUPERVISOR_PATH` and `AZITO_SUPERVISOR_RUNNER`), it is used as is and the env file is not read.
-- Otherwise the environment's values are not used and the whole set is read from the env file (the same rule as the hooks), so the file's token is never sent to a URL other than the file's. For example, with only a URL in the environment, the file's token is not sent to that URL.
-- When a prefix is set but `azitoctl-<prefix>.env` does not exist, there is no fallback to the unprefixed `azitoctl.env` (another hub's). `azitoctl` sends to `AZITO_URL` if the environment has it (without a token) and otherwise exits with code 3; `azs` launches the command without a supervisor.
+The destination (`azitoctl`: `AZITO_URL` and `AZITO_WEBHOOK_TOKEN`; `azs`: `AZITO_URL`, `AZITO_WEBHOOK_TOKEN` and `AZITO_SERVER_NAME`) is handled as a set (the same rule as the hooks).
+
+- When the environment holds the whole set, it is used as is and the destination is not read from the env file.
+- Otherwise the environment's destination values are not used and the set is read from the env file, so the file's token is never sent to a URL other than the file's. For example, with only a URL in the environment, the file's token is not sent to that URL.
+- `azs`'s `AZITO_SUPERVISOR_PATH` and `AZITO_SUPERVISOR_RUNNER` are not a destination and are not part of the set: the environment's value wins and the file only fills in a missing one (`setup.sh` does not write `AZITO_SUPERVISOR_RUNNER` to the file).
+- When a prefix is set but `azitoctl-<prefix>.env` does not exist, there is no fallback to the unprefixed `azitoctl.env` (another hub's). `azitoctl` sends to `AZITO_URL` if the environment has it (without a token) and otherwise exits with code 3; `azs` launches the command without a supervisor unless the environment holds the whole destination.
+- The only difference from the hooks is when the file does not exist: the hooks send nothing, while `azitoctl` sends to the environment's `AZITO_URL` without a token.
 
 ### First-time azt-mcp Setup
 

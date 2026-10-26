@@ -46,7 +46,7 @@ const VERSION = '0.3.0';
 const NO_INTERACTIVE_LOGON = /0x(8004130f|80070520)/i;
 const AGENT_MAIN = path.resolve(__dirname, '../../../agent/main.ts');
 const TSX_CLI = path.join(path.dirname(require.resolve('tsx/package.json')), 'dist', 'cli.mjs');
-const HUB_ENV = { publicUrl: 'http://hub.example:3001', localUrl: 'http://127.0.0.1:3001', webhookToken: 'wh-token-secret' };
+const HUB_ENV = { publicUrl: 'http://hub.example:3001', localUrl: 'http://127.0.0.1:3001', webhookToken: 'wh-token-secret', harnessPrefix: '' };
 const AGENT_TOKEN = crypto.randomBytes(16).toString('hex');
 const SYSTEM_ROOT = process.env.SystemRoot ?? 'C:\\Windows';
 

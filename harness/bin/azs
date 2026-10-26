@@ -58,21 +58,43 @@ if [[ -z "$TARGET" ]]; then
 fi
 
 # ── env解決 (serverName / supervisor path / runner) ──
-# AZITO_SERVER_NAME / AZITO_SUPERVISOR_PATH / AZITO_SUPERVISOR_RUNNER は
-# 環境変数優先。3 つがそろっていれば
-# ファイルは読まない。そろっていなければ環境の値は使わず、azitoctl[-<prefix>].env
-# (AZITO_PREFIX で選ぶ。azitoctl / azito-activity.sh と同じ規則) から一式を読む。
+# 宛先 (AZITO_URL / AZITO_WEBHOOK_TOKEN / AZITO_SERVER_NAME) は 3 つの組として扱う
+# (フック azito-activity.sh と同じ規則)。環境に 3 つがそろっていればそのまま使い、
+# そろっていなければ環境の宛先の値は使わず、azitoctl[-<prefix>].env
+# (AZITO_PREFIX で選ぶ。azitoctl / フックと同じ規則) から組を読む。ファイルの値を
+# 環境の別のハブの値と混ぜない (supervisor に渡る URL / token / serverName を同じハブにそろえる)。
+# AZITO_SUPERVISOR_PATH / AZITO_SUPERVISOR_RUNNER は宛先ではなく実行の仕方なので、
+# 組にしない: 環境の値が先で、無いときだけファイルから補う (setup.sh はファイルに RUNNER を
+# 書かない。環境の RUNNER を消さない)。
 # azitoctl.env は setup.sh が printf %q でクォートして書き出す信頼済みファイル (chmod 600)。
-# プレフィックスが指定されているのにそのファイルが無いときは、無印のファイルを
-# 読まず、supervisor 無しで起動する (別のハブの serverName を使わないため)。
-if [[ -z "${AZITO_SERVER_NAME:-}" || -z "${AZITO_SUPERVISOR_PATH:-}" || -z "${AZITO_SUPERVISOR_RUNNER:-}" ]]; then
+# プレフィックスが指定されているのにそのファイルが無く、宛先がそろっていないときは、無印の
+# ファイルを読まず、supervisor 無しで起動する (別のハブの serverName を使わないため)。
+DEST_COMPLETE=0
+if [[ -n "${AZITO_URL:-}" && -n "${AZITO_WEBHOOK_TOKEN:-}" && -n "${AZITO_SERVER_NAME:-}" ]]; then
+  DEST_COMPLETE=1
+fi
+if [[ "$DEST_COMPLETE" -eq 0 || -z "${AZITO_SUPERVISOR_PATH:-}" ]]; then
   if [[ -f "$AZITOCTL_ENV_FILE" ]]; then
-    AZITO_SERVER_NAME=""
-    AZITO_SUPERVISOR_PATH=""
-    AZITO_SUPERVISOR_RUNNER=""
+    _pane_path="${AZITO_SUPERVISOR_PATH:-}"
+    _pane_runner="${AZITO_SUPERVISOR_RUNNER:-}"
+    _pane_url="${AZITO_URL:-}"
+    _pane_token="${AZITO_WEBHOOK_TOKEN:-}"
+    _pane_server="${AZITO_SERVER_NAME:-}"
+    if [[ "$DEST_COMPLETE" -eq 0 ]]; then
+      AZITO_URL=""
+      AZITO_WEBHOOK_TOKEN=""
+      AZITO_SERVER_NAME=""
+    fi
     # shellcheck disable=SC1090
     source "$AZITOCTL_ENV_FILE"
-  elif [[ -n "${AZITO_PREFIX:-}" ]]; then
+    [[ -z "$_pane_path" ]] || AZITO_SUPERVISOR_PATH="$_pane_path"
+    [[ -z "$_pane_runner" ]] || AZITO_SUPERVISOR_RUNNER="$_pane_runner"
+    if [[ "$DEST_COMPLETE" -eq 1 ]]; then
+      AZITO_URL="$_pane_url"
+      AZITO_WEBHOOK_TOKEN="$_pane_token"
+      AZITO_SERVER_NAME="$_pane_server"
+    fi
+  elif [[ -n "${AZITO_PREFIX:-}" && "$DEST_COMPLETE" -eq 0 ]]; then
     echo "azs: AZITO_PREFIX=$AZITO_PREFIX but $AZITOCTL_ENV_FILE does not exist (not falling back to the unprefixed azitoctl.env); launching without supervisor" >&2
     exec "$@"
   fi

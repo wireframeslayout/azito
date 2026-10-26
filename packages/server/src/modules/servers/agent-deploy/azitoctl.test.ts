@@ -214,7 +214,7 @@ describe.skipIf(process.platform === 'win32')('azitoctl.mjs sends what the bash 
 
 // #528: which azitoctl[-<prefix>].env is read. Both implementations follow the same rules: AZITO_PREFIX selects the file (never the
 // unprefixed one of another hub), a complete set in the pane's environment is used without reading the file, otherwise the file's whole set is used.
-describe.skipIf(process.platform === 'win32')('azitoctl env file selection (bash and node)', { timeout: 30_000 }, () => {
+describe('azitoctl env file selection (bash and node)', { timeout: 30_000 }, () => {
   const DEAD_HUB = 'http://127.0.0.1:9'; // the "other hub": anything sent here never arrives, and the test would see no request
   const impls: Array<[string, (args: string[], env: Record<string, string>) => Promise<Ran>]> = [
     ['bash', (args, env) => run('bash', [BASH_CTL, ...args], env)],
@@ -226,7 +226,13 @@ describe.skipIf(process.platform === 'win32')('azitoctl env file selection (bash
   };
   const args = ['progress', '--turn', TURN];
 
-  describe.each(impls)('%s', (_name, ctl) => {
+  describe.each(impls)('%s', (name, ctl) => {
+    // the bash script needs bash + curl; the node one (azitoctl.mjs) is what Windows runs, so it is tested there too
+    if (name === 'bash' && process.platform === 'win32') {
+      it.skip('is not run on Windows', () => {});
+      return;
+    }
+
     it('AZITO_PREFIX selects azitoctl-<prefix>.env even when the unprefixed file of another hub exists', async () => {
       envFile('azitoctl.env', DEAD_HUB, 'tok-other');
       envFile('azitoctl-dev.env', baseUrl, 'tok-dev');

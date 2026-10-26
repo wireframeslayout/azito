@@ -80,10 +80,10 @@ describe.skipIf(!fs.existsSync(MISAO_CLI))('one local server with a tmux and a m
     await vi.waitFor(() => expect(fs.existsSync(socketPath)).toBe(true), { timeout: 10000, interval: 50 });
 
     registry = new MuxDriverRegistry();
-    tmuxClient = new TmuxClient(new TransportFactory('http://127.0.0.1:1', testLocalHost(), new TaskTempFiles('/tmp', 'linux'), { platform: 'linux', arch: 'x64' }), 'http://127.0.0.1:1', 'ui', 'http://127.0.0.1:1', 'wh');
+    tmuxClient = new TmuxClient(new TransportFactory('http://127.0.0.1:1', testLocalHost(), new TaskTempFiles('/tmp', 'linux'), { platform: 'linux', arch: 'x64' }), 'http://127.0.0.1:1', 'ui', 'http://127.0.0.1:1', 'wh', '');
     registry.register('tmux', tmuxClient);
     const sdk = await import('@misao/sdk');
-    const handle = registerMisaoDriver(registry, { sdk, socketPath, paneShell: hubPaneShell('/bin/bash', { platform: 'linux', arch: 'x64' }) }, () => {}, { warn: () => {} }, { publicUrl: 'http://hub.example', localUrl: 'http://127.0.0.1:3001', webhookToken: 'wh' }, NO_AGENT_MISAO);
+    const handle = registerMisaoDriver(registry, { sdk, socketPath, paneShell: hubPaneShell('/bin/bash', { platform: 'linux', arch: 'x64' }) }, () => {}, { warn: () => {} }, { publicUrl: 'http://hub.example', localUrl: 'http://127.0.0.1:3001', webhookToken: 'wh', harnessPrefix: '' }, NO_AGENT_MISAO);
     connection = handle.connection;
     await connection.start();
     expect(connection.availability()).toEqual({ available: true });

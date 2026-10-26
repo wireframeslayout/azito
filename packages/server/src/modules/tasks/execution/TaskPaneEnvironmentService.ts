@@ -126,9 +126,6 @@ export class TaskPaneEnvironmentService {
     private projectSecretRepo: SqliteProjectSecretRepository,
     private uiToken: string,
     private scopedAuthEnabled: boolean,
-    // The hub's harness prefix ('' = none), resolved once at the boundary (app/wiring.ts). Handed to every task pane as AZITO_PREFIX so
-    // harness/bin/azitoctl and azs read azitoctl[-<prefix>].env of THIS hub, not the unprefixed one of another hub on the same host (#528).
-    private harnessPrefix: string,
     // Optional (Issue #28 third-party review Important finding): the
     // audit UI's own description claims task-token issuance/revocation as
     // a category it shows (settings.auditLog.description), but nothing
@@ -190,7 +187,6 @@ export class TaskPaneEnvironmentService {
     const env: Record<string, string> = {
       AZITO_TASK_TOKEN: issued.token,
       AZITO_TASK_ID: String(task.id),
-      AZITO_PREFIX: this.harnessPrefix,
     };
     for (const secret of secretEntries) {
       env[`AZITO_SECRET_${secret.name}`] = secret.value;
@@ -222,7 +218,7 @@ export class TaskPaneEnvironmentService {
    * `isPrimaryTaskWindow`'s doc comment for how callers tell the two apart.
    */
   buildEnvForSecondaryWindow(task: Task, server: ServerConfig): Record<string, string> {
-    const env: Record<string, string> = { AZITO_TASK_ID: String(task.id), AZITO_PREFIX: this.harnessPrefix };
+    const env: Record<string, string> = { AZITO_TASK_ID: String(task.id) };
     applyTokenMaskingOrCompat(env, server, this.uiToken, this.scopedAuthEnabled);
     return env;
   }

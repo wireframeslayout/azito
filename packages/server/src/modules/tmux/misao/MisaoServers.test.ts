@@ -42,7 +42,7 @@ let latestOf: (name: string) => ServerConfig | null = (name) => agent(name);
 function setup(status: () => Promise<{ socketPresent: boolean }> = async () => ({ socketPresent: true })) {
   const { sdk, clients } = fakeSdk();
   const log = { warn: vi.fn() };
-  const hubEnv = { publicUrl: 'http://hub', localUrl: 'http://127.0.0.1:3001', webhookToken: 'wh' };
+  const hubEnv = { publicUrl: 'http://hub', localUrl: 'http://127.0.0.1:3001', webhookToken: 'wh', harnessPrefix: '' };
   const localConnection = new MisaoConnection({ socketPath: '/local.sock', sdk, log });
   const localDriver = new MisaoMuxClient(localConnection, { paneShell: hubPaneShell('/bin/bash', { platform: 'linux', arch: 'x64' }), onChange: vi.fn(), log, hubEnv, connectAttachClient: async () => { throw new Error('unused'); } });
   const connect = vi.fn(async () => { throw new Error('unused'); });

@@ -15,19 +15,23 @@ const VALID_PREFIX = /^[a-z0-9-]+$/;
 
 /**
  * Returns the path to the azitoctl env file selected by `AZITO_PREFIX`:
- * `~/.azito/azitoctl-<prefix>.env` when the prefix is valid, otherwise
- * `~/.azito/azitoctl.env`. Same convention as `harness/setup.sh`'s hook
- * commands (`azitoctl${AZITO_PREFIX:+-$AZITO_PREFIX}.env`).
+ * `~/.azito/azitoctl-<prefix>.env` when the prefix is valid, `~/.azito/azitoctl.env`
+ * when there is none. Same convention as `harness/setup.sh`'s hook commands
+ * (`azitoctl${AZITO_PREFIX:+-$AZITO_PREFIX}.env`).
+ * A prefix of an invalid shape selects no file (null): it must not fall back to the unprefixed
+ * file, which belongs to another hub.
  */
-export function resolveEnvFilePath(env: NodeJS.ProcessEnv = process.env): string {
-  const prefix = env.AZITO_PREFIX && VALID_PREFIX.test(env.AZITO_PREFIX) ? env.AZITO_PREFIX : '';
+export function resolveEnvFilePath(env: NodeJS.ProcessEnv = process.env): string | null {
+  const prefix = env.AZITO_PREFIX ?? '';
+  if (prefix && !VALID_PREFIX.test(prefix)) return null;
   return path.join(os.homedir(), '.azito', `azitoctl${prefix ? `-${prefix}` : ''}.env`);
 }
 
 /**
- * Resolves AZITO_URL / AZITO_WEBHOOK_TOKEN, preferring process env vars and
- * falling back to the azitoctl env file selected by `AZITO_PREFIX` (written
- * by harness/setup.sh with `printf 'KEY=%q\n'`).
+ * Resolves AZITO_URL / AZITO_WEBHOOK_TOKEN as a pair (the same rule as the hooks and azitoctl): both from
+ * the process env when it has both, otherwise both from the azitoctl env file selected by `AZITO_PREFIX`
+ * (written by harness/setup.sh with `printf 'KEY=%q\n'`). The env's values are not mixed with the file's,
+ * so the file's token is never sent to a URL that is not the file's.
  *
  * Never throws: any resolution failure (missing file, unreadable, missing
  * values) returns null, in which case the supervisor runs pass-through only
@@ -35,19 +39,20 @@ export function resolveEnvFilePath(env: NodeJS.ProcessEnv = process.env): string
  */
 export function resolveHubEnv(
   env: NodeJS.ProcessEnv = process.env,
-  envFilePath: string = resolveEnvFilePath(env),
+  envFilePath: string | null = resolveEnvFilePath(env),
 ): HubEnvResult {
+  if (env.AZITO_URL && env.AZITO_WEBHOOK_TOKEN) return { ok: true, env: { url: env.AZITO_URL, token: env.AZITO_WEBHOOK_TOKEN } };
   let fileValues: Record<string, string> = {};
   try {
-    if (fs.existsSync(envFilePath)) {
+    if (envFilePath !== null && fs.existsSync(envFilePath)) {
       fileValues = parseEnvFile(fs.readFileSync(envFilePath, 'utf-8'));
     }
   } catch {
     fileValues = {};
   }
 
-  const url = env.AZITO_URL || fileValues.AZITO_URL;
-  const token = env.AZITO_WEBHOOK_TOKEN || fileValues.AZITO_WEBHOOK_TOKEN;
+  const url = fileValues.AZITO_URL;
+  const token = fileValues.AZITO_WEBHOOK_TOKEN;
   if (url && token) return { ok: true, env: { url, token } };
   const missing: ('AZITO_URL' | 'AZITO_WEBHOOK_TOKEN')[] = [];
   if (!url) missing.push('AZITO_URL');
