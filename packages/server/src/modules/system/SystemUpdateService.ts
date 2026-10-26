@@ -22,7 +22,7 @@ const execFileAsync = promisify(execFile);
 export type SystemUpdateStatus =
   | 'up-to-date' | 'checking' | 'update-available' | 'check-failed'
   | 'confirming' | 'running' | 'restarting' | 'success' | 'failed'
-  | 'disabled' | 'blocked';
+  | 'disabled' | 'blocked' | 'no-asset';
 
 export interface UpdateCommit {
   sha: string;
@@ -43,6 +43,8 @@ export interface UpdateStatusResponse {
   runningTasks: number;
   disabledReason: string | null;
   channel: 'stable' | 'rc';
+  /** `no-asset` のとき、版にあるべきなのに無かったこの OS 向けの配布物の名前（それ以外は null）。 */
+  missingAsset: string | null;
   /** 稼働検知診断の導線を UI に出してよいか（{@link isDiagnosticsEnabled}）。 */
   diagnosticsEnabled: boolean;
 }
@@ -81,10 +83,26 @@ interface UpdateTarget {
   sha256sumsUrl: string;
 }
 
+/**
+ * What looking up a release came to. `failed` = the release could not be had (network, API error, malformed answer);
+ * `no-asset` = a release was had but lacks this host's archive or checksum file (not a failure of the check).
+ */
+type TargetResolution =
+  | { kind: 'found'; target: UpdateTarget }
+  | { kind: 'no-asset'; version: string; missingAsset: string }
+  | { kind: 'failed' };
+
+const FAILED: TargetResolution = { kind: 'failed' };
+
+/** The refusal shown when an update names (or resolves to) a version without this host's asset. */
+export function noAssetMessage(version: string, asset: string): string {
+  return `${version} には、この OS 向けの配布物（${asset}）がありません`;
+}
+
 interface CachedCheck {
   fetchedAt: number;
   channel: 'stable' | 'rc';
-  target: UpdateTarget | null;
+  resolution: TargetResolution;
 }
 
 // A task in any of these statuses has an agent actively driving a worktree —
@@ -209,10 +227,14 @@ export class SystemUpdateService {
       return this.buildResponse('check-failed', currentVersion, currentCommit, null, deployMode, runningTasks, disabledReason, null);
     }
 
-    const target = await this.resolveTarget(repo);
-    if (!target) {
+    const resolution = await this.resolveTarget(repo);
+    if (resolution.kind === 'failed') {
       return this.buildResponse('check-failed', currentVersion, currentCommit, null, deployMode, runningTasks, disabledReason, repo);
     }
+    if (resolution.kind === 'no-asset') {
+      return { ...this.buildResponse('no-asset', currentVersion, currentCommit, null, deployMode, runningTasks, disabledReason, repo), latestVersion: resolution.version, missingAsset: resolution.missingAsset };
+    }
+    const target = resolution.target;
 
     const status: SystemUpdateStatus = currentVersion && isNewer(target.version, currentVersion) ? 'update-available' : 'up-to-date';
     return this.buildResponse(status, currentVersion, currentCommit, target, deployMode, runningTasks, disabledReason, repo);
@@ -250,12 +272,16 @@ export class SystemUpdateService {
       return { started: false, error: '更新チャンネル（配信元リポジトリ）が設定されていません' };
     }
 
-    const target = version ? await this.fetchSpecificRelease(repo, version) : await this.resolveTarget(repo);
+    const resolution = version ? await this.fetchSpecificRelease(repo, version) : await this.resolveTarget(repo);
     const release = getReleaseInfo();
     const currentVersion = release?.version ?? null;
-    if (!target) {
+    if (resolution.kind === 'failed') {
       return { started: false, error: '最新バージョンの確認に失敗しました' };
     }
+    if (resolution.kind === 'no-asset') {
+      return { started: false, error: noAssetMessage(resolution.version, resolution.missingAsset) };
+    }
+    const target = resolution.target;
     if (!currentVersion) {
       return { started: false, error: '現在のバージョンを取得できませんでした' };
     }
@@ -317,18 +343,18 @@ export class SystemUpdateService {
     return NON_TERMINAL_TASK_STATUSES.reduce((sum, status) => sum + this.taskRepo.findByStatus(status).length, 0);
   }
 
-  private async resolveTarget(repo: string): Promise<UpdateTarget | null> {
+  private async resolveTarget(repo: string): Promise<TargetResolution> {
     assertSupportedHubHost(this.host);
     const channel = this.channelResolver.resolveChannel();
     if (this.cachedCheck && Date.now() - this.cachedCheck.fetchedAt < CHECK_CACHE_TTL_MS && this.cachedCheck.channel === channel) {
-      return this.cachedCheck.target;
+      return this.cachedCheck.resolution;
     }
 
-    const target = channel === 'rc'
+    const resolution = channel === 'rc'
       ? await this.fetchLatestPrerelease(repo)
       : await this.fetchLatestRelease(repo);
-    this.cachedCheck = { fetchedAt: Date.now(), channel, target };
-    return target;
+    this.cachedCheck = { fetchedAt: Date.now(), channel, resolution };
+    return resolution;
   }
 
   private buildGithubHeaders(): Record<string, string> {
@@ -341,54 +367,61 @@ export class SystemUpdateService {
     return headers;
   }
 
-  private hasRequiredAssets(release: GithubRelease): boolean {
-    if (!Array.isArray(release.assets)) return false;
+  /** The name of the first asset this host needs that the release lacks, or null when it has them all. A release whose asset list is not an array is malformed, not "without assets". */
+  private missingAsset(release: GithubRelease): string | null {
     const names = hubAssetNames(release.tag_name, this.host);
-    return release.assets.some((a) => a.name === names.archive)
-      && release.assets.some((a) => a.name === names.sums);
+    if (!release.assets.some((a) => a.name === names.archive)) return names.archive;
+    if (!release.assets.some((a) => a.name === names.sums)) return names.sums;
+    return null;
   }
 
-  private async fetchLatestRelease(repo: string): Promise<UpdateTarget | null> {
+  private hasRequiredAssets(release: GithubRelease): boolean {
+    return Array.isArray(release.assets) && this.missingAsset(release) === null;
+  }
+
+  private async fetchLatestRelease(repo: string): Promise<TargetResolution> {
     try {
       const res = await fetch(`${this.options.githubApiBase}/repos/${repo}/releases/latest`, { headers: this.buildGithubHeaders() });
-      if (!res.ok) return null;
+      if (!res.ok) return FAILED;
       const release = await res.json() as GithubRelease;
 
       return this.resolveReleaseAssets(release);
     } catch {
-      return null;
+      return FAILED;
     }
   }
 
-  private async fetchLatestPrerelease(repo: string): Promise<UpdateTarget | null> {
+  private async fetchLatestPrerelease(repo: string): Promise<TargetResolution> {
     try {
       const res = await fetch(`${this.options.githubApiBase}/repos/${repo}/releases?per_page=30`, { headers: this.buildGithubHeaders() });
-      if (!res.ok) return null;
+      if (!res.ok) return FAILED;
       const releases = await res.json() as GithubRelease[];
-      if (!Array.isArray(releases)) return null;
+      if (!Array.isArray(releases)) return FAILED;
       const valid = releases
         .filter((r) => !r.draft && typeof r.tag_name === 'string' && isReleaseTag(r.tag_name))
         .sort((a, b) => compareVersions(b.tag_name, a.tag_name));
+      // A newer release still being built may lack the archive: the newest one that has it is taken, as before.
       for (const release of valid) {
-        const target = this.resolveReleaseAssets(release);
-        if (target) return target;
+        const resolution = this.resolveReleaseAssets(release);
+        if (resolution.kind === 'found') return resolution;
       }
-      return null;
+      // None has it. A release was had, so say what is missing from the newest rather than calling it a failed check.
+      return valid.length > 0 ? this.resolveReleaseAssets(valid[0]) : FAILED;
     } catch {
-      return null;
+      return FAILED;
     }
   }
 
-  private async fetchSpecificRelease(repo: string, version: string): Promise<UpdateTarget | null> {
+  private async fetchSpecificRelease(repo: string, version: string): Promise<TargetResolution> {
     assertSupportedHubHost(this.host);
     try {
       const tag = version.startsWith('v') ? version : `v${version}`;
       const res = await fetch(`${this.options.githubApiBase}/repos/${repo}/releases/tags/${encodeURIComponent(tag)}`, { headers: this.buildGithubHeaders() });
-      if (!res.ok) return null;
+      if (!res.ok) return FAILED;
       const release = await res.json() as GithubRelease;
       return this.resolveReleaseAssets(release);
     } catch {
-      return null;
+      return FAILED;
     }
   }
 
@@ -430,20 +463,24 @@ export class SystemUpdateService {
     this.cachedVersions = null;
   }
 
-  private resolveReleaseAssets(release: GithubRelease): UpdateTarget | null {
-    if (typeof release.tag_name !== 'string' || !isReleaseTag(release.tag_name)) {
-      return null;
+  private resolveReleaseAssets(release: GithubRelease): TargetResolution {
+    if (typeof release.tag_name !== 'string' || !isReleaseTag(release.tag_name) || !Array.isArray(release.assets)) {
+      return FAILED;
     }
-    if (!this.hasRequiredAssets(release)) return null;
+    const missingAsset = this.missingAsset(release);
+    if (missingAsset !== null) return { kind: 'no-asset', version: release.tag_name, missingAsset };
     const names = hubAssetNames(release.tag_name, this.host);
     const tarballAsset = release.assets.find((a) => a.name === names.archive)!;
     const sumsAsset = release.assets.find((a) => a.name === names.sums)!;
     return {
-      version: release.tag_name,
-      publishedAt: release.published_at,
-      commits: parseChangelog(release.body),
-      tarballUrl: tarballAsset.browser_download_url,
-      sha256sumsUrl: sumsAsset.browser_download_url,
+      kind: 'found',
+      target: {
+        version: release.tag_name,
+        publishedAt: release.published_at,
+        commits: parseChangelog(release.body),
+        tarballUrl: tarballAsset.browser_download_url,
+        sha256sumsUrl: sumsAsset.browser_download_url,
+      },
     };
   }
 
@@ -561,6 +598,7 @@ export class SystemUpdateService {
       runningTasks,
       disabledReason,
       channel,
+      missingAsset: null,
       diagnosticsEnabled: isDiagnosticsEnabled(deployMode, channel),
     };
   }

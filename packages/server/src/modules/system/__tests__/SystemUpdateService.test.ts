@@ -310,13 +310,85 @@ describe('SystemUpdateService', () => {
     it('does not take another OS\'s archive for a Windows hub', async () => {
       stubRelease(['azito-hub-v1.1.0-linux-x64.tar.gz', 'SHA256SUMS']);
       const service = new SystemUpdateService(channelResolver, stateManager, deployModeDetector, dataPaths, makeTaskRepoStub(0), null, { platform: 'win32', arch: 'x64', bundleRoot: host.bundleRoot });
-      await expect(service.checkForUpdate()).resolves.toMatchObject({ status: 'check-failed' });
+      await expect(service.checkForUpdate()).resolves.toMatchObject({ status: 'no-asset', latestVersion: 'v1.1.0', missingAsset: 'azito-hub-v1.1.0-win32-x64.zip' });
     });
 
     it('does not take a zip for a Linux hub', async () => {
       stubRelease(['azito-hub-v1.1.0-win32-x64.zip', 'SHA256SUMS']);
       const service = new SystemUpdateService(channelResolver, stateManager, deployModeDetector, dataPaths, makeTaskRepoStub(0), null, { platform: 'linux', arch: 'x64', bundleRoot: host.bundleRoot });
-      await expect(service.checkForUpdate()).resolves.toMatchObject({ status: 'check-failed' });
+      await expect(service.checkForUpdate()).resolves.toMatchObject({ status: 'no-asset', missingAsset: 'azito-hub-v1.1.0-linux-x64.tar.gz' });
+    });
+
+    describe('rc channel', () => {
+      function stubReleases(releases: Array<{ tag: string; assets: string[] }>): void {
+        vi.stubGlobal('fetch', vi.fn(() => Promise.resolve({
+          ok: true,
+          json: () => Promise.resolve(releases.map((r) => ({
+            tag_name: r.tag, body: null, published_at: '2026-01-01T00:00:00Z', draft: false, prerelease: true,
+            assets: r.assets.map(releaseAsset),
+          }))),
+        } as Response)));
+      }
+      const linux = (): SystemUpdateService => new SystemUpdateService(channelResolver, stateManager, deployModeDetector, dataPaths, makeTaskRepoStub(0), null, { platform: 'linux', arch: 'x64', bundleRoot: host.bundleRoot });
+
+      beforeEach(() => channelResolver.updateChannelKind('rc'));
+
+      it('takes the newest release that has the asset when a newer one lacks it', async () => {
+        stubReleases([
+          { tag: 'v1.2.0-rc.1', assets: ['azito-hub-v1.2.0-rc.1-win32-x64.zip', 'SHA256SUMS'] },
+          { tag: 'v1.1.0', assets: ['azito-hub-v1.1.0-linux-x64.tar.gz', 'SHA256SUMS'] },
+        ]);
+        await expect(linux().checkForUpdate()).resolves.toMatchObject({ status: 'update-available', latestVersion: 'v1.1.0', missingAsset: null });
+      });
+
+      it('reports no-asset for the newest release when none has the asset', async () => {
+        stubReleases([
+          { tag: 'v1.1.0', assets: ['azito-hub-v1.1.0-win32-x64.zip', 'SHA256SUMS'] },
+          { tag: 'v1.2.0-rc.1', assets: ['azito-hub-v1.2.0-rc.1-win32-x64.zip', 'SHA256SUMS'] },
+        ]);
+        await expect(linux().checkForUpdate()).resolves.toMatchObject({
+          status: 'no-asset', latestVersion: 'v1.2.0-rc.1', missingAsset: 'azito-hub-v1.2.0-rc.1-linux-x64.tar.gz',
+        });
+      });
+
+      it('reports check-failed when there is no release at all', async () => {
+        stubReleases([]);
+        await expect(linux().checkForUpdate()).resolves.toMatchObject({ status: 'check-failed' });
+      });
+    });
+
+    it('names the checksum file when only that is missing', async () => {
+      stubRelease(['azito-hub-v1.1.0-linux-x64.tar.gz']);
+      const service = new SystemUpdateService(channelResolver, stateManager, deployModeDetector, dataPaths, makeTaskRepoStub(0), null, { platform: 'linux', arch: 'x64', bundleRoot: host.bundleRoot });
+      await expect(service.checkForUpdate()).resolves.toMatchObject({ status: 'no-asset', missingAsset: 'SHA256SUMS' });
+    });
+
+    it('still reports check-failed when the release API cannot be reached or answers an error', async () => {
+      vi.stubGlobal('fetch', vi.fn(() => Promise.reject(new Error('offline'))));
+      const offline = new SystemUpdateService(channelResolver, stateManager, deployModeDetector, dataPaths, makeTaskRepoStub(0), null, host);
+      await expect(offline.checkForUpdate()).resolves.toMatchObject({ status: 'check-failed', missingAsset: null });
+
+      vi.stubGlobal('fetch', vi.fn(() => Promise.resolve({ ok: false, status: 500 } as Response)));
+      const apiError = new SystemUpdateService(channelResolver, stateManager, deployModeDetector, dataPaths, makeTaskRepoStub(0), null, host);
+      await expect(apiError.checkForUpdate()).resolves.toMatchObject({ status: 'check-failed' });
+    });
+
+    it('refuses an update to the latest release that has no asset for this OS, with the reason', async () => {
+      stubRelease(['azito-hub-v1.1.0-linux-x64.tar.gz', 'SHA256SUMS']);
+      const service = new SystemUpdateService(channelResolver, stateManager, deployModeDetector, dataPaths, makeTaskRepoStub(0), null, { platform: 'win32', arch: 'x64', bundleRoot: host.bundleRoot });
+      await expect(service.startUpdate()).resolves.toEqual({ started: false, error: 'v1.1.0 には、この OS 向けの配布物（azito-hub-v1.1.0-win32-x64.zip）がありません' });
+    });
+
+    it('refuses an update to a named version that has no asset for this OS, with the same reason', async () => {
+      stubRelease(['azito-hub-v1.1.0-linux-x64.tar.gz', 'SHA256SUMS']);
+      const service = new SystemUpdateService(channelResolver, stateManager, deployModeDetector, dataPaths, makeTaskRepoStub(0), null, { platform: 'win32', arch: 'x64', bundleRoot: host.bundleRoot });
+      await expect(service.startUpdate('v1.1.0')).resolves.toEqual({ started: false, error: 'v1.1.0 には、この OS 向けの配布物（azito-hub-v1.1.0-win32-x64.zip）がありません' });
+    });
+
+    it('still says the check failed when a named version cannot be fetched', async () => {
+      vi.stubGlobal('fetch', vi.fn(() => Promise.resolve({ ok: false, status: 404 } as Response)));
+      const service = new SystemUpdateService(channelResolver, stateManager, deployModeDetector, dataPaths, makeTaskRepoStub(0), null, host);
+      await expect(service.startUpdate('v9.9.9')).resolves.toEqual({ started: false, error: '最新バージョンの確認に失敗しました' });
     });
 
     it('refuses a Windows architecture without a release, with the reason, instead of looking for another archive', async () => {

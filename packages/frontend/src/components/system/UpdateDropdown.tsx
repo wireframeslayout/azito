@@ -2,6 +2,7 @@ import { useTranslation } from 'react-i18next';
 import { useSystemUpdate } from '../../hooks/useSystemUpdate';
 import type { UpdateCommit } from '../../hooks/useSystemUpdate';
 import { Chip } from '../ui/Chip';
+import { updateStatusNotice } from './updateStatusView';
 import { Spinner } from '../ui/Spinner';
 
 interface UpdateDropdownProps {
@@ -48,7 +49,7 @@ export function UpdateDropdown({ onStartUpdate, onCheckNow }: UpdateDropdownProp
 
   const hasUpdate = status.status === 'update-available';
   const isDisabled = status.status === 'disabled';
-  const isCheckFailed = status.status === 'check-failed';
+  const notice = updateStatusNotice(status);
 
   return (
     <div>
@@ -110,17 +111,17 @@ export function UpdateDropdown({ onStartUpdate, onCheckNow }: UpdateDropdownProp
         </div>
       )}
 
-      {isCheckFailed && (
-        <div style={{
+      {notice && (
+        <div role="status" style={{
           margin: '10px 14px',
           padding: '8px 10px',
           borderRadius: 'var(--radius-sm)',
-          background: 'var(--danger-a08)',
-          border: '1px solid var(--danger-a35)',
-          color: 'var(--danger)',
+          background: `var(--${notice.severity}-a08)`,
+          border: `1px solid var(--${notice.severity}-a35)`,
+          color: `var(--${notice.severity})`,
           fontSize: 'var(--font-xs)',
         }}>
-          {t('system.checkFailed')}
+          {t(notice.key, notice.values)}
         </div>
       )}
 
