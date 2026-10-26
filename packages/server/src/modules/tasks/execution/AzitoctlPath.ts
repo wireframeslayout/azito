@@ -49,8 +49,10 @@ async function assertHarnessInstalled(files: IFileOps, serverName: string, harne
     throw new Error(`Could not check whether this hub's harness is installed on server "${serverName}" (${scriptPath}): ${err instanceof Error ? err.message : String(err)}`);
   }
   if (found !== null) return;
+  // `null` is "not found or not readable", not strictly "not installed": an older agent's ShellFileOps decides existence with `test -e`, which
+  // cannot tell a missing path from one the agent's user may not search, so the message names both causes instead of guessing.
   const hub = harnessPrefix ? `this hub's harness (prefix "${harnessPrefix}")` : "this hub's harness";
-  throw new Error(`${hub} is not installed on server "${serverName}" (${scriptPath} is missing). Install the harness again from Setup.`);
+  throw new Error(`The azitoctl of ${hub} was not found or cannot be read on server "${serverName}" (${scriptPath}). Install the harness again from Setup, or check the permissions of that path.`);
 }
 
 /**

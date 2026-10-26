@@ -445,6 +445,29 @@ describe('PhaseLoopRunner http-signal execution mode (Issue: AZITO監視強化 P
     }));
   });
 
+  it.each([
+    ['not found', async () => null, /not found or cannot be read on server "win".*Install the harness again from Setup/],
+    ['a failed query', async () => { throw new Error('stat gave no usable output'); }, /Could not check whether this hub's harness is installed on server "win".*stat gave no usable output/],
+  ])('rejects with the reason, before any output stream or prompt, when the hub harness is %s on the server (#523)', async (_name, stat, reason) => {
+    const windowsAgent = { name: 'win', type: 'agent' } as any;
+    const transportFactory = {
+      hostProfileFor: vi.fn(() => ({ platform: 'win32', arch: 'x64' })),
+      getFileOps: vi.fn(() => ({ platform: 'win32', realpath: vi.fn(async () => 'C:\\Users\\me'), stat })),
+      getAgentTransport: vi.fn(() => ({ fetchNodeExecPath: vi.fn(async () => 'C:\\Program Files\\nodejs\\node.exe') })),
+    };
+    const { runner, workerInput, workerWaiter, httpSignalCoordinator } = makeRunner({ harnessPrefix: 'w806rc', transportFactory });
+    const unit = makeUnitForRun({ workerExecutionMode: 'http-signal' });
+
+    await expect(
+      runner.stateMachineLoop(unit, 'win', task, windowsAgent, asPaneHandle('sess:1.1'), {} as any, new AbortController().signal, 'sess:1', null, false),
+    ).rejects.toThrow(reason);
+
+    expect(workerWaiter.startPaneStream).not.toHaveBeenCalled();
+    expect(workerWaiter.startSignalStream).not.toHaveBeenCalled();
+    expect(httpSignalCoordinator.start).not.toHaveBeenCalled();
+    expect(workerInput.sendPrompt).not.toHaveBeenCalled();
+  });
+
   it('advances to the next phase on an explicit azitoctl completion even when the output payload/file is empty', async () => {
     // Fail-fast guard exception: completionSource 'azitoctl' means the agent
     // itself ran `azitoctl complete` — an explicit signal is trusted even when

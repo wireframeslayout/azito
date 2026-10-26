@@ -4224,7 +4224,7 @@ describe('ExecuteTaskUseCase.followUp state-machine continuation uses the task-r
       await useCase.followUp(10, 1, 'please continue');
       await flushMicrotasks(60);
       expect(taskRepo.updateStatus).toHaveBeenCalledWith(1, 'failed');
-      expect(errorLogs(logRepo).join('\n')).toMatch(/not installed on server "srv-agent".*Install the harness again from Setup/);
+      expect(errorLogs(logRepo).join('\n')).toMatch(/not found or cannot be read on server "srv-agent".*Install the harness again from Setup, or check the permissions/);
       expect(waiter.startPaneStream).not.toHaveBeenCalled();
       expect(waiter.waitForWorker).not.toHaveBeenCalled();
     });

@@ -37,7 +37,7 @@ describe('resolveEnvelopeHost', () => {
   ])('%s that has only the unprefixed harness fails at once, telling to install it again (no fallback to the unprefixed folder)', async (_name, platform, home, script) => {
     const onlyUnprefixed = (p: string) => /[\\/]harness[\\/]/.test(p);
     const tf = factory(platform, home, undefined, onlyUnprefixed);
-    await expect(resolveEnvelopeHost(tf, agent, 'w806rc')).rejects.toThrow(new RegExp(`prefix "w806rc".*"srv".*harness-w806rc.*${script.replace('.', '\\.')} is missing.*Install the harness again from Setup`));
+    await expect(resolveEnvelopeHost(tf, agent, 'w806rc')).rejects.toThrow(new RegExp(`prefix "w806rc".*"srv".*harness-w806rc.*${script.replace('.', '\\.')}.*Install the harness again from Setup, or check the permissions`));
     // the same host is fine for a hub without a prefix
     await expect(resolveEnvelopeHost(tf, agent, '')).resolves.toMatchObject({ os: platform === 'win32' ? 'windows' : 'posix' });
   });
