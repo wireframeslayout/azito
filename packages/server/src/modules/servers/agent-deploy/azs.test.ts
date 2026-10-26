@@ -59,13 +59,23 @@ describe.skipIf(process.platform === 'win32')('azs env file selection', { timeou
     expect((await azs({})).stdout).toContain('--server plain-hub ');
   });
 
-  it('the pane environment wins; only the missing values come from the file', async () => {
+  it('a complete set in the pane environment is used and the file is not read', async () => {
+    envFile('azitoctl-dev.env', 'file-hub');
+
+    const ran = await azs({
+      AZITO_PREFIX: 'dev', AZITO_SERVER_NAME: 'pane-hub', AZITO_SUPERVISOR_PATH: path.join(home, 'supervisor.cjs'), AZITO_SUPERVISOR_RUNNER: 'echo',
+    });
+
+    expect(ran.stdout).toContain('--server pane-hub ');
+  });
+
+  it('an incomplete set in the pane environment is dropped: the whole set comes from the file', async () => {
     envFile('azitoctl-dev.env', 'file-hub');
 
     const ran = await azs({ AZITO_PREFIX: 'dev', AZITO_SERVER_NAME: 'pane-hub' });
 
-    expect(ran.stdout).toContain('--server pane-hub ');
-    expect(ran.stdout.startsWith(path.join(home, 'supervisor.cjs'))).toBe(true); // runner `echo` and path both came from the file
+    expect(ran.stdout).toContain('--server file-hub ');
+    expect(ran.stdout.startsWith(path.join(home, 'supervisor.cjs'))).toBe(true);
   });
 
   it('a prefix whose env file is missing launches the command without a supervisor and never reads the unprefixed file', async () => {

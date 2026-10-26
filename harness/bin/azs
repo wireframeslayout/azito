@@ -59,21 +59,19 @@ fi
 
 # ── env解決 (serverName / supervisor path / runner) ──
 # AZITO_SERVER_NAME / AZITO_SUPERVISOR_PATH / AZITO_SUPERVISOR_RUNNER は
-# 環境変数優先。欠けている値だけを azitoctl[-<prefix>].env (AZITO_PREFIX で選ぶ。
-# azitoctl / azito-activity.sh と同じ探索順) から補い、pane の環境の値は上書きしない。
+# 環境変数優先。3 つがそろっていれば
+# ファイルは読まない。そろっていなければ環境の値は使わず、azitoctl[-<prefix>].env
+# (AZITO_PREFIX で選ぶ。azitoctl / azito-activity.sh と同じ規則) から一式を読む。
 # azitoctl.env は setup.sh が printf %q でクォートして書き出す信頼済みファイル (chmod 600)。
 # プレフィックスが指定されているのにそのファイルが無いときは、無印のファイルを
 # 読まず、supervisor 無しで起動する (別のハブの serverName を使わないため)。
 if [[ -z "${AZITO_SERVER_NAME:-}" || -z "${AZITO_SUPERVISOR_PATH:-}" || -z "${AZITO_SUPERVISOR_RUNNER:-}" ]]; then
   if [[ -f "$AZITOCTL_ENV_FILE" ]]; then
-    _pane_server="${AZITO_SERVER_NAME:-}"
-    _pane_path="${AZITO_SUPERVISOR_PATH:-}"
-    _pane_runner="${AZITO_SUPERVISOR_RUNNER:-}"
+    AZITO_SERVER_NAME=""
+    AZITO_SUPERVISOR_PATH=""
+    AZITO_SUPERVISOR_RUNNER=""
     # shellcheck disable=SC1090
     source "$AZITOCTL_ENV_FILE"
-    AZITO_SERVER_NAME="${_pane_server:-${AZITO_SERVER_NAME:-}}"
-    AZITO_SUPERVISOR_PATH="${_pane_path:-${AZITO_SUPERVISOR_PATH:-}}"
-    AZITO_SUPERVISOR_RUNNER="${_pane_runner:-${AZITO_SUPERVISOR_RUNNER:-}}"
   elif [[ -n "${AZITO_PREFIX:-}" ]]; then
     echo "azs: AZITO_PREFIX=$AZITO_PREFIX but $AZITOCTL_ENV_FILE does not exist (not falling back to the unprefixed azitoctl.env); launching without supervisor" >&2
     exec "$@"

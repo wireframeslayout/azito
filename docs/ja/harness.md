@@ -116,9 +116,9 @@ Codex CLI がインストールされている環境（`codex` コマンドま�
 
 読む env ファイルは環境変数 `AZITO_PREFIX` で決まります: `~/.azito/azitoctl${AZITO_PREFIX:+-$AZITO_PREFIX}.env`（`AZITO_PREFIX` が空なら `azitoctl.env`）。フック（`azito-activity.sh` など）と同じ規則です。ハブは、タスクのワーカーの pane に自分のハーネスのプレフィックス（`AZITO_HARNESS_PREFIX`、無ければ空）を `AZITO_PREFIX` として渡します。
 
-- pane の環境で与えられた値は上書きしません。env ファイルは足りない値だけを補います（`azitoctl`: `AZITO_URL` / `AZITO_WEBHOOK_TOKEN`、`azs`: `AZITO_SERVER_NAME` / `AZITO_SUPERVISOR_PATH` / `AZITO_SUPERVISOR_RUNNER`）。
-- プレフィックスが指定されているのに `azitoctl-<prefix>.env` が無いとき、無印の `azitoctl.env`（別のハブのもの）にはフォールバックしません。`azitoctl` は `AZITO_URL` が環境にあればそのまま送信し、無ければ終了コード 3 で終了します。`azs` は supervisor 無しでコマンドをそのまま起動します。
-- フックは「3 つの値が揃っていなければ環境の値を捨て、ファイルから一式を読む」規則で、`azitoctl` / `azs` とは補完の仕方が異なります（ファイルの選び方は同じ）。
+- 環境に一式（`azitoctl`: `AZITO_URL` と `AZITO_WEBHOOK_TOKEN`、`azs`: `AZITO_SERVER_NAME` / `AZITO_SUPERVISOR_PATH` / `AZITO_SUPERVISOR_RUNNER`）がそろっていれば、それをそのまま使い、env ファイルは読みません。
+- 一式がそろっていなければ、環境の値は使わず、env ファイルから一式を読みます（フックと同じ規則）。ファイルの token を、そのファイルの URL 以外へ送らないためです。例えば環境に URL しかないとき、その URL にファイルの token は送られません。
+- プレフィックスが指定されているのに `azitoctl-<prefix>.env` が無いとき、無印の `azitoctl.env`（別のハブのもの）にはフォールバックしません。`azitoctl` は環境に `AZITO_URL` があればそのまま送信し（token は付けません）、無ければ終了コード 3 で終了します。`azs` は supervisor 無しでコマンドをそのまま起動します。
 
 ### azt-mcp の初回準備
 
