@@ -87,7 +87,7 @@ terminal.
 
 Agent processes launched in a task's worker window (`is_primary = 1`) receive flags that block
 access to the `azt-mcp` MCP server (Claude: `--strict-mcp-config`, Codex:
-`-c mcp_servers.azt-mcp.enabled=false`). This prevents a task agent from reaching the
+`-c mcp_servers.azt-mcp.enabled=false -c mcp_servers.azt-mcp.command=azt-mcp-disabled`; the second keeps a host without a registered azt-mcp loadable, #522). This prevents a task agent from reaching the
 full-authority API surface through the operator's `AZITO_UI_TOKEN`-carrying MCP server.
 
 User-added windows (`is_primary = 0`) do **not** receive these blocking flags. These windows

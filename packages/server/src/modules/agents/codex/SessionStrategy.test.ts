@@ -67,16 +67,16 @@ describe('CodexSessionStrategy.buildRespawnLaunch (Issue #28 third-party review:
     const strategy = createStrategy();
     const fresh = respawnLine(strategy, null, null, null);
     const resumed = respawnLine(strategy, 'session-1', null, null);
-    expect(fresh).toContain('-c mcp_servers.azt-mcp.enabled=false');
+    expect(fresh).toContain('-c mcp_servers.azt-mcp.enabled=false -c mcp_servers.azt-mcp.command=azt-mcp-disabled');
     // This is the exact gap the review caught: the respawn builder's
     // `codex resume` branch previously hand-rolled its own command string
     // and omitted the MCP-disable override that buildCodexLaunchCommand
     // applies to a fresh launch — a respawned codex worker could load the
     // operator's azt-mcp (full-power AZITO_UI_TOKEN) and bypass task-token
     // scoping.
-    expect(resumed).toContain('-c mcp_servers.azt-mcp.enabled=false');
+    expect(resumed).toContain('-c mcp_servers.azt-mcp.enabled=false -c mcp_servers.azt-mcp.command=azt-mcp-disabled');
     expect(resumed).toBe(
-      'codex resume session-1 --dangerously-bypass-approvals-and-sandbox -c mcp_servers.azt-mcp.enabled=false',
+      'codex resume session-1 --dangerously-bypass-approvals-and-sandbox -c mcp_servers.azt-mcp.enabled=false -c mcp_servers.azt-mcp.command=azt-mcp-disabled',
     );
   });
 
@@ -84,7 +84,7 @@ describe('CodexSessionStrategy.buildRespawnLaunch (Issue #28 third-party review:
     const strategy = createStrategy();
     const resumed = respawnLine(strategy, 'session-2', 'gpt-5.6-sol', '--verbose');
     expect(resumed).toBe(
-      "codex resume session-2 --dangerously-bypass-approvals-and-sandbox -c mcp_servers.azt-mcp.enabled=false --model 'gpt-5.6-sol' '--verbose'",
+      "codex resume session-2 --dangerously-bypass-approvals-and-sandbox -c mcp_servers.azt-mcp.enabled=false -c mcp_servers.azt-mcp.command=azt-mcp-disabled --model 'gpt-5.6-sol' '--verbose'",
     );
   });
 

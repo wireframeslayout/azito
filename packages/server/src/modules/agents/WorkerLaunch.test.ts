@@ -18,11 +18,21 @@ describe('one launch, two ways to start it', () => {
   it('codex: the same, with the MCP override as two words', () => {
     const launch = buildWorkerLaunch('codex', 'gpt-5.6-sol', null);
     expect(renderLaunchLine(launch!, posixDialect)).toBe(
-      "codex --dangerously-bypass-approvals-and-sandbox -c mcp_servers.azt-mcp.enabled=false --model 'gpt-5.6-sol'",
+      "codex --dangerously-bypass-approvals-and-sandbox -c mcp_servers.azt-mcp.enabled=false -c mcp_servers.azt-mcp.command=azt-mcp-disabled --model 'gpt-5.6-sol'",
     );
     expect(launchArgv(launch!)).toEqual([
-      'codex', '--dangerously-bypass-approvals-and-sandbox', '-c', 'mcp_servers.azt-mcp.enabled=false', '--model', 'gpt-5.6-sol',
+      'codex', '--dangerously-bypass-approvals-and-sandbox', '-c', 'mcp_servers.azt-mcp.enabled=false', '-c', 'mcp_servers.azt-mcp.command=azt-mcp-disabled', '--model', 'gpt-5.6-sol',
     ]);
+  });
+
+  it('codex: the azt-mcp override needs no double quote, so it survives cmd.exe and the POSIX shell untouched (#522)', () => {
+    // codex reads `-c key=value` as TOML and falls back to a string; `command="x"` would need a `"` that launchArgv refuses and a
+    // bare `true` would become a boolean (config.load fails). The unquoted word is a string in both.
+    const launch = buildWorkerLaunch('codex', null, null)!;
+    const argv = launchArgv(launch);
+    expect(argv).toContain('mcp_servers.azt-mcp.command=azt-mcp-disabled');
+    expect(argv.join(' ')).not.toMatch(/["']/);
+    expect(renderLaunchLine(launch, posixDialect)).not.toMatch(/["']/);
   });
 
   it('session arguments are added after the launch in both forms', () => {

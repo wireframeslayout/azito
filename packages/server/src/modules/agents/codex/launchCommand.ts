@@ -24,7 +24,22 @@ import { extraArgValues, flag, value, type LaunchArg, type ProgramLaunch } from 
  * registered by hand under a different name (out of scope here — the review
  * finding is specifically about our own azt-mcp carrying the UI token).
  */
-const CODEX_MCP_DISABLE_ARGS: readonly LaunchArg[] = [flag('-c'), flag('mcp_servers.azt-mcp.enabled=false')];
+export const CODEX_MCP_DISABLE_TEXTS = [
+  'mcp_servers.azt-mcp.enabled=false',
+  // Issue #522: `-c` deep-merges into the host's config.toml. On a host that never registered azt-mcp (a fresh host, a harness
+  // installed without a UI token, a Windows agent) `enabled=false` alone builds an entry with no transport and codex refuses to
+  // load its config ("invalid transport in mcp_servers.azt-mcp"; reproduced on codex-cli 0.149.1 and 0.163.0). A `command` makes
+  // that entry a valid stdio definition, and since it is disabled it is never started. The value is deliberately an unquoted
+  // word: codex's `-c` parser (codex-rs/utils/cli/src/config_override.rs, identical in rust-v0.149.0 / v0.163.0 / v0.164.0) tries
+  // TOML first and, when that fails, takes the text as a string — so no `"` has to survive the shell (POSIX) or cmd.exe, whose
+  // special characters `launchArgv` refuses. A bare word that is valid TOML (`true`, `1`) would become a non-string and fail.
+  // A host whose azt-mcp is stdio (what setup.sh / setup.mjs register) keeps working: only its command is replaced, and it is disabled.
+  // A host whose azt-mcp is a `url` (streamable_http) transport fails to load ("url is not supported for stdio",
+  // codex-rs/config/src/mcp_types.rs) — fail-closed, never an azt-mcp usable by the worker. We do not register that form.
+  'mcp_servers.azt-mcp.command=azt-mcp-disabled',
+] as const;
+
+const CODEX_MCP_DISABLE_ARGS: readonly LaunchArg[] = CODEX_MCP_DISABLE_TEXTS.flatMap((text) => [flag('-c'), flag(text)]);
 
 /**
  * Shared base builder for both a fresh `codex` launch and a `codex resume
