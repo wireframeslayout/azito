@@ -11,7 +11,11 @@ export type HubEnvResult =
   | { ok: true; env: HubEnv }
   | { ok: false; missing: ('AZITO_URL' | 'AZITO_WEBHOOK_TOKEN')[] };
 
-const VALID_PREFIX = /^[a-z0-9-]+$/;
+/**
+ * The prefix grammar of harness/setup.mjs (PREFIX_PATTERN in harness/lib/claudeSettings.mjs plus its `..` check), the same as the hub's
+ * (packages/server/src/app/harnessPrefix.ts); env.test.ts compares it with setup.mjs's.
+ */
+const VALID_PREFIX = /^[A-Za-z0-9][A-Za-z0-9._-]*$/;
 
 /**
  * Returns the path to the azitoctl env file selected by `AZITO_PREFIX`:
@@ -23,7 +27,7 @@ const VALID_PREFIX = /^[a-z0-9-]+$/;
  */
 export function resolveEnvFilePath(env: NodeJS.ProcessEnv = process.env): string | null {
   const prefix = env.AZITO_PREFIX ?? '';
-  if (prefix && !VALID_PREFIX.test(prefix)) return null;
+  if (prefix && (!VALID_PREFIX.test(prefix) || prefix.includes('..'))) return null;
   return path.join(os.homedir(), '.azito', `azitoctl${prefix ? `-${prefix}` : ''}.env`);
 }
 

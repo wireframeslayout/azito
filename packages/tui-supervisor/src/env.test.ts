@@ -1,6 +1,7 @@
 import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
+import { pathToFileURL } from 'node:url';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { parseEnvFile, resolveEnvFilePath, resolveHubEnv, resolveMuxPaneRef } from './env';
 
@@ -96,9 +97,21 @@ describe('resolveEnvFilePath', () => {
     expect(p).toBeNull();
   });
 
-  it('selects no file for a prefix with uppercase letters (never the unprefixed one)', () => {
-    const p = resolveEnvFilePath({ AZITO_PREFIX: 'Dev' });
-    expect(p).toBeNull();
+  it.each(['prod.eu', 'Dev', 'dev_1'])('accepts %j, a prefix setup.sh / setup.mjs install', (prefix) => {
+    expect(resolveEnvFilePath({ AZITO_PREFIX: prefix })).toBe(path.join(os.homedir(), '.azito', `azitoctl-${prefix}.env`));
+  });
+
+  it.each(['a/b', '.x', 'a..b', '-x'])('selects no file for %j (never the unprefixed one)', (prefix) => {
+    expect(resolveEnvFilePath({ AZITO_PREFIX: prefix })).toBeNull();
+  });
+
+  it('is the same rule as setup.mjs (PREFIX_PATTERN and its ".." check) and as the hub', async () => {
+    const file = path.resolve(__dirname, '..', '..', '..', 'harness', 'lib', 'claudeSettings.mjs');
+    const { PREFIX_PATTERN } = (await import(pathToFileURL(file).href)) as { PREFIX_PATTERN: RegExp };
+    for (const value of ['dev', 'prod.eu', 'Dev', 'dev_1', '../x', 'a/b', '.x', 'a..b', 'a b', '-x', '_x']) {
+      const accepted = resolveEnvFilePath({ AZITO_PREFIX: value }) !== null;
+      expect(accepted, value).toBe(PREFIX_PATTERN.test(value) && !value.includes('..'));
+    }
   });
 
   it('selects no file for a prefix with spaces (never the unprefixed one)', () => {
