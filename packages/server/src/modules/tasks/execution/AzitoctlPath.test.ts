@@ -42,6 +42,13 @@ describe('resolveEnvelopeHost', () => {
     await expect(resolveEnvelopeHost(tf, agent, '')).resolves.toMatchObject({ os: platform === 'win32' ? 'windows' : 'posix' });
   });
 
+  it('a query that fails is reported as such, not as a missing harness', async () => {
+    const tf = factory('linux', '/home/me', undefined, () => { throw new Error('stat gave no usable output'); });
+    const err = await resolveEnvelopeHost(tf, agent, 'w806rc').catch((e: Error) => e);
+    expect((err as Error).message).toMatch(/Could not check whether this hub's harness is installed.*stat gave no usable output/);
+    expect((err as Error).message).not.toMatch(/Install the harness again/);
+  });
+
   it('the hub\'s own server is not checked (no prefixed copy is ever installed there)', async () => {
     const tf = factory('linux', '/home/me', undefined, () => false);
     await expect(resolveEnvelopeHost(tf, local, 'w806rc')).resolves.toMatchObject({ os: 'posix' });

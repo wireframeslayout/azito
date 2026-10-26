@@ -41,7 +41,14 @@ export function resolveAzitoctlPath(server: Pick<ServerConfig, 'type'>, harnessP
 async function assertHarnessInstalled(files: IFileOps, serverName: string, harnessPrefix: string, script: 'azitoctl' | 'azitoctl.mjs'): Promise<void> {
   const { harnessDir } = harnessLocation(files.platform, await homeDirOf(files), harnessPrefix);
   const scriptPath = pathApiFor(files.platform).join(harnessDir, 'bin', script);
-  if (await files.stat(scriptPath) !== null) return;
+  // A failed query is not "missing": it fails with its own reason (reinstalling would not help), `null` is the only "not installed".
+  let found: Awaited<ReturnType<IFileOps['stat']>>;
+  try {
+    found = await files.stat(scriptPath);
+  } catch (err) {
+    throw new Error(`Could not check whether this hub's harness is installed on server "${serverName}" (${scriptPath}): ${err instanceof Error ? err.message : String(err)}`);
+  }
+  if (found !== null) return;
   const hub = harnessPrefix ? `this hub's harness (prefix "${harnessPrefix}")` : "this hub's harness";
   throw new Error(`${hub} is not installed on server "${serverName}" (${scriptPath} is missing). Install the harness again from Setup.`);
 }

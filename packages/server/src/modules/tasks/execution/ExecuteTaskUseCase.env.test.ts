@@ -4196,6 +4196,62 @@ describe('ExecuteTaskUseCase.followUp state-machine continuation uses the task-r
     expect(taskRepo.updateStatus).toHaveBeenCalledWith(1, 'failed');
   });
 
+  describe('the hub harness is checked before the follow-up opens any stream (#523)', () => {
+    function setup(files: { stat: () => Promise<unknown> } | null) {
+      const server = makeServer({ name: 'srv-agent', type: 'agent' });
+      const task = makeTask({ id: 1, serverName: server.name, unitId: 10, currentPhase: 'implementing', tmuxWindow: 'task-1', workingDirectory: '/srv/repo' });
+      const built = buildUseCase({
+        task,
+        project: makeProject({ defaultUnitId: null, repositories: [repoWithId(1)] }),
+        units: [makeUnit({ id: 10, workerType: 'claude', workerModel: 'opus', workerExecutionMode: 'tmux-pipe' })],
+        projectServer: { workingDirectory: null, branch: null, tmuxSession: 'azito', distributeCode: false, distributionRepositoryId: null },
+        server,
+      });
+      (built.unitTypeLoader.get as ReturnType<typeof vi.fn>).mockReturnValue(makeUnitTypeWithImplementingPhase());
+      (built.tmux.listSessions as ReturnType<typeof vi.fn>).mockResolvedValue([{ name: 'azito', windows: [{ name: 'task-1', index: 1 }] }]);
+      if (files) (built.transportFactory.getFileOps as ReturnType<typeof vi.fn>).mockReturnValue({ platform: 'linux', realpath: async () => '/home/test', ...files });
+      const stream = { stop: vi.fn(), getBuffer: () => '', getFilePath: () => '/tmp/pane' };
+      const waiter = (built.useCase as any).workerWaiter;
+      waiter.startPaneStream = vi.fn(() => stream);
+      waiter.startSignalStream = vi.fn(() => ({ stop: vi.fn(), getFilePath: () => '/tmp/sig' }));
+      waiter.waitForWorker = vi.fn(async () => ({ output: 'done', classification: { status: 'phase_complete' as const } }));
+      return { ...built, stream, waiter };
+    }
+    const errorLogs = (logRepo: { append: ReturnType<typeof vi.fn> }) => logRepo.append.mock.calls.filter((c) => c[2] === 'status_change' && c[3]?.status === 'error').map((c) => String(c[3].message));
+
+    it('fails the task with "install the harness again" when this hub\'s harness is not on the server, and opens no stream', async () => {
+      const { useCase, taskRepo, logRepo, waiter } = setup({ stat: async () => null });
+      await useCase.followUp(10, 1, 'please continue');
+      await flushMicrotasks(60);
+      expect(taskRepo.updateStatus).toHaveBeenCalledWith(1, 'failed');
+      expect(errorLogs(logRepo).join('\n')).toMatch(/not installed on server "srv-agent".*Install the harness again from Setup/);
+      expect(waiter.startPaneStream).not.toHaveBeenCalled();
+      expect(waiter.waitForWorker).not.toHaveBeenCalled();
+    });
+
+    it('fails with the reason of a query that could not be made (not "install again"), and opens no stream', async () => {
+      const { useCase, taskRepo, logRepo, waiter } = setup({ stat: async () => { throw new Error('stat gave no usable output'); } });
+      await useCase.followUp(10, 1, 'please continue');
+      await flushMicrotasks(60);
+      expect(taskRepo.updateStatus).toHaveBeenCalledWith(1, 'failed');
+      const logged = errorLogs(logRepo).join('\n');
+      expect(logged).toMatch(/Could not check whether this hub's harness is installed on server "srv-agent".*stat gave no usable output/);
+      expect(logged).not.toMatch(/Install the harness again/);
+      expect(waiter.startPaneStream).not.toHaveBeenCalled();
+    });
+
+    it('releases the output stream when the envelope cannot be built after it was opened', async () => {
+      const { useCase, taskRepo, logRepo, stream, waiter } = setup({ stat: async () => ({}) });
+      (useCase as any).runtimeRegistry.get('tui').buildFollowUpEnvelope = vi.fn(() => { throw new Error('envelope boom'); });
+      await useCase.followUp(10, 1, 'please continue');
+      await flushMicrotasks(60);
+      expect(waiter.startPaneStream).toHaveBeenCalledTimes(1);
+      expect(stream.stop).toHaveBeenCalledTimes(1);
+      expect(taskRepo.updateStatus).toHaveBeenCalledWith(1, 'failed');
+      expect(errorLogs(logRepo)).toContain('envelope boom');
+    });
+  });
+
   // Issue #87 review (forge/87-mirror follow-up), Important finding 2
   // (third round) — same "disable distribution, then resume/follow-up, then
   // delete the recorded repository before pushing" flow as
