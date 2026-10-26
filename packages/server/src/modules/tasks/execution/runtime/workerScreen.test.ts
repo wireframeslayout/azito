@@ -154,6 +154,18 @@ describe('readInputBox on the screens of real panes (#532)', () => {
       expect(isWorkerScreenReady('codex', fixture('codex-0.164-win-pending.txt'))).toBe(false);
     });
 
+    it('an overlay in place of the input is unknown: the `›` of the history (our echo) is not the input', () => {
+      const screen = fixture('codex-0.163-locked-overlay.txt');
+      expect(screen).toContain('› AZITO prompt file.');
+      expect(screen).toContain('This conversation is open in another app');
+      expect(readInputBox('codex', screen)).toEqual({ state: 'unknown' });
+      expect(isWorkerScreenReady('codex', screen)).toBe(false);
+    });
+
+    it('a `›` message in the history above a real composer is not taken for the input', () => {
+      expect(readInputBox('codex', fixture('codex-0.164-win-after-reply.txt'))).toEqual({ state: 'empty' });
+    });
+
     it('knows "Input disabled", and an unknown screen is unknown, not empty', () => {
       expect(readInputBox('codex', '› Input disabled while the agent works\n\n  ? for shortcuts')).toEqual({ state: 'disabled' });
       expect(readInputBox('codex', 'some screen without a composer\nat all')).toEqual({ state: 'unknown' });
@@ -186,6 +198,20 @@ describe('readInputBox on the screens of real panes (#532)', () => {
       expect(readInputBox('claude', `${rule}\n❯ check the logs\n${rule}\n  bypass permissions on (shift+tab to cycle)`)).toEqual({ state: 'filled', text: 'check the logs' });
       expect(readInputBox('claude', 'bypass permissions on (shift+tab to cycle)')).toEqual({ state: 'unknown' });
       expect(readInputBox('claude', '')).toEqual({ state: 'unknown' });
+    });
+
+    it('the queued-message placeholder of a busy turn is an empty input', () => {
+      const screen = fixture('claude-2.1.310-linux-queued-placeholder.txt');
+      expect(screen).toContain('Press up to edit queued messages');
+      expect(readInputBox('claude', screen)).toEqual({ state: 'empty' });
+    });
+
+    it('an old empty frame in the history is not the input when the current input below it cannot be read', () => {
+      const oldFrame = '╭────────╮\n│ >        │\n╰────────╯';
+      // the current input has our line and a lower rule that is not one long run of ─
+      const current = `❯ AZITO prompt file. x: /tmp/azito-prompt-4-0123456789abcdef.md\n${'─'.repeat(20)} ${'─'.repeat(20)}\n  bypass permissions on (shift+tab to cycle)`;
+      expect(readInputBox('claude', `${oldFrame}\n\n● reply\n\n${current}`)).toEqual({ state: 'unknown' });
+      expect(readInputBox('claude', `${oldFrame}\n\n● reply\n\n${'─'.repeat(40)}\n❯ \n${'─'.repeat(20)} ${'─'.repeat(20)}\n  bypass permissions on (shift+tab to cycle)`)).toEqual({ state: 'unknown' });
     });
 
     it('reads Claude Code 2.0.x\'s framed box', () => {

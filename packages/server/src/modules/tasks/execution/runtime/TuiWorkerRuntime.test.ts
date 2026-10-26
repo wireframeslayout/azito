@@ -174,7 +174,10 @@ interface HarnessOptions {
   drawDelayMs?: number;
   /** The first N Enters are not a submit (codex read them as part of a paste). */
   enterIgnored?: number;
-  supervised?: boolean;
+  /** Ctrl+U does not clear the input. */
+  cannotClear?: boolean;
+  /** The first captures, whatever else is set (a screen that is still changing). */
+  firstScreens?: string[];
 }
 
 /** The real runtime over a pane that reacts to the keys the way a TUI does, under fake timers. */
@@ -183,7 +186,9 @@ function sendHarness(kind: 'claude' | 'codex', options: HarnessOptions = {}) {
   const events: Array<{ what: string; at: number }> = [];
   const state = { typedAt: -1, submits: 0, enterIgnored: options.enterIgnored ?? 0 };
   const note = (what: string) => events.push({ what, at: Date.now() });
+  const firstScreens = [...(options.firstScreens ?? [])];
   const screen = (): string => {
+    if (firstScreens.length > 0) return firstScreens.shift()!;
     if (state.typedAt >= 0 && state.submits === 0 && options.typed !== undefined && Date.now() - state.typedAt >= (options.drawDelayMs ?? 0)) return options.typed;
     if (state.submits > 0 && options.submitted !== undefined) return options.submitted;
     if (state.typedAt >= 0 && Date.now() - state.typedAt < (options.drawDelayMs ?? 0)) return workerScreenWith('');
@@ -197,9 +202,9 @@ function sendHarness(kind: 'claude' | 'codex', options: HarnessOptions = {}) {
   };
   const workerInput = {
     sendPrompt: vi.fn(async (_s: unknown, _h: unknown, text: string) => { pane.sendKeys([text, 'Enter']); }),
-    isSupervised: vi.fn(() => options.supervised ?? false),
-    typePrompt: vi.fn(async (_s: unknown, _h: unknown, text: string) => { state.typedAt = Date.now(); note('type'); pane.sendKeys([text]); }),
-    submitPrompt: vi.fn(async () => {
+    clearInputLine: vi.fn(async () => { note('clear'); if (!options.cannotClear) pane.clear(); }),
+    typePrompt: vi.fn(async (_s: unknown, _h: unknown, text: string, _ctx?: unknown, _target?: unknown) => { state.typedAt = Date.now(); note('type'); pane.sendKeys([text]); }),
+    submitPrompt: vi.fn(async (_s: unknown, _h: unknown, _ctx?: unknown, _target?: unknown) => {
       note('enter');
       state.submits++;
       if (state.enterIgnored > 0) { state.enterIgnored--; state.submits--; state.submits = Math.max(state.submits, 0); return; }
@@ -285,6 +290,22 @@ describe('TuiWorkerRuntime.sendPrompt — the worker has to be at an empty input
     expect(h.workerInput.typePrompt).not.toHaveBeenCalled();
   });
 
+  it('a Claude input that shows "Press up to edit queued messages" is empty: a message of a person waits for the turn, ours is sent', async () => {
+    const h = sendHarness('claude', { idle: fixture('claude-2.1.310-linux-queued-placeholder.txt') });
+    expect(await h.send()).toBeNull();
+    expect(h.workerInput.typePrompt).toHaveBeenCalledTimes(1);
+  });
+
+  it('an input that reads as text for a moment (a wording not known yet) gets the grace before the task is stopped', async () => {
+    const rule = '─'.repeat(60);
+    const unknownHint = `${rule}\n❯ Some new hint of an empty input\n${rule}\n  bypass permissions on (shift+tab to cycle)`;
+    const h = sendHarness('claude', { firstScreens: [unknownHint, unknownHint] });
+    expect(await h.send()).toBeNull();
+    const stuck = sendHarness('claude', { idle: unknownHint });
+    expect(await stuck.send()).toMatchObject({ reason: 'input_not_empty' });
+    expect(stuck.promptFiles.stage).not.toHaveBeenCalled();
+  });
+
   it('a screen that is still drawing gets the grace: the line is sent once the empty input shows', async () => {
     const h = sendHarness('codex', {});
     const first = h.tmux.captureScreen.getMockImplementation()!;
@@ -353,6 +374,27 @@ describe('TuiWorkerRuntime.sendPrompt — the line has to be drawn, submitted an
     expect(err).toMatchObject({ name: 'TuiNotReadyError', reason: 'prompt_not_submitted' });
     expect(h.workerInput.submitPrompt).toHaveBeenCalledTimes(2);
     expect(workerNotReadyReason(err)).toBe('worker_not_ready: prompt_not_submitted');
+    // the line the task typed is taken back, so nothing submits it later
+    expect(h.workerInput.clearInputLine).toHaveBeenCalledTimes(1);
+    expect(h.pane.screen()).toContain('Ask Codex to do anything');
+    expect((err as Error).message).not.toMatch(/消してから再開/);
+  });
+
+  it('says to clear the input before resuming when the line could not be taken back', async () => {
+    const h = sendHarness('codex', { enterIgnored: 99, cannotClear: true });
+    const err = await h.send();
+    expect(err).toMatchObject({ name: 'TuiNotReadyError', reason: 'prompt_not_submitted', inputLeft: true });
+    expect((err as Error).message).toMatch(/入力欄に残った 1 行を消してから再開してください/);
+    expect(h.workerInput.clearInputLine).toHaveBeenCalledTimes(1);
+  });
+
+  it('does not clear an input that does not hold the task\'s line (a person\'s draft is never touched)', async () => {
+    const h = sendHarness('codex', { typed: workerScreenWith('') });
+    expect(await h.send()).toMatchObject({ reason: 'prompt_not_typed' });
+    expect(h.workerInput.clearInputLine).not.toHaveBeenCalled();
+    const draft = sendHarness('codex', { idle: fixture('codex-0.164-win-draft.txt') });
+    expect(await draft.send()).toMatchObject({ reason: 'input_not_empty' });
+    expect(draft.workerInput.clearInputLine).not.toHaveBeenCalled();
   });
 
   it('stops with input_state_unknown, not as a success, when the input cannot be read until the end', async () => {
@@ -384,11 +426,21 @@ describe('TuiWorkerRuntime.sendPrompt — the line has to be drawn, submitted an
     expect(h.pane.submitted).toEqual([LINE]);
   });
 
-  it('a supervised pane takes the line and Enter as one command; the check that it was taken still follows', async () => {
-    const h = sendHarness('codex', { supervised: true });
+  it('the Enter is not sent on the first, still empty look after the line was typed (a pane that draws it late, under a supervisor too)', async () => {
+    // before: empty, empty; after the line was typed: empty, then the line shows
+    const h = sendHarness('codex', { drawDelayMs: 700 });
     expect(await h.send()).toBeNull();
-    expect(h.workerInput.sendPrompt).toHaveBeenCalledTimes(1);
-    expect(h.workerInput.typePrompt).not.toHaveBeenCalled();
+    const at = (what: string) => h.events.find((e) => e.what === what)!.at;
+    expect(at('enter') - at('type')).toBeGreaterThanOrEqual(700);
+    expect(h.workerInput.submitPrompt).toHaveBeenCalledTimes(1);
+    expect(h.pane.submitted).toEqual([LINE]);
+  });
+
+  it('hands the supervisor target to the typing and to the Enter', async () => {
+    const h = sendHarness('claude', {});
+    await h.send();
+    expect(h.workerInput.typePrompt.mock.calls[0][4]).toBe('sess:1');
+    expect(h.workerInput.submitPrompt.mock.calls[0][3]).toBe('sess:1');
   });
 });
 

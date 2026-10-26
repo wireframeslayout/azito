@@ -44,8 +44,12 @@ const NOT_READY_MESSAGES: Record<TuiNotReadyReason, string> = {
 };
 
 export class TuiNotReadyError extends Error {
-  constructor(public readonly reason: TuiNotReadyReason, public readonly lastScreen: string) {
-    super(NOT_READY_MESSAGES[reason]);
+  /**
+   * `inputLeft`: the task's own line was typed and is still in the input (it could not be taken back): whoever resumes must clear it first,
+   * or it is submitted by the next Enter.
+   */
+  constructor(public readonly reason: TuiNotReadyReason, public readonly lastScreen: string, public readonly inputLeft = false) {
+    super(inputLeft ? `${NOT_READY_MESSAGES[reason]}。入力欄に残った 1 行を消してから再開してください` : NOT_READY_MESSAGES[reason]);
     this.name = 'TuiNotReadyError';
   }
 }
@@ -80,6 +84,8 @@ const LINE_DRAW_MS = 5000;
 const LINE_DRAW_POLL_MS = 200;
 const SUBMIT_CONFIRM_MS = 5000;
 const SUBMIT_CONFIRM_POLL_MS = 300;
+const CLEAR_CONFIRM_MS = 2000;
+const CLEAR_POLL_MS = 200;
 
 export class TuiWorkerRuntime implements IWorkerRuntime {
   constructor(
@@ -154,7 +160,7 @@ export class TuiWorkerRuntime implements IWorkerRuntime {
    *      the text is drawn is not a submit;
    *   4. after the agent's submit delay, Enter;
    *   5. the line is gone from the input (submitted). If it is still there, Enter once more; still there: `prompt_not_submitted`.
-   * A pane under a supervisor takes the line and Enter as one command, so only 1, 2 and 5 apply. A generic worker has no screen to read:
+   * A pane under a supervisor takes the same steps: the line is pasted without a submit, and the Enter is a key command of its own. A generic worker has no screen to read:
    * the line and Enter are sent together, and a key that did not arrive shows as the wait for completion running out.
    */
   async sendPrompt(ctx: WorkerContext, prompt: string): Promise<void> {
@@ -167,15 +173,11 @@ export class TuiWorkerRuntime implements IWorkerRuntime {
       return;
     }
     await this.assertEmptyInputNow(ctx, kind);
-    if (this.workerInput.isSupervised(ctx.server, ctx.handle, ctx.supervisorTarget)) {
-      await this.workerInput.sendPrompt(ctx.server, ctx.handle, instruction, logCtx, ctx.supervisorTarget);
-    } else {
-      await this.workerInput.typePrompt(ctx.server, ctx.handle, instruction, logCtx);
-      await this.awaitLineDrawn(ctx, kind, instruction);
-      const submitDelayMs = submitDelayMsOf(kind);
-      if (submitDelayMs > 0) await sleep(submitDelayMs);
-      await this.workerInput.submitPrompt(ctx.server, ctx.handle);
-    }
+    await this.workerInput.typePrompt(ctx.server, ctx.handle, instruction, logCtx, ctx.supervisorTarget);
+    await this.awaitLineDrawn(ctx, kind, instruction);
+    const submitDelayMs = submitDelayMsOf(kind);
+    if (submitDelayMs > 0) await sleep(submitDelayMs);
+    await this.workerInput.submitPrompt(ctx.server, ctx.handle, logCtx, ctx.supervisorTarget);
     await this.confirmSubmitted(ctx, kind, instruction);
   }
 
@@ -194,10 +196,10 @@ export class TuiWorkerRuntime implements IWorkerRuntime {
       const dialog = detectWorkerDialog(kind, screen);
       if (dialog) throw new TuiNotReadyError(dialog, screen);
       const box = readInputBox(kind, screen);
-      // Text in the input (the line of an earlier prompt, a person's draft) would be sent together with ours.
-      if (box.state === 'filled') throw new TuiNotReadyError('input_not_empty', screen);
+      // Text in the input (the line of an earlier prompt, a person's draft) would be sent together with ours. It is waited on for the
+      // grace like any screen that is not settled: a wording of an empty input that is not known yet reads as text, and goes away.
       if (box.state === 'empty' && isWorkerScreenReady(kind, screen)) return;
-      if (Date.now() >= deadline) throw new TuiNotReadyError('not_ready', screen);
+      if (Date.now() >= deadline) throw new TuiNotReadyError(box.state === 'filled' ? 'input_not_empty' : 'not_ready', screen);
       await sleep(SEND_READY_POLL_MS);
     }
   }
@@ -217,7 +219,7 @@ export class TuiWorkerRuntime implements IWorkerRuntime {
     for (;;) {
       screen = await this.captureScreen(ctx);
       if (inputHoldsLine(readInputBox(kind, screen), instruction)) return;
-      if (Date.now() >= deadline) throw new TuiNotReadyError('prompt_not_typed', screen);
+      if (Date.now() >= deadline) throw await this.stoppedWithInputCleared(ctx, kind, instruction, 'prompt_not_typed', screen);
       await sleep(LINE_DRAW_POLL_MS);
     }
   }
@@ -239,9 +241,27 @@ export class TuiWorkerRuntime implements IWorkerRuntime {
         await sleep(SUBMIT_CONFIRM_POLL_MS);
       }
       if (box.state === 'unknown') throw new TuiNotReadyError('input_state_unknown', screen);
-      if (resendEnter) await this.workerInput.submitPrompt(ctx.server, ctx.handle);
+      if (resendEnter) await this.workerInput.submitPrompt(ctx.server, ctx.handle, { taskId: ctx.taskId, unitId: ctx.unitId }, ctx.supervisorTarget);
     }
-    throw new TuiNotReadyError('prompt_not_submitted', screen);
+    throw await this.stoppedWithInputCleared(ctx, kind, instruction, 'prompt_not_submitted', screen);
+  }
+
+  /**
+   * The error that stops the task after the line was typed. If the line is in the input, it is taken back first (Ctrl+U) so that a person's
+   * Enter or the chat cannot submit a prompt the task was stopped for; a draft of someone else is never touched: the line is only cleared
+   * when it is seen to be ours. If it could not be cleared, the message says to clear it before resuming.
+   */
+  private async stoppedWithInputCleared(ctx: WorkerContext, kind: TuiAgentKind, instruction: string, reason: TuiNotReadyReason, screen: string): Promise<TuiNotReadyError> {
+    if (!inputHoldsLine(readInputBox(kind, screen), instruction)) return new TuiNotReadyError(reason, screen);
+    await this.workerInput.clearInputLine(ctx.server, ctx.handle);
+    const deadline = Date.now() + CLEAR_CONFIRM_MS;
+    let latest = screen;
+    for (;;) {
+      await sleep(CLEAR_POLL_MS);
+      latest = await this.captureScreen(ctx);
+      if (!inputHoldsLine(readInputBox(kind, latest), instruction)) return new TuiNotReadyError(reason, latest);
+      if (Date.now() >= deadline) return new TuiNotReadyError(reason, latest, true);
+    }
   }
 
   buildEnvelope(ctx: EnvelopeBuildContext): EnvelopeBuildResult {

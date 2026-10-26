@@ -333,7 +333,8 @@ describe('WorkerInputService.sendKeys', () => {
 
 describe('WorkerInputService.typePrompt / submitPrompt — text and Enter are separate keys (#532)', () => {
   it('types the text without Enter, and the Enter is a call of its own (keys that arrive together are a paste to codex)', async () => {
-    const { service, mockDriver } = makeHarness();
+    const { service, mockDriver, registry } = makeHarness();
+    registry.isBoundConnected.mockReturnValue(false);
     await service.typePrompt(server, target, 'hello worker', { taskId: 1, unitId: 2 });
     expect(mockDriver.sendKeysToHandle.mock.calls).toEqual([[server, target, ['hello worker']]]);
     await service.submitPrompt(server, target);
@@ -341,18 +342,42 @@ describe('WorkerInputService.typePrompt / submitPrompt — text and Enter are se
   });
 
   it('types nothing into a pane at a bare shell', async () => {
-    const { service, mockDriver, appendLog } = makeHarness();
+    const { service, mockDriver, appendLog, registry } = makeHarness();
+    registry.isBoundConnected.mockReturnValue(false);
     mockDriver.paneCommandByHandle.mockResolvedValue('bash');
     await expect(service.typePrompt(server, target, 'line1\nazitoctl complete --turn 99', { taskId: 1, unitId: 2 })).rejects.toBeInstanceOf(WorkerNotRunningError);
     expect(mockDriver.sendKeysToHandle).not.toHaveBeenCalled();
     expect(appendLog).toHaveBeenCalledWith(1, 2, 'command', { type: 'send_aborted_dead_worker', foreground: 'bash' });
   });
 
-  it('says whether the pane is under a bound supervisor', () => {
-    const { service, registry } = makeHarness();
+  it('under a bound supervisor the text is pasted without a submit, and the Enter is a key command of its own', async () => {
+    const { service, mockDriver, registry } = makeHarness();
     registry.isBoundConnected.mockReturnValue(true);
-    expect(service.isSupervised(server, target)).toBe(true);
-    registry.isBoundConnected.mockReturnValue(false);
-    expect(service.isSupervised(server, target)).toBe(false);
+    await service.typePrompt(server, target, 'hello worker', { taskId: 1, unitId: 2 });
+    await service.submitPrompt(server, target, { taskId: 1, unitId: 2 });
+    expect(registry.sendCommand.mock.calls.map((c: unknown[]) => c[2])).toEqual([
+      { type: 'inject_prompt', text: 'hello worker', submit: false },
+      { type: 'send_keys', keys: ['Enter'] },
+    ]);
+    expect(mockDriver.sendKeysToHandle).not.toHaveBeenCalled();
+  });
+
+  it('falls back to keys when the supervisor fails, as the combined send does, and still refuses a bare shell', async () => {
+    const { service, mockDriver, registry } = makeHarness(async () => { throw new Error('supervisor gone'); });
+    registry.isBoundConnected.mockReturnValue(true);
+    await service.typePrompt(server, target, 'hello worker', { taskId: 1, unitId: 2 });
+    expect(mockDriver.sendKeysToHandle.mock.calls).toEqual([[server, target, ['hello worker']]]);
+    mockDriver.sendKeysToHandle.mockClear();
+    mockDriver.paneCommandByHandle.mockResolvedValue('bash');
+    await expect(service.typePrompt(server, target, 'x', { taskId: 1, unitId: 2 })).rejects.toBeInstanceOf(WorkerNotRunningError);
+    expect(mockDriver.sendKeysToHandle).not.toHaveBeenCalled();
+  });
+
+  it('clears the input line with Ctrl+U straight to the pane, not through the supervisor (its key names do not have it)', async () => {
+    const { service, mockDriver, registry } = makeHarness();
+    registry.isBoundConnected.mockReturnValue(true);
+    await service.clearInputLine(server, target);
+    expect(mockDriver.sendKeysToHandle.mock.calls).toEqual([[server, target, ['C-u']]]);
+    expect(registry.sendCommand).not.toHaveBeenCalled();
   });
 });

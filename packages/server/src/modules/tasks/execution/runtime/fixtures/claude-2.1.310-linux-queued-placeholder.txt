@@ -1,0 +1,40 @@
+
+ ▐▛███▛█   Claude Code v2.1.310
+▝▜██████▀  Opus 5.5 · Claude Max
+ ▝▝   ▝▝   /tmp
+
+
+❯ AZITO prompt file. Read the file named at the end of this line and
+  carry out every instruction in it exactly:
+  /tmp/azr4/azito-prompt-9-00aa11bb22cc33dd.md
+
+  Read 1 file
+
+● OK
+
+✻ Cogitated for 7s · done 6:06
+
+❯ AZITO prompt file. Read the file named at the end of this line and
+  carry out every instruction in it exactly:
+  /tmp/azr4/azito-prompt-9-11aa11bb22cc33dd.md
+
+  AZITOプロンプトファイルを読む · 3s
+  ⎿  $ sleep 12 (3s)
+     (ctrl+b ctrl+b (twice) to run in background)
+
+❯ AZITO prompt file. Read the file named at the end of this line and
+  carry out every instruction in it exactly:
+  /tmp/azr4/azito-prompt-9-22aa11bb22cc33dd.md
+  ctrl+x ctrl+s to send now
+
+
+
+* Proofing… (8s · ↓ 192 tokens)
+  ⎿  Tip: Run /install-github-app to tag @claude right from your
+     Github issues and PRs
+
+──────────────────────────────────────────────────────────────────────
+❯ Press up to edit queued messages
+──────────────────────────────────────────────────────────────────────
+  server01@win-server-001 | /tmp  Opus 5.5 | ctx:95% | 5h:2%
+  ⏵⏵ bypass permissions on (shift+tab to cycle) · ← 2 agents

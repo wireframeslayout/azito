@@ -7,19 +7,20 @@ const CONTROL_KEY = /^(C-|M-|Escape$|Tab$|BTab$|Up$|Down$|Left$|Right$|BSpace$|H
 const RULE = '─'.repeat(60);
 
 export function workerScreenWith(draft: string): string {
+  // Claude's input between its two rules, codex's composer and footer at the bottom (each parser reads its own part).
   return [
-    `› ${draft === '' ? 'Ask Codex to do anything' : draft}`,
-    '',
-    '  ? for shortcuts                              100% context left',
     RULE,
     `❯ ${draft}`,
     RULE,
-    '  bypass permissions on (shift+tab to cycle)',
+    `› ${draft === '' ? 'Ask Codex to do anything' : draft}`,
+    '',
+    '  ? for shortcuts                              100% context left',
+    '  bypass permissions on (shift+tab to cycle) · fake pane',
   ].join('\n');
 }
 
 /** A pane that takes keys the way a TUI's input does: text is appended to the box, Enter submits (empties) it. */
-export function createFakeWorkerPane(): { sendKeys(keys: string[]): void; screen(): string; readonly submitted: string[] } {
+export function createFakeWorkerPane(): { sendKeys(keys: string[]): void; clear(): void; screen(): string; readonly submitted: string[] } {
   let draft = '';
   const submitted: string[] = [];
   return {
@@ -32,6 +33,9 @@ export function createFakeWorkerPane(): { sendKeys(keys: string[]): void; screen
           draft += key;
         }
       }
+    },
+    clear() {
+      draft = '';
     },
     screen: () => workerScreenWith(draft),
     submitted,

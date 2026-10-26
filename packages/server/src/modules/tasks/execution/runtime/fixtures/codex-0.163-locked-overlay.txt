@@ -1,0 +1,40 @@
+
+  >_ OpenAI Codex (v0.163.0)
+     /tmp
+
+
+› AZITO prompt file. Read the file named at the end of this line and carry out every instruction in it exactly: /tmp/
+  azr4/azito-prompt-9-00aa11bb22cc33dd.md
+
+
+• 指定されたプロンプトを読み、手順と対象を確認して進めます。
+
+• Explored
+  └ Read azito-prompt-9-00aa11bb22cc33dd.md
+    + Show details
+
+• OK
+
+  Worked for 7s • 6:12 AM
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+  🔒  This conversation is open in another app                                                              r to retry
+      Close it there and press R to continue here.
+
+   r retry   f fork   esc/^c/q exit   ^t transcript

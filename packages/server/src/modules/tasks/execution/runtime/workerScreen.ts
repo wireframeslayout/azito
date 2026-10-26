@@ -163,6 +163,11 @@ function screenLines(output: string): string[] {
   return stripAnsi(output).split('\n').map((line) => line.replace(/\s+$/, ''));
 }
 
+/** What Claude Code shows in an empty input: the `Try "..."` hint, and `Press up to edit queued messages` while a message waits for the turn to end. */
+function isClaudePlaceholder(text: string): boolean {
+  return text.startsWith('Try "') || text.startsWith('Press up to');
+}
+
 function boxOf(text: string, isEmpty: (text: string) => boolean): InputBox {
   const trimmed = text.trim();
   return trimmed === '' || isEmpty(trimmed) ? { state: 'empty' } : { state: 'filled', text: trimmed };
@@ -170,6 +175,8 @@ function boxOf(text: string, isEmpty: (text: string) => boolean): InputBox {
 
 const RULE_LINE = /^─{10,}$/;
 /** codex's lines below the composer: the model line is after a blank line, the shortcuts / context line carries these. */
+/** A row of codex's footer: the model line (`<model> default · <dir>`), the shortcuts / context row, the warning row. */
+const CODEX_FOOTER_ROW = /·|\? for shortcuts|context left|esc to interrupt|warning|\bf\d to /i;
 const CODEX_FOOTER_LINE = /\? for shortcuts|context left|esc to interrupt/i;
 
 /**
@@ -185,16 +192,20 @@ function readClaudeInput(lines: string[]): InputBox {
     const inside = lines.slice(upper + 1, lower).filter((line) => line.trim() !== '');
     const below = lines.slice(lower + 1).filter((line) => line.trim() !== '');
     if (inside.length > 0 && /^[❯>]/.test(inside[0].trim()) && below.length <= 4) {
-      return boxOf([inside[0].trim().replace(/^[❯>]\s?/, ''), ...inside.slice(1).map((line) => line.trim())].join(''), (text) => text.startsWith('Try "'));
+      return boxOf([inside[0].trim().replace(/^[❯>]\s?/, ''), ...inside.slice(1).map((line) => line.trim())].join(''), isClaudePlaceholder);
     }
     if (inside.length === 0 && below.length <= 4) return UNKNOWN;
   }
   const top = lines.map((line, i) => (line.trim().startsWith('╭') ? i : -1)).filter((i) => i >= 0).pop();
   const bottom = lines.map((line, i) => (line.trim().startsWith('╰') ? i : -1)).filter((i) => i >= 0).pop();
-  if (top !== undefined && bottom !== undefined && bottom > top + 1) {
+  // The 2.0.x frame is the input only when it is the bottom of the screen: a status line or two below it, and no rule or prompt line
+  // (a current input of the 2.1.x layout whose rules could not be read, for one) that would make it an old frame of the history.
+  const belowFrame = bottom === undefined ? [] : lines.slice(bottom + 1).filter((line) => line.trim() !== '');
+  const frameIsCurrent = belowFrame.length <= 4 && belowFrame.every((line) => !/^[─\s]*─[─\s]*$/.test(line.trim()) && !/^[❯>]/.test(line.trim()) && !line.trim().startsWith('╭'));
+  if (top !== undefined && bottom !== undefined && bottom > top + 1 && frameIsCurrent) {
     const inside = lines.slice(top + 1, bottom).map((line) => line.trim().replace(/^│\s?/, '').replace(/\s?│$/, '').trim()).filter((line) => line !== '');
     if (inside.length > 0 && /^[❯>]/.test(inside[0])) {
-      return boxOf([inside[0].replace(/^[❯>]\s?/, ''), ...inside.slice(1)].join(''), (text) => text.startsWith('Try "'));
+      return boxOf([inside[0].replace(/^[❯>]\s?/, ''), ...inside.slice(1)].join(''), isClaudePlaceholder);
     }
   }
   return UNKNOWN;
@@ -208,10 +219,15 @@ function readCodexInput(lines: string[]): InputBox {
   const start = lines.map((line, i) => (line.startsWith('›') ? i : -1)).filter((i) => i >= 0).pop();
   if (start === undefined) return UNKNOWN;
   const composer = [lines[start].replace(/^›\s?/, '')];
-  for (const line of lines.slice(start + 1)) {
-    if (line.trim() === '' || CODEX_FOOTER_LINE.test(line)) break;
-    composer.push(line.trim());
+  let end = start + 1;
+  for (; end < lines.length; end++) {
+    if (lines[end].trim() === '' || CODEX_FOOTER_LINE.test(lines[end])) break;
+    composer.push(lines[end].trim());
   }
+  // Codex's history marks a person's message with `›` too, so a `›` line is the input only at the bottom of the screen: after it only a
+  // blank line and the footer (model line, shortcuts / context, warnings). An overlay in place of the input leaves the history's `›` as the last one.
+  const below = lines.slice(end).filter((line) => line.trim() !== '');
+  if (below.length > 3 || !below.every((line) => CODEX_FOOTER_ROW.test(line))) return UNKNOWN;
   const text = composer.join(' ').trim();
   if (/^input disabled/i.test(text)) return { state: 'disabled' };
   return boxOf(composer.join(''), (t) => t.toLowerCase().startsWith('ask codex to do anything'));
