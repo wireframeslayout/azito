@@ -87,7 +87,7 @@ harness 配布分離（Phase B）を説明します。
 
 タスクワーカーの窓（`is_primary = 1`）で起動されるエージェントには、`azt-mcp` MCP サーバーへの
 アクセスを遮断するフラグが付与されます（Claude: `--strict-mcp-config`、Codex:
-`-c mcp_servers.azt-mcp.enabled=false -c mcp_servers.azt-mcp.command=azt-mcp-disabled`。後者は azt-mcp 未登録のホストでも Codex が設定を読み込めるようにするもの、#522）。これにより、タスクエージェントがオペレーターの
+`-c mcp_servers.azt-mcp.enabled=false -c mcp_servers.azt-mcp.command=azt-mcp-disabled`。後者は azt-mcp 未登録のホストでも Codex が設定を読み込めるようにするものです、#522）。これにより、タスクエージェントがオペレーターの
 `AZITO_UI_TOKEN` を持つ MCP サーバー経由で全権 API にアクセスすることを防ぎます。
 
 ユーザーが追加した窓（`is_primary = 0`）にはこの遮断を適用しません。ユーザーの窓は対話的な
@@ -95,6 +95,13 @@ harness 配布分離（Phase B）を説明します。
 `untrusted` のタスクに紐付いた非プライマリ窓では、実行承認が完了するまで遮断が維持されます
 （`approve-execution` で承認され、fingerprint が一致している場合のみ遮断が解除されます）。
 タスクや設定の取得に失敗した場合はフェイルクローズ（遮断する）で動作します。
+
+注意（Codex）: `azt-mcp` を `url`（streamable_http）形式で手動登録したホストでは、上記の
+`command` の上書きと衝突し、Codex が `url is not supported for stdio` で設定を読み込めず
+タスクのワーカーが起動しません（`azt-mcp` は使えないまま、安全側に失敗します）。直すには、
+`~/.codex/config.toml`（`CODEX_HOME` があればその下）から `url` 形式の `[mcp_servers.azt-mcp]`
+を削除し、必要ならハーネスの stdio の形（`harness/setup.sh` / `setup.mjs` が `codex mcp add` で
+登録するもの）で登録し直してください。
 
 ### `~/.azito/operator.env`
 

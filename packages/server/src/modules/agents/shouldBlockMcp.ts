@@ -1,7 +1,7 @@
 /**
  * MCP blocking policy (Issue #471): determine whether a window's agent
  * launch should include MCP blocking flags (`--strict-mcp-config` for
- * claude, `-c mcp_servers.azt-mcp.enabled=false` for codex).
+ * claude, the `-c mcp_servers.azt-mcp.*` overrides in `CODEX_MCP_DISABLE_TEXTS` for codex).
  *
  * Blocking is mandatory for task worker panes (`isPrimary`) but
  * optional for user-added windows (`isPrimary === false`).  When a

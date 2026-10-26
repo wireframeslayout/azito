@@ -96,6 +96,13 @@ attached to a task with `inputTrust = 'untrusted'` are blocked until execution i
 (`approve-execution` with a matching fingerprint). If the task or its settings cannot be
 resolved, blocking is applied (fail-closed).
 
+Note (Codex): on a host where `azt-mcp` was registered by hand with a `url` (streamable_http)
+transport, the `command` override above conflicts with it and Codex fails to load its config with
+`url is not supported for stdio`, so task workers do not start (`azt-mcp` stays unusable; the
+failure is on the safe side). To fix it, remove the `url`-style `[mcp_servers.azt-mcp]` from
+`~/.codex/config.toml` (under `CODEX_HOME` if set) and, if needed, register it again in the
+harness's stdio form (what `harness/setup.sh` / `setup.mjs` add with `codex mcp add`).
+
 ### `~/.azito/operator.env`
 
 When you pass `--ui-token` to `setup.sh`, it writes `AZITO_URL` and `AZITO_UI_TOKEN` into
