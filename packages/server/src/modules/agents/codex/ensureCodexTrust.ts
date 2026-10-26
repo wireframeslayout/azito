@@ -54,6 +54,11 @@ function sameKey(platform: TrustPlatform, a: string, b: string): boolean {
  * inline table) is reported as `failed` and left alone, and so is a file that is not valid TOML. The write is atomic, keeps the file's
  * permission bits and is refused if the file changed after it was read. An existing `trust_level` (even "untrusted") is a person's
  * decision and is not changed. A missing file is created.
+ *
+ * Where the file is: the hub's own server honours the hub's `CODEX_HOME` (`homes.codexHome`); any other server is `~/.codex` of its user. The
+ * `CODEX_HOME` of a remote shell is not known to the hub, so a remote host that sets it elsewhere is not covered by this registration. That
+ * is safe, not a gap that lets a prompt through: codex then shows its trust screen, and the screen check before every prompt
+ * (`TuiWorkerRuntime.sendPrompt`) stops the task with `worker_not_ready: codex_trust_prompt` and sends nothing.
  */
 export async function ensureCodexTrust(
   transport: IServerTransport,

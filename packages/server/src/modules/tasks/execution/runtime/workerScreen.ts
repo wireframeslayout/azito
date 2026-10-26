@@ -56,32 +56,58 @@ function hasBypassPermissionsDialog(output: string): boolean {
 }
 
 /**
+ * The text codex shows only at its composer: the placeholder "Ask Codex to do anything" (`chatwidget.rs` PLACEHOLDER), the footer
+ * ("? for shortcuts", "100% context left", `bottom_pane/footer.rs`) and the working line "esc to interrupt". None of these is on an
+ * onboarding screen, and the composer is the bottom of the screen: whatever sits above it is the conversation.
+ */
+const CODEX_READY_MARKERS = ['ask codex to do anything', '? for shortcuts', 'context left', 'esc to interrupt'] as const;
+
+function lastIndexOfAny(text: string, needles: readonly string[]): number {
+  return Math.max(...needles.map((needle) => text.lastIndexOf(needle)));
+}
+
+/**
+ * The last place in `text` where a whole choice set shows (every needle present), or -1. A conversation can quote a sentence of a dialog,
+ * but only the dialog itself has its choices together.
+ */
+function lastIndexOfChoiceSet(text: string, needles: readonly string[]): number {
+  return needles.every((needle) => text.includes(needle)) ? Math.max(...needles.map((needle) => text.lastIndexOf(needle))) : -1;
+}
+
+/**
  * codex's "Update available" screen (`update_prompt.rs`): "Update available · 0.149.1 → 0.164.0", the choices "Update now (runs `...`)" /
  * "Skip" / "Skip until next version". Its default choice is the first one, so an Enter typed over it runs the update command.
  */
-function hasCodexUpdatePrompt(output: string): boolean {
-  const text = flatten(output);
-  return text.includes('update available') && (text.includes('skip until next version') || text.includes('update now'));
-}
+const CODEX_UPDATE_CHOICES = ['update available', 'update now', 'skip until next version'] as const;
 
 /**
  * codex's folder trust screen: rust-v0.149.0 asks "Do you trust the contents of this directory?" with "Yes, continue" / "No, quit";
  * rust-v0.164.0 says "Trust this folder? Codex can read, edit, and run files here ..." with "Trust and continue" / "Quit".
  * (Claude Code's own "trust this folder" screen does not mention Codex and has no "trust and continue".)
  */
-function hasCodexTrustPrompt(output: string): boolean {
+const CODEX_TRUST_CHOICE_SETS = [
+  ['trust the contents of this directory', 'yes, continue', 'no, quit'],
+  ['trust this folder?', 'trust and continue', 'quit'],
+] as const;
+
+/**
+ * The codex dialog on the screen right now. A dialog is a whole choice set, and it is the current screen only when nothing of the
+ * composer (placeholder, footer) shows below it: a conversation that quotes "Update available ... Skip until next version" above a live
+ * composer is not one, and a dialog under an old footer in the scrollback is.
+ */
+function detectCodexDialog(output: string): WorkerDialog | null {
   const text = flatten(output);
-  return text.includes('trust the contents of this directory') ||
-    text.includes('trust and continue') ||
-    (text.includes('trust this folder?') && text.includes('codex can'));
+  const composerAt = lastIndexOfAny(text, CODEX_READY_MARKERS);
+  const update = lastIndexOfChoiceSet(text, CODEX_UPDATE_CHOICES);
+  const trust = Math.max(...CODEX_TRUST_CHOICE_SETS.map((set) => lastIndexOfChoiceSet(text, set)));
+  if (update > composerAt && update >= trust) return 'codex_update_prompt';
+  if (trust > composerAt) return 'codex_trust_prompt';
+  return null;
 }
 
 /** The dialog `kind`'s screen shows, or null when it shows none this knows. */
 export function detectWorkerDialog(kind: TuiAgentKind, output: string): WorkerDialog | null {
-  if (kind === 'codex') {
-    if (hasCodexUpdatePrompt(output)) return 'codex_update_prompt';
-    return hasCodexTrustPrompt(output) ? 'codex_trust_prompt' : null;
-  }
+  if (kind === 'codex') return detectCodexDialog(output);
   if (hasBypassPermissionsDialog(output)) return 'bypass_permissions_dialog';
   return hasClaudeTrustDialog(output) ? 'trust_dialog' : null;
 }
@@ -94,17 +120,9 @@ function isClaudeReady(output: string): boolean {
   return stripped.includes('/help') && /Claude/i.test(stripped);
 }
 
-/**
- * codex's composer is on screen: its placeholder "Ask Codex to do anything" (`chatwidget.rs` PLACEHOLDER) or its footer ("? for shortcuts",
- * "100% context left", `bottom_pane/footer.rs`), or the working line "esc to interrupt". None of these is on an onboarding screen.
- */
 function isCodexReady(output: string): boolean {
-  if (detectWorkerDialog('codex', output) !== null) return false;
-  const lower = stripAnsi(output).toLowerCase();
-  return lower.includes('ask codex to do anything') ||
-    lower.includes('? for shortcuts') ||
-    lower.includes('context left') ||
-    lower.includes('esc to interrupt');
+  if (detectCodexDialog(output) !== null) return false;
+  return lastIndexOfAny(flatten(output), CODEX_READY_MARKERS) >= 0;
 }
 
 /**

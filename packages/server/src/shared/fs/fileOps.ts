@@ -161,6 +161,12 @@ export interface FileContent {
 export interface WriteOptions {
   /** Optimistic lock: the write happens only if the file still has this mtime (exact) and / or content hash (sha256, hex). */
   expect?: { mtimeMs?: number; sha256?: string };
+  /**
+   * A file that does not exist yet is created readable by its owner only (0600) from the first moment, whatever the umask; an existing
+   * file keeps its permission bits. On Windows there are no such bits: the file takes the ACL of its folder (the user's own temp folder
+   * is not readable by other users by default).
+   */
+  ownerOnly?: boolean;
 }
 
 export interface WriteResult {

@@ -24,7 +24,7 @@ const AGENT_DEDUPE_SCAN_LIMIT = 50;
 // プロジェクト跨ぎナビゲーション後、Workspace が onOpenTask を再登録しない場合に保留を破棄するTTL
 const PENDING_OPEN_TASK_TTL_MS = 5000;
 
-const FAILED_STATUSES = new Set(['error', 'send_error', 'codex_error', 'stopped_by_user']);
+const FAILED_STATUSES = new Set(['error', 'send_error', 'worker_not_ready', 'codex_error', 'stopped_by_user']);
 
 const NOTIFICATION_KINDS: readonly AppNotificationKind[] = [
   'qa', 'plan_approval', 'execution_approval', 'task_done', 'task_failed', 'agent_finished',

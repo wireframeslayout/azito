@@ -46,10 +46,35 @@ describe('codex screens', () => {
     expect(detectWorkerDialog('codex', 'Do you trust this folder?\n1. Yes, proceed\n2. No, exit')).toBeNull();
   });
 
-  it('blocks on a dialog only', () => {
+  it('names a dialog, and an unknown or empty screen is simply not ready (a sender must not go on with it)', () => {
     expect(blockingWorkerDialog('codex', update)).toBe('codex_update_prompt');
-    expect(blockingWorkerDialog('codex', 'something unknown')).toBeNull();
     expect(blockingWorkerDialog('codex', composer)).toBeNull();
+    for (const screen of ['something unknown', '', '\n\n', 'Welcome to Codex\n› 1. Sign in with ChatGPT\n  2. Provide your own API key']) {
+      expect(blockingWorkerDialog('codex', screen)).toBeNull();
+      expect(isWorkerScreenReady('codex', screen)).toBe(false);
+    }
+  });
+
+  // The conversation of a worker that develops AZITO itself quotes these sentences; the live composer below them says it is at its input.
+  it('is not stopped by a conversation that quotes a dialog above a live composer (update, trust 0.149, trust 0.164)', () => {
+    for (const quoted of [update, trust149, trust164]) {
+      const screen = `• Earlier output:\n${quoted}\n\n${composer}`;
+      expect(detectWorkerDialog('codex', screen)).toBeNull();
+      expect(isWorkerScreenReady('codex', screen)).toBe(true);
+      expect(blockingWorkerDialog('codex', screen)).toBeNull();
+    }
+  });
+
+  it('is not stopped by a single quoted sentence of a dialog (the choices are not all there)', () => {
+    for (const sentence of ['The UI says "Update available" in Settings', 'I pressed "Trust and continue" earlier', 'Do you trust the contents of this directory? is asked once']) {
+      expect(detectWorkerDialog('codex', sentence)).toBeNull();
+    }
+  });
+
+  it('is a dialog when it is below an old composer in the scrollback', () => {
+    expect(detectWorkerDialog('codex', `${composer}\n\n${update}`)).toBe('codex_update_prompt');
+    expect(detectWorkerDialog('codex', `${composer}\n\n${trust164}`)).toBe('codex_trust_prompt');
+    expect(isWorkerScreenReady('codex', `${composer}\n\n${update}`)).toBe(false);
   });
 });
 

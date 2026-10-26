@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'fs';
+import { mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, statSync, writeFileSync } from 'fs';
 import { tmpdir } from 'os';
 import * as path from 'path';
 import { FileOpsError } from './fileOps';
@@ -149,5 +149,29 @@ describe('executeFileOp', () => {
   it('lets an unexpected error propagate instead of turning it into a body', async () => {
     const broken = { ...local, platform: local.platform, list: async () => { throw new TypeError('boom'); } } as unknown as LocalFileOps;
     await expect(executeFileOp(broken, { op: 'list', path: '/x' })).rejects.toThrow('boom');
+  });
+});
+
+describe('RemoteFileOps ownerOnly write (#532)', () => {
+  it.skipIf(process.platform === 'win32')('is a separate op, and the file is created 0600 even under a permissive umask', async () => {
+    const file = path.join(dir, 'private.md');
+    const previous = process.umask(0o000);
+    try {
+      await remote.write(file, Buffer.from('secret'), { ownerOnly: true });
+    } finally {
+      process.umask(previous);
+    }
+    expect(sent.map((r) => r.op)).toEqual(['writeOwnerOnly']);
+    expect(statSync(file).mode & 0o777).toBe(0o600);
+    expect(readFileSync(file, 'utf8')).toBe('secret');
+  });
+
+  it('an agent that predates the op rejects the request (the file is not written readable by others)', async () => {
+    const oldAgentOps = fileOpRequestSchema.options.filter((o) => o.shape.op.value !== 'writeOwnerOnly');
+    const old = new RemoteFileOps(local.platform, async (request) => {
+      if (!oldAgentOps.some((o) => o.safeParse(request).success)) throw new Error('HTTP 400: invalid request');
+      return { ok: true, result: null };
+    });
+    await expect(old.write(path.join(dir, 'private.md'), Buffer.from('x'), { ownerOnly: true })).rejects.toThrow(/400/);
   });
 });

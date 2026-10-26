@@ -5,6 +5,7 @@ import * as path from 'path';
 import { TaskCleanupService } from './TaskCleanupService';
 import type { Task } from './Task';
 import { TaskTempFiles } from '../../shared/os/taskTempFiles';
+import { FileOpsError, type IFileOps } from '../../shared/fs/fileOps';
 
 describe('TaskCleanupService temp files', () => {
   let dir: string;
@@ -20,11 +21,11 @@ describe('TaskCleanupService temp files', () => {
     fs.rmSync(otherDir, { recursive: true, force: true });
   });
 
-  function service(serverType: 'local' | 'agent', logs: unknown[]): TaskCleanupService {
+  function service(serverType: 'local' | 'agent', logs: unknown[], hostFiles: Partial<IFileOps> = { platform: 'linux', remove: async () => undefined }): TaskCleanupService {
     return new TaskCleanupService({
       serverRepo: { findByName: () => ({ name: 's', type: serverType }) } as never,
       worktreeServiceFactory: {} as never,
-      transportFactory: {} as never,
+      transportFactory: { getTransport: () => ({ files: () => hostFiles }) } as never,
       projectServerRepo: { find: () => null, findByProject: () => [] } as never,
       projectRepo: {} as never,
       muxDriverRegistry: {} as never,
@@ -60,5 +61,48 @@ describe('TaskCleanupService temp files', () => {
     fs.writeFileSync(path.join(dir, 'azito-pipe-5-1.log'), 'x');
     await service('agent', []).cleanup(task, { warn: vi.fn() });
     expect(fs.existsSync(path.join(dir, 'azito-pipe-5-1.log'))).toBe(true);
+  });
+
+  // #532: the prompt file holds the task's text and is written on the agent's host, where the hub's own cleanup cannot reach it.
+  describe('an agent server\'s host', () => {
+    it('removes the recorded prompt file (and the task\'s other recorded files) through the host\'s file operations', async () => {
+      const remove = vi.fn(async (_path: string) => undefined);
+      const logs = [
+        { type: 'command', content: JSON.stringify({ type: 'prompt_file', promptFilePath: '/tmp/azito-prompt-5-0123456789abcdef.md' }) },
+        { type: 'command', content: JSON.stringify({ type: 'phase_prompt', outputFilePath: '/tmp/azito-output-5-a.md' }) },
+        { type: 'command', content: JSON.stringify({ type: 'prompt_file', promptFilePath: '/tmp/azito-prompt-6-0123456789abcdef.md' }) },
+      ];
+      await service('agent', logs, { platform: 'linux', remove }).cleanup(task, { warn: vi.fn() });
+      expect(remove.mock.calls.map((c) => c[0]).sort()).toEqual(['/tmp/azito-output-5-a.md', '/tmp/azito-prompt-5-0123456789abcdef.md']);
+    });
+
+    it('reads a Windows agent\'s paths in the agent\'s notation, whatever OS the hub runs on', async () => {
+      const remove = vi.fn(async (_path: string) => undefined);
+      const winPath = 'C:\\Users\\Jun Matsuno\\AppData\\Local\\Temp\\azito-prompt-5-0123456789abcdef.md';
+      const logs = [{ type: 'command', content: JSON.stringify({ type: 'prompt_file', promptFilePath: winPath }) }];
+      await service('agent', logs, { platform: 'win32', remove }).cleanup(task, { warn: vi.fn() });
+      expect(remove).toHaveBeenCalledWith(winPath);
+    });
+
+    it('does not remove a path that is not this task\'s prompt file, and does not warn about a file that is already gone', async () => {
+      const remove = vi.fn(async (_path: string) => { throw new FileOpsError('NOT_FOUND', 'gone'); });
+      const logs = [
+        { type: 'command', content: JSON.stringify({ type: 'prompt_file', promptFilePath: '/etc/passwd' }) },
+        { type: 'command', content: JSON.stringify({ type: 'prompt_file', promptFilePath: 'azito-prompt-5-relative.md' }) },
+        { type: 'command', content: JSON.stringify({ type: 'prompt_file', promptFilePath: '/tmp/azito-prompt-5-0123456789abcdef.md' }) },
+      ];
+      const log = { warn: vi.fn() };
+      await service('agent', logs, { platform: 'linux', remove }).cleanup(task, log);
+      expect(remove.mock.calls).toEqual([['/tmp/azito-prompt-5-0123456789abcdef.md']]);
+      expect(log.warn).not.toHaveBeenCalled();
+    });
+
+    it('warns, and goes on, when a file cannot be removed', async () => {
+      const remove = vi.fn(async (_path: string) => { throw new FileOpsError('PERMISSION_DENIED', 'no'); });
+      const logs = [{ type: 'command', content: JSON.stringify({ type: 'prompt_file', promptFilePath: '/tmp/azito-prompt-5-0123456789abcdef.md' }) }];
+      const log = { warn: vi.fn() };
+      await service('agent', logs, { platform: 'linux', remove }).cleanup(task, log);
+      expect(log.warn).toHaveBeenCalledTimes(1);
+    });
   });
 });

@@ -263,7 +263,7 @@ export class LocalFileOps implements IFileOps {
       if (existing && this.host.platform === 'win32') {
         await this.writeInPlace(target, data);
       } else {
-        await this.replaceAtomically(target, data, existing);
+        await this.replaceAtomically(target, data, existing, options.ownerOnly === true);
       }
       return { mtimeMs: (await fs.promises.stat(target)).mtimeMs, sha256: sha256Of(data) };
     }));
@@ -286,14 +286,14 @@ export class LocalFileOps implements IFileOps {
 
   /**
    * Staged next to the target (the same filesystem, so the rename is atomic) and owner-only until it is complete. A new file takes
-   * the process's umask like any file the host creates; an existing one keeps its permission bits, owner and group. If the owner
+   * the process's umask like any file the host creates (0600 with `ownerOnly`); an existing one keeps its permission bits, owner and group. If the owner
    * or group cannot be kept (another user's file), nothing is changed and the write fails. Extended attributes / POSIX ACLs of
    * the old file are not copied.
    */
-  private async replaceAtomically(target: string, data: Buffer, existing: fs.Stats | null): Promise<void> {
+  private async replaceAtomically(target: string, data: Buffer, existing: fs.Stats | null, ownerOnly: boolean): Promise<void> {
     const staging = this.api.join(this.api.dirname(target), `.${this.api.basename(target)}.azito-tmp-${randomBytes(8).toString('hex')}`);
     try {
-      const handle = await fs.promises.open(staging, 'wx', existing ? 0o600 : 0o666);
+      const handle = await fs.promises.open(staging, 'wx', existing || ownerOnly ? 0o600 : 0o666);
       try {
         await handle.writeFile(data);
         if (existing) {

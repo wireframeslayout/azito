@@ -4,6 +4,7 @@
 // event-bridge wiring on an already-created Fastify instance. Mirrors the
 // former inline registration block in main.ts.
 
+import { pushKeyForLogEntry } from '../modules/notifications/push/taskStatusPush';
 import type { FastifyInstance } from 'fastify';
 import { getPushMessage } from '../modules/notifications/push/pushCatalog';
 import { taskPushUrl, agentActivityPushUrl } from '../modules/notifications/push/pushLinks';
@@ -131,20 +132,8 @@ export async function buildServer(app: FastifyInstance, wiring: Wiring, port: nu
 
   // ─── Push notifications on task status changes ───
 
-  const STATUS_TO_PUSH_KEY: Record<string, import('../modules/notifications/push/pushCatalog').PushMessageKey> = {
-    done:              'task.done',
-    error:             'task.error',
-    stopped_by_user:   'task.stoppedByUser',
-    send_error:        'task.sendError',
-    codex_error:       'task.codexError',
-    waiting_for_human: 'task.waitingForHuman',
-    phase_review:      'task.phaseReview',
-    pending_approval:  'task.pendingApproval',
-  };
-
   executeTaskUseCase.events.on('log', (entry: { taskId: number; type: string; content: { status?: string } }) => {
-    if (entry.type !== 'status_change' || !entry.content.status) return;
-    const pushKey = STATUS_TO_PUSH_KEY[entry.content.status];
+    const pushKey = pushKeyForLogEntry(entry);
     if (!pushKey) return;
     const task = taskRepo.findById(entry.taskId);
     if (!task) return;

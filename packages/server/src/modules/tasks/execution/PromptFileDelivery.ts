@@ -48,7 +48,8 @@ export class PromptFileDelivery {
     // The path the worker is told: forward slashes on a Windows host (the file itself is written under its own spelling).
     const told = files.platform === 'win32' ? windowsPromptPath(filePath) : filePath;
     const instruction = buildPromptFileInstruction(told);
-    await files.write(filePath, Buffer.from(prompt, 'utf8'));
+    // Owner-only from the moment it exists: the prompt holds the task's text (an agent that cannot do this refuses the write).
+    await files.write(filePath, Buffer.from(prompt, 'utf8'), { ownerOnly: true });
     this.appendLog(taskId, unitId, 'command', { type: 'prompt_file', promptFilePath: filePath });
     return instruction;
   }

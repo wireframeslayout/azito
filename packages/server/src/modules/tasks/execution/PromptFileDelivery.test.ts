@@ -79,9 +79,10 @@ describe('PromptFileDelivery', () => {
       appendLog,
     );
     const line = await delivery.stage(server, 4, 9, 'the whole prompt');
-    const [[filePath, data]] = write.mock.calls as unknown as [[string, Buffer]];
+    const [[filePath, data, options]] = write.mock.calls as unknown as [[string, Buffer, { ownerOnly?: boolean }]];
     expect(filePath).toMatch(/^\/var\/tmp\/azito-prompt-4-[0-9a-f]{16}\.md$/);
     expect(data.toString('utf8')).toBe('the whole prompt');
+    expect(options).toEqual({ ownerOnly: true });
     expect(line.endsWith(filePath)).toBe(true);
     expect(appendLog).toHaveBeenCalledWith(4, 9, 'command', { type: 'prompt_file', promptFilePath: filePath });
   });

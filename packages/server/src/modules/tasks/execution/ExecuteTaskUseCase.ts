@@ -193,8 +193,8 @@ export class ExecuteTaskUseCase {
     private primaryWindowWaker: IPrimaryWindowWaker,
     private taskTempFiles: TaskTempFiles,
     private harnessPrefix: string,
-    private hubGitIdentity: GitIdentity | null = null,
-    private localHomes: LocalAgentHomes = { claudeConfigDir: null, codexHome: null },
+    private hubGitIdentity: GitIdentity | null,
+    private localHomes: LocalAgentHomes,
   ) {
     this.gitInfoCollector = new GitInfoCollector(this.transportFactory);
     this.pushVerifier = new PushVerifier(this.transportFactory, this.gitProvider);
@@ -620,6 +620,15 @@ export class ExecuteTaskUseCase {
       paneLayout: null,
       sleeping: false,
     });
+  }
+
+  /**
+   * The status_change entry of a task stopped because its worker was not at its input (a dialog, a shell, an unknown screen). It is what
+   * the push / in-app notification for a failed task follows; without it the task would fail without anyone being told.
+   */
+  private logWorkerNotReady(taskId: number, unitId: number, err: unknown): void {
+    const reason = workerNotReadyReason(err);
+    this.appendLog(taskId, unitId, 'status_change', { status: 'worker_not_ready', ...(reason ? { reason } : {}), message: (err as Error).message });
   }
 
   /** Before a Claude worker is started on `server`: the host's Claude Code settings (see {@link prepareClaudeLaunch}); anything else is left alone. */
@@ -1410,6 +1419,7 @@ export class ExecuteTaskUseCase {
             type: 'bypass_permissions_dialog',
             message: 'Claude Code の Bypass Permissions mode の確認ダイアログで起動が停止しました。対象ホストで claude --dangerously-skip-permissions を一度起動して受け入れるか、~/.claude/settings.json に "skipDangerousModePermissionPrompt": true を追加してください（Claude Code 2.0.x は ~/.claude.json の "bypassPermissionsModeAccepted": true）',
           });
+          this.logWorkerNotReady(taskId, unitId, launchErr);
           this.taskRepo.updateStatus(taskId, 'failed' as TaskStatus);
           return;
         }
@@ -1418,6 +1428,7 @@ export class ExecuteTaskUseCase {
             type: 'claude_trust_dialog_detected',
             message: `Claude Code の信頼確認ダイアログで起動が停止しました。作業ディレクトリ ${effectiveDir || workingDir} を信頼済みにしてください`,
           });
+          this.logWorkerNotReady(taskId, unitId, launchErr);
           this.taskRepo.updateStatus(taskId, 'failed' as TaskStatus);
           return;
         }
@@ -1425,6 +1436,7 @@ export class ExecuteTaskUseCase {
         if (notReady) {
           // The worker is not at its input screen (back at a shell, a dialog this does not name, never ready): no prompt is sent.
           this.appendLog(taskId, unitId, 'command', { type: 'worker_not_ready', reason: notReady, message: (launchErr as Error).message });
+          this.logWorkerNotReady(taskId, unitId, launchErr);
           this.taskRepo.updateStatus(taskId, 'failed' as TaskStatus);
           return;
         }

@@ -206,6 +206,7 @@ describe('RemoteWorktreeService over LocalTransport with a real git', () => {
       transportFactory: { getTransport: () => transport, hostProfileFor: () => profile },
       projectServerRepo: { find: () => ({ workingDirectory: viaLink }), findByProject: () => [] },
       projectRepo: { findById: () => ({ id: 1 }) },
+      logRepo: { findByTask: () => [] },
     } as unknown as TaskCleanupDeps);
     await cleanup.cleanup({ id: 4, projectId: 1, serverName: 's', worktreePath: created.path, workingDirectory: viaLink } as unknown as Task, { warn });
     expect(warn).not.toHaveBeenCalled();

@@ -2,7 +2,7 @@ import { type PaneHandle } from '@azito/shared';
 import type { IMuxClient } from '../../../tmux/IMuxClient';
 import { WorkerNotRunningError, type WorkerInputService } from '../WorkerInputService';
 import type { PromptFileDelivery } from '../PromptFileDelivery';
-import { blockingWorkerDialog, isWorkerScreenReady, tuiAgentKindOf, type TuiAgentKind, type WorkerDialog } from './workerScreen';
+import { blockingWorkerDialog, detectWorkerDialog, isWorkerScreenReady, tuiAgentKindOf, type TuiAgentKind, type WorkerDialog } from './workerScreen';
 import type { WorkerWaiter } from '../WorkerWaiter';
 import type { HttpSignalTurnCoordinator } from '../HttpSignalTurnCoordinator';
 import type { ServerConfig } from '../../../servers/Server';
@@ -26,7 +26,7 @@ function sleep(ms: number): Promise<void> {
 }
 
 /** Why the worker's screen did not take a prompt: a dialog that waits for a person, the worker back at a shell, or nothing recognisable within the time allowed. */
-export type TuiNotReadyReason = WorkerDialog | 'worker_exited_to_shell' | 'timeout';
+export type TuiNotReadyReason = WorkerDialog | 'worker_exited_to_shell' | 'not_ready' | 'timeout';
 
 const NOT_READY_MESSAGES: Record<TuiNotReadyReason, string> = {
   trust_dialog: 'Claude Code の信頼確認ダイアログで起動が停止しました',
@@ -34,6 +34,7 @@ const NOT_READY_MESSAGES: Record<TuiNotReadyReason, string> = {
   codex_update_prompt: 'Codex の更新の確認画面で起動が停止しました',
   codex_trust_prompt: 'Codex のフォルダー信頼の確認画面で起動が停止しました',
   worker_exited_to_shell: 'ワーカーが終了してシェルに戻っています',
+  not_ready: 'ワーカーの画面が入力待ちになっていません（既知の入力欄が見えません）',
   timeout: 'The worker TUI did not become ready within 30s',
 };
 
@@ -56,6 +57,10 @@ export function workerNotReadyReason(err: unknown): string | null {
 
 /** The screen the readiness checks read: the pane's last lines. */
 const SCREEN_CAPTURE_LINES = -50;
+
+/** How long a screen that shows neither the input nor a known dialog (a worker still drawing it) gets before the prompt is refused. */
+const SEND_READY_GRACE_MS = 5000;
+const SEND_READY_POLL_MS = 500;
 
 export class TuiWorkerRuntime implements IWorkerRuntime {
   constructor(
@@ -123,17 +128,16 @@ export class TuiWorkerRuntime implements IWorkerRuntime {
   }
 
   /**
-   * Types the instruction to read the prompt's file into the worker, never the prompt (Issue #532). Before that the screen is read: a
-   * dialog on it (the worker would take the line as an answer to it) stops the task with a reason and nothing is sent. A worker that
-   * has gone back to a shell is refused by WorkerInputService.sendPrompt (`WorkerNotRunningError`), also before anything is typed.
+   * Types the instruction to read the prompt's file into the worker, never the prompt (Issue #532). The worker has to be at its input:
+   * its screen is read and must show it (a dialog, a shell, an empty or unknown screen all stop the task with a reason and nothing is
+   * sent, not even the prompt file). Order: input screen confirmed (given a few seconds to finish drawing) -> prompt file written ->
+   * input screen confirmed again just before the line is typed -> the line. A worker that has gone back to a shell is refused earlier
+   * and, for a supervised pane, by WorkerInputService.sendPrompt (`WorkerNotRunningError`).
    */
   async sendPrompt(ctx: WorkerContext, prompt: string): Promise<void> {
-    if (ctx.agentKind !== null) {
-      const screen = (await ctx.driver.captureScreen(ctx.server, ctx.handle, SCREEN_CAPTURE_LINES)).stdout;
-      const dialog = blockingWorkerDialog(ctx.agentKind, screen);
-      if (dialog) throw new TuiNotReadyError(dialog, screen);
-    }
+    if (ctx.agentKind !== null) await this.awaitInputScreen(ctx, ctx.agentKind);
     const instruction = await this.promptFiles.stage(ctx.server, ctx.taskId, ctx.unitId, prompt);
+    if (ctx.agentKind !== null) await this.assertInputScreenNow(ctx, ctx.agentKind);
     await this.workerInput.sendPrompt(
       ctx.server,
       ctx.handle,
@@ -141,6 +145,26 @@ export class TuiWorkerRuntime implements IWorkerRuntime {
       { taskId: ctx.taskId, unitId: ctx.unitId },
       ctx.supervisorTarget,
     );
+  }
+
+  private async awaitInputScreen(ctx: WorkerContext, kind: TuiAgentKind): Promise<void> {
+    const deadline = Date.now() + SEND_READY_GRACE_MS;
+    for (;;) {
+      const screen = (await ctx.driver.captureScreen(ctx.server, ctx.handle, SCREEN_CAPTURE_LINES)).stdout;
+      if (isWorkerScreenReady(kind, screen)) return;
+      const dialog = detectWorkerDialog(kind, screen);
+      if (dialog) throw new TuiNotReadyError(dialog, screen);
+      const foreground = await ctx.driver.paneCommandByHandle(ctx.server, ctx.handle);
+      if (foreground !== null && isBareShellCommand(foreground)) throw new TuiNotReadyError('worker_exited_to_shell', screen);
+      if (Date.now() >= deadline) throw new TuiNotReadyError('not_ready', screen);
+      await sleep(SEND_READY_POLL_MS);
+    }
+  }
+
+  private async assertInputScreenNow(ctx: WorkerContext, kind: TuiAgentKind): Promise<void> {
+    const screen = (await ctx.driver.captureScreen(ctx.server, ctx.handle, SCREEN_CAPTURE_LINES)).stdout;
+    if (isWorkerScreenReady(kind, screen)) return;
+    throw new TuiNotReadyError(detectWorkerDialog(kind, screen) ?? 'not_ready', screen);
   }
 
   buildEnvelope(ctx: EnvelopeBuildContext): EnvelopeBuildResult {

@@ -3,7 +3,7 @@ import * as path from 'path';
 import type { Task } from './Task';
 import type { IExecutionLogRepository } from './ExecutionLog';
 import { TaskTempFiles } from '../../shared/os/taskTempFiles';
-import { recordedTempFilePaths } from './recordedTempFiles';
+import { recordedTempFilePaths, recordedTempFilePathsOnHost } from './recordedTempFiles';
 import type { IServerRepository, ServerConfig } from '../servers/Server';
 import type { MuxDriverRegistry } from '../tmux/MuxDriverRegistry';
 import type { WorktreeServiceFactory } from '../git/WorktreeServiceFactory';
@@ -129,6 +129,22 @@ export class TaskCleanupService {
     }
   }
 
+  /**
+   * The task's temp files on another host (an agent's, or an SSH server's): the paths recorded in its execution_log, removed through that
+   * host's own file operations. The prompt file (#532) holds the task's text and is not left behind there. A file that is already gone is fine.
+   */
+  private async removeHostTempFiles(task: Task, server: ServerConfig, log: { warn: (msg: string) => void }): Promise<void> {
+    const files = this.deps.transportFactory.getTransport(server).files();
+    for (const filePath of recordedTempFilePathsOnHost(this.deps.logRepo.findByTask(task.id), task.id, files.platform)) {
+      try {
+        await files.remove(filePath);
+      } catch (e) {
+        if (e instanceof FileOpsError && e.code === 'NOT_FOUND') continue;
+        log.warn(`[task-cleanup] Failed to remove temp file ${filePath} on ${server.name}: ${(e as Error).message}`);
+      }
+    }
+  }
+
   async cleanup(task: Task, log: { warn: (msg: string) => void }): Promise<void> {
     const { serverRepo, worktreeServiceFactory, transportFactory, projectServerRepo, projectRepo } = this.deps;
 
@@ -164,6 +180,8 @@ export class TaskCleanupService {
 
     if (server.type === 'local') {
       removeTempFiles(task.id, this.deps.taskTempFiles, recordedTempFilePaths(this.deps.logRepo.findByTask(task.id), task.id), log);
+    } else {
+      await this.removeHostTempFiles(task, server, log);
     }
   }
 }

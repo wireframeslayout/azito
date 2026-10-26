@@ -130,7 +130,7 @@ export class ShellFileOps implements IFileOps {
     const q = sq(target);
     if (options.expect) await this.assertUnchanged(target, options.expect);
 
-    // Keeps an existing file's permission bits across the replace (the staged file is created owner-only).
+    // Keeps an existing file's permission bits across the replace (the staged file is created owner-only, so `ownerOnly` holds as it is).
     const existingMode = (await this.out(`stat -c%a ${q} 2>/dev/null || stat -f%Lp ${q} 2>/dev/null`)).trim();
     const nonce = randomBytes(8).toString('hex');
     const qUpload = sq(`${target}.azito-upload-${nonce}`);

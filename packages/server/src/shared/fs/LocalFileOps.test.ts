@@ -586,3 +586,22 @@ describe('LocalFileOps.stat withAge', () => {
     expect((await ops.stat(path.join(dir, 'f')))?.ageMs).toBeUndefined();
   });
 });
+
+describe('LocalFileOps.write ownerOnly (#532)', () => {
+  it.skipIf(process.platform === 'win32')('creates a new file 0600 under a permissive umask, and an existing file keeps its bits', async () => {
+    const root = realpathSync.native(mkdtempSync(path.join(tmpdir(), 'azito-owneronly-')));
+    const ops = new LocalFileOps(localFileOpsHost({ platform: process.platform, homeDir: root }));
+    const previous = process.umask(0o000);
+    try {
+      await ops.write(path.join(root, 'new.md'), Buffer.from('a'), { ownerOnly: true });
+      writeFileSync(path.join(root, 'old.md'), 'x');
+      chmodSync(path.join(root, 'old.md'), 0o644);
+      await ops.write(path.join(root, 'old.md'), Buffer.from('b'), { ownerOnly: true });
+    } finally {
+      process.umask(previous);
+    }
+    expect(statSync(path.join(root, 'new.md')).mode & 0o777).toBe(0o600);
+    expect(statSync(path.join(root, 'old.md')).mode & 0o777).toBe(0o644);
+    rmSync(root, { recursive: true, force: true });
+  });
+});

@@ -29,6 +29,7 @@ import type { Unit, IUnitRepository } from '../../units/Unit';
 import type { ServerConfig, IServerRepository } from '../../servers/Server';
 import type { ProjectDetail, IProjectRepository } from '../../projects/Project';
 import type { IProjectServerRepository } from '../../projects/ProjectServer';
+import { pushKeyForLogEntry } from '../../notifications/push/taskStatusPush';
 import { TaskTempFiles } from '../../../shared/os/taskTempFiles';
 import { LocalFileOps, localFileOpsHost } from '../../../shared/fs/LocalFileOps';
 import type { IFileOps } from '../../../shared/fs/fileOps';
@@ -493,6 +494,8 @@ function buildUseCase(opts: {
     primaryWindowWaker as any,
     new TaskTempFiles('/tmp', 'linux'),
     '',
+    null,
+    { claudeConfigDir: null, codexHome: null },
   );
 
   return { useCase, primaryWindowWaker, sessionStrategyFactory, taskRepo, windowRepo, logRepo, tmux, supervisorRegistry, worktreeServiceFactory, transportFactory, unitRepo, projectRepo, projectServerRepo, serverRepo, projectSecretRepo, unitTypeLoader, sidekickLoader, paneEnvService, gitProvider };
@@ -603,6 +606,9 @@ describe('ExecuteTaskUseCase execution-env resolution', () => {
 
       expect(taskRepo.updateStatus).toHaveBeenCalledWith(6, 'failed');
       expect(logRepo.append).toHaveBeenCalledWith(6, 64, 'command', expect.objectContaining({ type: 'worker_not_ready', reason: `worker_not_ready: ${reason}` }));
+      // The failure is announced like any other the task ends with (push / in-app notification follow the status_change entry).
+      expect(logRepo.append).toHaveBeenCalledWith(6, 64, 'status_change', expect.objectContaining({ status: 'worker_not_ready', reason: `worker_not_ready: ${reason}` }));
+      expect(pushKeyForLogEntry({ type: 'status_change', content: { status: 'worker_not_ready' } })).toBe('task.sendError');
       expect(writtenPromptFiles.size).toBe(0);
       const typed = (tmux.sendKeysToHandle.mock.calls as unknown as unknown[][]).map((c) => c[2]).flat();
       expect(typed.some((k) => typeof k === 'string' && k.startsWith('AZITO prompt file.'))).toBe(false);
@@ -620,6 +626,7 @@ describe('ExecuteTaskUseCase execution-env resolution', () => {
 
       expect(taskRepo.updateStatus).toHaveBeenCalledWith(6, 'failed');
       expect(logRepo.append).toHaveBeenCalledWith(6, 65, 'command', expect.objectContaining({ type: 'worker_not_ready', reason: 'worker_not_ready: worker_exited_to_shell' }));
+      expect(logRepo.append).toHaveBeenCalledWith(6, 65, 'status_change', expect.objectContaining({ status: 'worker_not_ready', reason: 'worker_not_ready: worker_exited_to_shell' }));
       expect(writtenPromptFiles.size).toBe(0);
     }, 15_000);
   });
@@ -1785,6 +1792,8 @@ describe('ExecuteTaskUseCase.followUp http-signal execution mode (Issue: AZITOç›
       { wake: vi.fn(async () => ({ tmuxTarget: 'azito:task-1' })), findRunningSession: vi.fn(async () => null) } as any,
       new TaskTempFiles('/tmp', 'linux'),
     '',
+    null,
+    { claudeConfigDir: null, codexHome: null },
     );
 
     await useCase.followUp(42, 1, 'please continue');
@@ -3027,6 +3036,8 @@ describe('ExecuteTaskUseCase.execute() execution-gate self-invalidation regressi
       { wake: vi.fn(async () => ({ tmuxTarget: 'azito:task-1' })), findRunningSession: vi.fn(async () => null) } as any,
       new TaskTempFiles('/tmp', 'linux'),
     '',
+    null,
+    { claudeConfigDir: null, codexHome: null },
     );
 
     // execute() itself resolves once setup (session/window/worktree

@@ -102,7 +102,7 @@ describe.skipIf(!fs.existsSync(MISAO_CLI))('TuiWorkerRuntime.sendPrompt on a rea
   it('a worker that went back to a shell: nothing is typed, the shell runs nothing', async () => {
     const handle = await paneRunning('echo "agent finished"');
     await vi.waitFor(async () => expect(await client.paneCommandByHandle(server, handle)).toMatch(/^(bash|sh)$/), { timeout: 10000, interval: 100 });
-    await expect(runtime.sendPrompt(ctxFor(handle), HOSTILE_PROMPT)).rejects.toMatchObject({ name: 'WorkerNotRunningError' });
+    await expect(runtime.sendPrompt(ctxFor(handle), HOSTILE_PROMPT)).rejects.toMatchObject({ name: 'TuiNotReadyError', reason: 'worker_exited_to_shell' });
     await sleep(500);
     const screen = await screenOf(handle);
     expect(screen).not.toContain('AZITO prompt file');
@@ -120,6 +120,18 @@ describe.skipIf(!fs.existsSync(MISAO_CLI))('TuiWorkerRuntime.sendPrompt on a rea
     expect(line).toMatch(/^AZITO prompt file\. .*\/azito-prompt-4-[0-9a-f]{16}\.md$/);
     const promptFile = line.slice(line.lastIndexOf(' ') + 1);
     expect(fs.readFileSync(promptFile, 'utf8')).toBe(HOSTILE_PROMPT);
+    expect(fs.statSync(promptFile).mode & 0o777).toBe(0o600);
     expect(fs.existsSync(path.join(work, 'PWNED_BY_PROMPT'))).toBe(false);
   }, 30000);
+
+  it('a screen that is none of the known ones (not the input, not a known dialog): refused after the grace, nothing typed, no prompt file', async () => {
+    const fed = path.join(dir, `fed-${windowSeq}.txt`);
+    const promptFilesBefore = fs.readdirSync(dir).filter((f) => f.startsWith('azito-prompt-'));
+    const handle = await paneRunning(`echo "Welcome! Choose a theme"; echo "1. Dark"; echo "2. Light"\nIFS= read -r -t 12 line; printf '%s' "$line" > ${fed}`);
+    await vi.waitFor(async () => expect(await screenOf(handle)).toContain('2. Light'), { timeout: 10000, interval: 100 });
+    await expect(runtime.sendPrompt(ctxFor(handle), HOSTILE_PROMPT)).rejects.toMatchObject({ name: 'TuiNotReadyError', reason: 'not_ready' });
+    await vi.waitFor(() => expect(fs.existsSync(fed)).toBe(true), { timeout: 15000, interval: 100 });
+    expect(fs.readFileSync(fed, 'utf8')).toBe('');
+    expect(fs.readdirSync(dir).filter((f) => f.startsWith('azito-prompt-'))).toEqual(promptFilesBefore);
+  }, 40000);
 });

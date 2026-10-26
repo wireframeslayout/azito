@@ -49,6 +49,14 @@ export const fileOpRequestSchema = z.discriminatedUnion('op', [
     dataBase64: z.string(),
     expect: z.object({ mtimeMs: z.number().optional(), sha256: sha256.optional() }).optional(),
   }),
+  // A separate op, not a flag on `write`: an agent that predates it rejects the request (400) instead of dropping an unknown flag and
+  // writing the file readable by others.
+  z.object({
+    op: z.literal('writeOwnerOnly'),
+    path: filePath,
+    dataBase64: z.string(),
+    expect: z.object({ mtimeMs: z.number().optional(), sha256: sha256.optional() }).optional(),
+  }),
   z.object({ op: z.literal('create'), path: filePath, kind: z.enum(['file', 'directory']), recursive: z.boolean().optional() }),
   z.object({ op: z.literal('remove'), path: filePath }),
   z.object({ op: z.literal('rename'), from: filePath, to: filePath }),
@@ -97,6 +105,7 @@ const resultSchemas = {
   stat: fileStatSchema.nullable(),
   read: z.object({ dataBase64: z.string(), stat: fileStatSchema }),
   write: z.object({ mtimeMs: z.number(), sha256 }),
+  writeOwnerOnly: z.object({ mtimeMs: z.number(), sha256 }),
   create: z.object({ created: z.boolean() }),
   remove: z.null(),
   rename: z.null(),
@@ -126,6 +135,11 @@ async function perform(ops: IFileOps, request: FileOpRequest): Promise<unknown> 
       const data = Buffer.from(request.dataBase64, 'base64');
       if (data.length > MAX_FILE_OPS_BYTES) throw new FileOpsError('TOO_LARGE', `Content too large (${data.length} bytes, limit ${MAX_FILE_OPS_BYTES})`, { size: data.length });
       return ops.write(request.path, data, { expect: request.expect });
+    }
+    case 'writeOwnerOnly': {
+      const data = Buffer.from(request.dataBase64, 'base64');
+      if (data.length > MAX_FILE_OPS_BYTES) throw new FileOpsError('TOO_LARGE', `Content too large (${data.length} bytes, limit ${MAX_FILE_OPS_BYTES})`, { size: data.length });
+      return ops.write(request.path, data, { expect: request.expect, ownerOnly: true });
     }
     case 'create': return ops.create(request.path, request.kind, { recursive: request.recursive });
     case 'remove': await ops.remove(request.path); return null;
@@ -177,7 +191,9 @@ export class RemoteFileOps implements IFileOps {
   }
 
   write(path: string, data: Buffer, options: WriteOptions = {}): Promise<WriteResult> {
-    return this.call('write', { op: 'write', path, dataBase64: data.toString('base64'), expect: options.expect });
+    const dataBase64 = data.toString('base64');
+    if (options.ownerOnly) return this.call('writeOwnerOnly', { op: 'writeOwnerOnly', path, dataBase64, expect: options.expect });
+    return this.call('write', { op: 'write', path, dataBase64, expect: options.expect });
   }
 
   create(path: string, kind: 'file' | 'directory', options: { recursive?: boolean } = {}): Promise<{ created: boolean }> {

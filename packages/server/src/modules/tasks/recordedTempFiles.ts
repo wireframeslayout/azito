@@ -1,4 +1,7 @@
 import * as path from 'path';
+import type { HostPathApi } from '../../shared/os/hostPath';
+import { pathApiFor } from '../../shared/os/hostPath';
+import type { HostPlatform } from '../../shared/os/hostEnv';
 import type { ExecutionLog } from './ExecutionLog';
 import { TaskTempFiles } from '../../shared/os/taskTempFiles';
 
@@ -16,6 +19,15 @@ const RECORDING_LOGS: Record<string, readonly string[]> = {
  * 記録の破損として無視する（片付けで他のファイルを消さないため）。
  */
 export function recordedTempFilePaths(logs: readonly ExecutionLog[], taskId: number): string[] {
+  return recordedTempFilePathsWith(logs, taskId, path);
+}
+
+/** The same for the files of another host (an agent's), whose paths are read with that host's notation: a Windows agent's `C:\...` is absolute there, not on a POSIX hub. */
+export function recordedTempFilePathsOnHost(logs: readonly ExecutionLog[], taskId: number, platform: HostPlatform): string[] {
+  return recordedTempFilePathsWith(logs, taskId, pathApiFor(platform));
+}
+
+function recordedTempFilePathsWith(logs: readonly ExecutionLog[], taskId: number, pathApi: Pick<HostPathApi, 'isAbsolute' | 'basename'>): string[] {
   const prefixes = TaskTempFiles.prefixesForTask(taskId);
   const found = new Set<string>();
   for (const log of logs) {
@@ -25,7 +37,7 @@ export function recordedTempFilePaths(logs: readonly ExecutionLog[], taskId: num
     if (!record || !keys) continue;
     for (const key of keys) {
       const value = record[key];
-      if (typeof value === 'string' && isTaskTempFilePath(value, prefixes)) found.add(value);
+      if (typeof value === 'string' && isTaskTempFilePathWith(value, prefixes, pathApi)) found.add(value);
     }
   }
   return [...found];
@@ -33,7 +45,11 @@ export function recordedTempFilePaths(logs: readonly ExecutionLog[], taskId: num
 
 /** 記録された値を信用してよい基準（絶対パスで、ファイル名がタスクの接頭辞で始まる）。片付けと復旧で共通。 */
 export function isTaskTempFilePath(value: string, prefixes: readonly string[]): boolean {
-  return path.isAbsolute(value) && prefixes.some((p) => path.basename(value).startsWith(p));
+  return isTaskTempFilePathWith(value, prefixes, path);
+}
+
+function isTaskTempFilePathWith(value: string, prefixes: readonly string[], pathApi: Pick<HostPathApi, 'isAbsolute' | 'basename'>): boolean {
+  return pathApi.isAbsolute(value) && prefixes.some((p) => pathApi.basename(value).startsWith(p));
 }
 
 /** phase_prompt のログに記録された signal ファイルのパス。基準に合わない値は無いものとして扱う。 */
