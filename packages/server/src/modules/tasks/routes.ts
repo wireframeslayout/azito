@@ -1137,7 +1137,7 @@ const tasksRoutes: FastifyPluginCallback<TasksRouteOptions> = (fastify, opts, do
         } catch (err) {
           if (replyToExecutionGateError(err, reply)) return;
           if (err instanceof DuplicateAgentSessionError) {
-            return reply.status(409).send({ error: 'session_already_running', windowId: err.windowId, message: err.message });
+            return reply.status(409).send({ error: 'session_already_running', windowId: err.windowId, sessionId: err.sessionId, message: err.message });
           }
           throw err;
         }

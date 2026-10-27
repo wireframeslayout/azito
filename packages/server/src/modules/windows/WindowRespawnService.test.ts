@@ -2280,6 +2280,70 @@ describe('WindowRespawnService.respawn — duplicate session guard (Issue #274)'
     await expect(service.respawn(1, makeServer())).rejects.toMatchObject({ windowId: 999 });
   });
 
+  it('wakes a secondary window with its own session while the primary runs the task session (Issue #540)', async () => {
+    const taskSession = 'aaaaaaaa-1111-4111-8111-111111111111';
+    const ownSession = 'bbbbbbbb-2222-4222-8222-222222222222';
+    const task = makeTask({ id: 5, unitId: 10, agentSessionId: taskSession });
+    const unit = makeUnit({ id: 10 });
+    const secondary = makeWindow({ id: 2, taskId: 5, isPrimary: false, sleeping: true, windowType: 'agent', workerType: 'claude', agentSessionId: ownSession });
+    const primary = makeWindow({ id: 1, taskId: 5, sleeping: false, tmuxTarget: 'azito:task-primary' });
+
+    const { service, sentCommands } = buildServiceWithProcessDetection({
+      window: secondary,
+      task,
+      unit,
+      extraWindows: [primary, secondary],
+      psOutput: ['  5000     1      10 bash', `  5001  5000       3 claude --resume ${taskSession} --dangerously-skip-permissions`].join('\n'),
+      panePidByHandle: vi.fn(async () => 5000),
+    });
+
+    await service.respawn(2, makeServer());
+    expect(sentCommands.length).toBeGreaterThanOrEqual(1);
+  });
+
+  it('rejects waking a secondary window whose own session runs in another window, naming window and conversation (Issue #540)', async () => {
+    const ownSession = 'bbbbbbbb-2222-4222-8222-222222222222';
+    const task = makeTask({ id: 5, unitId: 10, agentSessionId: 'aaaaaaaa-1111-4111-8111-111111111111' });
+    const unit = makeUnit({ id: 10 });
+    const secondary = makeWindow({ id: 2, taskId: 5, isPrimary: false, sleeping: true, windowType: 'agent', workerType: 'claude', agentSessionId: ownSession });
+    const other = makeWindow({ id: 999, taskId: 5, isPrimary: false, sleeping: false, tmuxTarget: 'azito:task-other' });
+
+    const { service } = buildServiceWithProcessDetection({
+      window: secondary,
+      task,
+      unit,
+      extraWindows: [other],
+      psOutput: ['  5000     1      10 bash', `  5001  5000       3 claude --resume ${ownSession} --dangerously-skip-permissions`].join('\n'),
+      panePidByHandle: vi.fn(async () => 5000),
+    });
+
+    await expect(service.respawn(2, makeServer())).rejects.toMatchObject({
+      windowId: 999,
+      sessionId: 'bbbbbbbb',
+      message: 'この窓の会話（bbbbbbbb）は W-999 で動作中です',
+    });
+  });
+
+  it('does not check duplicates for a secondary window without a session of its own (Issue #540)', async () => {
+    const taskSession = 'aaaaaaaa-1111-4111-8111-111111111111';
+    const task = makeTask({ id: 5, unitId: 10, agentSessionId: taskSession });
+    const unit = makeUnit({ id: 10 });
+    const secondary = makeWindow({ id: 2, taskId: 5, isPrimary: false, sleeping: true, windowType: 'agent', workerType: 'claude', agentSessionId: null });
+    const primary = makeWindow({ id: 1, taskId: 5, sleeping: false, tmuxTarget: 'azito:task-primary' });
+
+    const { service, listProcesses } = buildServiceWithProcessDetection({
+      window: secondary,
+      task,
+      unit,
+      extraWindows: [primary],
+      psOutput: ['  5000     1      10 bash', `  5001  5000       3 claude --resume ${taskSession}`].join('\n'),
+      panePidByHandle: vi.fn(async () => 5000),
+    });
+
+    await service.respawn(2, makeServer());
+    expect(listProcesses).not.toHaveBeenCalled();
+  });
+
   it('skips execution gate when gateAlreadyEnforced is true (Finding 1)', async () => {
     const task = makeTask({ id: 5, unitId: 10, agentSessionId: null });
     const unit = makeUnit({ id: 10 });
