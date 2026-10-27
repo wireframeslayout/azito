@@ -150,7 +150,7 @@ misao の更新は別です。agent の更新は misao に触れません（動�
 
 ### ハーネスとその設定
 
-ハーネスの導入（`setup.mjs`）は、agent のフォルダーの外に次のものを書きます。上の削除はこれらを一つも消しません。**トークン**と付けたものは、操作者の全権の認証情報 `AZITO_UI_TOKEN` を含むので、先に扱ってください。パスはすべて agent を動かしているユーザーのホーム以下です。
+ハーネスの導入（`setup.mjs`）は、agent のフォルダーの外に次のものを書きます。上の削除はこれらを一つも消しません。**トークン**と付けたものは、操作者の全権の認証情報 `AZITO_UI_TOKEN` を含むので、先に扱ってください。パスは、`CODEX_HOME` を指定した場合の Codex 関連のものを除き、すべて agent を動かしているユーザーのホーム以下です。
 
 **まず、どのハブを消すのかを特定します。** ハーネスはハブごとです。`AZITO_HARNESS_PREFIX` が無いハブは `harness` と `azitoctl.env`、プレフィックス `<p>` のハブは `harness-<p>` と `azitoctl-<p>.env`（`~\.azito\`）を使います。消そうとする `azitoctl[-<p>].env` を開き、`AZITO_URL` を読んでください。このハブの URL でなければ別のハブのものなので残します。消すのは、このハブのファイル・フック・エントリだけです。`harness*` や `azitoctl*.env` のようなワイルドカードは使わないでください。同じホストの別のハブのハーネスや `harness-copies.json` まで一致します。
 
@@ -160,7 +160,7 @@ misao の更新は別です。agent の更新は misao に触れません（動�
 | **トークン** `<CODEX_HOME>\config.toml` の `[mcp_servers.azt-mcp]` と `[mcp_servers.azt-mcp.env]`（`CODEX_HOME`、無ければ `~\.codex`） | プレフィックスなしの実行で、`codex` コマンドが PATH にあるときだけ | 上の行と同じ条件で、`codex mcp get azt-mcp --json` の `transport.env` にある `AZITO_URL`（setup が既存のトークンを読むのと同じ場所）を確かめてから、`codex mcp remove azt-mcp` を実行します。agent が `CODEX_HOME` を設定して動いていたなら、同じ値を `$env:CODEX_HOME` に入れてから実行します。`codex` コマンドが無ければ、`config.toml` から 2 つのテーブルを手で消します |
 | **トークン** `~\.azito\operator.env` | UI トークンが与えられたとき、**プレフィックスの有無に関係なく**書かれます。ホストに 1 つだけのファイルで、最後に実行した setup が上書きします | 中の `AZITO_URL` を読み、このハブのものならファイルを削除します。別のハブのものなら残します |
 | `~\.claude\settings.json` の `hooks` | どの実行でも | このハブのエントリを削除します: `node "C:/Users/<you>/.azito/harness[-<p>]/hooks/azito-hook.mjs" <kind> [start\|stop] [--prefix <p>]`（パスは `/` 区切り。フォルダーと `--prefix` の値がこのハブのもの）。ほかのハブのエントリは残します |
-| `~\.azito\azitoctl[-<p>].env`（webhook トークン。UI トークンは含まない） | どの実行でも | このハブのプレフィックスのものだけを削除します |
+| `~\.azito\azitoctl[-<p>].env`（webhook トークン。UI トークンは含まない） | ハブの URL と webhook トークンの両方が与えられたとき。このファイルが無くても、ハーネスのほかのものが残っていないとは言えません | このハブのプレフィックスのものだけを削除します |
 | `~\.azito\harness[-<p>]` | どの実行でも | このハブのプレフィックスのものだけを削除します。**プレフィックスなしの `harness` フォルダーは、下の共有 skills のジャンクションのリンク先でもあります**（プレフィックス付きの実行は skills を書かないので、別のハブの `/azt-*` もこのフォルダーを使います）。ホストのほかのハブが共有の skills を使っていないときだけ消してください。使っているなら、フォルダーは残し、このハブのほかのもの（`azitoctl` の env、フック、トークン）を個別に消します |
 | `~\.claude\skills\azt-*` と `<CODEX_HOME>\skills\azt-*`（ジャンクション。ホストの全ハブで共有） | プレフィックスなしの実行。Codex 側は、`codex` コマンドが PATH にあるか、`<CODEX_HOME>` が存在するとき | ホストのほかのハブがまだ使っていないときだけです（1 つのハーネスのフォルダーを指しています）。リンク先をたどらずに消します: `cmd /c rmdir "%USERPROFILE%\.claude\skills\azt-plan"`。`rd /s` や `Remove-Item -Recurse` は、リンク先のハーネスのファイルまで消すことがあるので使いません |
 | `~\.claude\rules\*.md` と `~\.azito\harness-copies.json`（共有） | プレフィックスなしの実行 | 同じ条件で、規則のコピーは `(Get-FileHash -Algorithm SHA256 <file>).Hash` が `harness-copies.json` のそのファイルの値と（大文字小文字を無視して）同じもの、つまり編集していないものだけを削除し、そのあと台帳を削除します |
