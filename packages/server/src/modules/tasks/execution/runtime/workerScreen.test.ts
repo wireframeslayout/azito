@@ -282,6 +282,33 @@ describe('a turn that is still running (#532)', () => {
     expect(showsTurnEnd('codex', `  Worked for 6s • 9:44 AM\n› Run something\n\n› Ask Codex to do anything\n\n  ? for shortcuts`)).toBe(false);
   });
 
+  it('codex writes a "■" line when a turn ends with Esc or with an error (also when the error wraps), right above the input', () => {
+    const esc = fixture('codex-0.163-linux-after-esc.txt');
+    const error = fixture('codex-0.163-linux-error-turn.txt');
+    expect(esc).toContain('■ Conversation interrupted');
+    expect(error).toContain('■ {"type":"error"');
+    expect(showsTurnEnd('codex', esc)).toBe(true);
+    expect(showsTurnEnd('codex', error)).toBe(true);
+    expect(isWorkerBusy('codex', esc)).toBe(false);
+    expect(readInputBox('codex', esc)).toEqual({ state: 'empty' });
+    expect(readInputBox('codex', error)).toEqual({ state: 'empty' });
+    // a prompt or a bullet after it: a later turn has begun
+    expect(showsTurnEnd('codex', '■ Conversation interrupted\n› next prompt\n\n› Ask Codex to do anything\n\n  ? for shortcuts')).toBe(false);
+    expect(showsTurnEnd('codex', '■ Conversation interrupted\n• Working on it\n\n› Ask Codex to do anything\n\n  ? for shortcuts')).toBe(false);
+  });
+
+  it('a path with the word "warning" in a wrapped line of the input is the input, not the footer', () => {
+    const line = 'AZITO prompt file. Read the file named at the end of this line and carry out every instruction in it exactly: C:/Users/warning/AppData/Local/Temp/azito-prompt-99-0123456789abcdef.md';
+    const wrap = (text: string, width: number) => text.match(new RegExp(`.{1,${width}}`, 'g'))!;
+    const [first, ...rest] = wrap(line, 100);
+    const screen = `› ${first}\n${rest.map((r) => `  ${r}`).join('\n')}\n\n  GPT-6.1-Sol default · ~\\repo\n  ? for shortcuts      ⚠ 1 warning · f2 to view`;
+    const box = readInputBox('codex', screen);
+    expect(box.state).toBe('filled');
+    expect(inputHoldsLine(box, line)).toBe(true);
+    // the real warning row still is the footer
+    expect(readInputBox('codex', '› Ask Codex to do anything\n\n  ? for shortcuts      ⚠ 3 warnings · f2 to view')).toEqual({ state: 'empty' });
+  });
+
   it('an answer that stalls in the middle of a sentence shows no status line and no turn end', () => {
     for (const name of ['codex-0.163-linux-answer-stalled-mid-sentence-1.txt', 'codex-0.163-linux-answer-stalled-mid-sentence-2.txt']) {
       expect(isWorkerBusy('codex', fixture(name)), name).toBe(false);

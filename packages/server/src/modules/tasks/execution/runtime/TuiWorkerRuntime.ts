@@ -55,11 +55,14 @@ export class TuiNotReadyError extends Error {
     public readonly lastScreen: string,
     public readonly inputLeft = false,
     public readonly inputUnreadable = false,
+    /** What went wrong in taking the line back, when that itself failed: added to the message, the reason stays the one that stopped the task. */
+    public readonly cleanupNote?: string,
   ) {
     super(
-      !inputLeft
+      (!inputLeft
         ? NOT_READY_MESSAGES[reason]
-        : `${NOT_READY_MESSAGES[reason]}。${inputUnreadable ? '入力欄の状態を読み取れませんでした。入力欄を確かめてから再開してください' : '入力欄に残った 1 行を消してから再開してください'}`,
+        : `${NOT_READY_MESSAGES[reason]}。${inputUnreadable ? '入力欄の状態を読み取れませんでした。入力欄を確かめてから再開してください' : '入力欄に残った 1 行を消してから再開してください'}`)
+        + (cleanupNote ? `（入力欄の後片付けに失敗しました: ${cleanupNote}）` : ''),
     );
     this.name = 'TuiNotReadyError';
   }
@@ -227,9 +230,11 @@ export class TuiWorkerRuntime implements IWorkerRuntime {
 
   /**
    * The worker is at its input, the input is empty and no turn is running; a screen that is still drawing gets a few seconds, a turn up to
-   * `BUSY_WAIT_MS` (counted over the whole send, in `turnWait`). A turn is over when its status line is gone and the screen above the input
-   * has stopped changing (codex hides the line while it streams its answer and between tool calls), or when codex has written its
-   * `Worked for ...` line.
+   * `BUSY_WAIT_MS` (counted over the whole send, in `turnWait`). A turn is over when its status line is gone and the line that ends a turn
+   * is right above the input (codex: `Worked for ...`, or `■ Conversation interrupted` / `■ {"type":"error"...` after Esc or an error;
+   * Claude has none, its spinner is there throughout). Codex hides its status line while it streams its answer and between tool calls and
+   * stalls mid-sentence, so once a turn was seen (a status line, or a screen changing under a message of the user) a quiet screen does not
+   * end it. On a screen where no turn was seen (a session that has just started) 5 quiet seconds do.
    */
   private async awaitEmptyInput(ctx: WorkerContext, kind: TuiAgentKind, turnWait: TurnWait): Promise<void> {
     let deadline = Date.now() + SEND_READY_GRACE_MS;
@@ -354,7 +359,13 @@ export class TuiWorkerRuntime implements IWorkerRuntime {
    * before resuming.
    */
   private async stoppedWithInputCleared(ctx: WorkerContext, kind: TuiAgentKind, instruction: string, reason: TuiNotReadyReason): Promise<TuiNotReadyError> {
-    const left = await this.clearOwnLine(ctx, kind, instruction);
+    let left: { screen: string; box: InputBox } | null;
+    try {
+      left = await this.clearOwnLine(ctx, kind, instruction);
+    } catch (err) {
+      // The reason that stopped the task stays; the failure of the cleanup is added to it.
+      return new TuiNotReadyError(reason, '', true, true, err instanceof Error ? err.message : String(err));
+    }
     if (left === null) return new TuiNotReadyError(reason, '', true, true);
     return new TuiNotReadyError(reason, left.screen, left.box.state !== 'empty', left.box.state === 'unknown');
   }

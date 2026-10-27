@@ -399,7 +399,18 @@ describe('TuiWorkerRuntime.sendPrompt — the worker has to be at an empty input
     expect(h.pane.submitted).toEqual([LINE]);
   });
 
-  it('a turn that was seen and never writes "Worked for" (stopped, an error) is waited for 60 s and then worker_busy', async () => {
+  it.each([
+    ['stopped with Esc', 'codex-0.163-linux-after-esc.txt'],
+    ['ended in an error', 'codex-0.163-linux-error-turn.txt'],
+  ] as const)('a turn that %s writes a "■" line instead of "Worked for": the prompt goes in once the screen shows it, without waiting 60 s', async (_how, file) => {
+    const streaming = (n: number) => fixture('codex-0.163-linux-streaming-final-answer.txt').replace('TCP congestion control adjusts', `TCP congestion control adjusts ${'word '.repeat(n)}`);
+    const h = sendHarness('codex', { firstScreens: [streaming(1), streaming(2), streaming(3)], idle: fixture(file), quiet: true });
+    expect(await h.send()).toBeNull();
+    expect(h.waitedMs()).toBeLessThan(15_000);
+    expect(h.pane.submitted).toEqual([LINE]);
+  });
+
+  it('a turn that was seen and shows no line that ends it (a screen that is stalled mid-answer) is waited for 60 s and then worker_busy', async () => {
     const streaming = (n: number) => fixture('codex-0.163-linux-streaming-final-answer.txt').replace('TCP congestion control adjusts', `TCP congestion control adjusts ${'word '.repeat(n)}`);
     const h = sendHarness('codex', { firstScreens: [streaming(1), streaming(2), streaming(3)], quiet: true });
     expect(await h.send()).toMatchObject({ reason: 'worker_busy' });
@@ -616,6 +627,23 @@ describe('TuiWorkerRuntime.sendPrompt — the line has to be drawn, submitted an
     const err = await h.send();
     expect((err as Error).message).toMatch(/^capture-pane failed。入力欄の状態を確かめられませんでした/);
     expect(h.workerInput.clearInputLine).not.toHaveBeenCalled();
+  });
+
+  it('a cleanup that fails keeps the reason that stopped the task, and adds the failure to the message', async () => {
+    const h = sendHarness('codex', { enterIgnored: 99 });
+    h.workerInput.clearInputLine.mockRejectedValue(new Error('Ctrl-U transport failed'));
+    const err = await h.send();
+    expect(err).toMatchObject({ name: 'TuiNotReadyError', reason: 'prompt_not_submitted', inputLeft: true });
+    expect((err as Error).message).toMatch(/入力欄の後片付けに失敗しました: Ctrl-U transport failed/);
+    expect(workerNotReadyReason(err)).toBe('worker_not_ready: prompt_not_submitted');
+  });
+
+  it('a path with "warning" in it, wrapped in the input, is read as our line: the prompt is sent', async () => {
+    const warningLine = `${LINE.slice(0, LINE.indexOf('C:/'))}C:/Users/warning/AppData/Local/Temp/azito-prompt-99-0123456789abcdef.md`;
+    const h = sendHarness('codex', {});
+    h.promptFiles.stage.mockResolvedValue(warningLine);
+    expect(await h.send()).toBeNull();
+    expect(h.pane.submitted).toEqual([warningLine]);
   });
 
   it('does not clear an input that does not hold the task\'s line (a person\'s draft is never touched)', async () => {

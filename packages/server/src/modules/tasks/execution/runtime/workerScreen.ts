@@ -177,8 +177,8 @@ const RULE_LINE = /^─{10,}$/;
 /** A line made of rule characters and spaces: a rule, or one that is not a clean run of them (broken by the pane). */
 const ROUGH_RULE = /^[─\s]*─[─\s]*$/;
 /** codex's lines below the composer: the model line is after a blank line, the shortcuts / context line carries these. */
-/** A row of codex's footer: the model line (`<model> default · <dir>`), the shortcuts / context row, the warning row. */
-const CODEX_FOOTER_ROW = /·|\? for shortcuts|context left|esc to interrupt|warning|\bf\d to |tab to queue|queued message/i;
+/** A row of codex's footer: the model line (`<model> default · <dir>`), the shortcuts / context row, the warning row (`⚠ 3 warnings · f2 to view`; a path with the word `warning` in it is not one). */
+const CODEX_FOOTER_ROW = /·|\? for shortcuts|context left|esc to interrupt|⚠\s*\d+ warnings?|\bf\d to |tab to queue|queued message/i;
 const CODEX_FOOTER_LINE = /\? for shortcuts|context left|esc to interrupt/i;
 
 /**
@@ -291,8 +291,10 @@ export function isWorkerBusy(kind: TuiAgentKind, output: string): boolean {
 
 /**
  * codex hides its status line while it streams the final answer and in the gaps between tool calls, so "no status line" does not say the
- * turn is over. What does: the `Worked for ...` line right above the input. Without it, only a screen that has stopped changing for a while
- * (`screenAboveInput` the same on consecutive looks) says so. Claude draws its spinner throughout; for it this is always true.
+ * turn is over, and neither does a screen that is quiet (it stalls mid-sentence for seconds). What does: the line codex writes at the end
+ * of a turn, right above the input: `Worked for ...` for a turn that finished, `■ Conversation interrupted ...` for one stopped with Esc,
+ * `■ {"type":"error" ...` (it wraps over several lines) for one that ended in an error. Without such a line, only a screen on which no turn
+ * was seen can be taken as free (see TuiWorkerRuntime). Claude draws its spinner throughout; for it this is always true.
  */
 export function showsTurnEnd(kind: TuiAgentKind, output: string): boolean {
   if (kind === 'claude') return true;
@@ -302,7 +304,8 @@ export function showsTurnEnd(kind: TuiAgentKind, output: string): boolean {
   // (just sent, its status line not drawn yet) means the next turn has begun.
   const withoutNotes = above.filter((line, i) => !(i >= above.length - 2 && CODEX_BACKGROUND_NOTE.test(line.trim())));
   const last = withoutNotes[withoutNotes.length - 1];
-  return last !== undefined && CODEX_TURN_END_LINE.test(last.trim());
+  if (last !== undefined && CODEX_TURN_END_LINE.test(last.trim())) return true;
+  return endsWithStoppedTurnLine(withoutNotes);
 }
 
 /**
@@ -312,6 +315,20 @@ export function showsTurnEnd(kind: TuiAgentKind, output: string): boolean {
 export function hasUserMessageAbove(kind: TuiAgentKind, output: string): boolean {
   if (kind === 'claude') return true;
   return (nonBlankLinesAboveInput(kind, output) ?? []).some((line) => line.startsWith('›'));
+}
+
+/**
+ * `■ ...` (an interrupted or failed turn) closes the turn when it is the last block above the input: the lines after it are only the
+ * continuation of a wrapped one. Any line of something else (a prompt `›`, a bullet `•` / `◦`) after it means a later turn has begun.
+ */
+function endsWithStoppedTurnLine(lines: string[]): boolean {
+  const tail = lines.slice(-4);
+  for (let i = tail.length - 1; i >= 0; i--) {
+    const line = tail[i].trim();
+    if (line.startsWith('■')) return true;
+    if (/^[›•◦]/.test(line) || CODEX_TURN_END_LINE.test(line)) return false;
+  }
+  return false;
 }
 
 /** The text above the input, for telling whether the screen is still changing (a turn streaming) between two looks. */
