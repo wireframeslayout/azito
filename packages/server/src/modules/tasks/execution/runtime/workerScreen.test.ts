@@ -297,6 +297,20 @@ describe('a turn that is still running (#532)', () => {
     expect(showsTurnEnd('codex', '■ Conversation interrupted\n• Working on it\n\n› Ask Codex to do anything\n\n  ? for shortcuts')).toBe(false);
   });
 
+  it('a "■" at column 0 ends the turn however far the error wraps (a narrow pane); an indented "■" is a heading of an answer being written', () => {
+    const narrow = fixture('codex-0.163-linux-error-turn-44col.txt');
+    expect(narrow).toContain('■ {"type":"error"');
+    expect(showsTurnEnd('codex', narrow)).toBe(true);
+    expect(readInputBox('codex', narrow)).toEqual({ state: 'empty' });
+    const headings = fixture('codex-0.163-linux-answer-square-headings-midturn.txt');
+    expect(headings).toMatch(/^ +■ /m);
+    expect(showsTurnEnd('codex', headings)).toBe(false);
+    expect(isWorkerBusy('codex', headings)).toBe(false);
+    // synthetic: a long wrap, then an indented heading in a later answer
+    expect(showsTurnEnd('codex', `■ {"type":"error"\n${'x'.repeat(40)}\n${'y'.repeat(40)}\n${'z'.repeat(40)}\n${'w'.repeat(40)}\n${'v'.repeat(40)}\n\n› Ask Codex to do anything\n\n  ? for shortcuts`)).toBe(true);
+    expect(showsTurnEnd('codex', `■ Conversation interrupted\n› again\n• answer\n  ■ Heading\n  text\n\n› Ask Codex to do anything\n\n  ? for shortcuts`)).toBe(false);
+  });
+
   it('a path with the word "warning" in a wrapped line of the input is the input, not the footer', () => {
     const line = 'AZITO prompt file. Read the file named at the end of this line and carry out every instruction in it exactly: C:/Users/warning/AppData/Local/Temp/azito-prompt-99-0123456789abcdef.md';
     const wrap = (text: string, width: number) => text.match(new RegExp(`.{1,${width}}`, 'g'))!;

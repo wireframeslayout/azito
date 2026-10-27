@@ -410,6 +410,23 @@ describe('TuiWorkerRuntime.sendPrompt — the worker has to be at an empty input
     expect(h.pane.submitted).toEqual([LINE]);
   });
 
+  // cap9: a heading drawn with ■ and indented is part of the answer being written, not the line that ends a turn
+  it('an answer being written with indented "■" headings (no status line) is waited for, not taken as ended: nothing is sent early', async () => {
+    const headings = fixture('codex-0.163-linux-answer-square-headings-midturn.txt');
+    const h = sendHarness('codex', { firstScreens: [headings, `  more text of the answer\n${headings}`, `  more text of the answer\n  and more\n${headings}`], idle: headings, quiet: true });
+    expect(await h.send()).toMatchObject({ reason: 'worker_busy' });
+    expect(h.waitedMs()).toBeGreaterThanOrEqual(60_000);
+    expect(h.workerInput.typePrompt).not.toHaveBeenCalled();
+  });
+
+  it('an error that wraps over six lines on a 44-column pane ends the turn: the prompt goes in without the 60 s', async () => {
+    const streaming = (n: number) => fixture('codex-0.163-linux-streaming-final-answer.txt').replace('TCP congestion control adjusts', `TCP congestion control adjusts ${'word '.repeat(n)}`);
+    const h = sendHarness('codex', { firstScreens: [streaming(1), streaming(2), streaming(3)], idle: fixture('codex-0.163-linux-error-turn-44col.txt'), quiet: true });
+    expect(await h.send()).toBeNull();
+    expect(h.waitedMs()).toBeLessThan(15_000);
+    expect(h.pane.submitted).toEqual([LINE]);
+  });
+
   it('a turn that was seen and shows no line that ends it (a screen that is stalled mid-answer) is waited for 60 s and then worker_busy', async () => {
     const streaming = (n: number) => fixture('codex-0.163-linux-streaming-final-answer.txt').replace('TCP congestion control adjusts', `TCP congestion control adjusts ${'word '.repeat(n)}`);
     const h = sendHarness('codex', { firstScreens: [streaming(1), streaming(2), streaming(3)], quiet: true });
