@@ -27,6 +27,8 @@ const HOST: AgentMisaoHost = {
   windows: { systemRoot: 'C:\\Windows', userName: 'dev', misaoRoot: ROOT },
 };
 
+const OTHER_TASK_XML = '<Task><Actions><Exec><Arguments>--data "C:\\Users\\dev\\hub-prefix\\misao"</Arguments></Exec></Actions></Task>';
+
 interface FakeOptions {
   /** The daemon of this release never opens its pipe after `/Run` (the task that names its `misao.exe` starts and ends at once). */
   failStartFor?: string;
@@ -518,6 +520,66 @@ describe('MisaoAgentInstaller on a Windows agent', () => {
       await lock.run(async () => {
         expect(await sharing(lock, 'D:\\other\\.azito\\misao').reviveWindowsDaemon(agent.asTarget(), false)).toBe('running');
       });
+    });
+  });
+
+  describe('a task of another folder (the hub installed with its own prefix)', () => {
+    const seedOther = (agent: FakeWindowsAgent, running: boolean): void => {
+      agent.seedInstalled(OLD_VERSION, running);
+      agent.host.registeredXml = OTHER_TASK_XML;
+    };
+    const expectUntouched = (agent: FakeWindowsAgent): void => {
+      expect(agent.host.registeredXml).toBe(OTHER_TASK_XML);
+      expect(agent.uploads).toEqual([]);
+      expect(agent.written).toEqual([]);
+      expect(agent.events).toEqual([]);
+      expect(agent.specs.some((spec) => spec.file.endsWith('misao.exe'))).toBe(false);
+    };
+
+    for (const action of ['install', 'update'] as const) {
+      it(`${action} refuses while that task is stopped, and changes nothing`, async () => {
+        const agent = new FakeWindowsAgent(bundle);
+        seedOther(agent, false);
+        await expect(installer()[action](agent.asTarget())).rejects.toMatchObject({ code: 'custom_socket', message: expect.stringContaining('hub-prefix') });
+        expectUntouched(agent);
+      });
+
+      it(`${action} refuses for this reason, not daemon_not_ready, while that task is running`, async () => {
+        const agent = new FakeWindowsAgent(bundle);
+        seedOther(agent, false);
+        agent.host.markRunning();
+        await expect(installer()[action](agent.asTarget())).rejects.toMatchObject({ code: 'custom_socket' });
+        expectUntouched(agent);
+      });
+
+      it(`${action} refuses a task whose folder cannot be read`, async () => {
+        const agent = new FakeWindowsAgent(bundle);
+        agent.seedInstalled(OLD_VERSION, false);
+        agent.host.registeredXml = '<Task>not a misao task</Task>';
+        await expect(installer()[action](agent.asTarget())).rejects.toMatchObject({ code: 'custom_socket', message: expect.stringContaining('cannot be read') });
+        expect(agent.uploads).toEqual([]);
+        expect(agent.events).toEqual([]);
+      });
+    }
+
+    it('install still shares a task of the same folder (case and doubled backslashes aside)', async () => {
+      const agent = new FakeWindowsAgent(bundle);
+      agent.seedInstalled(VERSION, true);
+      agent.host.registeredXml = `<Task><Actions><Exec><Arguments>--data "${ROOT.toUpperCase().replace(/\\/g, '\\\\')}"</Arguments></Exec></Actions></Task>`;
+      expect(await installer().install(agent.asTarget())).toMatchObject({ startMethod: 'running', updateAvailable: false });
+      expect(agent.events).toEqual([]);
+    });
+
+    it('update still replaces a task of the same folder', async () => {
+      const agent = new FakeWindowsAgent(bundle);
+      agent.seedInstalled(OLD_VERSION, true);
+      expect(await installer().update(agent.asTarget())).toMatchObject({ startMethod: 'taskscheduler', runningVersion: VERSION });
+    });
+
+    it('install registers a new task when there is none', async () => {
+      const agent = new FakeWindowsAgent(bundle);
+      expect(await installer().install(agent.asTarget())).toMatchObject({ startMethod: 'taskscheduler' });
+      expect(agent.schtasks()).toContain('/Create');
     });
   });
 

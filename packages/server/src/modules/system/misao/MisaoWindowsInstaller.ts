@@ -55,6 +55,11 @@ function describeError(err: unknown): string {
   return err instanceof Error ? err.message : String(err);
 }
 
+/** The agent reported its folder in its real spelling and the task was written with it: the strings are compared, never looked up on this machine. */
+function isTaskOfRoot(taskRoot: string | undefined, misaoRoot: string): boolean {
+  return taskRoot !== undefined && win32.normalize(taskRoot).toLowerCase() === win32.normalize(misaoRoot).toLowerCase();
+}
+
 /** What was on the host before a switch, to put back if it fails. */
 interface PreviousInstall {
   /** The task definition as it was, when a task was registered. */
@@ -91,6 +96,7 @@ export class MisaoWindowsInstaller {
   async install(target: WindowsTarget, bundle: MisaoBundle, onProgress: (step: MisaoInstallStep) => void): Promise<MisaoAgentInstallResult> {
     onProgress('inspect');
     const { session, status } = await this.inspect(target, bundle);
+    await this.refuseTaskOfAnotherRoot(session);
     const live = status.socketPresent;
     // The pipe probe can miss a daemon that is just starting (the logon task is on its way up): the task's own state says so.
     if (!live && (await this.taskIsRunning(session))) {
@@ -125,6 +131,7 @@ export class MisaoWindowsInstaller {
   async update(target: WindowsTarget, bundle: MisaoBundle, onProgress: (step: MisaoInstallStep) => void): Promise<MisaoAgentInstallResult> {
     onProgress('inspect');
     const { session, status } = await this.inspect(target, bundle);
+    await this.refuseTaskOfAnotherRoot(session);
     if (!status.installedVersion) {
       throw new MisaoServiceError('not_installed', 'misao is not installed on this server by AZITO, so there is nothing to update. Install it first.');
     }
@@ -180,8 +187,7 @@ export class MisaoWindowsInstaller {
     if (!state.exists) return 'no_task';
     const xml = await tasks.exportXml(this.options.taskName);
     const taskRoot = taskMisaoRoot(xml);
-    // The agent reported its folder in its real spelling and the task was written with it: the strings are compared, never looked up on this machine.
-    if (taskRoot === undefined || win32.normalize(taskRoot).toLowerCase() !== win32.normalize(host.windows.misaoRoot).toLowerCase()) return 'other_task';
+    if (!isTaskOfRoot(taskRoot, host.windows.misaoRoot)) return 'other_task';
     if (isTaskDefinitionDisabled(xml)) return 'disabled';
     if (state.running) {
       if (!force) return 'starting';
@@ -201,6 +207,19 @@ export class MisaoWindowsInstaller {
   }
 
   // ── Reading the host ──
+
+  /**
+   * The task name is one per user, and the hub may be installed with its own prefix on the same machine: a task that starts a misao
+   * from another folder (or one whose folder cannot be read) is another install's. Replacing it would leave that install without
+   * its daemon, so nothing is changed. A missing task is the normal first install.
+   */
+  private async refuseTaskOfAnotherRoot(session: Session): Promise<void> {
+    if (!(await session.tasks.query(this.options.taskName)).exists) return;
+    const taskRoot = taskMisaoRoot(await session.tasks.exportXml(this.options.taskName));
+    if (isTaskOfRoot(taskRoot, session.windows.misaoRoot)) return;
+    const where = taskRoot === undefined ? 'a task whose misao folder cannot be read' : `a misao task of another folder (${taskRoot})`;
+    throw new MisaoServiceError('custom_socket', `The task "${this.options.taskName}" is registered as ${where}, not ${session.windows.misaoRoot}. Changing it would leave that install without its misao, so nothing was changed.`);
+  }
 
   private async inspect(target: WindowsTarget, bundle: MisaoBundle): Promise<{ session: Session; status: MisaoSocketStatus }> {
     let status: MisaoSocketStatus;
