@@ -233,7 +233,7 @@ export function TerminalContainer({ registeredWindow, serverName, target: rawTar
     setRespawning(true);
     setRespawnError(null);
     try {
-      const res = await api<{ tmuxTarget: string; error?: string; message?: string; windowId?: number }>(`/windows/${respawnWindowId}/respawn`, {
+      const res = await api<{ tmuxTarget: string; error?: string; message?: string; windowId?: number; sessionId?: string }>(`/windows/${respawnWindowId}/respawn`, {
         method: 'POST',
         body: JSON.stringify({ force }),
       });
@@ -248,8 +248,8 @@ export function TerminalContainer({ registeredWindow, serverName, target: rawTar
         return;
       }
       if (!res.tmuxTarget) {
-        if (res.error === 'session_already_running' && res.windowId != null) {
-          setRespawnError(t('terminal.sessionAlreadyRunning', { windowId: formatWindowId(res.windowId) }));
+        if (res.error === 'session_already_running' && res.windowId != null && res.sessionId) {
+          setRespawnError(t('terminal.sessionAlreadyRunning', { windowId: formatWindowId(res.windowId), sessionId: res.sessionId.slice(0, 8) }));
         } else {
           setRespawnError(res.message || res.error || 'Respawn failed');
         }

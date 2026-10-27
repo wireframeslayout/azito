@@ -243,13 +243,21 @@ export class WindowRespawnService {
       unitId = this.enforceExecutionGate(task, server, 'respawn', windowId, buildRespawnManifestInput(win), respawnBaseBranch);
     }
 
-    // Issue #274: duplicate session detection — if the same agentSessionId
-    // is already running in a DIFFERENT window for this task, reject the
-    // respawn to prevent launching a second instance of the same conversation.
-    if (task && task.agentSessionId) {
-      const running = await this.findRunningSessionForTask(task.id, task.agentSessionId, server.name);
-      if (running && running.windowId !== windowId) {
-        throw new DuplicateAgentSessionError(running.windowId);
+    // Issue #274 / #540: duplicate session detection — the conversation this
+    // window will resume (win.agentSessionId, which is what the launch of its
+    // first pane resumes) must not already be running in a DIFFERENT window of
+    // the task. A window with no session of its own falls back to the task's
+    // session only when it is the task's primary window; any other window has
+    // nothing to collide with. Known limit, older than #540 and left as is: a
+    // window with several panes is checked for this one session only, not for
+    // the conversation of each pane.
+    if (task) {
+      const ownSessionId = win.agentSessionId ?? (isPrimaryTaskWindow(win) ? task.agentSessionId : null);
+      if (ownSessionId) {
+        const running = await this.findRunningSessionForTask(task.id, ownSessionId, server.name);
+        if (running && running.windowId !== windowId) {
+          throw new DuplicateAgentSessionError(running.windowId, ownSessionId);
+        }
       }
     }
 
