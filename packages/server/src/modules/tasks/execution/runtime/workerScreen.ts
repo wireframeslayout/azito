@@ -267,6 +267,8 @@ const CLAUDE_SPINNER = /^[·✻✽✶✢✳*]\s+[^\s…]+…(\s|$)/;
 const CODEX_WORKING_LINE = /^[•◦]\s*Working\s*\(/;
 /** The line codex writes when a turn is over: `Worked for 44s • 8:24 AM`. */
 const CODEX_TURN_END_LINE = /^Worked for \d/;
+/** The row under `Worked for` that counts a background terminal: `1 background terminal running · /ps to view · /stop to close`. */
+const CODEX_BACKGROUND_NOTE = /background terminals? running/i;
 
 function nonBlankLinesAboveInput(kind: TuiAgentKind, output: string): string[] | null {
   const lines = screenLines(output);
@@ -295,7 +297,12 @@ export function isWorkerBusy(kind: TuiAgentKind, output: string): boolean {
 export function showsTurnEnd(kind: TuiAgentKind, output: string): boolean {
   if (kind === 'claude') return true;
   const above = nonBlankLinesAboveInput(kind, output);
-  return above !== null && above.slice(-3).some((line) => CODEX_TURN_END_LINE.test(line.trim()));
+  if (above === null) return false;
+  // `Worked for ...` is the last line of the turn; only the note of a background terminal may follow it. A line of the next prompt under it
+  // (just sent, its status line not drawn yet) means the next turn has begun.
+  const withoutNotes = above.filter((line, i) => !(i >= above.length - 2 && CODEX_BACKGROUND_NOTE.test(line.trim())));
+  const last = withoutNotes[withoutNotes.length - 1];
+  return last !== undefined && CODEX_TURN_END_LINE.test(last.trim());
 }
 
 /** The text above the input, for telling whether the screen is still changing (a turn streaming) between two looks. */

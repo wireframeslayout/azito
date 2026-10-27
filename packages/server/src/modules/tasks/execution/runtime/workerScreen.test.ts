@@ -267,6 +267,23 @@ describe('a turn that is still running (#532)', () => {
     expect(showsTurnEnd('codex', fixture('codex-0.163-linux-between-tools-1.txt'))).toBe(false);
   });
 
+  it('"Worked for" counts only on the line right above the input (a background terminal note may follow it), not above the next prompt just sent', () => {
+    const over = fixture('codex-0.163-linux-next-prompt-just-sent.txt');
+    expect(over).toContain('Worked for 25s');
+    expect(showsTurnEnd('codex', over)).toBe(false);
+    const withNote = '  Worked for 6s • 9:44 AM\n  1 background terminal running · /ps to view · /stop to close\n\n› Ask Codex to do anything\n\n  ? for shortcuts';
+    expect(showsTurnEnd('codex', withNote)).toBe(true);
+    expect(showsTurnEnd('codex', `  Worked for 6s • 9:44 AM\n› Run something\n\n› Ask Codex to do anything\n\n  ? for shortcuts`)).toBe(false);
+  });
+
+  it('an answer that stalls in the middle of a sentence shows no status line and no turn end', () => {
+    for (const name of ['codex-0.163-linux-answer-stalled-mid-sentence-1.txt', 'codex-0.163-linux-answer-stalled-mid-sentence-2.txt']) {
+      expect(isWorkerBusy('codex', fixture(name)), name).toBe(false);
+      expect(showsTurnEnd('codex', fixture(name)), name).toBe(false);
+      expect(readInputBox('codex', fixture(name)), name).toEqual({ state: 'empty' });
+    }
+  });
+
   it('codex writes "Worked for ..." right above the input when the turn is over', () => {
     expect(showsTurnEnd('codex', fixture('codex-0.164-win-after-reply.txt'))).toBe(true);
     expect(showsTurnEnd('claude', fixture('claude-2.1.310-linux-done.txt'))).toBe(true);

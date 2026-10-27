@@ -13,7 +13,7 @@ function wrapped(draft: string, width: number | undefined): string[] {
   return pieces;
 }
 
-export function workerScreenWith(draft: string, wrapWidth?: number, onlyClaude = false): string {
+export function workerScreenWith(draft: string, wrapWidth?: number, onlyClaude = false, quiet = false): string {
   const pieces = wrapped(draft, wrapWidth);
   // Claude's input between its two rules, codex's composer and footer at the bottom (each parser reads its own part).
   return [
@@ -21,6 +21,8 @@ export function workerScreenWith(draft: string, wrapWidth?: number, onlyClaude =
     ...pieces.map((piece, i) => (i === 0 ? `❯ ${piece}` : `  ${piece}`)),
     RULE,
     ...(onlyClaude ? [] : [
+      // the line codex writes when a turn is over (a pane that has a "quiet" screen has none: a session just started)
+      ...(quiet ? [] : ['  Worked for 1s • 9:00 AM']),
       ...pieces.map((piece, i) => (i === 0 ? `› ${draft === '' ? 'Ask Codex to do anything' : piece}` : `  ${piece}`)),
       '',
       '  ? for shortcuts                              100% context left',
@@ -32,6 +34,8 @@ export function workerScreenWith(draft: string, wrapWidth?: number, onlyClaude =
 export interface FakeWorkerPaneOptions {
   /** Only Claude's part of the screen is drawn (a wrapped codex composer would not leave room for the footer rows Claude's reader allows). */
   onlyClaude?: boolean;
+  /** The screen has no "Worked for" line above the codex composer. */
+  quiet?: boolean;
   /** The input wraps at this many characters. */
   wrapWidth?: number;
   /** Ctrl+U clears one display line of the input only (Claude Code's behaviour in a wrapped input). */
@@ -57,7 +61,7 @@ export function createFakeWorkerPane(options: FakeWorkerPaneOptions = {}): { sen
       if (options.clearsOneLine && options.wrapWidth !== undefined) draft = draft.slice(0, Math.floor((draft.length - 1) / options.wrapWidth) * options.wrapWidth);
       else draft = '';
     },
-    screen: () => workerScreenWith(draft, options.wrapWidth, options.onlyClaude),
+    screen: () => workerScreenWith(draft, options.wrapWidth, options.onlyClaude, options.quiet),
     submitted,
   };
 }
