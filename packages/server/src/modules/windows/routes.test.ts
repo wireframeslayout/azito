@@ -511,7 +511,7 @@ describe('POST /api/windows/:id/respawn — execution gate (Issue #328 second-ro
     const res = await app.inject({ method: 'POST', url: `/api/windows/${window.id}/respawn` });
 
     expect(res.statusCode).toBe(409);
-    expect(res.json()).toMatchObject({ error: 'conversation_unverifiable', sessionId: '6f1e3403-aaaa-4bbb-8ccc-0123456789ab', message: expect.stringContaining('agent did not answer') });
+    expect(res.json()).toMatchObject({ error: expect.stringContaining('agent did not answer'), code: 'conversation_unverifiable', sessionId: '6f1e3403-aaaa-4bbb-8ccc-0123456789ab' });
   });
 
   it('still succeeds and returns tmuxTarget when the gate allows execution', async () => {

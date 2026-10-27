@@ -2718,6 +2718,35 @@ describe('WindowRespawnService.respawn — a conversation that was never written
     }
   });
 
+  it('stops before the window is touched when the Claude config directory is missing (it may be set differently for the pane shell)', async () => {
+    const missing = new LocalTranscriptSource(new ClaudeTranscriptSource(path.join(projects, 'no-config', 'projects')));
+    const built = await respawnWith(makeWindow({ agentSessionId: SESSION }), probeOver(missing));
+    expect(built.outcome).toBeInstanceOf(ConversationCheckError);
+    expect((built.outcome as Error).message).toMatch(/config directory/);
+    untouched(built);
+  });
+
+  it('starts fresh when the config directory exists but holds no projects yet', async () => {
+    const noProjects = new LocalTranscriptSource(new ClaudeTranscriptSource(path.join(projects, 'projects')));
+    const { sentCommands, outcome } = await respawnWith(makeWindow({ agentSessionId: SESSION }), probeOver(noProjects));
+    expect(outcome).toBeNull();
+    expect(sentCommands.join('\n')).toContain(`claude --session-id ${SESSION}`);
+  });
+
+  it('stops before the window is touched when the storage is broken (projects is a file, or <id>.jsonl is a directory)', async () => {
+    mkdirSync(path.join(projects, '-p', `${SESSION}.jsonl`), { recursive: true });
+    const asDirectory = await respawnWith(makeWindow({ agentSessionId: SESSION }), probeOver());
+    expect(asDirectory.outcome).toBeInstanceOf(ConversationCheckError);
+    untouched(asDirectory);
+
+    const projectsFile = path.join(projects, 'cfg', 'projects');
+    mkdirSync(path.dirname(projectsFile), { recursive: true });
+    writeFileSync(projectsFile, 'x');
+    const asFile = await respawnWith(makeWindow({ agentSessionId: SESSION }), probeOver(new LocalTranscriptSource(new ClaudeTranscriptSource(projectsFile))));
+    expect(asFile.outcome).toBeInstanceOf(ConversationCheckError);
+    untouched(asFile);
+  });
+
   it('starts fresh when the agent answers that the conversation is not there', async () => {
     const agent = new AgentTranscriptSource('claude', 'srv', { getJson: async () => ({ status: 404, body: { error: AGENT_SESSION_NOT_FOUND } }) });
     const { sentCommands, outcome } = await respawnWith(makeWindow({ agentSessionId: SESSION }), probeOver(agent));

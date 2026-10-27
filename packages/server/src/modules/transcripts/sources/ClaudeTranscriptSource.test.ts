@@ -37,7 +37,22 @@ describe('ClaudeTranscriptSource', () => {
       writeSession(dir, 'proj-a', SID_A, [{ type: 'user', uuid: 'u', message: { role: 'user', content: 'hi' } }]);
       expect(service.sessionExists(SID_A)).toBe(true);
       expect(service.sessionExists(SID_B)).toBe(false);
+      // The config directory is there but has no projects yet (Claude started and wrote no conversation): not there.
       expect(new ClaudeTranscriptSource(path.join(dir, 'nonexistent')).sessionExists(SID_A)).toBe(false);
+    });
+
+    it('cannot tell when the config directory itself is missing (it may be a different CLAUDE_CONFIG_DIR)', () => {
+      expect(() => new ClaudeTranscriptSource(path.join(dir, 'no-config', 'projects')).sessionExists(SID_A)).toThrow(/config directory .* does not exist/);
+    });
+
+    it('throws when projects is not a directory (ENOTDIR), or <id>.jsonl is not a regular file', () => {
+      const asFile = path.join(dir, 'cfg', 'projects');
+      fs.mkdirSync(path.dirname(asFile), { recursive: true });
+      fs.writeFileSync(asFile, 'x');
+      expect(() => new ClaudeTranscriptSource(asFile).sessionExists(SID_A)).toThrow(/ENOTDIR/);
+
+      fs.mkdirSync(path.join(dir, 'proj-a', `${SID_B}.jsonl`), { recursive: true });
+      expect(() => service.sessionExists(SID_B)).toThrow(/not a regular file/);
     });
 
     it.skipIf(process.platform === 'win32' || process.getuid?.() === 0)('throws on a folder it cannot read instead of saying false', () => {

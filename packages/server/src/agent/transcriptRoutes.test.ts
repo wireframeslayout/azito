@@ -56,6 +56,12 @@ describe('agent transcript routes', () => {
       expect(missing.json()).toEqual({ error: 'session_not_found' });
     });
 
+    it('answers 400 for an id that is not a UUID', async () => {
+      const res = await app.inject({ method: 'GET', url: url('not-a-uuid'), headers: AUTH });
+      expect(res.statusCode).toBe(400);
+      expect(res.json()).toEqual({ error: 'invalid_session_id' });
+    });
+
     it('is not answered for an agent type whose reader cannot tell (codex), and needs the token', async () => {
       expect((await app.inject({ method: 'GET', url: url(SID, 'codex'), headers: AUTH })).statusCode).toBe(404);
       expect((await app.inject({ method: 'GET', url: url(SID) })).statusCode).toBe(401);

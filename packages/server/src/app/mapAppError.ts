@@ -25,8 +25,8 @@ export function mapAppError(err: unknown): AppErrorResponse | null {
     return { status: 501, body: { error: err.message, code: err.code } };
   }
   if (err instanceof ConversationCheckError) {
-    // A respawn stopped before the window was touched because the conversation it would resume could not be looked up: the reason is the message.
-    return { status: 409, body: { error: 'conversation_unverifiable', sessionId: err.sessionId, message: err.message } };
+    // A respawn stopped before the window was touched because the conversation it would resume could not be looked up: the reason is `error`, like the other reasons here (the UI shows `error`).
+    return { status: 409, body: { error: err.message, code: 'conversation_unverifiable', sessionId: err.sessionId } };
   }
   if (err instanceof GitNotFoundError) {
     // Same shape as the host-OS reasons above: the reason (with how to install Git for Windows) in `error`, `git_not_found` in `code`.

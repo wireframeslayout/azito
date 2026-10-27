@@ -859,25 +859,45 @@ export class ClaudeTranscriptSource implements TranscriptReader {
 
   /**
    * `projects/<どのフォルダーでも>/<id>.jsonl` があるか（`claude --resume <id>` が探す範囲と同じ。窓の cwd には頼らない）。
-   * findSessionFile と違い、読めないものを「無い」にしない: ENOENT / ENOTDIR（そこに無い）だけが「無い」で、
-   * それ以外の読み取りエラーは投げる。projects 自体が無いのは「このマシンで Claude が会話を作ったことが無い」＝無い。
+   * findSessionFile と違い、読めないもの・壊れているものを「無い」にしない:
+   * - 「無い」は、設定フォルダー（projects の親）があり、そこに projects が無い（ENOENT）か、どの projects/<folder>/ にも <id>.jsonl が無い場合だけ。
+   * - 設定フォルダー自体が無いのは確かめられない（Claude が使う CLAUDE_CONFIG_DIR は、このプロセスの環境と違う場所かもしれない）ので投げる。
+   * - projects が一覧できない（ENOTDIR・権限・I/O）、<id>.jsonl が通常のファイルでない、stat できない場合も投げる。
+   *
+   * 残る制限: 利用者のシェルの rc だけで CLAUDE_CONFIG_DIR を変えていて、しかもこのプロセスの設定フォルダー（既定の ~/.claude）にも
+   * projects がある場合は、会話が別の場所にあっても「無い」と答えてしまう。プロセスから pane のシェルの環境は見えない。
    */
   sessionExists(sessionId: string): boolean {
     if (!SESSION_ID_PATTERN.test(sessionId)) throw new Error(`Invalid session id: ${sessionId}`);
     const projectsDir = this.projectsDir();
-    let projects: string[];
+    let projects: fs.Dirent[];
     try {
-      projects = fs.readdirSync(projectsDir);
+      projects = fs.readdirSync(projectsDir, { withFileTypes: true });
     } catch (err) {
-      if (isAbsentError(err)) return false;
-      throw err;
+      if ((err as NodeJS.ErrnoException).code !== 'ENOENT') throw err;
+      const configDir = path.dirname(projectsDir);
+      try {
+        fs.statSync(configDir);
+      } catch (configErr) {
+        if ((configErr as NodeJS.ErrnoException).code === 'ENOENT') {
+          throw new Error(`The Claude config directory ${configDir} does not exist (is CLAUDE_CONFIG_DIR set differently for the agent's shell?)`);
+        }
+        throw configErr;
+      }
+      return false;
     }
     for (const project of projects) {
+      if (project.isFile()) continue;
+      const file = path.join(projectsDir, project.name, `${sessionId}.jsonl`);
+      let stat: fs.Stats;
       try {
-        if (fs.statSync(path.join(projectsDir, project, `${sessionId}.jsonl`)).isFile()) return true;
+        stat = fs.statSync(file);
       } catch (err) {
-        if (!isAbsentError(err)) throw err;
+        if (isAbsentError(err)) continue;
+        throw err;
       }
+      if (!stat.isFile()) throw new Error(`${file} is not a regular file`);
+      return true;
     }
     return false;
   }

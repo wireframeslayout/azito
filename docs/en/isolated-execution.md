@@ -509,7 +509,11 @@ including isolated ones. The decision, and why it does not weaken isolation:
 - The agent's conversation-log API (`/api/transcripts/:agent/sessions...`) sits behind the agent's
   token check. It serves only the agent host's own session directories (`~/.claude/projects` or
   `CLAUDE_CONFIG_DIR`, and the Codex `sessions` directory), addressed by agent type + session UUID.
-  There is no endpoint that takes a file path, so arbitrary files cannot be read.
+  There is no endpoint that takes a file path, so arbitrary files cannot be read. A window respawn asks
+  `.../sessions/:id/exists` whether a conversation exists. Known limit: if only the user's shell rc sets
+  `CLAUDE_CONFIG_DIR` and the agent process's own config directory (default `~/.claude`) also has a `projects`
+  folder, a conversation stored elsewhere is answered as "not there" (the process cannot see the pane shell's
+  environment). A missing config directory itself is "cannot tell" and stops the respawn.
 - Data flows isolated host -> hub, like terminal output and task logs already do. The hub renders
   it as text; a prompt-injected agent can write misleading text into its own log, exactly as it can
   into its pane.
