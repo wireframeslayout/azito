@@ -56,6 +56,18 @@ describe('agent transcript routes', () => {
       expect(missing.json()).toEqual({ error: 'session_not_found' });
     });
 
+    it.skipIf(process.platform === 'win32' || process.getuid?.() === 0)('answers 500 with the reason when the logs cannot be read', async () => {
+      const projects = path.join(root, 'claude', 'projects');
+      fs.chmodSync(projects, 0o000);
+      try {
+        const res = await app.inject({ method: 'GET', url: url(SID), headers: AUTH });
+        expect(res.statusCode).toBe(500);
+        expect(res.json()).toMatchObject({ error: 'exists_failed', message: expect.stringContaining('EACCES') });
+      } finally {
+        fs.chmodSync(projects, 0o700);
+      }
+    });
+
     it('answers 400 for an id that is not a UUID', async () => {
       const res = await app.inject({ method: 'GET', url: url('not-a-uuid'), headers: AUTH });
       expect(res.statusCode).toBe(400);

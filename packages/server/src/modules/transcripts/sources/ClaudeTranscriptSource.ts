@@ -367,12 +367,6 @@ export interface ClaudeTranscriptSourceOptions {
 
 // ─── Helpers ───
 
-/** そこに何も無い（ファイル／フォルダーが無い、途中がフォルダーでない）ことを表すエラー。権限エラーなどは含まない。 */
-function isAbsentError(err: unknown): boolean {
-  const code = (err as NodeJS.ErrnoException).code;
-  return code === 'ENOENT' || code === 'ENOTDIR';
-}
-
 function resolveProjectsDir(baseDir?: string): string {
   return baseDir ?? path.join(process.env.CLAUDE_CONFIG_DIR ?? path.join(os.homedir(), '.claude'), 'projects');
 }
@@ -880,7 +874,7 @@ export class ClaudeTranscriptSource implements TranscriptReader {
         fs.statSync(configDir);
       } catch (configErr) {
         if ((configErr as NodeJS.ErrnoException).code === 'ENOENT') {
-          throw new Error(`The Claude config directory ${configDir} does not exist (is CLAUDE_CONFIG_DIR set differently for the agent's shell?)`);
+          throw new Error(`The Claude config directory ${configDir} does not exist (run claude once on this host, or check that CLAUDE_CONFIG_DIR is the same for the agent process and the pane shell)`);
         }
         throw configErr;
       }
@@ -893,7 +887,9 @@ export class ClaudeTranscriptSource implements TranscriptReader {
       try {
         stat = fs.statSync(file);
       } catch (err) {
-        if (isAbsentError(err)) continue;
+        // Only a missing entry (ENOENT: no such file, or a dangling link) is "not there". ENOTDIR here means projects/<entry> is
+        // something that is not a folder (e.g. a link to a file): the storage is not as expected, so it cannot be told.
+        if ((err as NodeJS.ErrnoException).code === 'ENOENT') continue;
         throw err;
       }
       if (!stat.isFile()) throw new Error(`${file} is not a regular file`);

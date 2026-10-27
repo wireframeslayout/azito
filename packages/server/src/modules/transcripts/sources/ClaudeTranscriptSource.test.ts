@@ -55,6 +55,16 @@ describe('ClaudeTranscriptSource', () => {
       expect(() => service.sessionExists(SID_B)).toThrow(/not a regular file/);
     });
 
+    it.skipIf(process.platform === 'win32')('throws when projects/<entry> is a link to a regular file (ENOTDIR), but passes over a dangling link', () => {
+      fs.writeFileSync(path.join(dir, 'a-file'), 'x');
+      fs.symlinkSync(path.join(dir, 'a-file'), path.join(dir, 'linked'));
+      expect(() => service.sessionExists(SID_B)).toThrow(/ENOTDIR/);
+      fs.rmSync(path.join(dir, 'linked'));
+
+      fs.symlinkSync(path.join(dir, 'gone'), path.join(dir, 'dangling'));
+      expect(service.sessionExists(SID_B)).toBe(false);
+    });
+
     it.skipIf(process.platform === 'win32' || process.getuid?.() === 0)('throws on a folder it cannot read instead of saying false', () => {
       const locked = path.join(dir, 'locked');
       fs.mkdirSync(locked);

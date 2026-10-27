@@ -1,6 +1,6 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { EventEmitter } from 'events';
-import { chmodSync, mkdtempSync, mkdirSync, realpathSync, rmSync, writeFileSync } from 'fs';
+import { chmodSync, mkdtempSync, mkdirSync, realpathSync, rmSync, symlinkSync, writeFileSync } from 'fs';
 import { tmpdir } from 'os';
 import * as path from 'path';
 import { WindowRespawnService, buildRespawnManifestInput } from './WindowRespawnService';
@@ -2745,6 +2745,22 @@ describe('WindowRespawnService.respawn — a conversation that was never written
     const asFile = await respawnWith(makeWindow({ agentSessionId: SESSION }), probeOver(new LocalTranscriptSource(new ClaudeTranscriptSource(projectsFile))));
     expect(asFile.outcome).toBeInstanceOf(ConversationCheckError);
     untouched(asFile);
+  });
+
+  it.skipIf(process.platform === 'win32')('stops before the window is touched when a project entry is a link to a file', async () => {
+    writeFileSync(path.join(projects, 'a-file'), 'x');
+    symlinkSync(path.join(projects, 'a-file'), path.join(projects, 'linked'));
+    const built = await respawnWith(makeWindow({ agentSessionId: SESSION }), probeOver());
+    expect(built.outcome).toBeInstanceOf(ConversationCheckError);
+    untouched(built);
+  });
+
+  it('puts the reason the agent gave into the message of the stopped respawn', async () => {
+    const agent = new AgentTranscriptSource('claude', 'srv', { getJson: async () => ({ status: 500, body: { error: 'exists_failed', message: "EACCES: permission denied, scandir '/home/u/.claude/projects'" } }) });
+    const built = await respawnWith(makeWindow({ agentSessionId: SESSION }), probeOver(agent));
+    expect(built.outcome).toBeInstanceOf(ConversationCheckError);
+    expect((built.outcome as Error).message).toContain('EACCES: permission denied');
+    untouched(built);
   });
 
   it('starts fresh when the agent answers that the conversation is not there', async () => {

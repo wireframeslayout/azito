@@ -44,6 +44,12 @@ export class TranscriptAgentBadResponseError extends Error {
 /** 同一セッションに対する meta の連続取得（cwd → mtime → created）を1往復にまとめる短い有効期間。 */
 const META_TTL_MS = 1500;
 
+/** The reason an agent gave with a failure (`message`), cut short: the agent host is not trusted. */
+function failureReason(body: unknown): string {
+  const message = typeof body === 'object' && body !== null ? (body as { message?: unknown }).message : undefined;
+  return typeof message === 'string' && message !== '' ? `: ${message.slice(0, 300)}` : '';
+}
+
 function isSessionNotFound(body: unknown): boolean {
   return typeof body === 'object' && body !== null && (body as { error?: unknown }).error === AGENT_SESSION_NOT_FOUND;
 }
@@ -126,7 +132,7 @@ export class AgentTranscriptSource implements TranscriptSource {
   private async fetchOk<S extends z.ZodType>(path: string, schema: S): Promise<z.infer<S>> {
     const { status, body } = await this.client.getJson(path);
     if (status === 404) throw new TranscriptAgentOutdatedError(this.serverName);
-    if (status < 200 || status >= 300) throw new Error(`Agent ${path} failed (${status})`);
+    if (status < 200 || status >= 300) throw new Error(`Agent ${path} failed (${status})${failureReason(body)}`);
     return this.parse(path, schema, body);
   }
 
@@ -137,7 +143,7 @@ export class AgentTranscriptSource implements TranscriptSource {
       if (isSessionNotFound(body)) return null;
       throw new TranscriptAgentOutdatedError(this.serverName);
     }
-    if (status < 200 || status >= 300) throw new Error(`Agent ${path} failed (${status})`);
+    if (status < 200 || status >= 300) throw new Error(`Agent ${path} failed (${status})${failureReason(body)}`);
     return this.parse(path, schema, body);
   }
 
