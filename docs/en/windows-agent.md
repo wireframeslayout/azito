@@ -128,7 +128,7 @@ What happens on the host (each step answers `removed` / `was not there` / `faile
 **What stays.**
 
 - The firewall rule `AZITO Agent (TCP 3002)` (if the install added it): in an Administrator PowerShell list it with `Get-NetFirewallRule -DisplayName "AZITO Agent (TCP 3002)"`, check that it is the one the install added (an Allow for TCP 3002, for this agent's node.exe, from 100.64.0.0/10), and remove it by its Name: `Remove-NetFirewallRule -Name '<the Name>'`. Leaving the rule does no harm: the agent is removed, so nothing listens on that port and the rule opens nothing new. Remove it only if you want to.
-- The AZITO harness (`%USERPROFILE%\.azito\harness*`, the hooks in `~\.claude\settings.json`): not removed automatically; remove it by hand.
+- The AZITO harness and the settings it wrote: not removed automatically (automatic removal is #538); remove them by hand ([The harness and its settings](#the-harness-and-its-settings)).
 - misao (the task and the folder) when you did not choose "Also remove misao".
 
 **When it fails.** If any step of the host removal fails, the server's row is not deleted. The result of each step stays on screen and you can choose:
@@ -146,6 +146,31 @@ By hand (when you did not use the UI, or the host was offline):
 3. Delete `%USERPROFILE%\.azito\agent`
 4. The firewall rule as above (check it, then remove it)
 5. For misao too: `schtasks /Delete /TN AzitoMisao /F` and delete `%USERPROFILE%\.azito\misao` (every window closes; if the daemon is running, **before you unregister the task** read the target `misao.exe` and the `--socket` pipe from the task definition (`schtasks /Query /TN AzitoMisao /XML`) and run, in PowerShell, `$env:MISAO_SOCKET = '<the target pipe>'; & '<the target misao.exe>' stop`. Without the pipe, the stop may not reach it or may stop another daemon)
+6. The harness and the settings it wrote (the tokens first): see [The harness and its settings](#the-harness-and-its-settings)
+
+### The harness and its settings
+
+The harness install (`setup.mjs`) writes the items below outside the agent folder. The removal above touches none of them. Items marked **TOKEN** hold `AZITO_UI_TOKEN`, the operator's full-power credential, so deal with them first. All paths are in the home of the user the agent runs as, except the Codex ones when `CODEX_HOME` points elsewhere.
+
+**Start by finding out which hub you are removing.** The harness is per hub: a hub with no `AZITO_HARNESS_PREFIX` uses `harness` and `azitoctl.env`; a hub with prefix `<p>` uses `harness-<p>` and `azitoctl-<p>.env` (`~\.azito\`). Open the `azitoctl[-<p>].env` you are about to remove and read its `AZITO_URL`: if it is not this hub's URL, it belongs to another hub and stays. Remove only the files, hooks and entries of this hub. Do not use wildcards such as `harness*` or `azitoctl*.env`: they also match the harness of another hub on the same host and `harness-copies.json`.
+
+| Item | Written | Remove by hand |
+|---|---|---|
+| **TOKEN** `~\.claude\settings.json`, key `mcpServers["azt-mcp"]` | An unprefixed run writes the key even without a token; `env.AZITO_UI_TOKEN` is in it only when a token was given (or was there before) | Delete the `azt-mcp` key under `mcpServers`, but only if its `args` points to `.azito\harness\skills\azt-mcp\mcp-server\index.js` **and** its `env.AZITO_URL` is this hub's URL. `args` is the same for every unprefixed hub of the host, so it cannot tell whose entry it is; setup rewrites `env.AZITO_URL` on each run, so it shows the hub that ran setup last. With another hub's URL, or with an `args` that points elsewhere, or one that you wrote yourself, leave it |
+| **TOKEN** `<CODEX_HOME>\config.toml`, tables `[mcp_servers.azt-mcp]` and `[mcp_servers.azt-mcp.env]` (`CODEX_HOME`, else `~\.codex`) | An unprefixed run, only when the `codex` command is on PATH | Same condition as the row above; read the `AZITO_URL` with `codex mcp get azt-mcp --json` (under `transport.env`, the place setup reads the existing token from). `codex mcp remove azt-mcp`, with the same `$env:CODEX_HOME` as the one the agent ran with (if it was set). Without the `codex` command, delete the two tables from `config.toml` by hand |
+| **TOKEN** `~\.azito\operator.env` | Whenever a UI token is given, **with or without a prefix**. It is one file for the whole host, so the last setup run overwrites it | Read its `AZITO_URL`. Delete the file only when it is this hub's; if it is another hub's, leave it |
+| `~\.claude\settings.json`, `hooks` | Every run | Delete the entries of this hub: `node "C:/Users/<you>/.azito/harness[-<p>]/hooks/azito-hook.mjs" <kind> [start\|stop] [--prefix <p>]` (the path has `/`; the folder and the `--prefix` value are this hub's). Entries of other hubs stay |
+| `~\.azito\azitoctl[-<p>].env` (the webhook token; no UI token) | When both the hub URL and the webhook token are given. Its absence does not mean the rest of the harness is gone | Delete it, for this hub's prefix only |
+| `~\.azito\harness[-<p>]` | Every run | Delete it for this hub's prefix only. **The unprefixed `harness` folder is also what the shared skills junctions below point into** (a prefixed run writes no skills, so another hub's `/azt-*` use that folder): delete it only when no other hub on this host uses the shared skills. If one does, leave the folder and remove this hub's other items (`azitoctl` env, hooks, tokens) one by one |
+| `~\.claude\skills\azt-*` and `<CODEX_HOME>\skills\azt-*` (junctions, shared by all hubs of the host) | An unprefixed run; the Codex ones when the `codex` command is on PATH **or** `<CODEX_HOME>` exists | Only if no other hub on the host still uses them (they point into one harness folder). Remove each junction without following it: `cmd /c rmdir "%USERPROFILE%\.claude\skills\azt-plan"`. Not `rd /s` or `Remove-Item -Recurse`, which can delete the harness files behind the link |
+| `~\.claude\rules\*.md` and `~\.azito\harness-copies.json` (shared) | An unprefixed run | Under the same condition: delete a rule copy only when `(Get-FileHash -Algorithm SHA256 <file>).Hash` equals (ignoring case) its entry in `harness-copies.json`, which means you have not edited it. Then the manifest |
+| `<CODEX_HOME>\AGENTS.md`, the block from `<!-- AZITO-HARNESS:BEGIN ... -->` to `<!-- AZITO-HARNESS:END -->` (shared) | An unprefixed run, when the `codex` command is on PATH **or** `<CODEX_HOME>` exists | Under the same condition: delete the block and keep the rest of the file |
+
+A run **with a prefix** (`--prefix <p>`, for a second hub) writes only the hooks (with `--prefix <p>`) into `settings.json`, the harness into `harness-<p>`, and `azitoctl-<p>.env` into `~\.azito\`; and, when a UI token is given, `operator.env` as above. It does not write `azt-mcp`, the skills, the rules or the Codex files. So the shared items are there from the unprefixed run, and removing them is only right when no hub of the host still needs them.
+
+**If the host can no longer be trusted** (it was lost, sold, or shared), removing the entries is not enough, because a token may have been copied. On the hub, run `azito token rotate` and then **restart the hub**; the old token keeps working until it restarts. If the token is given by the `AZITO_UI_TOKEN` environment variable or the hub's `.env`, `rotate` refuses to run: set a new value there and restart the hub instead. The webhook token in `azitoctl*.env` can be copied too: to change it, delete `$AZITO_DATA_DIR/webhook-token` (or change `AZITO_WEBHOOK_TOKEN`) and restart the hub, as in [Security setup](./security-setup.md).
+
+**In either case, give the new token to the hosts you keep.** `rotate` updates only the hub's own token file, `operator.env` and Claude MCP settings; it does not update other hosts or the Codex MCP registration. So run setup again with the new tokens (`--ui-token`, and `--webhook-token` if you changed it) on every host you still use; until then their `azt-mcp`, `operator.env` and `azitoctl*.env` carry the old tokens.
 
 ## Limits
 
