@@ -128,7 +128,7 @@ What happens on the host (each step answers `removed` / `was not there` / `faile
 **What stays.**
 
 - The firewall rule `AZITO Agent (TCP 3002)` (if the install added it): in an Administrator PowerShell list it with `Get-NetFirewallRule -DisplayName "AZITO Agent (TCP 3002)"`, check that it is the one the install added (an Allow for TCP 3002, for this agent's node.exe, from 100.64.0.0/10), and remove it by its Name: `Remove-NetFirewallRule -Name '<the Name>'`. Leaving the rule does no harm: the agent is removed, so nothing listens on that port and the rule opens nothing new. Remove it only if you want to.
-- The AZITO harness (`%USERPROFILE%\.azito\harness*`, the hooks in `~\.claude\settings.json`): not removed automatically; remove it by hand.
+- The AZITO harness and the settings it wrote: not removed automatically (automatic removal is #538); remove them by hand ([The harness and its settings](#the-harness-and-its-settings)).
 - misao (the task and the folder) when you did not choose "Also remove misao".
 
 **When it fails.** If any step of the host removal fails, the server's row is not deleted. The result of each step stays on screen and you can choose:
@@ -146,6 +146,28 @@ By hand (when you did not use the UI, or the host was offline):
 3. Delete `%USERPROFILE%\.azito\agent`
 4. The firewall rule as above (check it, then remove it)
 5. For misao too: `schtasks /Delete /TN AzitoMisao /F` and delete `%USERPROFILE%\.azito\misao` (every window closes; if the daemon is running, **before you unregister the task** read the target `misao.exe` and the `--socket` pipe from the task definition (`schtasks /Query /TN AzitoMisao /XML`) and run, in PowerShell, `$env:MISAO_SOCKET = '<the target pipe>'; & '<the target misao.exe>' stop`. Without the pipe, the stop may not reach it or may stop another daemon)
+
+### The harness and its settings
+
+The harness install (`setup.mjs`) writes the items below outside the agent folder. The removal above touches none of them. Items marked **TOKEN** hold `AZITO_UI_TOKEN`, the operator's full-power credential, so remove them first. All paths are in the home of the user the agent runs as.
+
+| Item | Written by | Remove by hand |
+|---|---|---|
+| **TOKEN** `~\.claude\settings.json`, key `mcpServers["azt-mcp"]` (`env.AZITO_UI_TOKEN`) | setup (when `--ui-token` was given) | Delete the `azt-mcp` key under `mcpServers`. Check first that its `args` points into this install's `.azito\harness\skills\azt-mcp\mcp-server\index.js`; one that points elsewhere or that you wrote yourself is not AZITO's here |
+| **TOKEN** `<CODEX_HOME>\config.toml`, table `[mcp_servers.azt-mcp]` and its `env` (`CODEX_HOME`, else `~\.codex`) | setup, only when Codex is found | `codex mcp remove azt-mcp` |
+| **TOKEN** `~\.azito\operator.env` | setup (when `--ui-token` was given) | Delete the file |
+| `~\.claude\settings.json`, `hooks` | setup | Delete the entries whose `command` runs `...\.azito\harness*\hooks\azito-hook.mjs` (events `Stop`, `UserPromptSubmit`, `Notification`, `PermissionRequest`, `SessionStart`) |
+| `%USERPROFILE%\.azito\harness*` (one folder per prefix) and `%USERPROFILE%\.azito\azitoctl*.env` (the webhook token; no UI token) | the harness transfer and setup | Delete them |
+| `~\.claude\skills\azt-*` and `<CODEX_HOME>\skills\azt-*` (junctions) | setup | Remove each junction without following it: `cmd /c rmdir "%USERPROFILE%\.claude\skills\azt-plan"` (not `rd /s`, not `Remove-Item -Recurse`, which can delete the harness files behind the link) |
+| `~\.claude\rules\*.md` and `~\.azito\harness-copies.json` | setup (copies of the harness `prompt-modules`) | Delete the files named in `harness-copies.json` that you did not edit, then the manifest |
+| `<CODEX_HOME>\AGENTS.md`, the block from `<!-- AZITO-HARNESS:BEGIN ... -->` to `<!-- AZITO-HARNESS:END -->` | setup, only when Codex is found | Delete the block, keep the rest of the file |
+
+Differences by how it was installed:
+
+- **A run with a prefix** (`--prefix <name>`, for a second hub) writes only the hooks (with `--prefix`) and `azitoctl-<name>.env`, in `harness-<name>`. It does not write `azt-mcp`, the skills, the rules, the Codex files or `operator.env`.
+- Run in the **unprefixed** form, setup writes the whole table. Only one `azt-mcp` exists per host, so remove it only when no other hub still uses it.
+
+**If the host can no longer be trusted** (it was lost, sold, or shared), removing the entries is not enough, because the token may have been copied. Rotate it on the hub: `azito token rotate` (the old token stops working). Then run setup again on the hosts you still use; see [Security setup](./security-setup.md).
 
 ## Limits
 

@@ -128,7 +128,7 @@ misao の更新は別です。agent の更新は misao に触れません（動�
 **残るもの。**
 
 - ファイアウォールの規則 `AZITO Agent (TCP 3002)`（導入が追加していた場合）: 管理者の PowerShell で `Get-NetFirewallRule -DisplayName "AZITO Agent (TCP 3002)"` を実行して一覧にし、導入が追加した規則（TCP 3002 の Allow、この agent の node.exe、100.64.0.0/10 から）であることを確かめて、Name で消します: `Remove-NetFirewallRule -Name '<Name>'`。この規則は消さなくても害はありません。agent を消したので、このポートを待ち受けるものはなく、規則が新しく開くものもありません。気になるときだけ消してください。
-- AZITO ハーネス（`%USERPROFILE%\.azito\harness*`、`~\.claude\settings.json` のフック）: 自動では消しません。手作業で消してください。
+- AZITO ハーネスと、それが書いた設定: 自動では消しません（自動で消す機能は #538）。手作業で消してください（[ハーネスとその設定](#ハーネスとその設定)）。
 - 「misao も消す」を選ばなかったときの misao（タスクとフォルダー）。
 
 **失敗したとき。** ホストの削除が一部でも失敗したら、サーバーの行は消えません。手順ごとの結果が画面に残り、次から選べます。
@@ -146,6 +146,28 @@ misao の更新は別です。agent の更新は misao に触れません（動�
 3. `%USERPROFILE%\.azito\agent` を削除
 4. ファイアウォールの規則は上のとおり（確かめてから消す）
 5. misao も消すなら `schtasks /Delete /TN AzitoMisao /F` と `%USERPROFILE%\.azito\misao` の削除（窓はすべて閉じます。デーモンが動いていれば、**タスクの登録を解除する前に**、タスクの定義（`schtasks /Query /TN AzitoMisao /XML`）で対象の `misao.exe` と `--socket` のパイプを確かめ、`$env:MISAO_SOCKET = '<対象のパイプ>'; & '<対象の misao.exe>' stop` を PowerShell で実行してください。パイプの指定が無いと、止まらないか別のデーモンを止めることがあります）
+
+### ハーネスとその設定
+
+ハーネスの導入（`setup.mjs`）は、agent のフォルダーの外に次のものを書きます。上の削除はこれらを一つも消しません。**トークン**と付けたものは、操作者の全権の認証情報 `AZITO_UI_TOKEN` を含むので、先に消してください。パスはすべて agent を動かしているユーザーのホーム以下です。
+
+| 項目 | 書いたもの | 手作業での消し方 |
+|---|---|---|
+| **トークン** `~\.claude\settings.json` の `mcpServers["azt-mcp"]`（`env.AZITO_UI_TOKEN`） | setup（`--ui-token` を渡したとき） | `mcpServers` の `azt-mcp` キーを削除。先に `args` が、この導入の `.azito\harness\skills\azt-mcp\mcp-server\index.js` を指していることを確かめる。別の場所を指すもの、自分で書いたものは、ここでは AZITO のものではありません |
+| **トークン** `<CODEX_HOME>\config.toml` の `[mcp_servers.azt-mcp]` とその `env`（`CODEX_HOME`、無ければ `~\.codex`） | setup（Codex が見つかったときだけ） | `codex mcp remove azt-mcp` |
+| **トークン** `~\.azito\operator.env` | setup（`--ui-token` を渡したとき） | ファイルを削除 |
+| `~\.claude\settings.json` の `hooks` | setup | `command` が `...\.azito\harness*\hooks\azito-hook.mjs` を実行するエントリを削除（イベントは `Stop`・`UserPromptSubmit`・`Notification`・`PermissionRequest`・`SessionStart`） |
+| `%USERPROFILE%\.azito\harness*`（プレフィックスごとに 1 つ）と `%USERPROFILE%\.azito\azitoctl*.env`（webhook トークン。UI トークンは含まない） | ハーネスの転送と setup | 削除 |
+| `~\.claude\skills\azt-*` と `<CODEX_HOME>\skills\azt-*`（ジャンクション） | setup | リンク先をたどらずに消す: `cmd /c rmdir "%USERPROFILE%\.claude\skills\azt-plan"`（`rd /s` や `Remove-Item -Recurse` は、リンク先のハーネスのファイルまで消すことがあるので使わない） |
+| `~\.claude\rules\*.md` と `~\.azito\harness-copies.json` | setup（ハーネスの `prompt-modules` のコピー） | `harness-copies.json` に載っているファイルのうち、自分で編集していないものを削除し、そのあと台帳を削除 |
+| `<CODEX_HOME>\AGENTS.md` の `<!-- AZITO-HARNESS:BEGIN ... -->` から `<!-- AZITO-HARNESS:END -->` までの区画 | setup（Codex が見つかったときだけ） | 区画を削除し、ファイルのほかの部分は残す |
+
+導入のしかたによる違い:
+
+- **プレフィックス付きの実行**（`--prefix <name>`、2 つ目のハブ用）は、`harness-<name>` にフック（`--prefix` 付き）と `azitoctl-<name>.env` だけを書きます。`azt-mcp`・skills・rules・Codex のファイル・`operator.env` は書きません。
+- **プレフィックスなし**の実行は上の表をすべて書きます。ホストごとに `azt-mcp` は 1 つだけなので、ほかのハブがまだ使っていないことを確かめてから消してください。
+
+**ホストを信頼できなくなったとき**（紛失、譲渡、共用など）は、トークンがコピーされた可能性があるので、エントリを消すだけでは足りません。ハブで `azito token rotate` を実行してトークンを回転します（古いトークンは使えなくなります）。そのあと、使い続けるホストで setup をやり直してください。詳しくは [セキュリティ設定](./security-setup.md) を参照してください。
 
 ## 制約
 
