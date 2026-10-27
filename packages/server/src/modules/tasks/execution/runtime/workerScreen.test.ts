@@ -1,7 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { blockingWorkerDialog, detectWorkerDialog, inputHoldsLine, isWorkerBusy, isWorkerScreenReady, readInputBox, tuiAgentKindOf, tuiAgentKindOfWorkerType } from './workerScreen';
+import { blockingWorkerDialog, detectWorkerDialog, inputHoldsLine, isWorkerBusy, isWorkerScreenReady, readInputBox, showsTurnEnd, tuiAgentKindOf, tuiAgentKindOfWorkerType } from './workerScreen';
 
 describe('tuiAgentKindOf', () => {
   it('reads the agent from the launch line', () => {
@@ -240,6 +240,36 @@ describe('a turn that is still running (#532)', () => {
     expect(isWorkerBusy('codex', fixture('codex-0.164-win-idle.txt'))).toBe(false);
     expect(isWorkerBusy('codex', fixture('codex-0.164-win-after-reply.txt'))).toBe(false);
     expect(isWorkerBusy('codex', '• The worker prints "esc to interrupt" in a long answer\n' + Array.from({ length: 12 }, (_, i) => `  line ${i}`).join('\n') + '\n\n› Ask Codex to do anything\n\n  ? for shortcuts')).toBe(false);
+  });
+
+  it('a sentence of an answer that says "esc to interrupt" is not the status line, for codex or for Claude', () => {
+    const answer = 'The status says "esc to interrupt" while a turn runs.';
+    expect(isWorkerBusy('codex', `${answer}\n\n› Ask Codex to do anything\n\n  ? for shortcuts`)).toBe(false);
+    expect(isWorkerBusy('codex', `  Worked for 5s • 8:24 AM\n${answer}\n\n› Ask Codex to do anything\n\n  ? for shortcuts`)).toBe(false);
+    const rule = '─'.repeat(60);
+    expect(isWorkerBusy('claude', `● ${answer}\n\n${rule}\n❯ \n${rule}\n  bypass permissions on (shift+tab to cycle)`)).toBe(false);
+  });
+
+  it('the status line is told by its shape: `Working (` after a bullet, and the glyph + word + … of Claude (also ✳)', () => {
+    expect(isWorkerBusy('codex', '◦ Working (5s • esc to interrupt)\n\n› Ask Codex to do anything\n\n  ? for shortcuts')).toBe(true);
+    const rule = '─'.repeat(60);
+    for (const glyph of ['·', '✢', '✳', '✶', '✻', '✽', '*']) {
+      expect(isWorkerBusy('claude', `${glyph} Wrangling… (5s · ↓ 77 tokens)\n\n${rule}\n❯ \n${rule}\n  bypass permissions on (shift+tab to cycle)`), glyph).toBe(true);
+    }
+  });
+
+  it('codex hides the status line while it streams the final answer and between tool calls: such a screen is not busy by its shape, and shows no turn end', () => {
+    for (const name of ['codex-0.163-linux-streaming-final-answer.txt', 'codex-0.163-linux-between-tools-1.txt', 'codex-0.163-linux-between-tools-2.txt']) {
+      expect(isWorkerBusy('codex', fixture(name)), name).toBe(false);
+      expect(showsTurnEnd('codex', fixture(name)), name).toBe(false);
+    }
+    // a "Worked for" line of the turn before, far above, is not the end of this one
+    expect(showsTurnEnd('codex', fixture('codex-0.163-linux-between-tools-1.txt'))).toBe(false);
+  });
+
+  it('codex writes "Worked for ..." right above the input when the turn is over', () => {
+    expect(showsTurnEnd('codex', fixture('codex-0.164-win-after-reply.txt'))).toBe(true);
+    expect(showsTurnEnd('claude', fixture('claude-2.1.310-linux-done.txt'))).toBe(true);
   });
 
   it('is busy while Claude shows its spinner above the input (it has no "esc to interrupt" in 2.1.310), and not when the turn is done', () => {

@@ -259,22 +259,48 @@ export function inputHoldsLine(box: InputBox, instruction: string): boolean {
   return squashed.includes('azitopromptfile.') && squashed.includes(promptFileNameOf(instruction).replace(/\s+/g, ''));
 }
 
-/** Lines above the input box / composer in which a running turn shows (its working line sits right above the input). */
-const BUSY_LOOKBACK_LINES = 10;
-/** Claude Code's spinner: a glyph, one word and an ellipsis (`✽ Spinning…`, `· Wrangling… (5s · ↓ 77 tokens)`); a finished turn reads `✻ Baked for 4s`. */
-const CLAUDE_SPINNER = /^[·✻✽✶✢*]\s+[^\s…]+…(\s|$)/;
+/** How far above the input a turn's status line can be (blank lines not counted): it sits right above the input. */
+const STATUS_LOOKBACK_LINES = 6;
+/** Claude Code's spinner line: a glyph, one word and an ellipsis (`✽ Spinning…`, `· Wrangling… (5s · ↓ 77 tokens)`); a finished turn reads `✻ Baked for 4s`. */
+const CLAUDE_SPINNER = /^[·✻✽✶✢✳*]\s+[^\s…]+…(\s|$)/;
+/** codex's status line of a running turn: `• Working (3s • esc to interrupt) · 1 background terminal running · ...` (`◦` on the other frame of its blink). */
+const CODEX_WORKING_LINE = /^[•◦]\s*Working\s*\(/;
+/** The line codex writes when a turn is over: `Worked for 44s • 8:24 AM`. */
+const CODEX_TURN_END_LINE = /^Worked for \d/;
 
-/**
- * Whether a turn is running in the worker: codex's working line ("Working (3s • esc to interrupt)") or Claude's spinner line, among the lines
- * just above the input. A prompt typed into the input of a running turn is queued behind it (codex: "tab to queue message") or interrupts it,
- * so a next prompt is not sent until the turn is over. False for a screen whose input cannot be found.
- */
-export function isWorkerBusy(kind: TuiAgentKind, output: string): boolean {
+function nonBlankLinesAboveInput(kind: TuiAgentKind, output: string): string[] | null {
   const lines = screenLines(output);
   const inputAt = kind === 'codex' ? lastCodexInputLine(lines) : lastClaudeUpperRule(lines);
-  if (inputAt === undefined) return false;
-  const above = lines.slice(0, inputAt).filter((line) => line.trim() !== '').slice(-BUSY_LOOKBACK_LINES);
-  return above.some((line) => (kind === 'codex' ? /esc to interrupt/i.test(line) : CLAUDE_SPINNER.test(line.trim()) || /esc to interrupt/i.test(line)));
+  if (inputAt === undefined) return null;
+  return lines.slice(0, inputAt).filter((line) => line.trim() !== '');
+}
+
+/**
+ * Whether a turn is running in the worker: its status line, in the form the agent draws it, among the few lines just above the input
+ * (codex `• Working (3s • esc to interrupt)`, Claude the spinner line). A sentence in an answer that says "esc to interrupt" is not one: the
+ * line has to start the way the status line does. A prompt typed into a running turn is queued behind it (codex: "tab to queue message") or
+ * cuts into it, so the next prompt is not sent until the turn is over. False for a screen whose input cannot be found.
+ */
+export function isWorkerBusy(kind: TuiAgentKind, output: string): boolean {
+  const above = nonBlankLinesAboveInput(kind, output);
+  if (above === null) return false;
+  return above.slice(-STATUS_LOOKBACK_LINES).some((line) => (kind === 'codex' ? CODEX_WORKING_LINE.test(line.trim()) : CLAUDE_SPINNER.test(line.trim())));
+}
+
+/**
+ * codex hides its status line while it streams the final answer and in the gaps between tool calls, so "no status line" does not say the
+ * turn is over. What does: the `Worked for ...` line right above the input. Without it, only a screen that has stopped changing for a while
+ * (`screenAboveInput` the same on consecutive looks) says so. Claude draws its spinner throughout; for it this is always true.
+ */
+export function showsTurnEnd(kind: TuiAgentKind, output: string): boolean {
+  if (kind === 'claude') return true;
+  const above = nonBlankLinesAboveInput(kind, output);
+  return above !== null && above.slice(-3).some((line) => CODEX_TURN_END_LINE.test(line.trim()));
+}
+
+/** The text above the input, for telling whether the screen is still changing (a turn streaming) between two looks. */
+export function screenAboveInput(kind: TuiAgentKind, output: string): string {
+  return (nonBlankLinesAboveInput(kind, output) ?? []).join('\n');
 }
 
 function lastCodexInputLine(lines: string[]): number | undefined {

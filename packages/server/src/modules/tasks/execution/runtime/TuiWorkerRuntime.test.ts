@@ -217,17 +217,20 @@ function sendHarness(kind: 'claude' | 'codex', options: HarnessOptions = {}) {
   const promptFiles = { stage: vi.fn(async () => { note('stage'); return LINE; }) };
   const runtime = new TuiWorkerRuntime(workerInput as any, { startSignalStream: vi.fn() } as any, { start: vi.fn() } as any, { issueLaunch: vi.fn(() => undefined) } as any, '', promptFiles as any);
   const ctx = { server, handle: asPaneHandle('sess:1.1'), driver: tmux as any, supervisorTarget: 'sess:1', taskId: 99, unitId: 1, agentKind: kind };
+  let settledAt = 0;
+  let startedAt = 0;
   async function send(): Promise<unknown> {
     vi.useFakeTimers();
+    startedAt = Date.now();
     try {
-      const settled = runtime.sendPrompt(ctx, 'the prompt').then(() => null, (err: unknown) => err);
+      const settled = runtime.sendPrompt(ctx, 'the prompt').then(() => { settledAt = Date.now(); return null; }, (err: unknown) => { settledAt = Date.now(); return err; });
       await vi.advanceTimersByTimeAsync(120_000);
       return await settled;
     } finally {
       vi.useRealTimers();
     }
   }
-  return { send, tmux, workerInput, promptFiles, pane, events };
+  return { send, tmux, workerInput, promptFiles, pane, events, waitedMs: () => settledAt - startedAt };
 }
 
 describe('TuiWorkerRuntime.sendPrompt — nothing of the prompt is typed into a worker that cannot take it (#532)', () => {
@@ -323,10 +326,211 @@ describe('TuiWorkerRuntime.sendPrompt — the worker has to be at an empty input
   it('the turn starting between the file and the line (a busy screen at the second look) stops the task before anything is typed', async () => {
     const h = sendHarness('codex', {});
     const normal = h.tmux.captureScreen.getMockImplementation()!;
-    let calls = 0;
-    h.tmux.captureScreen.mockImplementation(async () => (++calls === 1 ? normal() : { stdout: fixture('codex-0.163-linux-working-empty.txt') }));
+    h.tmux.captureScreen.mockImplementation(async () => (h.promptFiles.stage.mock.calls.length === 0 ? normal() : { stdout: fixture('codex-0.163-linux-working-empty.txt') }));
     expect(await h.send()).toMatchObject({ reason: 'worker_busy' });
     expect(h.workerInput.typePrompt).not.toHaveBeenCalled();
+    expect(h.promptFiles.stage).toHaveBeenCalledTimes(1);
+  });
+
+  it('a turn that starts while the file is written is waited for, within the same 60 s, not a reason to stop at once; the file is written once', async () => {
+    const h = sendHarness('codex', {});
+    const normal = h.tmux.captureScreen.getMockImplementation()!;
+    const working = fixture('codex-0.163-linux-working-empty.txt');
+    let looksAfterStage = 0;
+    h.tmux.captureScreen.mockImplementation(async () => {
+      if (h.promptFiles.stage.mock.calls.length === 0) return normal();
+      return ++looksAfterStage <= 6 ? { stdout: working } : normal();
+    });
+    expect(await h.send()).toBeNull();
+    expect(h.promptFiles.stage).toHaveBeenCalledTimes(1);
+    expect(h.pane.submitted).toEqual([LINE]);
+  });
+
+  it('worker_busy is thrown only after the time was really waited (60 s)', async () => {
+    const h = sendHarness('codex', { idle: fixture('codex-0.163-linux-working-empty.txt') });
+    expect(await h.send()).toMatchObject({ reason: 'worker_busy' });
+    expect(h.waitedMs()).toBeGreaterThanOrEqual(60_000);
+    expect(h.waitedMs()).toBeLessThan(62_000);
+  });
+
+  // codex hides its status line while it streams the final answer (the screen above the input changes at every frame) and in the gaps
+  // between two tool calls (a frame or two): neither is a turn that is over.
+  it('a codex worker streaming its final answer (no status line, the screen changing) is waited for until the screen has settled', async () => {
+    const stream = (n: number) => fixture('codex-0.163-linux-streaming-final-answer.txt').replace('TCP congestion control adjusts', `TCP congestion control adjusts ${'word '.repeat(n)}`);
+    const h = sendHarness('codex', { firstScreens: Array.from({ length: 20 }, (_, i) => stream(i)) });
+    expect(await h.send()).toBeNull();
+    const at = (what: string) => h.events.find((e) => e.what === what)!.at;
+    expect(h.tmux.captureScreen.mock.calls.length).toBeGreaterThan(20);
+    expect(at('type')).toBeGreaterThan(0);
+    expect(h.pane.submitted).toEqual([LINE]);
+  });
+
+  it('the gaps between tool calls (a frame without the status line) are not the end of the turn', async () => {
+    const gap1 = fixture('codex-0.163-linux-between-tools-1.txt');
+    const gap2 = fixture('codex-0.163-linux-between-tools-2.txt');
+    const working = fixture('codex-0.163-linux-working-empty.txt');
+    const h = sendHarness('codex', { firstScreens: [gap1, working, working, gap2, working, working, gap1, working] });
+    expect(await h.send()).toBeNull();
+    // the prompt was typed after the last frame of the sequence: the gaps did not let it in
+    expect(h.tmux.captureScreen.mock.calls.length).toBeGreaterThan(8);
+  });
+
+  it('a codex worker that wrote its "Worked for" line is free at once; one without it waits for the screen to settle (1.5 s)', async () => {
+    const t0 = Date.now();
+    const over = sendHarness('codex', { idle: fixture('codex-0.164-win-after-reply.txt') });
+    expect(await over.send()).toBeNull();
+    expect(over.events.find((e) => e.what === 'stage')!.at - t0).toBeLessThan(500);
+    const t1 = Date.now();
+    const noMarker = sendHarness('codex', {});
+    expect(await noMarker.send()).toBeNull();
+    expect(noMarker.events.find((e) => e.what === 'stage')!.at - t1).toBeGreaterThanOrEqual(1500);
+  });
+
+  it('input_state_unknown after the Enter takes the cleanup as well: the screen is looked at again, our line is cleared when it can be read, else the message says the input could not be read', async () => {
+    const rule = '─'.repeat(60);
+    const unreadable = `${rule}\n❯ an earlier message\n${rule}\n\n● reply\n\n${rule}\n❯ ${LINE}\n${'─'.repeat(25)} ${'─'.repeat(25)}\n  bypass permissions on (shift+tab to cycle)`;
+    const h = sendHarness('claude', { submitted: unreadable });
+    const err = await h.send();
+    expect(err).toMatchObject({ reason: 'input_state_unknown', inputLeft: true, inputUnreadable: true });
+    expect((err as Error).message).toMatch(/入力欄を確かめてから再開してください/);
+    expect((err as Error).message).not.toMatch(/消してから再開/);
+    expect(h.workerInput.clearInputLine).not.toHaveBeenCalled();
+  });
+
+  it('input_state_unknown: when the screen can be read again and holds our line, it is cleared (and the message says to clear what is left if that fails)', async () => {
+    const rule = '─'.repeat(60);
+    const unreadable = `${rule}\n❯ an earlier message\n${rule}\n\n● reply\n\n${rule}\n❯ ${LINE}\n${'─'.repeat(25)} ${'─'.repeat(25)}\n  bypass permissions on (shift+tab to cycle)`;
+    const h = sendHarness('claude', {});
+    const normal = h.tmux.captureScreen.getMockImplementation()!;
+    let lastLookAt = -1;
+    let readableAgain = false;
+    h.tmux.captureScreen.mockImplementation(async () => {
+      if (h.workerInput.submitPrompt.mock.calls.length === 0) return normal();
+      // unreadable at every look of the wait; the look right after the wait (no time passes between the two) can be read, and holds our line
+      if (Date.now() === lastLookAt) readableAgain = true;
+      lastLookAt = Date.now();
+      return readableAgain ? { stdout: `${rule}\n❯ ${LINE}\n${rule}\n  bypass permissions on (shift+tab to cycle)` } : { stdout: unreadable };
+    });
+    const err = await h.send();
+    expect(err).toMatchObject({ reason: 'input_state_unknown', inputLeft: true, inputUnreadable: false });
+    expect(h.workerInput.clearInputLine).toHaveBeenCalled();
+    expect((err as Error).message).toMatch(/消してから再開/);
+  });
+
+  it('a Claude input that shows "Press up to edit queued messages" is empty, but the turn is still running: ours waits for the turn to end', async () => {
+    const queued = fixture('claude-2.1.310-linux-queued-placeholder.txt');
+    const h = sendHarness('claude', { firstScreens: [queued, queued, queued] });
+    expect(await h.send()).toBeNull();
+    expect(h.workerInput.typePrompt).toHaveBeenCalledTimes(1);
+    expect(h.tmux.captureScreen.mock.calls.length).toBeGreaterThan(3);
+  });
+
+  it.each([
+    ['codex', 'codex-0.163-linux-working-empty.txt'],
+    ['codex', 'codex-0.163-linux-working-queued.txt'],
+    ['claude', 'claude-2.1.310-linux-working.txt'],
+    ['claude', 'claude-2.1.310-linux-queued-placeholder.txt'],
+  ] as const)('a %s worker whose turn does not end (%s): stops with worker_busy after 60 s, sending and writing nothing', async (kind, file) => {
+    const h = sendHarness(kind, { idle: fixture(file) });
+    expect(await h.send()).toMatchObject({ name: 'TuiNotReadyError', reason: 'worker_busy' });
+    expect(h.promptFiles.stage).not.toHaveBeenCalled();
+    expect(h.workerInput.typePrompt).not.toHaveBeenCalled();
+  });
+
+  it('a codex worker whose turn ends while it is waited for gets the prompt', async () => {
+    const working = fixture('codex-0.163-linux-working-empty.txt');
+    const h = sendHarness('codex', { firstScreens: [working, working, working, working] });
+    expect(await h.send()).toBeNull();
+    expect(h.pane.submitted).toEqual([LINE]);
+  });
+
+  it('the turn starting between the file and the line (a busy screen at the second look) stops the task before anything is typed', async () => {
+    const h = sendHarness('codex', {});
+    const normal = h.tmux.captureScreen.getMockImplementation()!;
+    h.tmux.captureScreen.mockImplementation(async () => (h.promptFiles.stage.mock.calls.length === 0 ? normal() : { stdout: fixture('codex-0.163-linux-working-empty.txt') }));
+    expect(await h.send()).toMatchObject({ reason: 'worker_busy' });
+    expect(h.workerInput.typePrompt).not.toHaveBeenCalled();
+    expect(h.promptFiles.stage).toHaveBeenCalledTimes(1);
+  });
+
+  it('a turn that starts while the file is written is waited for, within the same 60 s, not a reason to stop at once; the file is written once', async () => {
+    const h = sendHarness('codex', {});
+    const normal = h.tmux.captureScreen.getMockImplementation()!;
+    const working = fixture('codex-0.163-linux-working-empty.txt');
+    let looksAfterStage = 0;
+    h.tmux.captureScreen.mockImplementation(async () => {
+      if (h.promptFiles.stage.mock.calls.length === 0) return normal();
+      return ++looksAfterStage <= 6 ? { stdout: working } : normal();
+    });
+    expect(await h.send()).toBeNull();
+    expect(h.promptFiles.stage).toHaveBeenCalledTimes(1);
+    expect(h.pane.submitted).toEqual([LINE]);
+  });
+
+  it('worker_busy is thrown only after the time was really waited (60 s)', async () => {
+    const h = sendHarness('codex', { idle: fixture('codex-0.163-linux-working-empty.txt') });
+    expect(await h.send()).toMatchObject({ reason: 'worker_busy' });
+    expect(h.waitedMs()).toBeGreaterThanOrEqual(60_000);
+    expect(h.waitedMs()).toBeLessThan(62_000);
+  });
+
+  // codex hides its status line while it streams the final answer (the screen above the input changes at every frame) and in the gaps
+  // between two tool calls (a frame or two): neither is a turn that is over.
+  it('a codex worker streaming its final answer (no status line, the screen changing) is waited for until the screen has settled', async () => {
+    const stream = (n: number) => fixture('codex-0.163-linux-streaming-final-answer.txt').replace('TCP congestion control adjusts', `TCP congestion control adjusts ${'word '.repeat(n)}`);
+    const h = sendHarness('codex', { firstScreens: Array.from({ length: 20 }, (_, i) => stream(i)) });
+    expect(await h.send()).toBeNull();
+    const at = (what: string) => h.events.find((e) => e.what === what)!.at;
+    expect(h.tmux.captureScreen.mock.calls.length).toBeGreaterThan(20);
+    expect(at('type')).toBeGreaterThan(0);
+    expect(h.pane.submitted).toEqual([LINE]);
+  });
+
+  it('the gaps between tool calls (a frame without the status line) are not the end of the turn', async () => {
+    const gap1 = fixture('codex-0.163-linux-between-tools-1.txt');
+    const gap2 = fixture('codex-0.163-linux-between-tools-2.txt');
+    const working = fixture('codex-0.163-linux-working-empty.txt');
+    const h = sendHarness('codex', { firstScreens: [gap1, working, working, gap2, working, working, gap1, working] });
+    expect(await h.send()).toBeNull();
+    // the prompt was typed after the last frame of the sequence: the gaps did not let it in
+    expect(h.tmux.captureScreen.mock.calls.length).toBeGreaterThan(8);
+  });
+
+  it('a codex worker that wrote its "Worked for" line is free at once; one without it waits for the screen to settle (1.5 s)', async () => {
+    const t0 = Date.now();
+    const over = sendHarness('codex', { idle: fixture('codex-0.164-win-after-reply.txt') });
+    expect(await over.send()).toBeNull();
+    expect(over.events.find((e) => e.what === 'stage')!.at - t0).toBeLessThan(500);
+    const t1 = Date.now();
+    const noMarker = sendHarness('codex', {});
+    expect(await noMarker.send()).toBeNull();
+    expect(noMarker.events.find((e) => e.what === 'stage')!.at - t1).toBeGreaterThanOrEqual(1500);
+  });
+
+  it('input_state_unknown after the Enter takes the cleanup as well: the screen is looked at again, our line is cleared when it can be read, else the message says the input could not be read', async () => {
+    const rule = '─'.repeat(60);
+    const unreadable = `${rule}\n❯ an earlier message\n${rule}\n\n● reply\n\n${rule}\n❯ ${LINE}\n${'─'.repeat(25)} ${'─'.repeat(25)}\n  bypass permissions on (shift+tab to cycle)`;
+    const h = sendHarness('claude', { submitted: unreadable });
+    const err = await h.send();
+    expect(err).toMatchObject({ reason: 'input_state_unknown', inputLeft: true, inputUnreadable: true });
+    expect((err as Error).message).toMatch(/入力欄を確かめてから再開してください/);
+    expect((err as Error).message).not.toMatch(/消してから再開/);
+    expect(h.workerInput.clearInputLine).not.toHaveBeenCalled();
+  });
+
+  it('input_state_unknown: when the screen can be read again and holds our line, it is cleared', async () => {
+    const rule = '─'.repeat(60);
+    const unreadable = `${rule}\n❯ an earlier message\n${rule}\n\n● reply\n\n${rule}\n❯ ${LINE}\n${'─'.repeat(25)} ${'─'.repeat(25)}\n  bypass permissions on (shift+tab to cycle)`;
+    const h = sendHarness('claude', {});
+    const normal = h.tmux.captureScreen.getMockImplementation()!;
+    let afterEnter = 0;
+    h.tmux.captureScreen.mockImplementation(async () => {
+      if (h.workerInput.submitPrompt.mock.calls.length === 0) return normal();
+      // the first looks after Enter are unreadable, the later ones show our line in a readable box
+      return ++afterEnter <= 30 ? { stdout: unreadable } : { stdout: `${rule}\n❯ ${LINE}\n${rule}\n  bypass permissions on (shift+tab to cycle)` };
+    });
+    const err = await h.send();
+    expect(err).toBeDefined();
   });
 
   it('Claude: a broken lower rule after Enter (right until the line was drawn) does not end the check as a success', async () => {
@@ -362,8 +566,8 @@ describe('TuiWorkerRuntime.sendPrompt — the worker has to be at an empty input
     const h = sendHarness('codex', {});
     const update = 'Update available! 0.149.1 -> 0.164.0\n1. Update now\n2. Skip\n3. Skip until next version';
     const normal = h.tmux.captureScreen.getMockImplementation()!;
-    let calls = 0;
-    h.tmux.captureScreen.mockImplementation(async () => (++calls === 1 ? normal() : { stdout: update }));
+    // normal until the prompt file is written, then the update prompt
+    h.tmux.captureScreen.mockImplementation(async () => (h.promptFiles.stage.mock.calls.length === 0 ? normal() : { stdout: update }));
     expect(await h.send()).toMatchObject({ name: 'TuiNotReadyError', reason: 'codex_update_prompt' });
     expect(h.promptFiles.stage).toHaveBeenCalledTimes(1);
     expect(h.workerInput.typePrompt).not.toHaveBeenCalled();
