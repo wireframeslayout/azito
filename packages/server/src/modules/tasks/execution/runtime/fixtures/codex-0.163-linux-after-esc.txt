@@ -1,0 +1,50 @@
+› Say only: ok
+  Worked for 2s • 11:05 AM
+
+
+› Without using any tools, write a 120-line numbered list of distinct facts about the ocean, one per line.
+
+
+• 1. The ocean covers about 71% of Earth's surface.
+  2. The ocean contains about 97% of Earth's water.
+  3. All ocean basins connect to form one global ocean.
+  4. The Pacific is the largest ocean basin.
+  5. The Arctic is the smallest ocean basin.
+  6. The Atlantic lies between the Americas and Europe and Africa.
+  7. The Indian Ocean lies mainly in the Southern Hemisphere.
+  8. The Southern Ocean surrounds Antarctica.
+  9. The Pacific contains the Mariana Trench.
+  10. Challenger Deep is the deepest known part of the ocean.
+  11. The ocean's average depth is about 3.7 kilometers.
+  12. Mount Everest could fit below sea level inside the deepest ocean trench.
+  13. Seawater contains dissolved salts.
+  14. Average ocean salinity is about 35 grams of salt per kilogram of seawater.
+  15. Sodium and chloride are the most abundant dissolved ions in seawater.
+  16. Rivers carry dissolved minerals into the ocean.
+  17. Evaporation removes water from the ocean while leaving most salts behind.
+  18. Rainfall can lower salinity at the ocean surface.
+  19. Sea ice formation generally increases the salinity of nearby water.
+  20. Melting sea ice can freshen surface seawater.
+  21. Seawater freezes at a lower temperature than freshwater.
+  22. Typical seawater begins freezing near minus 1.9 degrees Celsius.
+  23. Increasing salinity generally makes seawater denser.
+  24. Cooling seawater generally increases its density until it freezes.
+  25. Ocean pressure increases by roughly one atmosphere for every ten meters of depth.
+  26. Sunlight becomes weaker as it travels through seawater.
+  27. Red light is absorbed more quickly than blue light in seawater.
+  28. Most of the deep ocean receives no sunlight.
+  29. The sunlit upper ocean is called the euphotic zone.
+  30. Photosynthesis requires sufficient light.
+  31. Phytoplankton are microscopic organisms that drift in water and perform photosynthesis.
+  32. Marine photosynthesis produces roughly half of Earth's oxygen.
+  33. Phytoplankton form the base of many marine food webs.
+  34. Zooplankton include drifting animals and animal larvae.
+  35. Some plankton can swim but cannot overcome
+
+■ Conversation interrupted - use /feedback if something went wrong
+
+
+› Ask Codex to do anything
+
+  GPT-6.1-Sol medium fast · /tmp/claude-1000/-home-server01-workspace-azito-agent-base/a0dc9dd8-f35d-421d-8a47-afe2fc78abfe/scratchpad/w8/cx · GPT-6.1-Sol · me…
+  ? for shortcuts                                                                                                                     ⚠ 3 warnings · f2 to view

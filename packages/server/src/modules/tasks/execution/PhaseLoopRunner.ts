@@ -8,6 +8,8 @@ import type { SubagentConfig, WorkerExecutionMode, WorkerRuntime } from '../../u
 import { usesHttpSignalPath } from '../../units/Unit';
 import type { WorkerRuntimeRegistry } from './runtime/WorkerRuntimeRegistry';
 import type { IWorkerRuntime, WorkerContext } from './runtime/IWorkerRuntime';
+import { workerNotReadyReason } from './runtime/TuiWorkerRuntime';
+import { tuiAgentKindOfWorkerType } from './runtime/workerScreen';
 import type { IProjectRepository } from '../../projects/Project';
 import type { IProjectServerRepository } from '../../projects/ProjectServer';
 import { resolveEffectiveInputPolicy } from '../../projects/ProjectServer';
@@ -45,14 +47,6 @@ import { resolveExecutionManifest, hashExecutionManifest } from './ExecutionMani
 import { isDistributionRequiredButRepositoryUnresolved } from './DistributionHelper';
 import type { ProjectRepository } from '../../projects/Project';
 import type { TaskTempFiles } from '../../../shared/os/taskTempFiles';
-
-function sleep(ms: number): Promise<void> {
-  return new Promise((resolve) => setTimeout(resolve, ms));
-}
-
-function isPromptDelivered(text: string): boolean {
-  return /Thinking|Mulling|Hyperspacing|Deepening|esc to interrupt|AZITO_DONE_|<\/completion_signal>|⏺/i.test(text);
-}
 
 /** The subset of Unit fields the phase loop needs; selfReviewMaxAttempts may be overridden per-run by the caller. */
 export interface UnitForRun {
@@ -290,31 +284,6 @@ export class PhaseLoopRunner {
     await this.sidekickSyncService.sync(server.name, transport, this.sidekickLoader.list());
   }
 
-  private async verifyPromptDelivery(
-    runtime: IWorkerRuntime,
-    workerContext: WorkerContext,
-    prompt: string,
-    phase: string,
-  ): Promise<void> {
-    await sleep(3000);
-    const firstPaneText = await this.workerWaiter.capturePaneText(workerContext.server, workerContext.handle);
-    if (isPromptDelivered(firstPaneText)) return;
-
-    this.appendLog(workerContext.taskId, workerContext.unitId, 'command', { type: 'prompt_retry', phase });
-    try {
-      await runtime.sendPrompt(workerContext, prompt);
-    } catch {
-      this.appendLog(workerContext.taskId, workerContext.unitId, 'command', { type: 'prompt_delivery_failed', phase });
-      return;
-    }
-
-    await sleep(3000);
-    const retryPaneText = await this.workerWaiter.capturePaneText(workerContext.server, workerContext.handle);
-    if (!isPromptDelivered(retryPaneText)) {
-      this.appendLog(workerContext.taskId, workerContext.unitId, 'command', { type: 'prompt_delivery_failed', phase });
-    }
-  }
-
   // ─── State Machine Loop ───
 
   async stateMachineLoop(
@@ -375,7 +344,6 @@ export class PhaseLoopRunner {
 
     let selfReviewCount = 0;
     const maxSelfReview = unit.selfReviewMaxAttempts ?? 2;
-    let isFirstPromptSent = false;
 
     // Shared with ExecutionManifest.ts's approval-manifest resolution
     // (resolveCurrentPhaseIndex) so the phase a human approves is guaranteed
@@ -544,7 +512,7 @@ export class PhaseLoopRunner {
           ...(rulesFilePath ? { rulesFilePath } : {}),
         });
 
-        const workerContext: WorkerContext = { server, handle, driver, supervisorTarget: supervisorTarget, taskId: task.id, unitId: unit.id };
+        const workerContext: WorkerContext = { server, handle, driver, supervisorTarget: supervisorTarget, taskId: task.id, unitId: unit.id, agentKind: tuiAgentKindOfWorkerType(unit.workerType) };
         // A pane stream that already failed (e.g. an agent too old to register it) cannot see the answer: fail with the reason, do not prompt.
         const streamFailure = this.workerWaiter.streamFailure(phaseStream) ?? this.workerWaiter.streamFailure(phaseSignalStream);
         if (streamFailure) {
@@ -557,13 +525,14 @@ export class PhaseLoopRunner {
           await runtime.sendPrompt(workerContext, markerizedPromptWithSignal);
         } catch (err: unknown) {
           phaseSignalStream.stop();
-          this.appendLog(task.id, unit.id, 'status_change', { status: 'send_error', message: (err as Error).message });
+          const notReady = workerNotReadyReason(err);
+          this.appendLog(task.id, unit.id, 'status_change', {
+            status: notReady ? 'worker_not_ready' : 'send_error',
+            ...(notReady ? { reason: notReady } : {}),
+            message: (err as Error).message,
+          });
           this.taskRepo.updateStatus(task.id, 'failed');
           return;
-        }
-        if (!isFirstPromptSent) {
-          await this.verifyPromptDelivery(runtime, workerContext, markerizedPromptWithSignal, phase);
-          isFirstPromptSent = true;
         }
 
         if (phaseDef.pushVerify && !(currentIsolationIntent && this.pushNotaryService)) {

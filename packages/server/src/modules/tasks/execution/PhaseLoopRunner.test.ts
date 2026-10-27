@@ -206,7 +206,7 @@ function makeRunner(overrides: {
     workerInput as any,
     unitTypeLoader as any,
     (() => {
-      const tuiRuntime = new TuiWorkerRuntime(workerInput as any, workerWaiter as any, httpSignalCoordinator as any, { issueLaunch: vi.fn(() => undefined) } as any, '');
+      const tuiRuntime = new TuiWorkerRuntime(workerInput as any, workerWaiter as any, httpSignalCoordinator as any, { issueLaunch: vi.fn(() => undefined) } as any, '', { stage: vi.fn(async (_server: unknown, _taskId: number, _unitId: number, prompt: string) => prompt) } as any);
       const registry = new WorkerRuntimeRegistry();
       registry.register('tui', tuiRuntime);
       return registry;
@@ -683,37 +683,18 @@ describe('PhaseLoopRunner http-signal execution mode (Issue: AZITO監視強化 P
   });
 });
 
-describe('PhaseLoopRunner prompt delivery verification (Issue #447)', () => {
-  it('retries sendPrompt once when first delivery check finds no delivery indicators', { timeout: 15_000 }, async () => {
-    const { runner, workerInput, workerWaiter, appendLog } = makeRunner();
-    let captureCalls = 0;
-    workerWaiter.capturePaneText = vi.fn(async () => {
-      captureCalls++;
-      if (captureCalls === 1) return 'Claude Code\n/help\nbypass permissions';
-      return 'Thinking...';
-    });
-    const unit = makeUnitForRun();
-
-    await runner.stateMachineLoop(unit, 'local', task, server, asPaneHandle('sess:1.1'), {} as any, new AbortController().signal, 'sess:1', null, false);
-
-    expect(workerInput.sendPrompt).toHaveBeenCalledTimes(6);
-    const retryLog = appendLog.mock.calls.find(
-      (args: unknown[]) => args[2] === 'command' && (args[3] as { type?: string }).type === 'prompt_retry',
-    );
-    expect(retryLog).toBeDefined();
-  });
-
-  it('does not retry when first delivery check finds delivery indicators', async () => {
+describe('PhaseLoopRunner prompt delivery (Issue #447, #532)', () => {
+  // Whether the line was taken is checked by the runtime right after the Enter (TuiWorkerRuntime.confirmSubmitted): the loop sends each phase once.
+  it('sends each phase\'s prompt once and no longer re-sends it on a pane guess', async () => {
     const { runner, workerInput, appendLog } = makeRunner();
     const unit = makeUnitForRun();
 
     await runner.stateMachineLoop(unit, 'local', task, server, asPaneHandle('sess:1.1'), {} as any, new AbortController().signal, 'sess:1', null, false);
 
     expect(workerInput.sendPrompt).toHaveBeenCalledTimes(5);
-    const retryLog = appendLog.mock.calls.find(
-      (args: unknown[]) => args[2] === 'command' && (args[3] as { type?: string }).type === 'prompt_retry',
-    );
-    expect(retryLog).toBeUndefined();
+    const types = appendLog.mock.calls.filter((args: unknown[]) => args[2] === 'command').map((args: unknown[]) => (args[3] as { type?: string }).type);
+    expect(types).not.toContain('prompt_retry');
+    expect(types).not.toContain('prompt_delivery_failed');
   });
 });
 

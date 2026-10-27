@@ -36,13 +36,13 @@ describe('buildWorkerLaunchCommand', () => {
 
   it('builds codex command with model', () => {
     expect(buildWorkerLaunchCommand('codex', 'gpt-5.6-sol', null, posixDialect)).toBe(
-      "codex --dangerously-bypass-approvals-and-sandbox -c mcp_servers.azt-mcp.enabled=false -c mcp_servers.azt-mcp.command=azt-mcp-disabled --model 'gpt-5.6-sol'",
+      "codex --dangerously-bypass-approvals-and-sandbox -c check_for_update_on_startup=false -c mcp_servers.azt-mcp.enabled=false -c mcp_servers.azt-mcp.command=azt-mcp-disabled --model 'gpt-5.6-sol'",
     );
   });
 
   it('builds codex command with no model', () => {
     expect(buildWorkerLaunchCommand('codex', null, null, posixDialect)).toBe(
-      'codex --dangerously-bypass-approvals-and-sandbox -c mcp_servers.azt-mcp.enabled=false -c mcp_servers.azt-mcp.command=azt-mcp-disabled',
+      'codex --dangerously-bypass-approvals-and-sandbox -c check_for_update_on_startup=false -c mcp_servers.azt-mcp.enabled=false -c mcp_servers.azt-mcp.command=azt-mcp-disabled',
     );
   });
 
@@ -75,7 +75,7 @@ describe('buildWorkerLaunchCommand for a PowerShell pane', () => {
       "claude --dangerously-skip-permissions --strict-mcp-config --model 'o''brien' '--verbose'",
     );
     expect(buildWorkerLaunchCommand('codex', 'gpt-5.6-sol', null, powershellDialect)).toBe(
-      "codex --dangerously-bypass-approvals-and-sandbox -c mcp_servers.azt-mcp.enabled=false -c mcp_servers.azt-mcp.command=azt-mcp-disabled --model 'gpt-5.6-sol'",
+      "codex --dangerously-bypass-approvals-and-sandbox -c check_for_update_on_startup=false -c mcp_servers.azt-mcp.enabled=false -c mcp_servers.azt-mcp.command=azt-mcp-disabled --model 'gpt-5.6-sol'",
     );
   });
 });

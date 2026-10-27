@@ -33,6 +33,11 @@ export interface IFileOps {
   create(path: string, kind: 'file' | 'directory', options?: { recursive?: boolean }): Promise<{ created: boolean }>;
   /** Removes a file, or a directory with everything in it. A missing path is `NOT_FOUND`. Never follows a symbolic link. */
   remove(path: string): Promise<void>;
+  /**
+   * Removes one file, or one symbolic link (the link itself), and nothing else: never recursive, never through a link. A directory is
+   * `NOT_A_FILE` and is left as it is; a missing path is `NOT_FOUND`. For a name that must only ever mean a single file (a task's temp file).
+   */
+  unlink(path: string): Promise<void>;
   /** Moves `from` to `to` in the same filesystem. A missing source is `NOT_FOUND`, an existing destination `ALREADY_EXISTS`. */
   rename(from: string, to: string): Promise<void>;
   /**
@@ -161,6 +166,12 @@ export interface FileContent {
 export interface WriteOptions {
   /** Optimistic lock: the write happens only if the file still has this mtime (exact) and / or content hash (sha256, hex). */
   expect?: { mtimeMs?: number; sha256?: string };
+  /**
+   * A file that does not exist yet is created readable by its owner only (0600) from the first moment, whatever the umask; an existing
+   * file keeps its permission bits. On Windows there are no such bits: the file takes the ACL of its folder (the user's own temp folder
+   * is not readable by other users by default).
+   */
+  ownerOnly?: boolean;
 }
 
 export interface WriteResult {

@@ -586,3 +586,60 @@ describe('LocalFileOps.stat withAge', () => {
     expect((await ops.stat(path.join(dir, 'f')))?.ageMs).toBeUndefined();
   });
 });
+
+describe('LocalFileOps.write ownerOnly (#532)', () => {
+  it.skipIf(process.platform === 'win32')('creates a new file 0600 under a permissive umask, and an existing file keeps its bits', async () => {
+    const root = realpathSync.native(mkdtempSync(path.join(tmpdir(), 'azito-owneronly-')));
+    const ops = new LocalFileOps(localFileOpsHost({ platform: process.platform, homeDir: root }));
+    const previous = process.umask(0o000);
+    try {
+      await ops.write(path.join(root, 'new.md'), Buffer.from('a'), { ownerOnly: true });
+      writeFileSync(path.join(root, 'old.md'), 'x');
+      chmodSync(path.join(root, 'old.md'), 0o644);
+      await ops.write(path.join(root, 'old.md'), Buffer.from('b'), { ownerOnly: true });
+    } finally {
+      process.umask(previous);
+    }
+    expect(statSync(path.join(root, 'new.md')).mode & 0o777).toBe(0o600);
+    expect(statSync(path.join(root, 'old.md')).mode & 0o777).toBe(0o644);
+    rmSync(root, { recursive: true, force: true });
+  });
+});
+
+describe('LocalFileOps.unlink (#532)', () => {
+  let root: string;
+  let ops: LocalFileOps;
+  beforeEach(() => {
+    root = realpathSync.native(mkdtempSync(path.join(tmpdir(), 'azito-unlink-')));
+    ops = new LocalFileOps(localFileOpsHost({ platform: process.platform, homeDir: root }));
+  });
+  afterEach(() => {
+    rmSync(root, { recursive: true, force: true });
+  });
+
+  it('removes a file', async () => {
+    writeFileSync(path.join(root, 'a.txt'), 'x');
+    await ops.unlink(path.join(root, 'a.txt'));
+    expect(existsSync(path.join(root, 'a.txt'))).toBe(false);
+  });
+
+  it('refuses a directory (NOT_A_FILE) and leaves it and what is in it', async () => {
+    mkdirSync(path.join(root, 'd'));
+    writeFileSync(path.join(root, 'd', 'inside.txt'), 'x');
+    await expect(ops.unlink(path.join(root, 'd'))).rejects.toMatchObject({ code: 'NOT_A_FILE' });
+    expect(readFileSync(path.join(root, 'd', 'inside.txt'), 'utf8')).toBe('x');
+  });
+
+  it('says NOT_FOUND for a missing path', async () => {
+    await expect(ops.unlink(path.join(root, 'missing'))).rejects.toMatchObject({ code: 'NOT_FOUND' });
+  });
+
+  it.skipIf(process.platform === 'win32')('removes a symbolic link itself, never what it points at', async () => {
+    mkdirSync(path.join(root, 'd'));
+    writeFileSync(path.join(root, 'd', 'inside.txt'), 'x');
+    symlinkSync(path.join(root, 'd'), path.join(root, 'link'));
+    await ops.unlink(path.join(root, 'link'));
+    expect(existsSync(path.join(root, 'link'))).toBe(false);
+    expect(readFileSync(path.join(root, 'd', 'inside.txt'), 'utf8')).toBe('x');
+  });
+});

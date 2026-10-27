@@ -30,6 +30,13 @@ describe('recordedTempFilePaths', () => {
     ]);
   });
 
+  it('collects the prompt files (#532), which an agent host\'s cleanup cannot find by scanning', () => {
+    expect(recordedTempFilePaths([
+      log('command', { type: 'prompt_file', promptFilePath: '/t/azito-prompt-7-0123456789abcdef.md' }),
+      log('command', { type: 'prompt_file', promptFilePath: '/t/azito-prompt-70-0123456789abcdef.md' }),
+    ], 7)).toEqual(['/t/azito-prompt-7-0123456789abcdef.md']);
+  });
+
   it('ignores paths that are not this task\'s temp files, relative paths and non-recording logs', () => {
     expect(recordedTempFilePaths([
       log('command', { type: 'phase_prompt', outputFilePath: '/etc/passwd', signalFilePath: '/t/azito-pipe-70-sig-1.log', rulesFilePath: 'azito-rules-7-x.md' }),

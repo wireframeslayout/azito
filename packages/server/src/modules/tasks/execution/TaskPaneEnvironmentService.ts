@@ -187,6 +187,9 @@ export class TaskPaneEnvironmentService {
     const env: Record<string, string> = {
       AZITO_TASK_TOKEN: issued.token,
       AZITO_TASK_ID: String(task.id),
+      // Claude Code 2.1.x shows a suggested next prompt in its (empty) input, as text that a screen capture cannot tell from a person's
+      // draft, and an Enter would send it. A worker has no use for it (#532). Harmless to a worker that is not Claude.
+      CLAUDE_CODE_ENABLE_PROMPT_SUGGESTION: 'false',
     };
     for (const secret of secretEntries) {
       env[`AZITO_SECRET_${secret.name}`] = secret.value;

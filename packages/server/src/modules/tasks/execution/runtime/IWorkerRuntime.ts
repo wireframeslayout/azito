@@ -6,6 +6,7 @@ import type { IPaneStream } from '../../../tmux/PaneStream';
 import type { AgentTurn } from '../../turns/AgentTurn';
 import type { EnvelopeHost, PhaseSignalCapability } from '../../../prompt/executionEnvelope';
 import type { TaskTempServer } from '../../../../shared/os/taskTempFiles';
+import type { TuiAgentKind } from './workerScreen';
 import type { ShellDialect } from '../../../../shared/os/shellDialect';
 
 export interface WorkerLaunchContext {
@@ -37,6 +38,8 @@ export interface WorkerContext {
   supervisorTarget: string;
   taskId: number;
   unitId: number;
+  /** The agent whose screen is read before a prompt is sent; null for a generic worker. */
+  agentKind: TuiAgentKind | null;
 }
 
 export interface EnvelopeBuildContext {

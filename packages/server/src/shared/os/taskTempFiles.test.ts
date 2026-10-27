@@ -14,12 +14,14 @@ describe('TaskTempFiles', () => {
     expect(files.pipeFile(local, '12-sig', 5)).toBe('/var/folders/xy/T/azito-pipe-12-sig-5.log');
     expect(files.outputFile(local, 12, 'abc')).toBe('/var/folders/xy/T/azito-output-12-abc.md');
     expect(files.rulesFile(local, 12, 'abc')).toBe('/var/folders/xy/T/azito-rules-12-abc.md');
+    expect(files.promptFile(local, 12, 'abc')).toBe('/var/folders/xy/T/azito-prompt-12-abc.md');
   });
 
   it('names an agent server\'s files in the OS notation and temp folder the agent reported', () => {
     expect(files.pipeFile(linuxAgent, '12-1700', 5)).toBe('/tmp/azito-pipe-12-1700-5.log');
     expect(files.outputFile(macAgent, 12, 'abc')).toBe('/var/folders/ab/c_d/T/azito-output-12-abc.md');
     expect(files.rulesFile(macAgent, 12, 'abc')).toBe('/var/folders/ab/c_d/T/azito-rules-12-abc.md');
+    expect(files.promptFile(winAgent, 12, 'abc')).toBe('C:\\Users\\u\\AppData\\Local\\Temp\\azito-prompt-12-abc.md');
     expect(files.pipeFile(winAgent, '12-sig', 5)).toBe('C:\\Users\\u\\AppData\\Local\\Temp\\azito-pipe-12-sig-5.log');
     expect(files.outputFile(winAgent, 12, 'abc')).toBe('C:\\Users\\u\\AppData\\Local\\Temp\\azito-output-12-abc.md');
     expect(files.rulesFile(winAgent, 12, 'abc')).toBe('C:\\Users\\u\\AppData\\Local\\Temp\\azito-rules-12-abc.md');
@@ -60,7 +62,7 @@ describe('TaskTempFiles', () => {
   });
 
   it('exposes the file-name prefixes cleanup and recovery match on', () => {
-    expect(TaskTempFiles.prefixesForTask(7)).toEqual(['azito-pipe-7-', 'azito-output-7-', 'azito-rules-7-']);
+    expect(TaskTempFiles.prefixesForTask(7)).toEqual(['azito-pipe-7-', 'azito-output-7-', 'azito-rules-7-', 'azito-prompt-7-']);
     expect(TaskTempFiles.signalPrefixForTask(7)).toBe('azito-pipe-7-sig-');
   });
 });

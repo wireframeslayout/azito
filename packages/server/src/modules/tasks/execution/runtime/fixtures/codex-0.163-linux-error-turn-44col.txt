@@ -1,0 +1,12 @@
+he 'no-such-model-x' model is not supported
+when using Codex with a ChatGPT
+account.","code":"model_not_found"}}
+› hi3
+■ {"type":"error","status":400,"error":
+{"type":"invalid_request_error","message":"T
+he 'no-such-model-x' model is not supported
+when using Codex with a ChatGPT
+account.","code":"model_not_found"}}
+› Ask Codex to do anything
+  no-such-model-x medium · /tmp/claude-1000…
+  ? for shortcuts                  ⚠ 5 · f2

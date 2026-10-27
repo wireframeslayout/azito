@@ -3,7 +3,7 @@ import * as path from 'path';
 import type { Task } from './Task';
 import type { IExecutionLogRepository } from './ExecutionLog';
 import { TaskTempFiles } from '../../shared/os/taskTempFiles';
-import { recordedTempFilePaths } from './recordedTempFiles';
+import { recordedTempFilePaths, recordedTempFilePathsOnHost } from './recordedTempFiles';
 import type { IServerRepository, ServerConfig } from '../servers/Server';
 import type { MuxDriverRegistry } from '../tmux/MuxDriverRegistry';
 import type { WorktreeServiceFactory } from '../git/WorktreeServiceFactory';
@@ -20,7 +20,8 @@ import { resolveStoredWindowKind } from '../tmux/storedWindowKind';
 import { taskIdOfWorktreePath } from '../git/gitPath';
 import { platformOfProfile } from '../../shared/os/hostProfile';
 import { hostPathFor } from '@azito/shared';
-import { FileOpsError } from '../../shared/fs/fileOps';
+import { FileOpsError, type IFileOps } from '../../shared/fs/fileOps';
+import { pathApiFor } from '../../shared/os/hostPath';
 import type { IServerTransport } from '../servers/transport/ServerTransport';
 import type { HostPlatform } from '../../shared/os/hostEnv';
 
@@ -64,6 +65,16 @@ function removeTempFiles(taskId: number, taskTempFiles: TaskTempFiles, recorded:
     } catch (e) {
       log.warn(`[task-cleanup] Failed to read ${dir} for cleanup: ${(e as Error).message}`);
     }
+  }
+}
+
+/** The real path of an existing entry, or null when there is none. */
+async function realpathIfExists(files: IFileOps, filePath: string): Promise<string | null> {
+  try {
+    return await files.realpath(filePath);
+  } catch (e) {
+    if (e instanceof FileOpsError && e.code === 'NOT_FOUND') return null;
+    throw e;
   }
 }
 
@@ -129,6 +140,48 @@ export class TaskCleanupService {
     }
   }
 
+  /**
+   * The task's temp files on another host (an agent's): the paths recorded in its execution_log, removed through that host's own file
+   * operations. The prompt file (#532) holds the task's text and is not left behind there. A recorded path is trusted only as far as
+   * the hub wrote it: it has to be a file directly in the temp folder the agent reported (its real path, so a link in the parent is no
+   * way out of it) and carry this task's file name, and it is removed with `unlink`, which refuses a directory and is never recursive.
+   * A file that is already gone is fine.
+   */
+  private async removeHostTempFiles(task: Task, server: ServerConfig, log: { warn: (msg: string) => void }): Promise<void> {
+    const files = this.deps.transportFactory.getTransport(server).files();
+    const recorded = recordedTempFilePathsOnHost(this.deps.logRepo.findByTask(task.id), task.id, files.platform);
+    if (recorded.length === 0) return;
+    // Asking the agent for its temp folder needs the agent: one that is offline must not stop the task from being deleted or archived,
+    // as the worktree's removal above does not. The files are left (and said so) in that case.
+    let tempServer: Awaited<ReturnType<TransportFactory['taskTempServer']>>;
+    let tempDir: string | null;
+    try {
+      tempServer = await this.deps.transportFactory.taskTempServer(server);
+      if (tempServer.type !== 'agent') return;
+      tempDir = await realpathIfExists(files, tempServer.tmpDir);
+    } catch (e) {
+      log.warn(`[task-cleanup] Not removing the temp files of task ${task.id} on ${server.name}: the temp folder could not be read (${(e as Error).message})`);
+      return;
+    }
+    if (tempDir === null) return;
+    const pathApi = pathApiFor(files.platform);
+    const sameDirectory = (a: string, b: string): boolean => (files.platform === 'win32' ? a.toLowerCase() === b.toLowerCase() : a === b);
+    const namePattern = new RegExp(`^azito-(?:prompt|pipe|output|rules)-${task.id}-[A-Za-z0-9._-]+$`);
+    for (const filePath of recorded) {
+      try {
+        const parent = await realpathIfExists(files, pathApi.dirname(filePath));
+        if (!namePattern.test(pathApi.basename(filePath)) || parent === null || !sameDirectory(parent, tempDir)) {
+          log.warn(`[task-cleanup] Not removing ${filePath} on ${server.name}: not a file of task ${task.id} directly in ${tempServer.tmpDir}`);
+          continue;
+        }
+        await files.unlink(filePath);
+      } catch (e) {
+        if (e instanceof FileOpsError && e.code === 'NOT_FOUND') continue;
+        log.warn(`[task-cleanup] Failed to remove temp file ${filePath} on ${server.name}: ${(e as Error).message}`);
+      }
+    }
+  }
+
   async cleanup(task: Task, log: { warn: (msg: string) => void }): Promise<void> {
     const { serverRepo, worktreeServiceFactory, transportFactory, projectServerRepo, projectRepo } = this.deps;
 
@@ -164,6 +217,8 @@ export class TaskCleanupService {
 
     if (server.type === 'local') {
       removeTempFiles(task.id, this.deps.taskTempFiles, recordedTempFilePaths(this.deps.logRepo.findByTask(task.id), task.id), log);
+    } else {
+      await this.removeHostTempFiles(task, server, log);
     }
   }
 }

@@ -1,0 +1,40 @@
+› hi2
+ChatGPT
+account.","code":"model_not_found"}}
+
+
+› AZITO prompt file. Read the file
+  named at the end of this line and
+  carry out every instruction in it
+  exactly: /tmp/claude-1000/-home-
+  server01-workspace-azito-agent-
+  base/a0dc9dd8-f35d-421d-8a47-
+  afe2fc78abfe/scratchpad/w10/cx44/
+  azito-prompt-9-9a0dfaa6f12070be.md
+
+
+■
+{"type":"error","status":400,"error":
+{"type":"invalid_request_error","messa
+ge":"The 'no-such-model-x' model is
+not supported when using Codex with a
+ChatGPT
+account.","code":"model_not_found"}}
+
+
+› hi3
+
+
+■
+{"type":"error","status":400,"error":
+{"type":"invalid_request_error","messa
+ge":"The 'no-such-model-x' model is
+not supported when using Codex with a
+ChatGPT
+account.","code":"model_not_found"}}
+
+
+› Ask Codex to do anything
+
+  no-such-model-x medium · /tmp/claud…
+  ? for shortcuts            ⚠ 5 · f2

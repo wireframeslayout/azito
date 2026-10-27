@@ -1,4 +1,5 @@
 import type { PaneHandle } from '@azito/shared';
+import type { IMuxClient } from '../../tmux/IMuxClient';
 import type { MuxDriverRegistry } from '../../tmux/MuxDriverRegistry';
 import type { ServerConfig } from '../../servers/Server';
 import type { SupervisorRegistry } from '../../supervisors/SupervisorRegistry';
@@ -69,18 +70,49 @@ export class WorkerInputService {
 
     // Guard against sending to a bare shell — covers both the supervisor
     // fallback path (sendCommand failed) and the no-supervisor path.
-    const foreground = await driver.paneCommandByHandle(server, handle);
-    if (foreground !== null && isBareShellCommand(foreground)) {
-      if (ctx) {
-        this.appendLog(ctx.taskId, ctx.unitId, 'command', {
-          type: 'send_aborted_dead_worker',
-          foreground,
-        });
-      }
-      throw new WorkerNotRunningError(foreground);
-    }
+    await this.assertNotAtShell(driver, server, handle, ctx);
 
     await driver.sendKeysToHandle(server, handle, [text, 'Enter']);
+  }
+
+  /**
+   * Types `text` into the pane without submitting it: pasted by the supervisor (`inject_prompt` with `submit: false`) when the pane has a
+   * bound one, else as keys. The Enter is `submitPrompt`, sent when the text has been seen in the worker's input, because an Enter that
+   * reaches codex before its input has drawn the text is not a submit. A supervisor's ack timeout is taken as typed (the screen says);
+   * a failed supervisor falls back to keys. The keys path is refused, with nothing typed, for a pane at a bare shell (the supervisor path has
+   * no such check here: the runtime looks at the pane before it writes anything).
+   */
+  async typePrompt(server: ServerConfig, handle: PaneHandle, text: string, ctx?: WorkerInputContext, supervisorTarget?: string): Promise<void> {
+    const driver = this.muxDriverRegistry.resolve(server);
+    const supervisorKey = supervisorTarget ?? handle;
+    if (this.registry.isBoundConnected(server.name, supervisorKey)) {
+      try {
+        // Pasted, not submitted: the Enter is a command of its own, after the worker's input has been seen to hold the text.
+        await this.registry.sendCommand(server.name, supervisorKey, { type: 'inject_prompt', text, submit: false });
+        return;
+      } catch (err) {
+        if (this.isAckTimeout(err)) {
+          this.logAmbiguousTimeout(ctx, err.message);
+          return;
+        }
+        this.logFallback(ctx, (err as Error).message);
+      }
+    }
+    await this.assertNotAtShell(driver, server, handle, ctx);
+    await driver.sendKeysToHandle(server, handle, [text]);
+  }
+
+  /** The Enter that submits what `typePrompt` typed (through the supervisor when the pane has one, as every key of a supervised pane goes). */
+  async submitPrompt(server: ServerConfig, handle: PaneHandle, ctx?: WorkerInputContext, supervisorTarget?: string): Promise<void> {
+    await this.sendKeys(server, handle, ['Enter'], ctx, supervisorTarget);
+  }
+
+  /**
+   * Clears the line of the input (Ctrl+U), straight to the pane: the supervisor's key names do not include it. For taking back the
+   * line a stopped task typed, so that nothing submits it later.
+   */
+  async clearInputLine(server: ServerConfig, handle: PaneHandle): Promise<void> {
+    await this.muxDriverRegistry.resolve(server).sendKeysToHandle(server, handle, ['C-u']);
   }
 
   async sendKeys(
@@ -105,6 +137,19 @@ export class WorkerInputService {
       }
     }
     await driver.sendKeysToHandle(server, handle, keys);
+  }
+
+  private async assertNotAtShell(driver: IMuxClient, server: ServerConfig, handle: PaneHandle, ctx?: WorkerInputContext): Promise<void> {
+    const foreground = await driver.paneCommandByHandle(server, handle);
+    if (foreground !== null && isBareShellCommand(foreground)) {
+      if (ctx) {
+        this.appendLog(ctx.taskId, ctx.unitId, 'command', {
+          type: 'send_aborted_dead_worker',
+          foreground,
+        });
+      }
+      throw new WorkerNotRunningError(foreground);
+    }
   }
 
   private isAckTimeout(err: unknown): err is SupervisorCommandError {

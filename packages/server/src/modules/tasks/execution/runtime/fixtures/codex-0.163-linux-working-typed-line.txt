@@ -1,0 +1,40 @@
+› AZITO prompt file. Read the file named at the end of this line and carry out every instruction in it exactly: /tmp/a…
+• OK
+
+  Worked for 4s • 7:13 AM
+
+
+› Run the shell command: sleep 15; echo done. Then reply DONE.
+
+
+• 指定のコマンドを実行します。
+
+• Ran sleep 15; echo done
+  └ done
+
+• DONE
+
+  Worked for 18s • 7:14 AM
+
+
+› second message draft
+
+
+• Who is the second message for, and what should it say?
+
+  Worked for 1s • 7:14 AM
+
+
+› Run the shell command: sleep 12; echo done. Then reply DONE2.
+
+
+• I’ll run the command now.
+
+• Working (5s • esc to interrupt) · 1 background terminal running · /ps to view · /stop to close
+
+
+› AZITO prompt file. Read the file named at the end of this line and carry out every instruction in it exactly: /tmp/
+  azr5/azito-prompt-9-83de1b3fccacce11.md
+
+  GPT-6.1-Sol medium fast · /tmp/azr5 · GPT-6.1-Sol · medium
+  tab to queue message

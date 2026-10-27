@@ -31,7 +31,7 @@ export function assertTmpDirShellSafe(platform: NodeJS.Platform, tmpDir: string,
 }
 
 /**
- * signal / pipe / output / rules ファイルのパスを 1 か所で決める。
+ * signal / pipe / output / rules / prompt ファイルのパスを 1 か所で決める。
  * - ハブ自身（`local`）のサーバーは、ハブの一時フォルダ（`HostEnv.tmpDir`）に置く。
  * - agent サーバーは、相手の OS（`path.win32` / `path.posix`）と相手が報告した一時フォルダで決める。
  * 作ったパスは execution_log に記録され、復旧・片付けは記録されたパスを優先する。
@@ -68,6 +68,11 @@ export class TaskTempFiles {
     return this.join(server, `azito-rules-${taskId}-${nonce}.md`);
   }
 
+  /** ワーカーに読ませるプロンプトの本文（pane には、このファイルを読むよう指示する 1 行だけを送る。#532）。 */
+  promptFile(server: TaskTempServer, taskId: number, nonce: string): string {
+    return this.join(server, `azito-prompt-${taskId}-${nonce}.md`);
+  }
+
   /** ハブ自身のサーバーのファイルを探す（復旧）・消す（片付け）フォルダ。現在の配置を先頭に、Unix では旧 `/tmp` を足す。 */
   hubScanDirs(): string[] {
     const dirs = [this.hubTmpDir];
@@ -77,7 +82,7 @@ export class TaskTempFiles {
 
   /** タスクの一時ファイルのファイル名の接頭辞（片付け用）。 */
   static prefixesForTask(taskId: number): string[] {
-    return [`azito-pipe-${taskId}-`, `azito-output-${taskId}-`, `azito-rules-${taskId}-`];
+    return [`azito-pipe-${taskId}-`, `azito-output-${taskId}-`, `azito-rules-${taskId}-`, `azito-prompt-${taskId}-`];
   }
 
   /** タスクの signal ファイルのファイル名の接頭辞（復旧用）。 */

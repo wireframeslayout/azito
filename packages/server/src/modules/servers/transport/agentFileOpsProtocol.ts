@@ -6,6 +6,9 @@ export class AgentFileOpOutdatedError extends Error {
   }
 }
 
+/** The file operations an agent may predate: for these, a 400 that rejects the `op` itself means the agent is older than this hub (see {@link rejectsOperationName}). */
+export const FILE_OPS_ADDED_LATER: ReadonlySet<string> = new Set(['searchContent', 'writeOwnerOnly', 'unlink']);
+
 /**
  * Whether the body of an agent's `400 invalid_file_op` says the operation itself (`op`) is unknown to it, as opposed to a field of
  * a known one being out of range. The agent's `message` is the JSON of the schema's issues; an issue on the path `["op"]` is the former.

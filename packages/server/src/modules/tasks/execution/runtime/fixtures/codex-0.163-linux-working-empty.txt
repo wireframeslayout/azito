@@ -1,0 +1,40 @@
+
+  >_ OpenAI Codex (v0.163.0)
+     /tmp/azr5
+
+  To get started, describe a task or try one of these commands:
+
+  /init - create an AGENTS.md file with instructions for Codex
+  /status - show current session configuration
+  /permissions - choose what Codex is allowed to do
+  /model - choose what model and reasoning effort to use
+  /review - review any changes and find issues
+
+
+› AZITO prompt file. Read the file named at the end of this line and carry out every instruction in it exactly: /tmp/
+  azr5/azito-prompt-9-83de1b3fccacce11.md
+
+
+• 指定されたプロンプトを読み、レビュー対象と手順を確認します。
+
+• Explored
+  └ Read azito-prompt-9-83de1b3fccacce11.md
+    + Show details
+
+• OK
+
+  Worked for 4s • 7:13 AM
+
+
+› Run the shell command: sleep 15; echo done. Then reply DONE.
+
+
+• 指定のコマンドを実行します。
+
+• Working (3s • esc to interrupt) · 1 background terminal running · /ps to view · /stop to close
+
+
+› Ask Codex to do anything
+
+  GPT-6.1-Sol medium fast · /tmp/azr5 · GPT-6.1-Sol · medium
+  ? for shortcuts                                                                             ⚠ 3 warnings · f2 to view
