@@ -12,6 +12,8 @@ import { buildCodexLaunch, buildCodexRespawnLaunch } from './launchCommand';
 export class CodexSessionStrategy implements ISessionStrategy {
   readonly supportsSession = true;
   readonly needsPostLaunchScan = true;
+  /** A Codex session id only ever comes from {@link scanSessionId}, which reads it out of a rollout file that exists; there is nothing to ask. */
+  readonly conversationLogAgentType = null;
   private excludedIds = new Set<string>();
 
   constructor(private transportFactory: TransportFactory, private localHomes: LocalAgentHomes) {}

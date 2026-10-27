@@ -23,7 +23,7 @@ export function agentSessionsPath(agentType: string): string {
   return `${AGENT_TRANSCRIPT_API_PREFIX}/${encodeURIComponent(agentType)}/sessions`;
 }
 
-export function agentSessionPath(agentType: string, sessionId: string, leaf: 'meta' | 'entries' | 'tail'): string {
+export function agentSessionPath(agentType: string, sessionId: string, leaf: 'meta' | 'entries' | 'tail' | 'exists'): string {
   return `${agentSessionsPath(agentType)}/${encodeURIComponent(sessionId)}/${leaf}`;
 }
 
@@ -99,6 +99,9 @@ export const agentSessionMetaSchema = z.object({
   createdMs: epochMsSchema.nullable(),
 });
 export type AgentSessionMeta = z.infer<typeof agentSessionMetaSchema>;
+
+/** `GET .../sessions/:id/exists`（会話ファイルがある場合の 200）。無いときは session_not_found の 404、探索が壊れたときは 5xx。 */
+export const agentSessionExistsSchema = z.object({ exists: z.literal(true) });
 
 /** 一覧の1件。ハブの cwd 照合が候補ごとに作成時刻を引き直さずに済むよう、作成時刻を添える。 */
 const agentSessionSummarySchema = z.object({

@@ -155,6 +155,12 @@ export interface TranscriptReader {
   readSessionBefore(sessionId: string, before: number, budget?: ReadBudget): ReadSessionBeforeResult | null;
   getSessionCwd(sessionId: string): { cwd: string | null } | null;
   /**
+   * セッションの会話ファイルが、このマシンの会話ログのどこかにあるか。他のメソッドと違い、探索が壊れたとき
+   * （読めないフォルダー・I/O エラー）は null/false にせず例外を投げる — 「無い」と「確かめられない」を区別させるため。
+   * 実装するのは、窓の復帰（respawn）が起動の前に確かめる必要のあるエージェント種別（Claude）だけ。
+   */
+  sessionExists?(sessionId: string): boolean;
+  /**
    * セッション JSONL の最終更新時刻（epoch ms）。WindowSessionResolver の agentDetected 判定
    * （セッション活動シグナル層）用 — 直近更新されていれば「エージェントが書き込み中」とみなせる。
    * セッションが存在しない、または stat に失敗した場合は null。
@@ -231,6 +237,8 @@ export interface TranscriptSource {
   readSession(sessionId: string, offset?: number): Promise<ReadSessionResult | null>;
   readSessionBefore(sessionId: string, before: number): Promise<ReadSessionBeforeResult | null>;
   getSessionCwd(sessionId: string): Promise<{ cwd: string | null } | null>;
+  /** {@link TranscriptReader.sessionExists}。エージェントに届かない・古い・応答が壊れている場合も例外（「無い」にしない）。 */
+  sessionExists?(sessionId: string): Promise<boolean>;
   getSessionMtimeMs(sessionId: string): Promise<number | null>;
   getSessionCreatedMs(sessionId: string): Promise<number | null>;
   getSessionTailState(sessionId: string): Promise<SessionTailState>;

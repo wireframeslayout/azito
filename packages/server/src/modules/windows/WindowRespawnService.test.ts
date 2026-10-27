@@ -1,10 +1,20 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { EventEmitter } from 'events';
-import { mkdtempSync, mkdirSync, realpathSync, rmSync } from 'fs';
+import { chmodSync, mkdtempSync, mkdirSync, realpathSync, rmSync, symlinkSync, writeFileSync } from 'fs';
 import { tmpdir } from 'os';
 import * as path from 'path';
 import { WindowRespawnService, buildRespawnManifestInput } from './WindowRespawnService';
 import { DuplicateAgentSessionError } from './DuplicateAgentSessionError';
+import type { ConversationProbe } from './ConversationProbe';
+import { ConversationCheckError } from '../agents/ConversationCheckError';
+import { ClaudeSessionStrategy } from '../agents/claude/SessionStrategy';
+import { CodexSessionStrategy } from '../agents/codex/SessionStrategy';
+import { TranscriptConversationProbe } from '../transcripts/TranscriptConversationProbe';
+import { ClaudeTranscriptSource } from '../transcripts/sources/ClaudeTranscriptSource';
+import { LocalTranscriptSource } from '../transcripts/sources/LocalTranscriptSource';
+import { AgentTranscriptSource } from '../transcripts/sources/AgentTranscriptSource';
+import { AGENT_SESSION_NOT_FOUND } from '../transcripts/sources/agentTranscriptProtocol';
+import type { TranscriptSource } from '../transcripts/sources/TranscriptSource';
 import { KeyedMutex } from '../../shared/keyedMutex';
 import { LocalFileOps, localFileOpsHost } from '../../shared/fs/LocalFileOps';
 
@@ -175,6 +185,10 @@ function buildService(opts: {
   transportFactory?: Pick<TransportFactory, 'getTransport' | 'getFileOps' | 'hostProfileFor'>;
   /** The strategy cannot rebuild a launch (a generic worker: its custom command is not stored). */
   noRespawnLaunch?: boolean;
+  /** Real strategies instead of the stub: the launch and the conversation check are then the production ones. */
+  strategyFactory?: { create(workerType: string | null): unknown };
+  /** Answers whether a recorded conversation exists; the default says it does. */
+  conversationProbe?: ConversationProbe;
 }) {
   const windowRepo: IWindowRepository = {
     add: vi.fn(() => 1),
@@ -224,12 +238,14 @@ function buildService(opts: {
     applyLayout: vi.fn(async () => ({ stdout: '', stderr: '', code: 0 })),
   };
 
-  const sessionStrategyFactory = {
+  const stubStrategyFactory = {
     create: vi.fn(() => ({
       supportsSession: true,
       buildRespawnLaunch: vi.fn(() => (opts.noRespawnLaunch ? null : program('claude', ['--resume', 'abc', '--dangerously-skip-permissions']))),
+      conversationLogAgentType: null,
     })),
   };
+  const sessionStrategyFactory = (opts.strategyFactory ?? stubStrategyFactory) as typeof stubStrategyFactory;
 
   const taskRepo: Pick<ITaskRepository, 'findById' | 'updateStatus' | 'update' | 'recordExecutionGateBlock'> = {
     findById: vi.fn(() => opts.task ?? null),
@@ -303,6 +319,7 @@ function buildService(opts: {
   } as any;
 
   const muxDriverRegistry = { resolve: vi.fn(() => tmux) } as any;
+  const conversationProbe: ConversationProbe = opts.conversationProbe ?? { exists: vi.fn(async () => true) };
 
   const service = new WindowRespawnService(
     windowRepo,
@@ -325,6 +342,7 @@ function buildService(opts: {
     true,
     () => ({ AZITO_UI_TOKEN: 'ui-token-fixture' }),
     '',
+    conversationProbe,
   );
 
   return { service, windowRepo, tmux, muxDriverRegistry, sessionStrategyFactory, sentCommands, clearExitMarker, taskRepo, logRepo, serverRepo, projectSecretRepo, events, paneEnvService };
@@ -1791,6 +1809,7 @@ describe('WindowRespawnService.respawn — concurrent respawns for the same task
       create: vi.fn(() => ({
         supportsSession: true,
         buildRespawnLaunch: vi.fn(() => program('claude', ['--resume', 'abc', '--dangerously-skip-permissions'])),
+        conversationLogAgentType: null,
       })),
     };
     const taskRepo: Pick<ITaskRepository, 'findById' | 'updateStatus' | 'update' | 'recordExecutionGateBlock'> = {
@@ -1842,6 +1861,7 @@ describe('WindowRespawnService.respawn — concurrent respawns for the same task
       true,
       () => ({ AZITO_UI_TOKEN: 'ui-token-fixture' }),
       '',
+      { exists: vi.fn(async () => true) },
     );
 
     const server = makeServer();
@@ -2609,5 +2629,230 @@ describe('WindowRespawnService.respawn — a host that starts a worker as a prog
 
     expect(tmux.openWindow).not.toHaveBeenCalled();
     expect(sentCommands).toEqual([]);
+  });
+});
+
+describe('WindowRespawnService.respawn — a conversation that was never written (#542)', () => {
+  const SESSION = '6f1e3403-aaaa-4bbb-8ccc-0123456789ab';
+  const MISAO_REF = { kind: 'misao', workspace: 'azito', window: 'w_01' } as const;
+  type Created = [unknown, string, string, { program: { argv: string[] } }];
+
+  let projects: string;
+  beforeEach(() => {
+    projects = mkdtempSync(path.join(tmpdir(), 'azito-respawn-projects-'));
+  });
+  afterEach(() => {
+    rmSync(projects, { recursive: true, force: true });
+  });
+
+  /** A conversation file under `projects/<folder>/`. */
+  function conversation(folder: string, id = SESSION): void {
+    mkdirSync(path.join(projects, folder), { recursive: true });
+    writeFileSync(path.join(projects, folder, `${id}.jsonl`), '{}\n');
+  }
+
+  const claude = new ClaudeSessionStrategy({ getFileOps: () => { throw new Error('not used'); } } as unknown as TransportFactory, { claudeConfigDir: null, codexHome: null });
+  const claudeFactory = { create: () => claude };
+
+  /** The production probe over the hub's own conversation logs (a Claude reader on `projects`), or over whatever source is given. */
+  function probeOver(source: TranscriptSource = new LocalTranscriptSource(new ClaudeTranscriptSource(projects))): ConversationProbe {
+    return new TranscriptConversationProbe({ forServer: () => [source] });
+  }
+
+  async function respawnWith(window: Window, probe: ConversationProbe, transportFactory?: Pick<TransportFactory, 'getTransport' | 'getFileOps' | 'hostProfileFor'>) {
+    const built = buildService({ window, strategyFactory: claudeFactory, conversationProbe: probe, ...(transportFactory ? { transportFactory } : {}) });
+    const outcome = await built.service.respawn(window.id, makeServer()).then(() => null, (err: unknown) => err);
+    return { ...built, outcome };
+  }
+
+  function untouched(built: Awaited<ReturnType<typeof respawnWith>>): void {
+    expect(built.tmux.closeWindow).not.toHaveBeenCalled();
+    expect(built.tmux.openWindow).not.toHaveBeenCalled();
+    expect(built.tmux.openWorkspace).not.toHaveBeenCalled();
+    expect(built.windowRepo.update).not.toHaveBeenCalled();
+    expect(built.sentCommands).toEqual([]);
+  }
+
+  it('starts a window whose conversation file exists nowhere with --session-id <id>', async () => {
+    const { sentCommands, outcome } = await respawnWith(makeWindow({ agentSessionId: SESSION, workingDirectory: '/work/app' }), probeOver());
+    expect(outcome).toBeNull();
+    expect(sentCommands.join('\n')).toContain(`claude --session-id ${SESSION}`);
+    expect(sentCommands.join('\n')).not.toContain('--resume');
+  });
+
+  it('keeps --resume when the conversation is in another folder than the window directory (cwd moved, symlink, /resume)', async () => {
+    conversation('-somewhere-else');
+    const { sentCommands } = await respawnWith(makeWindow({ agentSessionId: SESSION, workingDirectory: '/work/app' }), probeOver());
+    expect(sentCommands.join('\n')).toContain(`claude --resume ${SESSION}`);
+    expect(sentCommands.join('\n')).not.toContain('--session-id');
+  });
+
+  it('keeps --resume for a window without a working directory when the conversation exists', async () => {
+    conversation('-x');
+    const { sentCommands, outcome } = await respawnWith(makeWindow({ agentSessionId: SESSION, workingDirectory: null }), probeOver());
+    expect(outcome).toBeNull();
+    expect(sentCommands.join('\n')).toContain(`claude --resume ${SESSION}`);
+  });
+
+  it('starts a window without a working directory fresh when no conversation exists (it does not need the directory to say so)', async () => {
+    const { sentCommands, outcome } = await respawnWith(makeWindow({ agentSessionId: SESSION, workingDirectory: null }), probeOver());
+    expect(outcome).toBeNull();
+    expect(sentCommands.join('\n')).toContain(`claude --session-id ${SESSION}`);
+  });
+
+  it('a working directory written as ~/app does not change the answer (the conversation is found by its id)', async () => {
+    conversation('-home-me-app');
+    const { sentCommands } = await respawnWith(makeWindow({ agentSessionId: SESSION, workingDirectory: '~/app' }), probeOver());
+    expect(sentCommands.join('\n')).toContain(`claude --resume ${SESSION}`);
+  });
+
+  it.skipIf(process.platform === 'win32' || process.getuid?.() === 0)('stops before the window is touched when the conversation logs hold a folder that cannot be read', async () => {
+    mkdirSync(path.join(projects, '-locked'));
+    chmodSync(path.join(projects, '-locked'), 0o000);
+    try {
+      const built = await respawnWith(makeWindow({ agentSessionId: SESSION, workingDirectory: '/work/app' }), probeOver());
+      expect(built.outcome).toBeInstanceOf(ConversationCheckError);
+      untouched(built);
+    } finally {
+      chmodSync(path.join(projects, '-locked'), 0o700);
+    }
+  });
+
+  it('stops before the window is touched when the Claude config directory is missing (it may be set differently for the pane shell)', async () => {
+    const missing = new LocalTranscriptSource(new ClaudeTranscriptSource(path.join(projects, 'no-config', 'projects')));
+    const built = await respawnWith(makeWindow({ agentSessionId: SESSION }), probeOver(missing));
+    expect(built.outcome).toBeInstanceOf(ConversationCheckError);
+    expect((built.outcome as Error).message).toMatch(/config directory/);
+    untouched(built);
+  });
+
+  it('starts fresh when the config directory exists but holds no projects yet', async () => {
+    const noProjects = new LocalTranscriptSource(new ClaudeTranscriptSource(path.join(projects, 'projects')));
+    const { sentCommands, outcome } = await respawnWith(makeWindow({ agentSessionId: SESSION }), probeOver(noProjects));
+    expect(outcome).toBeNull();
+    expect(sentCommands.join('\n')).toContain(`claude --session-id ${SESSION}`);
+  });
+
+  it('stops before the window is touched when the storage is broken (projects is a file, or <id>.jsonl is a directory)', async () => {
+    mkdirSync(path.join(projects, '-p', `${SESSION}.jsonl`), { recursive: true });
+    const asDirectory = await respawnWith(makeWindow({ agentSessionId: SESSION }), probeOver());
+    expect(asDirectory.outcome).toBeInstanceOf(ConversationCheckError);
+    untouched(asDirectory);
+
+    const projectsFile = path.join(projects, 'cfg', 'projects');
+    mkdirSync(path.dirname(projectsFile), { recursive: true });
+    writeFileSync(projectsFile, 'x');
+    const asFile = await respawnWith(makeWindow({ agentSessionId: SESSION }), probeOver(new LocalTranscriptSource(new ClaudeTranscriptSource(projectsFile))));
+    expect(asFile.outcome).toBeInstanceOf(ConversationCheckError);
+    untouched(asFile);
+  });
+
+  it.skipIf(process.platform === 'win32')('stops before the window is touched when a project entry is a link to a file', async () => {
+    writeFileSync(path.join(projects, 'a-file'), 'x');
+    symlinkSync(path.join(projects, 'a-file'), path.join(projects, 'linked'));
+    const built = await respawnWith(makeWindow({ agentSessionId: SESSION }), probeOver());
+    expect(built.outcome).toBeInstanceOf(ConversationCheckError);
+    untouched(built);
+  });
+
+  it('puts the reason the agent gave into the message of the stopped respawn', async () => {
+    const agent = new AgentTranscriptSource('claude', 'srv', { getJson: async () => ({ status: 500, body: { error: 'exists_failed', message: "EACCES: permission denied, scandir '/home/u/.claude/projects'" } }) });
+    const built = await respawnWith(makeWindow({ agentSessionId: SESSION }), probeOver(agent));
+    expect(built.outcome).toBeInstanceOf(ConversationCheckError);
+    expect((built.outcome as Error).message).toContain('EACCES: permission denied');
+    untouched(built);
+  });
+
+  it('starts fresh when the agent answers that the conversation is not there', async () => {
+    const agent = new AgentTranscriptSource('claude', 'srv', { getJson: async () => ({ status: 404, body: { error: AGENT_SESSION_NOT_FOUND } }) });
+    const { sentCommands, outcome } = await respawnWith(makeWindow({ agentSessionId: SESSION }), probeOver(agent));
+    expect(outcome).toBeNull();
+    expect(sentCommands.join('\n')).toContain(`claude --session-id ${SESSION}`);
+  });
+
+  it('keeps --resume when the agent answers that the conversation is there', async () => {
+    const agent = new AgentTranscriptSource('claude', 'srv', { getJson: async () => ({ status: 200, body: { exists: true } }) });
+    const { sentCommands } = await respawnWith(makeWindow({ agentSessionId: SESSION }), probeOver(agent));
+    expect(sentCommands.join('\n')).toContain(`claude --resume ${SESSION}`);
+  });
+
+  it.each([
+    ['the agent cannot be reached', async () => { throw new Error('connect ECONNREFUSED'); }, /ECONNREFUSED/],
+    ['the agent is outdated (no such route)', async () => ({ status: 404, body: { error: 'Not Found' } }), /update the agent/],
+    ['the agent fails to read its logs', async () => ({ status: 500, body: { error: 'EACCES' } }), /failed \(500\)/],
+    ['the agent answers something that is not an answer', async () => ({ status: 200, body: { exists: false } }), /invalid response/],
+  ])('stops before the window is touched when %s', async (_name, getJson, reason) => {
+    const agent = new AgentTranscriptSource('claude', 'srv', { getJson });
+    const built = await respawnWith(makeWindow({ agentSessionId: SESSION }), probeOver(agent));
+    expect(built.outcome).toBeInstanceOf(ConversationCheckError);
+    expect((built.outcome as Error).message).toMatch(reason);
+    untouched(built);
+  });
+
+  it('stops when the server kind has no readable conversation logs (ssh)', async () => {
+    const built = await respawnWith(makeWindow({ agentSessionId: SESSION }), new TranscriptConversationProbe({ forServer: () => null }));
+    expect(built.outcome).toBeInstanceOf(ConversationCheckError);
+    untouched(built);
+  });
+
+  it('checks each pane of a multi-pane window by its own id', async () => {
+    const other = 'aaaaaaaa-1111-4111-8111-111111111111';
+    conversation('-work-other', other);
+    const paneLayout = {
+      layout: '',
+      panes: [
+        { index: 0, workerType: 'claude', agentSessionId: SESSION, workingDirectory: '/work/app' },
+        { index: 1, workerType: 'claude', agentSessionId: other, workingDirectory: '/work/app' },
+      ],
+    } as never;
+    const window = makeWindow({ paneLayout, workingDirectory: '/work/app' });
+    const built = buildService({ window, strategyFactory: claudeFactory, conversationProbe: probeOver() });
+    built.tmux.listPanesByRef.mockResolvedValue([{ ordinal: 1, handle: '%0', title: '', command: 'bash', active: true }, { ordinal: 2, handle: '%1', title: '', command: 'bash', active: false }]);
+    await built.service.respawn(1, makeServer());
+    const launches = built.sentCommands.filter((c) => c.includes('claude'));
+    expect(launches[0]).toContain(`--session-id ${SESSION}`);
+    expect(launches[1]).toContain(`--resume ${other}`);
+  });
+
+  describe('on a Windows host (the worker is the pane program)', () => {
+    const WIN_DIR = 'C:\\Users\\me\\app';
+    const winFactory = ({ getTransport: vi.fn(() => ({})), getFileOps: vi.fn(() => hostFiles), hostProfileFor: vi.fn(() => ({ platform: 'win32', arch: 'x64' })) }) as unknown as Pick<TransportFactory, 'getTransport' | 'getFileOps' | 'hostProfileFor'>;
+    const winWindow = () => makeWindow({ id: 7, agentSessionId: SESSION, workingDirectory: WIN_DIR, muxRef: MISAO_REF });
+
+    async function respawnWin(probe: ConversationProbe) {
+      const built = buildService({ window: winWindow(), strategyFactory: claudeFactory, conversationProbe: probe, transportFactory: winFactory });
+      Object.assign(built.tmux, { windowExists: vi.fn(async () => true) });
+      const outcome = await built.service.respawn(7, makeServer()).then(() => null, (err: unknown) => err);
+      return { ...built, outcome };
+    }
+
+    it('starts the program with --session-id when the conversation is nowhere', async () => {
+      const built = await respawnWin(probeOver());
+      expect(built.outcome).toBeNull();
+      expect((built.tmux.openWindow.mock.calls[0] as unknown as Created)[3].program.argv.slice(0, 3)).toEqual(['claude', '--session-id', SESSION]);
+    });
+
+    it('keeps --resume when the conversation exists, whatever the encoded folder of C:\\Users\\me\\app', async () => {
+      conversation('C--Users-me-elsewhere');
+      const built = await respawnWin(probeOver());
+      expect((built.tmux.openWindow.mock.calls[0] as unknown as Created)[3].program.argv.slice(0, 3)).toEqual(['claude', '--resume', SESSION]);
+    });
+
+    it('stops before the window is closed or opened when the agent cannot be reached', async () => {
+      const agent = new AgentTranscriptSource('claude', 'srv', { getJson: async () => { throw new Error('connect ECONNREFUSED'); } });
+      const built = await respawnWin(probeOver(agent));
+      expect(built.outcome).toBeInstanceOf(ConversationCheckError);
+      expect(built.tmux.closeWindow).not.toHaveBeenCalled();
+      expect(built.tmux.openWindow).not.toHaveBeenCalled();
+    });
+  });
+
+  it('resumes a Codex window as it always did, without asking (its id comes from a rollout that exists)', async () => {
+    const codex = new CodexSessionStrategy({ getFileOps: () => { throw new Error('not used'); } } as unknown as TransportFactory, { claudeConfigDir: null, codexHome: null });
+    const exists = vi.fn(async () => false);
+    const { service, sentCommands } = buildService({ window: makeWindow({ workerType: 'codex', agentSessionId: SESSION, workingDirectory: '/work/app' }), strategyFactory: { create: () => codex }, conversationProbe: { exists } });
+    await service.respawn(1, makeServer());
+    expect(sentCommands.join('\n')).toContain(`codex resume ${SESSION}`);
+    expect(exists).not.toHaveBeenCalled();
   });
 });

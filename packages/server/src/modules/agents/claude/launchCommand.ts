@@ -17,13 +17,17 @@ import { extraArgValues, flag, raw, value, type LaunchArg, type ProgramLaunch } 
  */
 const STRICT_MCP_CONFIG_FLAG = '--strict-mcp-config';
 
-/** `claude` started fresh, or resumed when `agentSessionId` is given (`claude --resume <id> ...`; a new session's id is added by the caller). */
-export function buildClaudeLaunch({ model, extraArgs, blockMcp = true }: LaunchOptions, agentSessionId: string | null = null): ProgramLaunch {
+/**
+ * `claude` started fresh, or resumed when `agentSessionId` is given (`claude --resume <id> ...`; a new session's id is added by the caller).
+ * With `startNew`, the given id is the one the new conversation is created under (`claude --session-id <id> ...`): for an id whose
+ * conversation was never written (Claude creates the file at the first message).
+ */
+export function buildClaudeLaunch({ model, extraArgs, blockMcp = true }: LaunchOptions, agentSessionId: string | null = null, startNew = false): ProgramLaunch {
   return {
     kind: 'program',
     file: 'claude',
     args: [
-      ...(agentSessionId ? [flag('--resume'), flag(agentSessionId)] : []),
+      ...(agentSessionId ? [flag(startNew ? '--session-id' : '--resume'), flag(agentSessionId)] : []),
       flag('--dangerously-skip-permissions'),
       ...(blockMcp ? [flag(STRICT_MCP_CONFIG_FLAG)] : []),
       ...(model ? [flag('--model'), value(model)] : []),

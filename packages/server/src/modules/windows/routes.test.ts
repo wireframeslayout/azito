@@ -4,6 +4,7 @@ import { mapAppError } from '../../app/mapAppError';
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import Fastify, { type FastifyInstance } from 'fastify';
 import windowsRoutes from './routes';
+import { ConversationCheckError } from '../agents/ConversationCheckError';
 import type { Window, IWindowRepository } from './Window';
 import type { ServerConfig, IServerRepository } from '../servers/Server';
 import type { TmuxClient } from '../tmux/TmuxClient';
@@ -121,6 +122,7 @@ describe('POST /api/windows/:id/launch-agent', () => {
           buildNewSessionArgs: (id: string) => ['--session-id', id],
           buildResumeArgs: (id: string) => ['--resume', id],
           buildRespawnLaunch: () => null,
+          conversationLogAgentType: null,
           scanSessionId: vi.fn().mockResolvedValue(null),
         }),
       } as unknown as ISessionStrategyFactory,
@@ -263,6 +265,7 @@ describe('POST /api/windows/:id/launch-agent', () => {
           buildNewSessionArgs: () => [],
           buildResumeArgs: (id: string) => ['--resume', id],
           buildRespawnLaunch: () => null,
+          conversationLogAgentType: null,
           scanSessionId: vi.fn().mockResolvedValue(null),
         }),
       } as unknown as ISessionStrategyFactory,
@@ -502,6 +505,15 @@ describe('POST /api/windows/:id/respawn — execution gate (Issue #328 second-ro
     expect(res.statusCode).toBe(500);
   });
 
+  it('answers 409 conversation_unverifiable with the reason when the conversation file cannot be checked (#542)', async () => {
+    app = await setup(vi.fn(async () => { throw new ConversationCheckError('6f1e3403-aaaa-4bbb-8ccc-0123456789ab', 'agent did not answer'); }));
+
+    const res = await app.inject({ method: 'POST', url: `/api/windows/${window.id}/respawn` });
+
+    expect(res.statusCode).toBe(409);
+    expect(res.json()).toMatchObject({ error: expect.stringContaining('agent did not answer'), code: 'conversation_unverifiable', sessionId: '6f1e3403-aaaa-4bbb-8ccc-0123456789ab' });
+  });
+
   it('still succeeds and returns tmuxTarget when the gate allows execution', async () => {
     app = await setup(vi.fn(async () => ({ tmuxTarget: 'proj:win1' })));
 
@@ -540,6 +552,7 @@ describe('resource check in the answers of launch-agent and respawn (#531)', () 
           buildNewSessionArgs: (id: string) => ['--session-id', id],
           buildResumeArgs: (id: string) => ['--resume', id],
           buildRespawnLaunch: () => null,
+          conversationLogAgentType: null,
           scanSessionId: vi.fn().mockResolvedValue(null),
         }),
       } as unknown as ISessionStrategyFactory,

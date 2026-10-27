@@ -6,6 +6,7 @@ import type { WorkerLaunch } from './WorkerLaunch';
 export class NullSessionStrategy implements ISessionStrategy {
   readonly supportsSession = false;
   readonly needsPostLaunchScan = false;
+  readonly conversationLogAgentType = null;
 
   constructor(private workerType: string | null) {}
 

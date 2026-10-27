@@ -851,6 +851,53 @@ export class ClaudeTranscriptSource implements TranscriptReader {
     return { cwd };
   }
 
+  /**
+   * `projects/<どのフォルダーでも>/<id>.jsonl` があるか（`claude --resume <id>` が探す範囲と同じ。窓の cwd には頼らない）。
+   * findSessionFile と違い、読めないもの・壊れているものを「無い」にしない:
+   * - 「無い」は、設定フォルダー（projects の親）があり、そこに projects が無い（ENOENT）か、どの projects/<folder>/ にも <id>.jsonl が無い場合だけ。
+   * - 設定フォルダー自体が無いのは確かめられない（Claude が使う CLAUDE_CONFIG_DIR は、このプロセスの環境と違う場所かもしれない）ので投げる。
+   * - projects が一覧できない（ENOTDIR・権限・I/O）、<id>.jsonl が通常のファイルでない、stat できない場合も投げる。
+   *
+   * 残る制限: 利用者のシェルの rc だけで CLAUDE_CONFIG_DIR を変えていて、しかもこのプロセスの設定フォルダー（既定の ~/.claude）にも
+   * projects がある場合は、会話が別の場所にあっても「無い」と答えてしまう。プロセスから pane のシェルの環境は見えない。
+   */
+  sessionExists(sessionId: string): boolean {
+    if (!SESSION_ID_PATTERN.test(sessionId)) throw new Error(`Invalid session id: ${sessionId}`);
+    const projectsDir = this.projectsDir();
+    let projects: fs.Dirent[];
+    try {
+      projects = fs.readdirSync(projectsDir, { withFileTypes: true });
+    } catch (err) {
+      if ((err as NodeJS.ErrnoException).code !== 'ENOENT') throw err;
+      const configDir = path.dirname(projectsDir);
+      try {
+        fs.statSync(configDir);
+      } catch (configErr) {
+        if ((configErr as NodeJS.ErrnoException).code === 'ENOENT') {
+          throw new Error(`The Claude config directory ${configDir} does not exist (run claude once on this host, or check that CLAUDE_CONFIG_DIR is the same for the agent process and the pane shell)`);
+        }
+        throw configErr;
+      }
+      return false;
+    }
+    for (const project of projects) {
+      if (project.isFile()) continue;
+      const file = path.join(projectsDir, project.name, `${sessionId}.jsonl`);
+      let stat: fs.Stats;
+      try {
+        stat = fs.statSync(file);
+      } catch (err) {
+        // Only a missing entry (ENOENT: no such file, or a dangling link) is "not there". ENOTDIR here means projects/<entry> is
+        // something that is not a folder (e.g. a link to a file): the storage is not as expected, so it cannot be told.
+        if ((err as NodeJS.ErrnoException).code === 'ENOENT') continue;
+        throw err;
+      }
+      if (!stat.isFile()) throw new Error(`${file} is not a regular file`);
+      return true;
+    }
+    return false;
+  }
+
   getSessionMtimeMs(sessionId: string): number | null {
     const file = this.findSessionFile(sessionId);
     if (!file) return null;

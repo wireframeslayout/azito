@@ -68,6 +68,7 @@ describe('SessionCaptureService', () => {
         buildNewSessionArgs: () => [],
         buildResumeArgs: () => [],
         buildRespawnLaunch: () => null,
+        conversationLogAgentType: null,
         scanSessionId: scanSessionId as ISessionStrategy['scanSessionId'],
         excludeSessionId: excludeSessionId as ISessionStrategy['excludeSessionId'],
       }),
@@ -112,6 +113,7 @@ describe('SessionCaptureService', () => {
           buildNewSessionArgs: () => [],
           buildResumeArgs: () => [],
           buildRespawnLaunch: () => null,
+          conversationLogAgentType: null,
           scanSessionId: scanSessionId as ISessionStrategy['scanSessionId'],
         }),
       };

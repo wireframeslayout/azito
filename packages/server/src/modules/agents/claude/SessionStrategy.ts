@@ -1,4 +1,4 @@
-import type { ISessionStrategy } from '../SessionStrategy';
+import type { ISessionStrategy, RespawnConversation } from '../SessionStrategy';
 import type { ServerConfig } from '../../servers/Server';
 import type { TransportFactory } from '../../servers/transport/TransportFactory';
 import { findFilesByMtime, SESSION_SCAN_BUDGET_MS } from '../sessionScanUtils';
@@ -11,6 +11,8 @@ import { claudeConfigDirOf, type LocalAgentHomes } from '../agentHomes';
 export class ClaudeSessionStrategy implements ISessionStrategy {
   readonly supportsSession = true;
   readonly needsPostLaunchScan = false;
+  /** Claude creates the conversation file at the first message, so a window never typed into has an id but no file (#542). */
+  readonly conversationLogAgentType = 'claude';
 
   constructor(private transportFactory: TransportFactory, private localHomes: LocalAgentHomes) {}
 
@@ -26,8 +28,8 @@ export class ClaudeSessionStrategy implements ISessionStrategy {
     return ['--resume', sessionId];
   }
 
-  buildRespawnLaunch(agentSessionId: string | null, model: string | null, extraArgs: string | null, blockMcp = true): WorkerLaunch {
-    return buildClaudeLaunch({ model, extraArgs, blockMcp }, agentSessionId);
+  buildRespawnLaunch(agentSessionId: string | null, model: string | null, extraArgs: string | null, blockMcp = true, conversation: RespawnConversation = 'resume'): WorkerLaunch {
+    return buildClaudeLaunch({ model, extraArgs, blockMcp }, agentSessionId, conversation === 'new');
   }
 
   async scanSessionId(server: ServerConfig, workingDirectory: string | null, afterTimestamp?: Date): Promise<string | null> {
