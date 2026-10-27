@@ -146,6 +146,7 @@ misao の更新は別です。agent の更新は misao に触れません（動�
 3. `%USERPROFILE%\.azito\agent` を削除
 4. ファイアウォールの規則は上のとおり（確かめてから消す）
 5. misao も消すなら `schtasks /Delete /TN AzitoMisao /F` と `%USERPROFILE%\.azito\misao` の削除（窓はすべて閉じます。デーモンが動いていれば、**タスクの登録を解除する前に**、タスクの定義（`schtasks /Query /TN AzitoMisao /XML`）で対象の `misao.exe` と `--socket` のパイプを確かめ、`$env:MISAO_SOCKET = '<対象のパイプ>'; & '<対象の misao.exe>' stop` を PowerShell で実行してください。パイプの指定が無いと、止まらないか別のデーモンを止めることがあります）
+6. ハーネスと、それが書いた設定（トークンを含むものを先に）: [ハーネスとその設定](#ハーネスとその設定) を参照
 
 ### ハーネスとその設定
 

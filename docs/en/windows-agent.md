@@ -146,6 +146,7 @@ By hand (when you did not use the UI, or the host was offline):
 3. Delete `%USERPROFILE%\.azito\agent`
 4. The firewall rule as above (check it, then remove it)
 5. For misao too: `schtasks /Delete /TN AzitoMisao /F` and delete `%USERPROFILE%\.azito\misao` (every window closes; if the daemon is running, **before you unregister the task** read the target `misao.exe` and the `--socket` pipe from the task definition (`schtasks /Query /TN AzitoMisao /XML`) and run, in PowerShell, `$env:MISAO_SOCKET = '<the target pipe>'; & '<the target misao.exe>' stop`. Without the pipe, the stop may not reach it or may stop another daemon)
+6. The harness and the settings it wrote (the tokens first): see [The harness and its settings](#the-harness-and-its-settings)
 
 ### The harness and its settings
 
