@@ -5,6 +5,7 @@ import { programFor } from '../agents/workerProgram';
 import type { PaneProgram } from '../tmux/IMuxClient';
 import { changeDirectoryLine } from '../../shared/os/changeDirectoryLine';
 import { DuplicateAgentSessionError } from './DuplicateAgentSessionError';
+import type { RespawnConversation } from '../agents/SessionStrategy';
 import type { ServerConfig } from '../servers/Server';
 import type { IMuxClient } from '../tmux/IMuxClient';
 import type { MuxDriverRegistry } from '../tmux/MuxDriverRegistry';
@@ -99,6 +100,12 @@ interface SupervisionContext {
   taskId: number | null;
   unitId: number | null;
   windowId?: number;
+}
+
+/** What a worker pane is started with by a respawn: the conversation id (null = a fresh start) and whether to resume it or start it under the same id. */
+interface AgentLaunchPlan {
+  sessionId: string | null;
+  conversation: RespawnConversation;
 }
 
 export class WindowRespawnService {
@@ -297,6 +304,10 @@ export class WindowRespawnService {
     const allowedRoot = this.resolveAllowedRoot(win, server.name);
     const resolvedCwds = await this.resolveAllCwds(server, win, allowedRoot);
 
+    // The conversation each pane resumes is looked for on the host here too, before anything is destroyed: one that cannot be told
+    // stops the respawn with its reason, and one that was never written is started fresh under the same id (#542).
+    const launchPlan = opts?.skipAgentLaunch ? null : await this.planAgentLaunches(server, win, windowId, resolvedCwds);
+
     const supervise = shouldSupervise(server.type, win.windowType, windowKindOf(win));
     // task/unitId already resolved above for the execution gate — reused
     // here instead of re-querying the repositories a second time.
@@ -307,9 +318,8 @@ export class WindowRespawnService {
     let respawnProgram: PaneProgram | undefined;
     if (this.startsWorkerAsProgram(server) && win.workerType && !opts?.skipAgentLaunch) {
       if (supervise) throw new Error(`A worker started as a program cannot run under a supervisor (${server.name}).`);
-      let sessionId = win.agentSessionId;
-      if (!sessionId && this.sessionCaptureService) sessionId = await this.sessionCaptureService.tryScanForWindow(windowId);
-      const launch = this.sessionStrategyFactory.create(win.workerType).buildRespawnLaunch(sessionId, win.workerModel, null, blockMcp);
+      const single = launchPlan?.single;
+      const launch = this.sessionStrategyFactory.create(win.workerType).buildRespawnLaunch(single?.sessionId ?? null, win.workerModel, null, blockMcp, single?.conversation);
       // A window whose launch cannot be rebuilt (a custom command is not stored, so a generic worker has none) would be destroyed and
       // recreated as a bare shell with nothing started: refused before anything is touched.
       if (!launch) {
@@ -584,11 +594,11 @@ export class WindowRespawnService {
             await this.restorePaneLayout(respawnServer, newRef, baseTarget, win.paneLayout, win, supervision, resolvedCwds.paneCwds, windowEnv, true);
           }
         } else if (win.paneLayout) {
-          await this.restorePaneLayout(respawnServer, newRef, baseTarget, win.paneLayout, win, supervision, resolvedCwds.paneCwds, windowEnv, false, blockMcp);
+          await this.restorePaneLayout(respawnServer, newRef, baseTarget, win.paneLayout, win, supervision, resolvedCwds.paneCwds, windowEnv, false, blockMcp, launchPlan?.panes);
         } else if (!respawnProgram) {
           // (A worker started as a program is already the window's pane: there is nothing to type.)
           const paneId = await restoreDriver.resolvePane(respawnServer, newRef, 1);
-          await this.setupSinglePane(respawnServer, paneId, baseTarget, win, supervision, resolvedCwds.singleCwd, blockMcp);
+          await this.setupSinglePane(respawnServer, paneId, baseTarget, win, supervision, resolvedCwds.singleCwd, blockMcp, launchPlan?.single ?? null);
         }
       } catch (err) {
         try {
@@ -1191,6 +1201,38 @@ export class WindowRespawnService {
     return { layout: captured.layout, panes };
   }
 
+  /**
+   * The session each worker pane of the window starts with, decided before the window is destroyed: the recorded id (the first pane
+   * also takes the window's, or the one found by a scan of the host when none was recorded) and whether its conversation file exists
+   * (`resume`) or never was written (`new`). A conversation that cannot be checked is a ConversationCheckError.
+   */
+  private async planAgentLaunches(
+    server: ServerConfig,
+    win: Window,
+    windowId: number,
+    cwds: { paneCwds: Map<number, string>; singleCwd: string | null },
+  ): Promise<{ single: AgentLaunchPlan | null; panes: Map<number, AgentLaunchPlan> }> {
+    const decide = async (workerType: string, recorded: string | null, cwd: string | null): Promise<AgentLaunchPlan> => {
+      const sessionId = recorded ?? (this.sessionCaptureService ? await this.sessionCaptureService.tryScanForWindow(windowId) : null);
+      if (!sessionId) return { sessionId: null, conversation: 'resume' };
+      return { sessionId, conversation: await this.sessionStrategyFactory.create(workerType).resolveRespawnConversation(server, cwd, sessionId) };
+    };
+    if (!win.paneLayout) {
+      return { single: win.workerType ? await decide(win.workerType, win.agentSessionId, cwds.singleCwd) : null, panes: new Map() };
+    }
+    const panes = new Map<number, AgentLaunchPlan>();
+    const firstIndex = win.paneLayout.panes[0]?.index;
+    for (const pane of win.paneLayout.panes) {
+      const workerType = pane.workerType || (pane.index === firstIndex ? win.workerType : null);
+      if (!workerType) continue;
+      const recorded = pane.agentSessionId || (pane.index === firstIndex ? win.agentSessionId : null);
+      // Only the id the pane recorded is looked for; a scan finds the window's one conversation, which the first pane alone may take.
+      const plan = recorded === null && pane.index !== firstIndex ? { sessionId: null, conversation: 'resume' as const } : await decide(workerType, recorded, cwds.paneCwds.get(pane.index) ?? null);
+      panes.set(pane.index, plan);
+    }
+    return { single: null, panes };
+  }
+
   private async restorePaneLayout(
     server: ServerConfig,
     ref: MuxRef,
@@ -1212,6 +1254,7 @@ export class WindowRespawnService {
     skipAgentLaunch = false,
     // Issue #471: when true, include MCP blocking flags in agent commands.
     blockMcp = true,
+    panePlans?: Map<number, AgentLaunchPlan>,
   ): Promise<void> {
     const driver = this.resolveDriver(server);
     const paneCount = paneLayout.panes.length;
@@ -1244,10 +1287,10 @@ export class WindowRespawnService {
 
       if (!skipAgentLaunch) {
         const workerType = pane.workerType || (pane.index === paneLayout.panes[0]?.index ? win.workerType : null);
-        const sessionId = pane.agentSessionId || (pane.index === paneLayout.panes[0]?.index ? win.agentSessionId : null);
         if (workerType) {
           const strategy = this.sessionStrategyFactory.create(workerType);
-          const launch = strategy.buildRespawnLaunch(sessionId, win.workerModel, null, blockMcp);
+          const plan = panePlans?.get(pane.index);
+          const launch = strategy.buildRespawnLaunch(plan?.sessionId ?? null, win.workerModel, null, blockMcp, plan?.conversation);
           if (launch) {
             const sendCmd = this.wrapIfSupervised(renderLaunchLine(launch, this.dialectOf(server)), server, baseTarget, supervision);
             await driver.sendKeysToHandle(server, paneId, [sendCmd, 'Enter']);
@@ -1261,10 +1304,11 @@ export class WindowRespawnService {
     server: ServerConfig,
     handle: PaneHandle,
     supervisorTarget: string,
-    win: { id?: number; workerType: string | null; agentSessionId: string | null; workerModel: string | null; workingDirectory: string | null },
+    win: { workerType: string | null; workerModel: string | null },
     supervision: SupervisionContext,
     singleCwd: string | null,
     blockMcp = true,
+    plan: AgentLaunchPlan | null,
   ): Promise<void> {
     const driver = this.resolveDriver(server);
     // A host that starts a worker as a program has no shell to type a directory change into (its cwd was the window's start directory).
@@ -1274,12 +1318,8 @@ export class WindowRespawnService {
     }
 
     if (win.workerType) {
-      let sessionId = win.agentSessionId;
-      if (!sessionId && win.id != null && this.sessionCaptureService) {
-        sessionId = await this.sessionCaptureService.tryScanForWindow(win.id);
-      }
       const strategy = this.sessionStrategyFactory.create(win.workerType);
-      const launch = strategy.buildRespawnLaunch(sessionId, win.workerModel, null, blockMcp);
+      const launch = strategy.buildRespawnLaunch(plan?.sessionId ?? null, win.workerModel, null, blockMcp, plan?.conversation);
       if (launch) {
         const sendCmd = this.wrapIfSupervised(renderLaunchLine(launch, this.dialectOf(server)), server, supervisorTarget, supervision);
         await driver.sendKeysToHandle(server, handle, [sendCmd, 'Enter']);

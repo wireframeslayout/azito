@@ -1,4 +1,5 @@
-import type { ISessionStrategy } from '../SessionStrategy';
+import type { ISessionStrategy, RespawnConversation } from '../SessionStrategy';
+import { ConversationCheckError } from '../ConversationCheckError';
 import type { ServerConfig } from '../../servers/Server';
 import type { TransportFactory } from '../../servers/transport/TransportFactory';
 import { findFilesByMtime, SESSION_SCAN_BUDGET_MS } from '../sessionScanUtils';
@@ -26,8 +27,34 @@ export class ClaudeSessionStrategy implements ISessionStrategy {
     return ['--resume', sessionId];
   }
 
-  buildRespawnLaunch(agentSessionId: string | null, model: string | null, extraArgs: string | null, blockMcp = true): WorkerLaunch {
-    return buildClaudeLaunch({ model, extraArgs, blockMcp }, agentSessionId);
+  buildRespawnLaunch(agentSessionId: string | null, model: string | null, extraArgs: string | null, blockMcp = true, conversation: RespawnConversation = 'resume'): WorkerLaunch {
+    return buildClaudeLaunch({ model, extraArgs, blockMcp }, agentSessionId, conversation === 'new');
+  }
+
+  /**
+   * Claude creates `<config dir>/projects/<cwd>/<id>.jsonl` at the first message, so a window that was never typed into has an id
+   * but no file, and `--resume` of it exits with "No conversation found". The location is the one {@link scanSessionId} reads.
+   * The file is looked for only (a stat, not its content): found = `resume`, absent in every possible folder = `new`, anything
+   * that stops the host from answering is a {@link ConversationCheckError}.
+   */
+  async resolveRespawnConversation(server: ServerConfig, workingDirectory: string | null, sessionId: string): Promise<RespawnConversation> {
+    if (!workingDirectory) throw new ConversationCheckError(sessionId, '窓の作業ディレクトリが分からず、会話の置き場所を決められません');
+    try {
+      const files = this.transportFactory.getFileOps(server);
+      const configDir = await claudeConfigDirOf(files, server.type === 'local', this.localHomes);
+      const api = pathApiFor(files.platform);
+      for (const dirName of claudeProjectDirNames(files.platform, workingDirectory)) {
+        const file = api.join(configDir, 'projects', dirName, `${sessionId}.jsonl`);
+        const stat = await files.stat(file);
+        if (stat === null) continue;
+        if (stat.kind !== 'file') throw new Error(`${file} は通常のファイルではありません`);
+        return 'resume';
+      }
+      return 'new';
+    } catch (err) {
+      if (err instanceof ConversationCheckError) throw err;
+      throw new ConversationCheckError(sessionId, err instanceof Error ? err.message : String(err));
+    }
   }
 
   async scanSessionId(server: ServerConfig, workingDirectory: string | null, afterTimestamp?: Date): Promise<string | null> {

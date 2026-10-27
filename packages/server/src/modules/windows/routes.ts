@@ -24,6 +24,7 @@ import { shouldSupervise, wrapWithSupervisor } from '../supervisors/SupervisorLa
 import { replyToExecutionGateError } from '../tasks/execution/ExecutionGate';
 import { shouldBlockMcp, ensureMcpBlockByCommand } from '../agents/shouldBlockMcp';
 import { DuplicateAgentSessionError } from './DuplicateAgentSessionError';
+import { ConversationCheckError } from '../agents/ConversationCheckError';
 import { isSameWindowTarget, isValidModelId } from '@azito/shared';
 import { muxRefFromTmuxTarget, parseMuxRef, type MuxRef, type PaneOrdinal, type MuxDriverKind } from '@azito/shared';
 import { MuxDriverUnavailableError, type MuxDriverUnavailableReason } from '../tmux/MuxCapabilityError';
@@ -549,6 +550,9 @@ const windowsRoutes: FastifyPluginCallback<WindowsRouteOptions> = (fastify, opts
         if (replyToExecutionGateError(err, reply)) return;
         if (err instanceof DuplicateAgentSessionError) {
           return reply.status(409).send({ error: 'session_already_running', windowId: err.windowId, sessionId: err.sessionId, message: err.message });
+        }
+        if (err instanceof ConversationCheckError) {
+          return reply.status(409).send({ error: 'conversation_unverifiable', sessionId: err.sessionId, message: err.message });
         }
         throw err;
       } finally {

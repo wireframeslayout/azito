@@ -10,7 +10,7 @@ function hostFiles() {
 }
 
 function strategies(over: Partial<ISessionStrategy>): ISessionStrategyFactory {
-  const strategy = { supportsSession: false, needsPostLaunchScan: false, buildNewSessionArgs: () => [], buildResumeArgs: () => [], buildRespawnLaunch: () => null, scanSessionId: async () => null, ...over } as ISessionStrategy;
+  const strategy = { supportsSession: false, needsPostLaunchScan: false, buildNewSessionArgs: () => [], buildResumeArgs: () => [], buildRespawnLaunch: () => null, resolveRespawnConversation: async () => 'resume', scanSessionId: async () => null, ...over } as ISessionStrategy;
   return { create: () => strategy };
 }
 

@@ -111,6 +111,7 @@ function claudeStrategy(): ISessionStrategy {
     buildNewSessionArgs: (id: string) => ['--session-id', id],
     buildResumeArgs: (id: string) => ['--resume', id],
     buildRespawnLaunch: () => null,
+    resolveRespawnConversation: async () => 'resume' as const,
     scanSessionId: vi.fn().mockResolvedValue(null),
   };
 }
@@ -122,6 +123,7 @@ function codexStrategy(): ISessionStrategy {
     buildNewSessionArgs: () => [],
     buildResumeArgs: (id: string) => ['--resume', id],
     buildRespawnLaunch: () => null,
+    resolveRespawnConversation: async () => 'resume' as const,
     scanSessionId: vi.fn().mockResolvedValue(null),
   };
 }

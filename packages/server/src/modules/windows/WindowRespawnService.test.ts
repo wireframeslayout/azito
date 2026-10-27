@@ -5,6 +5,10 @@ import { tmpdir } from 'os';
 import * as path from 'path';
 import { WindowRespawnService, buildRespawnManifestInput } from './WindowRespawnService';
 import { DuplicateAgentSessionError } from './DuplicateAgentSessionError';
+import { ConversationCheckError } from '../agents/ConversationCheckError';
+import { ClaudeSessionStrategy } from '../agents/claude/SessionStrategy';
+import { CodexSessionStrategy } from '../agents/codex/SessionStrategy';
+import { FileOpsError, type IFileOps } from '../../shared/fs/fileOps';
 import { KeyedMutex } from '../../shared/keyedMutex';
 import { LocalFileOps, localFileOpsHost } from '../../shared/fs/LocalFileOps';
 
@@ -175,6 +179,8 @@ function buildService(opts: {
   transportFactory?: Pick<TransportFactory, 'getTransport' | 'getFileOps' | 'hostProfileFor'>;
   /** The strategy cannot rebuild a launch (a generic worker: its custom command is not stored). */
   noRespawnLaunch?: boolean;
+  /** Real strategies instead of the stub: the launch and the conversation check are then the production ones. */
+  strategyFactory?: { create(workerType: string | null): unknown };
 }) {
   const windowRepo: IWindowRepository = {
     add: vi.fn(() => 1),
@@ -224,12 +230,14 @@ function buildService(opts: {
     applyLayout: vi.fn(async () => ({ stdout: '', stderr: '', code: 0 })),
   };
 
-  const sessionStrategyFactory = {
+  const stubStrategyFactory = {
     create: vi.fn(() => ({
       supportsSession: true,
       buildRespawnLaunch: vi.fn(() => (opts.noRespawnLaunch ? null : program('claude', ['--resume', 'abc', '--dangerously-skip-permissions']))),
+      resolveRespawnConversation: vi.fn(async () => 'resume'),
     })),
   };
+  const sessionStrategyFactory = (opts.strategyFactory ?? stubStrategyFactory) as typeof stubStrategyFactory;
 
   const taskRepo: Pick<ITaskRepository, 'findById' | 'updateStatus' | 'update' | 'recordExecutionGateBlock'> = {
     findById: vi.fn(() => opts.task ?? null),
@@ -1791,6 +1799,7 @@ describe('WindowRespawnService.respawn — concurrent respawns for the same task
       create: vi.fn(() => ({
         supportsSession: true,
         buildRespawnLaunch: vi.fn(() => program('claude', ['--resume', 'abc', '--dangerously-skip-permissions'])),
+        resolveRespawnConversation: vi.fn(async () => 'resume'),
       })),
     };
     const taskRepo: Pick<ITaskRepository, 'findById' | 'updateStatus' | 'update' | 'recordExecutionGateBlock'> = {
@@ -2609,5 +2618,109 @@ describe('WindowRespawnService.respawn — a host that starts a worker as a prog
 
     expect(tmux.openWindow).not.toHaveBeenCalled();
     expect(sentCommands).toEqual([]);
+  });
+});
+
+describe('WindowRespawnService.respawn — a conversation that was never written (#542)', () => {
+  const SESSION = '6f1e3403-aaaa-4bbb-8ccc-0123456789ab';
+  const POSIX_DIR = '/work/app';
+  const WIN_DIR = 'C:\\Users\\me\\app';
+  const MISAO_REF = { kind: 'misao', workspace: 'azito', window: 'w_01' } as const;
+
+  /** The real Claude strategy over a host whose files are `existing`; `stat` can be made to fail. */
+  function claudeOver(platform: 'linux' | 'win32', existing: Set<string>, failStat = false) {
+    const home = platform === 'win32' ? 'C:\\Users\\me' : '/home/me';
+    const stat = vi.fn(async (file: string) => {
+      if (failStat) throw new FileOpsError('FAILED', 'agent did not answer');
+      return existing.has(file) ? { kind: 'file' as const, size: 1, mtimeMs: 1, mode: 0o600 } : null;
+    });
+    const ops = { platform, stat, realpath: vi.fn(async (p: string) => (p === '~' ? home : p)) } as unknown as IFileOps;
+    const factory = { getTransport: vi.fn(() => ({})), getFileOps: vi.fn(() => ops), hostProfileFor: vi.fn(() => (platform === 'win32' ? { platform, arch: 'x64' } : null)) } as unknown as Pick<TransportFactory, 'getTransport' | 'getFileOps' | 'hostProfileFor'>;
+    const claude = new ClaudeSessionStrategy(factory as unknown as TransportFactory, { claudeConfigDir: null, codexHome: null });
+    return { transportFactory: factory, stat, strategyFactory: { create: () => claude } };
+  }
+
+  const posixFile = `/home/me/.claude/projects/-work-app/${SESSION}.jsonl`;
+  const winFile = `C:\\Users\\me\\.claude\\projects\\C--Users-me-app\\${SESSION}.jsonl`;
+  type Created = [unknown, string, string, { program: { argv: string[] } }];
+
+  it('starts a window whose conversation file is absent with --session-id <id>', async () => {
+    const host = claudeOver('linux', new Set());
+    const { service, sentCommands } = buildService({ window: makeWindow({ agentSessionId: SESSION, workingDirectory: POSIX_DIR }), ...host });
+    await service.respawn(1, makeServer());
+    expect(host.stat).toHaveBeenCalledWith(posixFile);
+    expect(sentCommands.join('\n')).toContain(`claude --session-id ${SESSION}`);
+    expect(sentCommands.join('\n')).not.toContain('--resume');
+  });
+
+  it('keeps --resume <id> when the conversation file is there', async () => {
+    const host = claudeOver('linux', new Set([posixFile]));
+    const { service, sentCommands } = buildService({ window: makeWindow({ agentSessionId: SESSION, workingDirectory: POSIX_DIR }), ...host });
+    await service.respawn(1, makeServer());
+    expect(sentCommands.join('\n')).toContain(`claude --resume ${SESSION}`);
+    expect(sentCommands.join('\n')).not.toContain('--session-id');
+  });
+
+  it('fails with the reason, and neither closes nor recreates the window, when the file cannot be checked', async () => {
+    const host = claudeOver('linux', new Set(), true);
+    const { service, tmux, windowRepo, sentCommands } = buildService({ window: makeWindow({ agentSessionId: SESSION, workingDirectory: POSIX_DIR }), ...host });
+    await expect(service.respawn(1, makeServer())).rejects.toThrow(/agent did not answer/);
+    await expect(service.respawn(1, makeServer())).rejects.toBeInstanceOf(ConversationCheckError);
+    expect(tmux.closeWindow).not.toHaveBeenCalled();
+    expect(tmux.openWindow).not.toHaveBeenCalled();
+    expect(tmux.openWorkspace).not.toHaveBeenCalled();
+    expect(windowRepo.update).not.toHaveBeenCalled();
+    expect(sentCommands).toEqual([]);
+  });
+
+  it('checks each pane of a multi-pane window under its own directory and starts only the unwritten ones fresh', async () => {
+    const other = 'aaaaaaaa-1111-4111-8111-111111111111';
+    const host = claudeOver('linux', new Set([`/home/me/.claude/projects/-work-other/${other}.jsonl`]));
+    const paneLayout = {
+      layout: '',
+      panes: [
+        { index: 0, workerType: 'claude', agentSessionId: SESSION, workingDirectory: '/work/app' },
+        { index: 1, workerType: 'claude', agentSessionId: other, workingDirectory: '/work/other' },
+      ],
+    } as never;
+    const { service, tmux, sentCommands } = buildService({ window: makeWindow({ paneLayout, workingDirectory: POSIX_DIR }), ...host });
+    tmux.listPanesByRef.mockResolvedValue([{ ordinal: 1, handle: '%0', title: '', command: 'bash', active: true }, { ordinal: 2, handle: '%1', title: '', command: 'bash', active: false }]);
+    await service.respawn(1, makeServer());
+    const launches = sentCommands.filter((c) => c.includes('claude'));
+    expect(launches[0]).toContain(`--session-id ${SESSION}`);
+    expect(launches[1]).toContain(`--resume ${other}`);
+  });
+
+  it('on a Windows host, looks under the C--Users-me-app folder and starts the program with --session-id', async () => {
+    const host = claudeOver('win32', new Set());
+    const { service, tmux } = buildService({ window: makeWindow({ id: 7, agentSessionId: SESSION, workingDirectory: WIN_DIR, muxRef: MISAO_REF }), ...host });
+    Object.assign(tmux, { windowExists: vi.fn(async () => false) });
+    await service.respawn(7, makeServer());
+    expect(host.stat).toHaveBeenCalledWith(winFile);
+    expect((tmux.openWindow.mock.calls[0] as unknown as Created)[3].program.argv.slice(0, 3)).toEqual(['claude', '--session-id', SESSION]);
+  });
+
+  it('on a Windows host, keeps --resume when the file is there', async () => {
+    const host = claudeOver('win32', new Set([winFile]));
+    const { service, tmux } = buildService({ window: makeWindow({ id: 7, agentSessionId: SESSION, workingDirectory: WIN_DIR, muxRef: MISAO_REF }), ...host });
+    Object.assign(tmux, { windowExists: vi.fn(async () => false) });
+    await service.respawn(7, makeServer());
+    expect((tmux.openWindow.mock.calls[0] as unknown as Created)[3].program.argv.slice(0, 3)).toEqual(['claude', '--resume', SESSION]);
+  });
+
+  it('on a Windows host, stops before the window is touched when the file cannot be checked', async () => {
+    const host = claudeOver('win32', new Set(), true);
+    const { service, tmux } = buildService({ window: makeWindow({ id: 7, agentSessionId: SESSION, workingDirectory: WIN_DIR, muxRef: MISAO_REF }), ...host });
+    Object.assign(tmux, { windowExists: vi.fn(async () => true) });
+    await expect(service.respawn(7, makeServer())).rejects.toBeInstanceOf(ConversationCheckError);
+    expect(tmux.closeWindow).not.toHaveBeenCalled();
+    expect(tmux.openWindow).not.toHaveBeenCalled();
+  });
+
+  it('resumes a Codex window as it always did, without looking for a file (its id comes from a rollout that exists)', async () => {
+    const codex = new CodexSessionStrategy({ getFileOps: () => { throw new Error('not used'); } } as unknown as TransportFactory, { claudeConfigDir: null, codexHome: null });
+    const { service, sentCommands } = buildService({ window: makeWindow({ workerType: 'codex', agentSessionId: SESSION, workingDirectory: POSIX_DIR }), strategyFactory: { create: () => codex } });
+    await service.respawn(1, makeServer());
+    expect(sentCommands.join('\n')).toContain(`codex resume ${SESSION}`);
   });
 });
