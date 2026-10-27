@@ -320,14 +320,14 @@ export function hasUserMessageAbove(kind: TuiAgentKind, output: string): boolean
 /**
  * `■ ...` (an interrupted or failed turn) closes the turn when it is the last block above the input. Going up from the input, a line of
  * the block's own (the wrapped rest of an error is written from column 0 on a narrow pane, an answer's lines are indented) is passed over,
- * and the first line that opens a block decides, by its first column: `■ ` at column 0 ends the turn; a `›` prompt, a `•` / `◦` bullet or
+ * and the first line that opens a block decides, by its first column: `■` at column 0 (alone on its line on a pane 38 columns wide or less) ends the turn; a `›` prompt, a `•` / `◦` bullet or
  * a `Worked for` line means a later turn has begun (or this one finished normally). A `■` that is indented is a heading in an answer being
  * written, not an end. The lines are the screen's own, not trimmed.
  */
 function endsWithStoppedTurnLine(lines: string[]): boolean {
   for (let i = lines.length - 1; i >= 0; i--) {
     const line = lines[i];
-    if (/^■\s/.test(line)) return true;
+    if (/^■(\s|$)/.test(line)) return true;
     if (/^[›•◦]/.test(line) || CODEX_TURN_END_LINE.test(line.trim())) return false;
   }
   return false;

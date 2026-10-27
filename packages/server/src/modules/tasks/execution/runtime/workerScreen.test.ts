@@ -311,6 +311,15 @@ describe('a turn that is still running (#532)', () => {
     expect(showsTurnEnd('codex', `■ Conversation interrupted\n› again\n• answer\n  ■ Heading\n  text\n\n› Ask Codex to do anything\n\n  ? for shortcuts`)).toBe(false);
   });
 
+  it('on a pane 38 columns wide or less the "■" of an error is alone on its line, and still ends the turn', () => {
+    const narrow = fixture('codex-0.163-linux-error-turn-38col.txt');
+    expect(narrow).toMatch(/^■$/m);
+    expect(showsTurnEnd('codex', narrow)).toBe(true);
+    expect(readInputBox('codex', narrow)).toEqual({ state: 'empty' });
+    // an indented lone ■ is still not one
+    expect(showsTurnEnd('codex', '• answer\n  ■\n  text\n\n› Ask Codex to do anything\n\n  ? for shortcuts')).toBe(false);
+  });
+
   it('a path with the word "warning" in a wrapped line of the input is the input, not the footer', () => {
     const line = 'AZITO prompt file. Read the file named at the end of this line and carry out every instruction in it exactly: C:/Users/warning/AppData/Local/Temp/azito-prompt-99-0123456789abcdef.md';
     const wrap = (text: string, width: number) => text.match(new RegExp(`.{1,${width}}`, 'g'))!;
