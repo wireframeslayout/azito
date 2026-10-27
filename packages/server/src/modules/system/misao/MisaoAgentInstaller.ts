@@ -237,7 +237,7 @@ export class MisaoAgentInstaller {
   private windows(): MisaoWindowsInstaller {
     const { windowsTaskName, readyTimeoutMs, pollIntervalMs, taskIdleTimeoutMs } = this.options;
     if (!windowsTaskName) throw new MisaoServiceError('not_managed', 'This hub was not given a task name for the misao of a Windows agent.');
-    return (this.windowsInstaller ??= new MisaoWindowsInstaller({ taskName: windowsTaskName, ...(readyTimeoutMs !== undefined ? { readyTimeoutMs } : {}), ...(pollIntervalMs !== undefined ? { pollIntervalMs } : {}), ...(taskIdleTimeoutMs !== undefined ? { taskIdleTimeoutMs } : {}) }));
+    return (this.windowsInstaller ??= new MisaoWindowsInstaller({ taskName: windowsTaskName, refuseTaskOfAnotherRoot: true, ...(readyTimeoutMs !== undefined ? { readyTimeoutMs } : {}), ...(pollIntervalMs !== undefined ? { pollIntervalMs } : {}), ...(taskIdleTimeoutMs !== undefined ? { taskIdleTimeoutMs } : {}) }));
   }
 
   private requireBundle(): MisaoBundle {

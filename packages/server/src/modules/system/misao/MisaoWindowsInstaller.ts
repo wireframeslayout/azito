@@ -26,6 +26,11 @@ export interface MisaoWindowsInstallerOptions {
   pollIntervalMs?: number;
   /** How long a stopped daemon's task gets to leave the running state before it is ended. */
   taskIdleTimeoutMs?: number;
+  /**
+   * Refuse (before anything is changed) when the task starts another folder's misao. Set for an agent's misao, whose folder is fixed
+   * (`~\.azito\misao`). The hub's own misao leaves it off: its caller (`MisaoServiceService`) decides that, and `--replace-socket` takes the task over on purpose.
+   */
+  refuseTaskOfAnotherRoot?: boolean;
 }
 
 /**
@@ -55,6 +60,11 @@ function describeError(err: unknown): string {
   return err instanceof Error ? err.message : String(err);
 }
 
+/** The agent reported its folder in its real spelling and the task was written with it: the strings are compared, never looked up on this machine. */
+function isTaskOfRoot(taskRoot: string | undefined, misaoRoot: string): boolean {
+  return taskRoot !== undefined && win32.normalize(taskRoot).toLowerCase() === win32.normalize(misaoRoot).toLowerCase();
+}
+
 /** What was on the host before a switch, to put back if it fails. */
 interface PreviousInstall {
   /** The task definition as it was, when a task was registered. */
@@ -68,6 +78,7 @@ interface Session {
   target: WindowsTarget;
   windows: AgentMisaoWindowsHost;
   homeDir: string;
+  nodePath: string;
   pipe: string;
   bundle: MisaoBundle;
   files: MisaoTargetFiles;
@@ -91,6 +102,7 @@ export class MisaoWindowsInstaller {
   async install(target: WindowsTarget, bundle: MisaoBundle, onProgress: (step: MisaoInstallStep) => void): Promise<MisaoAgentInstallResult> {
     onProgress('inspect');
     const { session, status } = await this.inspect(target, bundle);
+    await this.refuseTaskOfAnotherRootIfAsked(session);
     const live = status.socketPresent;
     // The pipe probe can miss a daemon that is just starting (the logon task is on its way up): the task's own state says so.
     if (!live && (await this.taskIsRunning(session))) {
@@ -125,6 +137,8 @@ export class MisaoWindowsInstaller {
   async update(target: WindowsTarget, bundle: MisaoBundle, onProgress: (step: MisaoInstallStep) => void): Promise<MisaoAgentInstallResult> {
     onProgress('inspect');
     const { session, status } = await this.inspect(target, bundle);
+    // Another install's task is refused before "not installed": the task is not ours to judge or to replace, whatever the folder holds.
+    await this.refuseTaskOfAnotherRootIfAsked(session);
     if (!status.installedVersion) {
       throw new MisaoServiceError('not_installed', 'misao is not installed on this server by AZITO, so there is nothing to update. Install it first.');
     }
@@ -180,8 +194,7 @@ export class MisaoWindowsInstaller {
     if (!state.exists) return 'no_task';
     const xml = await tasks.exportXml(this.options.taskName);
     const taskRoot = taskMisaoRoot(xml);
-    // The agent reported its folder in its real spelling and the task was written with it: the strings are compared, never looked up on this machine.
-    if (taskRoot === undefined || win32.normalize(taskRoot).toLowerCase() !== win32.normalize(host.windows.misaoRoot).toLowerCase()) return 'other_task';
+    if (!isTaskOfRoot(taskRoot, host.windows.misaoRoot)) return 'other_task';
     if (isTaskDefinitionDisabled(xml)) return 'disabled';
     if (state.running) {
       if (!force) return 'starting';
@@ -201,6 +214,42 @@ export class MisaoWindowsInstaller {
   }
 
   // ── Reading the host ──
+
+  /** Only an agent's installer asks for this check: see {@link MisaoWindowsInstallerOptions.refuseTaskOfAnotherRoot}. */
+  private async refuseTaskOfAnotherRootIfAsked(session: Session): Promise<void> {
+    if (this.options.refuseTaskOfAnotherRoot) await this.refuseTaskOfAnotherRoot(session);
+  }
+
+  /**
+   * The task name is one per user, and the hub may be installed with its own prefix on the same machine: a task that starts a misao
+   * from another folder (or one whose folder cannot be read) is another install's. Replacing it would leave that install without
+   * its daemon, so nothing is changed. A missing task is the normal first install.
+   */
+  private async refuseTaskOfAnotherRoot(session: Session): Promise<void> {
+    if (!(await session.tasks.query(this.options.taskName)).exists) return;
+    const taskRoot = taskMisaoRoot(await session.tasks.exportXml(this.options.taskName));
+    if (taskRoot !== undefined && isTaskOfRoot(taskRoot, session.windows.misaoRoot)) return;
+    const resolved = taskRoot === undefined ? undefined : await this.resolveFolderOnHost(session, taskRoot);
+    if (resolved !== undefined && resolved !== 'missing' && isTaskOfRoot(resolved, session.windows.misaoRoot)) return;
+    const where = taskRoot === undefined
+      ? 'a task whose misao folder cannot be read'
+      : resolved === 'missing' ? `a misao task of a folder that does not exist (${taskRoot})` : `a misao task of another folder (${taskRoot})`;
+    throw new MisaoServiceError('custom_socket', `The task "${this.options.taskName}" is registered as ${where}, not ${session.windows.misaoRoot}. Changing it would leave that install without its misao, so nothing was changed.`);
+  }
+
+  /**
+   * The task may name the same folder in another spelling (an 8.3 short name, a junction). The agent reported its folder resolved, so the
+   * task's folder is resolved by the host itself (`fs.realpath.native` in the agent's Node), never on the hub. The folder comes from the
+   * task definition, so it follows `--`: a value that starts with `-` (`--require=...`) is a path to resolve, never an option of node.
+   * `missing` = the folder does not exist; `undefined` = it could not be resolved.
+   */
+  private async resolveFolderOnHost(session: Session, taskRoot: string): Promise<string | 'missing' | undefined> {
+    const script = 'try { process.stdout.write(require("fs").realpathSync.native(process.argv[1])) } catch (e) { process.exit(e.code === "ENOENT" ? 3 : 1) }';
+    const spec = buildCommandSpec(session.nodePath, ['-e', script, '--', taskRoot], { timeoutMs: SCRIPT_TIMEOUT_MS, maxOutputBytes: SCRIPT_OUTPUT_BYTES });
+    const result = await session.target.run(spec);
+    if (result.exitCode === 3) return 'missing';
+    return result.exitCode === 0 ? result.stdout.trim() : undefined;
+  }
 
   private async inspect(target: WindowsTarget, bundle: MisaoBundle): Promise<{ session: Session; status: MisaoSocketStatus }> {
     let status: MisaoSocketStatus;
@@ -222,6 +271,7 @@ export class MisaoWindowsInstaller {
       target,
       windows: host.windows,
       homeDir: host.homeDir,
+      nodePath: host.nodePath,
       pipe,
       bundle,
       files,
