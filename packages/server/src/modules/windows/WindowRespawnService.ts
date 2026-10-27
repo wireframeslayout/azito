@@ -6,6 +6,7 @@ import type { PaneProgram } from '../tmux/IMuxClient';
 import { changeDirectoryLine } from '../../shared/os/changeDirectoryLine';
 import { DuplicateAgentSessionError } from './DuplicateAgentSessionError';
 import type { RespawnConversation } from '../agents/SessionStrategy';
+import type { ConversationProbe } from './ConversationProbe';
 import type { ServerConfig } from '../servers/Server';
 import type { IMuxClient } from '../tmux/IMuxClient';
 import type { MuxDriverRegistry } from '../tmux/MuxDriverRegistry';
@@ -188,6 +189,8 @@ export class WindowRespawnService {
     private scopedAuthEnabled: boolean,
     private uiTokenEnvFn: (server: ServerConfig) => Record<string, string>,
     private harnessPrefix: string,
+    // Asked before a conversation is resumed whether it exists (#542); required so a respawn can never skip the check by a forgotten wiring.
+    private conversationProbe: ConversationProbe,
     private sessionCaptureService?: SessionCaptureService,
   ) {}
 
@@ -306,7 +309,7 @@ export class WindowRespawnService {
 
     // The conversation each pane resumes is looked for on the host here too, before anything is destroyed: one that cannot be told
     // stops the respawn with its reason, and one that was never written is started fresh under the same id (#542).
-    const launchPlan = opts?.skipAgentLaunch ? null : await this.planAgentLaunches(server, win, windowId, resolvedCwds);
+    const launchPlan = opts?.skipAgentLaunch ? null : await this.planAgentLaunches(server, win, windowId);
 
     const supervise = shouldSupervise(server.type, win.windowType, windowKindOf(win));
     // task/unitId already resolved above for the execution gate — reused
@@ -1203,22 +1206,24 @@ export class WindowRespawnService {
 
   /**
    * The session each worker pane of the window starts with, decided before the window is destroyed: the recorded id (the first pane
-   * also takes the window's, or the one found by a scan of the host when none was recorded) and whether its conversation file exists
-   * (`resume`) or never was written (`new`). A conversation that cannot be checked is a ConversationCheckError.
+   * also takes the window's, or the one found by a scan of the host when none was recorded) and whether its conversation exists
+   * (`resume`) or never was written (`new`). The conversation is looked up by its id in the server's conversation logs, not by the
+   * directory of the window; one that cannot be looked up is a ConversationCheckError.
    */
   private async planAgentLaunches(
     server: ServerConfig,
     win: Window,
     windowId: number,
-    cwds: { paneCwds: Map<number, string>; singleCwd: string | null },
   ): Promise<{ single: AgentLaunchPlan | null; panes: Map<number, AgentLaunchPlan> }> {
-    const decide = async (workerType: string, recorded: string | null, cwd: string | null): Promise<AgentLaunchPlan> => {
+    const decide = async (workerType: string, recorded: string | null): Promise<AgentLaunchPlan> => {
       const sessionId = recorded ?? (this.sessionCaptureService ? await this.sessionCaptureService.tryScanForWindow(windowId) : null);
       if (!sessionId) return { sessionId: null, conversation: 'resume' };
-      return { sessionId, conversation: await this.sessionStrategyFactory.create(workerType).resolveRespawnConversation(server, cwd, sessionId) };
+      const agentType = this.sessionStrategyFactory.create(workerType).conversationLogAgentType;
+      if (agentType === null) return { sessionId, conversation: 'resume' };
+      return { sessionId, conversation: (await this.conversationProbe.exists(server, agentType, sessionId)) ? 'resume' : 'new' };
     };
     if (!win.paneLayout) {
-      return { single: win.workerType ? await decide(win.workerType, win.agentSessionId, cwds.singleCwd) : null, panes: new Map() };
+      return { single: win.workerType ? await decide(win.workerType, win.agentSessionId) : null, panes: new Map() };
     }
     const panes = new Map<number, AgentLaunchPlan>();
     const firstIndex = win.paneLayout.panes[0]?.index;
@@ -1227,8 +1232,7 @@ export class WindowRespawnService {
       if (!workerType) continue;
       const recorded = pane.agentSessionId || (pane.index === firstIndex ? win.agentSessionId : null);
       // Only the id the pane recorded is looked for; a scan finds the window's one conversation, which the first pane alone may take.
-      const plan = recorded === null && pane.index !== firstIndex ? { sessionId: null, conversation: 'resume' as const } : await decide(workerType, recorded, cwds.paneCwds.get(pane.index) ?? null);
-      panes.set(pane.index, plan);
+      panes.set(pane.index, recorded === null && pane.index !== firstIndex ? { sessionId: null, conversation: 'resume' } : await decide(workerType, recorded));
     }
     return { single: null, panes };
   }

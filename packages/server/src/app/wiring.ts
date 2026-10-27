@@ -116,6 +116,7 @@ import { SessionCaptureService } from '../modules/windows/SessionCaptureService'
 import { WindowActivityStatusService } from '../modules/windows/WindowActivityStatusService';
 import { WindowSessionResolver } from '../modules/transcripts/WindowSessionResolver';
 import { TRANSCRIPT_SOURCES } from '../modules/transcripts/sources/registry';
+import { TranscriptConversationProbe } from '../modules/transcripts/TranscriptConversationProbe';
 import { HostTranscriptSourceProvider, type TranscriptSourceProvider } from '../modules/transcripts/sources/TranscriptSourceProvider';
 import { TaskRestoreService } from '../modules/tasks/TaskRestoreService';
 import type { GitIdentity } from '../modules/git/ensureGitIdentity';
@@ -492,7 +493,8 @@ function buildApplicationServices(infra: SharedInfra, repos: Repositories, uiTok
   const originationService = new TaskOriginationService(repos.taskRepo, repos.auditLogService);
   const taskPaneEnvironmentService = new TaskPaneEnvironmentService(repos.taskTokenRepo, repos.projectSecretRepo, uiToken, scopedAuthEnabled, repos.auditLogService);
   const uiTokenEnvFn = (server: ServerConfig) => uiTokenEnvForServer(uiToken, server);
-  const windowRespawnService = new WindowRespawnService(repos.windowRepo, infra.muxDriverRegistry, sessionStrategyFactory, repos.taskRepo, repos.unitRepo, infra.supervisorRegistry, repos.projectServerRepo, repos.projectRepo, infra.transportFactory, repos.logRepo, infra.unitTypeLoader, infra.sidekickPackageLoader, repos.serverRepo, repos.projectSecretRepo, taskEvents, taskPaneEnvironmentService, infra.serverIsolationMutex, scopedAuthEnabled, uiTokenEnvFn, harnessPrefix, sessionCaptureService);
+  const transcriptSourceProvider = new HostTranscriptSourceProvider(TRANSCRIPT_SOURCES, infra.transportFactory);
+  const windowRespawnService = new WindowRespawnService(repos.windowRepo, infra.muxDriverRegistry, sessionStrategyFactory, repos.taskRepo, repos.unitRepo, infra.supervisorRegistry, repos.projectServerRepo, repos.projectRepo, infra.transportFactory, repos.logRepo, infra.unitTypeLoader, infra.sidekickPackageLoader, repos.serverRepo, repos.projectSecretRepo, taskEvents, taskPaneEnvironmentService, infra.serverIsolationMutex, scopedAuthEnabled, uiTokenEnvFn, harnessPrefix, new TranscriptConversationProbe(transcriptSourceProvider), sessionCaptureService);
   const windowSleepService = new WindowSleepService(repos.windowRepo, infra.muxDriverRegistry, sessionStrategyFactory, repos.serverRepo);
   const taskRestoreService = new TaskRestoreService({
     taskRepo: repos.taskRepo,
@@ -522,7 +524,6 @@ function buildApplicationServices(infra: SharedInfra, repos: Repositories, uiTok
   // (session resolution), windowsRoutes (GET /api/windows/activity-status, diagnostics)
   // and AgentActivityMonitor's Tier 4 probe — a single instance keeps the ps/tmux
   // lookups (and their cache) to one per process.
-  const transcriptSourceProvider = new HostTranscriptSourceProvider(TRANSCRIPT_SOURCES, infra.transportFactory);
   const windowSessionResolver = new WindowSessionResolver(repos.taskRepo, infra.muxDriverRegistry, repos.serverRepo, transcriptSourceProvider, sessionCaptureService, infra.transportFactory);
   const windowActivityStatusService = new WindowActivityStatusService(repos.windowRepo, repos.serverRepo, windowSessionResolver);
   const usageService = new UsageService(infra.agentRegistry);

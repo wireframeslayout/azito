@@ -77,7 +77,7 @@ function buildService(overrides: {
       buildNewSessionArgs: () => [],
       buildResumeArgs: () => [],
       buildRespawnLaunch: () => null,
-      resolveRespawnConversation: async () => 'resume' as const,
+      conversationLogAgentType: null,
       scanSessionId: vi.fn().mockResolvedValue(null),
     }),
   };

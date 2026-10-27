@@ -15,10 +15,11 @@ export interface ISessionStrategy {
   /** 再起動（respawn）の起動。ペインのシェルの行にするかプログラムと引数にするかは、起動する側が決める。 */
   buildRespawnLaunch(agentSessionId: string | null, model: string | null, extraArgs: string | null, blockMcp?: boolean, conversation?: RespawnConversation): WorkerLaunch | null;
   /**
-   * Whether the conversation `sessionId` exists on the host, to decide between resuming it and starting it fresh under the same id.
-   * Throws {@link ConversationCheckError} when that cannot be told (never answers `new` for "could not read").
+   * The agent type whose conversation log (transcripts) tells whether a recorded session id has a conversation, which a respawn asks
+   * before it resumes it (the agent only writes the file at the first message). null: a recorded id always has one (a Codex id is
+   * read from an existing rollout), so it is resumed without asking.
    */
-  resolveRespawnConversation(server: ServerConfig, workingDirectory: string | null, sessionId: string): Promise<RespawnConversation>;
+  readonly conversationLogAgentType: string | null;
   scanSessionId(server: ServerConfig, workingDirectory: string | null, afterTimestamp?: Date): Promise<string | null>;
   excludeSessionId?(id: string): void;
 }

@@ -32,6 +32,30 @@ describe('ClaudeTranscriptSource', () => {
     fs.rmSync(dir, { recursive: true, force: true });
   });
 
+  describe('sessionExists (#542)', () => {
+    it('finds the id in any project folder and says false when it is in none, or when projects does not exist', () => {
+      writeSession(dir, 'proj-a', SID_A, [{ type: 'user', uuid: 'u', message: { role: 'user', content: 'hi' } }]);
+      expect(service.sessionExists(SID_A)).toBe(true);
+      expect(service.sessionExists(SID_B)).toBe(false);
+      expect(new ClaudeTranscriptSource(path.join(dir, 'nonexistent')).sessionExists(SID_A)).toBe(false);
+    });
+
+    it.skipIf(process.platform === 'win32' || process.getuid?.() === 0)('throws on a folder it cannot read instead of saying false', () => {
+      const locked = path.join(dir, 'locked');
+      fs.mkdirSync(locked);
+      fs.chmodSync(locked, 0o000);
+      try {
+        expect(() => service.sessionExists(SID_B)).toThrow(/EACCES/);
+      } finally {
+        fs.chmodSync(locked, 0o700);
+      }
+    });
+
+    it('refuses an id that is not a UUID', () => {
+      expect(() => service.sessionExists('../x')).toThrow(/Invalid session id/);
+    });
+  });
+
   describe('listSessions', () => {
     it('returns empty list when projects dir does not exist', () => {
       const svc = new ClaudeTranscriptSource(path.join(dir, 'nonexistent'));

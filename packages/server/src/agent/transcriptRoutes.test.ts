@@ -46,6 +46,22 @@ describe('agent transcript routes', () => {
     fs.rmSync(root, { recursive: true, force: true });
   });
 
+  describe('exists (#542)', () => {
+    const url = (id: string, agent = 'claude') => `/api/transcripts/${agent}/sessions/${id}/exists`;
+
+    it('answers 200 for a conversation in any project folder, and session_not_found for one that is nowhere', async () => {
+      expect((await app.inject({ method: 'GET', url: url(SID), headers: AUTH })).json()).toEqual({ exists: true });
+      const missing = await app.inject({ method: 'GET', url: url('22222222-2222-2222-2222-222222222222'), headers: AUTH });
+      expect(missing.statusCode).toBe(404);
+      expect(missing.json()).toEqual({ error: 'session_not_found' });
+    });
+
+    it('is not answered for an agent type whose reader cannot tell (codex), and needs the token', async () => {
+      expect((await app.inject({ method: 'GET', url: url(SID, 'codex'), headers: AUTH })).statusCode).toBe(404);
+      expect((await app.inject({ method: 'GET', url: url(SID) })).statusCode).toBe(401);
+    });
+  });
+
   describe('authentication', () => {
     const urls = [
       '/api/transcripts/claude/sessions',

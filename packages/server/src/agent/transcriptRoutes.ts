@@ -73,6 +73,15 @@ const transcriptRoutes: FastifyPluginCallback<AgentTranscriptRoutesOptions> = (f
     return body;
   });
 
+  // 窓の復帰が「会話ファイルがあるか」を確かめる口。reader が探索の失敗を投げるので、500 になる（ハブは「無い」と扱わない）。
+  fastify.get<{ Params: { agent: string; id: string } }>(`${prefix}/:id/exists`, async (request, reply) => {
+    const reader = findReader(request.params.agent);
+    if (!reader?.sessionExists) return reply.status(404).send({ error: 'unknown_agent' });
+    if (!reader.sessionExists(request.params.id)) return reply.status(404).send({ error: AGENT_SESSION_NOT_FOUND });
+    const body: { exists: true } = { exists: true };
+    return body;
+  });
+
   fastify.get<{ Params: { agent: string; id: string }; Querystring: { offset?: string; before?: string } }>(
     `${prefix}/:id/entries`,
     async (request, reply) => {

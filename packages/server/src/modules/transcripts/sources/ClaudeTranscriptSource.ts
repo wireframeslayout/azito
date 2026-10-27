@@ -367,6 +367,12 @@ export interface ClaudeTranscriptSourceOptions {
 
 // ─── Helpers ───
 
+/** そこに何も無い（ファイル／フォルダーが無い、途中がフォルダーでない）ことを表すエラー。権限エラーなどは含まない。 */
+function isAbsentError(err: unknown): boolean {
+  const code = (err as NodeJS.ErrnoException).code;
+  return code === 'ENOENT' || code === 'ENOTDIR';
+}
+
 function resolveProjectsDir(baseDir?: string): string {
   return baseDir ?? path.join(process.env.CLAUDE_CONFIG_DIR ?? path.join(os.homedir(), '.claude'), 'projects');
 }
@@ -849,6 +855,31 @@ export class ClaudeTranscriptSource implements TranscriptReader {
     if (!file) return null;
     const { cwd } = scanSessionMeta(file, this.previewScanBytes);
     return { cwd };
+  }
+
+  /**
+   * `projects/<どのフォルダーでも>/<id>.jsonl` があるか（`claude --resume <id>` が探す範囲と同じ。窓の cwd には頼らない）。
+   * findSessionFile と違い、読めないものを「無い」にしない: ENOENT / ENOTDIR（そこに無い）だけが「無い」で、
+   * それ以外の読み取りエラーは投げる。projects 自体が無いのは「このマシンで Claude が会話を作ったことが無い」＝無い。
+   */
+  sessionExists(sessionId: string): boolean {
+    if (!SESSION_ID_PATTERN.test(sessionId)) throw new Error(`Invalid session id: ${sessionId}`);
+    const projectsDir = this.projectsDir();
+    let projects: string[];
+    try {
+      projects = fs.readdirSync(projectsDir);
+    } catch (err) {
+      if (isAbsentError(err)) return false;
+      throw err;
+    }
+    for (const project of projects) {
+      try {
+        if (fs.statSync(path.join(projectsDir, project, `${sessionId}.jsonl`)).isFile()) return true;
+      } catch (err) {
+        if (!isAbsentError(err)) throw err;
+      }
+    }
+    return false;
   }
 
   getSessionMtimeMs(sessionId: string): number | null {

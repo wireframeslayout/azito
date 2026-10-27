@@ -1,4 +1,4 @@
-import type { ISessionStrategy, RespawnConversation } from './SessionStrategy';
+import type { ISessionStrategy } from './SessionStrategy';
 import type { ServerConfig } from '../servers/Server';
 import { buildWorkerLaunch } from './LaunchCommand';
 import type { WorkerLaunch } from './WorkerLaunch';
@@ -6,6 +6,7 @@ import type { WorkerLaunch } from './WorkerLaunch';
 export class NullSessionStrategy implements ISessionStrategy {
   readonly supportsSession = false;
   readonly needsPostLaunchScan = false;
+  readonly conversationLogAgentType = null;
 
   constructor(private workerType: string | null) {}
 
@@ -19,10 +20,6 @@ export class NullSessionStrategy implements ISessionStrategy {
 
   buildRespawnLaunch(_agentSessionId: string | null, model: string | null, extraArgs: string | null, _blockMcp?: boolean): WorkerLaunch | null {
     return buildWorkerLaunch(this.workerType, model, extraArgs);
-  }
-
-  async resolveRespawnConversation(_server: ServerConfig, _workingDirectory: string | null, _sessionId: string): Promise<RespawnConversation> {
-    return 'resume';
   }
 
   async scanSessionId(_server: ServerConfig, _workingDirectory: string | null, _afterTimestamp?: Date): Promise<string | null> {

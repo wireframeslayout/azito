@@ -1,4 +1,4 @@
-import type { ISessionStrategy, RespawnConversation } from '../SessionStrategy';
+import type { ISessionStrategy } from '../SessionStrategy';
 import type { ServerConfig } from '../../servers/Server';
 import type { TransportFactory } from '../../servers/transport/TransportFactory';
 import { FileOpsError, type IFileOps } from '../../../shared/fs/fileOps';
@@ -12,6 +12,8 @@ import { buildCodexLaunch, buildCodexRespawnLaunch } from './launchCommand';
 export class CodexSessionStrategy implements ISessionStrategy {
   readonly supportsSession = true;
   readonly needsPostLaunchScan = true;
+  /** A Codex session id only ever comes from {@link scanSessionId}, which reads it out of a rollout file that exists; there is nothing to ask. */
+  readonly conversationLogAgentType = null;
   private excludedIds = new Set<string>();
 
   constructor(private transportFactory: TransportFactory, private localHomes: LocalAgentHomes) {}
@@ -33,14 +35,6 @@ export class CodexSessionStrategy implements ISessionStrategy {
       return buildCodexRespawnLaunch(agentSessionId, { model, extraArgs, blockMcp });
     }
     return buildCodexLaunch({ model, extraArgs, blockMcp });
-  }
-
-  /**
-   * Always `resume`: a Codex session id only ever comes from {@link scanSessionId}, which reads it out of a rollout file that already
-   * exists, so a recorded id has had its conversation file (Codex has no way to be started under a chosen id either).
-   */
-  async resolveRespawnConversation(_server: ServerConfig, _workingDirectory: string | null, _sessionId: string): Promise<RespawnConversation> {
-    return 'resume';
   }
 
   async scanSessionId(server: ServerConfig, workingDirectory: string | null, afterTimestamp?: Date): Promise<string | null> {

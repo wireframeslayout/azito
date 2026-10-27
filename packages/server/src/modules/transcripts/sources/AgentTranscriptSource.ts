@@ -11,6 +11,7 @@ import {
   AGENT_SESSION_NOT_FOUND,
   agentSessionPath,
   agentSessionsPath,
+  agentSessionExistsSchema,
   agentSessionMetaSchema,
   agentSessionsResponseSchema,
   readSessionBeforeResultSchema,
@@ -90,6 +91,11 @@ export class AgentTranscriptSource implements TranscriptSource {
   async getSessionCwd(sessionId: string): Promise<{ cwd: string | null } | null> {
     const meta = await this.getMeta(sessionId);
     return meta ? { cwd: meta.cwd } : null;
+  }
+
+  async sessionExists(sessionId: string): Promise<boolean> {
+    // 古いエージェントは経路が無い 404（TranscriptAgentOutdatedError）。それ以外の失敗も「無い」にはしない。
+    return (await this.fetchOrNull(agentSessionPath(this.agentType, sessionId, 'exists'), agentSessionExistsSchema)) !== null;
   }
 
   async getSessionMtimeMs(sessionId: string): Promise<number | null> {

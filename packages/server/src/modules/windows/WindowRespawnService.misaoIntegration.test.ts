@@ -112,6 +112,7 @@ describe.skipIf(!fs.existsSync(MISAO_CLI))('WindowRespawnService against a real 
       true,
       () => ({}),
       '',
+      { exists: async () => true },
     );
   });
 

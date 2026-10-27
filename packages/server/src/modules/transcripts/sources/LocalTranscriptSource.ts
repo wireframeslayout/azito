@@ -36,6 +36,11 @@ export class LocalTranscriptSource implements TranscriptSource {
     return this.reader.getSessionCwd(sessionId);
   }
 
+  async sessionExists(sessionId: string): Promise<boolean> {
+    if (!this.reader.sessionExists) throw new Error(`The ${this.reader.agentType} reader cannot tell whether a session exists`);
+    return this.reader.sessionExists(sessionId);
+  }
+
   async getSessionMtimeMs(sessionId: string): Promise<number | null> {
     return this.reader.getSessionMtimeMs(sessionId);
   }
