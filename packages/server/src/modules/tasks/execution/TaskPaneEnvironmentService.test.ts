@@ -99,6 +99,12 @@ describe('TaskPaneEnvironmentService.buildEnvForNewWindow', () => {
     expect(tokenId).toBe(1);
   });
 
+  it('turns off Claude Code\'s prompt suggestions in the worker\'s pane (a suggestion in the input reads as a draft; #532), also for an isolated server', () => {
+    const { service } = makeDeps(false);
+    expect(service.buildEnvForNewWindow(makeTask(), makeServer()).env.CLAUDE_CODE_ENABLE_PROMPT_SUGGESTION).toBe('false');
+    expect(service.buildEnvForNewWindow(makeTask(), makeServer({ isolationIntent: true })).env.CLAUDE_CODE_ENABLE_PROMPT_SUGGESTION).toBe('false');
+  });
+
   it('injects AZITO_UI_TOKEN when the scoped-auth flag is off (compat mode)', () => {
     const { service } = makeDeps(false);
     const { env } = service.buildEnvForNewWindow(makeTask(), makeServer());

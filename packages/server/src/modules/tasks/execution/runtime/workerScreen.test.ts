@@ -1,7 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { blockingWorkerDialog, detectWorkerDialog, inputHoldsLine, isWorkerBusy, isWorkerScreenReady, readInputBox, showsTurnEnd, tuiAgentKindOf, tuiAgentKindOfWorkerType } from './workerScreen';
+import { blockingWorkerDialog, hasUserMessageAbove, detectWorkerDialog, inputHoldsLine, isWorkerBusy, isWorkerScreenReady, readInputBox, showsTurnEnd, tuiAgentKindOf, tuiAgentKindOfWorkerType } from './workerScreen';
 
 describe('tuiAgentKindOf', () => {
   it('reads the agent from the launch line', () => {
@@ -265,6 +265,12 @@ describe('a turn that is still running (#532)', () => {
     }
     // a "Worked for" line of the turn before, far above, is not the end of this one
     expect(showsTurnEnd('codex', fixture('codex-0.163-linux-between-tools-1.txt'))).toBe(false);
+  });
+
+  it('a session that has just started has no message of the user in its history; a screen after a prompt has', () => {
+    expect(hasUserMessageAbove('codex', fixture('codex-0.164-win-just-started.txt'))).toBe(false);
+    expect(hasUserMessageAbove('codex', fixture('codex-0.163-linux-streaming-final-answer.txt'))).toBe(true);
+    expect(hasUserMessageAbove('codex', fixture('codex-0.164-win-after-reply.txt'))).toBe(true);
   });
 
   it('"Worked for" counts only on the line right above the input (a background terminal note may follow it), not above the next prompt just sent', () => {

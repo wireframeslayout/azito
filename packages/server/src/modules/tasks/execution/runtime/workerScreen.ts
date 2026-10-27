@@ -305,6 +305,15 @@ export function showsTurnEnd(kind: TuiAgentKind, output: string): boolean {
   return last !== undefined && CODEX_TURN_END_LINE.test(last.trim());
 }
 
+/**
+ * Whether the history above the input holds a message of the user (codex writes it with a `›`): a turn can only be running when there is
+ * one. A session that has just started draws its banner, MCP start-up and warnings, which change the screen without a turn.
+ */
+export function hasUserMessageAbove(kind: TuiAgentKind, output: string): boolean {
+  if (kind === 'claude') return true;
+  return (nonBlankLinesAboveInput(kind, output) ?? []).some((line) => line.startsWith('›'));
+}
+
 /** The text above the input, for telling whether the screen is still changing (a turn streaming) between two looks. */
 export function screenAboveInput(kind: TuiAgentKind, output: string): string {
   return (nonBlankLinesAboveInput(kind, output) ?? []).join('\n');

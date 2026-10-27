@@ -3,7 +3,7 @@ import type { IMuxClient } from '../../../tmux/IMuxClient';
 import { WorkerNotRunningError, type WorkerInputService } from '../WorkerInputService';
 import type { PromptFileDelivery } from '../PromptFileDelivery';
 import { getAgentTranscriptProfile } from '../../../transcripts/sources/profiles';
-import { blockingWorkerDialog, detectWorkerDialog, inputHoldsLine, type InputBox, isWorkerBusy, isWorkerScreenReady, readInputBox, screenAboveInput, showsTurnEnd, tuiAgentKindOf, type TuiAgentKind, type WorkerDialog } from './workerScreen';
+import { blockingWorkerDialog, detectWorkerDialog, inputHoldsLine, type InputBox, isWorkerBusy, isWorkerScreenReady, readInputBox, hasUserMessageAbove, screenAboveInput, showsTurnEnd, tuiAgentKindOf, type TuiAgentKind, type WorkerDialog } from './workerScreen';
 import type { WorkerWaiter } from '../WorkerWaiter';
 import type { HttpSignalTurnCoordinator } from '../HttpSignalTurnCoordinator';
 import type { ServerConfig } from '../../../servers/Server';
@@ -248,8 +248,9 @@ export class TuiWorkerRuntime implements IWorkerRuntime {
         const above = screenAboveInput(kind, screen);
         const busy = isWorkerBusy(kind, screen);
         if (above !== turnWait.above) {
-          // the screen above the input changed since the last look (not the first look): a turn is streaming
-          if (turnWait.above !== null) turnWait.turnSeen = true;
+          // the screen above the input changed since the last look (not the first look): a turn is streaming, if there is a message of the
+          // user to answer. A session that has only just started (banner, MCP start-up, warnings) changes the screen with no turn.
+          if (turnWait.above !== null && hasUserMessageAbove(kind, screen)) turnWait.turnSeen = true;
           turnWait.above = above;
           turnWait.stableSince = now;
         }

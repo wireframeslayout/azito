@@ -389,6 +389,16 @@ describe('TuiWorkerRuntime.sendPrompt — the worker has to be at an empty input
     expect(h.pane.submitted).toEqual([LINE]);
   });
 
+  // Windows, codex 0.164 (win-codex-busy-stop): the start-up (banner, MCP, a warning row) changes the screen; no prompt has been sent yet
+  it('a codex session that has only just started (its screen changing while it starts, then quiet, no "Worked for") is sent the prompt after the 5 s quiet time, not after 60 s', async () => {
+    const started = fixture('codex-0.164-win-just-started.txt');
+    const starting = (n: number) => started.replace('permissions: YOLO mode', `permissions: YOLO mode\n  starting MCP servers (${n}/3)`);
+    const h = sendHarness('codex', { firstScreens: [starting(0), starting(1), starting(2), starting(3)], idle: started });
+    expect(await h.send()).toBeNull();
+    expect(h.waitedMs()).toBeLessThan(15_000);
+    expect(h.pane.submitted).toEqual([LINE]);
+  });
+
   it('a turn that was seen and never writes "Worked for" (stopped, an error) is waited for 60 s and then worker_busy', async () => {
     const streaming = (n: number) => fixture('codex-0.163-linux-streaming-final-answer.txt').replace('TCP congestion control adjusts', `TCP congestion control adjusts ${'word '.repeat(n)}`);
     const h = sendHarness('codex', { firstScreens: [streaming(1), streaming(2), streaming(3)], quiet: true });
