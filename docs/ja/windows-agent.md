@@ -156,18 +156,21 @@ misao の更新は別です。agent の更新は misao に触れません（動�
 
 | 項目 | 書かれる条件 | 手作業での消し方 |
 |---|---|---|
-| **トークン** `~\.claude\settings.json` の `mcpServers["azt-mcp"]` | プレフィックスなしの実行は、トークンが無くてもキーを書きます。`env.AZITO_UI_TOKEN` が入るのは、トークンが与えられたとき（または前から入っていたとき）だけ | `mcpServers` の `azt-mcp` キーを削除します。ただし `args` がこのハブの `.azito\harness\skills\azt-mcp\mcp-server\index.js` を指し、ホストのほかのハブがまだ使っていないときだけです。別の場所を指すもの、自分で書いたものは消しません |
-| **トークン** `<CODEX_HOME>\config.toml` の `[mcp_servers.azt-mcp]` と `[mcp_servers.azt-mcp.env]`（`CODEX_HOME`、無ければ `~\.codex`） | プレフィックスなしの実行で、`codex` コマンドが PATH にあるときだけ | 上の行と同じ条件で、`codex mcp remove azt-mcp` を実行します。agent が `CODEX_HOME` を設定して動いていたなら、同じ値を `$env:CODEX_HOME` に入れてから実行します。`codex` コマンドが無ければ、`config.toml` から 2 つのテーブルを手で消します |
+| **トークン** `~\.claude\settings.json` の `mcpServers["azt-mcp"]` | プレフィックスなしの実行は、トークンが無くてもキーを書きます。`env.AZITO_UI_TOKEN` が入るのは、トークンが与えられたとき（または前から入っていたとき）だけ | `mcpServers` の `azt-mcp` キーを削除します。ただし `args` が `.azito\harness\skills\azt-mcp\mcp-server\index.js` を指し、**かつ** `env.AZITO_URL` がこのハブの URL のときだけです。`args` はホストのプレフィックスなしのハブすべてで同じなので、持ち主は見分けられません。setup は実行のたびに `env.AZITO_URL` を書き直すので、最後に setup を実行したハブがここに出ます。別のハブの URL のもの、`args` が別の場所を指すもの、自分で書いたものは消しません |
+| **トークン** `<CODEX_HOME>\config.toml` の `[mcp_servers.azt-mcp]` と `[mcp_servers.azt-mcp.env]`（`CODEX_HOME`、無ければ `~\.codex`） | プレフィックスなしの実行で、`codex` コマンドが PATH にあるときだけ | 上の行と同じ条件で、`codex mcp get azt-mcp --json` の `transport.env` にある `AZITO_URL`（setup が既存のトークンを読むのと同じ場所）を確かめてから、`codex mcp remove azt-mcp` を実行します。agent が `CODEX_HOME` を設定して動いていたなら、同じ値を `$env:CODEX_HOME` に入れてから実行します。`codex` コマンドが無ければ、`config.toml` から 2 つのテーブルを手で消します |
 | **トークン** `~\.azito\operator.env` | UI トークンが与えられたとき、**プレフィックスの有無に関係なく**書かれます。ホストに 1 つだけのファイルで、最後に実行した setup が上書きします | 中の `AZITO_URL` を読み、このハブのものならファイルを削除します。別のハブのものなら残します |
 | `~\.claude\settings.json` の `hooks` | どの実行でも | このハブのエントリを削除します: `node "C:/Users/<you>/.azito/harness[-<p>]/hooks/azito-hook.mjs" <kind> [start\|stop] [--prefix <p>]`（パスは `/` 区切り。フォルダーと `--prefix` の値がこのハブのもの）。ほかのハブのエントリは残します |
-| `~\.azito\harness[-<p>]` と `~\.azito\azitoctl[-<p>].env`（webhook トークン。UI トークンは含まない） | どの実行でも | このハブのプレフィックスのこの 2 つだけを削除します |
+| `~\.azito\azitoctl[-<p>].env`（webhook トークン。UI トークンは含まない） | どの実行でも | このハブのプレフィックスのものだけを削除します |
+| `~\.azito\harness[-<p>]` | どの実行でも | このハブのプレフィックスのものだけを削除します。**プレフィックスなしの `harness` フォルダーは、下の共有 skills のジャンクションのリンク先でもあります**（プレフィックス付きの実行は skills を書かないので、別のハブの `/azt-*` もこのフォルダーを使います）。ホストのほかのハブが共有の skills を使っていないときだけ消してください。使っているなら、フォルダーは残し、このハブのほかのもの（`azitoctl` の env、フック、トークン）を個別に消します |
 | `~\.claude\skills\azt-*` と `<CODEX_HOME>\skills\azt-*`（ジャンクション。ホストの全ハブで共有） | プレフィックスなしの実行。Codex 側は、`codex` コマンドが PATH にあるか、`<CODEX_HOME>` が存在するとき | ホストのほかのハブがまだ使っていないときだけです（1 つのハーネスのフォルダーを指しています）。リンク先をたどらずに消します: `cmd /c rmdir "%USERPROFILE%\.claude\skills\azt-plan"`。`rd /s` や `Remove-Item -Recurse` は、リンク先のハーネスのファイルまで消すことがあるので使いません |
 | `~\.claude\rules\*.md` と `~\.azito\harness-copies.json`（共有） | プレフィックスなしの実行 | 同じ条件で、規則のコピーは `(Get-FileHash -Algorithm SHA256 <file>).Hash` が `harness-copies.json` のそのファイルの値と（大文字小文字を無視して）同じもの、つまり編集していないものだけを削除し、そのあと台帳を削除します |
 | `<CODEX_HOME>\AGENTS.md` の `<!-- AZITO-HARNESS:BEGIN ... -->` から `<!-- AZITO-HARNESS:END -->` までの区画（共有） | プレフィックスなしの実行で、`codex` コマンドが PATH にあるか、`<CODEX_HOME>` が存在するとき | 同じ条件で、区画を削除し、ファイルのほかの部分は残します |
 
 **プレフィックス付き**の実行（`--prefix <p>`、2 つ目のハブ用）が書くのは、`settings.json` への `--prefix <p>` 付きのフック、`harness-<p>` のハーネス、`~\.azito\` の `azitoctl-<p>.env`、そして UI トークンが与えられたときの上記の `operator.env` です。`azt-mcp`・skills・rules・Codex のファイルは書きません。共有のものはプレフィックスなしの実行で書かれたもので、ホストのどのハブも必要としなくなったときだけ消すのが正しいです。
 
-**ホストを信頼できなくなったとき**（紛失、譲渡、共用など）は、トークンがコピーされた可能性があるので、エントリを消すだけでは足りません。ハブで `azito token rotate` を実行し、そのあと**ハブを再起動**します。再起動するまでは古いトークンが使えます。トークンを環境変数 `AZITO_UI_TOKEN` やハブの `.env` で与えている構成では、`rotate` は実行を断ります。その場合は設定元の値を新しいものに変えてハブを再起動し、使い続けるホストで新しいトークンを使って setup をやり直してください。`azitoctl*.env` の webhook トークンもコピーされうるので、替えるときは `$AZITO_DATA_DIR/webhook-token` を削除（または `AZITO_WEBHOOK_TOKEN` を変更）してハブを再起動します。詳しくは [セキュリティ設定](./security-setup.md) を参照してください。
+**ホストを信頼できなくなったとき**（紛失、譲渡、共用など）は、トークンがコピーされた可能性があるので、エントリを消すだけでは足りません。ハブで `azito token rotate` を実行し、そのあと**ハブを再起動**します。再起動するまでは古いトークンが使えます。トークンを環境変数 `AZITO_UI_TOKEN` やハブの `.env` で与えている構成では、`rotate` は実行を断ります。その場合は設定元の値を新しいものに変えてハブを再起動します。`azitoctl*.env` の webhook トークンもコピーされうるので、替えるときは `$AZITO_DATA_DIR/webhook-token` を削除（または `AZITO_WEBHOOK_TOKEN` を変更）してハブを再起動します。詳しくは [セキュリティ設定](./security-setup.md) を参照してください。
+
+**どちらの場合も、使い続けるホストには新しいトークンを配り直してください。** `rotate` が更新するのは、ハブ自身のトークンファイル・`operator.env`・Claude 側の MCP 設定だけで、ほかのホストと Codex の MCP の登録は更新しません。使い続けるすべてのホストで、新しいトークン（`--ui-token`、webhook トークンを替えたなら `--webhook-token` も）を付けて setup をやり直してください。それまでは、そのホストの `azt-mcp`・`operator.env`・`azitoctl*.env` は古いトークンのままです。
 
 ## 制約
 
