@@ -126,8 +126,10 @@ class FakeWindowsAgent {
       return { exitCode: 0, signal: null, stdout: '', stderr: '' };
     }
     if (spec.file === HOST.nodePath) {
-      const resolved = this.realPaths.get(spec.args[2]!);
-      return resolved === undefined ? { exitCode: 1, signal: null, stdout: '', stderr: 'ENOENT' } : { exitCode: 0, signal: null, stdout: resolved, stderr: '' };
+      // `node -e <script> -- <folder>`: the folder must come after `--`, or a value starting with `-` would be read as an option of node.
+      expect(spec.args.slice(2, 3)).toEqual(['--']);
+      const resolved = this.realPaths.get(spec.args[3]!);
+      return resolved === undefined ? { exitCode: 3, signal: null, stdout: '', stderr: 'ENOENT' } : { exitCode: 0, signal: null, stdout: resolved, stderr: '' };
     }
     const line = `powershell.exe ${spec.args.join(' ')}`;
     const script = decodeEncodedCommand(line);
@@ -539,21 +541,14 @@ describe('MisaoAgentInstaller on a Windows agent', () => {
       expect(agent.uploads).toEqual([]);
       expect(agent.written).toEqual([]);
       expect(agent.events).toEqual([]);
-    };
-    const expectUntouched = (agent: FakeWindowsAgent): void => {
-      expect(agent.host.registeredXml).toBe(OTHER_TASK_XML);
-      expect(agent.uploads).toEqual([]);
-      expect(agent.written).toEqual([]);
-      expect(agent.events).toEqual([]);
       expect(agent.specs.some((spec) => spec.file.endsWith('misao.exe'))).toBe(false);
     };
-
     for (const action of ['install', 'update'] as const) {
       it(`${action} refuses while that task is stopped, and changes nothing`, async () => {
         const agent = new FakeWindowsAgent(bundle);
         seedOther(agent, false);
         await expect(installer()[action](agent.asTarget())).rejects.toMatchObject({ code: 'custom_socket', message: expect.stringContaining('hub-prefix') });
-        expectUntouched(agent);
+        expectNothingChanged(agent, OTHER_TASK_XML);
       });
 
       it(`${action} refuses for this reason, not daemon_not_ready, while that task is running`, async () => {
@@ -561,7 +556,7 @@ describe('MisaoAgentInstaller on a Windows agent', () => {
         seedOther(agent, false);
         agent.host.markRunning();
         await expect(installer()[action](agent.asTarget())).rejects.toMatchObject({ code: 'custom_socket' });
-        expectUntouched(agent);
+        expectNothingChanged(agent, OTHER_TASK_XML);
       });
 
       it(`${action} refuses a task whose folder cannot be read`, async () => {
@@ -578,10 +573,31 @@ describe('MisaoAgentInstaller on a Windows agent', () => {
         const agent = new FakeWindowsAgent(bundle);
         agent.seedInstalled(OLD_VERSION, false);
         agent.host.registeredXml = OTHER_TASK_XML;
-        await expect(installer()[action](agent.asTarget())).rejects.toMatchObject({ code: 'custom_socket' });
+        await expect(installer()[action](agent.asTarget())).rejects.toMatchObject({ code: 'custom_socket', message: expect.stringContaining('does not exist') });
         expect(agent.specs.some((spec) => spec.file === HOST.nodePath)).toBe(true);
         expectNothingChanged(agent, OTHER_TASK_XML);
       }
+    });
+
+    it('install and update refuse a folder that exists but resolves to another one (a junction elsewhere)', async () => {
+      for (const action of ['install', 'update'] as const) {
+        const agent = new FakeWindowsAgent(bundle);
+        agent.seedInstalled(OLD_VERSION, false);
+        agent.host.registeredXml = OTHER_TASK_XML;
+        agent.realPaths.set('C:\\Users\\dev\\hub-prefix\\misao', 'D:\\elsewhere\\misao');
+        await expect(installer()[action](agent.asTarget())).rejects.toMatchObject({ code: 'custom_socket', message: expect.stringContaining('another folder') });
+        expectNothingChanged(agent, OTHER_TASK_XML);
+      }
+    });
+
+    it('a folder starting with "--" is a path to resolve, never an option of node', async () => {
+      const agent = new FakeWindowsAgent(bundle);
+      agent.seedInstalled(OLD_VERSION, false);
+      agent.host.registeredXml = '<Task><Actions><Exec><Arguments>--data "--require=C:\\x.js"</Arguments></Exec></Actions></Task>';
+      await expect(installer().install(agent.asTarget())).rejects.toMatchObject({ code: 'custom_socket' });
+      const node = agent.specs.find((spec) => spec.file === HOST.nodePath)!;
+      expect(node.args.slice(2)).toEqual(['--', '--require=C:\\x.js']);
+      expectNothingChanged(agent, agent.host.registeredXml!);
     });
 
     it('a task that names the same folder by a short name or another case is not another install\'s (resolved on the host)', async () => {
