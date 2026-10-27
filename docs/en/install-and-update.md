@@ -420,15 +420,15 @@ always run in **`user/<uid>`**, as Background-session LaunchAgents (`LimitLoadTo
 
 ### macOS: the launchd hub cannot reach LAN addresses
 
-A hub running as a launchd service cannot reach LAN addresses (for example `192.168.x.x`) unless it has macOS's Local Network
-privacy permission (macOS 15 and later). Installing an agent whose address is a LAN one fails in the preflight with
-`connect EHOSTUNREACH <IP>:22`. The same node run from an SSH shell does reach it, and Tailscale addresses (`100.x`) are reachable
-from the launchd hub (confirmed with v0.12.0-rc.3, from a macOS 26.3.1 arm64 hub to an Ubuntu 24.04 x64 agent).
+Installing an agent at a LAN address (for example `192.168.x.x`) from a hub running as a launchd service can fail in the preflight
+with `connect EHOSTUNREACH <IP>:22`. The same node run from an SSH shell does reach it, and Tailscale addresses (`100.x`) are
+reachable from the launchd hub (confirmed with v0.12.0-rc.3, from a macOS 26.3.1 arm64 hub to an Ubuntu 24.04 x64 agent). macOS's
+Local Network privacy permission (macOS 15 and later) is the likely cause.
 
-- **Workaround 1**: use the agent's Tailscale address (or its MagicDNS name) as its address.
-- **Workaround 2**: grant the permission in System Settings › Privacy & Security › Local Network.
+- **Workaround**: use the agent's Tailscale address (or its MagicDNS name) as its address (confirmed).
+- Granting the permission in System Settings › Privacy & Security › Local Network may also let it through, but this has not been confirmed yet.
 
-The underlying fix comes in a later version (#536).
+The underlying fix comes in a later version ([#536](https://github.com/wireframeslayout/azito/issues/536)).
 
 ### `azito service` on an existing install
 

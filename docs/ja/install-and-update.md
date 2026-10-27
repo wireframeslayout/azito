@@ -419,15 +419,15 @@ launchd にはユーザーごとのドメインが 2 つあります。`gui/<uid
 
 ### macOS: launchd のハブから LAN のアドレスに届かないとき
 
-launchd のサービスとして動くハブは、macOS の「ローカルネットワーク」のプライバシー許可（macOS 15 以降）が無いと、LAN のアドレス
-（例: `192.168.x.x`）に届きません。LAN のアドレスを宛先にした agent の導入は、preflight が `connect EHOSTUNREACH <IP>:22` で
-失敗します。同じ node を SSH のシェルから動かすと届き、Tailscale のアドレス（`100.x`）には launchd のハブからも届きます
-（v0.12.0-rc.3、macOS 26.3.1 arm64 のハブから Ubuntu 24.04 x64 の agent で確認）。
+launchd のサービスとして動くハブから、LAN のアドレス（例: `192.168.x.x`）の agent を導入すると、preflight が
+`connect EHOSTUNREACH <IP>:22` で失敗することがあります。同じ node を SSH のシェルから動かすと届き、Tailscale のアドレス（`100.x`）には
+launchd のハブからも届きます（v0.12.0-rc.3、macOS 26.3.1 arm64 のハブから Ubuntu 24.04 x64 の agent で確認）。macOS の
+「ローカルネットワーク」のプライバシー許可（macOS 15 以降）が関係していると考えられます。
 
-- **回避策 1**: agent の宛先に Tailscale のアドレス（または MagicDNS 名）を使います
-- **回避策 2**: システム設定 › プライバシーとセキュリティ › ローカルネットワークで許可を与えます
+- **回避策**: agent の宛先に Tailscale のアドレス（または MagicDNS 名）を使います（確認済み）
+- システム設定 › プライバシーとセキュリティ › ローカルネットワークで許可を与えると届く可能性がありますが、まだ確かめていません
 
-根本の対応は後の版で行います（#536）。
+根本の対応は後の版で行います（[#536](https://github.com/wireframeslayout/azito/issues/536)）。
 
 ### 既存のインストールでの `azito service`
 
