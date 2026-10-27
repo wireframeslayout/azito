@@ -249,7 +249,7 @@ export function TerminalContainer({ registeredWindow, serverName, target: rawTar
       }
       if (!res.tmuxTarget) {
         if (res.error === 'session_already_running' && res.windowId != null && res.sessionId) {
-          setRespawnError(t('terminal.sessionAlreadyRunning', { windowId: formatWindowId(res.windowId), sessionId: res.sessionId }));
+          setRespawnError(t('terminal.sessionAlreadyRunning', { windowId: formatWindowId(res.windowId), sessionId: res.sessionId.slice(0, 8) }));
         } else {
           setRespawnError(res.message || res.error || 'Respawn failed');
         }

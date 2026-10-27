@@ -244,10 +244,13 @@ export class WindowRespawnService {
     }
 
     // Issue #274 / #540: duplicate session detection — the conversation this
-    // window will resume (win.agentSessionId, the same one the launch uses) must
-    // not already be running in a DIFFERENT window of the task. A window with no
-    // session of its own falls back to the task's session only when it is the
-    // task's primary window; any other window has nothing to collide with.
+    // window will resume (win.agentSessionId, which is what the launch of its
+    // first pane resumes) must not already be running in a DIFFERENT window of
+    // the task. A window with no session of its own falls back to the task's
+    // session only when it is the task's primary window; any other window has
+    // nothing to collide with. Known limit, older than #540 and left as is: a
+    // window with several panes is checked for this one session only, not for
+    // the conversation of each pane.
     if (task) {
       const ownSessionId = win.agentSessionId ?? (isPrimaryTaskWindow(win) ? task.agentSessionId : null);
       if (ownSessionId) {

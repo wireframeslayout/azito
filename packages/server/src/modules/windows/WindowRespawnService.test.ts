@@ -327,7 +327,7 @@ function buildService(opts: {
     '',
   );
 
-  return { service, windowRepo, tmux, muxDriverRegistry, sentCommands, clearExitMarker, taskRepo, logRepo, serverRepo, projectSecretRepo, events, paneEnvService };
+  return { service, windowRepo, tmux, muxDriverRegistry, sessionStrategyFactory, sentCommands, clearExitMarker, taskRepo, logRepo, serverRepo, projectSecretRepo, events, paneEnvService };
 }
 
 describe('WindowRespawnService.respawn — pane labels (misao)', () => {
@@ -2288,7 +2288,7 @@ describe('WindowRespawnService.respawn — duplicate session guard (Issue #274)'
     const secondary = makeWindow({ id: 2, taskId: 5, isPrimary: false, sleeping: true, windowType: 'agent', workerType: 'claude', agentSessionId: ownSession });
     const primary = makeWindow({ id: 1, taskId: 5, sleeping: false, tmuxTarget: 'azito:task-primary' });
 
-    const { service, sentCommands } = buildServiceWithProcessDetection({
+    const { service, sentCommands, sessionStrategyFactory } = buildServiceWithProcessDetection({
       window: secondary,
       task,
       unit,
@@ -2299,6 +2299,10 @@ describe('WindowRespawnService.respawn — duplicate session guard (Issue #274)'
 
     await service.respawn(2, makeServer());
     expect(sentCommands.length).toBeGreaterThanOrEqual(1);
+    // The window is launched with its OWN conversation, not the task's. (The strategy mock returns a fixed
+    // command line, so what the launch was asked to resume is checked on the call itself.)
+    const resumed = sessionStrategyFactory.create.mock.results.flatMap((r) => (r.value.buildRespawnLaunch as ReturnType<typeof vi.fn>).mock.calls.map((c) => c[0]));
+    expect(resumed).toEqual([ownSession]);
   });
 
   it('rejects waking a secondary window whose own session runs in another window, naming window and conversation (Issue #540)', async () => {
@@ -2319,7 +2323,7 @@ describe('WindowRespawnService.respawn — duplicate session guard (Issue #274)'
 
     await expect(service.respawn(2, makeServer())).rejects.toMatchObject({
       windowId: 999,
-      sessionId: 'bbbbbbbb',
+      sessionId: ownSession,
       message: 'この窓の会話（bbbbbbbb）は W-999 で動作中です',
     });
   });
