@@ -2,7 +2,9 @@ import { spawn, spawnSync } from 'child_process';
 import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
-import { buildHubTaskXml, buildSingleRunLauncherScript, hubWindowsLayout, resolveWindowsUserId } from '../src/modules/system/windowsHubService';
+import { buildHubTaskXml, buildSingleRunLauncherScript, hubWindowsLayout, readWindowsUserId } from '../src/modules/system/windowsHubService';
+import { runCommandSpec, runHostOf } from '../src/shared/exec/runCommandSpec';
+import { resolveCurrentHostEnv } from '../src/shared/os/hostEnv';
 import { powershellEncodedArgs } from '../src/shared/os/shellDialect';
 import { encodeTaskXml } from '../src/shared/os/taskScheduler/taskDefinition';
 
@@ -274,7 +276,7 @@ async function main(): Promise<void> {
 
     step('the task as the first 0.12 builds registered it is replaced by azito service install');
     const layout = hubWindowsLayout(fs.realpathSync.native(prefix));
-    const current = buildHubTaskXml({ userId: resolveWindowsUserId(process.env), systemRoot: SYSTEM_ROOT, layout });
+    const current = buildHubTaskXml({ userId: await readWindowsUserId((spec) => runCommandSpec(spec, runHostOf(resolveCurrentHostEnv())), SYSTEM_ROOT), systemRoot: SYSTEM_ROOT, layout });
     const old = current.replace(/-EncodedCommand [A-Za-z0-9+/=]+/, `-EncodedCommand ${powershellEncodedArgs(buildSingleRunLauncherScript(layout)).at(-1)}`);
     assert(old !== current, 'the old definition must differ from the current one');
     const oldFile = path.join(work, 'old-task.xml');
