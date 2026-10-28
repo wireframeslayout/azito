@@ -2,7 +2,7 @@ import * as fs from 'fs';
 import type { ServiceManager } from './serviceManager';
 import type { ServiceHost } from './createServiceManager';
 import {
-  HUB_GRACE_MS, buildHubTaskXml, endHubProcesses, findHubProcesses, hubWindowsLayout, inspectRegisteredHub, resolveWindowsUserId, samePrefix,
+  HUB_GRACE_MS, buildHubTaskXml, endHubProcesses, findHubProcesses, hubWindowsLayout, inspectRegisteredHub, readWindowsUserId, samePrefix, sameTaskDefinition,
   type HubWindowsLayout, type SpecRunner,
 } from './windowsHubService';
 import { resolveInstallPrefix } from './misao/misaoPaths';
@@ -18,7 +18,6 @@ import type { SecretFileGuard } from '../../shared/os/secretFileGuard';
 
 /** What the operations need from the process that runs them, resolved at the entry point (`main.ts`). */
 export interface ServiceCommandContext {
-  env: NodeJS.ProcessEnv;
   /** The release bundle this process runs from, or null for a source checkout. */
   bundleRoot: string | null;
   /** This process's id (the Windows stop must not end the process that runs it). */
@@ -94,14 +93,17 @@ export async function requireOwnTask(manager: ServiceManager, hub: WindowsHub): 
  *   - this install's, with the definition we would register (a launcher that runs the hub once is not it): nothing to do (a missing or different copy is written again);
  *   - running: never replaced;
  *   - another install's, or one this version does not recognise: replaced only with `--yes`.
+ * - The definitions are compared with the account (`UserId`) spelled without regard to case (`sameTaskDefinition`); the rest must match exactly.
  * - No task (a copy left behind after a delete by hand, or nothing): registered.
  */
-export async function installWindowsTask(manager: ServiceManager, hub: WindowsHub, context: ServiceCommandContext, yes: boolean): Promise<void> {
-  const xml = buildHubTaskXml({ userId: resolveWindowsUserId(context.env), systemRoot: hub.systemRoot, layout: hub.layout });
+export async function installWindowsTask(manager: ServiceManager, hub: WindowsHub, yes: boolean): Promise<void> {
+  const userId = await readWindowsUserId((spec) => runCommandSpec(spec, hub.runHost), hub.systemRoot);
+  const xml = buildHubTaskXml({ userId, systemRoot: hub.systemRoot, layout: hub.layout });
   if (await taskExists(hub)) {
     const owner = await registeredOwner(hub);
     const own = owner !== undefined && isThisPrefix(owner.prefix, hub);
-    if (own && !owner.singleRun && manager.readDefinition() === xml) {
+    const copy = manager.readDefinition();
+    if (own && !owner.singleRun && copy !== undefined && sameTaskDefinition(copy, xml)) {
       console.log('service install: the task is already registered with this definition');
       return;
     }

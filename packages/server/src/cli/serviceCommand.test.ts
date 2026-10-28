@@ -27,7 +27,7 @@ describe('azito service', () => {
   let err: string[];
   const uid = os.userInfo().uid;
   const hostOf = (platform: 'darwin' | 'linux'): ServiceHost => ({ platform, homeDir: home, uid, tmpDir: os.tmpdir(), systemRoot: undefined });
-  const context: ServiceCommandContext = { env: {}, bundleRoot: '/opt/azito/hub/v0.0.0', pid: 1, secretFileGuard: new UnixSecretFileGuard() };
+  const context: ServiceCommandContext = { bundleRoot: '/opt/azito/hub/v0.0.0', pid: 1, secretFileGuard: new UnixSecretFileGuard() };
 
   beforeEach(() => {
     home = fs.mkdtempSync(path.join(os.tmpdir(), 'azsc-'));

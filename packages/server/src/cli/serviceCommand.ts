@@ -85,7 +85,7 @@ export async function serviceCommand(argv: string[], host: ServiceHost, context:
     if (windowsHub) {
       // One at a time with the in-app update, which stops and starts the same task.
       const lock = createHubLock(windowsHub.layout.hubRoot, context.secretFileGuard, windowsHub.systemRoot);
-      await underHubLock(lock, () => (command === 'install' ? installWindowsTask(manager, windowsHub, context, yes) : runOnWindows(command, manager, windowsHub, context)));
+      await underHubLock(lock, () => (command === 'install' ? installWindowsTask(manager, windowsHub, yes) : runOnWindows(command, manager, windowsHub, context)));
     } else {
       if (!manager.isInstalled()) throw new Error(notInstalledMessage(manager));
       if (command === 'start') await manager.start();

@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
 import type { CommandResult, CommandSpec } from '../../../shared/exec/commandSpec';
 import { powershellEncodedArgs } from '../../../shared/os/shellDialect';
-import { HUB_RESTART_TIMING, buildHubLauncherScript, buildHubTaskXml, buildSingleRunLauncherScript, endHubProcesses, findHubProcesses, hubWindowsLayout, inspectRegisteredHub, resolveWindowsUserId, samePrefix } from '../windowsHubService';
+import { HUB_RESTART_TIMING, buildHubLauncherScript, buildHubTaskXml, buildSingleRunLauncherScript, endHubProcesses, findHubProcesses, hubWindowsLayout, inspectRegisteredHub, readWindowsUserId, samePrefix, sameTaskDefinition, type SpecRunner } from '../windowsHubService';
 
 const PREFIX = 'C:\\Users\\Foo Bar (Work)\\.azito';
 
@@ -122,14 +122,40 @@ describe('a task registered by the launcher that ran the hub once', () => {
   });
 });
 
-describe('resolveWindowsUserId', () => {
-  it('is DOMAIN\\user', () => {
-    expect(resolveWindowsUserId({ USERDOMAIN: 'PC', USERNAME: 'me' })).toBe('PC\\me');
+describe('readWindowsUserId', () => {
+  const b64 = (text: string): string => Buffer.from(text, 'utf8').toString('base64');
+  const answer = (stdout: string, exitCode = 0, stderr = ''): SpecRunner => async () => ({ exitCode, stdout, stderr } as never);
+
+  it('reads the UTF-8 base64 name, also a non-ASCII one', async () => {
+    expect(await readWindowsUserId(answer(`${b64('PC\\me')}\r\n`), 'C:\\Windows')).toBe('PC\\me');
+    expect(await readWindowsUserId(answer(b64('PC\\山田')), 'C:\\Windows')).toBe('PC\\山田');
   });
 
-  it('is an error when the user cannot be told, not a guess', () => {
-    expect(() => resolveWindowsUserId({ USERNAME: 'me' })).toThrow(/USERDOMAIN/);
-    expect(() => resolveWindowsUserId({ USERDOMAIN: 'PC' })).toThrow(/USERNAME/);
+  it('asks WindowsIdentity.GetCurrent().Name through an encoded PowerShell, without a shell', async () => {
+    const seen: CommandSpec[] = [];
+    await readWindowsUserId(async (spec) => { seen.push(spec); return { exitCode: 0, stdout: b64('PC\\me'), stderr: '' } as never; }, 'C:\\Windows');
+    expect(seen[0]!.file).toMatch(/powershell\.exe$/i);
+    expect(scriptOf(seen[0]!)).toContain('WindowsIdentity]::GetCurrent().Name');
+  });
+
+  it('fails with a reason for an empty or unreadable answer and for a non-zero exit, never from the environment', async () => {
+    vi.stubEnv('USERDOMAIN', 'WORKGROUP');
+    vi.stubEnv('USERNAME', 'x');
+    try {
+      await expect(readWindowsUserId(answer(''), 'C:\\Windows')).rejects.toThrow(/did not tell which account/);
+      await expect(readWindowsUserId(answer('not base64!'), 'C:\\Windows')).rejects.toThrow(/did not tell which account/);
+      await expect(readWindowsUserId(answer('', 1, 'denied'), 'C:\\Windows')).rejects.toThrow(/Reading the account the task runs as failed \(exit 1\): denied/);
+    } finally {
+      vi.unstubAllEnvs();
+    }
+  });
+});
+
+describe('sameTaskDefinition', () => {
+  const xml = (user: string): string => buildHubTaskXml({ userId: user, systemRoot: 'C:\\Windows', layout: hubWindowsLayout(PREFIX) });
+  it('ignores the case of the account only', () => {
+    expect(sameTaskDefinition(xml('PC\\me'), xml('pc\\ME'))).toBe(true);
+    expect(sameTaskDefinition(xml('PC\\me'), xml('PC\\you'))).toBe(false);
   });
 });
 

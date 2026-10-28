@@ -59,7 +59,7 @@ async function main(): Promise<void> {
   }
 
   if (process.argv[2] === 'service') {
-    await serviceCommand(process.argv.slice(3), hostEnv, { env: process.env, bundleRoot: getBundleRoot(), pid: process.pid, secretFileGuard });
+    await serviceCommand(process.argv.slice(3), hostEnv, { bundleRoot: getBundleRoot(), pid: process.pid, secretFileGuard });
     return;
   }
 

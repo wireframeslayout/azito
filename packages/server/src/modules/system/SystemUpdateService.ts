@@ -15,7 +15,7 @@ import { assertSupportedHubHost, hubAssetNames, resolveHubInstallPaths, type Hub
 import { isReleaseTag } from './hubVersion';
 import { healthUrlOf } from './updateHealth';
 import { launchHubUpdateTask, type HubUpdateLauncher } from './windowsHubUpdateTask';
-import { resolveWindowsUserId } from './windowsHubService';
+import { readWindowsUserId } from './windowsHubService';
 
 const execFileAsync = promisify(execFile);
 
@@ -134,7 +134,6 @@ export function resolveGithubApiBase(env: NodeJS.ProcessEnv): string {
 export interface WindowsUpdateHost {
   launcher: HubUpdateLauncher;
   systemRoot: string;
-  env: NodeJS.ProcessEnv;
 }
 
 /** What the environment decides, resolved at the entry point. Omitted (tests): GitHub's API and no Windows launcher. */
@@ -558,9 +557,10 @@ export class SystemUpdateService {
       '--health-url', healthUrlOf(process.env.AZITO_BIND || '127.0.0.1', process.env.PORT || '3001'),
       ...(token !== undefined ? ['--token-file', tokenFile] : []),
     ];
+    const userId = await readWindowsUserId(windows.launcher.run, windows.systemRoot);
     await launchHubUpdateTask(windows.launcher, {
       task: {
-        userId: resolveWindowsUserId(windows.env),
+        userId,
         systemRoot: windows.systemRoot,
         hubDir,
         nodePath: process.execPath,
