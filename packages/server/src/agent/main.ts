@@ -33,6 +33,7 @@ import fileOpsRoutes from './fileOpsRoutes';
 import { LocalFileOps, localFileOpsHost } from '../shared/fs/LocalFileOps';
 import transcriptRoutes from './transcriptRoutes';
 import { agentAuthHook } from './authHook';
+import { listenWithRetry } from './listenRetry';
 import { processExists, readWindowsProcessCreation, startParentWatch } from './parentWatch';
 import { TRANSCRIPT_READERS } from '../modules/transcripts/sources/registry';
 import { resolveAgentMisaoSocket, type AgentMisaoHost, type AgentMisaoSocket, type AgentMisaoWindowsHost } from '../modules/servers/transport/agentMisaoSocket';
@@ -325,7 +326,29 @@ async function main(): Promise<void> {
     }
   });
 
-  await app.listen({ port: PORT, host: bind });
+  // The Tailscale IP may not exist yet right after a logon or boot: wait for it (EADDRNOTAVAIL only) instead of ending. A
+  // termination signal while waiting ends the agent at once; the regular handlers below take over once it listens.
+  const startupAbort = new AbortController();
+  const abortStartup = (): void => startupAbort.abort();
+  const startupSignals = ['SIGTERM', 'SIGINT', 'SIGHUP'] as const;
+  for (const sig of startupSignals) process.once(sig, abortStartup);
+  let listenResult: Awaited<ReturnType<typeof listenWithRetry>>;
+  try {
+    listenResult = await listenWithRetry({
+      listen: () => app.listen({ port: PORT, host: bind }),
+      bind: BIND_ADDRESS,
+      port: PORT,
+      log: app.log,
+      signal: startupAbort.signal,
+    });
+  } finally {
+    for (const sig of startupSignals) process.removeListener(sig, abortStartup);
+  }
+  if (listenResult === 'aborted') {
+    app.log.info('Stopped while waiting for the listen address, exiting');
+    await app.close();
+    process.exit(0);
+  }
 
   // Graceful shutdown: app.close() runs the onClose hook above (browserSessionManager.stopAll +
   // tmux hook cleanup + interval clear), then exits. A hard cap forces exit if close() hangs
