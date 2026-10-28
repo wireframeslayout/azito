@@ -9,6 +9,10 @@ const END_MARKER = '<<AZITO_PREFLIGHT_END>>';
 /**
  * One PowerShell script (run through the dialect's EncodedCommand, so it is the same under a cmd.exe and a PowerShell login
  * shell) that prints the facts the preflight needs as one JSON line between markers. A missing thing is `null`, not an error.
+ * WMI / CIM is refused to a non-administrator's SSH session (a network logon). The script tells that from "could not read" by the exception, never by its
+ * localized text: UnauthorizedAccessException, HRESULT 0x80070005, or a NativeErrorCode of AccessDenied on a CimException (on a Win32Exception 2 is
+ * file-not-found; the type is compared by name so none has to load), anywhere in the InnerException chain. The 8191-character command line is nearly
+ * used up, so notes belong here, not in the script.
  * tailscale.exe is looked for on PATH and then in its installer's location, because an SSH session may not have it on PATH.
  */
 const WINDOWS_PREFLIGHT_SCRIPT = `
@@ -31,14 +35,12 @@ if ($tailscalePath) {
 # RuntimeInformation.OSArchitecture and $env:PROCESSOR_ARCHITECTURE, but this machine-wide value is the OS's own. Unreadable = null (refused with a reason).
 $arch = $null
 try { $arch = (Get-ItemProperty -LiteralPath 'HKLM:\\SYSTEM\\CurrentControlSet\\Control\\Session Manager\\Environment' -Name PROCESSOR_ARCHITECTURE -ErrorAction Stop).PROCESSOR_ARCHITECTURE } catch { $arch = $null }
-# WMI / CIM is refused to a non-administrator's SSH session (a network logon): that is told apart from "could not read" by the exception itself
-# (CimException NativeErrorCode AccessDenied, UnauthorizedAccessException, or HRESULT 0x80070005 anywhere in the chain), never by the localized message text.
 function Test-AccessDenied($ex) {
   while ($ex) {
     if ($ex -is [System.UnauthorizedAccessException]) { return $true }
     if ($ex.HResult -eq -2147024891) { return $true }
     $native = $ex.PSObject.Properties['NativeErrorCode']
-    if ($native -and ([string]$native.Value -eq 'AccessDenied' -or [string]$native.Value -eq '2')) { return $true }
+    if ($ex.GetType().FullName -eq 'Microsoft.Management.Infrastructure.CimException' -and $native -and ([string]$native.Value -eq 'AccessDenied' -or [string]$native.Value -eq '2')) { return $true }
     $ex = $ex.InnerException
   }
   return $false
