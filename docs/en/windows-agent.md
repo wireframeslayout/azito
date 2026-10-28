@@ -23,6 +23,18 @@ What to have on the Windows host. No administrator rights are needed or asked fo
 
 Claude Code and Codex are needed to run tasks. Files, git and the terminal work without them.
 
+### Tailscale and Windows users
+
+The hub reaches the agent over Tailscale. On Windows, Tailscale by default stays connected **only while the Windows user who signed in to it is logged on**. In the v0.12.0-rc.4 checks:
+
+- Logging off dropped the Tailscale connection. The hub could no longer reach the host, and since SSH could not reach it either, the watchdog could not bring the agent back. Logging on again restored it.
+- With another user also logged on to the same Windows, the Tailscale connection belonged to the user who signed in first; the other user's session could not connect ("already in use by another user").
+
+Use one of these:
+
+- **Only the user who runs the agent is logged on** (and signs in to Tailscale).
+- **Turn on Tailscale's "Run unattended"** (in the Tailscale menu, as the user who owns the connection). Per Tailscale, it then stays connected after logoff and for other users' sessions (not yet tried in the AZITO checks). The agent itself runs as a Task Scheduler task, so it still runs only while its user is logged on ([Running and operating it](#running-and-operating-it)).
+
 ### Without administrator rights
 
 Installing, updating and removing work when the SSH user is **not an administrator** (the Task Scheduler task is registered with that user's own rights). Three things differ:
@@ -189,7 +201,7 @@ A run **with a prefix** (`--prefix <p>`, for a second hub) writes only the hooks
 | The git screens or tasks fail with `git_not_found` (501) | Git for Windows is not installed on the host. Install it with `winget install --id Git.Git -e` (no restart needed; a miss is forgotten after 30 seconds). The standard locations are in the [Prepare](#prepare) table; the places searched are in the error too |
 | The install stops and prints a firewall command | The SSH session is not an administrator and no Allow rule exists. Run the printed command once in an Administrator PowerShell, then install again (step 1 of [Add](#add)) |
 | The install stops and names a Block rule | An inbound Block rule would stop the hub. Check it and disable or remove it. A Block wins over any Allow, so AZITO does not add an Allow beside it |
-| The agent cannot be reached (offline, `401`) | Check in order: (1) is the user logged on (logging off stops it); (2) is the task `AzitoAgent` running (`schtasks /Query /TN AzitoAgent`) and not disabled; (3) does the firewall allow TCP 3002 and have no Block; (4) is Tailscale connected on both ends; (5) token: a 401 means the token the hub holds differs from the host's `agent.env`. "Reinstall" in the Setup row aligns them (a reinstall can be put back until the new agent answers) |
+| The agent cannot be reached (offline, `401`) | Check in order: (1) is the user logged on (logging off stops it); (2) is the task `AzitoAgent` running (`schtasks /Query /TN AzitoAgent`) and not disabled; (3) does the firewall allow TCP 3002 and have no Block; (4) is Tailscale connected on both ends (on Windows it drops on logoff, and with another user also logged on, that user's session may be refused as "in use": [Tailscale and Windows users](#tailscale-and-windows-users)); (5) token: a 401 means the token the hub holds differs from the host's `agent.env`. "Reinstall" in the Setup row aligns them (a reinstall can be put back until the new agent answers) |
 | An update fails | The error on screen says why, and the previous agent is running or has been put back. If it stopped halfway, `*.prev` (the previous version and settings set aside) may remain in `%USERPROFILE%\.azito\agent\`. **The next install or update will not go on while a `*.prev` remains.** The error names what is left: if the installed agent works, delete them; otherwise move each back to its name without `.prev`; then run it again (AZITO never deletes them itself, because they may be the only copy of the settings whose token the hub holds). A busy old version folder gets a warning and is removed at the next update |
 | A removal stops with `failed` | Read each step's result. (1) The task is not the install's: it is left alone; delete it with `schtasks /Delete /TN AzitoAgent /F` if it is not needed. (2) A process runs from the folder: stop the process at the pid and path shown, then "Try again". (3) An unreadable process of yours: check it in Task Manager and stop what is not needed. (4) misao was not done: read the reason (a Windows hub's, one no task started, and so on). If it is the hub's, do not remove it. (5) If nothing helps, use "Delete the entry only" and remove what is left by hand |
 | A task fails with `bypass_permissions_dialog` | Claude Code's "Bypass Permissions mode" confirmation appeared. Before it starts a Claude worker AZITO writes the acceptance into the host's `~\.claude\settings.json` ([Tasks](./tasks.md#claude-codes-confirmation-dialog-bypass-permissions-mode)). If it still appears, start `claude --dangerously-skip-permissions` once by hand on the host and accept it. A file with broken JSON is not rewritten; see the reason in the execution log |
