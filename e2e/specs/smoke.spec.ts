@@ -15,7 +15,14 @@ test('ログイン → プロジェクト作成 → ウィンドウ登録 → �
   await page.goto(harness.baseUrl);
   const tokenInput = page.getByPlaceholder('AZITO_UI_TOKEN');
   await expect(tokenInput).toBeVisible();
-  await tokenInput.fill(harness.uiToken);
+  // 使えない文字（全角）を含む入力はエラーになり、保存されない
+  await tokenInput.fill('ｔｏｋｅｎ');
+  await page.getByRole('button', { name: '接続' }).click();
+  await expect(page.getByRole('alert')).toContainText('使えない文字');
+  await expect(tokenInput).toBeVisible();
+  expect(await page.evaluate(() => localStorage.getItem('azito_ui_token') ?? sessionStorage.getItem('azito_ui_token'))).toBeNull();
+  // 前後の空白は除いて保存される
+  await tokenInput.fill(`  ${harness.uiToken}  `);
   await page.getByRole('button', { name: '接続' }).click();
   await expect(tokenInput).toHaveCount(0);
 

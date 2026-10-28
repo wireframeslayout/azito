@@ -128,4 +128,50 @@ describe('ui token storage', () => {
     expect(session.getItem(KEY)).toBeNull();
     expect(hasUiToken()).toBe(false);
   });
+
+  it('非 ASCII を含む保存値は null 扱いで、両方のストレージから消える', async () => {
+    const { getUiToken } = await import('./token');
+    const bad = JSON.stringify({ token: 'tok\uFF11', expiresAt: Date.now() + TTL_MS });
+    local.setItem(KEY, bad);
+    session.setItem(KEY, bad);
+    expect(getUiToken()).toBe('');
+    expect(local.getItem(KEY)).toBeNull();
+    expect(session.getItem(KEY)).toBeNull();
+  });
+
+  it.each([
+    ['改行を含む', 'tok\nx'],
+    ['全角数字', 'tok\uFF11'],
+    ['全角文字', '\u3042\u3044'],
+  ])('sessionStorage だけにある壊れた新形式（%s）は移行されず、両方から消える', async (_label, token) => {
+    const { getUiToken } = await import('./token');
+    session.setItem(KEY, JSON.stringify({ token, expiresAt: Date.now() + TTL_MS }));
+    expect(getUiToken()).toBe('');
+    expect(local.getItem(KEY)).toBeNull();
+    expect(session.getItem(KEY)).toBeNull();
+  });
+
+  describe('validateTokenInput', () => {
+    it('前後の空白を除いて受け入れる', async () => {
+      const { validateTokenInput } = await import('./token');
+      expect(validateTokenInput('  abc123  ')).toEqual({ ok: true, token: 'abc123' });
+    });
+
+    it('hex と - _ を含む値を受け入れる', async () => {
+      const { validateTokenInput } = await import('./token');
+      expect(validateTokenInput('0123abcdef').ok).toBe(true);
+      expect(validateTokenInput('my-token_1').ok).toBe(true);
+    });
+
+    it('空・空白のみは empty', async () => {
+      const { validateTokenInput } = await import('./token');
+      expect(validateTokenInput('   ')).toEqual({ ok: false, reason: 'empty' });
+    });
+
+    it('全角文字・途中の空白は invalidChars', async () => {
+      const { validateTokenInput } = await import('./token');
+      expect(validateTokenInput('abc\uFF11')).toEqual({ ok: false, reason: 'invalidChars' });
+      expect(validateTokenInput('ab cd')).toEqual({ ok: false, reason: 'invalidChars' });
+    });
+  });
 });

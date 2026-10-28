@@ -9,12 +9,37 @@ interface StoredToken {
 
 let migrated = false;
 
+// Authorization ヘッダーに入れられるのは表示可能な ASCII（空白を除く）だけ。
+// サーバー発行の hex トークンも、利用者が設定した `-` `_` 入りの値も通る。
+const HEADER_SAFE_TOKEN = /^[\x21-\x7E]+$/;
+
+export type TokenInputResult =
+  | { ok: true; token: string }
+  | { ok: false; reason: 'empty' | 'invalidChars' };
+
+export function validateTokenInput(raw: string): TokenInputResult {
+  const token = raw.trim();
+  if (token === '') return { ok: false, reason: 'empty' };
+  if (!HEADER_SAFE_TOKEN.test(token)) return { ok: false, reason: 'invalidChars' };
+  return { ok: true, token };
+}
+
+// 保存形式の見分け: 新形式は JSON のオブジェクト、旧形式は生のトークン文字列。値の検証（parseStored）とは別。
+function isEnvelope(raw: string): boolean {
+  try {
+    const parsed: unknown = JSON.parse(raw);
+    return typeof parsed === 'object' && parsed !== null;
+  } catch {
+    return false;
+  }
+}
+
 function parseStored(raw: string, now: number): StoredToken | null {
   try {
     const parsed: unknown = JSON.parse(raw);
     if (typeof parsed === 'object' && parsed !== null) {
       const { token, expiresAt } = parsed as Record<string, unknown>;
-      if (typeof token === 'string' && token !== '' && typeof expiresAt === 'number' && expiresAt > now) {
+      if (typeof token === 'string' && HEADER_SAFE_TOKEN.test(token) && typeof expiresAt === 'number' && expiresAt > now) {
         return { token, expiresAt };
       }
     }
@@ -49,8 +74,9 @@ function migrateFromSessionStorage(now: number): void {
   migrated = true;
   const legacy = sessionStorage.getItem(STORAGE_KEY);
   if (legacy === null || localStorage.getItem(STORAGE_KEY) !== null) return;
-  // Only migrate old-format bare tokens; new-format JSON is not a migration candidate
-  if (parseStored(legacy, now) !== null) return;
+  // Only migrate old-format bare tokens; new-format JSON is never a migration candidate,
+  // even when its value is invalid (readStored discards it).
+  if (isEnvelope(legacy)) return;
   try {
     localStorage.setItem(STORAGE_KEY, JSON.stringify({ token: legacy, expiresAt: now + TTL_MS }));
     sessionStorage.removeItem(STORAGE_KEY);
