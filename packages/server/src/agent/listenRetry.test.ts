@@ -7,27 +7,32 @@ function listenError(code: string): NodeJS.ErrnoException {
 }
 
 function setup() {
-  return { log: { warn: vi.fn<(message: string) => void>() }, sleep: vi.fn<(ms: number, signal: AbortSignal) => Promise<void>>(async () => undefined), controller: new AbortController() };
+  let clock = 0;
+  const now = (): number => clock;
+  const sleep = vi.fn<(ms: number, signal: AbortSignal) => Promise<void>>(async (ms) => {
+    clock += ms;
+  });
+  return { log: { warn: vi.fn<(message: string) => void>() }, sleep, now, advance: (ms: number) => { clock += ms; }, controller: new AbortController() };
 }
 
 describe('listenWithRetry', () => {
   it('listens once when the address is there', async () => {
-    const { log, sleep, controller } = setup();
+    const { log, sleep, now, controller } = setup();
     const listen = vi.fn(async () => undefined);
-    await expect(listenWithRetry({ listen, bind: '100.64.0.1', port: 3002, log, signal: controller.signal, sleep })).resolves.toBe('listening');
+    await expect(listenWithRetry({ listen, bind: '100.64.0.1', port: 3002, log, signal: controller.signal, sleep, now })).resolves.toBe('listening');
     expect(listen).toHaveBeenCalledTimes(1);
     expect(sleep).not.toHaveBeenCalled();
     expect(log.warn).not.toHaveBeenCalled();
   });
 
   it('starts after EADDRNOTAVAIL a few times, logging the reason once', async () => {
-    const { log, sleep, controller } = setup();
+    const { log, sleep, now, controller } = setup();
     const listen = vi.fn()
       .mockRejectedValueOnce(listenError('EADDRNOTAVAIL'))
       .mockRejectedValueOnce(listenError('EADDRNOTAVAIL'))
       .mockRejectedValueOnce(listenError('EADDRNOTAVAIL'))
       .mockResolvedValueOnce(undefined);
-    await expect(listenWithRetry({ listen, bind: '100.64.0.1', port: 3002, log, signal: controller.signal, sleep, intervalMs: 5000 })).resolves.toBe('listening');
+    await expect(listenWithRetry({ listen, bind: '100.64.0.1', port: 3002, log, signal: controller.signal, sleep, now, intervalMs: 5000 })).resolves.toBe('listening');
     expect(listen).toHaveBeenCalledTimes(4);
     expect(sleep).toHaveBeenCalledTimes(3);
     expect(log.warn).toHaveBeenCalledTimes(1);
@@ -39,29 +44,29 @@ describe('listenWithRetry', () => {
   });
 
   it('logs again once per minute, not on every attempt', async () => {
-    const { log, sleep, controller } = setup();
+    const { log, sleep, now, controller } = setup();
     let calls = 0;
     const listen = vi.fn(async () => {
       if (++calls <= 25) throw listenError('EADDRNOTAVAIL');
     });
-    await listenWithRetry({ listen, bind: '100.64.0.1', port: 3002, log, signal: controller.signal, sleep, intervalMs: 5000, maxWaitMs: 600_000, logEveryMs: 60_000 });
+    await listenWithRetry({ listen, bind: '100.64.0.1', port: 3002, log, signal: controller.signal, sleep, now, intervalMs: 5000, maxWaitMs: 600_000, logEveryMs: 60_000 });
     // waited 0s, 60s, 120s -> 3 logs over 24 waits of 5s
     expect(log.warn).toHaveBeenCalledTimes(3);
   });
 
   it('ends with the reason once the limit is reached', async () => {
-    const { log, sleep, controller } = setup();
+    const { log, sleep, now, controller } = setup();
     const listen = vi.fn(async () => { throw listenError('EADDRNOTAVAIL'); });
     await expect(
-      listenWithRetry({ listen, bind: '100.64.0.1', port: 3002, log, signal: controller.signal, sleep, intervalMs: 5000, maxWaitMs: 20_000 }),
+      listenWithRetry({ listen, bind: '100.64.0.1', port: 3002, log, signal: controller.signal, sleep, now, intervalMs: 5000, maxWaitMs: 20_000 }),
     ).rejects.toThrow(/100\.64\.0\.1:3002 was still not available after waiting 20s \(5 attempts\); is Tailscale connected/);
     expect(listen).toHaveBeenCalledTimes(5);
   });
 
   it.each(['EADDRINUSE', 'EACCES'])('ends at once on %s', async (code) => {
-    const { log, sleep, controller } = setup();
+    const { log, sleep, now, controller } = setup();
     const listen = vi.fn(async () => { throw listenError(code); });
-    await expect(listenWithRetry({ listen, bind: '100.64.0.1', port: 3002, log, signal: controller.signal, sleep })).rejects.toMatchObject({ code });
+    await expect(listenWithRetry({ listen, bind: '100.64.0.1', port: 3002, log, signal: controller.signal, sleep, now })).rejects.toMatchObject({ code });
     expect(listen).toHaveBeenCalledTimes(1);
     expect(sleep).not.toHaveBeenCalled();
   });
@@ -78,11 +83,31 @@ describe('listenWithRetry', () => {
     expect(listen).toHaveBeenCalledTimes(1);
   });
 
+  it('reports aborted when the stop came during the last, successful listen', async () => {
+    const { log, sleep, now, controller } = setup();
+    const listen = vi.fn(async () => { controller.abort(); });
+    await expect(listenWithRetry({ listen, bind: '100.64.0.1', port: 3002, log, signal: controller.signal, sleep, now })).resolves.toBe('aborted');
+  });
+
+  it('judges the limit by elapsed time, including the time a listen takes, and never sleeps past it', async () => {
+    const { log, sleep, now, advance, controller } = setup();
+    const listen = vi.fn(async () => {
+      advance(4000); // a listen that takes 4 s
+      throw listenError('EADDRNOTAVAIL');
+    });
+    await expect(
+      listenWithRetry({ listen, bind: '100.64.0.1', port: 3002, log, signal: controller.signal, sleep, now, intervalMs: 5000, maxWaitMs: 20_000 }),
+    ).rejects.toThrow(/after waiting 22s/);
+    // 4 s listen + 5 s sleep per round: fails at 4, 13 (sleep 5), 22 >= 20
+    expect(listen).toHaveBeenCalledTimes(3);
+    expect(sleep.mock.calls.map((c) => c[0])).toEqual([5000, 5000]);
+  });
+
   it('does not listen at all when already aborted', async () => {
-    const { log, sleep, controller } = setup();
+    const { log, sleep, now, controller } = setup();
     controller.abort();
     const listen = vi.fn(async () => undefined);
-    await expect(listenWithRetry({ listen, bind: '100.64.0.1', port: 3002, log, signal: controller.signal, sleep })).resolves.toBe('aborted');
+    await expect(listenWithRetry({ listen, bind: '100.64.0.1', port: 3002, log, signal: controller.signal, sleep, now })).resolves.toBe('aborted');
     expect(listen).not.toHaveBeenCalled();
   });
 

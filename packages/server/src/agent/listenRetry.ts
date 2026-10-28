@@ -24,11 +24,16 @@ export interface ListenRetryOptions {
   intervalMs?: number;
   maxWaitMs?: number;
   logEveryMs?: number;
+  /** A monotonic clock in milliseconds. Replaced in a test. */
+  now?: () => number;
   /** Waits `ms`, resolving early when `signal` aborts. Replaced in a test so that no real time passes. */
   sleep?: (ms: number, signal: AbortSignal) => Promise<void>;
 }
 
-/** `listening`: the server listens. `aborted`: the signal aborted while waiting, nothing listens. Any other failure throws. */
+/**
+ * `listening`: the server listens and no stop was asked. `aborted`: a stop was asked (while waiting, or while the last listen was
+ * under way: then the server does listen and the caller closes it). Any other failure throws.
+ */
 export type ListenRetryResult = 'listening' | 'aborted';
 
 export function abortableSleep(ms: number, signal: AbortSignal): Promise<void> {
@@ -61,29 +66,31 @@ export async function listenWithRetry(options: ListenRetryOptions): Promise<List
   const maxWaitMs = options.maxWaitMs ?? LISTEN_RETRY_MAX_WAIT_MS;
   const logEveryMs = options.logEveryMs ?? LISTEN_RETRY_LOG_EVERY_MS;
   const sleep = options.sleep ?? abortableSleep;
+  const now = options.now ?? (() => performance.now());
 
-  let waitedMs = 0;
+  const startedAt = now();
   let lastLoggedAt = -Infinity;
   for (let attempt = 1; ; attempt++) {
     if (signal.aborted) return 'aborted';
     try {
       await listen();
-      return 'listening';
+      // A stop asked while this listen was under way must not be lost: the caller closes the server.
+      return signal.aborted ? 'aborted' : 'listening';
     } catch (err) {
       if (!isAddressNotAvailable(err)) throw err;
-      if (waitedMs >= maxWaitMs) {
+      const elapsedMs = now() - startedAt;
+      if (elapsedMs >= maxWaitMs) {
         throw new Error(
-          `${bind}:${port} was still not available after waiting ${formatDuration(waitedMs)} (${attempt} attempts); is Tailscale connected on this host? ${(err as Error).message}`,
+          `${bind}:${port} was still not available after waiting ${formatDuration(elapsedMs)} (${attempt} attempts); is Tailscale connected on this host? ${(err as Error).message}`,
         );
       }
-      if (waitedMs - lastLoggedAt >= logEveryMs) {
-        lastLoggedAt = waitedMs;
+      if (elapsedMs - lastLoggedAt >= logEveryMs) {
+        lastLoggedAt = elapsedMs;
         log.warn(
-          `Address ${bind} is not available yet (attempt ${attempt}); waiting for Tailscale to connect, retrying every ${formatDuration(intervalMs)}, ${formatDuration(maxWaitMs - waitedMs)} left`,
+          `Address ${bind} is not available yet (attempt ${attempt}); waiting for Tailscale to connect, retrying every ${formatDuration(intervalMs)}, ${formatDuration(maxWaitMs - elapsedMs)} left`,
         );
       }
+      await sleep(Math.min(intervalMs, maxWaitMs - elapsedMs), signal);
     }
-    await sleep(intervalMs, signal);
-    waitedMs += intervalMs;
   }
 }
