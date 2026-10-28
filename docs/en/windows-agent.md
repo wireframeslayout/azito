@@ -33,7 +33,7 @@ The hub reaches the agent over Tailscale. On Windows, Tailscale by default stays
 Use one of these:
 
 - **Only the user who runs the agent is logged on** (and signs in to Tailscale).
-- **Turn on Tailscale's "Run unattended"** (in the Tailscale menu, as the user who owns the connection). It then stays connected after logoff and for other users' sessions. The agent itself runs as a Task Scheduler task, so it still runs only while its user is logged on ([Running and operating it](#running-and-operating-it)).
+- **Turn on Tailscale's "Run unattended"** (in the Tailscale menu, as the user who owns the connection). Per Tailscale, it then stays connected after logoff and for other users' sessions (not yet tried in the AZITO checks). The agent itself runs as a Task Scheduler task, so it still runs only while its user is logged on ([Running and operating it](#running-and-operating-it)).
 
 ### Without administrator rights
 
