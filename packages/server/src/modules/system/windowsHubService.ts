@@ -285,12 +285,28 @@ export function windowsPowershell(systemRoot: string): string {
   return path.win32.join(systemRoot, 'System32', 'WindowsPowerShell', 'v1.0', 'powershell.exe');
 }
 
-/** `DOMAIN\user` of the logged-on user, from the environment Windows gives every process of that logon (read at the entry point). */
-export function resolveWindowsUserId(env: NodeJS.ProcessEnv): string {
-  const domain = env.USERDOMAIN;
-  const user = env.USERNAME;
-  if (!domain || !user) throw new Error('Cannot tell which user the task should run as: USERDOMAIN or USERNAME is not set');
-  return `${domain}\\${user}`;
+/**
+ * `DOMAIN\user` of the account this process runs as, asked of Windows (`WindowsIdentity.GetCurrent().Name`, the way the agent install does) and
+ * NOT built from `%USERDOMAIN%\%USERNAME%`: an OpenSSH session reports `USERDOMAIN=WORKGROUP` on a workgroup machine, an account that does not exist.
+ * On a desktop logon the local account's Name is `<COMPUTERNAME>\<user>`, the same as the environment's. Goes out as UTF-8 base64 so a name outside ASCII is not mangled by the console code page.
+ * An empty answer or a failing PowerShell is an error with its reason; the environment is never a fallback.
+ */
+export async function readWindowsUserId(run: SpecRunner, systemRoot: string): Promise<string> {
+  const script = '[Convert]::ToBase64String([System.Text.Encoding]::UTF8.GetBytes([System.Security.Principal.WindowsIdentity]::GetCurrent().Name))';
+  const result = await runPowershell(run, systemRoot, script, 'Reading the account the task runs as');
+  const encoded = result.stdout.trim();
+  const userId = /^[A-Za-z0-9+/]+={0,2}$/.test(encoded) ? Buffer.from(encoded, 'base64').toString('utf8').trim() : '';
+  if (userId === '') throw new Error('Windows did not tell which account this process runs as, so the task cannot be registered for it');
+  return userId;
+}
+
+/**
+ * Whether two task definitions are the same, with the account spelled without regard to case: `GetCurrent().Name` and the `%USERDOMAIN%\%USERNAME%`
+ * an earlier install wrote can differ in case only, and that is the same account (not a reason to replace a running task or to refuse).
+ */
+export function sameTaskDefinition(a: string, b: string): boolean {
+  const norm = (xml: string): string => xml.replace(/<UserId>[^<]*<\/UserId>/g, (m) => m.toLowerCase());
+  return norm(a) === norm(b);
 }
 
 /** Runs one command (`runCommandSpec` with the host's options, or a fake). */
