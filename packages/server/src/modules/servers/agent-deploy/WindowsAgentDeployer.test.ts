@@ -70,7 +70,7 @@ describe('the process sweep script', () => {
   async function sweepScript(): Promise<string> {
     const host = new FakeWindowsHost({ sha256: 'a'.repeat(64) });
     const deployer = new WindowsAgentDeployer(host.exec, { putFile: async () => undefined, putBuffer: async () => undefined }, DEFAULT_WINDOWS_AGENT_OPTIONS);
-    await deployer.stop('h', { nodePath: 'C:\\node.exe', nodeVersion: '24', arch: 'x64', windowsVersion: null, buildNumber: 22631, tailscaleIp: '100.64.0.9', home: 'C:\\Users\\dev', systemRoot: 'C:\\Windows', userId: 'PC\\dev' });
+    await deployer.stop('h', { nodePath: 'C:\\node.exe', nodeVersion: '24', arch: 'x64', windowsVersion: null, buildNumber: 22631, cim: 'ok', tailscaleIp: '100.64.0.9', home: 'C:\\Users\\dev', systemRoot: 'C:\\Windows', userId: 'PC\\dev' });
     return host.calls.map((c) => c.text).find((t) => t.includes('Get-AgentNodes'))!;
   }
 

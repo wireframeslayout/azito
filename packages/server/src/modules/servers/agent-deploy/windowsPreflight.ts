@@ -9,6 +9,10 @@ const END_MARKER = '<<AZITO_PREFLIGHT_END>>';
 /**
  * One PowerShell script (run through the dialect's EncodedCommand, so it is the same under a cmd.exe and a PowerShell login
  * shell) that prints the facts the preflight needs as one JSON line between markers. A missing thing is `null`, not an error.
+ * WMI / CIM is refused to a non-administrator's SSH session (a network logon). The script tells that from "could not read" by the exception, never by its
+ * localized text: UnauthorizedAccessException, HRESULT 0x80070005, or a NativeErrorCode of AccessDenied on a CimException (on a Win32Exception 2 is
+ * file-not-found; the type is compared by name so none has to load), anywhere in the InnerException chain. The 8191-character command line is nearly
+ * used up, so notes belong here, not in the script.
  * tailscale.exe is looked for on PATH and then in its installer's location, because an SSH session may not have it on PATH.
  */
 const WINDOWS_PREFLIGHT_SCRIPT = `
@@ -31,15 +35,27 @@ if ($tailscalePath) {
 # RuntimeInformation.OSArchitecture and $env:PROCESSOR_ARCHITECTURE, but this machine-wide value is the OS's own. Unreadable = null (refused with a reason).
 $arch = $null
 try { $arch = (Get-ItemProperty -LiteralPath 'HKLM:\\SYSTEM\\CurrentControlSet\\Control\\Session Manager\\Environment' -Name PROCESSOR_ARCHITECTURE -ErrorAction Stop).PROCESSOR_ARCHITECTURE } catch { $arch = $null }
+function Test-AccessDenied($ex) {
+  while ($ex) {
+    if ($ex -is [System.UnauthorizedAccessException]) { return $true }
+    if ($ex.HResult -eq -2147024891) { return $true }
+    $native = $ex.PSObject.Properties['NativeErrorCode']
+    if ($ex.GetType().FullName -eq 'Microsoft.Management.Infrastructure.CimException' -and $native -and ([string]$native.Value -eq 'AccessDenied' -or [string]$native.Value -eq '2')) { return $true }
+    $ex = $ex.InnerException
+  }
+  return $false
+}
 $caption = $null
 $build = $null
-try { $os = Get-CimInstance -ClassName Win32_OperatingSystem -ErrorAction Stop; $caption = $os.Caption; $build = $os.BuildNumber } catch { $caption = $null; $build = $null }
+$cim = 'ok'
+try { $os = Get-CimInstance -ClassName Win32_OperatingSystem -ErrorAction Stop; $caption = $os.Caption; $build = $os.BuildNumber } catch { $caption = $null; $build = $null; if (Test-AccessDenied $_.Exception) { $cim = 'denied' } else { $cim = 'unreadable' } }
 $info = [ordered]@{
   nodePath = $nodePath
   nodeVersion = $nodeVersion
   arch = $arch
   windowsCaption = $caption
   buildNumber = $build
+  cim = $cim
   tailscaleIp = $tailscaleIp
   home = $env:USERPROFILE
   systemRoot = $env:SystemRoot
@@ -64,6 +80,7 @@ const rawSchema = z.object({
   arch: z.string().nullable(),
   windowsCaption: z.string().nullable(),
   buildNumber: z.string().nullable(),
+  cim: z.enum(['ok', 'denied', 'unreadable']),
   tailscaleIp: z.string().nullable(),
   home: z.string().min(1),
   systemRoot: z.string().min(1),
@@ -80,6 +97,8 @@ export interface WindowsPreflightInfo {
   windowsVersion: string | null;
   /** The Windows build number (`17763` is Windows 10 1809 / Server 2019); null = unreadable. */
   buildNumber: number | null;
+  /** Whether `Get-CimInstance` (WMI) answered: `denied` = refused to this session (a non-administrator's SSH), `unreadable` = failed for another reason. */
+  cim: 'ok' | 'denied' | 'unreadable';
   tailscaleIp: string | null;
   home: string;
   /** `%SystemRoot%` of the host (where `schtasks.exe` lives). */
@@ -112,6 +131,7 @@ export function parseWindowsPreflight(output: string, stderr = '', code: number 
     nodeVersion: v.nodeVersion ? v.nodeVersion.trim().replace(/^v/, '') : null,
     arch: v.arch === null ? null : (ARCH_BY_REGISTRY_VALUE[v.arch] ?? v.arch),
     windowsVersion: v.windowsCaption ? v.windowsCaption.trim().replace(/^Microsoft\s+/, '') : null,
+    cim: v.cim,
     buildNumber: v.buildNumber && /^\d+$/.test(v.buildNumber.trim()) ? Number(v.buildNumber.trim()) : null,
     tailscaleIp: v.tailscaleIp ? v.tailscaleIp.trim() : null,
     home: v.home,
@@ -122,6 +142,9 @@ export function parseWindowsPreflight(output: string, stderr = '', code: number 
 
 /** Windows 10 1809 / Server 2019: the first build with `conhost.exe --headless` (ConPTY), which keeps the agent's console window from appearing. */
 const MIN_WINDOWS_BUILD = 17763;
+
+/** The reason for a WMI refusal. Shown as it is by the API and the UI. */
+export const WMI_DENIED_MESSAGE = 'Windows WMI is not available in this user\'s SSH session (the SSH session of a user who is not an administrator is refused WMI as network access). Install with an administrator account. Installing for a user who is not an administrator will be supported in v0.13.0 (https://github.com/wireframeslayout/azito/issues/559)';
 
 const IPV4 = /^\d+\.\d+\.\d+\.\d+$/;
 
@@ -137,7 +160,10 @@ export function checkWindowsPreflight(info: WindowsPreflightInfo): string[] {
   } else if (info.arch !== 'x64') {
     missing.push(`x86_64 architecture required (found: ${info.arch}; Windows on ARM is not supported)`);
   }
-  if (info.buildNumber === null) {
+  if (info.cim === 'denied') {
+    // The build number (and the firewall check after this) cannot be read: say why, and do not call it an old build.
+    missing.push(WMI_DENIED_MESSAGE);
+  } else if (info.buildNumber === null) {
     missing.push(`Could not read the Windows build number; Windows 10 version 1809 (build ${MIN_WINDOWS_BUILD}) or later is required`);
   } else if (info.buildNumber < MIN_WINDOWS_BUILD) {
     missing.push(`Windows 10 version 1809 (build ${MIN_WINDOWS_BUILD}) or later required (found: build ${info.buildNumber}); the agent runs under \`conhost.exe --headless\``);
