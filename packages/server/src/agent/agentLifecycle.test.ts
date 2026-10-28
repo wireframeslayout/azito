@@ -53,7 +53,7 @@ describe('createAgentLifecycle', () => {
 
   it('after listening, a stop closes the server and exits with 0; a second one is ignored', async () => {
     const { lifecycle, handlers, close, exit } = setup();
-    lifecycle.markListening();
+    lifecycle.finishStartup('listening');
     handlers.get('SIGTERM')?.();
     handlers.get('SIGINT')?.();
     expect(lifecycle.startupSignal.aborted).toBe(false);
@@ -64,14 +64,34 @@ describe('createAgentLifecycle', () => {
   it('shutdown after an aborted startup closes the server (the last listen won the race)', async () => {
     const { lifecycle, handlers, close, exit } = setup();
     handlers.get('SIGTERM')?.();
-    lifecycle.shutdown(lifecycle.startupStopReason ?? 'x');
+    expect(lifecycle.finishStartup('aborted')).toBe(false);
     expect(close).toHaveBeenCalledTimes(1);
     await vi.waitFor(() => expect(exit).toHaveBeenCalledWith(0));
   });
 
+  it('an aborted startup never becomes listening: a later stop is not a second shutdown', async () => {
+    const { lifecycle, close, exit } = setup();
+    lifecycle.requestStop('SIGTERM');
+    expect(lifecycle.finishStartup('aborted')).toBe(false);
+    lifecycle.requestStop('SIGINT');
+    expect(close).toHaveBeenCalledTimes(1);
+    await vi.waitFor(() => expect(exit).toHaveBeenCalledWith(0));
+  });
+
+  it('finishing as listening returns true', () => {
+    const { lifecycle } = setup();
+    expect(lifecycle.finishStartup('listening')).toBe(true);
+  });
+
+  it('aborted without any stop reason is a programming error', () => {
+    const { lifecycle, close } = setup();
+    expect(() => lifecycle.finishStartup('aborted')).toThrow(/without a stop reason/);
+    expect(close).not.toHaveBeenCalled();
+  });
+
   it('forces the exit through the hard cap when closing hangs', () => {
     const { lifecycle, timers, exit, log } = setup(() => new Promise<void>(() => undefined));
-    lifecycle.markListening();
+    lifecycle.finishStartup('listening');
     lifecycle.requestStop('SIGTERM');
     expect(exit).not.toHaveBeenCalled();
     expect(timers).toHaveLength(1);
@@ -82,7 +102,7 @@ describe('createAgentLifecycle', () => {
 
   it('exits even when closing fails', async () => {
     const { lifecycle, exit } = setup(async () => { throw new Error('boom'); });
-    lifecycle.markListening();
+    lifecycle.finishStartup('listening');
     lifecycle.requestStop('SIGHUP');
     await vi.waitFor(() => expect(exit).toHaveBeenCalledWith(0));
   });

@@ -369,11 +369,7 @@ async function main(): Promise<void> {
     log: app.log,
     signal: lifecycle.startupSignal,
   });
-  if (listenResult === 'aborted') {
-    lifecycle.shutdown(lifecycle.startupStopReason ?? 'stop request');
-    return;
-  }
-  lifecycle.markListening();
+  if (!lifecycle.finishStartup(listenResult)) return;
 
   // Install tmux hooks to notify on window/pane changes. `set-hook -g` is idempotent, so this is
   // re-run periodically to survive a tmux server that starts/restarts after the agent (in which case

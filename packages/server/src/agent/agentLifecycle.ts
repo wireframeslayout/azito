@@ -7,6 +7,8 @@
  * `shutdown` closes the server and exits, with a hard cap if closing hangs (e.g. a stuck Chromium); a second request is ignored.
  */
 
+import type { ListenRetryResult } from './listenRetry';
+
 export type StopSignal = 'SIGTERM' | 'SIGINT' | 'SIGHUP';
 const STOP_SIGNALS: readonly StopSignal[] = ['SIGTERM', 'SIGINT', 'SIGHUP'];
 
@@ -21,12 +23,16 @@ export interface AgentLifecycleDeps {
 }
 
 export interface AgentLifecycle {
-  /** Aborted by a stop requested before {@link markListening}. */
+  /** Aborted by a stop requested before {@link finishStartup}. */
   readonly startupSignal: AbortSignal;
   /** Why the startup was stopped (undefined while it was not). */
   readonly startupStopReason: string | undefined;
   requestStop(reason: string): void;
-  markListening(): void;
+  /**
+   * Called with what `listenWithRetry` returned. `aborted`: a stop was asked, so it shuts down (the server may already listen) and
+   * returns false. Otherwise the server now listens, later stops shut it down, and it returns true.
+   */
+  finishStartup(result: ListenRetryResult): boolean;
   shutdown(reason: string): void;
 }
 
@@ -62,8 +68,14 @@ export function createAgentLifecycle(deps: AgentLifecycleDeps): AgentLifecycle {
       return startupStopReason;
     },
     requestStop,
-    markListening: () => {
+    finishStartup: (result) => {
+      if (result === 'aborted') {
+        if (startupStopReason === undefined) throw new Error('startup was aborted without a stop reason');
+        shutdown(startupStopReason);
+        return false;
+      }
       listening = true;
+      return true;
     },
     shutdown,
   };
