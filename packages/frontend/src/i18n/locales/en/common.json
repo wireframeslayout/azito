@@ -100,6 +100,7 @@
     "title": "AZITO",
     "instruction": "Enter the UI token to continue.",
     "tokenRequired": "Token is required",
+    "invalidChars": "The token contains unsupported characters (use printable ASCII only, no spaces)",
     "storageDuration": "Saved in this browser for 60 days (extended on each visit)"
   },
   "windowPaneTree": {

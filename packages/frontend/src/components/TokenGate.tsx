@@ -2,7 +2,7 @@ import { useState, useEffect, useCallback } from 'react';
 import { useTranslation } from 'react-i18next';
 import { FormInput } from './ui/FormInput';
 import { Button } from './ui/Button';
-import { hasUiToken, setUiToken } from '../api/token';
+import { hasUiToken, setUiToken, validateTokenInput } from '../api/token';
 
 interface TokenGateProps {
   children: React.ReactNode;
@@ -21,12 +21,12 @@ export function TokenGate({ children }: TokenGateProps) {
   }, []);
 
   const handleSubmit = useCallback(() => {
-    const trimmed = inputValue.trim();
-    if (!trimmed) {
-      setError(t('tokenGate.tokenRequired'));
+    const result = validateTokenInput(inputValue);
+    if (!result.ok) {
+      setError(t(result.reason === 'empty' ? 'tokenGate.tokenRequired' : 'tokenGate.invalidChars'));
       return;
     }
-    setUiToken(trimmed);
+    setUiToken(result.token);
     setInputValue('');
     setError('');
   }, [inputValue, t]);
@@ -66,9 +66,12 @@ export function TokenGate({ children }: TokenGateProps) {
             value={inputValue}
             onChange={(e) => { setInputValue(e.target.value); setError(''); }}
             autoFocus
+            aria-label="AZITO_UI_TOKEN"
+            aria-invalid={error !== ''}
+            aria-describedby={error ? 'token-gate-error' : undefined}
           />
           {error && (
-            <p role="alert" style={{ color: 'var(--danger)', fontSize: 'var(--font-sm)', marginTop: 4 }}>
+            <p id="token-gate-error" role="alert" aria-live="assertive" style={{ color: 'var(--danger)', fontSize: 'var(--font-sm)', marginTop: 4 }}>
               {error}
             </p>
           )}

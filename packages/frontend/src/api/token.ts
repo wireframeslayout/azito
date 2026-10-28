@@ -9,12 +9,27 @@ interface StoredToken {
 
 let migrated = false;
 
+// Authorization ヘッダーに入れられるのは表示可能な ASCII（空白を除く）だけ。
+// サーバー発行の hex トークンも、利用者が設定した `-` `_` 入りの値も通る。
+const HEADER_SAFE_TOKEN = /^[\x21-\x7E]+$/;
+
+export type TokenInputResult =
+  | { ok: true; token: string }
+  | { ok: false; reason: 'empty' | 'invalidChars' };
+
+export function validateTokenInput(raw: string): TokenInputResult {
+  const token = raw.trim();
+  if (token === '') return { ok: false, reason: 'empty' };
+  if (!HEADER_SAFE_TOKEN.test(token)) return { ok: false, reason: 'invalidChars' };
+  return { ok: true, token };
+}
+
 function parseStored(raw: string, now: number): StoredToken | null {
   try {
     const parsed: unknown = JSON.parse(raw);
     if (typeof parsed === 'object' && parsed !== null) {
       const { token, expiresAt } = parsed as Record<string, unknown>;
-      if (typeof token === 'string' && token !== '' && typeof expiresAt === 'number' && expiresAt > now) {
+      if (typeof token === 'string' && HEADER_SAFE_TOKEN.test(token) && typeof expiresAt === 'number' && expiresAt > now) {
         return { token, expiresAt };
       }
     }
