@@ -33,6 +33,8 @@ import fileOpsRoutes from './fileOpsRoutes';
 import { LocalFileOps, localFileOpsHost } from '../shared/fs/LocalFileOps';
 import transcriptRoutes from './transcriptRoutes';
 import { agentAuthHook } from './authHook';
+import { listenWithRetry } from './listenRetry';
+import { createAgentLifecycle } from './agentLifecycle';
 import { processExists, readWindowsProcessCreation, startParentWatch } from './parentWatch';
 import { TRANSCRIPT_READERS } from '../modules/transcripts/sources/registry';
 import { resolveAgentMisaoSocket, type AgentMisaoHost, type AgentMisaoSocket, type AgentMisaoWindowsHost } from '../modules/servers/transport/agentMisaoSocket';
@@ -312,39 +314,29 @@ async function main(): Promise<void> {
 
   // Cleanup tmux hooks and browser on shutdown (must register before listen — Fastify rejects addHook after ready)
   let hookInstallInterval: ReturnType<typeof setInterval> | null = null;
+  // Hooks are installed only after the server listens: a stop while it still waits for its address has none to remove.
+  let hooksInstalled = false;
   app.addHook('onClose', async () => {
     if (hookInstallInterval) {
       clearInterval(hookInstallInterval);
       hookInstallInterval = null;
     }
     await browserSessionManager.stopAll();
-    for (const event of hasTmux ? hookEvents : []) {
+    for (const event of hasTmux && hooksInstalled ? hookEvents : []) {
       await new Promise<void>((resolve) => {
         execFile(hookRt.bin, [...hookRt.baseArgs, ...buildHookUnsetArgs(event)], { timeout: 5000 }, () => resolve());
       });
     }
   });
 
-  await app.listen({ port: PORT, host: bind });
-
-  // Graceful shutdown: app.close() runs the onClose hook above (browserSessionManager.stopAll +
-  // tmux hook cleanup + interval clear), then exits. A hard cap forces exit if close() hangs
-  // (e.g. a stuck Chromium process), and a running flag ignores a second signal during shutdown.
-  let shuttingDown = false;
-  const shutdown = (signal: string): void => {
-    if (shuttingDown) return;
-    shuttingDown = true;
-    app.log.info(`Received ${signal}, shutting down gracefully`);
-    const hardCap = setTimeout(() => {
-      app.log.warn('Graceful shutdown exceeded hard cap, forcing exit');
-      process.exit(0);
-    }, SHUTDOWN_HARD_CAP_MS);
-    hardCap.unref();
-    app.close().then(() => process.exit(0)).catch(() => process.exit(0));
-  };
-  process.on('SIGTERM', () => shutdown('SIGTERM'));
-  process.on('SIGINT', () => shutdown('SIGINT'));
-  process.on('SIGHUP', () => shutdown('SIGHUP'));
+  // Every way of being stopped goes through the lifecycle: before the server listens it aborts the wait below, afterwards it shuts down.
+  const lifecycle = createAgentLifecycle({
+    onSignal: (signal, handler) => process.on(signal, handler),
+    close: () => app.close(),
+    exit: (code) => process.exit(code),
+    log: app.log,
+    hardCapMs: SHUTDOWN_HARD_CAP_MS,
+  });
 
   // A Windows agent runs under `conhost.exe --headless` (see the task the hub registers), and the Task Scheduler's "End" ends only
   // that conhost: the agent would be left running with a valid token. Its settings ask it to follow its parent, so when the
@@ -361,11 +353,23 @@ async function main(): Promise<void> {
       verifyIntervalMs: PARENT_VERIFY_INTERVAL_MS,
       isAlive: processExists,
       readCreation: (pid) => (systemRoot ? readWindowsProcessCreation(systemRoot, pid) : Promise.resolve(null)),
-      onGone: shutdown,
+      onGone: lifecycle.requestStop,
       onUnverifiable: (message) => app.log.warn(message),
       onVerifiable: (message) => app.log.info(message),
     });
   }
+
+  // The Tailscale IP may not exist yet right after a logon or boot: wait for it (EADDRNOTAVAIL only) instead of ending. A stop
+  // asked meanwhile (signal, or the parent gone) ends the wait at once. The parent watch above runs during the wait too: on
+  // Windows that is how the agent learns that the task was ended.
+  const listenResult = await listenWithRetry({
+    listen: () => app.listen({ port: PORT, host: bind }),
+    bind: BIND_ADDRESS,
+    port: PORT,
+    log: app.log,
+    signal: lifecycle.startupSignal,
+  });
+  if (!lifecycle.finishStartup(listenResult)) return;
 
   // Install tmux hooks to notify on window/pane changes. `set-hook -g` is idempotent, so this is
   // re-run periodically to survive a tmux server that starts/restarts after the agent (in which case
@@ -389,6 +393,7 @@ async function main(): Promise<void> {
   };
 
   if (hasTmux) {
+    hooksInstalled = true;
     installTmuxHooks();
     hookInstallInterval = setInterval(installTmuxHooks, 60000);
   } else {
