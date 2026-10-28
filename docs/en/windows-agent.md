@@ -8,7 +8,7 @@ This page is about using a Windows machine as an AZITO agent server over SSH. It
 
 ## Prepare
 
-What to have on the Windows host. No administrator rights are needed or asked for (adding the firewall rule is the one thing that may need an administrator: see [Without administrator rights](#without-administrator-rights)).
+What to have on the Windows host. **In v0.12.0 the SSH user must be an administrator** (installing for a user who is not an administrator comes in v0.13.0: see [Without administrator rights](#without-administrator-rights)).
 
 | Prerequisite | Detail |
 |---|---|
@@ -37,9 +37,11 @@ Use one of these:
 
 ### Without administrator rights
 
-Installing, updating and removing work when the SSH user is **not an administrator** (the Task Scheduler task is registered with that user's own rights). Three things differ:
+**In v0.12.0, installing through the SSH account of a user who is not an administrator does not work. Install with an administrator account.** The SSH session of a user who is not an administrator is treated as network access, and Windows refuses it WMI (`Get-CimInstance`). Tested on Windows 11 Pro 26200, in a workgroup; other setups are not tested. When the install preflight finds this, it **stops before transferring anything** with a reason of its own (`Windows WMI is not available in this user's SSH session ...`), not as an old build. Installing for a user who is not an administrator comes in v0.13.0 ([#559](https://github.com/wireframeslayout/azito/issues/559)).
 
-- **AZITO cannot add the firewall rule itself.** An elevated (administrator) SSH session lets the install add it. Without elevation, if **a covering enabled Allow rule already exists**, the install goes on without creating a rule (the firewall step of a removal is then `was not there`). Only when there is no Allow rule and none can be added does the install **stop before transferring anything** and print the command to run once in an Administrator PowerShell. Run it, then install again.
+What follows is what is expected to apply after #559 (v0.13.0 and later). In v0.12.0 you install with an administrator account, so only the last two points apply.
+
+- **(v0.13.0 and later) AZITO cannot add the firewall rule itself.** An elevated (administrator) SSH session lets the install add it. Without elevation, if **a covering enabled Allow rule already exists**, the install goes on without creating a rule (the firewall step of a removal is then `was not there`). Only when there is no Allow rule and none can be added does the install **stop before transferring anything** and print the command to run once in an Administrator PowerShell. Run it, then install again.
 - **Some processes cannot be seen.** Removal and cleanup look for processes running from the folder, but system and other users' processes cannot be read from an ordinary user's SSH session. AZITO has a rule for your own unreadable processes ([Remove](#remove)); other users' processes are out of reach.
 - **Protected processes such as Defender** cannot always be read even by an administrator ([Limits](#limits)).
 
@@ -201,6 +203,7 @@ A run **with a prefix** (`--prefix <p>`, for a second hub) writes only the hooks
 |---|---|
 | An operation is refused with `unsupported_os` (501), or an entry is greyed out with a reason | That feature is closed on a Windows host. The reason is shown as it is. Closed: tmux, code distribution (#464), isolation (#464), the browser runtime (#500), removal from a Linux / macOS host (#499), starting a command with shell syntax, and some respawns ([What works](#what-works)) |
 | The git screens or tasks fail with `git_not_found` (501) | Git for Windows is not installed on the host. Install it with `winget install --id Git.Git -e` (no restart needed; a miss is forgotten after 30 seconds). The standard locations are in the [Prepare](#prepare) table; the places searched are in the error too |
+| The install stops with `Windows WMI is not available in this user's SSH session` | The SSH user is not an administrator. In v0.12.0, install with an administrator account. Installing for a user who is not an administrator comes in v0.13.0 ([#559](https://github.com/wireframeslayout/azito/issues/559)) |
 | The install stops and prints a firewall command | The SSH session is not an administrator and no Allow rule exists. Run the printed command once in an Administrator PowerShell, then install again (step 1 of [Add](#add)) |
 | The install stops and names a Block rule | An inbound Block rule would stop the hub. Check it and disable or remove it. A Block wins over any Allow, so AZITO does not add an Allow beside it |
 | The agent cannot be reached (offline, `401`) | Check in order: (1) is the user logged on (logging off stops it); (2) is the task `AzitoAgent` running (`schtasks /Query /TN AzitoAgent`) and not disabled; (3) does the firewall allow TCP 3002 and have no Block; (4) is Tailscale connected on both ends (on Windows it drops on logoff, and with another user also logged on, that user's session may be refused as "in use": [Tailscale and Windows users](#tailscale-and-windows-users)); (5) token: a 401 means the token the hub holds differs from the host's `agent.env`. "Reinstall" in the Setup row aligns them (a reinstall can be put back until the new agent answers) |

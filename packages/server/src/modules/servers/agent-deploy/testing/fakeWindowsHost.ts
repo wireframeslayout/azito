@@ -19,6 +19,8 @@ export interface FakeWindowsHostOptions {
   sha256: string;
   firewall?: { ruleFound: boolean | null; elevated: boolean; created: boolean; problem: string | null; blockedBy?: string[] };
   buildNumber?: string;
+  /** What the preflight's WMI query came to (default `ok`). */
+  cim?: 'ok' | 'denied' | 'unreadable';
   /** The task is already registered (and running) before the install. */
   existingTask?: 'running' | 'stopped';
   /** `/Run` leaves the task not running with this last result (the user is not logged on). */
@@ -93,7 +95,7 @@ export class FakeWindowsHost {
     if (script.includes('AZITO_PREFLIGHT_BEGIN')) {
       this.calls.push({ kind: 'preflight', text: script });
       const info = {
-        nodePath: this.options.nodePath, nodeVersion: 'v24.14.0', arch: 'AMD64', windowsCaption: 'Microsoft Windows 11 Pro', buildNumber: this.options.buildNumber ?? '22631',
+        nodePath: this.options.nodePath, nodeVersion: 'v24.14.0', arch: 'AMD64', windowsCaption: 'Microsoft Windows 11 Pro', buildNumber: this.options.buildNumber ?? '22631', cim: this.options.cim ?? 'ok',
         tailscaleIp: this.options.tailscaleIp, home: this.options.home, systemRoot: this.options.systemRoot, userId: this.options.userId,
       };
       return { stdout: `<<AZITO_PREFLIGHT_BEGIN>>\r\n${JSON.stringify(info)}\r\n<<AZITO_PREFLIGHT_END>>\r\n`, stderr: '', code: 0 };

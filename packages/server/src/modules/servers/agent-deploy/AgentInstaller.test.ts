@@ -456,7 +456,7 @@ describe('AgentInstaller', () => {
 
   describe('OS detection and the Windows preflight', () => {
     const windowsOutput = (over: Record<string, unknown> = {}) => `banner\n<<AZITO_PREFLIGHT_BEGIN>>\n${JSON.stringify({
-      nodePath: 'C:\\node.exe', nodeVersion: 'v24.14.0', arch: 'AMD64', windowsCaption: 'Microsoft Windows 11 Pro', buildNumber: '22631', tailscaleIp: '100.64.0.9', home: 'C:\\Users\\d', systemRoot: 'C:\\Windows', userId: 'PC\\d', ...over,
+      nodePath: 'C:\\node.exe', nodeVersion: 'v24.14.0', arch: 'AMD64', windowsCaption: 'Microsoft Windows 11 Pro', buildNumber: '22631', cim: 'ok', tailscaleIp: '100.64.0.9', home: 'C:\\Users\\d', systemRoot: 'C:\\Windows', userId: 'PC\\d', ...over,
     })}\n<<AZITO_PREFLIGHT_END>>\n`;
 
     function makeWindows(login: 'cmd' | 'powershell', over: Record<string, unknown> = {}) {

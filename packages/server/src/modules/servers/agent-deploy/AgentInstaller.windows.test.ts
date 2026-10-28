@@ -435,6 +435,15 @@ describe('AgentInstaller on a Windows host', () => {
       expect(host.calls.some((c) => c.kind === 'firewall' || c.kind === 'script')).toBe(false);
     });
 
+    it('stops with the WMI reason, not an old-build one, when WMI is refused, before the firewall and any transfer', async () => {
+      const { installer, host } = make({ cim: 'denied', buildNumber: undefined });
+      const result = await installer.install('user@win');
+      expect(result.success).toBe(false);
+      expect(result.error).toMatch(/WMI is not available.*administrator.*v0\.13\.0.*issues\/559/);
+      expect(result.error).not.toMatch(/build number|1809/);
+      expect(host.calls.some((c) => c.kind === 'firewall' || c.kind === 'script')).toBe(false);
+    });
+
     it('stops with the name of an enabled inbound Block rule', async () => {
       const { installer, host } = make({ firewall: { ruleFound: true, elevated: true, created: false, problem: null, blockedBy: ['node.js JavaScript Runtime'] } });
       const result = await installer.install('user@win');

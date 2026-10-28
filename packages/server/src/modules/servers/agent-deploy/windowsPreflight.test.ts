@@ -1,6 +1,6 @@
 import { spawnSync } from 'child_process';
 import { describe, expect, it } from 'vitest';
-import { buildWindowsPreflightCommand, checkWindowsPreflight, parseWindowsPreflight, type WindowsPreflightInfo } from './windowsPreflight';
+import { buildWindowsPreflightCommand, checkWindowsPreflight, WMI_DENIED_MESSAGE, parseWindowsPreflight, type WindowsPreflightInfo } from './windowsPreflight';
 
 const isWindows = process.platform === 'win32';
 
@@ -14,6 +14,7 @@ function output(over: Record<string, unknown> = {}, wrap = (json: string) => `${
     arch: 'AMD64',
     windowsCaption: 'Microsoft Windows 11 Pro',
     buildNumber: '22631',
+    cim: 'ok',
     tailscaleIp: '100.64.0.9',
     home: 'C:\\Users\\dev',
     systemRoot: 'C:\\Windows',
@@ -32,11 +33,12 @@ describe('buildWindowsPreflightCommand', () => {
     expect(script).toContain(END);
     expect(script).toContain('ConvertTo-Json');
     expect(script).toContain('Tailscale\\tailscale.exe');
+    expect(script).toContain("$cim = 'denied'");
   });
 });
 
 describe('checkWindowsPreflight: the Windows build', () => {
-  const info = (buildNumber: number | null): WindowsPreflightInfo => ({ nodePath: 'C:\\node.exe', nodeVersion: '24.14.0', arch: 'x64', windowsVersion: 'Windows 10', buildNumber, tailscaleIp: '100.64.0.9', home: 'C:\\Users\\d', systemRoot: 'C:\\Windows', userId: 'PC\\d' });
+  const info = (buildNumber: number | null): WindowsPreflightInfo => ({ nodePath: 'C:\\node.exe', nodeVersion: '24.14.0', arch: 'x64', windowsVersion: 'Windows 10', buildNumber, tailscaleIp: '100.64.0.9', home: 'C:\\Users\\d', systemRoot: 'C:\\Windows', userId: 'PC\\d', cim: buildNumber === null ? 'unreadable' : 'ok' });
   it('accepts 1809 (build 17763) and later', () => {
     expect(checkWindowsPreflight(info(17763))).toEqual([]);
     expect(checkWindowsPreflight(info(26100))).toEqual([]);
@@ -44,6 +46,28 @@ describe('checkWindowsPreflight: the Windows build', () => {
   it('refuses an older build and an unreadable one, with the reason', () => {
     expect(checkWindowsPreflight(info(17134))).toEqual([expect.stringMatching(/1809.*found: build 17134.*conhost\.exe --headless/)]);
     expect(checkWindowsPreflight(info(null))).toEqual([expect.stringMatching(/Could not read the Windows build number/)]);
+  });
+});
+
+describe('checkWindowsPreflight: WMI refused or unreadable', () => {
+  const base = (): WindowsPreflightInfo => parseWindowsPreflight(output());
+  it('reads the WMI result as its own value, apart from the build number', () => {
+    expect(parseWindowsPreflight(output({ cim: 'denied', buildNumber: null, windowsCaption: null }))).toMatchObject({ cim: 'denied', buildNumber: null });
+    expect(parseWindowsPreflight(output({ cim: 'unreadable', buildNumber: null }))).toMatchObject({ cim: 'unreadable', buildNumber: null });
+    expect(parseWindowsPreflight(output()).cim).toBe('ok');
+    expect(() => parseWindowsPreflight(output({ cim: undefined }))).toThrow(/unexpected result/);
+  });
+  it('stops with the WMI reason and the issue, and does not call it an old or unreadable build', () => {
+    const missing = checkWindowsPreflight({ ...base(), cim: 'denied', buildNumber: null, windowsVersion: null });
+    expect(missing).toEqual([WMI_DENIED_MESSAGE]);
+    expect(missing[0]).toMatch(/administrator account.*v0\.13\.0.*issues\/559/);
+  });
+  it('keeps the other problems beside the WMI reason', () => {
+    expect(checkWindowsPreflight({ ...base(), cim: 'denied', buildNumber: null, tailscaleIp: null })).toHaveLength(2);
+  });
+  it('reports a WMI failure for another reason as an unreadable build, not as a refusal', () => {
+    const missing = checkWindowsPreflight({ ...base(), cim: 'unreadable', buildNumber: null });
+    expect(missing).toEqual([expect.stringMatching(/Could not read the Windows build number/)]);
   });
 });
 
@@ -55,6 +79,7 @@ describe('parseWindowsPreflight', () => {
       arch: 'x64',
       windowsVersion: 'Windows 11 Pro',
       buildNumber: 22631,
+      cim: 'ok',
       tailscaleIp: '100.64.0.9',
       home: 'C:\\Users\\dev',
       systemRoot: 'C:\\Windows',
@@ -75,7 +100,7 @@ describe('parseWindowsPreflight', () => {
   });
 
   it('reads \\uXXXX-escaped non-ASCII text (the script prints ASCII only)', () => {
-    const noisy = output({}, () => `${BEGIN}\n{"nodePath":null,"nodeVersion":null,"arch":"AMD64","windowsCaption":null,"buildNumber":null,"tailscaleIp":null,"home":"C:\\\\Users\\u30c6\\u30b9\\u30c8","systemRoot":"C:\\\\Windows","userId":"PC\\\\\\u30c6"}\n${END}\n`);
+    const noisy = output({}, () => `${BEGIN}\n{"nodePath":null,"nodeVersion":null,"arch":"AMD64","windowsCaption":null,"buildNumber":null,"cim":"ok","tailscaleIp":null,"home":"C:\\\\Users\\u30c6\\u30b9\\u30c8","systemRoot":"C:\\\\Windows","userId":"PC\\\\\\u30c6"}\n${END}\n`);
     expect(parseWindowsPreflight(noisy).home).toBe('C:\\Users\u30c6\u30b9\u30c8');
   });
 
@@ -157,6 +182,8 @@ describe.skipIf(!isWindows)('the preflight script on a real PowerShell', () => {
     expect(info.arch).toBe('x64');
     expect(info.windowsVersion).toMatch(/^Windows /);
     expect(info.buildNumber).toBeGreaterThanOrEqual(17763);
+    // The runner is an administrator, so WMI answers; a refusal cannot be reproduced there (the denied branch is covered by the parse tests).
+    expect(info.cim).toBe('ok');
     expect(info.tailscaleIp).toBeNull();
     expect(info.home.length).toBeGreaterThan(0);
     expect(info.systemRoot.toLowerCase()).toBe((process.env.SystemRoot ?? '').toLowerCase());
