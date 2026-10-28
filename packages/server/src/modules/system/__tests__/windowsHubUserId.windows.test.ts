@@ -38,8 +38,13 @@ describe.skipIf(process.platform !== 'win32')('readWindowsUserId on a real Windo
   });
 
   afterAll(async () => {
-    for (const name of [REGISTER_TASK, RUN_TASK]) await removeTaskIfPresent(client, name);
-    fs.rmSync(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 500 });
+    // Each cleanup is tried on its own; what failed is reported together at the end.
+    const failures: unknown[] = [];
+    for (const name of [REGISTER_TASK, RUN_TASK]) {
+      try { await removeTaskIfPresent(client, name); } catch (err) { failures.push(err); }
+    }
+    try { fs.rmSync(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 500 }); } catch (err) { failures.push(err); }
+    if (failures.length > 0) throw new AggregateError(failures, `Cleanup failed (${failures.length})`);
   });
 
   it('is the process\'s own identity, which whoami agrees with', async () => {
@@ -78,13 +83,13 @@ describe.skipIf(process.platform !== 'win32')('readWindowsUserId on a real Windo
     }));
     await client.start(RUN_TASK);
     const deadline = Date.now() + 60_000;
-    while (!fs.existsSync(out) && Date.now() < deadline) await new Promise((resolve) => setTimeout(resolve, 300));
-    if (!fs.existsSync(out)) {
+    // The task's state is looked at while waiting: a machine with no interactive logon says so at once, and the test skips.
+    while (!fs.existsSync(out) && Date.now() < deadline) {
       const state = await client.query(RUN_TASK);
-      const last = state.exists ? state.lastResult : -1;
-      if (!NO_INTERACTIVE_LOGON.has(last)) throw new Error(`The task did not run within 60 s (last result ${last})`);
-      ctx.skip(`no interactive logon session on this machine (last result ${last})`);
+      if (state.exists && NO_INTERACTIVE_LOGON.has(state.lastResult)) ctx.skip(`no interactive logon session on this machine (last result ${state.lastResult})`);
+      await new Promise((resolve) => setTimeout(resolve, 500));
     }
+    if (!fs.existsSync(out)) throw new Error('The task did not run within 60 s');
     expect(fs.readFileSync(out, 'utf8')).toBe(userId);
-  });
+  }, 90_000);
 });

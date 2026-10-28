@@ -21,7 +21,7 @@ describe('the Windows update backend', () => {
   let backend: UpdateBackend;
   const manager = {} as ServiceManager;
   const hub = {} as WindowsHub;
-  const context = { env: {}, bundleRoot: null, pid: 4242, secretFileGuard: new UnixSecretFileGuard() };
+  const context = { bundleRoot: null, pid: 4242, secretFileGuard: new UnixSecretFileGuard() };
 
   beforeEach(() => {
     hubDir = fs.mkdtempSync(path.join(os.tmpdir(), 'azito-win-backend-'));

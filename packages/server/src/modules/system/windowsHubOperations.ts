@@ -93,9 +93,10 @@ export async function requireOwnTask(manager: ServiceManager, hub: WindowsHub): 
  *   - this install's, with the definition we would register (a launcher that runs the hub once is not it): nothing to do (a missing or different copy is written again);
  *   - running: never replaced;
  *   - another install's, or one this version does not recognise: replaced only with `--yes`.
+ * - The definitions are compared with the account (`UserId`) spelled without regard to case (`sameTaskDefinition`); the rest must match exactly.
  * - No task (a copy left behind after a delete by hand, or nothing): registered.
  */
-export async function installWindowsTask(manager: ServiceManager, hub: WindowsHub, context: ServiceCommandContext, yes: boolean): Promise<void> {
+export async function installWindowsTask(manager: ServiceManager, hub: WindowsHub, yes: boolean): Promise<void> {
   const userId = await readWindowsUserId((spec) => runCommandSpec(spec, hub.runHost), hub.systemRoot);
   const xml = buildHubTaskXml({ userId, systemRoot: hub.systemRoot, layout: hub.layout });
   if (await taskExists(hub)) {

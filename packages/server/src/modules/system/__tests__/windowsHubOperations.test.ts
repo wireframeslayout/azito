@@ -73,13 +73,13 @@ describe('installWindowsTask', () => {
 
   it('registers when there is no task, even though a copy is left', async () => {
     const { hub, manager } = setup(undefined, xmlFor(MINE));
-    await installWindowsTask(manager, hub, context, false);
+    await installWindowsTask(manager, hub, false);
     expect(manager.install).toHaveBeenCalledTimes(1);
   });
 
   it('does nothing for this install\'s task with the same definition', async () => {
     const { hub, manager } = setup(xmlFor(MINE), xmlFor(MINE));
-    await installWindowsTask(manager, hub, context, false);
+    await installWindowsTask(manager, hub, false);
     expect(manager.install).not.toHaveBeenCalled();
   });
 
@@ -87,7 +87,7 @@ describe('installWindowsTask', () => {
     vi.stubEnv('USERDOMAIN', 'WORKGROUP');
     try {
       const { hub, manager } = setup(undefined, undefined);
-      await installWindowsTask(manager, hub, context, false);
+      await installWindowsTask(manager, hub, false);
       expect(manager.install).toHaveBeenCalledWith(xmlFor(MINE));
     } finally {
       vi.unstubAllEnvs();
@@ -97,48 +97,48 @@ describe('installWindowsTask', () => {
   it('does not touch the task when the account cannot be read', async () => {
     vi.mocked(runCommandSpec).mockResolvedValue({ exitCode: 1, stdout: '', stderr: 'boom' } as never);
     const { hub, manager } = setup(undefined, undefined);
-    await expect(installWindowsTask(manager, hub, context, false)).rejects.toThrow(/Reading the account.*boom/);
+    await expect(installWindowsTask(manager, hub, false)).rejects.toThrow(/Reading the account.*boom/);
     expect(manager.install).not.toHaveBeenCalled();
   });
 
   it('counts a registered definition that differs only in the case of the account as the same one (also while it runs)', async () => {
     const lower = xmlFor(MINE).replace('PC\\me', 'pc\\ME');
     const idle = setup(lower, lower);
-    await installWindowsTask(idle.manager, idle.hub, context, false);
+    await installWindowsTask(idle.manager, idle.hub, false);
     expect(idle.manager.install).not.toHaveBeenCalled();
     const running = setup(lower, lower, true);
-    await installWindowsTask(running.manager, running.hub, context, false);
+    await installWindowsTask(running.manager, running.hub, false);
     expect(running.manager.install).not.toHaveBeenCalled();
   });
 
   it('replaces this install\'s task from the first 0.12 builds (one that does not start the hub again) with the new launcher, without --yes, once it is stopped', async () => {
     const { hub, manager } = setup(singleRunXmlFor(MINE), singleRunXmlFor(MINE));
-    await installWindowsTask(manager, hub, context, false);
+    await installWindowsTask(manager, hub, false);
     expect(manager.install).toHaveBeenCalledWith(xmlFor(MINE));
     // The registered task decides, not the copy: a copy that already is the new definition does not make an old task current.
     const stale = setup(singleRunXmlFor(MINE), xmlFor(MINE));
-    await installWindowsTask(stale.manager, stale.hub, context, false);
+    await installWindowsTask(stale.manager, stale.hub, false);
     expect(stale.manager.install).toHaveBeenCalledWith(xmlFor(MINE));
     const running = setup(singleRunXmlFor(MINE), singleRunXmlFor(MINE), true);
-    await expect(installWindowsTask(running.manager, running.hub, context, false)).rejects.toThrow(/is running\. Stop it first/);
+    await expect(installWindowsTask(running.manager, running.hub, false)).rejects.toThrow(/is running\. Stop it first/);
     expect(running.manager.install).not.toHaveBeenCalled();
   });
 
   it('judges by the task, not the copy: another install\'s stopped task needs --yes even when the copy is missing or looks like ours', async () => {
     for (const copy of [undefined, xmlFor(MINE)]) {
       const { hub, manager } = setup(xmlFor(OTHER), copy);
-      await expect(installWindowsTask(manager, hub, context, false)).rejects.toThrow(/--yes/);
+      await expect(installWindowsTask(manager, hub, false)).rejects.toThrow(/--yes/);
       expect(manager.install).not.toHaveBeenCalled();
     }
     const { hub, manager } = setup(xmlFor(OTHER), undefined);
-    await installWindowsTask(manager, hub, context, true);
+    await installWindowsTask(manager, hub, true);
     expect(manager.install).toHaveBeenCalledTimes(1);
   });
 
   it('treats a definition it does not recognise as somebody else\'s: --yes to replace it', async () => {
     const stopped = setup('<Task>edited</Task>', xmlFor(MINE));
-    await expect(installWindowsTask(stopped.manager, stopped.hub, context, false)).rejects.toThrow(/does not recognise.*--yes/);
-    await installWindowsTask(stopped.manager, stopped.hub, context, true);
+    await expect(installWindowsTask(stopped.manager, stopped.hub, false)).rejects.toThrow(/does not recognise.*--yes/);
+    await installWindowsTask(stopped.manager, stopped.hub, true);
     expect(stopped.manager.install).toHaveBeenCalledTimes(1);
   });
 
@@ -146,7 +146,7 @@ describe('installWindowsTask', () => {
     for (const registered of [xmlFor(OTHER), '<Task>edited</Task>']) {
       for (const copy of [undefined, xmlFor(MINE)]) {
         const { hub, manager } = setup(registered, copy, true);
-        await expect(installWindowsTask(manager, hub, context, true)).rejects.toThrow(/is running/);
+        await expect(installWindowsTask(manager, hub, true)).rejects.toThrow(/is running/);
         expect(manager.install).not.toHaveBeenCalled();
       }
     }

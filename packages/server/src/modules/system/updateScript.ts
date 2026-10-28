@@ -112,7 +112,7 @@ function createBackend(args: UpdateArgs, host: HostEnv, secretFileGuard: SecretF
   }
   const created = createServiceManager(host, HUB_SERVICE, runCommand);
   if ('error' in created) throw created.error;
-  const context = { env: process.env, bundleRoot: getBundleRoot(), pid: process.pid, secretFileGuard };
+  const context = { bundleRoot: getBundleRoot(), pid: process.pid, secretFileGuard };
   return createWindowsUpdateBackend({
     hubDir: args.hubDir,
     healthUrl,
