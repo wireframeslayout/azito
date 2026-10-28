@@ -53,7 +53,7 @@ export function TokenGate({ children }: TokenGateProps) {
         maxWidth: 400,
       }}>
         <h2 style={{ fontSize: 'var(--font-xl)', marginBottom: 8 }}>{t('tokenGate.title')}</h2>
-        <p style={{ fontSize: 'var(--font-base)', color: 'var(--text-dim)', marginBottom: 4 }}>
+        <p id="token-gate-instruction" style={{ fontSize: 'var(--font-base)', color: 'var(--text-dim)', marginBottom: 4 }}>
           {t('tokenGate.instruction')}
         </p>
         <p style={{ fontSize: 'var(--font-sm)', color: 'var(--text-dim)', marginBottom: 16 }}>
@@ -66,12 +66,12 @@ export function TokenGate({ children }: TokenGateProps) {
             value={inputValue}
             onChange={(e) => { setInputValue(e.target.value); setError(''); }}
             autoFocus
-            aria-label="AZITO_UI_TOKEN"
+            aria-labelledby="token-gate-instruction"
             aria-invalid={error !== ''}
             aria-describedby={error ? 'token-gate-error' : undefined}
           />
           {error && (
-            <p id="token-gate-error" role="alert" aria-live="assertive" style={{ color: 'var(--danger)', fontSize: 'var(--font-sm)', marginTop: 4 }}>
+            <p id="token-gate-error" role="alert" style={{ color: 'var(--danger)', fontSize: 'var(--font-sm)', marginTop: 4 }}>
               {error}
             </p>
           )}

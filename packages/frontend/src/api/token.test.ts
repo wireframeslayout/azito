@@ -139,6 +139,18 @@ describe('ui token storage', () => {
     expect(session.getItem(KEY)).toBeNull();
   });
 
+  it.each([
+    ['改行を含む', 'tok\nx'],
+    ['全角数字', 'tok\uFF11'],
+    ['全角文字', '\u3042\u3044'],
+  ])('sessionStorage だけにある壊れた新形式（%s）は移行されず、両方から消える', async (_label, token) => {
+    const { getUiToken } = await import('./token');
+    session.setItem(KEY, JSON.stringify({ token, expiresAt: Date.now() + TTL_MS }));
+    expect(getUiToken()).toBe('');
+    expect(local.getItem(KEY)).toBeNull();
+    expect(session.getItem(KEY)).toBeNull();
+  });
+
   describe('validateTokenInput', () => {
     it('前後の空白を除いて受け入れる', async () => {
       const { validateTokenInput } = await import('./token');

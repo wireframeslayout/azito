@@ -24,6 +24,16 @@ export function validateTokenInput(raw: string): TokenInputResult {
   return { ok: true, token };
 }
 
+// 保存形式の見分け: 新形式は JSON のオブジェクト、旧形式は生のトークン文字列。値の検証（parseStored）とは別。
+function isEnvelope(raw: string): boolean {
+  try {
+    const parsed: unknown = JSON.parse(raw);
+    return typeof parsed === 'object' && parsed !== null;
+  } catch {
+    return false;
+  }
+}
+
 function parseStored(raw: string, now: number): StoredToken | null {
   try {
     const parsed: unknown = JSON.parse(raw);
@@ -64,8 +74,9 @@ function migrateFromSessionStorage(now: number): void {
   migrated = true;
   const legacy = sessionStorage.getItem(STORAGE_KEY);
   if (legacy === null || localStorage.getItem(STORAGE_KEY) !== null) return;
-  // Only migrate old-format bare tokens; new-format JSON is not a migration candidate
-  if (parseStored(legacy, now) !== null) return;
+  // Only migrate old-format bare tokens; new-format JSON is never a migration candidate,
+  // even when its value is invalid (readStored discards it).
+  if (isEnvelope(legacy)) return;
   try {
     localStorage.setItem(STORAGE_KEY, JSON.stringify({ token: legacy, expiresAt: now + TTL_MS }));
     sessionStorage.removeItem(STORAGE_KEY);
