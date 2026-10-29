@@ -606,6 +606,8 @@ azito version        # バージョン表示
 | Linux | aarch64 (arm64) | サポート |
 | macOS | Apple Silicon (arm64) | サポート |
 | macOS | Intel (x64) | 未対応（要望があれば検討） |
+| Windows | x64 | サポート。ハブ（[Windows 版の配布物](#windows-版の配布物)）と、エージェントサーバー（[Windows のエージェントサーバー](./windows-agent.md)）の両方 |
+| Windows | arm64 | 未対応 |
 
 ## 配布先リポジトリの移行
 
