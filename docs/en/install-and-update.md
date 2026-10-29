@@ -609,6 +609,8 @@ azito version        # Show version
 | Linux | aarch64 (arm64) | Supported |
 | macOS | Apple Silicon (arm64) | Supported |
 | macOS | Intel (x64) | Not supported (will consider on demand) |
+| Windows | x64 | Supported, as a hub ([Windows bundle](#windows-bundle)) and as an agent server ([Windows agent servers](./windows-agent.md)) |
+| Windows | arm64 | Not supported |
 
 ## Repository Migration
 
