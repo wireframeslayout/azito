@@ -38,9 +38,17 @@ export class StorageTextContent {
 
   async write(path: string, content: string, version: string | undefined): Promise<{ version: string }> {
     const key = this.key(path);
+    if (content.includes('\0')) throw new StorageOperationError(400, 'binary', 'File contains NUL bytes');
     const data = Buffer.from(content, 'utf-8');
     if (data.length > Math.min(MAX_FILE_SIZE, this.maxFileSize)) throw new StorageOperationError(413, 'too_large', 'File exceeds the configured size limit');
-    const head = await this.s3.send(new HeadObjectCommand({ Bucket: this.bucket, Key: key }));
+    let head;
+    try { head = await this.s3.send(new HeadObjectCommand({ Bucket: this.bucket, Key: key })); }
+    catch (error) {
+      if (version !== undefined && (error as { $metadata?: { httpStatusCode?: number } }).$metadata?.httpStatusCode === 404) {
+        throw new StorageOperationError(409, 'conflict', 'File has changed');
+      }
+      throw error;
+    }
     if (!head.ETag) throw new Error('Storage object ETag is missing');
     if (version !== undefined && normalizeEtag(head.ETag) !== normalizeEtag(version)) throw new StorageOperationError(409, 'conflict', 'File has changed');
     try {

@@ -237,6 +237,7 @@ export class FileBrowseService {
     baseMtime?: number,
     baseHash?: string,
   ): Promise<{ mtime: number; hash: string }> {
+    if (content.includes('\0')) throw new FileBrowseError('File contains NUL bytes', 400);
     if (Buffer.byteLength(content, 'utf-8') > MAX_FILE_SIZE) {
       throw new FileBrowseError(`Content too large. Maximum is 500KB.`, 400);
     }

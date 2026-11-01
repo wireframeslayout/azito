@@ -34,15 +34,13 @@ export function useFileTree(backend: FilesBackend, rootPath: string) {
   treeRef.current = tree;
 
   const loadDir = useCallback(async (dirPath: string): Promise<TreeNode[]> => {
-    {
-      const entries = await backend.list(dirPath);
-      return entries.map((e) => ({
-        ...e,
-        children: e.type === 'directory' ? [] : undefined,
-        loaded: false,
-        expanded: false,
-      }));
-    }
+    const entries = await backend.list(dirPath);
+    return entries.map((e) => ({
+      ...e,
+      children: e.type === 'directory' ? [] : undefined,
+      loaded: false,
+      expanded: false,
+    }));
   }, [backend]);
 
   const loadRoot = useCallback(async () => {
@@ -69,6 +67,7 @@ export function useFileTree(backend: FilesBackend, rootPath: string) {
       return { ...node, expanded: !node.expanded };
     });
       setTree(updated);
+      setError(null);
     } catch (error) {
       setError(error instanceof Error ? error.message : 'Failed to load directory');
     }
@@ -85,6 +84,7 @@ export function useFileTree(backend: FilesBackend, rootPath: string) {
       return node;
     });
       setTree(updated);
+      setError(null);
     } catch (error) {
       setError(error instanceof Error ? error.message : 'Failed to load directory');
     }
@@ -97,6 +97,7 @@ export function useFileTree(backend: FilesBackend, rootPath: string) {
       return { ...node, loaded: true, children };
     });
       setTree(updated);
+      setError(null);
     } catch (error) {
       setError(error instanceof Error ? error.message : 'Failed to load directory');
     }

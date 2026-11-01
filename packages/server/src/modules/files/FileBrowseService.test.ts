@@ -169,6 +169,12 @@ describe('FileBrowseService on a real directory', () => {
   });
 
   describe('writeFileContent', () => {
+    it('rejects NUL content before modifying a file', async () => {
+      const filePath = path.join(tmpDir, 'nul-save.txt');
+      fs.writeFileSync(filePath, 'original');
+      await expect(svc.writeFileContent(localSrv, filePath, 'bad\0text')).rejects.toThrow('File contains NUL bytes');
+      expect(fs.readFileSync(filePath, 'utf8')).toBe('original');
+    });
     it('writes file and returns mtime and the hash of the new content', async () => {
       const filePath = path.join(tmpDir, 'test.txt');
       fs.writeFileSync(filePath, 'original');
