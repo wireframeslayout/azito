@@ -65,3 +65,16 @@ it('does not rerender hotkey and terminal consumers when overlays open or close'
   await user.click(screen.getByText('Toggle')); await user.click(screen.getByText('Toggle'));
   expect(renderHotkey).toHaveBeenCalledTimes(1); expect(renderTerminal).toHaveBeenCalledTimes(1);
 });
+
+it('prevents Ctrl+R only when the configured shortcut is handled', () => {
+  function AssignReload() { const { setBinding } = useHotkeyBindings(); return <button onClick={() => setBinding('search.open', parseKeySpec('Ctrl+R'))}>Assign reload</button>; }
+  const handler = vi.fn(); render(<HotkeyProvider><Global handler={handler} /><AssignReload /></HotkeyProvider>);
+  fireEvent.click(screen.getByText('Assign reload'));
+  const editable = new KeyboardEvent('keydown', { key: 'r', ctrlKey: true, bubbles: true, cancelable: true });
+  screen.getByLabelText('input').dispatchEvent(editable);
+  expect(editable.defaultPrevented).toBe(false);
+  const global = new KeyboardEvent('keydown', { key: 'r', ctrlKey: true, bubbles: true, cancelable: true });
+  document.body.dispatchEvent(global);
+  expect(global.defaultPrevented).toBe(true);
+  expect(handler).toHaveBeenCalledOnce();
+});

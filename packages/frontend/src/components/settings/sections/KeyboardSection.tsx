@@ -38,9 +38,9 @@ export default function KeyboardSection() {
       <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap', gap: 'var(--space-3)' }}>
         <div style={{ flex: 1, minWidth: 'min(100%, calc(var(--space-4) * 9))' }}>
           <div style={{ fontWeight: 600 }}>{t('keyboard.interval')}</div>
-          <div style={{ fontSize: 'var(--font-xs)', color: 'var(--text-dim)' }}>{t('keyboard.intervalDescription')}</div>
+          <div style={{ fontSize: 'var(--font-xs)', color: 'var(--text-dim)' }}>{t('keyboard.intervalDescription')} {bindingValue('search.open') !== 'Space Space' && t('keyboard.intervalOnlySpace')}</div>
         </div>
-        <SegmentedToggle ariaLabel={t('keyboard.interval')} value={String(chordMs)} onChange={changeInterval} options={['200', '300', '500'].map((value) => ({ value, label: t('keyboard.seconds', { value: Number(value) / 1000 }) }))} />
+        <SegmentedToggle disabled={bindingValue('search.open') !== 'Space Space'} ariaLabel={t('keyboard.interval')} value={String(chordMs)} onChange={changeInterval} options={['200', '300', '500'].map((value) => ({ value, label: t('keyboard.seconds', { value: Number(value) / 1000 }) }))} />
       </div>
       <div style={{ display: 'flex', alignItems: 'center', gap: 'var(--space-2)', fontSize: 'var(--font-xs)', color: 'var(--text-dim)' }}>
         <Icon name="terminal" size={14} />{t('keyboard.notice')}

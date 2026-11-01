@@ -17,14 +17,16 @@ interface OverlayProps {
   dismissOnBackdrop?: boolean;
   closeDisabled?: boolean;
   busy?: boolean;
+  toggleAction?: 'search.open';
   maxWidth?: number | string;
   maxHeight?: string;
   style?: CSSProperties;
 }
 
-export function Overlay({ open, onClose, labelledBy, children, variant = 'dialog', surface = 'elevated', initialFocusRef, dismissOnBackdrop = true, closeDisabled = false, busy = false, maxWidth = 500, maxHeight = '90vh', style }: OverlayProps) {
+export function Overlay({ open, onClose, labelledBy, children, variant = 'dialog', surface = 'elevated', initialFocusRef, dismissOnBackdrop = true, closeDisabled = false, busy = false, toggleAction, maxWidth = 500, maxHeight = '90vh', style }: OverlayProps) {
   const ref = useRef<HTMLDivElement>(null);
   const { id, isTop } = useOverlayStack(open, ref, true);
+  useHotkey({ action: 'search.open', scope: 'overlay', overlayId: id, handler: () => onClose() }, open && toggleAction === 'search.open');
   useHotkey({ action: 'local:overlay-close', spec: parseKeySpec('Escape'), scope: 'overlay', overlayId: id, handler: event => { if (shouldCloseOnKey(event)) onClose(); } }, open && !closeDisabled && !busy);
 
   useEffect(() => {
