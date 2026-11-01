@@ -6,18 +6,15 @@ import type { TreeNode } from './useFileTree';
 import type { PendingCreate, PendingRename } from './useFileCrud';
 import InlineNameInput from './InlineNameInput';
 
-interface CustomFileTreeProps {
+interface CustomRowFileTreeProps {
   nodes: TreeNode[];
-  renderRow: (node: TreeNode) => React.ReactNode;
+  /** Replaces the built-in row; the tree still walks expanded directories and passes the depth. */
+  renderRow: (node: TreeNode, depth: number) => React.ReactNode;
 }
 
-export default function FileTree(props: FileTreeProps | CustomFileTreeProps): React.ReactElement {
-  if ('renderRow' in props) return <>{props.nodes.map(props.renderRow)}</>;
-  return <DefaultFileTree {...props} />;
-}
-
-interface FileTreeProps {
+interface DefaultFileTreeProps {
   nodes: TreeNode[];
+  renderRow?: undefined;
   selectedPath: string | null;
   rootPath: string;
   pathApi: HostPathApi;
@@ -38,12 +35,28 @@ interface FileTreeProps {
   };
 }
 
+type FileTreeProps = DefaultFileTreeProps | CustomRowFileTreeProps;
+
+export default function FileTree(props: FileTreeProps): React.ReactElement {
+  if (props.renderRow) {
+    const { renderRow } = props;
+    const walk = (node: TreeNode, depth: number): React.ReactNode => (
+      <React.Fragment key={node.path}>
+        {renderRow(node, depth)}
+        {node.type === 'directory' && node.expanded && node.children?.map((child) => walk(child, depth + 1))}
+      </React.Fragment>
+    );
+    return <>{props.nodes.map((node) => walk(node, 0))}</>;
+  }
+  return <DefaultFileTree {...props} />;
+}
+
 function DefaultFileTree({
   nodes, selectedPath, rootPath, pathApi, pendingCreate, pendingRename,
   onSelect, onContextMenu, onLongPress,
   onCommitCreate, onCancelCreate, onCommitRename, onCancelRename,
   getSiblingNames, longPressHandlers,
-}: FileTreeProps) {
+}: DefaultFileTreeProps) {
   const renderNode = (node: TreeNode, depth: number): React.ReactElement => {
     const isDir = node.type === 'directory';
     const isSelected = node.path === selectedPath;

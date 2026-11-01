@@ -3,10 +3,9 @@ import { useTranslation } from 'react-i18next';
 import { fetchBlob, uploadFile } from '../api/client';
 import { useToast } from '../hooks/useToast';
 import { useConfirm } from '../hooks/useConfirm';
-import { useBlobUrl } from '../hooks/useBlobUrl';
+import { formatSize } from '../utils/formatSize';
 import { BottomSheet } from './ui/BottomSheet';
-import { Icon } from './ui/Icon';
-import { LoadingState, EmptyState } from './ui';
+import { Button, EmptyState, FormInput, FormSelect, LoadingState } from './ui';
 import InlineNameInput from './files/InlineNameInput';
 import { PathBreadcrumb } from './files/PathBreadcrumb';
 import FileTree from './files/FileTree';
@@ -15,17 +14,14 @@ import { StorageFilesBackend } from './files/backend/StorageFilesBackend';
 import { StorageStatusGate } from './storage/StorageStatusGate';
 import { useStorageEntries } from './storage/useStorageEntries';
 import { StorageMovePicker } from './storage/StorageMovePicker';
+import { StorageEntryRow } from './storage/StorageEntryRow';
+import { StorageSelectionActions } from './storage/StorageSelectionActions';
 import { collectStorageDrop, uploadStorageDrop, type StorageDropItem, type StorageDropFailure } from './storage/storageDrop';
 
 export interface StoredFile { key: string; originalName: string; size: number; lastModified: string }
 interface StoragePanelProps { projectId: number; onFilePreview?: (file: StoredFile) => void; activeTabId?: string | null }
 export default function StoragePanel(props: StoragePanelProps) {
   return <StorageStatusGate projectId={props.projectId}><StorageFileList key={props.projectId} {...props} /></StorageStatusGate>;
-}
-
-function StorageThumbnail({ path }: { path: string }) {
-  const { url } = useBlobUrl(path);
-  return url ? <img src={url} alt="" style={{ width: 28, height: 28, objectFit: 'cover', borderRadius: 'var(--radius-sm)' }} /> : <Icon name="image" size={16} />;
 }
 
 function StorageFileList({ projectId, onFilePreview, activeTabId }: StoragePanelProps) {
@@ -58,15 +54,13 @@ function StorageFileList({ projectId, onFilePreview, activeTabId }: StoragePanel
   const [previews, setPreviews] = useState<Array<{ url: string; name: string }>>([]);
   const input = useRef<HTMLInputElement>(null);
   const sentinel = useRef<HTMLDivElement>(null);
-  const press = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const didLongPress = useRef(false);
   const visible = entries.filter((entry) => entry.name.toLocaleLowerCase().includes(filter.toLocaleLowerCase())).sort((a, b) => {
     if (a.type !== b.type) return a.type === 'directory' ? -1 : 1;
     if (sort === 'dateAsc' || sort === 'dateDesc') return (a.lastModified === undefined && b.lastModified === undefined ? 0 : a.lastModified === undefined ? 1 : b.lastModified === undefined ? -1 : (sort === 'dateAsc' ? 1 : -1) * a.lastModified.localeCompare(b.lastModified)) || a.name.localeCompare(b.name);
     if (sort === 'sizeAsc' || sort === 'sizeDesc') return (a.size === undefined && b.size === undefined ? 0 : a.size === undefined ? 1 : b.size === undefined ? -1 : (sort === 'sizeAsc' ? 1 : -1) * (a.size - b.size)) || a.name.localeCompare(b.name);
     return (sort === 'nameDesc' ? -1 : 1) * a.name.localeCompare(b.name);
   });
-  const chosen = entries.filter((entry) => selected.includes(entry.path));
+  const chosen = visible.filter((entry) => selected.includes(entry.path));
   useEffect(() => { if (selected.length === 0) setActionsOpen(false); }, [selected.length]);
   useEffect(() => { setSelected([]); anchor.current = null; setEditing(null); setMoving(false); setActionsOpen(false); }, [path]);
   useEffect(() => {
@@ -99,7 +93,9 @@ function StorageFileList({ projectId, onFilePreview, activeTabId }: StoragePanel
       const stats = await Promise.all(chosen.filter((entry) => entry.type === 'directory').map((entry) => backend.stat(entry.path)));
       const count = stats.reduce((sum, item) => sum + item.count, 0);
       const size = stats.reduce((sum, item) => sum + item.totalSize, 0);
-      if (await confirm({ title: t('list.deleteTitle'), message: t('list.deleteMessage', { names: chosen.map((entry) => entry.name).join(', '), count, size }), danger: true })) {
+      const names = chosen.map((entry) => entry.name).join(', ');
+      const message = stats.length ? t('list.deleteMessage', { names, count, size: formatSize(size) }) : t('list.deleteMessageFiles', { names });
+      if (await confirm({ title: t('list.deleteTitle'), message, danger: true })) {
         await backend.deleteMany(chosen); setSelected([]); await refresh();
       }
     } catch (err) { showToast(err instanceof Error ? err.message : t('list.operationError')); await refresh(); }
@@ -160,38 +156,42 @@ function StorageFileList({ projectId, onFilePreview, activeTabId }: StoragePanel
       showToast(filesT('storage.copiedUrl'));
     } catch { showToast(t('list.operationError')); }
   }
+  const selectionActions = <StorageSelectionActions count={chosen.length} busy={busy} onRename={() => setEditing(chosen[0])} onMove={() => setMoving(true)} onDelete={() => void remove()} onClear={() => setSelected([])} />;
   function preview(entry: FileEntry) { onFilePreview?.({ key: `projects/${projectId}/${entry.path}`, originalName: entry.name, size: entry.size ?? 0, lastModified: entry.lastModified ?? '' }); }
   return <div style={{ flex: 1, display: 'flex', flexDirection: 'column', overflow: 'hidden', position: 'relative', minWidth: 0 }}
     onDragEnter={(event) => { if (!isFileDrag(event)) return; event.preventDefault(); event.stopPropagation(); setDragOver(true); }}
     onDragOver={(event) => { if (!isFileDrag(event)) return; event.preventDefault(); event.stopPropagation(); }}
     onDragLeave={(event) => { if (!isFileDrag(event)) return; event.stopPropagation(); if (!event.currentTarget.contains(event.relatedTarget as Node)) setDragOver(false); }} onDrop={(event) => void drop(event)}>
-    <div style={{ display: 'flex', flexWrap: 'wrap', gap: 'var(--space-2)', padding: 'var(--space-2)' }}>
-      <button type="button" disabled={busy} onClick={() => input.current?.click()}>{filesT('storage.uploadFile')}</button>
+    <div style={{ display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: 'var(--space-2)', padding: 'var(--space-2)' }}>
+      <Button size="sm" variant="primary" type="button" disabled={busy} onClick={() => input.current?.click()}>{filesT('storage.uploadFile')}</Button>
       <input ref={input} type="file" multiple hidden onChange={(event) => { void uploadItems(Promise.resolve(Array.from(event.target.files ?? []).map((file) => ({ type: 'file' as const, path: file.name, file })))); event.target.value = ''; }} />
-      <button type="button" disabled={busy} onClick={() => setEditing('create')}>{t('list.newFolder')}</button>
-      <label>{t('list.filter')} <input value={filter} onChange={(event) => setFilter(event.target.value)} /></label>
-      <label>{t('list.sort')} <select value={sort} onChange={(event) => setSort(event.target.value)}><option value="name">{t('list.nameAsc')}</option><option value="nameDesc">{t('list.nameDesc')}</option><option value="sizeAsc">{t('list.sizeAsc')}</option><option value="sizeDesc">{t('list.sizeDesc')}</option><option value="dateAsc">{t('list.dateAsc')}</option><option value="dateDesc">{t('list.dateDesc')}</option></select></label>
+      <Button size="sm" type="button" disabled={busy} onClick={() => setEditing('create')}>{t('list.newFolder')}</Button>
+      <FormInput aria-label={t('list.filter')} placeholder={t('list.filter')} value={filter} onChange={(event) => setFilter(event.target.value)} style={{ flex: '1 1 8rem', width: 'auto', minWidth: 0, padding: 'var(--space-1) var(--space-2)', fontSize: 'var(--font-sm)' }} />
+      <FormSelect aria-label={t('list.sort')} value={sort} onChange={(event) => setSort(event.target.value)} style={{ width: 'auto', padding: 'var(--space-1) var(--space-2)', fontSize: 'var(--font-sm)' }}><option value="name">{t('list.nameAsc')}</option><option value="nameDesc">{t('list.nameDesc')}</option><option value="sizeAsc">{t('list.sizeAsc')}</option><option value="sizeDesc">{t('list.sizeDesc')}</option><option value="dateAsc">{t('list.dateAsc')}</option><option value="dateDesc">{t('list.dateDesc')}</option></FormSelect>
     </div>
-    <PathBreadcrumb path={path} rootLabel="Storage" navigationLabel={t('list.path')} onNavigate={navigate} />
-    <div aria-live="polite">{t('list.count', { count: visible.length, selected: selected.length })} {nextCursor && t('list.moreAvailable')}</div>
-    {mobile ? <>{chosen.length > 0 && <button type="button" onClick={() => setActionsOpen(true)}>{t('list.actions', { count: chosen.length })}</button>}<BottomSheet open={actionsOpen && chosen.length > 0 && !moving && !editing} title={t('list.count', { count: visible.length, selected: selected.length })} onClose={() => setActionsOpen(false)}><div><button disabled={busy || chosen.length !== 1} onClick={() => setEditing(chosen[0])}>{t('list.rename')}</button> <button disabled={busy} onClick={() => setMoving(true)}>{t('list.move')}</button> <button disabled={busy} onClick={() => void remove()}>{t('list.delete')}</button> <button onClick={() => setSelected([])}>{t('list.clearSelection')}</button></div></BottomSheet></> : chosen.length > 0 && <div><button disabled={busy || chosen.length !== 1} onClick={() => setEditing(chosen[0])}>{t('list.rename')}</button> <button disabled={busy} onClick={() => setMoving(true)}>{t('list.move')}</button> <button disabled={busy} onClick={() => void remove()}>{t('list.delete')}</button> <button onClick={() => setSelected([])}>{t('list.clearSelection')}</button></div>}
+    <PathBreadcrumb path={path} rootLabel={t('list.root')} navigationLabel={t('list.path')} onNavigate={navigate} />
+    <div aria-live="polite" style={{ padding: '0 var(--space-2)', fontSize: 'var(--font-xs)', color: 'var(--text-dim)' }}>{t('list.count', { count: visible.length, selected: selected.length })} {nextCursor && t('list.moreAvailable')}</div>
+    {chosen.length > 0 && (mobile
+      ? <div style={{ padding: 'var(--space-2)' }}><Button size="sm" type="button" onClick={() => setActionsOpen(true)}>{t('list.actions', { count: chosen.length })}</Button></div>
+      : <div style={{ padding: 'var(--space-2)' }}>{selectionActions}</div>)}
+    {mobile && <BottomSheet open={actionsOpen && chosen.length > 0 && !moving && !editing} title={t('list.count', { count: visible.length, selected: selected.length })} onClose={() => setActionsOpen(false)}>{selectionActions}</BottomSheet>}
     {moving && <StorageMovePicker backend={backend} initialPath={path} disabled={busy} onCancel={() => setMoving(false)} onMove={(destination) => { if (chosen.some((item) => item.type === 'directory' && destination.startsWith(item.path))) { showToast(t('list.invalidDestination')); return; } setMoving(false); void run(() => backend.moveMany(chosen, destination)); }} />}
     {dragOver && <div role="status" style={{ position: 'absolute', inset: 0, background: 'var(--accent-a15)', border: '2px dashed var(--accent)', pointerEvents: 'none', zIndex: 1 }}>{filesT('storage.dropToUpload')}</div>}
     {progress && <div role="status">{progress}</div>}
-    {previews.length > 0 && <div style={{ display: 'flex', flexWrap: 'wrap', gap: 'var(--space-2)', maxHeight: 'min(25vh, calc(var(--space-6) * 6))', overflowY: 'auto', flexShrink: 0 }}>{previews.map((image) => <img key={image.url} src={image.url} alt={image.name} style={{ width: 64, height: 64, objectFit: 'contain', borderRadius: 'var(--radius-sm)' }} />)}</div>}
+    {previews.length > 0 && <div style={{ display: 'flex', flexWrap: 'wrap', gap: 'var(--space-2)', maxHeight: 'min(25vh, calc(var(--space-6) * 6))', overflowY: 'auto', flexShrink: 0 }}>{previews.map((image) => <img key={image.url} src={image.url} alt={image.name} style={{ width: 'calc(var(--space-6) * 2 + var(--space-4))', height: 'calc(var(--space-6) * 2 + var(--space-4))', objectFit: 'contain', borderRadius: 'var(--radius-sm)' }} />)}</div>}
     {failures.length > 0 && <div role="alert" style={{ maxHeight: 'min(25vh, calc(var(--space-6) * 6))', overflowY: 'auto', overflowWrap: 'anywhere', flexShrink: 0 }}><div>{t('list.uploadFailures')}</div><ul>{failures.map((failure, index) => <li key={index}>{failure.path}: {failure.error}</li>)}</ul></div>}
     <div style={{ flex: 1, overflowY: 'auto', paddingBottom: 'env(safe-area-inset-bottom)' }}>
       {editing === 'create' && <InlineNameInput initialValue="" kind="directory" siblingNames={entries.map((entry) => entry.name)} depth={0} onCancel={() => setEditing(null)} onCommit={(name) => { setEditing(null); void run(async () => { await backend.create(`${path}${name}/`, 'directory'); }); }} />}
       {loading && <LoadingState />}
-      {error && <div role="alert">{error} <button onClick={() => void (nextCursor !== null ? loadMore() : refresh())}>{t('retry')}</button></div>}
+      {error && <div role="alert" style={{ display: 'flex', alignItems: 'center', gap: 'var(--space-2)', padding: 'var(--space-2)', color: 'var(--danger)' }}>{error} <Button size="sm" type="button" onClick={() => void (nextCursor !== null ? loadMore() : refresh())}>{t('retry')}</Button></div>}
       {!loading && !error && !visible.length && <EmptyState title={t('list.empty')} />}
-      <FileTree nodes={visible} renderRow={(entry) => editing !== 'create' && editing?.path === entry.path ? <InlineNameInput key={entry.path} initialValue={entry.name} kind={entry.type} siblingNames={entries.filter((item) => item.path !== entry.path).map((item) => item.name)} depth={0} onCancel={() => setEditing(null)} onCommit={(name) => { setEditing(null); void run(() => backend.rename(entry.path, name)); }} /> : <div key={entry.path} className={`row-hover${selected.includes(entry.path) || activeTabId === `storage-file:${projectId}:${entry.path}` ? ' row-selected' : ''}`} style={{ display: 'flex', alignItems: 'center', minHeight: 44, gap: 'var(--space-2)', minWidth: 0 }} onTouchStart={() => { didLongPress.current = false; press.current = setTimeout(() => { didLongPress.current = true; select(entry, true, false); }, 500); }} onTouchEnd={() => { if (press.current) clearTimeout(press.current); }} onTouchMove={() => { if (press.current) clearTimeout(press.current); }}>
-        <input type="checkbox" aria-label={t('list.select', { name: entry.name })} checked={selected.includes(entry.path)} onChange={() => select(entry, true, false)} />
-        {entry.type === 'directory' ? <Icon name="files" size={16} /> : /\.(jpe?g|png|gif|webp|svg|bmp|ico)$/i.test(entry.name) ? <StorageThumbnail path={raw(entry)} /> : <Icon name="file" size={16} />}
-        <button type="button" style={{ flex: 1, minWidth: 0, textAlign: 'left', overflow: 'hidden', textOverflow: 'ellipsis' }} onClick={(event) => { if (didLongPress.current) { didLongPress.current = false; return; } if (event.shiftKey || event.ctrlKey || event.metaKey) select(entry, true, event.shiftKey); else if (entry.type === 'directory') navigate(entry.path); else preview(entry); }}>{entry.name}</button>
-        {entry.type === 'file' && <><button type="button" aria-label={filesT('storage.download')} title={filesT('storage.download')} onClick={() => void download(entry)}><Icon name="download" size={16} /></button><button type="button" aria-label={filesT('storage.copyUrl')} title={filesT('storage.copyUrl')} onClick={() => void copyUrl(entry)}><Icon name="external-link" size={16} /></button></>}
-      </div>} />
-      {nextCursor && <div ref={sentinel}><button disabled={loadingMore} onClick={() => void loadMore()}>{loadingMore ? t('list.loading') : t('list.loadMore')}</button></div>}
+      <FileTree nodes={visible} renderRow={(entry, depth) => editing !== 'create' && editing?.path === entry.path
+        ? <InlineNameInput initialValue={entry.name} kind={entry.type} siblingNames={entries.filter((item) => item.path !== entry.path).map((item) => item.name)} depth={depth} onCancel={() => setEditing(null)} onCommit={(name) => { setEditing(null); void run(() => backend.rename(entry.path, name)); }} />
+        : <StorageEntryRow entry={entry} rawPath={raw(entry)} isSelected={selected.includes(entry.path)} isActive={activeTabId === `storage-file:${projectId}:${entry.path}`}
+          onToggle={() => select(entry, true, false)} onRangeSelect={() => select(entry, true, true)}
+          onOpen={() => { if (entry.type === 'directory') navigate(entry.path); else preview(entry); }}
+          onDownload={() => void download(entry)} onCopyUrl={() => void copyUrl(entry)} />} />
+      {nextCursor && <div ref={sentinel} style={{ padding: 'var(--space-2)' }}><Button size="sm" variant="ghost" type="button" loading={loadingMore} loadingLabel={t('list.loading')} onClick={() => void loadMore()}>{t('list.loadMore')}</Button></div>}
     </div>
   </div>;
 }

@@ -33,10 +33,6 @@
     },
     "configureLater": "Set up later"
   },
-  "delete": {
-    "title": "Delete file?",
-    "message": "Delete {{name}}? This cannot be undone."
-  },
   "list": {
     "moveDestination": "Move destination",
     "parent": "Parent folder",
@@ -46,7 +42,7 @@
     "cancel": "Cancel",
     "operationError": "Could not complete the operation",
     "deleteTitle": "Delete selected items?",
-    "deleteMessage": "Delete {{names}}? Folders contain {{count}} files ({{size}} bytes). This cannot be undone.",
+    "deleteMessage": "Delete {{names}}? Folders contain {{count}} files ({{size}}). This cannot be undone.",
     "newFolder": "New folder",
     "filter": "Filter",
     "sort": "Sort",
@@ -68,6 +64,8 @@
     "sizeAsc": "Size: smallest first",
     "sizeDesc": "Size: largest first",
     "dateAsc": "Updated: oldest first",
-    "dateDesc": "Updated: newest first"
+    "dateDesc": "Updated: newest first",
+    "root": "Storage",
+    "deleteMessageFiles": "Delete {{names}}? This cannot be undone."
   }
 }

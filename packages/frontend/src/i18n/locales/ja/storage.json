@@ -33,10 +33,6 @@
     },
     "configureLater": "あとで設定"
   },
-  "delete": {
-    "title": "ファイルを削除しますか？",
-    "message": "{{name}} を削除します。この操作は取り消せません。"
-  },
   "list": {
     "moveDestination": "移動先",
     "parent": "親フォルダ",
@@ -46,7 +42,7 @@
     "cancel": "キャンセル",
     "operationError": "操作に失敗しました",
     "deleteTitle": "選択した項目を削除しますか？",
-    "deleteMessage": "{{names}} を削除しますか？ フォルダ内のファイルは {{count}} 件（{{size}} バイト）です。元に戻せません。",
+    "deleteMessage": "{{names}} を削除しますか？ フォルダ内のファイルは {{count}} 件（{{size}}）です。元に戻せません。",
     "newFolder": "フォルダを作成",
     "filter": "絞り込み",
     "sort": "並べ替え",
@@ -68,6 +64,8 @@
     "sizeAsc": "サイズの小さい順",
     "sizeDesc": "サイズの大きい順",
     "dateAsc": "更新日時の古い順",
-    "dateDesc": "更新日時の新しい順"
+    "dateDesc": "更新日時の新しい順",
+    "root": "ストレージ",
+    "deleteMessageFiles": "{{names}} を削除しますか？ 元に戻せません。"
   }
 }

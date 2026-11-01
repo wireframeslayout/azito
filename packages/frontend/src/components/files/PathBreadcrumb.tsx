@@ -21,9 +21,10 @@ export function PathBreadcrumb({ path, onNavigate, rootLabel, navigationLabel }:
 
   if (onNavigate) {
     const segments = path.split('/').filter(Boolean);
-    return <nav aria-label={navigationLabel} style={{ display: 'flex', flexWrap: 'wrap', minWidth: 0 }}>
-      <button type="button" onClick={() => onNavigate('')}>{rootLabel}</button>
-      {segments.map((segment, index) => <span key={index}> / <button type="button" onClick={() => onNavigate(`${segments.slice(0, index + 1).join('/')}/`)}>{segment}</button></span>)}
+    const crumbStyle: React.CSSProperties = { background: 'none', border: 'none', padding: '2px 4px', color: 'var(--text-dim)', fontSize: 'var(--font-xs)', cursor: 'pointer', overflowWrap: 'anywhere', textAlign: 'left' };
+    return <nav aria-label={navigationLabel} style={{ display: 'flex', flexWrap: 'wrap', alignItems: 'center', padding: '4px 12px', minWidth: 0, flexShrink: 0, fontSize: 'var(--font-xs)', color: 'var(--text-dim)' }}>
+      <button type="button" className="icon-btn" style={crumbStyle} aria-current={segments.length === 0 ? 'location' : undefined} onClick={() => onNavigate('')}>{rootLabel}</button>
+      {segments.map((segment, index) => <span key={index} style={{ display: 'inline-flex', alignItems: 'center', minWidth: 0 }}>/<button type="button" className="icon-btn" style={crumbStyle} aria-current={index === segments.length - 1 ? 'location' : undefined} onClick={() => onNavigate(`${segments.slice(0, index + 1).join('/')}/`)}>{segment}</button></span>)}
     </nav>;
   }
 

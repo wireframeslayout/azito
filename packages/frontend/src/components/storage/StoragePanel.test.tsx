@@ -28,7 +28,7 @@ describe('StoragePanel', () => {
     render(<StoragePanel projectId={1} />);
     fireEvent.click(await screen.findByRole('button', { name: 'folder' }));
     await waitFor(() => expect(listPage).toHaveBeenCalledWith('folder/', null));
-    fireEvent.click(screen.getByRole('button', { name: 'Storage' }));
+    fireEvent.click(screen.getByRole('button', { name: 'list.root' }));
     await waitFor(() => expect(listPage).toHaveBeenCalledWith('', null));
   });
   it('sorts size and date in both directions with missing values last', async () => {
@@ -38,9 +38,9 @@ describe('StoragePanel', () => {
       { name: 'unknown', path: 'unknown', type: 'file' },
     ], nextCursor: null });
     render(<StoragePanel projectId={1} />);
-    await screen.findByRole('button', { name: 'small' });
+    await screen.findByRole('checkbox', { name: 'list.select small' });
     const select = screen.getByLabelText('list.sort');
-    const order = () => screen.getAllByRole('button').map((button) => button.textContent).filter((name) => ['small', 'large', 'unknown'].includes(name ?? ''));
+    const order = () => screen.getAllByRole('checkbox').map((box) => box.getAttribute('aria-label')?.replace('list.select ', ''));
     for (const [value, expected] of [
       ['sizeAsc', ['small', 'large', 'unknown']], ['sizeDesc', ['large', 'small', 'unknown']],
       ['dateAsc', ['small', 'large', 'unknown']], ['dateDesc', ['large', 'small', 'unknown']],
@@ -56,6 +56,22 @@ describe('StoragePanel', () => {
     await waitFor(() => expect(stat).toHaveBeenCalledWith('folder/'));
     await waitFor(() => expect(confirm).toHaveBeenCalledWith(expect.objectContaining({ danger: true })));
     await waitFor(() => expect(deleteMany).toHaveBeenCalled());
+  });
+  it('confirms a file-only deletion without folder statistics', async () => {
+    render(<StoragePanel projectId={1} />);
+    fireEvent.click(await screen.findByRole('checkbox', { name: 'list.select a.txt' }));
+    fireEvent.click(screen.getByRole('button', { name: 'list.delete' }));
+    await waitFor(() => expect(confirm).toHaveBeenCalledWith(expect.objectContaining({ message: 'list.deleteMessageFiles' })));
+    expect(stat).not.toHaveBeenCalled();
+  });
+  it('does not act on selected items hidden by the filter', async () => {
+    render(<StoragePanel projectId={1} />);
+    fireEvent.click(await screen.findByRole('checkbox', { name: 'list.select folder' }));
+    fireEvent.click(screen.getByRole('checkbox', { name: 'list.select a.txt' }));
+    fireEvent.change(screen.getByLabelText('list.filter'), { target: { value: 'a.txt' } });
+    fireEvent.click(screen.getByRole('button', { name: 'list.delete' }));
+    await waitFor(() => expect(deleteMany).toHaveBeenCalledWith([expect.objectContaining({ path: 'a.txt' })]));
+    expect(stat).not.toHaveBeenCalled();
   });
   it('does not delete when folder statistics fail', async () => {
     stat.mockRejectedValue(new Error('stat failed'));

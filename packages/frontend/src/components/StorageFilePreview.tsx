@@ -7,12 +7,7 @@ import { Icon } from './ui/Icon';
 import { useBlobUrl } from '../hooks/useBlobUrl';
 import { useFileDownload } from './files/useFileDownload';
 import { Button } from './ui';
-
-function formatSize(bytes: number): string {
-  if (bytes < 1024) return `${bytes} B`;
-  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
-  return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
-}
+import { formatSize } from '../utils/formatSize';
 
 const MIME_MAP: Record<string, string> = {
   jpg: 'image/jpeg', jpeg: 'image/jpeg', png: 'image/png', gif: 'image/gif',
