@@ -3,7 +3,7 @@ import { afterEach, expect, it, vi } from 'vitest';
 import { useRef } from 'react';
 import { HotkeyProvider, useHotkey, useHotkeyBindings, useOverlayStack } from './useHotkeys';
 import { parseKeySpec } from '../lib/hotkeys/keySpec';
-afterEach(() => localStorage.clear());
+afterEach(() => { localStorage.clear(); vi.restoreAllMocks(); });
 function Global({ handler }: { handler: () => void }) {
   useHotkey({ action: 'search.open', scope: 'global', when: 'not-editable', handler });
   return <input aria-label="input" />;
@@ -29,4 +29,12 @@ it('only dispatches escape to the top layer and suppresses global keys', async (
 it('honors preventDefault during propagation for escape', async () => {
   const close = vi.fn(); render(<HotkeyProvider><Layer handler={close} /><input aria-label="escape" onKeyDown={e => e.preventDefault()} /></HotkeyProvider>);
   fireEvent.keyDown(screen.getByLabelText('escape'), { key: 'Escape' }); await Promise.resolve(); expect(close).not.toHaveBeenCalled();
+});
+it('decides escape after propagation even when microtasks run between listeners', async () => {
+  vi.spyOn(globalThis, 'queueMicrotask').mockImplementation(callback => callback());
+  const close = vi.fn(); render(<HotkeyProvider><Layer handler={close} /><input aria-label="suggest" onKeyDown={e => e.preventDefault()} /><input aria-label="plain" /></HotkeyProvider>);
+  fireEvent.keyDown(screen.getByLabelText('suggest'), { key: 'Escape' });
+  await new Promise(resolve => setTimeout(resolve)); expect(close).not.toHaveBeenCalled();
+  fireEvent.keyDown(screen.getByLabelText('plain'), { key: 'Escape' });
+  await waitFor(() => expect(close).toHaveBeenCalledOnce());
 });

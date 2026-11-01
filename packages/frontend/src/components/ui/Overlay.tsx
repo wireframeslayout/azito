@@ -24,16 +24,14 @@ interface OverlayProps {
 
 export function Overlay({ open, onClose, labelledBy, children, variant = 'dialog', surface = 'elevated', initialFocusRef, dismissOnBackdrop = true, closeDisabled = false, busy = false, maxWidth = 500, maxHeight = '90vh', style }: OverlayProps) {
   const ref = useRef<HTMLDivElement>(null);
-  const { id, isTop } = useOverlayStack(open, ref);
+  const { id, isTop } = useOverlayStack(open, ref, true);
   useHotkey({ action: 'local:overlay-close', spec: parseKeySpec('Escape'), scope: 'overlay', overlayId: id, handler: event => { if (shouldCloseOnKey(event)) onClose(); } }, open && !closeDisabled && !busy);
 
   useEffect(() => {
     if (!open) return;
-    const previous = document.activeElement instanceof HTMLElement ? document.activeElement : null;
     const container = ref.current;
     if (!container) return;
     (initialFocusRef?.current ?? getFocusableElements(container)[0] ?? container).focus();
-    return () => { queueMicrotask(() => { if (previous?.isConnected) previous.focus(); }); };
   }, [open, initialFocusRef]);
 
 

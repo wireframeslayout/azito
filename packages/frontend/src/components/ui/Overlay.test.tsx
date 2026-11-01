@@ -1,7 +1,31 @@
 import { fireEvent, render, screen, waitFor } from '@testing-library/react';
-import { describe, expect, it, vi } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
+import type { ReactElement } from 'react';
 import { HotkeyProvider } from '../../hooks/useHotkeys';
 import { Overlay } from './Overlay';
+
+function isInertTree(element: HTMLElement): boolean {
+  for (let node: HTMLElement | null = element; node; node = node.parentElement) if (node.inert) return true;
+  return false;
+}
+function emulateBrowserFocus(): void {
+  const focus = HTMLElement.prototype.focus;
+  vi.spyOn(HTMLElement.prototype, 'focus').mockImplementation(function (this: HTMLElement, options?: FocusOptions) {
+    if (!isInertTree(this)) focus.call(this, options);
+  });
+  vi.spyOn(globalThis, 'queueMicrotask').mockImplementation(callback => callback());
+}
+function renderInRoot(ui: ReactElement) {
+  const root = document.createElement('div');
+  root.id = 'root';
+  document.body.append(root);
+  return render(ui, { container: root });
+}
+
+afterEach(() => {
+  vi.restoreAllMocks();
+  document.getElementById('root')?.remove();
+});
 
 describe('Overlay', () => {
   it('focuses and cycles within the dialog, then restores focus', async () => {
@@ -49,4 +73,38 @@ describe('Overlay', () => {
     await waitFor(() => expect(screen.getByText('Open nested')).toHaveFocus());
   });
 
+  it('returns focus to the trigger only after the root is no longer inert', async () => {
+    emulateBrowserFocus();
+    const view = (open: boolean) => <HotkeyProvider>
+      <button>Trigger</button>
+      <Overlay open={open} labelledBy="restore" onClose={() => {}}><h2 id="restore">Restore</h2><button>Inside</button></Overlay>
+    </HotkeyProvider>;
+    const { rerender } = renderInRoot(view(false));
+    screen.getByText('Trigger').focus();
+    rerender(view(true));
+    expect(screen.getByText('Inside')).toHaveFocus();
+    expect(document.getElementById('root')!.inert).toBe(true);
+    rerender(view(false));
+    await waitFor(() => expect(screen.getByText('Trigger')).toHaveFocus());
+    expect(document.getElementById('root')!.inert).toBeFalsy();
+  });
+
+  it('returns focus to the underlying dialog only after it is no longer inert', async () => {
+    emulateBrowserFocus();
+    const view = (nested: boolean) => <HotkeyProvider>
+      <Overlay open labelledBy="outer" onClose={() => {}}>
+        <h2 id="outer">Outer</h2><button>Open nested</button>
+      </Overlay>
+      <Overlay open={nested} labelledBy="inner" onClose={() => {}}>
+        <h2 id="inner">Inner</h2><button>Inner action</button>
+      </Overlay>
+    </HotkeyProvider>;
+    const { rerender } = renderInRoot(view(false));
+    screen.getByText('Open nested').focus();
+    rerender(view(true));
+    expect(screen.getByText('Inner action')).toHaveFocus();
+    expect(screen.getByRole('dialog', { name: 'Outer', hidden: true }).inert).toBe(true);
+    rerender(view(false));
+    await waitFor(() => expect(screen.getByText('Open nested')).toHaveFocus());
+  });
 });

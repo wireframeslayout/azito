@@ -15,13 +15,17 @@ export interface HotkeyRegistration {
 }
 type Registration = { current: HotkeyRegistration };
 type StackEntry = { id: symbol; element: HTMLElement };
+const isInert = (element: HTMLElement): boolean => {
+  for (let node: HTMLElement | null = element; node; node = node.parentElement) if (node.inert) return true;
+  return false;
+};
 interface HotkeysContextValue {
   bindings: Bindings;
   chordMs: number;
   setBinding: (action: HotkeyAction, spec: KeySpec | null) => 'ok' | 'conflict' | 'storage-error';
   setChordMs: (ms: number) => 'ok' | 'storage-error';
   register: (id: symbol, reg: Registration) => () => void;
-  addOverlay: (id: symbol, element: HTMLElement) => () => void;
+  addOverlay: (id: symbol, element: HTMLElement, returnFocusTo: HTMLElement | null) => () => void;
   stack: StackEntry[];
   dispatchFromTerminal: (e: KeyboardEvent) => boolean;
 }
@@ -39,15 +43,19 @@ export function HotkeyProvider({ children }: { children: ReactNode }) {
   const registrations = useRef(new Map<symbol, Registration>());
   const matchers = useRef(new Map<symbol, { spec: string; matcher: ChordMatcher }>());
   const handled = useRef(new WeakMap<KeyboardEvent, boolean>());
+  const pendingFocus = useRef<HTMLElement[]>([]);
   const state = useRef({ bindings, chordMs, stack });
   state.current = { bindings, chordMs, stack };
   const register = (id: symbol, reg: Registration) => {
     registrations.current.set(id, reg);
     return () => { registrations.current.delete(id); matchers.current.delete(id); };
   };
-  const addOverlay = (id: symbol, element: HTMLElement) => {
+  const addOverlay = (id: symbol, element: HTMLElement, returnFocusTo: HTMLElement | null) => {
     setStack(current => [...current.filter(entry => entry.id !== id), { id, element }]);
-    return () => setStack(current => current.filter(entry => entry.id !== id));
+    return () => {
+      if (returnFocusTo) pendingFocus.current.push(returnFocusTo);
+      setStack(current => current.filter(entry => entry.id !== id));
+    };
   };
   const dispatch = (e: KeyboardEvent, terminal: boolean): boolean => {
     if (handled.current.has(e)) return handled.current.get(e)!;
@@ -67,7 +75,7 @@ export function HotkeyProvider({ children }: { children: ReactNode }) {
       handled.current.set(e, true);
       if (e.key === 'Escape' && reg.scope === 'overlay') {
         const topId = top?.id;
-        queueMicrotask(() => { if (!e.defaultPrevented && state.current.stack.at(-1)?.id === topId && registrations.current.has(id)) reg.handler(e); });
+        setTimeout(() => { if (!e.defaultPrevented && state.current.stack.at(-1)?.id === topId && registrations.current.has(id)) reg.handler(e); });
       } else { e.preventDefault(); reg.handler(e); }
       return true;
     }
@@ -81,13 +89,15 @@ export function HotkeyProvider({ children }: { children: ReactNode }) {
     return () => document.removeEventListener('keydown', listener, true);
   }, []);
   useEffect(() => {
-    if (!stack.length) return;
-    const top = stack[stack.length - 1].element;
+    const top = stack.at(-1)?.element;
     const root = document.getElementById('root');
-    const targets = [...stack.slice(0, -1).map(entry => entry.element)];
-    if (root && !root.contains(top)) targets.push(root);
+    const targets = stack.slice(0, -1).map(entry => entry.element);
+    if (top && root && !root.contains(top)) targets.push(root);
     const previous = targets.map(element => [element, element.inert] as const);
-    targets.forEach(element => { if (!element.contains(top)) element.inert = true; });
+    targets.forEach(element => { if (top && !element.contains(top)) element.inert = true; });
+    const focusTarget = [...pendingFocus.current].reverse().find(element => element.isConnected && !isInert(element));
+    pendingFocus.current = [];
+    focusTarget?.focus();
     return () => previous.forEach(([element, inert]) => { element.inert = inert; });
   }, [stack]);
   const setBinding = (action: HotkeyAction, spec: KeySpec | null) => {
@@ -115,10 +125,15 @@ export function useHotkeyBindings(): Pick<HotkeysContextValue, 'bindings' | 'set
 export function useHotkeyDispatch(): Pick<HotkeysContextValue, 'dispatchFromTerminal'> {
   const { dispatchFromTerminal } = useContextValue(); return { dispatchFromTerminal };
 }
-export function useOverlayStack(open: boolean, elementRef: RefObject<HTMLElement | null>): { id: symbol; isTop: boolean } {
+export function useOverlayStack(open: boolean, elementRef: RefObject<HTMLElement | null>, returnFocus = false): { id: symbol; isTop: boolean } {
   const { addOverlay, stack } = useContextValue();
   const id = useRef(Symbol('overlay'));
   const addRef = useRef(addOverlay); addRef.current = addOverlay;
-  useEffect(() => { if (open && elementRef.current) return addRef.current(id.current, elementRef.current); }, [open, elementRef]);
+  const returnFocusRef = useRef(returnFocus); returnFocusRef.current = returnFocus;
+  useEffect(() => {
+    if (!open || !elementRef.current) return;
+    const previous = returnFocusRef.current && document.activeElement instanceof HTMLElement ? document.activeElement : null;
+    return addRef.current(id.current, elementRef.current, previous);
+  }, [open, elementRef]);
   return { id: id.current, isTop: stack.at(-1)?.id === id.current };
 }
