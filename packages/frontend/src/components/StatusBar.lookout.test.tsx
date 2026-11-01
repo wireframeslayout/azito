@@ -5,7 +5,7 @@ const mocks = vi.hoisted(() => ({ open: vi.fn(), close: vi.fn(), openTask: vi.fn
 vi.mock('../hooks/useAgentActivity', () => ({ useAgentActivity: () => ({ snapshotStatus: 'ready', retrySnapshot: vi.fn() }) }));
 vi.mock('../hooks/useCrossProjectNavigation', () => ({ useCrossProjectNavigation: () => ({ openTask: mocks.openTask, openTerminal: vi.fn() }) }));
 vi.mock('../hooks/useLookout', () => ({ useLookout: () => ({ open: false, openDrawer: mocks.open, closeDrawer: mocks.close, sections: { counts: { attention: mocks.attention } } }) }));
-vi.mock('./lookout/LookoutDrawer', () => ({ LookoutDrawer: ({ onOpenItem }: { onOpenItem: (item: unknown) => void }) => <button onClick={() => onOpenItem({ primaryRow: { taskId: 42 } })}>open row</button> }));
+vi.mock('./lookout/LookoutDrawer', () => ({ LookoutDrawer: ({ onOpenItem }: { onOpenItem: (item: unknown) => void }) => <button onClick={() => onOpenItem({ primaryRow: { taskId: 42, serverName: "local", target: "s:1" } })}>open row</button> }));
 vi.mock('./search/GlobalSearch', () => ({ useOpenGlobalSearch: () => vi.fn() }));
 vi.mock('../hooks/useWorkspaceTargets', () => ({ useWorkspaceTargets: () => ({ focusedTargetDisplay: null }) }));
 vi.mock('../hooks/useSystemUpdate', () => ({ useSystemUpdate: () => ({ status: null, startUpdate: vi.fn(), checkNow: vi.fn() }) }));

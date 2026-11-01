@@ -1,12 +1,11 @@
-import type { ActivityTitleData } from '../../lib/windowDisplay';
 import { useMemo, useRef, useState, type CSSProperties } from 'react';
 import { useTranslation } from 'react-i18next';
-import { useActiveWindowRows } from '../../hooks/useActiveWindowRows';
 import type { ActiveWindowRow } from '../../hooks/useActiveWindowRows';
 import { useClickOutside } from '../../hooks/useClickOutside';
 import { BrailleSpinner, BlockedDot, FinishedIndicator } from '../ui/WindowActivityIndicator';
 import { formatRelativeTime } from '../../utils/time';
 import { openActivityTarget } from '../../lib/activityOpen';
+import { openLookoutItem } from '../../lib/lookoutOpen';
 import { useOpenTerminalTarget } from '../../hooks/useTerminalTargetOpener';
 import type { ConnectPaneFn } from '../../lib/terminalRef';
 import { useLookout } from '../../hooks/useLookout';
@@ -15,7 +14,6 @@ import { MOBILE_STATUS_BAR_HEIGHT } from '../../lib/mobileChrome';
 import { IconButton } from '../ui/IconButton';
 import { Icon } from '../ui/Icon';
 import { useAgentActivity } from '../../hooks/useAgentActivity';
-import type { Task } from '../../pages/workspace/types';
 import { HealthDot } from '../statusbar/HealthDot';
 import { ResourceMeter } from '../statusbar/ResourceMeter';
 import { healthReasonText } from '../statusbar/ResourceDropdown';
@@ -32,8 +30,6 @@ import { ServerHealthSheet } from './ServerHealthSheet';
 
 
 interface MobileStatusBarProps {
-  titleData: ActivityTitleData;
-  allTasks: Task[];
   openTask: (taskId: number, title: string, projectId?: number) => void;
   connectPane: ConnectPaneFn;
 }
@@ -73,11 +69,10 @@ const rowTitleStyle: CSSProperties = {
   whiteSpace: 'nowrap',
 };
 
-export function MobileStatusBar({ titleData, openTask, connectPane }: MobileStatusBarProps) {
+export function MobileStatusBar({ openTask, connectPane }: MobileStatusBarProps) {
   const openTerminal = useOpenTerminalTarget(connectPane);
   const { t } = useTranslation(['workspace', 'common', 'lookout']);
-  const { sections } = useLookout();
-  const { rows, historyCount } = useActiveWindowRows(titleData);
+  const { sections, rows, historyCount } = useLookout();
   const [open, setOpen] = useState(false);
   const { markFinishedSeen, dismissFinished, clearSeenFinished, retention } = useAgentActivity();
   const [historyOpen, setHistoryOpen] = useState(false);
@@ -121,11 +116,7 @@ export function MobileStatusBar({ titleData, openTask, connectPane }: MobileStat
   };
 
   const handleWorkingRowOpen = (group: LookoutItem) => {
-    if (group.task) openTask(group.task.id, group.title, group.projectId);
-    else if (group.primaryRow) openActivityTarget(
-      { taskId: group.primaryRow.taskId, serverName: group.primaryRow.serverName, windowId: group.primaryRow.windowId, target: group.primaryRow.target, projectId: group.projectId },
-      group.title, openTask, openTerminal,
-    );
+    openLookoutItem(group, openTask, openTerminal);
     closePanel();
   };
 

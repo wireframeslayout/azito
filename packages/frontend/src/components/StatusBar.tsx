@@ -3,6 +3,7 @@ import { useLookout } from '../hooks/useLookout';
 import { useAgentActivity } from '../hooks/useAgentActivity';
 import { useCrossProjectNavigation } from '../hooks/useCrossProjectNavigation';
 import type { LookoutItem } from '../lib/lookoutSummary';
+import { openLookoutItem } from '../lib/lookoutOpen';
 import { useOpenGlobalSearch } from './search/GlobalSearch';
 import { useState, useMemo, useEffect, useRef, useCallback } from 'react';
 import { useTranslation } from 'react-i18next';
@@ -45,10 +46,8 @@ export function StatusBar({ servers }: StatusBarProps) {
   const lookout = useLookout();
   const { snapshotStatus, retrySnapshot } = useAgentActivity();
   const { openTask, openTerminal } = useCrossProjectNavigation();
-  const openLookoutItem = (item: LookoutItem) => {
-    const taskId = item.task?.id ?? item.primaryRow?.taskId;
-    if (taskId != null) openTask(taskId);
-    else if (item.primaryRow) openTerminal({ serverName: item.primaryRow.serverName, target: item.primaryRow.target, windowId: item.primaryRow.windowId }, item.projectId);
+  const handleOpenLookoutItem = (item: LookoutItem) => {
+    openLookoutItem(item, id => openTask(id), openTerminal);
     lookout.closeDrawer();
   };
   const { t: tn } = useTranslation('navigation');
@@ -221,7 +220,7 @@ export function StatusBar({ servers }: StatusBarProps) {
         ))}
       </div>
 
-      <LookoutDrawer open={lookout.open} onClose={lookout.closeDrawer} sections={lookout.sections} snapshotStatus={snapshotStatus} onRetry={retrySnapshot} onOpenItem={openLookoutItem} />
+      <LookoutDrawer open={lookout.open} onClose={lookout.closeDrawer} sections={lookout.sections} snapshotStatus={snapshotStatus} onRetry={retrySnapshot} onOpenItem={handleOpenLookoutItem} />
 
       {openItem && (
         <div

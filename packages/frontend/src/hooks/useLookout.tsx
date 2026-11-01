@@ -1,5 +1,5 @@
 import { createContext, useContext, useEffect, useMemo, useState } from 'react';
-import { buildWindowIndex } from '../lib/windowDisplay';
+import { buildWindowIndex, type ActivityTitleData } from '../lib/windowDisplay';
 import { buildLookoutSections, type LookoutSections } from '../lib/lookoutSummary';
 import { useActiveWindowRows } from './useActiveWindowRows';
 import { useWorkspaceCatalog } from './useWorkspaceCatalog';
@@ -15,6 +15,9 @@ function readLastSeen(): number {
 }
 interface LookoutContextValue {
   sections: LookoutSections;
+  rows: ReturnType<typeof useActiveWindowRows>['rows'];
+  historyCount: number;
+  setWorkspaceTitleData: (data: ActivityTitleData | null) => void;
   open: boolean;
   openDrawer: () => void;
   closeDrawer: () => void;
@@ -23,7 +26,8 @@ const Context = createContext<LookoutContextValue | null>(null);
 export function LookoutProvider({ children }: { children: React.ReactNode }) {
   const { allProjects, allTasks } = useWorkspaceCatalog();
   const data = useMemo(() => ({ windowById: buildWindowIndex(allProjects, allTasks), taskById: new Map(allTasks.map(task => [task.id, task])) }), [allProjects, allTasks]);
-  const { rows } = useActiveWindowRows(data);
+  const [workspaceTitleData, setWorkspaceTitleData] = useState<ActivityTitleData | null>(null);
+  const { rows, historyCount } = useActiveWindowRows(workspaceTitleData ?? data);
   const [lastSeen, setLastSeen] = useState(readLastSeen);
   const [drawer, setDrawer] = useState<{ openedAt: number; lastSeen: number } | null>(null);
   useEffect(() => {
@@ -39,7 +43,7 @@ export function LookoutProvider({ children }: { children: React.ReactNode }) {
     try { localStorage.setItem(STORAGE_KEY, String(drawer.openedAt)); } catch { /* Session-only when storage is unavailable. */ }
     setDrawer(null);
   };
-  return <Context.Provider value={{ sections, open: drawer !== null, openDrawer, closeDrawer }}>{children}</Context.Provider>;
+  return <Context.Provider value={{ sections, rows, historyCount, setWorkspaceTitleData, open: drawer !== null, openDrawer, closeDrawer }}>{children}</Context.Provider>;
 }
 export function useLookout(): LookoutContextValue {
   const value = useContext(Context);

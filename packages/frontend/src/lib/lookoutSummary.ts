@@ -73,6 +73,8 @@ export function buildLookoutSections({ rows, allTasks, lastSeenMs, scope }: Look
   }
   const items = Array.from(groups, ([key, group]) => makeItem(key, group.task, group.rows));
   const attention = items.filter((item) => item.status !== 'working').sort((a, b) => {
+    const priority = Number(b.hasBlocked) - Number(a.hasBlocked);
+    if (priority) return priority;
     const aTime = a.task ? Date.parse(a.task.updatedAt) : NaN;
     const bTime = b.task ? Date.parse(b.task.updatedAt) : NaN;
     return (Number.isFinite(bTime) ? bTime : 0) - (Number.isFinite(aTime) ? aTime : 0);

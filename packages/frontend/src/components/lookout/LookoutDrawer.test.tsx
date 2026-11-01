@@ -49,3 +49,10 @@ it('shows empty states and renders supplied summaries independently of counts', 
   rerender(<HotkeyProvider><LookoutDrawer open onClose={() => {}} sections={{ ...sections, attention: [] }} snapshotStatus="ready" onRetry={() => {}} onOpenItem={() => {}} /></HotkeyProvider>);
   expect(screen.getByText(/nothing needs your attention/i)).toBeInTheDocument();
 });
+
+it('does not show an idle message or active count while activity is unavailable', () => {
+  const sections = { attention: [], active: [], finished: [], counts: { attention: 0, active: 0, finished: 0, failed: 0 } };
+  render(<HotkeyProvider><LookoutDrawer open onClose={() => {}} sections={sections} snapshotStatus="error" onRetry={() => {}} onOpenItem={() => {}} /></HotkeyProvider>);
+  expect(screen.getByText('—')).toBeInTheDocument();
+  expect(screen.queryByText(/nothing is currently running/i)).not.toBeInTheDocument();
+});
