@@ -4,7 +4,6 @@ import {
   activityKeyForEntry,
   FINISHED_TTL_MS,
   pruneFinished,
-  removeFinished,
   removeDeletedFinished,
   upsertFinished,
   type FinishedEntry,
@@ -50,19 +49,6 @@ describe('upsertFinished', () => {
     const first = entry({ serverName: 'local', target: 'azito:win--a', finishedAt: 1_000 });
     const otherServer = entry({ serverName: 'remote', target: 'azito:win--a', finishedAt: 2_000 });
     expect(upsertFinished([first], otherServer)).toHaveLength(2);
-  });
-});
-
-describe('removeFinished', () => {
-  it('removes the row for a key and leaves the others', () => {
-    const a = entry({ target: 'azito:win--a' });
-    const b = entry({ target: 'azito:win--b' });
-    expect(removeFinished([a, b], activityKey('local', 'azito:win--a'))).toEqual([b]);
-  });
-
-  it('returns the same reference when the key is absent', () => {
-    const list = [entry()];
-    expect(removeFinished(list, activityKey('local', 'azito:nope'))).toBe(list);
   });
 });
 

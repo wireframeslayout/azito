@@ -58,12 +58,6 @@ export function upsertFinished(entries: FinishedEntry[], entry: FinishedEntry): 
   return next;
 }
 
-/** 指定キーの完了行を取り除く（ウィンドウ削除・再稼働・既読化などの経路で使う）。 */
-export function removeFinished(entries: FinishedEntry[], key: string): FinishedEntry[] {
-  const kept = entries.filter((e) => activityKeyForEntry(e) !== key);
-  return kept.length === entries.length ? entries : kept;
-}
-
 /** 削除通知では ID が片方にない場合、サーバーと target で照合する。 */
 export function removeDeletedFinished(
   entries: FinishedEntry[], deleted: Pick<FinishedEntry, 'serverName' | 'target' | 'windowId'>,
