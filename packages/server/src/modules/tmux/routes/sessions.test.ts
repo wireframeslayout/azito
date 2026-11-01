@@ -1755,8 +1755,8 @@ describe('action bodies reject unknown fields', () => {
     ['POST', '/api/servers/srv1/sessions/s/windows/w/panes', ['direction']],
     ['PUT', '/api/servers/srv1/sessions/s/rename', ['name']],
     ['PUT', '/api/servers/srv1/windows/s%3Aw/rename', ['name']],
-    ['PUT', '/api/servers/srv1/panes/%250/rename', ['title']],
-    ['POST', '/api/servers/srv1/panes/%250/send-keys', ['keys']],
+    ['PUT', '/api/servers/srv1/panes/%25250/rename', ['title']],
+    ['POST', '/api/servers/srv1/panes/%25250/send-keys', ['keys']],
     ['PUT', `/api/servers/srv1/mux/windows/${ref}/rename`, ['name']],
     ['POST', `/api/servers/srv1/mux/windows/${ref}/panes`, ['ordinal', 'direction']],
     ['POST', `/api/servers/srv1/mux/windows/${ref}/panes/1/send-keys`, ['keys']],
@@ -1771,4 +1771,32 @@ describe('action bodies reject unknown fields', () => {
       expect(res.json()).toEqual({ error: 'unknown_fields', unknown: ['extra'], accepted });
     } finally { await app.close(); }
   });
+  it.each([
+    ['POST', '/api/servers/srv1/sessions/s/windows/w/panes', { direction: 'v' }],
+    ['PUT', '/api/servers/srv1/sessions/s/rename', { name: 'new' }],
+    ['PUT', '/api/servers/srv1/windows/s%3Aw/rename', { name: 'new' }],
+    ['PUT', '/api/servers/srv1/panes/%25250/rename', { title: 'new' }],
+    ['POST', '/api/servers/srv1/panes/%25250/send-keys', { keys: ['Enter'] }],
+    ['PUT', `/api/servers/srv1/mux/windows/${ref}/rename`, { name: 'new' }],
+    ['POST', `/api/servers/srv1/mux/windows/${ref}/panes`, { ordinal: 1, direction: 'v' }],
+    ['POST', `/api/servers/srv1/mux/windows/${ref}/panes/1/send-keys`, { keys: ['Enter'] }],
+    ['PUT', `/api/servers/srv1/mux/windows/${ref}/panes/1/rename`, { name: 'new' }],
+    ['POST', '/api/servers/srv1/mux/focus', { ref: JSON.stringify({ kind: 'tmux', workspace: 's', window: 'w' }) }],
+    ['PUT', '/api/servers/srv1/mux/workspaces/s/rename', { name: 'new', kind: 'tmux' }],
+  ] as const)('%s %s accepts its body', async (method, url, payload) => {
+    const success = { code: 0, stdout: '', stderr: '' };
+    const tmux = {
+      resolvePane: vi.fn(async () => '%0'), getWindowIdentity: vi.fn(async () => null), resolveRef: vi.fn(async () => null),
+      splitPane: vi.fn(async () => success), renameSession: vi.fn(async () => success), renameWindow: vi.fn(async () => success),
+      renamePane: vi.fn(async () => success), sendKeysToHandle: vi.fn(async () => undefined), renameWindowByRef: vi.fn(async () => success),
+      splitPaneByHandle: vi.fn(async () => ({ result: success })), setPaneTitle: vi.fn(async () => success),
+      focusWindow: vi.fn(async () => undefined), renameWorkspace: vi.fn(async () => undefined),
+    };
+    const app = await buildApp({ tmux: tmux as unknown as Partial<TmuxClient>, windowRepo: makeWindowRepo() });
+    try {
+      const res = await app.inject({ method, url, payload });
+      expect(res.statusCode, res.body).toBe(200);
+    } finally { await app.close(); }
+  });
+
 });

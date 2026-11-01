@@ -95,6 +95,8 @@ describe('POST /api/windows/:id/launch-agent', () => {
     const windowRepo: Partial<IWindowRepository> = {
       findById: (id: number) => (id === window.id ? window : undefined),
       updateAgentSessionIdByWindow: updateByWindowFn,
+      findByServerAndTarget: vi.fn(() => undefined), findByServerAndRef: vi.fn(() => undefined),
+      add: vi.fn(() => 2), update: vi.fn(),
     };
     const serverRepo: Partial<IServerRepository> = {
       findByName: (name: string) => (name === server.name ? server : null),
@@ -102,6 +104,10 @@ describe('POST /api/windows/:id/launch-agent', () => {
     const tmux: Partial<TmuxClient> = {
       sendKeysToHandle: sendKeys as unknown as TmuxClient['sendKeysToHandle'],
       resolvePane: vi.fn().mockResolvedValue('%0') as unknown as TmuxClient['resolvePane'],
+      listWorkspaces: vi.fn(async () => [{ name: 's', windows: [] }]),
+      renameWindowByRef: vi.fn(async () => ({ code: 0, stdout: '', stderr: '' })),
+      splitPaneByHandle: vi.fn(async () => ({ result: { code: 0, stdout: '', stderr: '' } })),
+      setPaneTitle: vi.fn(async () => ({ code: 0, stdout: '', stderr: '' })),
     };
 
     app = Fastify();
@@ -114,7 +120,7 @@ describe('POST /api/windows/:id/launch-agent', () => {
       muxDriverRegistry: { resolve: () => tmux } as any,
       serverRepo: serverRepo as IServerRepository,
       transportFactory: { hostProfileFor: () => null },
-      respawnService: {} as WindowRespawnService,
+      respawnService: { respawn: vi.fn(async () => ({ tmuxTarget: 'proj:win1' })) } as unknown as WindowRespawnService,
       sleepService: { canSleep: vi.fn(() => false), sleep: vi.fn() } as unknown as WindowSleepService,
       sessionStrategyFactory: {
         create: () => ({
@@ -158,6 +164,22 @@ describe('POST /api/windows/:id/launch-agent', () => {
     expect(missing.json()).toEqual({ error: 'keys array required' });
     const invalid = await app.inject({ method: 'POST', url, payload: { keys: 'Enter' } });
     expect(invalid.json()).toMatchObject({ error: 'invalid_body' });
+  });
+
+  it.each([
+    ['POST', '/api/projects/1/windows', { server_name: 'other', tmux_target: 's:w' }],
+    ['POST', '/api/projects/1/windows/session', { server_name: 'local-server', session: 's' }],
+    ['POST', '/api/tasks/1/windows', { server_name: 'other', tmux_target: 's:w' }],
+    ['PUT', '/api/windows/1', { label: null }],
+    ['POST', '/api/windows/1/launch-agent', { command: 'claude' }],
+    ['POST', '/api/windows/1/respawn', { force: true }],
+    ['PUT', '/api/windows/1/rename', { name: 'new' }],
+    ['POST', '/api/windows/1/panes', { ordinal: 1, direction: 'v' }],
+    ['POST', '/api/windows/1/panes/1/send-keys', { keys: ['Enter'] }],
+    ['PUT', '/api/windows/1/panes/1/rename', { name: 'new' }],
+  ] as const)('%s %s accepts its body', async (method, url, payload) => {
+    const res = await app.inject({ method, url, payload });
+    expect(res.statusCode, res.body).toBe(200);
   });
 
   it('rejects unknown and invalid launch fields before sending keys', async () => {
