@@ -8,7 +8,7 @@ import { useToast } from '../hooks/useToast';
 import { useAgentDefinitions } from '../hooks/useAgentDefinitions';
 import { AgentIcon } from './ui/AgentIcons';
 import { Icon } from './ui/Icon';
-import { resolveWindowDisplay, formatWindowDisplayLabel } from '../lib/windowDisplay';
+import { resolveWindowTitle, formatWindowTitle } from '../lib/windowDisplay';
 
 interface WindowStatusDropdownProps {
   serverName: string;
@@ -315,13 +315,13 @@ export function WindowStatusDropdown({ serverName, target, sessions, muxKind, te
             <>
               <div style={{ padding: '8px 12px' }}>
                 {win.id != null && (() => {
-                  const display = resolveWindowDisplay({
-                    windowId: win.id, label: win.label,
+                  const display = resolveWindowTitle({
+                    windowId: win.id, label: win.label, labelSource: win.labelSource,
                     workerType: win.workerType, windowType: win.windowType,
                     tmuxTarget: win.tmuxTarget,
                   });
                   return (
-                    <InfoRow label="Window">{formatWindowDisplayLabel(display)}</InfoRow>
+                    <InfoRow label="Window">{formatWindowTitle(display)}</InfoRow>
                   );
                 })()}
                 <InfoRow label="tmux">

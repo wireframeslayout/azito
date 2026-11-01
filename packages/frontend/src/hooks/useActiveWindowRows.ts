@@ -9,6 +9,12 @@ export interface ActiveWindowRow {
   target: string;
   windowId?: number;
   label?: string;
+  labelSource?: 'auto' | 'user';
+  taskTitle?: string;
+  workerType?: string;
+  windowType?: string;
+  paneTitle?: string;
+  paneCommand?: string;
   taskId?: number;
   projectId?: number;
   status: 'running' | 'finished';
@@ -29,6 +35,12 @@ export function useActiveWindowRows() {
         target: e.target,
         windowId: e.windowId,
         label: e.label,
+        labelSource: e.labelSource,
+        taskTitle: e.taskTitle,
+        workerType: e.workerType,
+        windowType: e.windowType,
+        paneTitle: e.paneTitle,
+        paneCommand: e.paneCommand,
         taskId: e.taskId,
         projectId: e.projectId,
         status: 'running',
@@ -44,6 +56,12 @@ export function useActiveWindowRows() {
         target: e.target,
         windowId: e.windowId,
         label: e.label,
+        labelSource: e.labelSource,
+        taskTitle: e.taskTitle,
+        workerType: e.workerType,
+        windowType: e.windowType,
+        paneTitle: e.paneTitle,
+        paneCommand: e.paneCommand,
         taskId: e.taskId,
         projectId: e.projectId,
         status: 'finished',

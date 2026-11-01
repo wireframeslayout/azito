@@ -6,7 +6,7 @@ import { useLongPress, longPressStyle } from '../../hooks/useLongPress';
 import type { Session, TmuxWindow } from '../../hooks/useServerManagement';
 import { lookupWindowTask } from '../../lib/windowTask';
 import { terminalTabId, terminalRefFromWindow, type TerminalRef } from '../../lib/terminalRef';
-import { resolveWindowDisplay, formatWindowDisplayLabel } from '../../lib/windowDisplay';
+import { resolveWindowTitle, formatWindowTitle } from '../../lib/windowDisplay';
 import { Icon } from '../ui/Icon';
 import { paneRowBadge } from '../../lib/paneRowBadge';
 
@@ -93,7 +93,7 @@ export default function SessionTree({
                         {win.index}: {win.windowId != null
                           ? (() => {
                               const activePane = win.panes.find((p) => p.active) ?? win.panes[0];
-                              return formatWindowDisplayLabel(resolveWindowDisplay({
+                              return formatWindowTitle(resolveWindowTitle({
                                 windowId: win.windowId,
                                 label: win.name,
                                 paneTitle: activePane?.title,

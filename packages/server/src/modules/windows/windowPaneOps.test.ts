@@ -13,6 +13,7 @@ const makeWindow = (overrides: Partial<Window> = {}): Window => ({
   serverName: 'local',
   tmuxTarget: 'session:win-1',
   label: null,
+  labelSource: 'auto',
   isPrimary: false,
   windowType: 'agent',
   workerType: 'claude',

@@ -27,6 +27,7 @@ export interface Window {
   tmuxTarget: string;
   muxRef?: MuxRef;
   label?: string;
+  labelSource?: 'auto' | 'user';
   isPrimary: boolean;
   windowType: 'terminal' | 'agent';
   workerType?: string;

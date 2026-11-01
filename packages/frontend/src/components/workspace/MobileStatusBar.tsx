@@ -105,7 +105,7 @@ export function MobileStatusBar({ allTasks, openTask, connectPane }: MobileStatu
         key: groupKey,
         taskId: row.taskId,
         projectId: row.projectId,
-        title: task?.title || formatActiveWindowLabel(row),
+        title: formatActiveWindowLabel({ ...row, taskTitle: task?.title }),
         meta: task ? t(`common:status.${task.status}`) : undefined,
         isBlocked,
         row,

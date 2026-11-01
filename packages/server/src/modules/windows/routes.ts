@@ -692,6 +692,13 @@ const windowsRoutes: FastifyPluginCallback<WindowsRouteOptions> = (fastify, opts
       const result = await driverFor(srv).renameWindowByRef(srv, ref, name);
       const err = execResultError(result);
       if (err) return reply.status(err.status).send({ error: err.error });
+      try {
+        windowRepo.update(win.id, { label: name, labelSource: 'user' });
+      } catch (error) {
+        request.log.error({ err: error, windowId: win.id }, 'Window renamed in mux but label update failed');
+        notifyWindowsChanged(win.serverName);
+        return reply.status(500).send({ error: 'Window renamed, but saving its label failed' });
+      }
       notifyWindowsChanged(win.serverName);
       return { ok: true };
     },

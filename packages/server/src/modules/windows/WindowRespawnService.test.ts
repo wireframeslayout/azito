@@ -49,6 +49,7 @@ function makeWindow(overrides: Partial<Window> = {}): Window {
     serverName: 'local-server',
     tmuxTarget: 'azito:task-1',
     label: 'task-1',
+    labelSource: 'auto',
     isPrimary: true,
     windowType: 'agent',
     workerType: 'claude',

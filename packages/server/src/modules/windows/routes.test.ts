@@ -45,6 +45,7 @@ function makeWindow(overrides: Partial<Window> = {}): Window {
     tmuxTarget,
     muxRef: { kind: 'tmux' as const, workspace: tmuxTarget.slice(0, colonIdx), window: tmuxTarget.slice(colonIdx + 1) },
     label: 'manual-agent',
+    labelSource: 'auto',
     isPrimary: false,
     windowType: 'agent',
     workerType: 'claude',
@@ -679,5 +680,35 @@ describe('POST /api/windows/:id/sleep', () => {
     const res = await app.inject({ method: 'POST', url: '/api/windows/999/sleep' });
     expect(res.statusCode).toBe(404);
     expect(sleepFn).not.toHaveBeenCalled();
+  });
+});
+
+describe('PUT /api/windows/:id/rename', () => {
+  it.each([0, 1])('updates the label only when mux returns %i', async (code) => {
+    const win = makeWindow();
+    const update = vi.fn();
+    const app = Fastify();
+    await app.register(windowsRoutes, {
+      harnessPrefix: '',
+      windowRepo: { findById: () => win, update } as unknown as IWindowRepository,
+      projectRepo: {} as IProjectRepository,
+      taskRepo: {} as ITaskRepository,
+      tmux: {} as TmuxClient,
+      muxDriverRegistry: { resolve: () => ({ renameWindowByRef: async () => ({ code, stdout: '', stderr: 'failure' }) }) } as any,
+      serverRepo: { findByName: () => makeServer() } as unknown as IServerRepository,
+      transportFactory: { hostProfileFor: () => null },
+      respawnService: {} as WindowRespawnService,
+      sleepService: {} as WindowSleepService,
+      sessionStrategyFactory: {} as ISessionStrategyFactory,
+      sessionCaptureService: {} as SessionCaptureService,
+      supervisorRegistry: makeSupervisorRegistry(),
+      windowActivityStatusService: makeWindowActivityStatusService(),
+      uiToken: 'test-token', serverIsolationMutex: new KeyedMutex(), buildSecondaryWindowEnv: () => ({}),
+    });
+    const res = await app.inject({ method: 'PUT', url: '/api/windows/1/rename', payload: { name: 'chosen' } });
+    expect(res.statusCode).toBe(code === 0 ? 200 : 500);
+    if (code === 0) expect(update).toHaveBeenCalledWith(1, { label: 'chosen', labelSource: 'user' });
+    else expect(update).not.toHaveBeenCalled();
+    await app.close();
   });
 });

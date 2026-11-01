@@ -42,7 +42,7 @@ import type { PersistedTab } from '../../hooks/useTabPersistence';
 import { useIsMobile } from '../../hooks/useIsMobile';
 import { useClickOutside } from '../../hooks/useClickOutside';
 import { isSameWindowTarget } from '@azito/shared';
-import { resolveWindowDisplay, formatWindowDisplayLabel } from '../../lib/windowDisplay';
+import { resolveWindowTitle, formatWindowTitle } from '../../lib/windowDisplay';
 import { activityKey, useWorkspaceTargets } from '../../hooks/useWorkspaceTargets';
 import { useGlobalFocus } from '../../hooks/useGlobalFocus';
 import { useToast } from '../../hooks/useToast';
@@ -922,11 +922,11 @@ export default function TaskPanel({
         : undefined;
       const extra = w ? resolveWindowContextExtra(w, sessionData) : undefined;
       const displayLabel = w
-        ? formatWindowDisplayLabel(resolveWindowDisplay({
+        ? formatWindowTitle(resolveWindowTitle({
             windowId: w.id,
             paneTitle: extra?.paneTitle,
             paneCommand: extra?.paneCommand,
-            label: w.label,
+            label: w.label, labelSource: w.labelSource,
             taskTitle: task?.title,
             workerType: w.workerType,
             windowType: w.windowType,
@@ -1111,13 +1111,13 @@ export default function TaskPanel({
       if (!w) return focusedWindowTarget.target;
       const sessions = sessionData[w.serverName];
       const tw = sessions ? findSessionWindow(w, sessions)?.window : undefined;
-      const pane0 = tw?.panes[0];
-      const display = resolveWindowDisplay({
+      const pane0 = tw?.panes.find(p => p.active) ?? tw?.panes[0];
+      const display = resolveWindowTitle({
         windowId: w.id, paneTitle: pane0?.title, paneCommand: pane0?.command,
-        label: w.label, taskTitle: task?.title, tmuxTarget: w.tmuxTarget,
+        label: w.label, labelSource: w.labelSource, taskTitle: task?.title, tmuxTarget: w.tmuxTarget,
         workerType: w.workerType, windowType: w.windowType,
       });
-      return formatWindowDisplayLabel(display);
+      return formatWindowTitle(display);
     })();
     return (
       <span style={{ position: 'relative' }}>
@@ -1166,13 +1166,13 @@ export default function TaskPanel({
       if (!w) return focusedWindowTarget.target;
       const sessions = sessionData[w.serverName];
       const tw = sessions ? findSessionWindow(w, sessions)?.window : undefined;
-      const pane0 = tw?.panes[0];
-      const display = resolveWindowDisplay({
+      const pane0 = tw?.panes.find(p => p.active) ?? tw?.panes[0];
+      const display = resolveWindowTitle({
         windowId: w.id, paneTitle: pane0?.title, paneCommand: pane0?.command,
-        label: w.label, taskTitle: task?.title, tmuxTarget: w.tmuxTarget,
+        label: w.label, labelSource: w.labelSource, taskTitle: task?.title, tmuxTarget: w.tmuxTarget,
         workerType: w.workerType, windowType: w.windowType,
       });
-      return formatWindowDisplayLabel(display);
+      return formatWindowTitle(display);
     })();
     const hasMultiple = windows.length > 1;
     return (

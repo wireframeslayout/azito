@@ -12,6 +12,7 @@ export interface Window {
   tmuxTarget: string;
   muxRef?: MuxRef;
   label: string | null;
+  labelSource: 'auto' | 'user';
   isPrimary: boolean;
   windowType: WindowType;
   workerType: string | null;
@@ -77,7 +78,7 @@ export function isPrimaryTaskWindow(win: Pick<Window, 'ownerType' | 'isPrimary'>
 }
 
 export interface IWindowRepository {
-  add(window: Omit<Window, 'id' | 'createdAt'>): number;
+  add(window: Omit<Window, 'id' | 'createdAt' | 'labelSource'> & { labelSource?: Window['labelSource'] }): number;
   findAll(): Window[];
   findById(id: number): Window | undefined;
   findByProject(projectId: number): Window[];
@@ -128,7 +129,7 @@ export interface IWindowRepository {
    */
   adoptForTask(id: number, taskId: number): void;
   update(id: number, data: Partial<Pick<Window,
-    'tmuxTarget' | 'muxRef' | 'label' | 'agentSessionId' | 'launchCommand' | 'paneLayout' | 'workerModel' | 'workingDirectory' | 'windowType' | 'workerType' | 'sleeping' | 'projectId'
+    'tmuxTarget' | 'muxRef' | 'label' | 'labelSource' | 'agentSessionId' | 'launchCommand' | 'paneLayout' | 'workerModel' | 'workingDirectory' | 'windowType' | 'workerType' | 'sleeping' | 'projectId'
   >>): void;
   updateAgentSessionIdByWindow(serverName: string, tmuxTarget: string, sessionId: string): void;
   remove(id: number): void;

@@ -1,3 +1,4 @@
+import type { ITaskRepository } from '../tasks/Task';
 import type { ExecuteTaskUseCase } from '../tasks/execution/ExecuteTaskUseCase';
 import { ACTIVITY_THRESHOLD_SEC } from '../tasks/execution/WorkerWaiter';
 import type { AgentWindow, IWindowRepository } from '../windows/Window';
@@ -174,6 +175,12 @@ export interface AgentActivityEntry {
   operation: boolean;
   taskId?: number;
   label?: string;
+  labelSource?: 'auto' | 'user';
+  taskTitle?: string;
+  workerType?: string;
+  windowType?: string;
+  paneTitle?: string;
+  paneCommand?: string;
   projectId?: number;
   /**
    * Set when a title-aware source resolved the pane's state: either the
@@ -712,6 +719,7 @@ export class AgentActivityMonitor {
     private onActivityDetected?: (serverName: string, target: string) => void,
     private paneHandleResolver?: PaneHandleResolver,
     private onSessionIdUpdated?: (serverName: string, target: string, windowId: number, from: string | null, to: string, event: AgentHookSignal['event']) => void,
+    private taskRepo?: Pick<ITaskRepository, 'findById'>,
   ) {}
 
   start(): void {
@@ -1753,18 +1761,22 @@ export class AgentActivityMonitor {
     // Tier 0 idle → blocked refinement, for the keys queued above only.
     await this.refineTier0IdleKeys(tier0IdlePending, servers, sessionsByServer, sessionErrors, next, reasons, decisions);
 
-    // Enrich all entries with paneName from live session data
+    // Attach the same title inputs to every activity source.
     for (const [key, entry] of next) {
-      if (entry.paneName) continue;
-      const sessions = sessionsByServer.get(entry.serverName);
-      if (!sessions) continue;
       const dbWin = allWindows.find((aw) => windowKey(aw.serverName, aw.tmuxTarget) === key);
-      const win = findLiveWindow(sessions, entry.target, dbWin?.muxRef);
-      if (!win) continue;
+      const sessions = sessionsByServer.get(entry.serverName);
+      const win = sessions && findLiveWindow(sessions, entry.target, dbWin?.muxRef);
       const { windowSpec } = parseWindowTarget(entry.target);
-      const pi = extractPaneIndex(windowSpec, win.index, win.name);
-      const name = getRelevantPaneName(win.panes, pi);
-      if (name) next.set(key, { ...entry, paneName: name });
+      const pi = win ? extractPaneIndex(windowSpec, win.index, win.name) : null;
+      const relevant = win ? selectRelevantPanes(win.panes, pi) : [];
+      const pane = relevant.find((p) => p.active) ?? relevant[0];
+      const taskId = dbWin?.taskId ?? entry.taskId;
+      next.set(key, {
+        ...entry,
+        ...(dbWin ? { label: dbWin.label ?? undefined, labelSource: dbWin.labelSource, workerType: dbWin.workerType ?? undefined, windowType: dbWin.windowType } : {}),
+        ...(taskId != null ? { taskTitle: this.taskRepo?.findById(taskId)?.title } : {}),
+        ...(pane ? { paneTitle: pane.title, paneCommand: pane.command, paneName: getRelevantPaneName(win!.panes, pi) } : {}),
+      });
     }
 
     // Expire `done` mux entries: the agent session is finished, so the mux's
@@ -2220,6 +2232,9 @@ export class AgentActivityMonitor {
       // own task_done. recentOperationMeta keeps that attribution alive for a
       // short window after the run leaves getRunning().
       const operationMeta = this.recentOperationMeta.get(key);
+      const windowId = this.windowIdByKey.get(key);
+      const win = windowId == null ? undefined : this.windowRepo.findAll().find((w) => w.id === windowId);
+      const taskId = operationMeta?.taskId ?? probe.taskId;
       this.notificationBus.emit({
         type: 'agent:activity',
         payload: {
@@ -2228,10 +2243,14 @@ export class AgentActivityMonitor {
           running: false,
           source: operationMeta ? 'operation' : 'manual',
           operation: operationMeta !== undefined,
-          taskId: operationMeta?.taskId ?? probe.taskId,
-          label: probe.label,
+          taskId,
+          label: win?.label ?? probe.label,
+          labelSource: win?.labelSource,
+          workerType: win?.workerType ?? undefined,
+          windowType: win?.windowType,
+          taskTitle: taskId == null ? undefined : this.taskRepo?.findById(taskId)?.title,
           projectId: probe.projectId,
-          windowId: this.windowIdByKey.get(key),
+          windowId,
           reason: 'completed',
         },
       });
@@ -2261,6 +2280,12 @@ export class AgentActivityMonitor {
             operation: entry.operation,
             taskId: entry.taskId,
             label: entry.label,
+            labelSource: entry.labelSource,
+            taskTitle: entry.taskTitle,
+            workerType: entry.workerType,
+            windowType: entry.windowType,
+            paneTitle: entry.paneTitle,
+            paneCommand: entry.paneCommand,
             projectId: entry.projectId,
             status: entry.status,
             paneName: entry.paneName,
@@ -2293,6 +2318,12 @@ export class AgentActivityMonitor {
             operation: entry.operation,
             taskId: entry.taskId,
             label: entry.label,
+            labelSource: entry.labelSource,
+            taskTitle: entry.taskTitle,
+            workerType: entry.workerType,
+            windowType: entry.windowType,
+            paneTitle: entry.paneTitle,
+            paneCommand: entry.paneCommand,
             projectId: entry.projectId,
             paneName: entry.paneName,
             windowId: entry.windowId,

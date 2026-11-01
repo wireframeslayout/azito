@@ -1,4 +1,4 @@
-import { isMisaoWindowId, muxRefFromTmuxTarget, type MuxDriverKind, type MuxRef } from '@azito/shared';
+import { resolveWindowTitle, muxRefFromTmuxTarget, type MuxDriverKind, type MuxRef, type WindowTitleInput } from '@azito/shared';
 
 /** The fields of a window row these helpers read (structural, so this base module does not import the windows module). */
 export interface WindowRowIdentity {
@@ -58,11 +58,8 @@ export function isSameWindow(a: MuxRef, b: MuxRef): boolean {
   return a.workspace === b.workspace && a.window === b.window;
 }
 
-/**
- * The name to open a re-created window with. A misao window row's label is its display name; a label that
- * is itself a window id (rows written before labels were separated from ids) is not one.
- */
-export function windowDisplayName(win: Pick<WindowRowIdentity, 'label'>): string | undefined {
-  const label = win.label?.trim();
-  return label && !isMisaoWindowId(label) ? label : undefined;
+/** The display name to use when re-creating a misao window, never its mux identity. */
+export function windowDisplayName(win: WindowTitleInput): string | undefined {
+  const resolved = resolveWindowTitle(win);
+  return resolved.hasDisplayName ? resolved.title : undefined;
 }

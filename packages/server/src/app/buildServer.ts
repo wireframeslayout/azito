@@ -1,3 +1,4 @@
+import { formatWindowTitle, resolveWindowTitle } from '@azito/shared';
 // ─── Fastify instance assembly ───
 //
 // Registers plugins, HTTP routes, WebSocket handlers, static files, and the
@@ -171,7 +172,8 @@ export async function buildServer(app: FastifyInstance, wiring: Wiring, port: nu
   // those is exactly the false-completion class this reason field exists to end.
   notificationBus.on((event) => {
     if (event.type !== 'agent:activity') return;
-    const { serverName, target, label, taskId, running, status, reason } = event.payload;
+    const { serverName, target, taskId, running, status, reason } = event.payload;
+    const label = formatWindowTitle(resolveWindowTitle({ ...event.payload, tmuxTarget: target }));
 
     const resolveUrl = (): string => agentActivityPushUrl(event.payload, (id) => taskRepo.findById(id)?.projectId);
 
@@ -179,7 +181,7 @@ export async function buildServer(app: FastifyInstance, wiring: Wiring, port: nu
       const url = resolveUrl();
       const subs = pushSubRepo.findAll();
       pushService.sendToAll(subs, (sub) => ({
-        ...getPushMessage(sub.lang, 'agent.finished', { label: label || target, serverName }),
+        ...getPushMessage(sub.lang, 'agent.finished', { label, serverName }),
         data: { url, serverName, target },
       })).catch(() => {});
       return;
@@ -189,7 +191,7 @@ export async function buildServer(app: FastifyInstance, wiring: Wiring, port: nu
       const url = resolveUrl();
       const subs = pushSubRepo.findAll();
       pushService.sendToAll(subs, (sub) => ({
-        ...getPushMessage(sub.lang, 'agent.approvalRequired', { label: label || target, serverName }),
+        ...getPushMessage(sub.lang, 'agent.approvalRequired', { label, serverName }),
         data: { url, serverName, target, taskId },
       })).catch(() => {});
     }

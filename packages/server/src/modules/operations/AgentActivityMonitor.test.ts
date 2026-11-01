@@ -21,6 +21,7 @@ function makeWindow(overrides: Partial<Window>): Window {
     serverName: 'local',
     tmuxTarget: 'azito:agent-1',
     label: 'agent-1',
+    labelSource: 'auto',
     isPrimary: false,
     windowType: 'agent',
     workerType: 'claude',
@@ -174,7 +175,7 @@ describe('AgentActivityMonitor', () => {
     await monitor.tick();
     expect(emit).toHaveBeenCalledWith({
       type: 'agent:activity',
-      payload: { serverName: 'local', target: 'azito:agent-1', running: true, source: 'manual', operation: false, taskId: 7, label: 'agent-1', projectId: 1, paneName: 'claude', windowId: 1, status: undefined },
+      payload: { serverName: 'local', target: 'azito:agent-1', running: true, source: 'manual', operation: false, taskId: 7, label: 'agent-1', labelSource: 'auto', taskTitle: undefined, workerType: 'claude', windowType: 'agent', paneTitle: '', paneCommand: 'claude', projectId: 1, paneName: 'claude', windowId: 1, status: undefined },
     });
   });
 

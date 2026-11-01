@@ -20,7 +20,7 @@ import type { PersistedTab } from '../../hooks/useTabPersistence';
 import type { Project, Session, Window, Task } from '../../pages/workspace/types';
 import { useToast } from '../../hooks/useToast';
 import type { ContextMenuItem } from '../ContextMenu';
-import { resolveWindowDisplay } from '../../lib/windowDisplay';
+import { resolveWindowTitle } from '../../lib/windowDisplay';
 import { buildWindowSearchText } from './objects/windowRowTitle';
 import ObjectSection from './objects/ObjectSection';
 import BrowserSection from './objects/BrowserSection';
@@ -385,10 +385,10 @@ export default function ObjectsSidebar({
   // （オフライン・タイトル未設定）は ウィンドウラベル → タスクタイトル → tmux ターゲット の順で代替。
   const resolveOperationTitle = useCallback((w: WindowItem): string | undefined => {
     const extra = resolveWindowContextExtra(w, sessionData);
-    const display = resolveWindowDisplay({
+    const display = resolveWindowTitle({
       paneTitle: extra.paneTitle,
       paneCommand: extra.paneCommand,
-      label: w.label,
+      label: w.label, labelSource: w.labelSource,
       taskTitle: w.taskId != null ? taskById.get(w.taskId)?.title : undefined,
       tmuxTarget: w.tmuxTarget,
       windowId: w.id,
@@ -403,7 +403,9 @@ export default function ObjectsSidebar({
   const renderOperationSubtitle = useCallback((w: WindowItem) => {
     const task = w.taskId != null ? taskById.get(w.taskId) : undefined;
     const parts: string[] = [];
-    if (task?.title && task.title !== resolveOperationTitle(w)) parts.push(task.title);
+    const extra = resolveWindowContextExtra(w, sessionData);
+    const display = resolveWindowTitle({ label: w.label, labelSource: w.labelSource, paneTitle: extra.paneTitle, paneCommand: extra.paneCommand, taskTitle: task?.title, workerType: w.workerType, windowType: w.windowType, windowId: w.id });
+    if (display.subtitle) parts.push(display.subtitle);
     parts.push(w.serverName);
     const phaseKey = task?.currentPhase;
     if (phaseKey) {
@@ -413,7 +415,7 @@ export default function ObjectsSidebar({
     const branch = task?.branch || task?.worktreeBranch;
     if (branch) parts.push(branch);
     return parts.join(' · ');
-  }, [taskById, t, resolveOperationTitle]);
+  }, [taskById, t, sessionData]);
 
   const browserSectionAction = useMemo(() => {
     if (browserCapableServerNames.length === 0) return null;

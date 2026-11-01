@@ -1,7 +1,7 @@
 /**
  * ウィンドウ行の検索テキスト構築（純関数）。
  *
- * 表示系の関数（resolveWindowDisplay, resolvePaneDisplayTitle 等）は
+ * 表示系の関数（resolveWindowTitle, resolvePaneDisplayTitle 等）は
  * lib/windowDisplay.ts に移動済み。
  */
 

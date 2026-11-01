@@ -10,7 +10,7 @@ import { useRecentTasks } from '../../hooks/useRecentTasks';
 import { useBrowserGroups } from '../../hooks/useBrowserGroups';
 import { buildTaskSidebarGroups, findWindowActivity, type TaskGroupKey, type TaskSidebarGroup, type TaskSidebarRow } from './taskSidebarModel';
 import { listTaskChildren, type TaskChild } from './taskSidebarChildren';
-import { resolveWindowDisplay, formatWindowDisplayLabel } from '../../lib/windowDisplay';
+import { resolveWindowTitle, formatWindowTitle } from '../../lib/windowDisplay';
 import type { Task } from '../../pages/workspace/types';
 
 const EXPAND_STORAGE_KEY = 'tasks-sidebar-expanded';
@@ -534,10 +534,10 @@ interface ChildRowProps {
 function ChildRow({ child, taskId, taskTitle, onOpenTaskWindow, onOpenTaskBrowser, activity, t }: ChildRowProps) {
   if (child.kind === 'window') {
     const w = child.window;
-    const label = formatWindowDisplayLabel(resolveWindowDisplay({
+    const label = formatWindowTitle(resolveWindowTitle({
       windowId: w.id,
       paneTitle: activity?.paneName,
-      label: w.label,
+      label: w.label, labelSource: w.labelSource,
       taskTitle: taskTitle,
       workerType: w.workerType,
       windowType: w.windowType,

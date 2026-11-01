@@ -10,7 +10,7 @@ function disabledStyle(enabled: boolean): React.CSSProperties {
   return enabled ? { cursor: 'pointer' } : { cursor: 'not-allowed', opacity: DIMMED_PANE_OPACITY };
 }
 import { terminalRefFromWindow, terminalTabId, type TerminalRef } from '../../lib/terminalRef';
-import { resolveWindowDisplay, formatWindowDisplayLabel, sessionWindowLabel, type WindowIndexEntry } from '../../lib/windowDisplay';
+import { resolveWindowTitle, formatWindowTitle, sessionWindowLabel, type WindowIndexEntry } from '../../lib/windowDisplay';
 import { isPaneLive, preferredPaneOrdinal } from '../../lib/paneState';
 import { paneRowBadge } from '../../lib/paneRowBadge';
 import { Icon } from '../ui/Icon';
@@ -126,17 +126,17 @@ export default function WindowTreePopover({
                     <span style={{ fontFamily: 'var(--mono)', flex: 1, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{
                       (() => {
                         const regWin = win.windowId != null ? windowById.get(win.windowId) : undefined;
-                        const display = resolveWindowDisplay({
+                        const display = resolveWindowTitle({
                           windowId: win.windowId ?? undefined,
-                          paneTitle: win.panes[0]?.title,
-                          paneCommand: win.panes[0]?.command,
-                          label: regWin?.label,
+                          paneTitle: (win.panes.find(p => p.active) ?? win.panes[0])?.title,
+                          paneCommand: (win.panes.find(p => p.active) ?? win.panes[0])?.command,
+                          label: regWin?.label, labelSource: regWin?.labelSource,
                           workerType: regWin?.workerType,
                           windowType: regWin?.windowType,
                           taskTitle: regWin?.taskId != null ? taskById.get(regWin.taskId)?.title : undefined,
                           tmuxTarget: winLabel,
                         });
-                        return formatWindowDisplayLabel(display);
+                        return formatWindowTitle(display);
                       })()
                     }</span>
                     <span style={{ marginLeft: 'auto', fontSize: 'var(--font-xs)', color: 'var(--text-dim)' }}>
