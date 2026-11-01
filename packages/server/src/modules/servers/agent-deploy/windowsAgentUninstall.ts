@@ -1,4 +1,6 @@
 import * as path from 'path';
+import { harnessLocation } from './harnessLocation';
+import { harnessMcpScript, parseHarnessMcpOutput } from './windowsHarnessMcpUninstall';
 import type { SchtasksClient } from '../../../shared/os/taskScheduler/schtasks';
 import { hubRootOfScript, soleExecAction, taskExecActions } from '../../../shared/os/taskScheduler/taskXmlRead';
 import { firewallRuleName } from './windowsFirewall';
@@ -26,7 +28,7 @@ import { firewallInspectScript, misaoDaemonScript, misaoHubScript, parseFirewall
 /** The Task Scheduler task of a Windows hub (`HUB_SERVICE.windowsTaskName`, fixed: there is no setting for it; a test keeps the two in step). */
 export const WINDOWS_HUB_TASK_NAME = 'AzitoHub';
 
-export type UninstallStepId = 'task' | 'processes' | 'firewall' | 'folder' | 'misaoTask' | 'misaoProcesses' | 'misaoFolder';
+export type UninstallStepId = 'task' | 'processes' | 'firewall' | 'folder' | 'misaoTask' | 'misaoProcesses' | 'misaoFolder' | 'claudeHarnessMcp' | 'codexHarnessMcp';
 
 export type { UninstallOutcome };
 
@@ -165,6 +167,12 @@ export async function uninstallWindowsAgent(host: WindowsUninstallHost, facts: H
     : skipped('folder', 'the agent may still be running or registered: the folder is left so that nothing breaks underneath it'));
 
   if (choice.removeMisao) steps.push(...await removeMisao(host, facts, options));
+  const expected = path.win32.join(harnessLocation('win32', home).harnessDir, 'skills', 'azt-mcp', 'mcp-server', 'index.js');
+  for (const [id, kind] of [['claudeHarnessMcp', 'claude'], ['codexHarnessMcp', 'codex']] as const) {
+    steps.push(facts.nodePath === null
+      ? skipped(id, 'Node is unavailable, so the registration could not be inspected')
+      : await step(id, async () => parseHarnessMcpOutput(await host.script(`Checking ${kind} MCP registration`, harnessMcpScript(kind, facts.nodePath!, home, expected), 150_000))));
+  }
   return { ok: steps.every((s) => s.outcome !== 'failed'), steps };
 }
 

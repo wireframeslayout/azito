@@ -9,7 +9,7 @@ export function hostRemovalSupport(server: { type: string; hostProfile?: HostPro
   return server.hostProfile?.platform === 'win32' ? 'windows' : 'unsupported';
 }
 
-export type UninstallStepId = 'task' | 'processes' | 'firewall' | 'folder' | 'misaoTask' | 'misaoProcesses' | 'misaoFolder';
+export type UninstallStepId = 'task' | 'processes' | 'firewall' | 'folder' | 'misaoTask' | 'misaoProcesses' | 'misaoFolder' | 'claudeHarnessMcp' | 'codexHarnessMcp';
 export type UninstallOutcome = 'done' | 'absent' | 'failed' | 'skipped';
 
 export interface UninstallStep {
@@ -23,7 +23,7 @@ export type HostRemovalFailure =
   | { kind: 'steps'; steps: UninstallStep[] }
   | { kind: 'error'; message: string };
 
-const STEP_IDS: ReadonlySet<string> = new Set<UninstallStepId>(['task', 'processes', 'firewall', 'folder', 'misaoTask', 'misaoProcesses', 'misaoFolder']);
+const STEP_IDS: ReadonlySet<string> = new Set<UninstallStepId>(['task', 'processes', 'firewall', 'folder', 'misaoTask', 'misaoProcesses', 'misaoFolder', 'claudeHarnessMcp', 'codexHarnessMcp']);
 const OUTCOMES: ReadonlySet<string> = new Set<UninstallOutcome>(['done', 'absent', 'failed', 'skipped']);
 
 function parseSteps(value: unknown): UninstallStep[] | null {

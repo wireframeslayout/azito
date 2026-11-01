@@ -224,7 +224,7 @@
     "hostRemoval": {
       "groupLabel": "ホスト上のエージェント",
       "removeFromHost": "ホストからもエージェントを消す",
-      "removeFromHostDesc": "サーバーを削除する前に、Windows ホストからエージェントを消します。タスクスケジューラのタスクを終了して登録解除し、~\\.azito\\agent フォルダーを消します。AZITO はプロセスを自分では止めず、ファイアウォールの規則も消しません。フォルダーから動いているプロセスが残っていれば消さずに知らせ（どれかを示します）、規則は一覧と消すコマンドを示します。消せたときだけサーバーを削除します。",
+      "removeFromHostDesc": "サーバーを削除する前に、Windows ホストからエージェントを消します。タスクスケジューラのタスクを終了して登録解除し、~\\.azito\\agent フォルダーを消します。AZITO はプロセスを自分では止めず、ファイアウォールの規則も消しません。フォルダーから動いているプロセスが残っていれば消さずに知らせ（どれかを示します）、規則は一覧と消すコマンドを示します。消せたときだけサーバーを削除します。 一致する Claude と Codex の azt-mcp 登録も削除します。共有ハーネスは他のハブでも利用される場合があります。トークンを含む可能性のある operator.env は残ります。",
       "removeMisao": "misao も消す（窓はすべて閉じます）",
       "removeMisaoDesc": "misao のタスクと ~\\.azito\\misao フォルダーを消します。このホストの misao で動いている窓はすべて閉じます。同じホストの Windows のハブが使っている misao は消しません。",
       "removeMisaoNeedsHost": "ホストからもエージェントを消すときに選べます。",
@@ -250,6 +250,8 @@
         "folder": "エージェントのフォルダー",
         "misaoTask": "misao のタスク",
         "misaoProcesses": "misao のプロセス",
+        "claudeHarnessMcp": "Claude の azt-mcp 登録",
+        "codexHarnessMcp": "Codex の azt-mcp 登録",
         "misaoFolder": "misao のフォルダー"
       },
       "outcomes": {
