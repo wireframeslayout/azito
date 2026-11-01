@@ -10,7 +10,7 @@ export { SegmentedToggle } from './SegmentedToggle';
 export { MuxKindSelect } from './MuxKindSelect';
 export type { SegmentedToggleOption } from './SegmentedToggle';
 export { TerminalChatToggle } from './TerminalChatToggle';
-export type { WindowViewMode as TerminalChatViewMode } from './TerminalChatToggle';
+export type { WindowViewMode as TerminalChatViewMode } from '../../lib/windowViewMode';
 export { SectionHeader } from './SectionHeader';
 export { MiniTabBar } from './MiniTabBar';
 export type { MiniTab } from './MiniTabBar';

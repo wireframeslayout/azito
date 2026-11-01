@@ -14,7 +14,9 @@ import { useAgentActivity } from '../../hooks/useAgentActivity';
 import TaskRefBadges from '../TaskRefBadges';
 import TaskLogView from '../TaskLogView';
 import MarkdownRenderer from '../MarkdownRenderer';
-import { TerminalContainer, viewModeStorageKey, type WindowViewMode } from '../TerminalContainer';
+import { TerminalContainer } from '../TerminalContainer';
+import { isAgentWindow, type WindowViewMode } from '../../lib/windowViewMode';
+import { useWindowViewMode } from '../../hooks/useWindowViewMode';
 import { DiffViewer, CommitList } from '../diff';
 import { Chip } from '../ui';
 import { findSessionWindow } from '../../lib/windowMatch';
@@ -56,7 +58,7 @@ import {
   type FixedView, type TerminalRef,
 } from '../task/taskPaneLayout';
 import { ApprovalRequestTracker, isApprovalDataForTask } from '../task/executionApprovalRequest';
-import { TerminalChatToggle, type WindowViewMode as TerminalChatViewMode } from '../ui/TerminalChatToggle';
+import { TerminalChatToggle } from '../ui/TerminalChatToggle';
 
 // Re-exported so existing external imports (`from './TaskPanel'`) keep working —
 // the actual implementation lives in taskPaneLayout.ts, alongside the rest of the
@@ -271,7 +273,7 @@ function MobileBrowserContentHeader({
 // バーは既にそこにある）。それ以外のビュー（説明・Unit・実行情報・コミット履歴・差分）表示中は
 // 下端に何も無くなってしまうため、「情報ビュー表示中も下部トグル操作で端末/チャットに復帰できる」
 // 仕様を満たす最小限のバー（トグルのみ）をここで描く。
-function MobileContextFooter({ value, onChange, disabled }: { value: TerminalChatViewMode; onChange: (mode: TerminalChatViewMode) => void; disabled: boolean }) {
+function MobileContextFooter({ value, onChange, disabled }: { value: WindowViewMode; onChange: (mode: WindowViewMode) => void; disabled: boolean }) {
   return (
     <div
       style={{
@@ -480,7 +482,7 @@ export default function TaskPanel({
   // Working/blocked/finished activity indicator for window tabs — the same source
   // WindowsSidebar/the old TaskWindowDropdown/TaskWindowListView used, so a window tab
   // shows the same per-window activity state as every other window surface.
-  const { windowIndicator, findFinished } = useAgentActivity();
+  const { windowIndicator, findFinished, entries } = useAgentActivity();
 
   // SP 差し戻し（オーケストレーター照合、Issue #69）: タスク詳細の初期表示は「説明」ではなく
   // ウィンドウコンテンツ（端末/チャット）が既定。一度もレイアウトが永続化されていない
@@ -662,21 +664,9 @@ export default function TaskPanel({
   }, [focusedWindowTarget, windows]);
   const focusedWindowId = focusedWindow?.id ?? null;
 
-  // SP 端末/チャットセグメント（Issue #69 T5）: 表示モードは TaskPanel が単一の真実源として
-  // localStorage（azito.windowView.<windowId>、TerminalContainer と同一キー形式を共有）を
-  // 読み書きし、TerminalContainer には確定値を viewMode prop で渡す（controlled）。ウィンドウが
-  // 切り替わるたびそのウィンドウの最後の選択を読み直す — 旧 TerminalContainer 内蔵ロジックと
-  // 同じ「ウィンドウ単位で記憶する」粒度を維持する。
-  const [mobileViewMode, setMobileViewModeState] = useState<WindowViewMode>('terminal');
-  useEffect(() => {
-    if (focusedWindowId === null) return;
-    const stored = localStorage.getItem(viewModeStorageKey(focusedWindowId));
-    setMobileViewModeState(stored === 'chat' ? 'chat' : 'terminal');
-  }, [focusedWindowId]);
-  const setMobileViewMode = useCallback((mode: WindowViewMode, windowId: number | null) => {
-    setMobileViewModeState(mode);
-    if (windowId !== null) localStorage.setItem(viewModeStorageKey(windowId), mode);
-  }, []);
+  const [mobileViewMode, setMobileViewMode] = useWindowViewMode(
+    focusedWindowId, isMobile, isAgentWindow(focusedWindowId, focusedWindow?.windowType, entries.values()),
+  );
 
   const { setFocus } = useGlobalFocus();
   const { showToast } = useToast();
