@@ -14,6 +14,13 @@ describe('distribution information', () => {
       expect(resolveStorageOnboarding(getDistributionInfo(dir)).source).toBe('oss');
     } finally { fs.rmSync(dir, { recursive: true, force: true }); }
   });
+  it('reads a distribution onboarding and applies the dismissible default', () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'azito-distribution-'));
+    try {
+      fs.writeFileSync(path.join(dir, 'distribution.json'), JSON.stringify({ storage: { onboarding: { heading: 'Heading', body: 'Body', options: [{ id: 'managed', kind: 'managed', title: 'Managed', description: '', defaults: { endpoint: 'https://example.com', bucket: 'files' } }] } } }));
+      expect(resolveStorageOnboarding(getDistributionInfo(dir))).toMatchObject({ source: 'distribution', heading: 'Heading', dismissible: true, options: [{ kind: 'managed', defaults: { bucket: 'files' } }] });
+    } finally { fs.rmSync(dir, { recursive: true, force: true }); }
+  });
   it('rejects invalid JSON and invalid options', () => {
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'azito-distribution-'));
     const file = path.join(dir, 'distribution.json');
