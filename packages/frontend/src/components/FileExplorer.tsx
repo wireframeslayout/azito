@@ -12,6 +12,7 @@ import { useLongPress, longPressStyle } from '../hooks/useLongPress';
 import { useFileTree } from './files/useFileTree';
 import type { TreeNode } from './files/useFileTree';
 import { useFileCrud } from './files/useFileCrud';
+import { downloadFile } from './files/useFileDownload';
 import { useServerPath } from '../hooks/useServerPath';
 import { parentOrRoot } from '../lib/serverPath';
 import FileTree from './files/FileTree';
@@ -82,18 +83,7 @@ function FileExplorerTree({ serverName, rootPath, projectId, onFileSelect, onRef
         title: isDir ? t('explorer.downloadNotSupported') : undefined,
         onClick: () => {
           if (isDir) return;
-          backend.download(node.path)
-            .then((blob) => {
-              const url = URL.createObjectURL(blob);
-              const a = document.createElement('a');
-              a.href = url;
-              a.download = node.name;
-              document.body.appendChild(a);
-              a.click();
-              document.body.removeChild(a);
-              URL.revokeObjectURL(url);
-            })
-            .catch(() => showToast(t('explorer.downloadFailed')));
+          void downloadFile(backend, node.path, node.name).catch(() => showToast(t('explorer.downloadFailed')));
         },
       },
       { separator: true, label: '', onClick: () => {} },

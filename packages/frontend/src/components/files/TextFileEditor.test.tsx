@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { describe, expect, it, vi } from 'vitest';
 import type { FilesBackend } from './backend/FilesBackend';
 import { TextFileEditor } from './TextFileEditor';
@@ -56,8 +56,13 @@ describe('TextFileEditor', () => {
       read: vi.fn(async () => ({ kind: 'unavailable' as const, code: 'too_large' as const, message: 'File exceeds 500 KiB' })),
       save: vi.fn(), list: vi.fn(), create: vi.fn(), rename: vi.fn(), delete: vi.fn(), download,
     };
-    render(<TextFileEditor backend={backend} path="file" name="file" />);
-    expect(await screen.findByText('editor.unavailable.too_large')).toBeTruthy();
+    const downloadAction = <button>download</button>;
+    render(<TextFileEditor backend={backend} path="file" name="file" downloadAction={downloadAction} headerActions={<>{downloadAction}<button>VS Code</button><button>Zed</button></>} />);
+    const notice = (await screen.findByText('editor.unavailable.too_large')).closest('[role="status"]');
+    expect(notice).not.toBeNull();
+    expect(within(notice as HTMLElement).getByRole('button', { name: 'download' })).toBeTruthy();
+    expect(within(notice as HTMLElement).queryByRole('button', { name: 'VS Code' })).toBeNull();
+    expect(within(notice as HTMLElement).queryByRole('button', { name: 'Zed' })).toBeNull();
     expect(screen.queryByText('File exceeds 500 KiB')).toBeNull();
     expect(screen.queryByRole('textbox', { name: 'editor' })).toBeNull();
   });

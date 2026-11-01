@@ -23,10 +23,11 @@ interface TextFileEditorProps {
   name: string;
   initialLine?: number;
   headerActions?: ReactNode;
+  downloadAction?: ReactNode;
   onDirtyChange?: (dirty: boolean) => void;
 }
 
-export function TextFileEditor({ backend, path, name, initialLine, headerActions, onDirtyChange }: TextFileEditorProps) {
+export function TextFileEditor({ backend, path, name, initialLine, headerActions, downloadAction, onDirtyChange }: TextFileEditorProps) {
   const { t } = useTranslation('files');
   const mobile = useIsMobile();
   const confirm = useConfirm();
@@ -77,7 +78,7 @@ export function TextFileEditor({ backend, path, name, initialLine, headerActions
         </div>}>{t('editor.conflict')}</Notice>}
       {doc.unavailable && <Notice tone="warning" style={{ margin: 'var(--space-2)', flexShrink: 0 }}
         action={<div style={{ display: 'flex', flexWrap: 'wrap', gap: 'var(--space-2)' }}>
-          {headerActions}
+          {downloadAction}
           <Button size="sm" variant="ghost" onClick={() => void doc.reload()}>{t('editor.retry')}</Button>
         </div>}>{unavailableText(doc.unavailable)}</Notice>}
       {doc.error && <div role="alert" style={{ margin: 'var(--space-2)', flexShrink: 0 }}><Notice tone="danger" action={(!doc.document && !doc.loading) ? <Button size="sm" onClick={() => void doc.reload()}>{t('editor.retry')}</Button> : undefined}>{doc.error}</Notice></div>}

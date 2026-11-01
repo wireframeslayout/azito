@@ -124,3 +124,4 @@ https://<host>/api/projects/<projectId>/storage/<filename>/raw
 ストレージ一覧からテキストや Markdown を開き、ワークスペースで編集できます。保存時はオブジェクトの ETag で変更を検出します。競合した場合は最新内容との差分を確認し、再読み込みまたは明示的な上書きを選べます。編集できるのは 500 KiB 以下の UTF-8 ファイルです。S3 互換サービスが条件付き PUT を無視する場合、メタデータ確認後から保存までの間に行われた変更を上書きする可能性があります。
 
 テキストの `GET /api/projects/:id/storage/content?key=...` は `content`, `etag`, `language`, `size` を返します。`PUT` は `key`, `content`, `baseEtag` を受け取り、明示的な上書きには `force: true` を使います。競合は HTTP 409 で `error: "conflict"`, `etag`, `content` を返し、S3 の 412 も 409 に変換します。保存前に ETag を確認しますが、IfMatch を無視する S3 互換先では確認後の更新を検出できない競合の窓が残ります。
+最新の内容がテキストとして読めない場合、409 は `error: "conflict"` と、理由を示す `latest: { error, code }` または取得できない場合の `latest: null` を返します。

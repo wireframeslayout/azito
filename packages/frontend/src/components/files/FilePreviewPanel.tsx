@@ -19,9 +19,8 @@ interface FilePreviewPanelProps {
 }
 interface MediaContent { type: 'image' | 'pdf'; mimeType: string; base64: string; size: number; error?: string }
 
-function MediaPreview({ serverName, filePath, backend }: FilePreviewPanelProps & { backend: ServerFilesBackend }) {
+function MediaPreview({ serverName, filePath, backend, openInEditor }: FilePreviewPanelProps & { backend: ServerFilesBackend; openInEditor: (target: 'vscode' | 'zed') => Promise<void> }) {
   const { t } = useTranslation('files');
-  const { showToast } = useToast();
   const pathApi = useServerPath(serverName);
   const [media, setMedia] = useState<MediaContent | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -35,12 +34,6 @@ function MediaPreview({ serverName, filePath, backend }: FilePreviewPanelProps &
   }, [serverName, filePath]);
   const fileName = pathApi ? fileDisplayName(pathApi, filePath) : filePath;
   const download = useFileDownload(backend, filePath, fileName);
-  const openInEditor = async (editor: 'vscode' | 'zed') => {
-    try {
-      const result = await api<{ uri?: string }>(`/servers/${encodeURIComponent(serverName)}/editor-uri?path=${encodeURIComponent(filePath)}&editor=${editor}`);
-      if (result.uri) window.location.href = result.uri;
-    } catch { showToast(t('preview.loadError')); }
-  };
   const buttonStyle: React.CSSProperties = { background: 'none', border: '1px solid var(--border)', color: 'var(--text-dim)', cursor: 'pointer', fontSize: 'var(--font-xs)', padding: 'var(--space-1) var(--space-2)', borderRadius: 'var(--radius-sm)', whiteSpace: 'nowrap', flexShrink: 0 };
   return <div style={{ display: 'flex', flexDirection: 'column', height: '100%', background: 'var(--ws-surface)' }}>
     <div style={{ padding: 'var(--space-2) var(--space-4)', borderBottom: '1px solid var(--border)', background: 'var(--bg-card)', display: 'flex', alignItems: 'center', flexWrap: 'wrap', gap: 'var(--space-3)', flexShrink: 0 }}>
@@ -72,6 +65,7 @@ export function FilePreviewPanel(props: FilePreviewPanelProps) {
       if (result.uri) window.location.href = result.uri;
     } catch { showToast(t('preview.loadError')); }
   };
-  if (/\.(png|jpe?g|gif|svg|webp|ico|bmp|pdf)$/i.test(props.filePath)) return <MediaPreview {...props} backend={backend} />;
-  return <TextFileEditor backend={backend} path={props.filePath} name={props.filePath} initialLine={props.initialLine} headerActions={<><Button size="sm" variant="ghost" onClick={() => void download()}><Icon name="download" size={14} /> {t('explorer.download')}</Button><Button size="sm" variant="ghost" onClick={() => void openInEditor('vscode')}>VS Code</Button><Button size="sm" variant="ghost" onClick={() => void openInEditor('zed')}>Zed</Button></>} onDirtyChange={props.onDirtyChange} />;
+  if (/\.(png|jpe?g|gif|svg|webp|ico|bmp|pdf)$/i.test(props.filePath)) return <MediaPreview {...props} backend={backend} openInEditor={openInEditor} />;
+  const downloadAction = <Button size="sm" variant="ghost" onClick={() => void download()} title={t('explorer.download')}><Icon name="download" size={14} /> {t('explorer.download')}</Button>;
+  return <TextFileEditor backend={backend} path={props.filePath} name={props.filePath} initialLine={props.initialLine} downloadAction={downloadAction} headerActions={<>{downloadAction}<Button size="sm" variant="ghost" title={t('explorer.openInVsCode')} onClick={() => void openInEditor('vscode')}>VS Code</Button><Button size="sm" variant="ghost" title={t('explorer.openInZed')} onClick={() => void openInEditor('zed')}>Zed</Button></>} onDirtyChange={props.onDirtyChange} />;
 }

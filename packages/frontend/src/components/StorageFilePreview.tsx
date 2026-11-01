@@ -181,5 +181,6 @@ export default function StorageFilePreview(props: StorageFilePreviewProps) {
   const { t } = useTranslation('files');
   const download = useFileDownload(backend, props.filename, props.originalName);
   if (isPdf(props.originalName) || isImage(props.originalName)) return <MediaStorageFilePreview {...props} />;
-  return <TextFileEditor backend={backend} path={props.filename} name={props.originalName} headerActions={<Button size="sm" variant="ghost" onClick={() => void download()}><Icon name="download" size={14} /> {t('explorer.download')}</Button>} onDirtyChange={props.onDirtyChange} />;
+  const downloadAction = <Button size="sm" variant="ghost" onClick={() => void download()} title={t('explorer.download')}><Icon name="download" size={14} /> {t('explorer.download')}</Button>;
+  return <TextFileEditor backend={backend} path={props.filename} name={props.originalName} headerActions={downloadAction} downloadAction={downloadAction} onDirtyChange={props.onDirtyChange} />;
 }
