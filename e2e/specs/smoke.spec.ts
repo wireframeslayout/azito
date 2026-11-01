@@ -62,6 +62,7 @@ test('ログイン → プロジェクト作成 → ウィンドウ登録 → �
     await expect(header).toBeVisible({ timeout: 20_000 });
     if (await header.getAttribute('aria-expanded') === 'false') await header.click();
   }
+  // 表示名はペインタイトルが優先されるため、登録したウィンドウを ID で確認する。
   await expect(page.getByText(`W-${windowId}`, { exact: true })).toBeVisible({ timeout: 20_000 });
 
   // ── ステータスバーの稼働検知パネル ──
