@@ -37,7 +37,6 @@ interface NotificationCenterContextValue {
   toasts: EphemeralToast[];
   dismissToast: (id: string) => void;
   openNotification: (notification: AppNotification) => void;
-
 }
 
 const defaultValue: NotificationCenterContextValue = {
@@ -169,7 +168,6 @@ export function NotificationCenterProvider({ children }: { children: React.React
   const toastsRef = useRef<EphemeralToast[]>([]);
   const toastTimersRef = useRef(new Map<string, ReturnType<typeof setTimeout>>());
 
-
   useEffect(() => {
     saveNotifications(notifications);
   }, [notifications]);
@@ -180,7 +178,6 @@ export function NotificationCenterProvider({ children }: { children: React.React
     return () => {
       for (const timer of timers.values()) clearTimeout(timer);
       timers.clear();
-
     };
   }, []);
 

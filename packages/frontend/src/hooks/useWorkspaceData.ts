@@ -22,7 +22,8 @@ export function useWorkspaceData(
   const [project, setProject] = useState<Project | null>(null);
   const [allUnits, setAllUnits] = useState<Unit[]>([]);
   const { allProjects, allTasks, projectsLoaded, refresh: refreshCatalog } = useWorkspaceCatalog();
-  const tasks = allTasks.filter(t => t.projectId === Number(projectId));
+  // tasks は下流の useMemo / useEffect の依存に入るため、一覧か projectId が変わったときだけ作り直す
+  const tasks = useMemo(() => allTasks.filter(t => t.projectId === Number(projectId)), [allTasks, projectId]);
   const projectList = allProjects;
   const [servers, setServers] = useState<Server[]>([]);
   const [sessionData, setSessionData] = useState<Record<string, Session[]>>({});
