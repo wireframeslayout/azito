@@ -299,6 +299,11 @@ export class MisaoMuxClient implements IMuxClient {
     if (Buffer.byteLength(text, 'utf8') > LONG_TEXT_BYTES) await this.wait(LONG_TEXT_PASTE_SETTLE_MS);
   }
 
+  async pasteTextToHandle(_server: ServerConfig, handle: PaneHandle, text: string): Promise<void> {
+    await this.write(handle, `${BRACKETED_PASTE_START}${stripPasteEnd(text)}${BRACKETED_PASTE_END}`);
+    await this.wait(LONG_TEXT_PASTE_SETTLE_MS);
+  }
+
   async panePidByHandle(_server: ServerConfig, handle: PaneHandle): Promise<number | null> {
     return (await this.paneInfo(handle))?.pid ?? null;
   }
