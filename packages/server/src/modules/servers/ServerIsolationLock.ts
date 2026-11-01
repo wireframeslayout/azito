@@ -253,7 +253,7 @@ export async function withServerLock<T>(
  * old "adopt whatever is current" behavior by passing `enforceSnapshot: false`.
  */
 export async function ensureSessionWithLock(
-  mux: Pick<IMuxClient, 'listWorkspaces' | 'openWorkspace'> | Pick<TmuxClient, 'listSessions' | 'createSession'>,
+  mux: Pick<IMuxClient, 'listWorkspaces' | 'prepareWorkspace'> | Pick<TmuxClient, 'listSessions' | 'createSession'>,
   lock: ServerIsolationLock,
   server: ServerConfig,
   sessionName: string,
@@ -261,13 +261,13 @@ export async function ensureSessionWithLock(
 ): Promise<{ created: boolean; server: ServerConfig }> {
   return lock.serverIsolationMutex.withLock(server.name, async () => {
     const freshServer = refetchServer(lock, server, enforceSnapshot);
-    const driver = mux as Pick<IMuxClient, 'listWorkspaces' | 'openWorkspace'>;
+    const driver = mux as Pick<IMuxClient, 'listWorkspaces' | 'prepareWorkspace'>;
     const workspaces = await driver.listWorkspaces(freshServer);
     // The session is opened in the server's default mux, so only a session of that mux counts (a same-named session
     // of the other mux does not). A workspace without a `kind` comes from a single (non-routing) driver.
     const exists = workspaces.some((ws) => ws.name === sessionName && (ws.kind ?? freshServer.defaultMux) === freshServer.defaultMux);
     if (!exists) {
-      await driver.openWorkspace(freshServer, sessionName, { extraEnv: isolationMaskForServer(freshServer) });
+      await driver.prepareWorkspace(freshServer, sessionName, isolationMaskForServer(freshServer));
       return { created: true, server: freshServer };
     }
     return { created: false, server: freshServer };

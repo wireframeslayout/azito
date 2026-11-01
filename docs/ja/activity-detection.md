@@ -536,6 +536,8 @@ request`）を返します。
 
 ## 13. misao 窓
 
+misao の `bytes` 由来の working は、第1ペインの前面コマンドが既知のシェルなら Tier 0 から除外する。コマンドが不明な場合や title / profile 由来の判定は従来どおり扱う。codex の空タイトルは unknown として後段へ進む。tmux では通常ホスト名がタイトルに入り、非空タイトルとして idle と判定される。
+
 `mux_ref.kind` が `misao` の窓（local サーバー、および misao を持つ agent サーバー。それぞれ自分のデーモン接続と自分の `MisaoActivityBridge` を持つ）は、tmux ではなく misao デーモンが担う。
 tmux のサーバーでは以下は何も生成されず、これまでの tmux の挙動は変わらない。
 

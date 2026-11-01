@@ -564,6 +564,8 @@ socket), which checks the `pane.state`-driven working row and the finished row p
 
 ## 13. misao windows
 
+A misao working signal decided by `bytes` is excluded from Tier 0 when the first pane has a known shell foreground command. Unknown commands and title / profile decisions retain their existing behavior. An empty codex title remains unknown and falls through to later tiers; tmux normally supplies a hostname as a non-empty title, which is classified as idle.
+
 Windows whose `mux_ref.kind` is `misao` (local servers, and agent servers that have misao: each through its own daemon connection and its own `MisaoActivityBridge`) are served by the misao daemon instead of
 tmux. For tmux servers nothing below is created and the tmux behavior above is unchanged.
 

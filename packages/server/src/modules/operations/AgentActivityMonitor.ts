@@ -1417,7 +1417,11 @@ export class AgentActivityMonitor {
       // rather than polled. Bypasses Tier 1/2/3 but sits below a supervisor
       // (whose rules are AZITO-controlled).
       const muxState = this.muxStates.get(key);
-      if (muxState) {
+      const muxWindow = findLiveWindow(sessionsByServer.get(w.serverName) ?? [], w.tmuxTarget, w.muxRef);
+      const firstPane = muxWindow?.panes[0];
+      const shellBytes = isMisaoWindow(w) && muxState?.status === 'working' && muxState.decidedBy === 'bytes'
+        && firstPane && firstPane.commandKnown !== false && isBareShellCommand(firstPane.command);
+      if (muxState && !shellBytes) {
         const mapped = this.mapMuxStatus(muxState.status);
         if (mapped) {
           if (mapped.state === 'idle') {

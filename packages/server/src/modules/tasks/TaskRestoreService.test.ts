@@ -166,7 +166,7 @@ function makeDeps(overrides: Partial<TaskRestoreDeps> = {}): TaskRestoreDeps {
     muxDriverRegistry: (() => {
       const driver = {
         listWorkspaces: vi.fn(async () => [{ name: 'azito', windowCount: 0, attached: true, created: 0, windows: [] }]),
-        openWorkspace: vi.fn(async (_srv: unknown, name: string) => ({ ref: { kind: 'tmux' as const, workspace: name, window: 'default' }, result: { stdout: '', stderr: '', code: 0 } })),
+        prepareWorkspace: vi.fn(async (_srv: unknown, name: string) => ({ ref: { kind: 'tmux' as const, workspace: name, window: 'default' }, result: { stdout: '', stderr: '', code: 0 } })),
         openWindow: vi.fn(async (_srv: unknown, ws: string, name?: string) => ({ ref: { kind: 'tmux' as const, workspace: ws, window: name ?? 'task-1' }, result: { stdout: '', stderr: '', code: 0 }, windowName: name ?? 'task-1' })),
         closeWindow: vi.fn(async () => ({ stdout: '', stderr: '', code: 0 })),
         closePane: vi.fn(async () => ({ stdout: '', stderr: '', code: 0 })),
@@ -732,17 +732,17 @@ describe('TaskRestoreService', () => {
       ...deps,
       muxDriverRegistry: overrideDriver(deps, {
         listWorkspaces: vi.fn(async () => []),
-        openWorkspace: vi.fn(async (_srv: unknown, name: string) => ({ ref: { kind: 'tmux' as const, workspace: name, window: 'default' }, result: { stdout: '', stderr: '', code: 0 } })),
+        prepareWorkspace: vi.fn(async (_srv: unknown, name: string) => ({ ref: { kind: 'tmux' as const, workspace: name, window: 'default' }, result: { stdout: '', stderr: '', code: 0 } })),
       }),
     });
     service = new TaskRestoreService(deps);
 
     await service.restore(task, log);
 
-    expect(mockDriver().openWorkspace).toHaveBeenCalledWith(
+    expect(mockDriver().prepareWorkspace).toHaveBeenCalledWith(
       expect.objectContaining({ name: 'test-server' }),
       'azito',
-      { extraEnv: {} },
+      {},
     );
   });
 
@@ -774,7 +774,7 @@ describe('TaskRestoreService', () => {
       serverRepo: { ...deps.serverRepo, findByName },
       muxDriverRegistry: overrideDriver(deps, {
         listWorkspaces: vi.fn(async () => []),
-        openWorkspace: vi.fn(async (_srv: unknown, name: string) => ({ ref: { kind: 'tmux' as const, workspace: name, window: 'default' }, result: { stdout: '', stderr: '', code: 0 } })),
+        prepareWorkspace: vi.fn(async (_srv: unknown, name: string) => ({ ref: { kind: 'tmux' as const, workspace: name, window: 'default' }, result: { stdout: '', stderr: '', code: 0 } })),
       }),
     });
     service = new TaskRestoreService(deps);
@@ -784,10 +784,10 @@ describe('TaskRestoreService', () => {
     // findByName is called once at the top of restore() (serverAtStart),
     // once for pre-gate baseBranch detection (Issue #63), once inside
     // resolveExecutionManifest() for the execution-gate manifest, then once
-    // per lock-and-refetch span below — so openWorkspace/resolvePane/
+    // per lock-and-refetch span below — so prepareWorkspace/resolvePane/
     // getTransport must each see whichever generation its OWN span produced.
     const transportCalls = (deps.transportFactory.getTransport as ReturnType<typeof vi.fn>).mock.calls;
-    const createSessionServer = (mockDriver().openWorkspace as ReturnType<typeof vi.fn>).mock.calls[0][0];
+    const createSessionServer = (mockDriver().prepareWorkspace as ReturnType<typeof vi.fn>).mock.calls[0][0];
     const resolvePaneServer = (mockDriver().resolvePane as ReturnType<typeof vi.fn>).mock.calls[0][0];
     // Issue #63: getTransport is called once BEFORE the lock for baseBranch
     // auto-detection (calls[0], using serverAtStart = gen-1). Post-lock

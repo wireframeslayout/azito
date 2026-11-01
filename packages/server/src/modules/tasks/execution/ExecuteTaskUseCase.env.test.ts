@@ -380,7 +380,7 @@ function buildUseCase(opts: {
     createSession: vi.fn(async () => {}),
     createWindow: vi.fn(async () => ({ result: { stdout: '', stderr: '', code: 0 }, windowName: 'w1' })),
     listWorkspaces: vi.fn(async () => []),
-    openWorkspace: vi.fn(async (_srv: unknown, name: string) => ({ ref: { kind: 'tmux' as const, workspace: name, window: 'default' }, result: { stdout: '', stderr: '', code: 0 } })),
+    prepareWorkspace: vi.fn(async (_srv: unknown, name: string) => ({ ref: { kind: 'tmux' as const, workspace: name, window: 'default' }, result: { stdout: '', stderr: '', code: 0 } })),
     openWindow: vi.fn(async (_srv: unknown, ws: string, _name?: string) => ({ ref: { kind: 'tmux' as const, workspace: ws, window: 'w1' }, result: { stdout: '', stderr: '', code: 0 } })),
     resolvePaneId: vi.fn(async () => '%0'),
     resolvePane: vi.fn(async () => '%0'),
@@ -711,7 +711,7 @@ describe('ExecuteTaskUseCase execution-env resolution', () => {
 
     await useCase.execute(60, 60);
 
-    const createSessionServer = (tmux.openWorkspace as ReturnType<typeof vi.fn>).mock.calls[0][0];
+    const createSessionServer = (tmux.prepareWorkspace as ReturnType<typeof vi.fn>).mock.calls[0][0];
     const createWindowServer = (tmux.openWindow as ReturnType<typeof vi.fn>).mock.calls[0][0];
     const resolvePaneServer = (tmux.resolvePane as ReturnType<typeof vi.fn>).mock.calls[0][0];
     // Issue #63: getTransport is now called once BEFORE the lock (for
@@ -721,7 +721,7 @@ describe('ExecuteTaskUseCase execution-env resolution', () => {
     const preGateTransportServer = (transportFactory.getTransport as ReturnType<typeof vi.fn>).mock.calls[0][0];
 
     // ensureSessionWithLock's lock span re-read the server for the session
-    // bootstrap — openWorkspace must see that row.
+    // bootstrap — prepareWorkspace must see that row.
     expect(createSessionServer.agentVersion).toBeDefined();
     // createRotatedWindow's own, LATER lock span re-read the server again
     // for the real task window — createWindow must see a STRICTLY NEWER row
@@ -759,7 +759,7 @@ describe('ExecuteTaskUseCase execution-env resolution', () => {
 
     await useCase.followUp(61, 61, 'please continue');
 
-    const createSessionServer = (tmux.openWorkspace as ReturnType<typeof vi.fn>).mock.calls[0][0];
+    const createSessionServer = (tmux.prepareWorkspace as ReturnType<typeof vi.fn>).mock.calls[0][0];
     const createWindowServer = (tmux.openWindow as ReturnType<typeof vi.fn>).mock.calls[0][0];
     const resolvePaneServer = (tmux.resolvePane as ReturnType<typeof vi.fn>).mock.calls[0][0];
 
@@ -1733,7 +1733,7 @@ describe('ExecuteTaskUseCase.followUp http-signal execution mode (Issue: AZITO�
       caps: { changeEvents: true, agentState: false, independentClients: true, copyMode: true },
       listSessions: vi.fn(async () => [{ name: 'azito', windows: [{ name: 'task-1', index: 1 }] }]),
       listWorkspaces: vi.fn(async () => [{ name: 'azito', windowCount: 1, attached: true, created: 0, windows: [{ index: 0, name: 'task-1', active: true, panes: [], activity: 0 }] }]),
-      openWorkspace: vi.fn(async (_srv: unknown, name: string) => ({ ref: { kind: 'tmux' as const, workspace: name, window: 'default' }, result: { stdout: '', stderr: '', code: 0 } })),
+      prepareWorkspace: vi.fn(async (_srv: unknown, name: string) => ({ ref: { kind: 'tmux' as const, workspace: name, window: 'default' }, result: { stdout: '', stderr: '', code: 0 } })),
       openWindow: vi.fn(async (_srv: unknown, ws: string, name?: string) => ({ ref: { kind: 'tmux' as const, workspace: ws, window: name ?? 'task-1' }, result: { stdout: '', stderr: '', code: 0 } })),
       createSession: vi.fn(async () => {}),
       createWindow: vi.fn(async () => ({ result: { stdout: '', stderr: '', code: 0 }, windowName: 'task-1' })),
@@ -2981,7 +2981,7 @@ describe('ExecuteTaskUseCase.execute() execution-gate self-invalidation regressi
       caps: { changeEvents: true, agentState: false, independentClients: true, copyMode: true },
       listSessions: vi.fn(async () => []),
       listWorkspaces: vi.fn(async () => []),
-      openWorkspace: vi.fn(async (_srv: unknown, name: string) => ({ ref: { kind: 'tmux' as const, workspace: name, window: 'default' }, result: { stdout: '', stderr: '', code: 0 } })),
+      prepareWorkspace: vi.fn(async (_srv: unknown, name: string) => ({ ref: { kind: 'tmux' as const, workspace: name, window: 'default' }, result: { stdout: '', stderr: '', code: 0 } })),
       openWindow: vi.fn(async (_srv: unknown, ws: string, _name?: string) => ({ ref: { kind: 'tmux' as const, workspace: ws, window: 'w1' }, result: { stdout: '', stderr: '', code: 0 } })),
       createSession: vi.fn(async () => {}),
       createWindow: vi.fn(async () => ({ result: { stdout: '', stderr: '', code: 0 }, windowName: 'w1' })),
@@ -5459,7 +5459,7 @@ describe('ExecuteTaskUseCase on a host that starts the worker as the window\'s p
 
     await expect(useCase.execute(80, 8)).rejects.toMatchObject({ code: 'unsupported_os', message: expect.stringContaining('#464') });
 
-    expect(tmux.openWorkspace).not.toHaveBeenCalled();
+    expect(tmux.prepareWorkspace).not.toHaveBeenCalled();
     expect(tmux.openWindow).not.toHaveBeenCalled();
     expect(worktreeServiceFactory.create).not.toHaveBeenCalled();
   });

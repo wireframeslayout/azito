@@ -39,6 +39,7 @@ export interface IMuxClient {
   listWorkspaces(server: ServerConfig): Promise<MuxWorkspace[]>;
   listWorkspacesStrict(server: ServerConfig): Promise<MuxWorkspace[]>;
   /** `kind` (routing driver only) picks the mux to create in; omitted = the server's default mux. A single driver ignores it. */
+  prepareWorkspace(server: ServerConfig, name: string, extraEnv?: Record<string, string>): Promise<void>;
   openWorkspace(server: ServerConfig, name: string, opts?: { command?: string; windowName?: string; exactName?: boolean; extraEnv?: Record<string, string>; kind?: MuxDriverKind; program?: PaneProgram }): Promise<{ ref: MuxRef; result: ExecResult; windowName?: string }>;
   openWindow(server: ServerConfig, workspace: string, baseName?: string, opts?: { exactName?: boolean; extraEnv?: Record<string, string>; kind?: MuxDriverKind; program?: PaneProgram }): Promise<{ ref: MuxRef; result: ExecResult; windowName?: string }>;
   closeWindow(server: ServerConfig, ref: MuxRef): Promise<ExecResult>;
