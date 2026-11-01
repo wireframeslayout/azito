@@ -391,7 +391,7 @@ export default function ObjectsSidebar({
       label: w.label, labelSource: w.labelSource,
       taskTitle: w.taskId != null ? taskById.get(w.taskId)?.title : undefined,
       tmuxTarget: w.tmuxTarget,
-      windowId: w.id,
+      id: w.id,
       workerType: w.workerType,
       windowType: w.windowType,
     });
@@ -404,7 +404,7 @@ export default function ObjectsSidebar({
     const task = w.taskId != null ? taskById.get(w.taskId) : undefined;
     const parts: string[] = [];
     const extra = resolveWindowContextExtra(w, sessionData);
-    const display = resolveWindowTitle({ label: w.label, labelSource: w.labelSource, paneTitle: extra.paneTitle, paneCommand: extra.paneCommand, taskTitle: task?.title, workerType: w.workerType, windowType: w.windowType, windowId: w.id });
+    const display = resolveWindowTitle({ label: w.label, labelSource: w.labelSource, paneTitle: extra.paneTitle, paneCommand: extra.paneCommand, taskTitle: task?.title, workerType: w.workerType, windowType: w.windowType, id: w.id });
     if (display.subtitle) parts.push(display.subtitle);
     parts.push(w.serverName);
     const phaseKey = task?.currentPhase;

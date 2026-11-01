@@ -60,5 +60,5 @@ export {
 } from './hostCapabilities';
 export { pickTaskExecutionServer } from './taskServer';
 export { type HostPathApi, hostPathFor } from './hostPath';
-export { resolveWindowTitle, formatWindowTitle, resolvePaneDisplayTitle } from './windowTitle';
+export { resolveWindowTitle, formatWindowTitleLine, resolvePaneDisplayTitle } from './windowTitle';
 export type { WindowTitleInput, WindowTitle } from './windowTitle';

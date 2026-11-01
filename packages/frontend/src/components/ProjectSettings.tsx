@@ -13,7 +13,7 @@ import AddWindowModal from './workspace/AddWindowModal';
 import ResourceWarningDialog from './ResourceWarningDialog';
 import { Chip, EmptyState, FormSelect, ListRow, ListRowGroup, LoadingState, PanelHeader, baseInputStyle, Button } from './ui';
 import type { Window, Unit, Server } from '../pages/workspace/types';
-import { resolveWindowTitle, formatWindowTitle } from '../lib/windowDisplay';
+import { resolveWindowTitle, formatWindowTitleLine } from '../lib/windowDisplay';
 import { notifyProjectsChanged } from '../lib/projectsChanged';
 import { isDistributeCodeLocked, isDistributionRepositorySelected, resolveDistributeCodeForSave, resolveDistributeCodeToggleOnProjectServersChange, resolveDistributionRepositoryIdOnProjectServersChange } from '../lib/distributeCodePolicy';
 import { buildEnvironmentRowChips, needsDistributionSetup, type DistributionPrerequisite, type EnvironmentChip, type LastDistribution } from '../lib/environmentRow';
@@ -891,7 +891,7 @@ function WindowsSection({ settings: s, addWindowModal }: { settings: ReturnType<
         <ListRowGroup>
           {windows.map((w) => {
             const display = resolveWindowTitle({
-              windowId: w.id,
+              id: w.id,
               label: w.label, labelSource: w.labelSource,
               workerType: w.workerType,
               windowType: w.windowType,
@@ -901,7 +901,7 @@ function WindowsSection({ settings: s, addWindowModal }: { settings: ReturnType<
               <ListRow
                 key={w.id}
                 icon={<Icon name="terminal" size={14} />}
-                title={formatWindowTitle(display)}
+                title={formatWindowTitleLine(display)}
                 description={<span style={{ fontFamily: 'monospace' }}>{w.serverName} · tmux {w.tmuxTarget}</span>}
                 rightActions={<Button size="sm" onClick={() => s.handleRemoveWindow(w.id)}>{t('common:actions.remove')}</Button>}
               />

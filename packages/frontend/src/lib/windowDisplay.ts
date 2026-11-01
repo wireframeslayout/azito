@@ -1,5 +1,5 @@
-import { parseMuxRef, resolveWindowTitle, formatWindowTitle } from '@azito/shared';
-export { resolveWindowTitle, formatWindowTitle } from '@azito/shared';
+import { parseMuxRef } from '@azito/shared';
+export { resolveWindowTitle, formatWindowTitleLine } from '@azito/shared';
 export { resolvePaneDisplayTitle } from '@azito/shared';
 export type { WindowTitleInput as WindowDisplayInput, WindowTitle as WindowDisplay } from '@azito/shared';
 
@@ -31,37 +31,6 @@ export function buildWindowIndex<T extends WindowIndexEntry>(
     for (const w of currentProject.windows) map.set(w.id, w);
   }
   return map;
-}
-
-/**
- * ActiveWindowRow (稼働中ウィンドウ行) のフィールドから表示ラベルを組み立てる。
- * `paneName` をペインタイトルとして `resolveWindowTitle` に渡し、
- * `formatWindowTitle` で「表示名 · W-123」形式に整形する。
- */
-export function formatActiveWindowLabel(row: {
-  windowId?: number;
-  label?: string;
-  labelSource?: 'auto' | 'user';
-  paneName?: string;
-  paneTitle?: string;
-  paneCommand?: string;
-  taskTitle?: string;
-  workerType?: string;
-  windowType?: string;
-  target?: string;
-}): string {
-  const display = resolveWindowTitle({
-    windowId: row.windowId,
-    paneTitle: row.paneTitle ?? row.paneName,
-    paneCommand: row.paneCommand,
-    label: row.label,
-    labelSource: row.labelSource,
-    taskTitle: row.taskTitle,
-    workerType: row.workerType,
-    windowType: row.windowType,
-    tmuxTarget: row.target,
-  });
-  return formatWindowTitle(display);
 }
 
 /**

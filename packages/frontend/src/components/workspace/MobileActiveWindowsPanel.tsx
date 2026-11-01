@@ -1,7 +1,7 @@
 import { useActiveWindowRows } from '../../hooks/useActiveWindowRows';
 import { useAgentActivity } from '../../hooks/useAgentActivity';
 import { buildWindowTaskMap, lookupWindowTask } from '../../lib/windowTask';
-import { formatActiveWindowLabel } from '../../lib/windowDisplay';
+import { resolveWindowTitle, formatWindowTitleLine } from '@azito/shared';
 import { BrailleSpinner, BlockedDot, FinishedIndicator } from '../ui/WindowActivityIndicator';
 import { formatRelativeTime } from '../../utils/time';
 import { selectTaskTerminal } from './TaskPanel';
@@ -58,8 +58,8 @@ export function MobileActiveWindowsPanel({ onClose, connectPane, openTask, taskW
       ) : (
         rows.map((row) => {
           const taskId = row.taskId ?? lookupWindowTask(windowTaskMap, row.serverName, row.target);
-          const displayName = formatActiveWindowLabel(row);
-          const windowLabel = formatActiveWindowLabel(row);
+          const displayName = formatWindowTitleLine(resolveWindowTitle({ ...row, id: row.windowId, paneTitle: row.paneTitle ?? row.paneName, tmuxTarget: row.target }));
+          const windowLabel = formatWindowTitleLine(resolveWindowTitle({ ...row, id: row.windowId, paneTitle: row.paneTitle ?? row.paneName, tmuxTarget: row.target }));
           const isFinished = row.status === 'finished';
           const isBlocked = !isFinished && row.activityStatus === 'blocked';
 

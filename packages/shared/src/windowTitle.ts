@@ -9,7 +9,7 @@ export interface WindowTitleInput {
   labelSource?: 'auto' | 'user';
   taskTitle?: string;
   tmuxTarget?: string;
-  windowId?: number;
+  id?: number;
   workerType?: string;
   windowType?: string;
 }
@@ -37,7 +37,7 @@ function cleanLabel(value?: string | null): string | undefined {
 }
 
 export function resolveWindowTitle(input: WindowTitleInput): WindowTitle {
-  const idLabel = input.windowId == null ? undefined : formatWindowId(input.windowId);
+  const idLabel = input.id == null ? undefined : formatWindowId(input.id);
   const label = cleanLabel(input.label);
   const pane = resolvePaneDisplayTitle(input.paneTitle, input.paneCommand);
   const type = (input.workerType && TYPE_LABEL[input.workerType]) || (input.windowType && TYPE_LABEL[input.windowType]);
@@ -48,6 +48,6 @@ export function resolveWindowTitle(input: WindowTitleInput): WindowTitle {
   return { title, ...(subtitle ? { subtitle } : {}), ...(idLabel && title !== idLabel ? { idLabel } : {}), hasDisplayName: candidates.length > 0 };
 }
 
-export function formatWindowTitle(display: WindowTitle): string {
+export function formatWindowTitleLine(display: WindowTitle): string {
   return display.idLabel && display.title !== display.idLabel ? `${display.title} · ${display.idLabel}` : display.title;
 }

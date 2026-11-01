@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { resolveWindowTitle, formatWindowTitle, formatActiveWindowLabel, buildWindowIndex, type WindowIndexEntry } from '../../../lib/windowDisplay';
+import { resolveWindowTitle, formatWindowTitleLine, buildWindowIndex, type WindowIndexEntry } from '../../../lib/windowDisplay';
 import { buildWindowSearchText } from './windowRowTitle';
 
 describe('resolveWindowTitle', () => {
@@ -38,19 +38,19 @@ describe('resolveWindowTitle', () => {
   });
 
   it('returns hasDisplayName: true for workerType label', () => {
-    const result = resolveWindowTitle({ workerType: 'claude', windowId: 123, tmuxTarget: 'azito:0' });
+    const result = resolveWindowTitle({ workerType: 'claude', id: 123, tmuxTarget: 'azito:0' });
     expect(result.title).toBe('Claude');
     expect(result.idLabel).toBe('W-123');
     expect(result.hasDisplayName).toBe(true);
   });
 
   it('tab label shows "Claude · W-123" for workerType', () => {
-    const d = resolveWindowTitle({ workerType: 'claude', windowId: 42, tmuxTarget: 'azito:0' });
-    expect(formatWindowTitle(d)).toBe('Claude · W-42');
+    const d = resolveWindowTitle({ workerType: 'claude', id: 42, tmuxTarget: 'azito:0' });
+    expect(formatWindowTitleLine(d)).toBe('Claude · W-42');
   });
 
   it('tooltip does not duplicate when title equals idLabel', () => {
-    const d = resolveWindowTitle({ windowId: 42, tmuxTarget: 'azito:0' });
+    const d = resolveWindowTitle({ id: 42, tmuxTarget: 'azito:0' });
     const parts = [d.title];
     if (d.idLabel && d.idLabel !== d.title) parts.push(d.idLabel);
     parts.push('local');
@@ -58,20 +58,20 @@ describe('resolveWindowTitle', () => {
   });
 
   it('falls back to W-123 when only windowId is available', () => {
-    const result = resolveWindowTitle({ windowId: 123, tmuxTarget: 'azito:0' });
+    const result = resolveWindowTitle({ id: 123, tmuxTarget: 'azito:0' });
     expect(result.title).toBe('W-123');
     expect(result.idLabel).toBeUndefined();
     expect(result.hasDisplayName).toBe(false);
   });
 
-  it('formatWindowTitle で内部名ラベルが除外される', () => {
+  it('formatWindowTitleLine で内部名ラベルが除外される', () => {
     const d = resolveWindowTitle({
       label: 'task-42--ab12',
       taskTitle: 'Deploy fix',
-      windowId: 42,
+      id: 42,
       tmuxTarget: 'azito:win--ab12',
     });
-    expect(formatWindowTitle(d)).toBe('Deploy fix · W-42');
+    expect(formatWindowTitleLine(d)).toBe('Deploy fix · W-42');
   });
 
   it('falls back to tmuxTarget for unregistered windows', () => {
@@ -86,7 +86,7 @@ describe('resolveWindowTitle', () => {
   });
 
   it('strips generated suffix from user label', () => {
-    const d = resolveWindowTitle({ label: 'editor--ab12', windowId: 123, tmuxTarget: 'azito:0' });
+    const d = resolveWindowTitle({ label: 'editor--ab12', id: 123, tmuxTarget: 'azito:0' });
     expect(d.title).toBe('editor');
     expect(d.idLabel).toBe('W-123');
   });
@@ -96,7 +96,7 @@ describe('resolveWindowTitle', () => {
       paneTitle: 'node', paneCommand: 'node',
       label: 'task-42--ab12',
       taskTitle: 'Deploy fix',
-      windowId: 42,
+      id: 42,
       tmuxTarget: 'azito:win--ab12',
     });
     expect(d.title).toBe('Deploy fix');
@@ -106,7 +106,7 @@ describe('resolveWindowTitle', () => {
 
   it('別プロジェクトの窓でも workerType があればラベル付きで表示される', () => {
     const d = resolveWindowTitle({
-      windowId: 99,
+      id: 99,
       workerType: 'codex',
       label: 'win--ab12',
       tmuxTarget: 'azito:win--ab12',
@@ -117,14 +117,14 @@ describe('resolveWindowTitle', () => {
   });
 
   it('ID のみの窓は hasDisplayName: false で idLabel: undefined（二重表示防止）', () => {
-    const d = resolveWindowTitle({ windowId: 50, tmuxTarget: 'azito:0' });
+    const d = resolveWindowTitle({ id: 50, tmuxTarget: 'azito:0' });
     expect(d.title).toBe('W-50');
     expect(d.idLabel).toBeUndefined();
     expect(d.hasDisplayName).toBe(false);
   });
 
   it('renderTitle が undefined を返したとき行側は idLabel で判定する（Objects 二重表示テスト）', () => {
-    const d = resolveWindowTitle({ windowId: 50, tmuxTarget: 'azito:0' });
+    const d = resolveWindowTitle({ id: 50, tmuxTarget: 'azito:0' });
     const renderTitleResult = d.hasDisplayName ? d.title : undefined;
     expect(renderTitleResult).toBeUndefined();
     const showIdChip = renderTitleResult != null ? true : !!d.idLabel;
@@ -135,7 +135,7 @@ describe('resolveWindowTitle', () => {
 describe('resolveWindowTitle — paneTitle priority in sidebar/menu contexts', () => {
   it('paneName is used as paneTitle over taskTitle and label', () => {
     const d = resolveWindowTitle({
-      windowId: 10,
+      id: 10,
       paneTitle: 'reviewing PR #42',
       label: 'task-99--ab12',
       taskTitle: 'Some task',
@@ -143,24 +143,24 @@ describe('resolveWindowTitle — paneTitle priority in sidebar/menu contexts', (
       tmuxTarget: 'azito:win--ab12',
     });
     expect(d.title).toBe('reviewing PR #42');
-    expect(formatWindowTitle(d)).toBe('reviewing PR #42 · W-10');
+    expect(formatWindowTitleLine(d)).toBe('reviewing PR #42 · W-10');
   });
 
   it('taskTitle is used when label is internal and no paneTitle', () => {
     const d = resolveWindowTitle({
-      windowId: 5,
+      id: 5,
       label: 'task-99--ab12',
       taskTitle: 'Deploy fix',
       workerType: 'claude',
       tmuxTarget: 'azito:win--ab12',
     });
     expect(d.title).toBe('Deploy fix');
-    expect(formatWindowTitle(d)).toBe('Deploy fix · W-5');
+    expect(formatWindowTitleLine(d)).toBe('Deploy fix · W-5');
   });
 
   it('paneTitle matching paneCommand is skipped (not a real title)', () => {
     const d = resolveWindowTitle({
-      windowId: 7,
+      id: 7,
       paneTitle: 'bash',
       paneCommand: 'bash',
       taskTitle: 'My task',
@@ -170,86 +170,86 @@ describe('resolveWindowTitle — paneTitle priority in sidebar/menu contexts', (
   });
 });
 
-describe('formatWindowTitle', () => {
+describe('formatWindowTitleLine', () => {
   it('formats display with name and id', () => {
-    expect(formatWindowTitle({ title: 'Claude', idLabel: 'W-42', hasDisplayName: true })).toBe('Claude · W-42');
+    expect(formatWindowTitleLine({ title: 'Claude', idLabel: 'W-42', hasDisplayName: true })).toBe('Claude · W-42');
   });
 
   it('formats display with id only', () => {
-    expect(formatWindowTitle({ title: 'W-42', hasDisplayName: false })).toBe('W-42');
+    expect(formatWindowTitleLine({ title: 'W-42', hasDisplayName: false })).toBe('W-42');
   });
 
   it('formats display without idLabel', () => {
-    expect(formatWindowTitle({ title: 'azito:0', hasDisplayName: false })).toBe('azito:0');
+    expect(formatWindowTitleLine({ title: 'azito:0', hasDisplayName: false })).toBe('azito:0');
   });
 
   it('workerType が渡されればアイドル中でも Claude · W-123 になる', () => {
-    const d = resolveWindowTitle({ windowId: 123, workerType: 'claude', tmuxTarget: 'azito:win--ab12' });
-    expect(formatWindowTitle(d)).toBe('Claude · W-123');
+    const d = resolveWindowTitle({ id: 123, workerType: 'claude', tmuxTarget: 'azito:win--ab12' });
+    expect(formatWindowTitleLine(d)).toBe('Claude · W-123');
   });
 });
 
-describe('formatWindowTitle with pane suffix', () => {
+describe('formatWindowTitleLine with pane suffix', () => {
   it('旧形式タブのペイン番号は title に付く（名前.2 · W-42 の形式）', () => {
     const d = resolveWindowTitle({
       label: 'task-42--ab12',
       taskTitle: 'Deploy fix',
-      windowId: 42,
+      id: 42,
       tmuxTarget: 'azito:win--ab12',
     });
     // Simulate the legacy tab pane suffix logic: append to title before formatting
     const titleWithPane = `${d.title}.2`;
     const displayWithPane = { ...d, title: titleWithPane };
-    expect(formatWindowTitle(displayWithPane)).toBe('Deploy fix.2 · W-42');
+    expect(formatWindowTitleLine(displayWithPane)).toBe('Deploy fix.2 · W-42');
   });
 
   it('ペインが1つのときはサフィックスなし', () => {
     const d = resolveWindowTitle({
       workerType: 'claude',
-      windowId: 42,
+      id: 42,
       tmuxTarget: 'azito:win--ab12',
     });
-    expect(formatWindowTitle(d)).toBe('Claude · W-42');
+    expect(formatWindowTitleLine(d)).toBe('Claude · W-42');
   });
 
   it('windowId タブで複数ペイン時はタイトルにペイン番号が付く', () => {
     const d = resolveWindowTitle({
       paneTitle: 'building CI pipeline',
       paneCommand: 'node',
-      windowId: 42,
+      id: 42,
       tmuxTarget: 'azito:win--ab12',
     });
     const titleWithPane = `${d.title}.2`;
     const displayWithPane = { ...d, title: titleWithPane };
-    expect(formatWindowTitle(displayWithPane)).toBe('building CI pipeline.2 · W-42');
+    expect(formatWindowTitleLine(displayWithPane)).toBe('building CI pipeline.2 · W-42');
   });
 
   it('tmuxTarget のみのフォールバックで resolveWindowTitle を通る', () => {
     const d = resolveWindowTitle({ tmuxTarget: 'W-42' });
     expect(d.title).toBe('W-42');
     expect(d.hasDisplayName).toBe(false);
-    expect(formatWindowTitle(d)).toBe('W-42');
+    expect(formatWindowTitleLine(d)).toBe('W-42');
   });
 
   it('tmuxTarget のみでラベルがフォーマットされる', () => {
     const d = resolveWindowTitle({ tmuxTarget: 'sess:win' });
-    expect(formatWindowTitle(d)).toBe('sess:win');
+    expect(formatWindowTitleLine(d)).toBe('sess:win');
   });
 
   it('同じ windowId で異なるサーバーの窓が正しくラベル表示される', () => {
     // Both servers have windowId 10 but different worker types
     const displayA = resolveWindowTitle({
-      windowId: 10,
+      id: 10,
       workerType: 'claude',
       tmuxTarget: 'azito:win--a',
     });
     const displayB = resolveWindowTitle({
-      windowId: 10,
+      id: 10,
       workerType: 'codex',
       tmuxTarget: 'azito:win--b',
     });
-    expect(formatWindowTitle(displayA)).toBe('Claude · W-10');
-    expect(formatWindowTitle(displayB)).toBe('Codex · W-10');
+    expect(formatWindowTitleLine(displayA)).toBe('Claude · W-10');
+    expect(formatWindowTitleLine(displayB)).toBe('Codex · W-10');
   });
 });
 
@@ -319,45 +319,5 @@ describe('buildWindowIndex', () => {
     const taskWin = mkWin(20, { workerType: 'codex' });
     const map = buildWindowIndex([], [{ windows: [taskWin] }], null);
     expect(map.get(20)?.workerType).toBe('codex');
-  });
-});
-
-describe('formatActiveWindowLabel', () => {
-  it('uses paneName as pane title', () => {
-    expect(formatActiveWindowLabel({ windowId: 10, paneName: 'building...', target: 'azito:0' })).toBe('building... · W-10');
-  });
-
-  it('falls back to workerType', () => {
-    expect(formatActiveWindowLabel({ windowId: 10, workerType: 'claude', target: 'azito:0' })).toBe('Claude · W-10');
-  });
-
-  it('falls back to label when no paneName', () => {
-    expect(formatActiveWindowLabel({ windowId: 5, label: 'my-window', target: 'azito:0' })).toBe('my-window · W-5');
-  });
-
-  it('falls back to W-ID when only windowId is available', () => {
-    expect(formatActiveWindowLabel({ windowId: 42, target: 'azito:0' })).toBe('W-42');
-  });
-
-  it('falls back to target when nothing else is available', () => {
-    expect(formatActiveWindowLabel({ target: 'azito:0' })).toBe('azito:0');
-  });
-
-  it('uses taskTitle when no paneName or label', () => {
-    expect(formatActiveWindowLabel({ windowId: 7, taskTitle: 'Deploy fix', target: 'azito:0' })).toBe('Deploy fix · W-7');
-  });
-
-  it('skips internal label and uses taskTitle', () => {
-    expect(formatActiveWindowLabel({ windowId: 10, label: 'task-42--ab12', taskTitle: 'Bug fix', target: 'azito:0' })).toBe('Bug fix · W-10');
-  });
-
-  it('does not produce empty string for unregistered window with target', () => {
-    const result = formatActiveWindowLabel({ target: 'azito:my-window' });
-    expect(result).toBe('azito:my-window');
-    expect(result).not.toBe('');
-  });
-
-  it('target and paneName are both used correctly', () => {
-    expect(formatActiveWindowLabel({ windowId: 3, paneName: 'compiling...', target: 'sess:win' })).toBe('compiling... · W-3');
   });
 });

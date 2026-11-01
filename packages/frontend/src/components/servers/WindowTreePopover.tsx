@@ -10,7 +10,7 @@ function disabledStyle(enabled: boolean): React.CSSProperties {
   return enabled ? { cursor: 'pointer' } : { cursor: 'not-allowed', opacity: DIMMED_PANE_OPACITY };
 }
 import { terminalRefFromWindow, terminalTabId, type TerminalRef } from '../../lib/terminalRef';
-import { resolveWindowTitle, formatWindowTitle, sessionWindowLabel, type WindowIndexEntry } from '../../lib/windowDisplay';
+import { resolveWindowTitle, formatWindowTitleLine, sessionWindowLabel, type WindowIndexEntry } from '../../lib/windowDisplay';
 import { isPaneLive, preferredPaneOrdinal } from '../../lib/paneState';
 import { paneRowBadge } from '../../lib/paneRowBadge';
 import { Icon } from '../ui/Icon';
@@ -127,7 +127,7 @@ export default function WindowTreePopover({
                       (() => {
                         const regWin = win.windowId != null ? windowById.get(win.windowId) : undefined;
                         const display = resolveWindowTitle({
-                          windowId: win.windowId ?? undefined,
+                          id: win.windowId ?? undefined,
                           paneTitle: (win.panes.find(p => p.active) ?? win.panes[0])?.title,
                           paneCommand: (win.panes.find(p => p.active) ?? win.panes[0])?.command,
                           label: regWin?.label, labelSource: regWin?.labelSource,
@@ -136,7 +136,7 @@ export default function WindowTreePopover({
                           taskTitle: regWin?.taskId != null ? taskById.get(regWin.taskId)?.title : undefined,
                           tmuxTarget: winLabel,
                         });
-                        return formatWindowTitle(display);
+                        return formatWindowTitleLine(display);
                       })()
                     }</span>
                     <span style={{ marginLeft: 'auto', fontSize: 'var(--font-xs)', color: 'var(--text-dim)' }}>

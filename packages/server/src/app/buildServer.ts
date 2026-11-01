@@ -1,4 +1,4 @@
-import { formatWindowTitle, resolveWindowTitle } from '@azito/shared';
+import { formatWindowTitleLine, resolveWindowTitle } from '@azito/shared';
 // ─── Fastify instance assembly ───
 //
 // Registers plugins, HTTP routes, WebSocket handlers, static files, and the
@@ -173,7 +173,7 @@ export async function buildServer(app: FastifyInstance, wiring: Wiring, port: nu
   notificationBus.on((event) => {
     if (event.type !== 'agent:activity') return;
     const { serverName, target, taskId, running, status, reason } = event.payload;
-    const label = formatWindowTitle(resolveWindowTitle({ ...event.payload, tmuxTarget: target }));
+    const label = formatWindowTitleLine(resolveWindowTitle({ ...event.payload, id: event.payload.windowId, tmuxTarget: target }));
 
     const resolveUrl = (): string => agentActivityPushUrl(event.payload, (id) => taskRepo.findById(id)?.projectId);
 

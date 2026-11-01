@@ -6,7 +6,7 @@ import { useActiveWindowRows } from '../../hooks/useActiveWindowRows';
 import { BrailleSpinner, BlockedDot, FinishedIndicator } from '../ui/WindowActivityIndicator';
 import { formatRelativeTime } from '../../utils/time';
 import { buildWindowTaskMap, lookupWindowTask } from '../../lib/windowTask';
-import { formatActiveWindowLabel } from '../../lib/windowDisplay';
+import { resolveWindowTitle, formatWindowTitleLine } from '@azito/shared';
 import { selectTaskTerminal } from './TaskPanel';
 import { useOpenTerminalTarget } from '../../hooks/useTerminalTargetOpener';
 import type { TerminalRef } from '../../lib/terminalRef';
@@ -119,8 +119,8 @@ export default function ActiveWindowsSection({ connectPane, openTask, taskWindow
         <div style={{ flex: 1, overflowY: 'auto', padding: '0 4px 8px' }}>
           {rows.map((row) => {
             const taskId = row.taskId ?? lookupWindowTask(windowTaskMap, row.serverName, row.target);
-            const displayName = formatActiveWindowLabel(row);
-            const windowLabel = formatActiveWindowLabel(row);
+            const displayName = formatWindowTitleLine(resolveWindowTitle({ ...row, id: row.windowId, paneTitle: row.paneTitle ?? row.paneName, tmuxTarget: row.target }));
+            const windowLabel = formatWindowTitleLine(resolveWindowTitle({ ...row, id: row.windowId, paneTitle: row.paneTitle ?? row.paneName, tmuxTarget: row.target }));
             const isFinished = row.status === 'finished';
             const isBlocked = !isFinished && row.activityStatus === 'blocked';
             const dismissIfFinished = () => {

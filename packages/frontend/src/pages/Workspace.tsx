@@ -61,7 +61,7 @@ import { ACTIVE_PROJECT_KEY, getProjectColorFallback } from './workspace/types';
 import { buildObjectSections } from '../lib/workspaceObjects';
 import { GlobalFocusProvider, useGlobalFocus } from '../hooks/useGlobalFocus';
 import { parseTerminalTabId, terminalRefDisplayLabel, type TerminalRef } from '../lib/terminalRef';
-import { resolveWindowTitle, formatWindowTitle, buildWindowIndex } from '../lib/windowDisplay';
+import { resolveWindowTitle, formatWindowTitleLine, buildWindowIndex } from '../lib/windowDisplay';
 import { findTaskByTarget as findTaskByTargetLib } from '../lib/findTaskByTarget';
 import { describeUnsupportedOs, isUnsupportedOsAnswer } from '../lib/hostFeature';
 export default function Workspace() {
@@ -957,7 +957,7 @@ function WorkspaceInner() {
         label: projWin?.label, labelSource: projWin?.labelSource,
         taskTitle: projWin?.taskId != null ? taskById.get(projWin.taskId)?.title : undefined,
         tmuxTarget: projWin?.tmuxTarget,
-        windowId,
+        id: windowId,
         workerType: projWin?.workerType,
         windowType: projWin?.windowType,
       });
@@ -965,7 +965,7 @@ function WorkspaceInner() {
       const paneSuffix = hasManyPanes && paneOrdinal != null ? `.${paneOrdinal}` : '';
       const titleWithPane = paneSuffix ? `${display.title}${paneSuffix}` : display.title;
       const displayWithPane = paneSuffix ? { ...display, title: titleWithPane } : display;
-      const label = formatWindowTitle(displayWithPane);
+      const label = formatWindowTitleLine(displayWithPane);
       // ツールチップ: 重複を除く (title === idLabel のときは並べない)
       const titleParts: string[] = [];
       if (display.idLabel && display.idLabel !== titleWithPane) titleParts.push(display.idLabel);
@@ -979,7 +979,7 @@ function WorkspaceInner() {
     if (!m) {
       const fallbackName = ref ? terminalRefDisplayLabel(ref) : target;
       const fallbackDisplay = resolveWindowTitle({ tmuxTarget: fallbackName });
-      return { label: formatWindowTitle(fallbackDisplay) };
+      return { label: formatWindowTitleLine(fallbackDisplay) };
     }
     const [, sessionName, winIdx, paneIdx] = m;
     const srvSessions = sessionData[serverName] || [];
@@ -1013,13 +1013,13 @@ function WorkspaceInner() {
         label: projWin.label, labelSource: projWin.labelSource,
         taskTitle: projWin.taskId != null ? taskById.get(projWin.taskId)?.title : undefined,
         tmuxTarget: projWin.tmuxTarget,
-        windowId: projWin.id,
+        id: projWin.id,
         workerType: projWin.workerType,
         windowType: projWin.windowType,
       });
       const titleWithPane = hasManyPanes ? `${display.title}${paneSuffix}` : display.title;
       const displayWithPane = { ...display, title: titleWithPane };
-      const label = formatWindowTitle(displayWithPane);
+      const label = formatWindowTitleLine(displayWithPane);
       const titleParts: string[] = [];
       if (display.idLabel && display.idLabel !== titleWithPane) titleParts.push(display.idLabel);
       titleParts.push(titleWithPane);

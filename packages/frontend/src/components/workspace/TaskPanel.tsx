@@ -42,7 +42,7 @@ import type { PersistedTab } from '../../hooks/useTabPersistence';
 import { useIsMobile } from '../../hooks/useIsMobile';
 import { useClickOutside } from '../../hooks/useClickOutside';
 import { isSameWindowTarget } from '@azito/shared';
-import { resolveWindowTitle, formatWindowTitle } from '../../lib/windowDisplay';
+import { resolveWindowTitle, formatWindowTitleLine } from '../../lib/windowDisplay';
 import { activityKey, useWorkspaceTargets } from '../../hooks/useWorkspaceTargets';
 import { useGlobalFocus } from '../../hooks/useGlobalFocus';
 import { useToast } from '../../hooks/useToast';
@@ -922,8 +922,8 @@ export default function TaskPanel({
         : undefined;
       const extra = w ? resolveWindowContextExtra(w, sessionData) : undefined;
       const displayLabel = w
-        ? formatWindowTitle(resolveWindowTitle({
-            windowId: w.id,
+        ? formatWindowTitleLine(resolveWindowTitle({
+            id: w.id,
             paneTitle: extra?.paneTitle,
             paneCommand: extra?.paneCommand,
             label: w.label, labelSource: w.labelSource,
@@ -1113,11 +1113,11 @@ export default function TaskPanel({
       const tw = sessions ? findSessionWindow(w, sessions)?.window : undefined;
       const pane0 = tw?.panes.find(p => p.active) ?? tw?.panes[0];
       const display = resolveWindowTitle({
-        windowId: w.id, paneTitle: pane0?.title, paneCommand: pane0?.command,
+        id: w.id, paneTitle: pane0?.title, paneCommand: pane0?.command,
         label: w.label, labelSource: w.labelSource, taskTitle: task?.title, tmuxTarget: w.tmuxTarget,
         workerType: w.workerType, windowType: w.windowType,
       });
-      return formatWindowTitle(display);
+      return formatWindowTitleLine(display);
     })();
     return (
       <span style={{ position: 'relative' }}>
@@ -1168,11 +1168,11 @@ export default function TaskPanel({
       const tw = sessions ? findSessionWindow(w, sessions)?.window : undefined;
       const pane0 = tw?.panes.find(p => p.active) ?? tw?.panes[0];
       const display = resolveWindowTitle({
-        windowId: w.id, paneTitle: pane0?.title, paneCommand: pane0?.command,
+        id: w.id, paneTitle: pane0?.title, paneCommand: pane0?.command,
         label: w.label, labelSource: w.labelSource, taskTitle: task?.title, tmuxTarget: w.tmuxTarget,
         workerType: w.workerType, windowType: w.windowType,
       });
-      return formatWindowTitle(display);
+      return formatWindowTitleLine(display);
     })();
     const hasMultiple = windows.length > 1;
     return (

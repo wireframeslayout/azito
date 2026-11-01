@@ -199,7 +199,7 @@ function OfflineRow({ w, active, onPaneClick, onContextMenu, onLongPress, extra,
   const bindLongPress = useLongPress();
   const clickable = !!onPaneClick;
   const subtitle = renderSubtitle?.(w);
-  const display = resolveWindowTitle({ windowId: w.id, label: w.label, labelSource: w.labelSource, workerType: w.workerType, windowType: w.windowType, tmuxTarget: w.tmuxTarget });
+  const display = resolveWindowTitle({ id: w.id, label: w.label, labelSource: w.labelSource, workerType: w.workerType, windowType: w.windowType, tmuxTarget: w.tmuxTarget });
   const title = renderTitle?.(w) ?? display.title;
   const showIdChip = renderTitle?.(w) != null ? w.id != null : !!display.idLabel;
   return (
@@ -259,7 +259,7 @@ function SleepingRow({ w, active, onPaneClick, onContextMenu, onLongPress, extra
   const bindLongPress = useLongPress();
   const clickable = !!onPaneClick;
   const subtitle = renderSubtitle?.(w);
-  const display = resolveWindowTitle({ windowId: w.id, label: w.label, labelSource: w.labelSource, workerType: w.workerType, windowType: w.windowType, tmuxTarget: w.tmuxTarget });
+  const display = resolveWindowTitle({ id: w.id, label: w.label, labelSource: w.labelSource, workerType: w.workerType, windowType: w.windowType, tmuxTarget: w.tmuxTarget });
   const title = renderTitle?.(w) ?? display.title;
   const showIdChip = renderTitle?.(w) != null ? w.id != null : !!display.idLabel;
   return (
@@ -399,7 +399,7 @@ function WindowRow({ w, sessionData, isActive, expandedWindows, onToggle, onUnzo
   const isExpanded = expandedWindows.has(expandKey);
 
   // resolveWindowTitle を先に計算し、idChip の重複を防ぐ
-  const winDisplay = resolveWindowTitle({ windowId: w.id, paneTitle: (sw.panes.find(p => p.active) ?? sw.panes[0])?.title, paneCommand: (sw.panes.find(p => p.active) ?? sw.panes[0])?.command, label: w.label, labelSource: w.labelSource, workerType: w.workerType, windowType: w.windowType, tmuxTarget: w.tmuxTarget });
+  const winDisplay = resolveWindowTitle({ id: w.id, paneTitle: (sw.panes.find(p => p.active) ?? sw.panes[0])?.title, paneCommand: (sw.panes.find(p => p.active) ?? sw.panes[0])?.command, label: w.label, labelSource: w.labelSource, workerType: w.workerType, windowType: w.windowType, tmuxTarget: w.tmuxTarget });
   const winTitle = renderTitle?.(w) ?? winDisplay.title;
   const winShowIdChip = renderTitle?.(w) != null ? w.id != null : !!winDisplay.idLabel;
 

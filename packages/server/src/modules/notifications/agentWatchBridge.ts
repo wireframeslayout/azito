@@ -1,4 +1,4 @@
-import { formatWindowTitle, resolveWindowTitle } from '@azito/shared';
+import { formatWindowTitleLine, resolveWindowTitle } from '@azito/shared';
 import type { SqliteAgentWatchRepository } from './SqliteAgentWatchRepository';
 import type { SqlitePushSubscriptionRepository } from './SqlitePushSubscriptionRepository';
 import type { PushNotificationService } from './push/PushNotificationService';
@@ -50,7 +50,7 @@ export async function notifyAgentWatchesOnIdle(
       try {
         await deps.pushService.sendToAll([sub], (s) => ({
           ...getPushMessage(s.lang, 'agent.idle', {
-            label: formatWindowTitle(resolveWindowTitle({ ...payload, label: payload.label ?? watch.label, tmuxTarget: payload.target })),
+            label: formatWindowTitleLine(resolveWindowTitle({ ...payload, id: payload.windowId, label: payload.label ?? watch.label, tmuxTarget: payload.target })),
             serverName: payload.serverName,
           }),
           data: { url: agentPushUrl({ serverName: payload.serverName, target: payload.target, windowId: payload.windowId }) },
