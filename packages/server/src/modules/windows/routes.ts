@@ -150,9 +150,9 @@ const windowsRoutes: FastifyPluginCallback<WindowsRouteOptions> = (fastify, opts
       const parsedBody = parseStrictBody(projectWindowBody, request.body);
       if (!parsedBody.ok) return reply.status(400).send(parsedBody.body);
       const body = parsedBody.data;
-      const serverName = body['server_name'] as string | undefined;
-      let tmuxTarget = body['tmux_target'] as string | undefined;
-      const refJson = body['ref'] as string | undefined;
+      const serverName = body.server_name;
+      let tmuxTarget = body.tmux_target;
+      const refJson = body.ref;
       const srv = serverName ? serverRepo.findByName(serverName) : null;
       let givenRef: MuxRef | undefined;
       if (refJson) {
@@ -190,14 +190,14 @@ const windowsRoutes: FastifyPluginCallback<WindowsRouteOptions> = (fastify, opts
         return { ok: true, id: existing.id };
       }
 
-      const workerType = (body['worker_type'] as string) || null;
-      const workerModel = (body['worker_model'] as string) || null;
+      const workerType = body.worker_type || null;
+      const workerModel = body.worker_model || null;
       if (workerModel && !isValidModelId(workerModel)) {
         return reply.code(400).send({ error: 'Invalid worker_model format' });
       }
-      const workingDirectory = (body['working_directory'] as string) || null;
+      const workingDirectory = body.working_directory || null;
       // The session id a Windows host's agent was started with (it is the window's first pane, so no launch-agent call records it).
-      const agentSessionId = (body['agent_session_id'] as string | undefined) || null;
+      const agentSessionId = body.agent_session_id || null;
       if (agentSessionId !== null && !isAgentSessionId(agentSessionId)) {
         return reply.code(400).send({ error: 'Invalid agent_session_id format' });
       }
@@ -208,13 +208,13 @@ const windowsRoutes: FastifyPluginCallback<WindowsRouteOptions> = (fastify, opts
         serverName,
         tmuxTarget,
         ...(givenRef ? { muxRef: givenRef } : {}),
-        label: (body['label'] as string) || null,
+        label: body.label || null,
         isPrimary: false,
-        windowType: (body['window_type'] as string) === 'agent' ? 'agent' : 'terminal',
+        windowType: body.window_type === 'agent' ? 'agent' : 'terminal',
         workerType,
         workerModel,
         agentSessionId,
-        launchCommand: (body['launch_command'] as string) || null,
+        launchCommand: body.launch_command || null,
         workingDirectory,
         paneLayout: null,
         sleeping: false,
@@ -236,14 +236,14 @@ const windowsRoutes: FastifyPluginCallback<WindowsRouteOptions> = (fastify, opts
       const parsedBody = parseStrictBody(projectSessionBody, request.body);
       if (!parsedBody.ok) return reply.status(400).send(parsedBody.body);
       const body = parsedBody.data;
-      const serverName = body['server_name'] as string | undefined;
-      const session = body['session'] as string | undefined;
+      const serverName = body.server_name;
+      const session = body.session;
       if (!serverName || !session)
         return reply.status(400).send({ error: 'server_name and session required' });
       const srv = serverRepo.findByName(serverName);
       if (!srv) return reply.status(404).send({ error: 'Server not found' });
       // A tmux and a misao session can share a name: `kind` picks one (omitted = the server's default mux).
-      const kindParam = body['kind'];
+      const kindParam = body.kind;
       if (kindParam !== undefined && kindParam !== 'tmux' && kindParam !== 'misao')
         return reply.status(400).send({ error: 'Invalid kind' });
       const kind: MuxDriverKind = kindParam ?? srv.defaultMux;
@@ -310,9 +310,9 @@ const windowsRoutes: FastifyPluginCallback<WindowsRouteOptions> = (fastify, opts
       const parsedBody = parseStrictBody(taskWindowBody, request.body);
       if (!parsedBody.ok) return reply.status(400).send(parsedBody.body);
       const body = parsedBody.data;
-      const serverName = body['server_name'] as string | undefined;
-      let tmuxTarget = body['tmux_target'] as string | undefined;
-      const refJson = body['ref'] as string | undefined;
+      const serverName = body.server_name;
+      let tmuxTarget = body.tmux_target;
+      const refJson = body.ref;
       const srv = serverName ? serverRepo.findByName(serverName) : null;
       let givenRef: MuxRef | undefined;
       if (refJson) {
@@ -353,31 +353,31 @@ const windowsRoutes: FastifyPluginCallback<WindowsRouteOptions> = (fastify, opts
         if (existing.ownerType !== 'task' || existing.taskId !== id) {
           windowRepo.adoptForTask(existing.id, id);
           // A label the user set (rename) outlives the adoption; only an automatic one is replaced.
-          const label = existing.labelSource === 'user' ? undefined : (body['label'] as string) || undefined;
-          const windowType = (body['window_type'] as string) === 'agent' ? 'agent' as const : undefined;
+          const label = existing.labelSource === 'user' ? undefined : body.label || undefined;
+          const windowType = body.window_type === 'agent' ? 'agent' as const : undefined;
           if (label || windowType) windowRepo.update(existing.id, { ...(label ? { label } : {}), ...(windowType ? { windowType } : {}) });
           return { ok: true, id: existing.id, adopted: true, tmuxTarget: existing.tmuxTarget };
         }
         return { ok: true, id: existing.id, tmuxTarget: existing.tmuxTarget };
       }
 
-      if (body['worker_model'] && !isValidModelId(body['worker_model'] as string)) {
+      if (body.worker_model && !isValidModelId(body.worker_model)) {
         return reply.code(400).send({ error: 'Invalid worker_model format' });
       }
-      const workerType = (body['worker_type'] as string) || null;
-      const workingDirectory = (body['working_directory'] as string) || null;
+      const workerType = body.worker_type || null;
+      const workingDirectory = body.working_directory || null;
       const winId = windowRepo.add({
         ownerType: 'task',
         projectId: null,
         taskId: id,
-        serverName: serverName as string,
-        tmuxTarget: tmuxTarget as string,
+        serverName,
+        tmuxTarget,
         ...(givenRef ? { muxRef: givenRef } : {}),
-        label: (body['label'] as string) || null,
+        label: body.label || null,
         isPrimary: false,
-        windowType: (body['window_type'] as string) === 'agent' ? 'agent' : 'terminal',
+        windowType: body.window_type === 'agent' ? 'agent' : 'terminal',
         workerType,
-        workerModel: (body['worker_model'] as string) || null,
+        workerModel: body.worker_model || null,
         agentSessionId: null,
         launchCommand: null,
         workingDirectory,
@@ -385,7 +385,7 @@ const windowsRoutes: FastifyPluginCallback<WindowsRouteOptions> = (fastify, opts
         sleeping: false,
       });
       if (givenRef && srv) await labelOrRemoveWindow(srv, givenRef, winId, id);
-      sessionCaptureService.scheduleInitialScan(winId, workerType, serverName as string, workingDirectory);
+      sessionCaptureService.scheduleInitialScan(winId, workerType, serverName, workingDirectory);
       notifyWindowsChanged(serverName);
       return { ok: true, id: winId, tmuxTarget };
     },
