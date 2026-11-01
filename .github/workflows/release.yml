@@ -61,10 +61,10 @@ jobs:
         with:
           node-version: '24'
 
-      # Native modules built on this runner take their minimum macOS from MACOSX_DEPLOYMENT_TARGET, not from the
-      # runner's own macOS. 13.5 is Node 24's minimum (the bundled node binary records minos 13.5), and what the
-      # macos-14 builds produced for the modules compiled here (ssh2's sshcrypto.node in v0.12.0).
-      - name: Pin the minimum macOS
+      # The oldest macOS the bundle supports: 13.5 is Node 24's minimum (the bundled node records minos 13.5). node-gyp
+      # builds take it from Node's common.gypi (-mmacosx-version-min), not from this variable or the runner's macOS;
+      # the value set here is the limit the check below holds every bundled binary to, and applies to any direct clang build.
+      - name: Set the minimum macOS the bundle supports
         if: matrix.platform == 'darwin'
         run: echo "MACOSX_DEPLOYMENT_TARGET=13.5" >> "$GITHUB_ENV"
 
