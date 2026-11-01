@@ -1,4 +1,6 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useHotkey, useOverlayStack } from '../../hooks/useHotkeys';
+import { parseKeySpec } from '../../lib/hotkeys/keySpec';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { Icon } from '../ui/Icon';
 import { EmptyState } from '../ui/EmptyState';
@@ -67,6 +69,9 @@ export function MobileTabSwitcherSheet({
   onTogglePin,
 }: MobileTabSwitcherSheetProps) {
   const { t } = useTranslation('workspace');
+  const ref = useRef<HTMLDivElement>(null);
+  const { id } = useOverlayStack(open, ref);
+  useHotkey({ action: 'local:overlay-close', spec: parseKeySpec('Escape'), scope: 'overlay', overlayId: id, handler: onClose }, open);
   const [shouldRender, setShouldRender] = useState(open);
 
   useEffect(() => {
@@ -78,14 +83,6 @@ export function MobileTabSwitcherSheet({
     return () => window.clearTimeout(timer);
   }, [open]);
 
-  useEffect(() => {
-    if (!open) return;
-    const handleKeyDown = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') onClose();
-    };
-    document.addEventListener('keydown', handleKeyDown);
-    return () => document.removeEventListener('keydown', handleKeyDown);
-  }, [open, onClose]);
 
   useEffect(() => {
     if (!open) return;
@@ -103,7 +100,7 @@ export function MobileTabSwitcherSheet({
     [tabs, allProjects, buildTabItem],
   );
 
-  if (!shouldRender) return null;
+  if (!open && !shouldRender) return null;
 
   const renderCard = ({ tab, item }: TabGroupItem) => {
     const isActive = tab.id === activeTabId;
@@ -206,6 +203,7 @@ export function MobileTabSwitcherSheet({
 
   return (
     <div
+      ref={ref}
       role="dialog"
       aria-modal="true"
       aria-label={t('mobile.tabSwitcherTitle')}

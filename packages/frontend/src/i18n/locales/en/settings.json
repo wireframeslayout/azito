@@ -6,7 +6,8 @@
     "resources": "Resource Guard",
     "notifications": "Notifications",
     "security": "Security",
-    "system": "System"
+    "system": "System",
+    "keyboard": "Keyboard"
   },
   "auditLog": {
     "description": "The {{count}} most recent security audit events (task token issuance/revocation, denied requests, approvals, supervisor registration, etc.). This is an operational record, not tamper-evident.",
@@ -241,5 +242,17 @@
     "emptyActive": "No active windows.",
     "offlineHidden": "Offline windows ({{count}}) are hidden — see them all in Settings → System",
     "supervisorConnected": "connected"
+  },
+  "keyboard": {
+    "search": "Open search",
+    "spaceTwice": "Space twice",
+    "disabled": "Disabled",
+    "interval": "Double-press interval",
+    "intervalDescription": "A shorter interval makes accidental activation less likely.",
+    "seconds": "{{value}} sec",
+    "notice": "The shortcut does not respond while typing in a terminal or input field.",
+    "maximize": "Open maximize",
+    "conflict": "This key is already assigned to another action.",
+    "storageError": "Could not save the settings."
   }
 }
