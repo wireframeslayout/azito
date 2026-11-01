@@ -1,3 +1,4 @@
+import { isLaunchdHub } from '../modules/servers/launchdHub';
 // ─── Dependency wiring ───
 //
 // Constructs all infrastructure/repository/domain/application instances via
@@ -269,7 +270,8 @@ export interface Wiring extends SharedInfra, Repositories, PushNotificationModul
 // ─── Per-module factories ───
 
 function buildSharedInfra(agentBundler: AgentBundler, publicUrl: string, localUrl: string, dataPaths: DataPaths, uiToken: string, webhookToken: string, scopedAuthEnabled: boolean, harnessPrefix: string, misaoRuntime: MisaoRuntime, hostEnv: HostEnv, secretFileGuard: SecretFileGuard, hubHost: HubHostProfile, windowsAgent: WindowsAgentOptions, findServer: (name: string) => ServerConfig | null, db?: SqliteDatabase, fingerprintStore?: FingerprintStore, auditLogService?: AuditLogService): SharedInfra {
-  const sshClient = new SshClient(resolveSshClientEnv(hostEnv, process.env), fingerprintStore);
+  const isLaunchd = isLaunchdHub(hostEnv.platform, process.pid);
+  const sshClient = new SshClient(resolveSshClientEnv(hostEnv, process.env), fingerprintStore, undefined, isLaunchd);
   const misaoAgentInstaller = new MisaoAgentInstaller(readMisaoBundle(getBundleRoot()), { windowsTaskName: windowsAgent.misaoTaskName, ...optionalLocalMisao(localWindowsMisaoRoot(hostEnv), secretFileGuard, hostEnv.systemRoot) });
   // A hub with no bundled misao installs agents without it (instead of reporting a failed misao step on every install).
   const agentInstaller = new AgentInstaller(sshClient, agentBundler, windowsAgent, misaoAgentInstaller.bundledVersion !== undefined ? misaoAgentInstaller : undefined, harnessPrefix);
@@ -278,7 +280,7 @@ function buildSharedInfra(agentBundler: AgentBundler, publicUrl: string, localUr
   const muxDriverRegistry = new MuxDriverRegistry();
   const taskTempFiles = TaskTempFiles.fromHostEnv(hostEnv);
   taskTempFiles.assertHubDirShellSafe();
-  const transportFactory = new TransportFactory(publicUrl, hostEnv, taskTempFiles, hubHost);
+  const transportFactory = new TransportFactory(publicUrl, hostEnv, taskTempFiles, hubHost, isLaunchd);
   const tmuxClient = new TmuxClient(transportFactory, publicUrl, uiToken, localUrl, webhookToken, harnessPrefix);
   registerTmuxDriver(muxDriverRegistry, tmuxClient);
   const llmClient: ILlmClient = new CodexExecClient();

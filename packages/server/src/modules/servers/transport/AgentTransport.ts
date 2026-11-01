@@ -1,3 +1,4 @@
+import { diagnoseLocalNetworkError, LocalNetworkPermissionError } from '../localNetworkDiagnosis';
 import { AGENT_HOST_RESOURCES_PATH, AgentResourcesOutdatedError, parseHostResourceSample, type HostResourceSample } from '../../../shared/os/hostResources';
 import { EventEmitter } from 'events';
 import WebSocket, { createWebSocketStream } from 'ws';
@@ -12,7 +13,7 @@ import type {
 import type { IPaneStream } from '../../tmux/PaneStream';
 import { AgentPaneStream } from './AgentPaneStream';
 import { AGENT_PANE_STREAMS_PATH, AgentOutdatedError } from './agentPaneStreamProtocol';
-import { AgentUnreachableError, type AgentUnreachableReason } from './AgentUnreachableError';
+import { AgentLocalNetworkPermissionError, AgentUnreachableError, type AgentUnreachableReason } from './AgentUnreachableError';
 import type { MuxRuntime } from '../Server';
 import { AGENT_HOST_PATH, AgentHostOutdatedError, parseAgentHostInfo, type AgentHostInfo } from './agentHostProtocol';
 import { assertPosixHost, toHostProfile, type HostProfile } from '../../../shared/os/hostProfile';
@@ -127,13 +128,14 @@ export class AgentTransport implements IServerTransport, IMuxTransport, IHostBou
 
   // Circuit breaker: epoch ms until which calls fail fast; 0 = closed.
   private unreachableUntil = 0;
+  private localNetworkDetail: string | undefined;
   private probe: Promise<unknown> | null = null;
   // Request sequencing (see send()): the last handed-out sequence and the newest sequence whose outcome was applied.
   private nextSeq = 0;
   private appliedSeq = 0;
 
   /** `hostProfile`: the agent's OS / architecture as recorded; null for an agent registered before it was (treated as a Unix one). */
-  constructor(host: string, port: number, token: string, muxRuntime: MuxRuntime, private serverName: string, readonly hostProfile: HostProfile | null) {
+  constructor(host: string, port: number, token: string, muxRuntime: MuxRuntime, private serverName: string, readonly hostProfile: HostProfile | null, private diagnosisHost?: { platform: string; isLaunchd: boolean }) {
     this.token = token;
     this.muxRuntime = muxRuntime;
     this.baseUrl = `http://${host}:${port}`;
@@ -469,7 +471,7 @@ export class AgentTransport implements IServerTransport, IMuxTransport, IHostBou
    * online right away. Non-2xx responses mean the agent is reachable but unhealthy and throw a plain Error.
    */
   async fetchHealth(): Promise<unknown> {
-    if (this.isCircuitOpen()) throw new AgentUnreachableError(this.serverName, 'circuit_open');
+    if (this.isCircuitOpen()) throw this.circuitOpenError();
     if (this.unreachableUntil !== 0) return this.ensureProbe();
     return this.requestHealth();
   }
@@ -494,16 +496,22 @@ export class AgentTransport implements IServerTransport, IMuxTransport, IHostBou
       if (seq > this.appliedSeq) {
         this.appliedSeq = seq;
         this.unreachableUntil = 0;
+        this.localNetworkDetail = undefined;
       }
       return { status: res.status, text };
     } catch (err) {
       const reason = classifyFetchError(err);
       if (!reason) throw err;
+      const diagnosis = this.diagnosisHost
+        ? diagnoseLocalNetworkError(err, this.diagnosisHost.platform, this.diagnosisHost.isLaunchd)
+        : err;
+      const detail = diagnosis instanceof LocalNetworkPermissionError ? diagnosis.detail : undefined;
       if (seq > this.appliedSeq) {
         this.appliedSeq = seq;
         this.unreachableUntil = Date.now() + CIRCUIT_OPEN_MS;
+        this.localNetworkDetail = detail;
       }
-      throw new AgentUnreachableError(this.serverName, reason);
+      throw detail === undefined ? new AgentUnreachableError(this.serverName, reason) : new AgentLocalNetworkPermissionError(this.serverName, reason, detail);
     }
   }
 
@@ -519,7 +527,13 @@ export class AgentTransport implements IServerTransport, IMuxTransport, IHostBou
   private assertCircuitClosed(): void {
     if (this.unreachableUntil === 0) return;
     if (!this.isCircuitOpen()) this.ensureProbe().catch(() => undefined);
-    throw new AgentUnreachableError(this.serverName, 'circuit_open');
+    throw this.circuitOpenError();
+  }
+
+  private circuitOpenError(): AgentUnreachableError {
+    return this.localNetworkDetail === undefined
+      ? new AgentUnreachableError(this.serverName, 'circuit_open')
+      : new AgentLocalNetworkPermissionError(this.serverName, 'circuit_open', this.localNetworkDetail);
   }
 
   private async post(path: string, body: Record<string, unknown>, timeoutMs?: number): Promise<ExecResult> {
