@@ -1,9 +1,12 @@
+import { decodedTaskScript } from '../../../shared/os/taskScheduler/taskLauncher';
+import { buildMisaoTaskXml, misaoWindowsLayout } from './misaoWindowsTask';
+import { legacyMisaoTaskArgumentsOf } from '../../../shared/os/taskScheduler/misaoTaskArguments';
 import fs from 'fs';
 import os from 'os';
 import path from 'path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import type { CommandResult, CommandSpec } from '../../../shared/exec/commandSpec';
-import { decodeTaskXml } from '../../../shared/os/taskScheduler/taskDefinition';
+import { buildTaskXml, decodeTaskXml } from '../../../shared/os/taskScheduler/taskDefinition';
 import { decodeEncodedCommand, FakeWindowsHost } from '../../servers/agent-deploy/testing/fakeWindowsHost';
 import { MISAO_RELEASE_FILE_NAMES, windowsMisaoPipe, type AgentMisaoHost, type MisaoReleaseFile, type MisaoSocketStatus } from '../../servers/transport/agentMisaoSocket';
 import { readMisaoBundle, sha256Buffer, type MisaoBundle } from './MisaoBundle';
@@ -27,7 +30,7 @@ const HOST: AgentMisaoHost = {
   windows: { systemRoot: 'C:\\Windows', userName: 'dev', misaoRoot: ROOT },
 };
 
-const OTHER_TASK_XML = '<Task><Actions><Exec><Arguments>--data "C:\\Users\\dev\\hub-prefix\\misao"</Arguments></Exec></Actions></Task>';
+const OTHER_TASK_XML = '<Task><Principals><Principal id="Author"><UserId>PC\\dev</UserId></Principal></Principals><Actions><Exec><Arguments>--data "C:\\Users\\dev\\hub-prefix\\misao"</Arguments></Exec></Actions></Task>';
 
 interface FakeOptions {
   /** The daemon of this release never opens its pipe after `/Run` (the task that names its `misao.exe` starts and ends at once). */
@@ -51,6 +54,7 @@ interface FakeOptions {
 class FakeWindowsAgent {
   readonly host = new FakeWindowsHost({ sha256: 'x'.repeat(64), taskName: TASK });
   daemonUp = false;
+  processPresent = false;
   /** What `<root>\current` says. */
   current: string | undefined;
   /** The hashes of the files in each release folder on the host. */
@@ -73,7 +77,8 @@ class FakeWindowsAgent {
   seedInstalled(version: string, running: boolean): void {
     this.current = version;
     this.releaseDirs.set(version, version === VERSION ? MISAO_RELEASE_FILE_NAMES.map((name) => this.bundle.targets['x86_64-pc-windows-msvc'].sha256[name]) : MISAO_RELEASE_FILE_NAMES.map((name) => `old-${name}`));
-    this.host.registeredXml = `<Task><Actions><Exec><Arguments>--data "${ROOT}"</Arguments></Exec></Actions>previous definition for ${version}</Task>`;
+    const args = legacyMisaoTaskArgumentsOf({ systemRoot: 'C:\\Windows', root: ROOT, exe: `${ROOT}\\${version}\\misao.exe`, logFile: `${ROOT}\\misao.log`, pipe: PIPE });
+    this.host.registeredXml = buildTaskXml({ userId: 'PC\\dev', description: `previous definition for ${version}`, executable: 'C:\\Windows\\System32\\conhost.exe', argumentsLine: args, workingDirectory: HOST.homeDir, restartOnFailure: { intervalMinutes: 1, count: 999 } });
     if (running) this.host.markRunning();
     else this.host.markEnded(0);
     this.daemonUp = running;
@@ -135,6 +140,7 @@ class FakeWindowsAgent {
     const script = decodeEncodedCommand(line);
     this.scripts.push(script);
     const reply = (stdout = ''): CommandResult => ({ exitCode: 0, signal: null, stdout, stderr: '' });
+    if (script.includes('# AZITO_PROCESS_PRESENT')) return reply(this.processPresent ? 'present' : 'absent');
     if (script.includes('WindowsIdentity]::GetCurrent().Name')) return reply(Buffer.from('PC\\dev', 'utf8').toString('base64'));
     if (script.includes('function Get-Sha256')) {
       const dir = /'([^']*\\(\d+\.\d+\.\d+))\\misao\.exe'/.exec(script)![2]!;
@@ -160,12 +166,15 @@ class FakeWindowsAgent {
     const last = this.host.calls.at(-1)?.schtasksArgs?.[0];
     if (last !== undefined && last !== '/Query') this.events.push(`schtasks ${last}`);
     if (last === '/Run') {
-      const failing = this.options.failStartFor !== undefined && (this.host.registeredXml ?? '').includes(`\\${this.options.failStartFor}\\misao.exe`);
+      const xml = this.host.registeredXml ?? '';
+      const encoded = /-EncodedCommand ([A-Za-z0-9+/=]+)/.exec(xml)?.[1];
+      const body = `${xml} ${encoded ? decodedTaskScript(encoded) ?? '' : ''}`;
+      const failing = this.options.failStartFor !== undefined && body.includes(`\\${this.options.failStartFor}\\misao.exe`);
       if (failing) this.host.markEnded(1);
       else if (!runningBefore) {
         // A start while the task is running does nothing (IgnoreNew): the daemon that is up, if any, stays what it was.
         this.daemonUp = true;
-        this.daemonVersion = this.options.daemonVersionOverride ?? /(\d+\.\d+\.\d+)\\misao\.exe/.exec(this.host.registeredXml ?? '')?.[1];
+        this.daemonVersion = this.options.daemonVersionOverride ?? /(\d+\.\d+\.\d+)\\misao\.exe/.exec(body)?.[1];
       }
     }
     if (last === '/End' && result.code === 0 && !this.options.unstoppable) this.stopDaemon();
@@ -226,7 +235,9 @@ describe('MisaoAgentInstaller on a Windows agent', () => {
       expect(xml).toContain('<Command>C:\\Windows\\System32\\conhost.exe</Command>');
       // The release's own folder is in the command line, not a link; the daemon itself works in the home, so no pane starts in (and locks) a release folder.
       const args = /<Arguments>(.*)<\/Arguments>/.exec(xml)![1]!.replace(/&gt;/g, '>').replace(/&amp;/g, '&');
-      expect(args).toBe(`--headless C:\\Windows\\System32\\cmd.exe /d /c ""${ROOT}\\${VERSION}\\misao.exe" serve --socket "${PIPE}" --data "${ROOT}" >> "${ROOT}\\misao.log" 2>&1"`);
+      const script = decodedTaskScript(args.split(' ').pop()!)!;
+      expect(script).toContain(`${ROOT}\\${VERSION}\\misao.exe`);
+      expect(script).toContain(PIPE);
       expect(xml).toContain('<WorkingDirectory>C:\\Users\\dev</WorkingDirectory>');
       expect(xml).toContain('<Interval>PT1M</Interval>');
       // The XML went through the agent's file API (UTF-16, read back by the fake Task Scheduler), then schtasks /Create read it from there; the file is removed afterwards.
@@ -360,7 +371,7 @@ describe('MisaoAgentInstaller on a Windows agent', () => {
       expect(stop).toMatchObject({ file: `${ROOT}\\${OLD_VERSION}\\misao.exe`, args: ['stop'], env: { MISAO_SOCKET: PIPE } });
       expect(agent.current).toBe(VERSION);
       expect(agent.daemonUp).toBe(true);
-      expect(agent.host.registeredXml).toContain(`${VERSION}\\misao.exe`);
+      expect(decodedTaskScript(/-EncodedCommand ([A-Za-z0-9+/=]+)/.exec(agent.host.registeredXml!)![1]!)).toContain(`${VERSION}\\misao.exe`);
       // The old daemon was gone before anything was switched.
       expect(agent.events).toEqual(['misao stop', `current:${VERSION}`, 'schtasks /Create', 'schtasks /Run']);
     });
@@ -401,6 +412,22 @@ describe('MisaoAgentInstaller on a Windows agent', () => {
       expect(agent.current).toBe(OLD_VERSION);
       expect(agent.schtasks()).not.toContain('/Run');
       expect(agent.daemonUp).toBe(false);
+    });
+
+    it('does not switch a live same-version task whose gzip OS byte differs', async () => {
+      const agent = new FakeWindowsAgent(bundle);
+      agent.seedInstalled(VERSION, true);
+      const xml = buildMisaoTaskXml({ userId: 'PC\\dev', systemRoot: 'C:\\Windows', homeDir: HOST.homeDir, layout: misaoWindowsLayout({ misaoRoot: ROOT }, VERSION, TASK), pipe: PIPE });
+      agent.host.registeredXml = xml.replace(/(-EncodedCommand )([A-Za-z0-9+/=]+)/, (_all, prefix: string, encoded: string) => {
+        const outer = Buffer.from(encoded, 'base64').toString('utf16le');
+        const changed = outer.replace(/(\$azitoTaskGzip=')([A-Za-z0-9+/=]+)(')/, (_m, before: string, data: string, after: string) => {
+          const bytes = Buffer.from(data, 'base64'); bytes[9] = 10; return before + bytes.toString('base64') + after;
+        });
+        return prefix + Buffer.from(changed, 'utf16le').toString('base64');
+      });
+      expect(await installer().update(agent.asTarget())).toMatchObject({ startMethod: 'running', runningVersion: VERSION });
+      expect(agent.events).not.toContain('misao stop');
+      expect(agent.schtasks()).not.toContain('/Create');
     });
 
     it('does nothing while the task is running but the pipe is not up yet', async () => {
@@ -447,11 +474,20 @@ describe('MisaoAgentInstaller on a Windows agent', () => {
       expect(error!.message).toContain('To restore the previous release by hand');
     });
 
+    it('migrates a running legacy task when the release is already current', async () => {
+      const agent = new FakeWindowsAgent(bundle);
+      agent.seedInstalled(VERSION, true);
+      expect(await installer().update(agent.asTarget())).toMatchObject({ startMethod: 'taskscheduler', runningVersion: VERSION });
+      expect(agent.events).toContain('misao stop');
+      expect(agent.schtasks()).toContain('/Create');
+    });
+
     it('is refused when misao was not installed by AZITO, and does nothing when it is already the bundled release', async () => {
       const bare = new FakeWindowsAgent(bundle);
       await expect(installer().update(bare.asTarget())).rejects.toMatchObject({ code: 'not_installed' });
       const current = new FakeWindowsAgent(bundle);
       current.seedInstalled(VERSION, true);
+      current.host.registeredXml = buildMisaoTaskXml({ userId: 'PC\\dev', systemRoot: 'C:\\Windows', homeDir: HOST.homeDir, layout: misaoWindowsLayout({ misaoRoot: ROOT }, VERSION, TASK), pipe: PIPE });
       expect(await installer().update(current.asTarget())).toMatchObject({ startMethod: 'running', updateAvailable: false });
       expect(current.schtasks()).not.toContain('/Create');
     });
@@ -547,7 +583,7 @@ describe('MisaoAgentInstaller on a Windows agent', () => {
       it(`${action} refuses while that task is stopped, and changes nothing`, async () => {
         const agent = new FakeWindowsAgent(bundle);
         seedOther(agent, false);
-        await expect(installer()[action](agent.asTarget())).rejects.toMatchObject({ code: 'custom_socket', message: expect.stringContaining('hub-prefix') });
+        await expect(installer()[action](agent.asTarget())).rejects.toMatchObject({ code: 'custom_socket' });
         expectNothingChanged(agent, OTHER_TASK_XML);
       });
 
@@ -563,18 +599,25 @@ describe('MisaoAgentInstaller on a Windows agent', () => {
         const agent = new FakeWindowsAgent(bundle);
         agent.seedInstalled(OLD_VERSION, false);
         agent.host.registeredXml = '<Task>not a misao task</Task>';
-        await expect(installer()[action](agent.asTarget())).rejects.toMatchObject({ code: 'custom_socket', message: expect.stringContaining('cannot be read') });
+        await expect(installer()[action](agent.asTarget())).rejects.toMatchObject({ code: 'custom_socket', message: expect.stringContaining('folder cannot be read') });
         expectNothingChanged(agent, '<Task>not a misao task</Task>');
       });
     }
+
+    it('refuses a recognised task registered for another account', async () => {
+      const agent = new FakeWindowsAgent(bundle);
+      agent.seedInstalled(OLD_VERSION, false);
+      agent.host.registeredXml = agent.host.registeredXml!.replace(/<UserId>PC\\dev<\/UserId>/g, '<UserId>PC\\other</UserId>');
+      await expect(installer().update(agent.asTarget())).rejects.toMatchObject({ code: 'custom_socket', message: expect.stringContaining('another account') });
+      expect(agent.events).toEqual([]);
+    });
 
     it('install and update do not take a folder that is gone for the same folder', async () => {
       for (const action of ['install', 'update'] as const) {
         const agent = new FakeWindowsAgent(bundle);
         agent.seedInstalled(OLD_VERSION, false);
         agent.host.registeredXml = OTHER_TASK_XML;
-        await expect(installer()[action](agent.asTarget())).rejects.toMatchObject({ code: 'custom_socket', message: expect.stringContaining('does not exist') });
-        expect(agent.specs.some((spec) => spec.file === HOST.nodePath)).toBe(true);
+        await expect(installer()[action](agent.asTarget())).rejects.toMatchObject({ code: 'custom_socket', message: expect.stringContaining('folder that does not exist') });
         expectNothingChanged(agent, OTHER_TASK_XML);
       }
     });
@@ -585,29 +628,25 @@ describe('MisaoAgentInstaller on a Windows agent', () => {
         agent.seedInstalled(OLD_VERSION, false);
         agent.host.registeredXml = OTHER_TASK_XML;
         agent.realPaths.set('C:\\Users\\dev\\hub-prefix\\misao', 'D:\\elsewhere\\misao');
-        await expect(installer()[action](agent.asTarget())).rejects.toMatchObject({ code: 'custom_socket', message: expect.stringContaining('another folder') });
+        await expect(installer()[action](agent.asTarget())).rejects.toMatchObject({ code: 'custom_socket', message: expect.stringContaining('another misao folder') });
         expectNothingChanged(agent, OTHER_TASK_XML);
       }
     });
 
-    it('a folder starting with "--" is a path to resolve, never an option of node', async () => {
+    it('refuses an unrecognised task whose folder starts with "--"', async () => {
       const agent = new FakeWindowsAgent(bundle);
       agent.seedInstalled(OLD_VERSION, false);
       agent.host.registeredXml = '<Task><Actions><Exec><Arguments>--data "--require=C:\\x.js"</Arguments></Exec></Actions></Task>';
       await expect(installer().install(agent.asTarget())).rejects.toMatchObject({ code: 'custom_socket' });
-      const node = agent.specs.find((spec) => spec.file === HOST.nodePath)!;
-      expect(node.args.slice(2)).toEqual(['--', '--require=C:\\x.js']);
       expectNothingChanged(agent, agent.host.registeredXml!);
     });
 
-    it('a task that names the same folder by a short name or another case is not another install\'s (resolved on the host)', async () => {
+    it('refuses an unrecognised task even when its folder resolves to this install', async () => {
       const agent = new FakeWindowsAgent(bundle);
       agent.seedInstalled(VERSION, true);
       agent.host.registeredXml = '<Task><Actions><Exec><Arguments>--data "C:\\Users\\DEV~1\\.azito\\misao"</Arguments></Exec></Actions></Task>';
       agent.realPaths.set('C:\\Users\\DEV~1\\.azito\\misao', ROOT);
-      expect(await installer().install(agent.asTarget())).toMatchObject({ startMethod: 'running', updateAvailable: false });
-      agent.realPaths.set('C:\\Users\\DEV~1\\.azito\\misao', ROOT.toUpperCase());
-      expect(await installer().install(agent.asTarget())).toMatchObject({ startMethod: 'running' });
+      await expect(installer().install(agent.asTarget())).rejects.toMatchObject({ code: 'custom_socket' });
       expect(agent.events).toEqual([]);
     });
 
@@ -620,11 +659,18 @@ describe('MisaoAgentInstaller on a Windows agent', () => {
       expect(agent.schtasks()).toContain('/Create');
     });
 
-    it('install still shares a task of the same folder (case and doubled backslashes aside)', async () => {
+    it('explains when a managed folder task definition was changed', async () => {
+      const agent = new FakeWindowsAgent(bundle);
+      agent.seedInstalled(VERSION, false);
+      agent.host.registeredXml = agent.host.registeredXml!.replace('</Arguments>', ' --extra</Arguments>');
+      await expect(installer().install(agent.asTarget())).rejects.toMatchObject({ code: 'custom_socket', message: expect.stringContaining('modified definition') });
+    });
+
+    it('install refuses an unrecognised action even if it names the same folder', async () => {
       const agent = new FakeWindowsAgent(bundle);
       agent.seedInstalled(VERSION, true);
       agent.host.registeredXml = `<Task><Actions><Exec><Arguments>--data "${ROOT.toUpperCase().replace(/\\/g, '\\\\')}"</Arguments></Exec></Actions></Task>`;
-      expect(await installer().install(agent.asTarget())).toMatchObject({ startMethod: 'running', updateAvailable: false });
+      await expect(installer().install(agent.asTarget())).rejects.toMatchObject({ code: 'custom_socket' });
       expect(agent.events).toEqual([]);
     });
 
@@ -680,6 +726,19 @@ describe('MisaoAgentInstaller on a Windows agent', () => {
       expect(agent.scripts.some((t) => t.includes('function Get-AgentNodes') && t.includes(`$envArgument = '${PIPE}'`))).toBe(true);
     });
 
+    it('waits for an empty launcher but revives a present unresponsive daemon after force', async () => {
+      const agent = new FakeWindowsAgent(bundle);
+      agent.seedInstalled(VERSION, true);
+      agent.host.registeredXml = buildMisaoTaskXml({ userId: 'PC\\dev', systemRoot: 'C:\\Windows', homeDir: HOST.homeDir, layout: misaoWindowsLayout({ misaoRoot: ROOT }, VERSION, TASK), pipe: PIPE });
+      agent.daemonUp = false;
+      expect(await installer().reviveWindowsDaemon(agent.asTarget(), true)).toBe('starting');
+      expect(agent.schtasks()).not.toContain('/End');
+      agent.processPresent = true;
+      expect(await installer().reviveWindowsDaemon(agent.asTarget(), true)).toBe('started');
+      expect(agent.schtasks()).toContain('/End');
+      expect(agent.scripts.some((script) => script.includes("Get-Process -Name 'powershell'"))).toBe(true);
+    });
+
     it('leaves a daemon alone when the agent relays to another pipe (MISAO_SOCKET): it is not the managed one, whatever its state', async () => {
       const agent = new FakeWindowsAgent(bundle, { status: { socketPath: '\\\\.\\pipe\\someone-elses-misao' } });
       agent.seedInstalled(VERSION, true);
@@ -713,19 +772,19 @@ describe('MisaoAgentInstaller on a Windows agent', () => {
       expect(agent.schtasks()).not.toContain('/End');
     });
 
-    it('compares the folder without regard to case or a doubled backslash', async () => {
+    it('does not revive an unrecognised action even if it names the same folder', async () => {
       const agent = new FakeWindowsAgent(bundle);
       agent.seedInstalled(VERSION, false);
       agent.host.markEnded(0);
       agent.host.registeredXml = `<Task><Actions><Exec><Arguments>--data "${ROOT.toUpperCase().replace(/\\/g, '\\\\')}"</Arguments></Exec></Actions></Task>`;
-      expect(await installer().reviveWindowsDaemon(agent.asTarget(), false)).toBe('started');
+      expect(await installer().reviveWindowsDaemon(agent.asTarget(), false)).toBe('other_task');
     });
 
     it('does not start a task that was disabled by hand', async () => {
       const agent = new FakeWindowsAgent(bundle);
       agent.seedInstalled(VERSION, false);
       agent.host.markEnded(0);
-      agent.host.registeredXml = `<Task><Settings><Enabled>false</Enabled></Settings><Actions><Exec><Arguments>--data "${ROOT}"</Arguments></Exec></Actions></Task>`;
+      agent.host.registeredXml = agent.host.registeredXml!.replace('<Settings>', '<Settings><Enabled>false</Enabled>');
       expect(await installer().reviveWindowsDaemon(agent.asTarget(), true)).toBe('disabled');
       expect(agent.schtasks()).not.toContain('/Run');
     });

@@ -9,7 +9,7 @@ export interface AgentRecoveryDeps {
   /** Resolves when the agent answers `/health`; rejects when it cannot be reached (the circuit breaker being open is such a case). */
   checkAgent(server: ServerConfig): Promise<void>;
   /** Starts the agent again (`recoverAgent`: `/Query`, `/End`, `/Run` of its task). Resolves with what it did; `disabled` is a task disabled by hand, which is left alone. */
-  recoverAgent(server: ServerConfig): Promise<string>;
+  recoverAgent(server: ServerConfig, force: boolean): Promise<string>;
   /** Asks the (reachable) agent whether the managed misao it hosts is installed by AZITO and does not answer. Rejects when the agent cannot say (an older one). */
   isMisaoDown(server: ServerConfig): Promise<boolean>;
   /** Starts the misao task again through the agent; resolves with what it did (`started`, or why nothing was done). `force`: the task is still "running" but the daemon does not answer, so end it first. */
@@ -133,7 +133,8 @@ export class AgentRecoveryWatchdog {
       await this.deps.checkAgent(server);
     } catch {
       this.misaos.delete(server.name);
-      await this.attempt(this.agents, server, 'agent', (s) => this.deps.recoverAgent(s), async (s) => !(await this.answers(s)));
+      const force = (this.agents.get(server.name)?.attempts ?? 0) > 0;
+      await this.attempt(this.agents, server, 'agent', (s) => this.deps.recoverAgent(s, force), async (s) => !(await this.answers(s)));
       return;
     }
     this.agents.delete(server.name);

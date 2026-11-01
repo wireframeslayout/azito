@@ -4,7 +4,7 @@ import type { ExecResult } from '../transport/ServerTransport';
 import { CREATE_SCRIPT, INSPECT_SCRIPT, PROTECT_SCRIPT, evaluateAcl, parseAclSnapshot } from '../../../shared/os/windowsSecretFileGuard';
 import { MAX_WINDOWS_COMMAND_LINE, powershellDialect, powershellEncodedArgs } from '../../../shared/os/shellDialect';
 import { compressPowerShellScript } from '../../../shared/os/compressPowerShellScript';
-import { buildEndProcessesScript } from '../../../shared/os/windowsProcessSweep';
+import { buildEndProcessesScript, buildProcessPresentScript, parseProcessPresent } from '../../../shared/os/windowsProcessSweep';
 import { SchtasksClient, type TaskScheduleState } from '../../../shared/os/taskScheduler/schtasks';
 import { buildTaskXml, encodeTaskXml, isTaskDefinitionDisabled } from '../../../shared/os/taskScheduler/taskDefinition';
 import { redactSecretText } from '../../../shared/redactSecretText';
@@ -12,7 +12,8 @@ import { createSshCommandSpecRunner } from './windowsSshRunner';
 import { checkFirewall, describeFirewallProblem } from './windowsFirewall';
 import { MISAO_WINDOWS_DIR, type WindowsAgentOptions } from './windowsAgentConfig';
 import type { WindowsPreflightInfo } from './windowsPreflight';
-import { agentTaskAction } from './windowsAgentTask';
+import { agentTaskAction, agentTaskIdentity } from './windowsAgentTask';
+import { soleExecAction, taskHasUserId, taskPrincipalId } from '../../../shared/os/taskScheduler/taskXmlRead';
 import { uninstallWindowsAgent, type WindowsUninstallChoice, type WindowsUninstallResult } from './windowsAgentUninstall';
 
 /** Runs one command line on the Windows host through its SSH login shell. */
@@ -85,16 +86,6 @@ const RESTART_COUNT = 999;
 const SAFE_VERSION = /^[A-Za-z0-9][A-Za-z0-9._-]*$/;
 /** The folder name of an agent release: `build-agent.ts` names a bundle by the first 12 hex digits of its content hash. Only such folders are ever pruned. */
 const RELEASE_DIR_PATTERN = '^[0-9a-f]{12}$';
-/** The version folder a task definition runs its entry from (`...\<version>\azito-agent.cjs`). */
-const ENTRY_VERSION = /([A-Za-z0-9][A-Za-z0-9._-]*)\\azito-agent\.cjs/;
-
-/** The version a task definition (its XML) starts the agent from; undefined when the definition names no such entry. */
-export function versionOfTaskXml(xml: string): string | undefined {
-  const args = /<Arguments>([^<]*)<\/Arguments>/.exec(xml)?.[1];
-  const version = args === undefined ? undefined : ENTRY_VERSION.exec(args)?.[1];
-  return version !== undefined && SAFE_VERSION.test(version) ? version : undefined;
-}
-
 const sleep = (ms: number): Promise<void> => new Promise((resolve) => setTimeout(resolve, ms));
 
 /** Where everything of one agent install lives on the host. */
@@ -249,8 +240,8 @@ export class WindowsAgentDeployer {
       await this.prepareRoot(input.sshHost, layout);
       await this.transfer.putFile(input.sshHost, input.tarballPath, `${layout.rootRelative}/azito-agent-${input.version}.tar.gz`);
       await this.verifySha256(input.sshHost, layout.tarball, input.expectedSha256);
-      previous = await this.capturePrevious(client);
-      await this.stopTask(input.sshHost, client, layout.envFile);
+      previous = await this.capturePrevious(input.sshHost, client, input.host, layout);
+      await this.stopTask(input.sshHost, client, layout.envFile, input.host);
       await this.extract(input, layout);
       progress.versionCreated = true;
       await this.writeSettings(input, layout, envContent);
@@ -274,17 +265,27 @@ export class WindowsAgentDeployer {
 
   /** Stops the task if it is running and waits until it is not (`/End` returns before the process is gone). */
   async stop(sshHost: string, host: WindowsPreflightInfo): Promise<void> {
-    await this.stopTask(sshHost, this.schtasks(sshHost, host), windowsAgentEnvFile(host.home, this.options));
+    await this.stopTask(sshHost, this.schtasks(sshHost, host), windowsAgentEnvFile(host.home, this.options), host);
   }
 
   /** Stops and starts the registered task. A task that is not registered is an error (nothing is installed to restart); one disabled by hand is not touched. */
-  async restart(sshHost: string, host: WindowsPreflightInfo): Promise<'restarted' | 'disabled'> {
+  async restart(sshHost: string, host: WindowsPreflightInfo, force = false): Promise<'restarted' | 'disabled' | 'starting'> {
     const client = this.schtasks(sshHost, host);
     const state = await client.query(this.options.taskName);
     if (!state.exists) throw new Error(`The task "${this.options.taskName}" is not registered on the host: install the agent first`);
     // Disabled by hand (`schtasks /Change /DISABLE`): that is how the agent is kept stopped, so it is left alone.
-    if (isTaskDefinitionDisabled(await client.exportXml(this.options.taskName))) return 'disabled';
-    await this.stopTask(sshHost, client, windowsAgentEnvFile(host.home, this.options));
+    const xml = await client.exportXml(this.options.taskName);
+    if (isTaskDefinitionDisabled(xml)) return 'disabled';
+    const action = soleExecAction(xml);
+    const root = windowsAgentRoot(host.home, this.options);
+    const identity = action && agentTaskIdentity(action, host.systemRoot, root, windowsAgentEnvFile(host.home, this.options), this.options.taskName);
+    if (!identity || !await this.taskOwnedByHost(sshHost, xml, host.userId)) throw new Error(`The task "${this.options.taskName}" is not a recognised agent task for ${root}`);
+    if (identity.launcher && state.running) {
+      if (!force) return 'starting';
+      const output = await this.script(sshHost, 'Checking the agent process', compressPowerShellScript(buildProcessPresentScript('node.exe', `--env-file=${windowsAgentEnvFile(host.home, this.options)}`)));
+      if (!parseProcessPresent(output)) return 'starting';
+    }
+    await this.stopTask(sshHost, client, windowsAgentEnvFile(host.home, this.options), host);
     await client.start(this.options.taskName);
     return 'restarted';
   }
@@ -368,7 +369,7 @@ export class WindowsAgentDeployer {
    * `--headless` (Windows 10 1809 and later) gives the process a console that has no window.
    */
   private buildTask(input: WindowsDeployInput, layout: WindowsAgentLayout): string {
-    const action = agentTaskAction(input.host.systemRoot, input.nodePath, layout.envFile, layout.entry);
+    const action = agentTaskAction(input.host.systemRoot, input.nodePath, layout.envFile, layout.entry, this.options.taskName);
     return buildTaskXml({
       userId: input.host.userId,
       description: 'AZITO Agent: started at logon by the AZITO hub',
@@ -379,12 +380,22 @@ export class WindowsAgentDeployer {
     });
   }
 
+  private async taskOwnedByHost(sshHost: string, xml: string, userId: string): Promise<boolean> {
+    if (taskHasUserId(xml, userId)) return true;
+    if (!/^S-1-\d+(?:-\d+)+$/i.test(taskPrincipalId(xml) ?? '')) return false;
+    const sid = await this.script(sshHost, 'Reading the Windows account SID', '[System.Security.Principal.WindowsIdentity]::GetCurrent().User.Value');
+    return taskHasUserId(xml, userId, sid.trim());
+  }
+
   /** Reads what is registered now. A definition that cannot be read stops the deploy, before anything is changed. */
-  private async capturePrevious(client: SchtasksClient): Promise<Previous> {
+  private async capturePrevious(sshHost: string, client: SchtasksClient, host: WindowsPreflightInfo, layout: WindowsAgentLayout): Promise<Previous> {
     const state = await client.query(this.options.taskName);
     if (!state.exists) return { taskXml: undefined, version: undefined, wasRunning: false };
     const taskXml = await client.exportXml(this.options.taskName);
-    return { taskXml, version: versionOfTaskXml(taskXml), wasRunning: state.running };
+    const action = soleExecAction(taskXml);
+    const identity = action && agentTaskIdentity(action, host.systemRoot, layout.root, layout.envFile, this.options.taskName);
+    if (!identity || !await this.taskOwnedByHost(sshHost, taskXml, host.userId)) throw new Error(`The task "${this.options.taskName}" is not a recognised agent task for ${layout.root}; it was left unchanged`);
+    return { taskXml, version: identity.version, wasRunning: state.running };
   }
 
   /**
@@ -392,8 +403,21 @@ export class WindowsAgentDeployer {
    * task runs is gone (its settings say so), which is what `/End` and the Task Scheduler's own "End" rely on; this is the
    * safety net for an agent that does not (an older one, or one whose parent watch has not fired yet).
    */
-  private async stopTask(sshHost: string, client: SchtasksClient, envFile: string): Promise<void> {
+  private async stopTask(sshHost: string, client: SchtasksClient, envFile: string, host: WindowsPreflightInfo): Promise<void> {
+    const state = await client.query(this.options.taskName);
+    let launcherCommand: string | undefined;
+    if (state.exists) {
+      const xml = await client.exportXml(this.options.taskName);
+      const action = soleExecAction(xml);
+      const identity = action && agentTaskIdentity(action, host.systemRoot, path.win32.dirname(envFile), envFile, this.options.taskName);
+      if (identity?.launcher && await this.taskOwnedByHost(sshHost, xml, host.userId)) {
+        launcherCommand = /-EncodedCommand ([A-Za-z0-9+/=]+)$/.exec(action!.argumentsLine)?.[1];
+      }
+    }
     await this.endTask(client, this.options.taskName);
+    if (launcherCommand) {
+      await this.script(sshHost, 'Ending the agent launcher', compressPowerShellScript(buildEndProcessesScript({ image: 'powershell.exe', argument: launcherCommand, label: 'agent launcher', endParentConhost: false, hashEncodedCommand: true })), QUICK_MS);
+    }
     await this.endStrayProcesses(sshHost, envFile);
   }
 
@@ -592,7 +616,7 @@ export class WindowsAgentDeployer {
     // Nothing was touched before the capture: only the temporary files are removed.
     let restored = false;
     if (previous !== undefined) {
-      await attempt('stopped the new agent', () => this.stopTask(input.sshHost, client, layout.envFile));
+      await attempt('stopped the new agent', () => this.stopTask(input.sshHost, client, layout.envFile, input.host));
       const folder = await putBackAttempt('restored the version folder', 'Restoring the previous version folder', layout.versionDirPrev, layout.versionDir, progress.versionCreated);
       const settings = await putBackAttempt('restored the settings', 'Restoring the previous settings', layout.envFilePrev, layout.envFile, progress.settingsSwapped);
       restored = folder && settings;

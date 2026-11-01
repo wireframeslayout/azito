@@ -1,14 +1,33 @@
+import { decodedTaskScript } from '../../../../shared/os/taskScheduler/taskLauncher';
 import { gunzipSync } from 'node:zlib';
 import type { ExecResult } from '../../transport/ServerTransport';
-import { decodeTaskXml } from '../../../../shared/os/taskScheduler/taskDefinition';
+import * as path from 'path';
+import { decodeTaskXml, escapeXml } from '../../../../shared/os/taskScheduler/taskDefinition';
+import { joinWindowsArgs } from '../../../../shared/os/taskScheduler/windowsCommandLine';
+import { legacyAgentTaskAction } from '../windowsAgentTask';
 
 /** The script inside a `powershell.exe ... -EncodedCommand <base64>` line (what `powershellDialect.wrapScript` makes). */
 export function decodeEncodedCommand(line: string): string {
   const match = /-EncodedCommand ([A-Za-z0-9+/=]+)$/.exec(line);
   if (!match) throw new Error(`not an EncodedCommand line: ${line}`);
-  const script = Buffer.from(match[1]!, 'base64').toString('utf16le');
+  const script = decodedTaskScript(match[1]!) ?? '';
   const packed = /\$packed = \[Convert\]::FromBase64String\('([^']+)'\)/.exec(script);
   return packed ? gunzipSync(Buffer.from(packed[1]!, 'base64')).toString('utf8') : script;
+}
+
+/** The release the fake's pre-existing task runs, when a test does not register one of its own. */
+export const FAKE_PREVIOUS_VERSION = '0123456789ab';
+
+/** A task definition of the earlier (pre-launcher) form, as an older install registered it for `version` of the default layout. */
+export function legacyAgentTaskXml(version: string, host: { home?: string; systemRoot?: string; userId?: string; nodePath?: string } = {}): string {
+  const home = host.home ?? 'C:\\Users\\dev';
+  const systemRoot = host.systemRoot ?? 'C:\\Windows';
+  const root = path.win32.join(home, '.azito', 'agent');
+  const action = legacyAgentTaskAction(systemRoot, host.nodePath ?? 'C:\\Program Files\\nodejs\\node.exe', path.win32.join(root, 'agent.env'), path.win32.join(root, version, 'azito-agent.cjs'));
+  // Only the parts the deploy reads (the principal and the one Exec action), so that any home a test uses can be written.
+  return `<Task><Principals><Principal id="Author"><UserId>${escapeXml(host.userId ?? 'PC\\dev')}</UserId></Principal></Principals>`
+    + `<Actions Context="Author"><Exec><Command>${escapeXml(action.executable)}</Command><Arguments>${escapeXml(joinWindowsArgs(action.args))}</Arguments></Exec></Actions></Task>`;
+
 }
 
 export interface FakeWindowsHostOptions {
@@ -64,7 +83,7 @@ export class FakeWindowsHost {
     this.options = { home: 'C:\\Users\\dev', systemRoot: 'C:\\Windows', userId: 'PC\\dev', nodePath: 'C:\\Program Files\\nodejs\\node.exe', tailscaleIp: '100.64.0.9', taskName: 'AzitoAgent', ...options };
     this.taskState = options.existingTask === undefined ? 'absent' : options.existingTask;
     if (options.existingTask === 'running') this.lastResult = 0x41301;
-    if (options.existingTask !== undefined) this.registeredXml = '<Task>previous definition</Task>';
+    if (options.existingTask !== undefined) this.registeredXml = legacyAgentTaskXml(FAKE_PREVIOUS_VERSION, this.options);
   }
 
   /** The task is running, as the Task Scheduler reports it (a test that starts the program itself calls this). */

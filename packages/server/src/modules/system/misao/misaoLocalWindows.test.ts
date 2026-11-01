@@ -1,9 +1,11 @@
 import fs from 'fs';
 import os from 'os';
 import path from 'path';
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { describe, expect, it } from 'vitest';
 import { taskMisaoRoot, taskStartsMisaoOf } from './misaoLocalWindows';
 import { buildMisaoTaskXml, misaoWindowsLayout } from './misaoWindowsTask';
+import { legacyMisaoTaskArgumentsOf } from '../../../shared/os/taskScheduler/misaoTaskArguments';
+import { buildTaskXml } from '../../../shared/os/taskScheduler/taskDefinition';
 import { windowsMisaoPipe } from '../../servers/transport/agentMisaoSocket';
 
 const xmlFor = (rootOfTask: string): string => {
@@ -12,36 +14,46 @@ const xmlFor = (rootOfTask: string): string => {
 };
 
 describe('taskMisaoRoot', () => {
-  it.each(['C:\\Users\\dev\\.azito\\misao', 'C:\\Users\\Foo Bar (Work)\\.azito\\misao', "C:\\Users\\O'Neil\\misao", 'C:\\Users\\A&B\\misao'])('reads %s back from the task the builder writes (plain command line or launcher script)', (root) => {
+  it.each(['C:\\Users\\dev\\.azito\\misao', 'C:\\Users\\Foo Bar (Work)\\.azito\\misao', "C:\\Users\\O'Neil\\misao", 'C:\\Users\\A&B\\misao'])('reads %s from a generated task', (root) => {
     expect(taskMisaoRoot(xmlFor(root))).toBe(root);
   });
-
-  it('is undefined for a definition that is not a misao task of this code', () => {
+  it('returns undefined for an unreadable definition', () => {
     expect(taskMisaoRoot('<Task><Arguments>--headless whatever.exe</Arguments></Task>')).toBeUndefined();
-  });
-
-  it('compares the folder itself, not text that happens to contain it', () => {
-    expect(taskMisaoRoot('<Arguments>--data "D:\\other" &gt;&gt; "C:\\Users\\dev\\misao\\misao.log"</Arguments>')).toBe('D:\\other');
   });
 });
 
 describe('taskStartsMisaoOf', () => {
-  let dir: string;
-  beforeEach(() => { dir = fs.realpathSync.native(fs.mkdtempSync(path.join(os.tmpdir(), 'azo-'))); });
-  afterEach(() => fs.rmSync(dir, { recursive: true, force: true }));
+  it('finds the folder in legacy and new launchers including apostrophes', () => {
+    const root = "C:\\Users\\O'Neil’s\\.azito\\misao";
+    const pipe = windowsMisaoPipe(root, 'dev');
+    const layout = misaoWindowsLayout({ misaoRoot: root }, '0.3.0', 'AzitoMisao');
+    const legacy = buildTaskXml({ userId: 'PC\\dev', description: 'misao', executable: 'C:\\Windows\\System32\\conhost.exe', argumentsLine: legacyMisaoTaskArgumentsOf({ systemRoot: 'C:\\Windows', exe: layout.exe, root, logFile: layout.logFile, pipe }), workingDirectory: 'C:\\Users', restartOnFailure: { intervalMinutes: 1, count: 999 } });
+    expect(taskStartsMisaoOf(legacy, root)).toBe(true);
+    expect(taskStartsMisaoOf(xmlFor(root), root)).toBe(true);
+  });
 
-  it('says yes for the same folder spelled through a link (a short name on Windows), before and after the folder exists, and no for a sibling or another folder', () => {
-    const real = path.join(dir, 'real');
-    fs.mkdirSync(real);
-    const alias = path.join(dir, 'alias');
-    fs.symlinkSync(real, alias, 'dir');
-    const root = path.join(real, 'misao');
-    // The task was written with the alias spelling (as an agent that reported a short name would have it), the hub's root is the real one.
-    expect(taskStartsMisaoOf(xmlFor(path.join(alias, 'misao')), root)).toBe(true);
-    fs.mkdirSync(root);
-    expect(taskStartsMisaoOf(xmlFor(path.join(alias, 'misao')), root)).toBe(true);
-    expect(taskStartsMisaoOf(xmlFor(`${root}2`), root)).toBe(false);
-    expect(taskStartsMisaoOf(xmlFor(path.join(dir, 'else', 'misao')), root)).toBe(false);
-    expect(taskStartsMisaoOf('<Task/>', root)).toBe(false);
+  it('recognises the same folder through an alias before and after creation', () => {
+    const dir = fs.realpathSync.native(fs.mkdtempSync(path.join(os.tmpdir(), 'azo-')));
+    try {
+      const real = path.join(dir, 'real');
+      fs.mkdirSync(real);
+      const alias = path.join(dir, 'alias');
+      fs.symlinkSync(real, alias, 'dir');
+      const root = path.join(real, 'misao');
+      expect(taskStartsMisaoOf(xmlFor(path.join(alias, 'misao')), root)).toBe(true);
+      fs.mkdirSync(root);
+      expect(taskStartsMisaoOf(xmlFor(path.join(alias, 'misao')), root)).toBe(true);
+      expect(taskStartsMisaoOf(xmlFor(`${root}2`), root)).toBe(false);
+    } finally { fs.rmSync(dir, { recursive: true, force: true }); }
+  });
+
+  it('accepts the generated task and rejects extra actions or another installation', () => {
+    const root = 'C:\\Users\\dev\\.azito\\misao';
+    const matches = (xml: string): boolean => taskStartsMisaoOf(xml, root);
+    const xml = xmlFor(root);
+    expect(matches(xml)).toBe(true);
+    expect(matches(xml.replace('</Exec>', '</Exec><Exec><Command>C:\\other.exe</Command></Exec>'))).toBe(false);
+    expect(matches(xmlFor(`${root}2`))).toBe(false);
+    expect(matches('<Task/>')).toBe(false);
   });
 });

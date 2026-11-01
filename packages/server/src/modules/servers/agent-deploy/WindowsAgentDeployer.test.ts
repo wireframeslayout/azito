@@ -1,3 +1,6 @@
+import { createHash } from 'node:crypto';
+import { agentTaskAction } from './windowsAgentTask';
+import { buildTaskXml } from '../../../shared/os/taskScheduler/taskDefinition';
 import { parseEnv } from 'util';
 import { describe, expect, it, vi } from 'vitest';
 import { buildEndProcessesScript } from '../../../shared/os/windowsProcessSweep';
@@ -69,6 +72,39 @@ describe('powershellErrorText', () => {
   });
 });
 
+describe('stopping a task launcher', () => {
+  it('does not interrupt a waiting launcher, and restarts a present process only when forced', async () => {
+    const fake = new FakeWindowsHost({ sha256: 'a'.repeat(64), existingTask: 'running', scriptOutput: { containing: '# AZITO_PROCESS_PRESENT', stdout: 'absent' } });
+    const info = { nodePath: 'C:\\node.exe', nodeVersion: '24', arch: 'x64' as const, windowsVersion: null, buildNumber: 22631, cim: 'ok' as const, tailscaleIp: '100.64.0.9', home: 'C:\\Users\\dev', systemRoot: 'C:\\Windows', userId: 'PC\\dev' };
+    const layout = windowsAgentLayout(info.home, DEFAULT_WINDOWS_AGENT_OPTIONS, 'abc123');
+    const action = agentTaskAction(info.systemRoot, info.nodePath, layout.envFile, layout.entry, DEFAULT_WINDOWS_AGENT_OPTIONS.taskName);
+    fake.registeredXml = buildTaskXml({ userId: info.userId, description: 'agent', executable: action.executable, args: action.args, workingDirectory: layout.versionDir, restartOnFailure: { intervalMinutes: 1, count: 999 } });
+    const deployer = new WindowsAgentDeployer(fake.exec, { putFile: async () => undefined, putBuffer: async () => undefined }, DEFAULT_WINDOWS_AGENT_OPTIONS);
+    expect(await deployer.restart('h', info, false)).toBe('starting');
+    expect(await deployer.restart('h', info, true)).toBe('starting');
+    fake.options.scriptOutput!.stdout = 'present';
+    expect(await deployer.restart('h', info, true)).toBe('restarted');
+    expect(fake.calls.some((call) => call.schtasksArgs?.[0] === '/End')).toBe(true);
+  });
+
+  it('ends the recognised launcher before sweeping its agent even when the scheduler reports stopped', async () => {
+    const fake = new FakeWindowsHost({ sha256: 'a'.repeat(64), existingTask: 'stopped' });
+    const info = { nodePath: 'C:\\node.exe', nodeVersion: '24', arch: 'x64' as const, windowsVersion: null, buildNumber: 22631, cim: 'ok' as const, tailscaleIp: '100.64.0.9', home: 'C:\\Users\\dev', systemRoot: 'C:\\Windows', userId: 'PC\\dev' };
+    const layout = windowsAgentLayout(info.home, DEFAULT_WINDOWS_AGENT_OPTIONS, 'abc123');
+    const action = agentTaskAction(info.systemRoot, info.nodePath, layout.envFile, layout.entry, DEFAULT_WINDOWS_AGENT_OPTIONS.taskName);
+    fake.registeredXml = buildTaskXml({ userId: info.userId, description: 'agent', executable: action.executable, args: action.args, workingDirectory: layout.versionDir, restartOnFailure: { intervalMinutes: 1, count: 999 } });
+    const deployer = new WindowsAgentDeployer(fake.exec, { putFile: async () => undefined, putBuffer: async () => undefined }, DEFAULT_WINDOWS_AGENT_OPTIONS);
+    await deployer.stop('h', info);
+    const sweeps = fake.calls.filter((call) => call.text.includes('function Get-AgentNodes')).map((call) => call.text);
+    expect(sweeps).toHaveLength(2);
+    expect(sweeps[0]).toContain("Get-Process -Name 'powershell'");
+    expect(sweeps[0]).toContain(createHash('sha256').update(action.args.at(-1)!, 'ascii').digest('hex'));
+    expect(sweeps[0]).not.toContain(action.args.at(-1)!);
+    expect(sweeps[1]).toContain("Get-Process -Name 'node'");
+    expect(sweeps[1]).toContain(`--env-file=${layout.envFile}`);
+  });
+});
+
 describe('transferred uninstall scripts', () => {
   it('keeps a successful result when cleanup fails', async () => {
     const host = new FakeWindowsHost({ sha256: 'a'.repeat(64), failScript: { containing: "Remove-Item -LiteralPath 'C:\\Users\\dev\\.azito-script-", stderr: 'cleanup failed' } });
@@ -90,6 +126,7 @@ describe('transferred uninstall scripts', () => {
       await expect(run.transferredScript('h', 'C:\\Users\\dev', 'test', 'Write-Output 1')).rejects.toThrow('execution failed');
       expect(warn).toHaveBeenCalled();
     } finally { warn.mockRestore(); }
+
   });
 });
 

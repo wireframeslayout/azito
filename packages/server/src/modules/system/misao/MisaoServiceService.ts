@@ -11,7 +11,7 @@ import { MISAO_RELEASE_FILES, MISAO_RELEASE_FILE_NAMES } from '../../servers/tra
 import { DuplicateLoadError, type ServiceInspection, type ServiceManager } from '../serviceManager';
 import { MisaoServiceError } from './MisaoServiceError';
 import { renderMisaoUnit } from './misaoUnit';
-import { taskMisaoRoot, taskStartsMisaoOf, type LocalMisaoWindows } from './misaoLocalWindows';
+import { taskMisaoRoot, taskStartsMisaoOf, taskIsManagedMisao, type LocalMisaoWindows } from './misaoLocalWindows';
 import { isManagedMisaoDown } from './MisaoWindowsInstaller';
 import { underMisaoRootLock } from './misaoRootLock';
 import { FOREIGN_LOCK_PREFIX } from '../../../shared/recoveryBackoff';
@@ -237,12 +237,12 @@ export class MisaoServiceService {
 
   /**
    * The task name is one per user (an agent on this machine uses it too). A task that starts a misao from another folder is
-   * another install's: replacing it would leave that install without its daemon, so it takes `--replace-socket` (the one
-   * "move this hub to the managed misao on purpose" switch).
+   * another install's: replacing it would leave that install without its daemon, so it is left alone.
    */
-  private async refuseTaskOfAnotherRoot(windows: LocalMisaoWindows, replace: boolean): Promise<void> {
+  private async refuseTaskOfAnotherRoot(windows: LocalMisaoWindows, replace = false): Promise<void> {
     if (replace || !(await windows.tasks.query(windows.taskName)).exists) return;
     const xml = await windows.tasks.exportXml(windows.taskName);
+    if (!(await windows.installer.taskOwnedByCurrentUser(windows.target, xml))) throw new MisaoServiceError('custom_socket', `The task "${windows.taskName}" belongs to another account or its owner cannot be determined; it was left unchanged.`);
     if (!taskStartsMisaoOf(xml, this.paths.root)) {
       if (taskMisaoRoot(xml) === undefined) {
         throw new MisaoServiceError('custom_socket', `The task "${windows.taskName}" has a definition whose misao folder cannot be determined. Installing here would take it over; run \`azito misao install --replace-socket\` to do that on purpose.`);
@@ -309,7 +309,7 @@ export class MisaoServiceService {
     await controller.loadedDomain();
     if (!(await this.isServiceInstalled())) throw new MisaoServiceError('not_installed', 'The misao service is not installed. Run `azito misao install` first.');
     // Starting another install's task would wait for a pipe that never opens: only the folder this hub manages is started.
-    if (this.deps.windows) await this.refuseTaskOfAnotherRoot(this.deps.windows, false);
+    if (this.deps.windows) await this.refuseTaskOfAnotherRoot(this.deps.windows);
     if ((await controller.state()) !== 'active') {
       await controller.start();
       await this.waitUntilListening();
@@ -336,7 +336,7 @@ export class MisaoServiceService {
     // Windows: the installer's own stop / switch / start with its rollback (the same steps as an agent's update).
     if (this.deps.windows) {
       // Moving the task to another folder is `install --replace-socket`, never an update.
-      await this.refuseTaskOfAnotherRoot(this.deps.windows, false);
+      await this.refuseTaskOfAnotherRoot(this.deps.windows);
       await this.deps.windows.installer.update(this.deps.windows.target, bundle, () => undefined);
       return this.status();
     }
@@ -415,7 +415,11 @@ export class MisaoServiceService {
     try {
       return await this.exclusive(async () => {
         if (this.socketSetting() !== 'managed') return 'custom_socket';
-        if ((await windows.tasks.query(windows.taskName)).exists && !taskStartsMisaoOf(await windows.tasks.exportXml(windows.taskName), this.paths.root)) return 'other_task';
+        if ((await windows.tasks.query(windows.taskName)).exists) {
+          const status = await windows.target.fetchMisaoStatus();
+          const systemRoot = status.host.windows?.systemRoot;
+          if (!systemRoot || !taskIsManagedMisao(await windows.tasks.exportXml(windows.taskName), this.paths.root, systemRoot, this.paths.socket, windows.taskName)) return 'other_task';
+        }
         return await windows.installer.reviveDaemon(windows.target, force);
       });
     } catch (err) {
