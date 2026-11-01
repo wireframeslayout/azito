@@ -109,13 +109,18 @@ describe('FileBrowseService on a real directory', () => {
       });
     });
 
-    it('hashes the bytes of the file, so the hash a save sends back is the one the host computes (even for bytes that are not valid UTF-8)', async () => {
+    it('rejects invalid UTF-8 without replacing bytes', async () => {
       const file = path.join(tmpDir, 'latin1.txt');
-      const bytes = Buffer.from([0x63, 0x61, 0x66, 0xe9, 0x0a]);
-      fs.writeFileSync(file, bytes);
-      const read = await svc.getFileContent(localSrv, file);
-      expect('hash' in read && read.hash).toBe(sha256(bytes));
-      await expect(svc.writeFileContent(localSrv, file, 'replaced', ('mtime' in read ? read.mtime : 0), ('hash' in read ? read.hash : ''))).resolves.toBeTruthy();
+      fs.writeFileSync(file, Buffer.from([0x63, 0x61, 0x66, 0xe9, 0x0a]));
+      await expect(svc.getFileContent(localSrv, file)).rejects.toThrow('File is not valid UTF-8');
+    });
+
+    it('preserves the UTF-8 BOM and accepts an empty file', async () => {
+      const file = path.join(tmpDir, 'bom.txt');
+      fs.writeFileSync(file, Buffer.from([0xef, 0xbb, 0xbf, 0x61]));
+      expect(await svc.getFileContent(localSrv, file)).toMatchObject({ content: '\ufeffa' });
+      fs.writeFileSync(file, '');
+      expect(await svc.getFileContent(localSrv, file)).toMatchObject({ content: '' });
     });
 
     it('returns an image and a PDF as base64', async () => {

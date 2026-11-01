@@ -9,6 +9,7 @@ import {
 import { getSignedUrl } from '@aws-sdk/s3-request-presigner';
 import { GetObjectCommand } from '@aws-sdk/client-s3';
 import { StorageOperations } from './storageOperations';
+import { StorageTextContent } from './storageTextContent';
 
 export interface StorageSettings {
   endpoint: string;
@@ -67,6 +68,10 @@ export class MinioStorageClient {
 
   operations(settings: StorageSettings, projectId: number): StorageOperations {
     return new StorageOperations(this.getClient(settings), settings.bucket, projectId);
+  }
+
+  textContent(settings: StorageSettings, projectId: number): StorageTextContent {
+    return new StorageTextContent(this.getClient(settings), settings.bucket, projectId, settings.maxFileSize);
   }
 
   async upload(

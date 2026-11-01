@@ -38,6 +38,34 @@ export function registerStorageOperationRoutes(fastify: FastifyInstance, opts: S
       }
     } });
   }
+  const contentQuery = z.object({ key: path });
+  const contentBody = z.object({ key: path, content: z.string(), version: z.string().min(1).optional(), force: z.boolean().optional() }).refine((value) => value.force === true || value.version !== undefined);
+  for (const method of ['GET', 'PUT'] as const) {
+    fastify.route({ method, url: root + '/content', handler: async (request, reply) => {
+      const id = Number((request.params as { id: string }).id);
+      if (!Number.isSafeInteger(id) || !opts.projectRepo.findById(id)) return reply.status(404).send({ error: 'Project not found' });
+      const parsed = method === 'GET' ? contentQuery.safeParse(request.query) : contentBody.safeParse(request.body);
+      if (!parsed.success) return reply.status(400).send({ error: 'Invalid request', code: 'invalid_request' });
+      try {
+        const text = opts.storageClient.textContent(opts.storageSettingsRepo.get(), id);
+        const relative = relativeKey(parsed.data.key, id);
+        if (method === 'GET') return await text.read(relative);
+        const body = contentBody.parse(parsed.data);
+        try { return await text.write(relative, body.content, body.force ? undefined : body.version); }
+        catch (error) {
+          if (error instanceof StorageOperationError && error.code === 'conflict') {
+            try { return reply.status(409).send({ code: 'conflict', latest: await text.read(relative) }); }
+            catch { return reply.status(409).send({ code: 'conflict', latest: null }); }
+          }
+          throw error;
+        }
+      } catch (error) {
+        if (error instanceof StorageOperationError) return reply.status(error.status).send({ error: error.message, code: error.code });
+        request.log.error(error);
+        return reply.status(502).send(classifyStorageError(error));
+      }
+    } });
+  }
   register('GET', '/entries', querySchema, (ops, q: z.infer<typeof querySchema>) => ops.listPage(q.prefix, q.limit, q.cursor));
   const relativeKey = (key: string, id: number): string => {
     const rootKey = `projects/${id}/`;

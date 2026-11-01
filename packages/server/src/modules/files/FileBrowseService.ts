@@ -3,18 +3,10 @@ import type { ServerConfig } from '../servers/Server';
 import type { TransportFactory } from '../servers/transport/TransportFactory';
 import { FileOpsError, type IFileOps } from '../../shared/fs/fileOps';
 import { pathApiFor } from '../../shared/os/hostPath';
+import { EXT_LANG } from './fileLanguage';
 
 // ─── File type lookup tables ───
 
-export const EXT_LANG: Record<string, string> = {
-  '.ts': 'typescript', '.tsx': 'typescript',
-  '.js': 'javascript', '.jsx': 'javascript',
-  '.json': 'json', '.css': 'css', '.html': 'html',
-  '.md': 'markdown', '.py': 'python',
-  '.sh': 'shell', '.bash': 'shell',
-  '.yml': 'yaml', '.yaml': 'yaml',
-  '.sql': 'sql', '.toml': 'toml',
-};
 
 export const IMAGE_EXTS = new Set(['.png', '.jpg', '.jpeg', '.gif', '.svg', '.webp', '.ico', '.bmp']);
 
@@ -229,7 +221,13 @@ export class FileBrowseService {
     if (data.includes(0)) {
       throw new FileBrowseError('Binary file cannot be displayed', 400);
     }
-    return { content: data.toString('utf-8'), path: filePath, size: stat.size, language: EXT_LANG[ext] || 'text', mtime: stat.mtimeMs, hash: sha256Hex(data) };
+    let content: string;
+    try {
+      content = new TextDecoder('utf-8', { fatal: true, ignoreBOM: true }).decode(data);
+    } catch {
+      throw new FileBrowseError('File is not valid UTF-8', 400);
+    }
+    return { content, path: filePath, size: stat.size, language: EXT_LANG[ext] || 'text', mtime: stat.mtimeMs, hash: sha256Hex(data) };
   }
 
   async writeFileContent(
