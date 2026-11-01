@@ -27,6 +27,20 @@ describe('groupEntries', () => {
     expect(groups[0]).toEqual({ type: 'assistant', entries: [a, t1, t2] });
   });
 
+  it('keeps alternating assistant and tool entries together on the same date', () => {
+    const entries = [entry('1', 'assistant', '2026-08-10T09:00:00Z'), entry('2', 'tool', '2026-08-10T09:00:00Z'), entry('3', 'assistant', '2026-08-10T09:00:00Z'), entry('4', 'tool', '2026-08-10T09:00:00Z')];
+    expect(groupEntries(entries)).toEqual([{ type: 'assistant', entries }]);
+  });
+
+  it('does not absorb a tool entry across a date boundary', () => {
+    const assistant = entry('1', 'assistant', '2026-08-09T12:00:00Z');
+    const tool = entry('2', 'tool', '2026-08-10T12:00:00Z');
+    expect(groupEntries([assistant, tool])).toEqual([
+      { type: 'assistant', entries: [assistant] },
+      { type: 'tool', entries: [tool] },
+    ]);
+  });
+
   it('splits groups on a user entry', () => {
     const a1 = entry('1', 'assistant');
     const u = entry('2', 'user');
