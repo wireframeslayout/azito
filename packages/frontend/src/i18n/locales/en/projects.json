@@ -162,14 +162,13 @@
       "directoryFailed": "Failed to create the directory.",
       "cloneFailed": "Failed to clone the repository.",
       "serverTypeUnresolved": "Could not determine server \"{{server}}\"'s type yet — please wait a moment and try again."
-    },
-    "slugHint": "Lowercase letters, numbers, and hyphens only."
+    }
   },
   "general": {
     "projectName": "Project Name",
     "projectNamePlaceholder": "project name",
     "slug": "Slug",
-    "slugHint": "Used as tmux session name. Lowercase letters, numbers, and hyphens only.",
+    "slugHint": "Lowercase letters, numbers, and hyphens only.",
     "slugPlaceholder": "project-slug",
     "description": "Description",
     "descriptionPlaceholder": "Project description...",

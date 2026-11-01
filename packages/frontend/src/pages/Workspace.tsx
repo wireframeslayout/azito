@@ -62,8 +62,7 @@ import { buildObjectSections } from '../lib/workspaceObjects';
 import { GlobalFocusProvider, useGlobalFocus } from '../hooks/useGlobalFocus';
 import { parseTerminalTabId, terminalRefDisplayLabel, type TerminalRef } from '../lib/terminalRef';
 import { resolveWindowTitle, formatWindowTitleLine, parseMuxRef } from '@azito/shared';
-import { misaoRefWindowTitle } from '../lib/windowDisplay';
-import { buildWindowIndex } from '../lib/windowDisplay';
+import { buildWindowIndex, misaoRefWindowTitle } from '../lib/windowDisplay';
 import { findTaskByTarget as findTaskByTargetLib } from '../lib/findTaskByTarget';
 import { describeUnsupportedOs, isUnsupportedOsAnswer } from '../lib/hostFeature';
 export default function Workspace() {

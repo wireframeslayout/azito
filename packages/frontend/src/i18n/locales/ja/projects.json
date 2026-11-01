@@ -162,14 +162,13 @@
       "directoryFailed": "ディレクトリの作成に失敗しました。",
       "cloneFailed": "リポジトリのクローンに失敗しました。",
       "serverTypeUnresolved": "サーバー「{{server}}」の種別がまだ解決できていません。少し待ってからもう一度お試しください。"
-    },
-    "slugHint": "小文字英字・数字・ハイフンのみ使用できます。"
+    }
   },
   "general": {
     "projectName": "プロジェクト名",
     "projectNamePlaceholder": "プロジェクト名",
     "slug": "スラッグ",
-    "slugHint": "tmuxセッション名として使用されます。小文字英字・数字・ハイフンのみ。",
+    "slugHint": "小文字英字・数字・ハイフンのみ使用できます。",
     "slugPlaceholder": "project-slug",
     "description": "説明",
     "descriptionPlaceholder": "プロジェクトの説明...",
