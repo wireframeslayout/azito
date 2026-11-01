@@ -53,9 +53,17 @@ function onQuiet() {
   quietTimer = null;
   const file = PROMPT_FILE_RE.exec(received);
   if (!file && !received.includes('</completion_signal>')) return;
-  const prompt = file ? fs.readFileSync(file[1], 'utf8') : received;
+  let prompt = received;
   received = '';
-  if (file) process.stdout.write('\r\n⏺ e2e fake agent: reading prompt file\r\n');
+  if (file) {
+    try {
+      prompt = fs.readFileSync(file[1], 'utf8');
+    } catch (err) {
+      process.stdout.write(`\r\n⏺ e2e fake agent: cannot read prompt file ${file[1]}: ${err.message}\r\n`);
+      return;
+    }
+    process.stdout.write('\r\n⏺ e2e fake agent: reading prompt file\r\n');
+  }
   setTimeout(() => respond(prompt), RESPONSE_DELAY_MS);
 }
 
