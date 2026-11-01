@@ -6,10 +6,11 @@ import ConversationView from './ConversationView';
 import PromptInputBar from './PromptInputBar';
 import { hostUnavailableReason, type HostUnavailableReason } from './hostUnavailable';
 import type { ResolveWindowResult, TranscriptErrorResponse, UnresolvedReason } from './transcriptTypes';
-import type { WindowViewMode } from '../ui/TerminalChatToggle';
+import type { WindowViewMode } from '../../lib/windowViewMode';
 
 interface WindowChatPanelProps {
   windowId: number;
+  onOpenTerminal: () => void;
   /** SP 端末⇄チャットのミニトグル（PromptInputBar 左端、Issue #69 S8）へ渡す現在値。
    * SP・TaskPanel 配下からのみ渡される（TerminalContainer 参照）。省略時はトグル自体を出さない
    * （デスクトップ、または viewMode が呼び出し元で管理されていない経路）。 */
@@ -47,7 +48,7 @@ const POST_SEND_POLL_MAX_ATTEMPTS = 10;
  * 設計確定: 手動セッション選択はサポートしない（選択中ウィンドウ単位の自動解決のみ）。windowId が
  * 切り替わるたびに解決をやり直す。
  */
-export default function WindowChatPanel({ windowId, viewMode, onChangeViewMode }: WindowChatPanelProps) {
+export default function WindowChatPanel({ windowId, viewMode, onChangeViewMode, onOpenTerminal }: WindowChatPanelProps) {
   const { t } = useTranslation('transcript');
   const [state, setState] = useState<ResolveState>({ kind: 'loading' });
   const [retryTick, setRetryTick] = useState(0);
@@ -156,7 +157,10 @@ export default function WindowChatPanel({ windowId, viewMode, onChangeViewMode }
       <div style={{ height: '100%', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
         <EmptyState
           title={t(`windowChat.notFound.${reason}`)}
-          action={<Button size="sm" onClick={() => setRetryTick((n) => n + 1)}>{t('windowChat.retry')}</Button>}
+          action={<div style={{ display: 'flex', flexWrap: 'wrap', justifyContent: 'center', gap: 'var(--space-2)' }}>
+            <Button style={{ minHeight: 44 }} onClick={() => setRetryTick((n) => n + 1)}>{t('windowChat.retry')}</Button>
+            <Button style={{ minHeight: 44 }} onClick={onOpenTerminal}>{t('windowChat.openTerminal')}</Button>
+          </div>}
         />
       </div>
     );

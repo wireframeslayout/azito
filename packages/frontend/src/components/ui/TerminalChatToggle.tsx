@@ -1,13 +1,9 @@
 import { useTranslation } from 'react-i18next';
 import { Icon } from './Icon';
 
-// 'terminal' | 'chat' — TerminalContainer.tsx の WindowViewMode と同一の値集合。ui/ は基盤層
-// のため domain コンポーネント（TerminalContainer）から型を import せず、ここで独立定義する
-// （依存方向: ui → 上位コンポーネントは禁止 / .dependency-cruiser.cjs）。呼び出し側で
-// WindowViewMode 型とそのまま代入互換。
-export type WindowViewMode = 'terminal' | 'chat';
+import type { WindowViewMode } from '../../lib/windowViewMode';
 
-export interface TerminalChatToggleProps {
+interface TerminalChatToggleProps {
   value: WindowViewMode;
   onChange: (mode: WindowViewMode) => void;
   /** Disables interaction without hiding the control (e.g. no window resolved yet). */

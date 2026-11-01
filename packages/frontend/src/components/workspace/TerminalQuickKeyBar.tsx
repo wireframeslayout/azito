@@ -2,7 +2,8 @@ import { useEffect, useState, type CSSProperties } from 'react';
 import { useTranslation } from 'react-i18next';
 import { Icon } from '../ui/Icon';
 import { QuickActionButtons, type QuickActionButton } from '../ui/QuickActionButtons';
-import { TerminalChatToggle, type WindowViewMode } from '../ui/TerminalChatToggle';
+import { TerminalChatToggle } from '../ui/TerminalChatToggle';
+import type { WindowViewMode } from '../../lib/windowViewMode';
 import { KEYBOARD_HEIGHT_THRESHOLD } from '../../hooks/useVirtualKeyboard';
 
 export interface TerminalQuickKeyBarProps {
