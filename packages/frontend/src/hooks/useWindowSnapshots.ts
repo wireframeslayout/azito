@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from 'react';
 import { apiWithStatus } from '../api/client';
 
 export type WindowSnapshot = { status: 'ok'; id: number; content: string; activity: number | null; changed: true } | { status: 'unchanged'; id: number; activity: number } | { status: 'error'; id: number; code: string; message: string };
-export interface WindowSnapshotState { id: number; content: string; activity: number | null; activityConfirmed?: boolean; error?: { code: string; message: string } }
+export interface WindowSnapshotState { id: number; content: string; activity: number | null; activityConfirmed?: boolean; activityObservedAt?: number; error?: { code: string; message: string } }
 export interface WindowSnapshotOptions { lines?: number; intervalMs?: number; enabled: boolean }
 export function useWindowSnapshots(ids: number[], { lines = 12, intervalMs = 3000, enabled }: WindowSnapshotOptions): { snapshots: Map<number, WindowSnapshotState>; refresh: () => void } {
   const key = ids.join(',');
@@ -35,7 +35,7 @@ export function useWindowSnapshots(ids: number[], { lines = 12, intervalMs = 300
         const response = await apiWithStatus<{ snapshots: WindowSnapshot[] }>(`/windows/snapshots?${params}`);
         if (response.status !== 200) throw new Error('Failed to load snapshots');
         if (disposed || document.hidden || requestGeneration !== generation) return;
-        const next = mergeWindowSnapshots(latest.current, response.body.snapshots);
+        const next = mergeWindowSnapshots(latest.current, response.body.snapshots, Date.now());
         latest.current = next;
         setSnapshots(next);
       } catch {
@@ -65,12 +65,16 @@ export function useWindowSnapshots(ids: number[], { lines = 12, intervalMs = 300
   return { snapshots, refresh: () => refreshRef.current() };
 }
 
-export function mergeWindowSnapshots(previousSnapshots: Map<number, WindowSnapshotState>, results: WindowSnapshot[]): Map<number, WindowSnapshotState> {
+export function mergeWindowSnapshots(previousSnapshots: Map<number, WindowSnapshotState>, results: WindowSnapshot[], now: number): Map<number, WindowSnapshotState> {
   const next = new Map<number, WindowSnapshotState>();
   for (const item of results) {
     const previous = previousSnapshots.get(item.id);
-    if (item.status === 'ok') next.set(item.id, { id: item.id, content: item.content, activity: item.activity, activityConfirmed: item.activity !== null && previous?.activity === item.activity && !previous.error });
-    else if (item.status === 'unchanged' && previous) next.set(item.id, { id: item.id, content: previous.content, activity: item.activity, activityConfirmed: true });
+    if (item.status === 'ok') {
+      const sameActivity = item.activity !== null && previous?.activity === item.activity && !previous.error;
+      const observedAt = sameActivity ? previous.activityObservedAt ?? now : now;
+      next.set(item.id, { id: item.id, content: item.content, activity: item.activity, activityConfirmed: sameActivity && (previous.activityConfirmed === true || now - observedAt >= 1000), ...(item.activity !== null ? { activityObservedAt: observedAt } : {}) });
+    }
+    else if (item.status === 'unchanged' && previous) next.set(item.id, { ...previous, activity: item.activity, activityConfirmed: true });
     else next.set(item.id, { id: item.id, content: previous?.content ?? '', activity: null, error: item.status === 'error' ? { code: item.code, message: item.message } : { code: 'capture_failed', message: 'Snapshot unavailable' } });
   }
   return next;

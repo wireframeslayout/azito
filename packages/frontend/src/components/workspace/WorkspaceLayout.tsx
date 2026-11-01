@@ -80,7 +80,7 @@ interface WorkspaceLayoutBaseProps {
 }
 
 type WorkspaceLayoutProps = WorkspaceLayoutBaseProps & (
-  | { rightPanel: NonNullable<React.ReactNode>; rightPanelOpen: boolean; onRightPanelOpenChange: (open: boolean) => void }
+  | { rightPanel: React.ReactElement; rightPanelOpen: boolean; onRightPanelOpenChange: (open: boolean) => void }
   | { rightPanel?: null | undefined; rightPanelOpen?: never; onRightPanelOpenChange?: never }
 );
 
@@ -337,7 +337,7 @@ export default function WorkspaceLayout({
         {children}
       </div>
 
-      {!mobile && rightPanel != null && rightPanelOpen !== undefined && onRightPanelOpenChange && (
+      {!mobile && React.isValidElement(rightPanel) && rightPanelOpen !== undefined && onRightPanelOpenChange && (
         <RightPanel id={rightPanelId ?? generatedRightPanelId} title={t('workspace:rightPanel.title')} open={rightPanelOpen} onOpenChange={onRightPanelOpenChange} toggleRef={rightPanelToggleRef} actions={rightPanelActions}>
           {rightPanel}
         </RightPanel>
