@@ -14,7 +14,7 @@ function Controls() {
   const { openTask, openTaskInProject, openTerminal } = useCrossProjectNavigation();
   const navigate = useNavigate();
   const location = useLocation();
-  return <><output aria-label="path">{location.pathname}</output><button onClick={() => openTask(1)}>Task</button><button onClick={() => openTaskInProject(1, 2)}>Explicit</button><button onClick={() => openTerminal({ serverName: 'local', target: 'a' }, 2)}>Terminal</button><button onClick={() => navigate('/workspace/2')}>Move</button><button onClick={() => openTaskInProject(3)}>Direct</button></>;
+  return <><output aria-label="path">{location.pathname}</output><button onClick={() => openTask(1)}>Task</button><button onClick={() => openTaskInProject(1, 2)}>Explicit</button><button onClick={() => openTerminal({ serverName: 'local', target: 'a' }, 2)}>Terminal</button><button onClick={() => { openTaskInProject(1, 2); openTerminal({ serverName: 'local', target: 'a' }, 2); }}>Replace</button><button onClick={() => navigate('/workspace/2')}>Move</button><button onClick={() => openTaskInProject(3)}>Direct</button></>;
 }
 function App({ path }: { path: string }) {
   return <MemoryRouter initialEntries={[path]}><CrossProjectNavigationProvider><Controls /><Routes><Route path="*" element={<div>Route</div>} /></Routes></CrossProjectNavigationProvider></MemoryRouter>;
@@ -38,7 +38,7 @@ it('resolves an unknown task via API and reports failures', async () => {
   fireEvent.click(screen.getByRole('button', { name: 'Task' }));
   await waitFor(() => expect(mocks.task).toHaveBeenCalledWith(1));
   fireEvent.click(screen.getByRole('button', { name: 'Task' }));
-  await waitFor(() => expect(mocks.toast).toHaveBeenCalledWith('taskOpenFailed'));
+  await waitFor(() => expect(mocks.toast).toHaveBeenCalledWith('navigation.taskOpenFailed'));
 });
 
 it('expires a pending open when the workspace target is not registered in time', () => {
@@ -64,4 +64,29 @@ it('uses the latest route when an asynchronous task lookup completes', async () 
   expect(screen.getByLabelText('path')).toHaveTextContent('/workspace/1');
   fireEvent.click(screen.getByRole('button', { name: 'Direct' }));
   expect(mocks.task).toHaveBeenCalledWith(3);
+});
+
+
+it('opens a pending terminal after navigating from settings', () => {
+  mocks.registered = false;
+  const { rerender } = render(<App path="/settings" />);
+  fireEvent.click(screen.getByRole('button', { name: 'Terminal' }));
+  expect(screen.getByLabelText('path')).toHaveTextContent('/workspace/2');
+  expect(mocks.terminal).not.toHaveBeenCalled();
+  mocks.registered = true;
+  rerender(<App path="/settings" />);
+  expect(mocks.terminal).toHaveBeenCalledWith({ serverName: 'local', target: 'a' });
+});
+
+it('replaces a pending task with a terminal', () => {
+  mocks.registered = false;
+  const { rerender } = render(<App path="/settings" />);
+  fireEvent.click(screen.getByRole('button', { name: 'Replace' }));
+  expect(screen.getByLabelText('path')).toHaveTextContent('/workspace/2');
+  expect(mocks.task).not.toHaveBeenCalled();
+  expect(mocks.terminal).not.toHaveBeenCalled();
+  mocks.registered = true;
+  rerender(<App path="/settings" />);
+  expect(mocks.terminal).toHaveBeenCalledWith({ serverName: 'local', target: 'a' });
+  expect(mocks.task).not.toHaveBeenCalled();
 });

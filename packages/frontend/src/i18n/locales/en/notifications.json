@@ -24,6 +24,5 @@
   "toast": {
     "dismissAriaLabel": "Dismiss notification"
   },
-  "fallbackTaskTitle": "Task #{{taskId}}",
-  "taskOpenFailed": "Could not open the task."
+  "fallbackTaskTitle": "Task #{{taskId}}"
 }

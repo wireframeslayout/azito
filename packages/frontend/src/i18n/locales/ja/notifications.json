@@ -24,6 +24,5 @@
   "toast": {
     "dismissAriaLabel": "通知を閉じる"
   },
-  "fallbackTaskTitle": "タスク #{{taskId}}",
-  "taskOpenFailed": "タスクを開けませんでした。"
+  "fallbackTaskTitle": "タスク #{{taskId}}"
 }

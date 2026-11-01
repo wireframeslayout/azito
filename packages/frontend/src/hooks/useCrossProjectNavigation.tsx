@@ -22,7 +22,7 @@ export function CrossProjectNavigationProvider({ children }: { children: React.R
   const { onOpenTask, onOpenInTerminal } = useWorkspaceTargets();
   const { allTasks } = useWorkspaceCatalog();
   const { showToast } = useToast();
-  const { t } = useTranslation('notifications');
+  const { t } = useTranslation('workspace');
   const current = useRef({ location, onOpenTask, onOpenInTerminal });
   current.current = { location, onOpenTask, onOpenInTerminal };
   const pending = useRef<Pending | null>(null);
@@ -58,7 +58,7 @@ export function CrossProjectNavigationProvider({ children }: { children: React.R
       if (request !== sequence.current) return;
       if (status < 200 || status >= 300 || typeof body !== 'object' || body === null || typeof (body as { projectId?: unknown }).projectId !== 'number') throw new Error('Task project unavailable');
       queue({ type: 'task', taskId, projectId: (body as { projectId: number }).projectId });
-    }).catch(() => { if (request === sequence.current) showToast(t('taskOpenFailed')); });
+    }).catch(() => { if (request === sequence.current) showToast(t('navigation.taskOpenFailed')); });
   }, [allTasks, clear, queue, showToast, t]);
   const openTerminal = useCallback((req: TerminalOpenTarget, projectId?: number) => {
     sequence.current++;

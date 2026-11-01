@@ -1,4 +1,5 @@
 {
+  "navigation": { "taskOpenFailed": "タスクを開けませんでした。" },
   "tab": {
     "closeDirtyTitle": "未保存の変更があるタブを閉じますか？",
     "closeDirtyMessage": "「{{name}}」には未保存の変更があります。このタブを閉じると変更は破棄されます。",

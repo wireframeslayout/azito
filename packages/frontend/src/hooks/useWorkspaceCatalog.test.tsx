@@ -46,3 +46,25 @@ it('refreshes in response to task and workspace events', async () => {
 it('rejects use outside the provider', () => {
   expect(() => renderHook(() => useWorkspaceCatalog())).toThrow('useWorkspaceCatalog must be used within WorkspaceCatalogProvider');
 });
+
+
+it('polls every 60 seconds and stops after unmount', async () => {
+  vi.useFakeTimers();
+  try {
+    api.mockResolvedValue({ status: 200, body: [] });
+    const { unmount } = render(<WorkspaceCatalogProvider><View /></WorkspaceCatalogProvider>);
+    await act(async () => {});
+    expect(api).toHaveBeenCalledTimes(2);
+    await act(async () => { await vi.advanceTimersByTimeAsync(59999); });
+    expect(api).toHaveBeenCalledTimes(2);
+    await act(async () => { await vi.advanceTimersByTimeAsync(1); });
+    expect(api).toHaveBeenCalledTimes(4);
+    await act(async () => { await vi.advanceTimersByTimeAsync(60000); });
+    expect(api).toHaveBeenCalledTimes(6);
+    unmount();
+    await act(async () => { await vi.advanceTimersByTimeAsync(60000); });
+    expect(api).toHaveBeenCalledTimes(6);
+  } finally {
+    vi.useRealTimers();
+  }
+});
