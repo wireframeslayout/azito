@@ -7,8 +7,6 @@ import { powershellDialect, powershellEncodedArgs } from '../../../shared/os/she
 export const RELEASE_NAME = '[A-Za-z0-9][A-Za-z0-9._-]*';
 const AGENT_VERSION_IN_ENTRY = new RegExp(`\\\\(${RELEASE_NAME})\\\\azito-agent\\.cjs"?$`);
 
-const escapeRegExp = (text: string): string => text.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-
 /** The `conhost.exe` both tasks run under (`--headless` gives the program a console without a window). */
 function conhostOf(systemRoot: string): string {
   return path.win32.join(systemRoot, 'System32', 'conhost.exe');

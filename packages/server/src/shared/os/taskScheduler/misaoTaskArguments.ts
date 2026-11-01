@@ -105,7 +105,7 @@ export function misaoTaskArgumentsOf(input: MisaoTaskArgumentsInput & { taskName
     '  $began = [DateTime]::UtcNow; $code = $null',
     '  try {',
     '    $process = [System.Diagnostics.Process]::Start($info)',
-    `    while (-not $process.WaitForExit(1000)) { if (-not (ParentAlive)) { & ${q(win32.join(input.systemRoot, 'System32', 'taskkill.exe'))} /PID $process.Id /T /F | Out-Null; exit 0 } }`,
+    `    while (-not $process.WaitForExit(1000)) { if (-not (ParentAlive)) { & ${q(win32.join(input.systemRoot, 'System32', 'taskkill.exe'))} /PID $process.Id /T /F | Out-Null; if ($LASTEXITCODE -ne 0) { Log "could not end daemon process tree: taskkill exit $LASTEXITCODE" }; exit 0 } }`,
     '    $code = $process.ExitCode',
     '  } catch { Log "start failed: $_" }',
     '  if ($code -eq 0) { Log "daemon stopped normally"; exit 0 }',
