@@ -58,6 +58,7 @@ test('モバイルのメニューから検索しシートを閉じる', async ({
   expect(await app.evaluate(() => document.documentElement.scrollWidth <= document.documentElement.clientWidth)).toBe(true);
   await input.press('Escape');
   await expect(opener).toHaveCount(0);
+  await expect(app.getByRole('button', { name: 'メニュー', exact: true })).toBeFocused();
 });
 
 test('スマホでタスクを開くとナビシートが閉じる', async ({ app, harness }) => {
@@ -106,12 +107,12 @@ test('サーバーの取得失敗を表示し再取得する', async ({ app, har
     else await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ sessions: [], unavailable: [] }) });
   });
   await app.getByRole('button', { name: '検索', exact: true }).click();
-  await expect(app.getByRole('alert')).toContainText('local');
+  await expect(app.getByText(/一部のサーバーに接続できないため/)).toContainText('local');
   const input = app.getByRole('combobox', { name: '検索' });
   await input.fill(`W-${id}`);
   await expect(app.getByRole('option')).toContainText('オフライン');
   expect(intercepted).toBeGreaterThan(0);
   fail = false;
   await app.getByRole('button', { name: '再取得' }).click();
-  await expect(app.getByRole('alert')).toHaveCount(0);
+  await expect(app.getByText(/一部のサーバーに接続できないため/)).toHaveCount(0);
 });

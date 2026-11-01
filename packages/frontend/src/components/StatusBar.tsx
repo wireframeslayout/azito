@@ -197,7 +197,7 @@ export function StatusBar({ servers }: StatusBarProps) {
           </span>
         )}
         <span style={{ flex: 1 }} />
-        <button type="button" onClick={openSearch} className="row-hover" style={{ padding: '2px 10px', borderRadius: 'var(--radius-sm)', color: 'var(--text-dim)', border: 'none', cursor: 'pointer', fontFamily: 'var(--mono)', fontSize: 'var(--font-xs)' }}>{tn('globalSearch.title')}</button>
+        <button type="button" onClick={() => openSearch()} className="row-hover" style={{ padding: '2px 10px', borderRadius: 'var(--radius-sm)', color: 'var(--text-dim)', border: 'none', cursor: 'pointer', fontFamily: 'var(--mono)', fontSize: 'var(--font-xs)' }}>{tn('globalSearch.title')}</button>
         {registry.map((item) => (
           <StatusBarItem
             key={item.id}

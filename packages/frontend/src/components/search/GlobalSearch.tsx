@@ -26,8 +26,8 @@ import { LoadingState } from '../ui/LoadingState';
 import { EmptyState } from '../ui/EmptyState';
 import { SearchResultList } from '../ui/SearchResultList';
 
-const Context = createContext<(() => void) | null>(null);
-export function useOpenGlobalSearch(): () => void {
+const Context = createContext<((fallbackFocusTo?: HTMLElement | null) => void) | null>(null);
+export function useOpenGlobalSearch(): (fallbackFocusTo?: HTMLElement | null) => void {
   const open = useContext(Context);
   if (!open) throw new Error('GlobalSearchProvider is required');
   return open;
@@ -38,8 +38,9 @@ const defaultCategories: Category[] = ['all', 'window', 'task', 'project'];
 
 export function GlobalSearchProvider({ children }: { children: ReactNode }) {
   const [open, setOpen] = useState(false);
-  useHotkey({ action: 'search.open', scope: 'global', when: 'not-editable', handler: () => setOpen(true) });
-  return <Context.Provider value={() => setOpen(true)}>{children}{open && <GlobalSearchPalette onClose={() => setOpen(false)} />}</Context.Provider>;
+  const [fallbackFocusTo, setFallbackFocusTo] = useState<HTMLElement | null>(null);
+  useHotkey({ action: 'search.open', scope: 'global', when: 'not-editable', handler: () => { setFallbackFocusTo(null); setOpen(true); } });
+  return <Context.Provider value={fallback => { setFallbackFocusTo(fallback ?? null); setOpen(true); }}>{children}{open && <GlobalSearchPalette fallbackFocusTo={fallbackFocusTo} onClose={() => setOpen(false)} />}</Context.Provider>;
 }
 
 function resolveWindowStatus(item: SearchItem, unreachable: readonly string[], sessions: Record<string, Session[]>): 'sleeping' | 'offline' | undefined {
@@ -53,7 +54,7 @@ function resolveWindowStatus(item: SearchItem, unreachable: readonly string[], s
   return !match || match.session.stale ? 'offline' : undefined;
 }
 
-function GlobalSearchPalette({ onClose }: { onClose: () => void }) {
+function GlobalSearchPalette({ onClose, fallbackFocusTo }: { onClose: () => void; fallbackFocusTo: HTMLElement | null }) {
   const { t } = useTranslation('navigation');
   const { allProjects, allTasks, loading, error, refresh } = useWorkspaceCatalog();
   const { openTask, openTerminal } = useCrossProjectNavigation();
@@ -82,7 +83,7 @@ function GlobalSearchPalette({ onClose }: { onClose: () => void }) {
   const runningRows = rows.filter(row => row.status === 'running');
   const activeTargets = new Set(runningRows.map(row => windowKey(row.serverName, row.target)));
   const activeIds = new Set(runningRows.flatMap(row => row.windowId == null ? [] : [row.windowId]));
-  for (const window of [...allProjects.flatMap(project => project.windows ?? []), ...allTasks.flatMap(task => task.windows ?? [])]) {
+  for (const window of windows) {
     if (activeTargets.has(windowKey(window.serverName, window.tmuxTarget))) activeIds.add(window.id);
   }
   const index = buildSearchIndex(allProjects, allTasks, openedAt, activeIds, sessions);
@@ -102,7 +103,7 @@ function GlobalSearchPalette({ onClose }: { onClose: () => void }) {
     onClose();
   };
   const changeCategory = (next: Category) => { setCategory(next); setSelected(0); };
-  return <Overlay open onClose={onClose} labelledBy="global-search-title" surface="solid" initialFocusRef={input} toggleAction="search.open" maxWidth={680} style={{ padding: 0, overflow: 'hidden', ...(isMobile && viewportHeight ? { height: viewportHeight, maxHeight: viewportHeight } : {}) }}>
+  return <Overlay open onClose={onClose} fallbackFocusTo={fallbackFocusTo} labelledBy="global-search-title" surface="solid" initialFocusRef={input} toggleAction="search.open" maxWidth={680} style={{ padding: 0, overflow: 'hidden', ...(isMobile && viewportHeight ? { height: viewportHeight, maxHeight: viewportHeight } : {}) }}>
     <div className="global-search" onKeyDown={event => {
       if (event.target !== input.current) return;
       if (event.key === 'F6') { event.preventDefault(); closeButton.current?.focus(); }
@@ -118,17 +119,18 @@ function GlobalSearchPalette({ onClose }: { onClose: () => void }) {
         </button>)}
       </div>
       {error && <Notice tone="danger" action={<button onClick={() => void refresh()}>{t('globalSearch.retry')}</button>}>{t('globalSearch.error')}</Notice>}
-      {failed.length > 0 && <div role="alert"><Notice tone="warning" action={<button onClick={retry}>{t('globalSearch.retry')}</button>}>{t('globalSearch.failed', { servers: failed.join(', ') })}</Notice></div>}
+      {failed.length > 0 && <Notice tone="warning" action={<button onClick={retry}>{t('globalSearch.retry')}</button>}>{t('globalSearch.failed', { servers: failed.join(', ') })}</Notice>}
       {loading ? <LoadingState message={t('globalSearch.loading')} />
         : error && allProjects.length === 0 && allTasks.length === 0 ? null
         : shown.length === 0 ? <EmptyState title={query.trim() ? t('globalSearch.noResults', { query }) : t('globalSearch.empty')} /> : null}
-      <SearchResultList id="global-search-results" label={t('globalSearch.results')}
+      <SearchResultList id="global-search-results" label={t('globalSearch.results')} className="global-search-results" groupClassName="global-search-group" moreClassName="global-search-message"
         groups={shownGroups.map(group => ({ key: group.kind, label: t(`globalSearch.${group.kind}`), count: group.items.length, items: group.shown, more: t('globalSearch.more', { count: group.items.length - group.shown.length }) }))}
         renderItem={item => {
           const position = shown.indexOf(item);
-          return <SearchResultRow key={`${item.kind}-${item.id}`} item={item} selected={position === current} status={resolveWindowStatus(item, unreachable, sessions)} onSelect={() => setSelected(position)} onOpen={() => choose(item)} />;
+          const activity = item.window ? runningRows.find(row => row.windowId === item.id || (row.serverName === item.window!.serverName && windowKey(row.serverName, row.target) === windowKey(item.window!.serverName, item.window!.tmuxTarget)))?.activityStatus : undefined;
+          return <SearchResultRow key={`${item.kind}-${item.id}`} activityStatus={activity} item={item} selected={position === current} status={resolveWindowStatus(item, unreachable, sessions)} onSelect={() => setSelected(position)} onOpen={() => choose(item)} />;
         }} />
-      <div role="status" aria-live="polite" className="global-search-count">{t('globalSearch.count', { count: activeCategory === 'all' ? matches.length : groups.find(group => group.kind === activeCategory)?.items.length ?? 0 })}</div>
+      <div role="status" aria-live="polite" className="sr-only">{t('globalSearch.count', { count: activeCategory === 'all' ? matches.length : groups.find(group => group.kind === activeCategory)?.items.length ?? 0 })}</div>
       <div className="global-search-footer">{t('globalSearch.hint')}</div>
     </div>
   </Overlay>;

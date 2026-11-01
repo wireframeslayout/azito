@@ -9,14 +9,15 @@ interface SearchResultRowProps {
   item: SearchItem;
   selected: boolean;
   status?: 'sleeping' | 'offline';
+  activityStatus?: 'working' | 'blocked';
   onSelect: () => void;
   onOpen: () => void;
 }
 
-export function SearchResultRow({ item, selected, status, onSelect, onOpen }: SearchResultRowProps) {
+export function SearchResultRow({ item, selected, status, activityStatus, onSelect, onOpen }: SearchResultRowProps) {
   const { t } = useTranslation(['navigation', 'common']);
   const taskStatus = item.task?.status;
-  const blocked = taskStatus === 'phase_review' || taskStatus === 'waiting_input' || taskStatus === 'pending_approval';
+  const blocked = activityStatus === 'blocked' || taskStatus === 'phase_review' || taskStatus === 'waiting_input' || taskStatus === 'pending_approval';
   return <div id={`search-${item.kind}-${item.id}`} role="option" aria-selected={selected} className="global-search-row" onMouseMove={onSelect} onClick={onOpen}>
     <Icon name={item.kind === 'orchestrator' ? 'chip' : item.window ? 'terminal' : item.kind === 'task' ? 'tasks' : 'projects'} size={16} />
     {blocked ? <BlockedDot /> : item.active ? <BrailleSpinner /> : null}
