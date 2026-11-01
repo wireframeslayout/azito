@@ -378,7 +378,7 @@ describe('MisaoAgentInstaller on a Windows agent', () => {
       expect(agent.daemonUp).toBe(true);
       const sweep = agent.scripts.find((t) => t.includes('function Get-AgentNodes'))!;
       expect(sweep).toContain(`$envArgument = '${PIPE}'`);
-      expect(sweep).toContain(`Name = 'misao.exe'`);
+      expect(sweep).toContain(`Get-Process -Name 'misao'`);
     });
 
     it('changes nothing when the daemon cannot be stopped', async () => {

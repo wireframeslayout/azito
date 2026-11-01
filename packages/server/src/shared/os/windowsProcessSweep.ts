@@ -1,4 +1,5 @@
 import { powershellDialect } from './shellDialect';
+import { WINDOWS_PROCESS_INFO } from './windowsProcessInfo';
 
 export interface ProcessSweepInput {
   /** The program's image name, e.g. `node.exe`. */
@@ -27,18 +28,21 @@ export interface ProcessSweepInput {
 export function buildEndProcessesScript(input: ProcessSweepInput): string {
   const q = powershellDialect.quote;
   return [
+    WINDOWS_PROCESS_INFO,
     `$envArgument = ${q(input.argument)}`,
     "$pattern = '(^|[\\s\"])' + [regex]::Escape($envArgument) + '([\\s\"]|$)'",
     '$me = [Security.Principal.WindowsIdentity]::GetCurrent().User.Value',
-    'function Test-Mine($process) { try { (Invoke-CimMethod -InputObject $process -MethodName GetOwnerSid -ErrorAction Stop).Sid -eq $me } catch { $false } }',
+    '$elevated = ([Security.Principal.WindowsPrincipal][Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)',
+    "function Read-Node($p) { $started = $p.StartTime.ToUniversalTime(); $data = [AzitoProcessList]::Read($p.Id); $owner = [AzitoProcessList]::Owner($p.Id); $current = Get-Process -Id $p.Id -ErrorAction Stop; if ($current.StartTime.ToUniversalTime() -ne $started) { throw 'Process changed while inspected' }; [pscustomobject]@{ ProcessId = $p.Id; Name = $p.ProcessName + '.exe'; CreationDate = $started; ParentProcessId = $data[0]; CommandLine = $data[1]; Owner = $owner } }",
+    'function Test-Mine($process) { $process.Owner -eq $me }',
     'function Test-Argument($process) { $process.CommandLine -and ($process.CommandLine -match $pattern) }',
-    `function Get-AgentNodes { @(Get-CimInstance Win32_Process -Filter "Name = ${q(input.image)}" | Where-Object { (Test-Argument $_) -and (Test-Mine $_) }) }`,
-    'function Get-Same($target) { $current = Get-CimInstance Win32_Process -Filter "ProcessId = $($target.Id)"; if ($current -and $current.CreationDate -eq $target.Created) { $current } }',
+    `function Get-AgentNodes { @(Get-Process -Name ${q(input.image.replace(/\.exe$/i, ''))} -ErrorAction SilentlyContinue | ForEach-Object { $candidate = $_; $owner = [AzitoProcessList]::Owner($candidate.Id); if (-not $owner) { if (-not (Get-Process -Id $candidate.Id -ErrorAction SilentlyContinue) -or -not $elevated) { return }; throw "Cannot identify process $($_.Id)" }; if ($owner -ne $me) { return }; $n = try { Read-Node $candidate } catch { if (-not (Get-Process -Id $candidate.Id -ErrorAction SilentlyContinue)) { return }; throw }; if (-not $n.Owner -or -not $n.CommandLine) { throw "Cannot identify process $($n.ProcessId)" }; if ((Test-Argument $n) -and (Test-Mine $n)) { $n } }) }`,
+    'function Get-Same($target) { $p = Get-Process -Id $target.Id -ErrorAction SilentlyContinue; if (-not $p) { return }; try { $started = $p.StartTime.ToUniversalTime() } catch { if (-not (Get-Process -Id $target.Id -ErrorAction SilentlyContinue)) { return }; throw }; if ($started -eq $target.Created) { $p } }',
     '$targets = @()',
     'foreach ($node in Get-AgentNodes) {',
     '  $targets += [pscustomobject]@{ Id = $node.ProcessId; Created = $node.CreationDate }',
     ...(input.endParentConhost ? [
-      '  $parent = Get-CimInstance Win32_Process -Filter "ProcessId = $($node.ParentProcessId)"',
+      '  $p = Get-Process -Id $node.ParentProcessId -ErrorAction SilentlyContinue; $parent = if ($p -and [AzitoProcessList]::Owner($p.Id) -eq $me) { Read-Node $p } else { $null }',
       "  if ($parent -and $parent.Name -eq 'conhost.exe' -and $parent.CreationDate -le $node.CreationDate -and (Test-Argument $parent) -and (Test-Mine $parent)) {",
       '    $targets += [pscustomobject]@{ Id = $parent.ProcessId; Created = $parent.CreationDate }',
       '  }',
