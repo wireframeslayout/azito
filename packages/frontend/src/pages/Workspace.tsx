@@ -979,7 +979,7 @@ function WorkspaceInner() {
     const m = target.match(/^(.+):(\d+)\.(\d+)$/);
     if (!m) {
       if (ref?.kind === 'ref' && parseMuxRef(ref.ref).kind === 'misao') {
-        return { label: misaoRefWindowTitle(sessionData[serverName] ?? [], ref.ref, ref.pane, t('units:windowFallback')) };
+        return { label: misaoRefWindowTitle(sessionData[serverName] ?? [], ref.ref, ref.pane, t('common:labels.window')) };
       }
       const fallbackName = ref ? terminalRefDisplayLabel(ref) : target;
       const fallbackDisplay = resolveWindowTitle({ tmuxTarget: fallbackName });

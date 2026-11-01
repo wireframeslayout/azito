@@ -1,6 +1,6 @@
 import { useState, useCallback } from 'react';
 import { useTranslation } from 'react-i18next';
-import { formatWindowId, resolveWindowTitle, formatWindowTitleLine, type MuxDriverKind, type MuxRef } from '@azito/shared';
+import { type MuxDriverKind, type MuxRef } from '@azito/shared';
 import { api } from '../api/client';
 import type { ContextMenuItem } from '../components/ContextMenu';
 import type { PersistedTab } from './useTabPersistence';
@@ -11,7 +11,7 @@ import { Icon } from '../components/ui/Icon';
 import type { ResourceStatus } from '../components/ResourceWarningDialog';
 import { isInsufficientResources } from './useAddWindowModal';
 import { canRenamePane } from '../lib/windowRowPlan';
-import { buildWindowMenuItems, type WindowMenuItemDescriptor, type WindowMenuParams } from '../lib/windowMenuItems';
+import { buildWindowMenuItems, windowMenuInfo, type WindowMenuItemDescriptor, type WindowMenuParams } from '../lib/windowMenuItems';
 import { paneDeletePath, refTabMatchesTarget, tabsToCloseAfterPaneDelete } from '../lib/terminalRef';
 
 interface ConfirmDialog {
@@ -237,7 +237,7 @@ export function useWindowActions(
     });
   }, [tabs, closeTab, refreshWorkspace, refreshSessions, showToast]);
 
-  const getWindowMenuItems = useCallback((w: { id: number; serverName: string; tmuxTarget: string; label?: string; windowType?: string; agentSessionId?: string; sleeping?: boolean; muxRef?: MuxRef }, extra?: WindowMenuExtra): ContextMenuItem[] => {
+  const getWindowMenuItems = useCallback((w: { id: number; serverName: string; tmuxTarget: string; label?: string; labelSource?: 'auto' | 'user'; workerType?: string; windowType?: string; agentSessionId?: string; sleeping?: boolean; muxRef?: MuxRef }, extra?: WindowMenuExtra): ContextMenuItem[] => {
     const linkedTask = findTaskByTarget(w.tmuxTarget);
     const descriptors = buildWindowMenuItems({
       online: extra?.online ?? false,
@@ -274,7 +274,7 @@ export function useWindowActions(
     }));
     items.push(
       { label: '', separator: true, onClick: () => {} },
-      { label: w.muxRef?.kind === 'misao' ? `misao · ${formatWindowTitleLine(resolveWindowTitle({ id: w.id, label: w.label || extra?.windowName }))}` : `${formatWindowId(w.id)} · tmux ${w.tmuxTarget}`, disabled: true, onClick: () => {} },
+      { label: windowMenuInfo(w), disabled: true, onClick: () => {} },
     );
     return items;
   }, [handleRenameLabel, handleRenameWindow, handleRenamePane, handleDetachWindow, handleDeleteWindow, handleDeletePane, handleRespawnWindow, handleSleepWindow, handleCapturePanes, findTaskByTarget, openTask]);

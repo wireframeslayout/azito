@@ -3,7 +3,7 @@ import { describe, expect, it, vi } from 'vitest';
 import TaskFormFields from './TaskFormFields';
 import { emptyTaskForm } from '../lib/taskForm';
 
-vi.mock('react-i18next', async (importOriginal) => ({ ...(await importOriginal<typeof import('react-i18next')>()), useTranslation: () => ({ t: (key: string) => key === 'units:windowFallback' ? 'Window' : key }) }));
+vi.mock('react-i18next', async (importOriginal) => ({ ...(await importOriginal<typeof import('react-i18next')>()), useTranslation: () => ({ t: (key: string) => key === 'common:labels.window' ? 'Window' : key }) }));
 
 describe('TaskFormFields window input', () => {
   it('hides a stored misao ID without changing it until the field is edited', () => {

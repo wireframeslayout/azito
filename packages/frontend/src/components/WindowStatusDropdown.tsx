@@ -10,7 +10,7 @@ import { AgentIcon } from './ui/AgentIcons';
 import { Icon } from './ui/Icon';
 import { resolveWindowTitle, formatWindowTitleLine, parseMuxRef } from '@azito/shared';
 import { useTranslation } from 'react-i18next';
-import { sessionWindowLabel } from '../lib/windowDisplay';
+import { sessionWindowLabel, windowTitleInput } from '../lib/windowDisplay';
 
 interface WindowStatusDropdownProps {
   serverName: string;
@@ -137,8 +137,8 @@ export function WindowStatusDropdown({ serverName, target, sessions, muxKind, te
   const kind = win?.muxRef?.kind ?? (terminalRef?.kind === 'ref' ? parseMuxRef(terminalRef.ref).kind : muxKind);
   const sessionWindow = sessions?.flatMap((session) => session.windows.map((window) => ({ session, window })))
     .find(({ window }) => terminalRef?.kind === 'ref' ? window.ref === terminalRef.ref : win != null && window.windowId === win.id);
-  const windowName = sessionWindow ? sessionWindowLabel(sessionWindow.session.name, sessionWindow.window) : t('windowFallback');
-  const misaoName = formatWindowTitleLine(resolveWindowTitle({ label: win?.label || windowName, labelSource: win?.labelSource, tmuxTarget: t('windowFallback') }));
+  const windowName = sessionWindow ? sessionWindowLabel(sessionWindow.session.name, sessionWindow.window) : t('common:labels.window');
+  const misaoName = formatWindowTitleLine(resolveWindowTitle(win ? { ...windowTitleInput(win), tmuxTarget: t('common:labels.window') } : { label: windowName, tmuxTarget: t('common:labels.window') }));
 
   useEffect(() => {
     if (!open) return;
@@ -324,8 +324,7 @@ export function WindowStatusDropdown({ serverName, target, sessions, muxKind, te
               <div style={{ padding: '8px 12px' }}>
                 {win.id != null && (() => {
                   const display = resolveWindowTitle({
-                    id: win.id, label: win.label, labelSource: win.labelSource,
-                    workerType: win.workerType, windowType: win.windowType,
+                    ...windowTitleInput(win),
                     tmuxTarget: win.tmuxTarget,
                   });
                   return (

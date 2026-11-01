@@ -163,7 +163,7 @@ export function ActivityDiagnosticsDropdown({ rows, error, onClose }: ActivityDi
                         // はみ出して読めなくなるため、識別子は省略せず折り返しで収める。
                         style={{ ...MONO, border: 'none', background: 'none', padding: 0, cursor: 'pointer', textAlign: 'left' }}
                       >
-                        {diagnosticWindowTitle(row, t('units:windowFallback'))}
+                        {diagnosticWindowTitle(row, t('common:labels.window'))}
                       </button>
                       <span style={{ ...DIM, fontSize: 'var(--font-2xs)' }}>
                         {row.serverName}

@@ -1,4 +1,5 @@
-import { isMisaoWindowId, stripPaneSuffix, resolveWindowTitle, formatWindowTitleLine } from '@azito/shared';
+import { isMisaoTarget, windowTitleInput } from './windowDisplay';
+import { resolveWindowTitle, formatWindowTitleLine } from '@azito/shared';
 
 // 稼働検知診断（GET /api/debug/activity）のレスポンス型と、その検証（純ロジック）。
 // 検証をフックから切り離してあるのは、非2xx や想定外ボディの扱いが描画に依存せず単体で
@@ -95,13 +96,12 @@ export function parseDiagnosticsResponse(status: number, body: unknown): Activit
 }
 
 export function isMisaoDiagnosticWindow(row: ActivityDiagnosticRow): boolean {
-  return row.windowDisplay?.muxRef?.kind === 'misao' || isMisaoWindowId(stripPaneSuffix(row.target).split(':').pop() ?? '');
+  return row.windowDisplay?.muxRef?.kind === 'misao' || isMisaoTarget(row.target);
 }
 
 export function diagnosticWindowTitle(row: ActivityDiagnosticRow, fallback: string): string {
   if (!isMisaoDiagnosticWindow(row)) return row.target;
   return formatWindowTitleLine(resolveWindowTitle({
-    id: row.windowId, label: row.windowDisplay?.label, labelSource: row.windowDisplay?.labelSource,
-    workerType: row.windowDisplay?.workerType ?? undefined, windowType: row.windowDisplay?.windowType, tmuxTarget: fallback,
+    ...windowTitleInput({ id: row.windowId, ...row.windowDisplay }), tmuxTarget: fallback,
   }));
 }

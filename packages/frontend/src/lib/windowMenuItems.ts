@@ -1,3 +1,5 @@
+import { formatWindowId, resolveWindowTitle, formatWindowTitleLine, type MuxRef } from '@azito/shared';
+import { windowTitleInput } from './windowDisplay';
 import { canActOnMux } from './windowRowPlan';
 
 export type WindowMenuItemKind =
@@ -75,4 +77,10 @@ export function buildWindowMenuItems(params: WindowMenuParams): WindowMenuItemDe
     items.push({ kind: 'delete-window', labelKey: 'windows.deleteWindow', danger: true, disabled });
   }
   return items;
+}
+
+export function windowMenuInfo(w: { id: number; tmuxTarget: string; label?: string; labelSource?: 'auto' | 'user'; workerType?: string; windowType?: string; muxRef?: MuxRef }): string {
+  return w.muxRef?.kind === 'misao'
+    ? `misao · ${formatWindowTitleLine(resolveWindowTitle(windowTitleInput(w)))}`
+    : `${formatWindowId(w.id)} · tmux ${w.tmuxTarget}`;
 }

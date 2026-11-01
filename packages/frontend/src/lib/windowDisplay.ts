@@ -1,4 +1,4 @@
-import { parseMuxRef, resolveWindowTitle, formatWindowTitleLine, type WindowTitleInput } from '@azito/shared';
+import { isMisaoWindowId, stripPaneSuffix, parseMuxRef, resolveWindowTitle, formatWindowTitleLine, type WindowTitleInput } from '@azito/shared';
 import type { Session } from '../pages/workspace/types';
 
 
@@ -40,7 +40,7 @@ export function sessionWindowLabel(sessionName: string, win: { name: string; ref
 }
 
 /** Adapt activity rows to the shared window title input. */
-export function activeWindowTitleInput(row: { windowId?: number; target: string; paneTitle?: string; paneName?: string; paneCommand?: string; label?: string; labelSource?: 'auto' | 'user'; taskTitle?: string; workerType?: string; windowType?: string }): WindowTitleInput {
+export function activeWindowTitleInput(row: { windowId?: number; target: string; paneTitle?: string; paneName?: string; paneCommand?: string; label?: string | null; labelSource?: 'auto' | 'user'; taskTitle?: string; workerType?: string; windowType?: string }): WindowTitleInput {
   return { id: row.windowId, label: row.label, labelSource: row.labelSource, paneTitle: row.paneTitle ?? row.paneName, paneCommand: row.paneCommand, taskTitle: row.taskTitle, workerType: row.workerType, windowType: row.windowType, tmuxTarget: row.target };
 }
 
@@ -52,4 +52,12 @@ export function misaoRefWindowTitle(sessions: Session[], ref: string, pane: numb
   const display = resolveWindowTitle({ label: name, tmuxTarget: fallback });
   const suffix = match && match.window.panes.length > 1 ? `.${pane}` : '';
   return `${formatWindowTitleLine(display)}${suffix}`;
+}
+
+export function isMisaoTarget(target: string): boolean {
+  return isMisaoWindowId(stripPaneSuffix(target).split(':').pop() ?? '');
+}
+
+export function windowTitleInput(w: { id?: number; label?: string | null; labelSource?: 'auto' | 'user'; workerType?: string | null; windowType?: string }): WindowTitleInput {
+  return { id: w.id, label: w.label ?? undefined, labelSource: w.labelSource, workerType: w.workerType ?? undefined, windowType: w.windowType };
 }

@@ -14,6 +14,7 @@ import ResourceWarningDialog from './ResourceWarningDialog';
 import { Chip, EmptyState, FormSelect, ListRow, ListRowGroup, LoadingState, PanelHeader, baseInputStyle, Button } from './ui';
 import type { Window, Unit, Server } from '../pages/workspace/types';
 import { resolveWindowTitle, formatWindowTitleLine } from '@azito/shared';
+import { windowTitleInput } from '../lib/windowDisplay';
 import { notifyProjectsChanged } from '../lib/projectsChanged';
 import { isDistributeCodeLocked, isDistributionRepositorySelected, resolveDistributeCodeForSave, resolveDistributeCodeToggleOnProjectServersChange, resolveDistributionRepositoryIdOnProjectServersChange } from '../lib/distributeCodePolicy';
 import { buildEnvironmentRowChips, needsDistributionSetup, type DistributionPrerequisite, type EnvironmentChip, type LastDistribution } from '../lib/environmentRow';
@@ -867,7 +868,7 @@ function ServersSection({ settings: s }: { settings: ReturnType<typeof useProjec
   );
 }
 
-function WindowsSection({ settings: s, addWindowModal }: { settings: ReturnType<typeof useProjectSettings>; addWindowModal: ReturnType<typeof useAddWindowModal> }) {
+export function WindowsSection({ settings: s, addWindowModal }: { settings: ReturnType<typeof useProjectSettings>; addWindowModal: ReturnType<typeof useAddWindowModal> }) {
   const { t } = useTranslation(['projects', 'common']);
   if (!s.project) return null;
   const windows = s.project.windows;
@@ -891,10 +892,7 @@ function WindowsSection({ settings: s, addWindowModal }: { settings: ReturnType<
         <ListRowGroup>
           {windows.map((w) => {
             const display = resolveWindowTitle({
-              id: w.id,
-              label: w.label, labelSource: w.labelSource,
-              workerType: w.workerType,
-              windowType: w.windowType,
+              ...windowTitleInput(w),
               tmuxTarget: w.tmuxTarget,
             });
             return (

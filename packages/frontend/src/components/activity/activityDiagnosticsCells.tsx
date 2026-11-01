@@ -131,7 +131,7 @@ export function MatchCell({ row }: { row: ActivityDiagnosticRow }) {
 /** ウィンドウ列（tmux ターゲット＋ サーバー名・タスク番号）。 */
 export function WindowCell({ row }: { row: ActivityDiagnosticRow }) {
   const { t } = useTranslation('units');
-  const title = diagnosticWindowTitle(row, t('windowFallback'));
+  const title = diagnosticWindowTitle(row, t('common:labels.window'));
   return (
     <span style={{ display: 'inline-flex', flexDirection: 'column', gap: 2 }}>
       <span style={MONO}>{title}</span>

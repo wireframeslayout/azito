@@ -1,7 +1,6 @@
 import { useState, useEffect, useRef, useCallback } from 'react';
 import { stripPaneSuffix, parseMuxRef, type HostPathApi } from '@azito/shared';
 import { api } from '../api/client';
-import i18n from 'i18next';
 import { applyRetargetTabs } from '../lib/retargetTab';
 import { closeBrowserGroup } from '../lib/browserGroup';
 import { fileDisplayName, fileTabPath } from '../lib/serverPath';
@@ -452,7 +451,7 @@ export function useTabPersistence(storageKey?: string) {
         return;
       }
     }
-    const label = ref.kind === 'ref' && parseMuxRef(ref.ref).kind === 'misao' ? i18n.t('units:windowFallback') : terminalRefDisplayLabel(ref);
+    const label = ref.kind === 'ref' && parseMuxRef(ref.ref).kind === 'misao' ? '' : terminalRefDisplayLabel(ref);
     openTab({
       id: tabId,
       type: 'terminal',

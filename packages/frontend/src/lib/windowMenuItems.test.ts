@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { buildWindowMenuItems, type WindowMenuParams } from './windowMenuItems';
+import { buildWindowMenuItems, windowMenuInfo, type WindowMenuParams } from './windowMenuItems';
 
 const base: WindowMenuParams = { online: true, canRenamePane: true, hasLinkedTask: false, windowName: 'main' };
 const kinds = (params: WindowMenuParams) => buildWindowMenuItems(params).map((i) => i.kind);
@@ -53,5 +53,15 @@ describe('buildWindowMenuItems', () => {
     expect(k).toContain('respawn');
     expect(k).not.toContain('capture-panes');
     expect(find({ ...base, online: false, sleeping: true }, 'respawn')?.labelKey).toBe('common:terminal.wake');
+  });
+});
+
+describe('windowMenuInfo', () => {
+  it('uses a shared title for misao and preserves the tmux line', () => {
+    const w = { id: 12, tmuxTarget: 'ses:w_01234567890123456789012345', windowType: 'agent', workerType: 'claude' };
+    const misao = windowMenuInfo({ ...w, muxRef: { kind: 'misao', workspace: 'ses', window: 'w_01234567890123456789012345' } });
+    expect(misao).toContain('Claude');
+    expect(misao).not.toContain('w_012');
+    expect(windowMenuInfo({ ...w, tmuxTarget: 'ses:win', muxRef: { kind: 'tmux', workspace: 'ses', window: 'win' } })).toBe('W-12 · tmux ses:win');
   });
 });

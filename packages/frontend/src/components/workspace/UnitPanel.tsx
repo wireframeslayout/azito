@@ -14,7 +14,8 @@ import { useUnitTypes, findUnitType } from '../../hooks/useUnitTypes';
 import type { RunningOperation, Task, Unit } from '../../pages/workspace/types';
 import { useOpenTerminalTarget } from '../../hooks/useTerminalTargetOpener';
 import type { TerminalRef } from '../../lib/terminalRef';
-import { resolveWindowTitle, formatWindowTitleLine, isMisaoWindowId, stripPaneSuffix } from '@azito/shared';
+import { resolveWindowTitle, formatWindowTitleLine } from '@azito/shared';
+import { isMisaoTarget, windowTitleInput } from '../../lib/windowDisplay';
 
 interface UnitPanelProps {
   unitId: number;
@@ -142,7 +143,7 @@ function PanelHeader({ unit, isMobile, onBack, onEdit }: { unit: Unit; isMobile:
   );
 }
 
-function NowRunningSection({ running, unitTasks, connectPane }: {
+export function NowRunningSection({ running, unitTasks, connectPane }: {
   running: RunningOperation[];
   unitTasks: Task[];
   connectPane: (refOrServerName: TerminalRef | string, targetOrProjectId?: string | number, projectId?: number) => void;
@@ -159,10 +160,9 @@ function NowRunningSection({ running, unitTasks, connectPane }: {
         {running.map((op, i) => {
           const task = unitTasks.find((tt) => tt.id === op.taskId);
           const win = task?.windows?.find((w) => w.id === op.windowId && w.serverName === op.serverName);
-          const isMisao = win?.muxRef?.kind === 'misao' || isMisaoWindowId(stripPaneSuffix(op.target).split(':').pop() ?? '');
+          const isMisao = win?.muxRef?.kind === 'misao' || isMisaoTarget(op.target);
           const title = isMisao ? formatWindowTitleLine(resolveWindowTitle({
-            label: win?.label, labelSource: win?.labelSource, id: win?.id,
-            workerType: win?.workerType, windowType: win?.windowType, tmuxTarget: t('windowFallback'),
+            ...windowTitleInput(win ?? {}), tmuxTarget: t('common:labels.window'),
           })) : op.target;
           return (
             <ListRow

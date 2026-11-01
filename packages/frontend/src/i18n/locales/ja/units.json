@@ -1,5 +1,4 @@
 {
-  "windowFallback": "ウィンドウ",
   "title": "Units",
   "detail": {
     "notFound": "Unitが見つかりません",
@@ -83,12 +82,12 @@
     "empty": "（空）",
     "workerRuntime": "ワーカーランタイム",
     "workerRuntimeHint": "ワーカープロセスの起動・管理方法。",
-    "runtimeTui": "TUI（tmux）",
+    "runtimeTui": "TUI",
     "runtimeHeadless": "Headless（未実装）",
     "runtimeApi": "API（未実装）",
     "executionMode": "ワーカー実行モード",
     "executionModeHint": "ワーカーのターン完了をどのように検出するかを決定します。",
-    "modePipe": "tmux pipe（従来）",
+    "modePipe": "ペイン出力（従来）",
     "modeHttpSignal": "HTTPシグナル（新）",
     "sleepAfterPush": "PR作成後にエージェントウィンドウをスリープ"
   },
