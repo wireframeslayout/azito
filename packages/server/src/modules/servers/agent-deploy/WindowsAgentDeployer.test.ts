@@ -85,10 +85,18 @@ describe('the process sweep script', () => {
   it('keeps each target with its creation time, and checks it again before ending it and when asking whether it has ended', async () => {
     const script = await sweepScript();
     expect(script).toContain('[pscustomobject]@{ Id = $node.ProcessId; Created = $node.CreationDate }');
-    expect(script).toContain('$current.CreationDate -eq $target.Created');
+    expect(script).toContain('$p.StartTime.ToUniversalTime() -eq $target.Created');
     expect(script).toContain('foreach ($target in $targets) { if (Get-Same $target) { Stop-Process');
     expect(script).toContain('function Get-Alive { @($targets | Where-Object { Get-Same $_ }) }');
-    expect(script).not.toContain('Get-Process -Id');
+    expect(script).not.toMatch(/Get-CimInstance|Invoke-CimMethod/);
+  });
+
+  it('fits the SSH command limit with a long agent path', async () => {
+    const { buildEndProcessesScript } = await import('../../../shared/os/windowsProcessSweep');
+    const { compressPowerShellScript } = await import('../../../shared/os/compressPowerShellScript');
+    const { powershellDialect } = await import('../../../shared/os/shellDialect');
+    const body = buildEndProcessesScript({ image: 'node.exe', argument: `--env-file=C:\\${'a'.repeat(240)}\\agent.env`, label: 'agent', endParentConhost: true });
+    expect(powershellDialect.wrapScript(compressPowerShellScript(body)).length).toBeLessThanOrEqual(8191);
   });
 
   it('does not use two spellings of one variable', async () => {

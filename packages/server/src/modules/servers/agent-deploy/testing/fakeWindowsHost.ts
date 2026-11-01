@@ -1,3 +1,4 @@
+import { gunzipSync } from 'node:zlib';
 import type { ExecResult } from '../../transport/ServerTransport';
 import { decodeTaskXml } from '../../../../shared/os/taskScheduler/taskDefinition';
 
@@ -82,7 +83,9 @@ export class FakeWindowsHost {
       this.calls.push({ kind: 'os-probe', text: command });
       return { stdout: 'AZITO_OS:Windows_NT:$?\r\n', stderr: '', code: 0 };
     }
-    const script = decodeEncodedCommand(command);
+    const decoded = decodeEncodedCommand(command);
+    const packed = /\$packed = \[Convert\]::FromBase64String\('([^']+)'\)/.exec(decoded);
+    const script = packed ? gunzipSync(Buffer.from(packed[1]!, 'base64')).toString('utf8') : decoded;
     const failing = this.options.failScript;
     if (failing && script.includes(failing.containing)) {
       this.calls.push({ kind: 'script', text: script });

@@ -2,6 +2,7 @@ import * as path from 'path';
 import type { ExecResult } from '../transport/ServerTransport';
 import { CREATE_SCRIPT, INSPECT_SCRIPT, PROTECT_SCRIPT, evaluateAcl, parseAclSnapshot } from '../../../shared/os/windowsSecretFileGuard';
 import { powershellDialect } from '../../../shared/os/shellDialect';
+import { compressPowerShellScript } from '../../../shared/os/compressPowerShellScript';
 import { buildEndProcessesScript } from '../../../shared/os/windowsProcessSweep';
 import { SchtasksClient, type TaskScheduleState } from '../../../shared/os/taskScheduler/schtasks';
 import { buildTaskXml, encodeTaskXml, isTaskDefinitionDisabled } from '../../../shared/os/taskScheduler/taskDefinition';
@@ -414,7 +415,7 @@ export class WindowsAgentDeployer {
    * creation time: the time is checked again just before it is ended, and "has it ended?" asks the same question.
    */
   private async endStrayProcesses(sshHost: string, envFile: string): Promise<void> {
-    await this.script(sshHost, 'Ending the agent processes', buildEndProcessesScript({ image: 'node.exe', argument: `--env-file=${envFile}`, label: 'agent', endParentConhost: true }), QUICK_MS);
+    await this.script(sshHost, 'Ending the agent processes', compressPowerShellScript(buildEndProcessesScript({ image: 'node.exe', argument: `--env-file=${envFile}`, label: 'agent', endParentConhost: true })), QUICK_MS);
   }
 
   /** Runs a PowerShell script on the host; a non-zero exit is an error carrying the script's own message. */
