@@ -66,6 +66,8 @@ it('retains live state on failure and processes later events', async () => {
 it('discards a response after unmount', async () => {
   const view = mount();
   view.unmount();
-  await resolve(0, [running]);
-  expect(screen.queryByRole('status')).toBeNull();
+  const snapshot = [running];
+  const iterate = vi.spyOn(snapshot, Symbol.iterator);
+  await resolve(0, snapshot);
+  expect(iterate).not.toHaveBeenCalled();
 });
