@@ -149,7 +149,7 @@ export function useWorkspaceData(
     if (projectId && selectedFileServer) localStorage.setItem(`workspace-file-server-${projectId}`, selectedFileServer);
   }, [selectedFileServer, projectId]);
 
-  const refreshWorkspaceAndCatalog = useCallback(() => { void refreshWorkspace(); void refreshCatalog(); }, [refreshWorkspace, refreshCatalog]);
+  const refreshWorkspaceAndCatalog = useCallback(async () => { await Promise.all([refreshWorkspace(), refreshCatalog()]); }, [refreshWorkspace, refreshCatalog]);
 
   return {
     project,

@@ -161,7 +161,7 @@ export function NotificationCenterProvider({ children }: { children: React.React
   const { t } = useTranslation('notifications');
   const [notifications, setNotifications] = useState<AppNotification[]>(loadNotifications);
   const [toasts, setToasts] = useState<EphemeralToast[]>([]);
-  const { openTask, openTerminal } = useCrossProjectNavigation();
+  const { openTask, openTaskInProject, openTerminal } = useCrossProjectNavigation();
   const { isWatched } = useAgentActivity();
 
   // WSイベントが再レンダー前に連続到達してもデデュープ・上限制御が効くよう、stateと同値のミラーを持つ
@@ -284,7 +284,7 @@ export function NotificationCenterProvider({ children }: { children: React.React
 
     if (notification.taskId !== undefined && (notification.kind === 'qa' || notification.kind === 'plan_approval' || notification.kind === 'execution_approval' || notification.kind === 'task_done' || notification.kind === 'task_failed')) {
       if (notification.projectId !== undefined) {
-        openTask(notification.taskId, notification.projectId);
+        openTaskInProject(notification.taskId, notification.projectId);
       } else {
         openTask(notification.taskId);
       }
@@ -299,7 +299,7 @@ export function NotificationCenterProvider({ children }: { children: React.React
         openTerminal({ serverName: notification.serverName, target: notification.target, windowId: notification.windowId }, notification.projectId);
       }
     }
-  }, [markRead, dismissToast, openTask, openTerminal]);
+  }, [markRead, dismissToast, openTaskInProject, openTask, openTerminal]);
 
   const unreadCount = notifications.reduce((acc, n) => acc + (n.read ? 0 : 1), 0);
 

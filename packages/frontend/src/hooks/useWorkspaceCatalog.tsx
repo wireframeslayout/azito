@@ -16,7 +16,6 @@ interface Catalog {
 const Context = createContext<Catalog | null>(null);
 
 export function WorkspaceCatalogProvider({ children }: { children: React.ReactNode }) {
-  const [state, setState] = useState<Omit<Catalog, 'refresh'>>({ allProjects: [], allTasks: [], projectsLoaded: false, loading: true, error: null });
   const sequence = useRef(0);
   const mounted = useRef(false);
   const refresh = useCallback(async () => {
@@ -24,11 +23,12 @@ export function WorkspaceCatalogProvider({ children }: { children: React.ReactNo
     try {
       const [projects, tasks] = await Promise.all([apiWithStatus<unknown>('/projects'), apiWithStatus<unknown>('/tasks')]);
       if (projects.status < 200 || projects.status >= 300 || tasks.status < 200 || tasks.status >= 300 || !Array.isArray(projects.body) || !Array.isArray(tasks.body)) throw new Error('Failed to load workspace catalog');
-      if (mounted.current && request === sequence.current) setState({ allProjects: projects.body as ProjectListItem[], allTasks: tasks.body as Task[], projectsLoaded: true, loading: false, error: null });
+      if (mounted.current && request === sequence.current) setState(prev => ({ ...prev, allProjects: projects.body as ProjectListItem[], allTasks: tasks.body as Task[], projectsLoaded: true, loading: false, error: null }));
     } catch (error) {
       if (mounted.current && request === sequence.current) setState(prev => ({ ...prev, loading: false, error: error instanceof Error ? error : new Error(String(error)) }));
     }
   }, []);
+  const [state, setState] = useState<Catalog>(() => ({ allProjects: [], allTasks: [], projectsLoaded: false, loading: true, error: null, refresh }));
   useNotificationChannel({ onTaskStatus: refresh, onWorkspaceRefresh: refresh });
   useEffect(() => {
     mounted.current = true;
@@ -38,7 +38,7 @@ export function WorkspaceCatalogProvider({ children }: { children: React.ReactNo
     const timer = setInterval(onChanged, 60000);
     return () => { mounted.current = false; sequence.current++; window.removeEventListener(PROJECTS_CHANGED_EVENT, onChanged); clearInterval(timer); };
   }, [refresh]);
-  return <Context.Provider value={{ ...state, refresh }}>{children}</Context.Provider>;
+  return <Context.Provider value={state}>{children}</Context.Provider>;
 }
 
 export function useWorkspaceCatalog(): Catalog {

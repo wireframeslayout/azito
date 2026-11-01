@@ -9,7 +9,8 @@ import { useWorkspaceCatalog } from './useWorkspaceCatalog';
 import { useToast } from './useToast';
 
 interface Navigation {
-  openTask: (taskId: number, projectId?: number) => void;
+  openTask: (taskId: number) => void;
+  openTaskInProject: (taskId: number, projectId: number) => void;
   openTerminal: (req: TerminalOpenTarget, projectId?: number) => void;
 }
 type Pending = { type: 'task'; taskId: number; projectId: number } | { type: 'terminal'; req: TerminalOpenTarget; projectId: number };
@@ -24,7 +25,6 @@ export function CrossProjectNavigationProvider({ children }: { children: React.R
   const { t } = useTranslation('notifications');
   const pending = useRef<Pending | null>(null);
   const timer = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const previousTarget = useRef<unknown>(null);
   const sequence = useRef(0);
   const clear = useCallback(() => { pending.current = null; if (timer.current) clearTimeout(timer.current); timer.current = null; }, []);
   useEffect(() => () => { sequence.current++; clear(); }, [clear]);
@@ -35,16 +35,19 @@ export function CrossProjectNavigationProvider({ children }: { children: React.R
       if (item.type === 'task') onOpenTask?.(item.taskId); else onOpenInTerminal?.(item.req);
       return;
     }
-    previousTarget.current = item.type === 'task' ? onOpenTask : onOpenInTerminal;
     pending.current = item;
     timer.current = setTimeout(clear, 5000);
     navigate(paths.workspace(item.projectId));
   }, [clear, location.pathname, navigate, onOpenTask, onOpenInTerminal]);
-  const openTask = useCallback((taskId: number, projectId?: number) => {
+  const openTaskInProject = useCallback((taskId: number, projectId: number) => {
+    sequence.current++;
+    queue({ type: 'task', taskId, projectId });
+  }, [queue]);
+  const openTask = useCallback((taskId: number) => {
     const request = ++sequence.current;
     clear();
     const known = allTasks.find(task => task.id === taskId);
-    const resolved = known?.projectId ?? projectId;
+    const resolved = known?.projectId;
     if (typeof resolved === 'number') { queue({ type: 'task', taskId, projectId: resolved }); return; }
     void apiWithStatus<unknown>(`/tasks/${taskId}`).then(({ status, body }) => {
       if (request !== sequence.current) return;
@@ -62,10 +65,10 @@ export function CrossProjectNavigationProvider({ children }: { children: React.R
     const item = pending.current;
     const match = matchWorkspacePath(location.pathname);
     if (!item || !match || Number(match.id) !== item.projectId) return;
-    if (item.type === 'task' && onOpenTask && onOpenTask !== previousTarget.current) { clear(); onOpenTask(item.taskId); }
-    if (item.type === 'terminal' && onOpenInTerminal && onOpenInTerminal !== previousTarget.current) { clear(); onOpenInTerminal(item.req); }
+    if (item.type === 'task' && onOpenTask) { clear(); onOpenTask(item.taskId); }
+    if (item.type === 'terminal' && onOpenInTerminal) { clear(); onOpenInTerminal(item.req); }
   }, [location.pathname, onOpenTask, onOpenInTerminal, clear]);
-  return <Context.Provider value={{ openTask, openTerminal }}>{children}</Context.Provider>;
+  return <Context.Provider value={{ openTask, openTaskInProject, openTerminal }}>{children}</Context.Provider>;
 }
 export function useCrossProjectNavigation(): Navigation {
   const value = useContext(Context);
