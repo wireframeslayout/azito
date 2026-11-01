@@ -30,10 +30,10 @@ function GroupEntries({ entries, prevTimestamp, isUser }: {
   return <>{groupToolBlocks(blocks).map((segment) => {
     const items = segment as typeof blocks;
     const first = items[0];
-    const isTool = first.block.kind === 'tool_use' || first.block.kind === 'tool_result';
+    const isToolRun = items.length > 1 && items.every(({ block }) => block.kind === 'tool_use' || block.kind === 'tool_result');
     const content = items.map((item) => <BlockList key={item.key} blocks={[item.block]} markdownText={item.markdownText} thinkingSeconds={item.thinkingSeconds} />);
-    if (isTool && items.length > 1) return <ToolRunGroup key={first.key} blocks={items}>{content}</ToolRunGroup>;
-    if (!isTool && isUser && first.entryType === 'user') return <div key={first.key} style={{ background: 'var(--bg-card)', borderRadius: 'var(--radius-lg)', padding: 'var(--space-2) var(--space-3)' }}>{content}</div>;
+    if (isToolRun) return <ToolRunGroup key={first.key} blocks={items}>{content}</ToolRunGroup>;
+    if (isUser && first.entryType === 'user') return <div key={first.key} style={{ background: 'var(--bg-card)', borderRadius: 'var(--radius-lg)', padding: 'var(--space-2) var(--space-3)' }}>{content}</div>;
     return <div key={first.key}>{content}</div>;
   })}</>;
 }

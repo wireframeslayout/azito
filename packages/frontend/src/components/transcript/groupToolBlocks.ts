@@ -18,5 +18,15 @@ export function groupToolBlocks(blocks: ContextBlock[]): ContextBlock[][] {
     else if (!isTool && previousBlock && previousBlock.kind !== 'tool_use' && previousBlock.kind !== 'tool_result' && previous[0].entryKey === item.entryKey) previous.push(item);
     else groups.push([item]);
   }
-  return groups;
+  const merged: ContextBlock[][] = [];
+  for (const group of groups) {
+    const first = group[0];
+    const isRun = group.length > 1 && (first.block.kind === 'tool_use' || first.block.kind === 'tool_result');
+    const previous = merged[merged.length - 1];
+    const previousFirst = previous?.[0];
+    const previousIsRun = previous && previous.length > 1 && previous.every(({ block }) => block.kind === 'tool_use' || block.kind === 'tool_result');
+    if (!isRun && previous && !previousIsRun && previousFirst.entryKey === first.entryKey) previous.push(...group);
+    else merged.push([...group]);
+  }
+  return merged;
 }

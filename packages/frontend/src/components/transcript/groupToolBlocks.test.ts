@@ -13,7 +13,13 @@ describe('groupToolBlocks', () => {
     expect(groupToolBlocks([])).toEqual([]);
     expect(groupToolBlocks([item(use, '1')])).toHaveLength(1);
     const groups = groupToolBlocks([item(use, '1'), item(result, '2', 'b'), item(text, '3', 'b'), item(use, '4', 'b')]);
-    expect(groups.map((group) => group.length)).toEqual([2, 1, 1]);
+    expect(groups.map((group) => group.length)).toEqual([2, 2]);
     expect(groups[0][1].block).toEqual(result);
+    expect(groups[1].map(({ block }) => block.kind)).toEqual(['text', 'tool_use']);
+  });
+  it('keeps a single tool with surrounding content from the same entry', () => {
+    const groups = groupToolBlocks([item(text, '1'), item(use, '2'), item(text, '3')]);
+    expect(groups).toHaveLength(1);
+    expect(groups[0].map(({ block }) => block.kind)).toEqual(['text', 'tool_use', 'text']);
   });
 });
