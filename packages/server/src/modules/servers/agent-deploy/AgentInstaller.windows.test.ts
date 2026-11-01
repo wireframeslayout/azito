@@ -19,10 +19,10 @@ function makeBundler() {
 
 type SftpFake = { sftpUpload: (host: string, local: string, remote: string) => Promise<void>; sftpWrite: (host: string, data: Buffer, remote: string) => Promise<void> };
 
-function make(hostOptions: Partial<FakeWindowsHostOptions> = {}, windowsAgent: WindowsAgentOptions = DEFAULT_WINDOWS_AGENT_OPTIONS, misao?: AgentMisaoInstaller) {
+function make(hostOptions: Partial<FakeWindowsHostOptions> = {}, windowsAgent: WindowsAgentOptions = DEFAULT_WINDOWS_AGENT_OPTIONS, misao?: AgentMisaoInstaller, harnessPrefix = '') {
   const host = new FakeWindowsHost({ sha256: SHA, taskName: windowsAgent.taskName, ...hostOptions });
   const execIsolated = vi.fn(async (sshHost: string, command: string) => host.exec(sshHost, command));
-  const installer = new AgentInstaller({ execIsolated, resolveHost: (h: string) => ({ username: 'user', host: h.replace(/^.*@/, '').replace(/:\d+$/, ''), port: 22 }) } as never, makeBundler() as never, windowsAgent, misao);
+  const installer = new AgentInstaller({ execIsolated, resolveHost: (h: string) => ({ username: 'user', host: h.replace(/^.*@/, '').replace(/:\d+$/, ''), port: 22 }) } as never, makeBundler() as never, windowsAgent, misao, harnessPrefix);
   const sftp = installer as unknown as SftpFake;
   const uploads: string[] = [];
   sftp.sftpUpload = async (_h, _local, remote) => { uploads.push(remote); host.uploaded.set(remote, Buffer.from('tarball')); };
@@ -601,6 +601,29 @@ describe('AgentInstaller on a Windows host', () => {
 
   describe('removing the agent from the host', () => {
     const TASK_XML = '<Task><Actions><Exec><Command>C:\\Windows\\System32\\conhost.exe</Command><Arguments>--headless "C:\\Program Files\\nodejs\\node.exe" --env-file=C:\\Users\\dev\\.azito\\agent\\agent.env C:\\Users\\dev\\.azito\\agent\\abc123abc123\\azito-agent.cjs</Arguments></Exec></Actions></Task>';
+
+    it('propagates the hub harness prefix and leaves both MCP registrations untouched', async () => {
+      const { installer, host } = make({}, DEFAULT_WINDOWS_AGENT_OPTIONS, undefined, 'second-hub');
+      const registrations = {
+        claude: { command: 'node', args: ['C:\\Users\\dev\\.azito\\harness\\skills\\azt-mcp\\mcp-server\\index.js'] },
+        codex: { command: 'node', args: ['C:\\Users\\dev\\.azito\\harness\\skills\\azt-mcp\\mcp-server\\index.js'] },
+      };
+      const initial = structuredClone(registrations);
+      const exec = host.exec;
+      host.exec = async (h: string, command: string) => {
+        if (/-EncodedCommand [A-Za-z0-9+/=]+$/.test(command) && decodeEncodedCommand(command).includes('AZITO_MCP_SRC')) {
+          registrations.claude.args = [];
+          registrations.codex.args = [];
+        }
+        return exec(h, command);
+      };
+      const result = await installer.uninstallFromWindowsHost('user@win', { removeMisao: false });
+      const mcp = result.steps.filter((s) => s.id.endsWith('HarnessMcp'));
+      expect(mcp).toHaveLength(2);
+      expect(mcp.every((s) => s.outcome === 'skipped' && s.detail?.includes('harness prefix'))).toBe(true);
+      expect(host.calls.some((c) => c.text.includes('AZITO_MCP_SRC'))).toBe(false);
+      expect(registrations).toEqual(initial);
+    });
 
     it('asks the host who it is, takes the task off, and reports each step; no install check (Tailscale) is needed', async () => {
       const { installer, host } = make({ existingTask: 'running', tailscaleIp: '' });

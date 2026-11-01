@@ -131,9 +131,9 @@ async function removeTask(host: WindowsUninstallHost, taskName: string, isOurs: 
  *
  * A task is removed only when it has ONE action and that action is exactly what the install writes (`agentTaskAction`), with a node.exe that
  * is the same file as the one found on the host now; anything else is left. The folders are not entered through a link (every folder up to
- * the drive's root must be a real one). Harness files and hooks are not touched.
+ * the drive's root must be a real one). Harness files and hooks are not touched; matching MCP registrations are removed conditionally.
  */
-export async function uninstallWindowsAgent(host: WindowsUninstallHost, facts: HostFacts, options: WindowsAgentOptions, choice: WindowsUninstallChoice): Promise<WindowsUninstallResult> {
+export async function uninstallWindowsAgent(host: WindowsUninstallHost, facts: HostFacts, options: WindowsAgentOptions, choice: WindowsUninstallChoice, harnessPrefix = ''): Promise<WindowsUninstallResult> {
   const { home } = facts;
   const steps: UninstallStep[] = [];
   const agentRoot = path.win32.join(home, options.dir);
@@ -168,9 +168,11 @@ export async function uninstallWindowsAgent(host: WindowsUninstallHost, facts: H
   steps.push(folder);
 
   if (choice.removeMisao) steps.push(...await removeMisao(host, facts, options));
-  const expected = path.win32.join(harnessLocation('win32', home).harnessDir, 'skills', 'azt-mcp', 'mcp-server', 'index.js');
+  const expected = path.win32.join(harnessLocation('win32', home, harnessPrefix).harnessDir, 'skills', 'azt-mcp', 'mcp-server', 'index.js');
   for (const [id, kind] of [['claudeHarnessMcp', 'claude'], ['codexHarnessMcp', 'codex']] as const) {
-    steps.push(folder.outcome !== 'done' && folder.outcome !== 'absent'
+    steps.push(harnessPrefix
+      ? skipped(id, 'this hub uses a harness prefix and never registers azt-mcp, so the registration was left')
+      : folder.outcome !== 'done' && folder.outcome !== 'absent'
       ? skipped(id, 'the agent was not removed, so its MCP registration was kept')
       : facts.nodePath === null
       ? skipped(id, 'Node is unavailable, so the registration could not be inspected')

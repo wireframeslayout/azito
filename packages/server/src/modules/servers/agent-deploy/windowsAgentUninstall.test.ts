@@ -8,6 +8,7 @@ import { windowsMisaoPipe } from '../transport/agentMisaoSocket';
 import { DEFAULT_WINDOWS_AGENT_OPTIONS, MISAO_WINDOWS_TASK_NAME, type WindowsAgentOptions } from './windowsAgentConfig';
 import { WindowsAgentDeployer, windowsAgentEnvFile, type WindowsSshExec } from './WindowsAgentDeployer';
 import { FakeWindowsHost } from './testing/fakeWindowsHost';
+import { harnessMcpScript } from './windowsHarnessMcpUninstall';
 import { WINDOWS_HUB_TASK_NAME, uninstallWindowsAgent, type UninstallStepId, type WindowsUninstallHost, type WindowsUninstallResult } from './windowsAgentUninstall';
 import { decideMisaoStop, decidePathChains, folderScript, leftoverProcessesScript, misaoHolderScript, misaoStopScript, parseFolderOutput, parseLeftoverOutput, parseMisaoHolderOutput, parsePathChainOutput, pathChainScript, tailBelow } from './windowsAgentUninstallScripts';
 import { HUB_COMMAND_LINE_PATTERN, firewallInspectScript, misaoDaemonScript, misaoHubScript, parseFirewallOutput, parseMisaoGuardOutput, parseSameFileOutput, sameFileScript } from './windowsAgentOwnership';
@@ -882,6 +883,13 @@ describe('the task names the uninstall relies on', () => {
 });
 
 describe('the scripts it sends', () => {
+  it('fits the MCP commands with a long non-ASCII home path', () => {
+    const home = `C:\\Users\\${'日本語の名前'.repeat(16)}`;
+    const expected = `${home}\\.azito\\harness\\skills\\azt-mcp\\mcp-server\\index.js`;
+    for (const kind of ['claude', 'codex'] as const) {
+      expect(() => powershellDialect.wrapScript(harnessMcpScript(kind, NODE, home, expected))).not.toThrow();
+    }
+  });
   it('each fits one command line (8191 characters once encoded) for a long user folder', async () => {
     const home = `C:\\Users\\${'a-very-long-user-name-'.repeat(4)}`;
     const long = new FakeUninstallHost({

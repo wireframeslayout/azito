@@ -2,7 +2,7 @@ import { gzipSync } from 'node:zlib';
 import { powershellDialect } from '../../../shared/os/shellDialect';
 import type { ScriptOutcome } from './windowsAgentUninstallScripts';
 
-/** Runs on the host, where both the registration and the target file can be resolved. */
+/** Runs on the host; keep codexCommand in sync with harness/lib/codex.mjs. */
 const HOST_SCRIPT = String.raw`
 const fs = require('fs');
 const path = require('path');

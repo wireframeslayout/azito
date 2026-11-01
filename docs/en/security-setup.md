@@ -633,4 +633,4 @@ The added DB column (`servers.ssh_host_fingerprint`) is harmless to old code, so
 
 ### Windows agent removal and MCP credentials
 
-Host removal deletes Claude and Codex `azt-mcp` registrations only when their command and single argument identify the default harness file on the host. Registrations that cannot be verified are left for manual inspection. The default harness can be shared by other hubs, so removing a matching registration can affect them. `~/.azito/operator.env` is shared and remains; inspect it and remove credentials manually when no longer needed.
+Host removal deletes Claude and Codex `azt-mcp` registrations only when their command and single argument identify this hub's harness file on the host. A hub with a harness prefix never registers azt-mcp and leaves both registrations untouched. Registrations that cannot be verified are left for manual inspection. The default harness can be shared by other hubs, so removing a matching registration can affect them. `~/.azito/operator.env` is shared and remains; inspect it and remove credentials manually when no longer needed.

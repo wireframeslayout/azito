@@ -272,7 +272,7 @@ function buildSharedInfra(agentBundler: AgentBundler, publicUrl: string, localUr
   const sshClient = new SshClient(resolveSshClientEnv(hostEnv, process.env), fingerprintStore);
   const misaoAgentInstaller = new MisaoAgentInstaller(readMisaoBundle(getBundleRoot()), { windowsTaskName: windowsAgent.misaoTaskName, ...optionalLocalMisao(localWindowsMisaoRoot(hostEnv), secretFileGuard, hostEnv.systemRoot) });
   // A hub with no bundled misao installs agents without it (instead of reporting a failed misao step on every install).
-  const agentInstaller = new AgentInstaller(sshClient, agentBundler, windowsAgent, misaoAgentInstaller.bundledVersion !== undefined ? misaoAgentInstaller : undefined);
+  const agentInstaller = new AgentInstaller(sshClient, agentBundler, windowsAgent, misaoAgentInstaller.bundledVersion !== undefined ? misaoAgentInstaller : undefined, harnessPrefix);
   const harnessInstaller = new HarnessInstaller(sshClient);
   const tmuxInstaller = new TmuxInstaller();
   const muxDriverRegistry = new MuxDriverRegistry();
