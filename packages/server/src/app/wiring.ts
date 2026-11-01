@@ -117,6 +117,7 @@ import { WindowRespawnService } from '../modules/windows/WindowRespawnService';
 import { WindowSleepService } from '../modules/windows/WindowSleepService';
 import { SessionCaptureService } from '../modules/windows/SessionCaptureService';
 import { WindowActivityStatusService } from '../modules/windows/WindowActivityStatusService';
+import { WindowSnapshotService } from '../modules/windows/WindowSnapshotService';
 import { WindowSessionResolver } from '../modules/transcripts/WindowSessionResolver';
 import { TRANSCRIPT_SOURCES } from '../modules/transcripts/sources/registry';
 import { TranscriptConversationProbe } from '../modules/transcripts/TranscriptConversationProbe';
@@ -213,6 +214,7 @@ export interface ApplicationServices {
   transcriptSourceProvider: TranscriptSourceProvider;
   windowSessionResolver: WindowSessionResolver;
   windowActivityStatusService: WindowActivityStatusService;
+  windowSnapshotService: WindowSnapshotService;
   windowRespawnService: WindowRespawnService;
   windowSleepService: WindowSleepService;
   taskRestoreService: TaskRestoreService;
@@ -276,7 +278,7 @@ function buildSharedInfra(agentBundler: AgentBundler, publicUrl: string, localUr
   const sshClient = new SshClient(resolveSshClientEnv(hostEnv, process.env), fingerprintStore);
   const misaoAgentInstaller = new MisaoAgentInstaller(readMisaoBundle(getBundleRoot()), { windowsTaskName: windowsAgent.misaoTaskName, ...optionalLocalMisao(localWindowsMisaoRoot(hostEnv), secretFileGuard, hostEnv.systemRoot) });
   // A hub with no bundled misao installs agents without it (instead of reporting a failed misao step on every install).
-  const agentInstaller = new AgentInstaller(sshClient, agentBundler, windowsAgent, misaoAgentInstaller.bundledVersion !== undefined ? misaoAgentInstaller : undefined);
+  const agentInstaller = new AgentInstaller(sshClient, agentBundler, windowsAgent, misaoAgentInstaller.bundledVersion !== undefined ? misaoAgentInstaller : undefined, harnessPrefix);
   const harnessInstaller = new HarnessInstaller(sshClient);
   const tmuxInstaller = new TmuxInstaller();
   const muxDriverRegistry = new MuxDriverRegistry();
@@ -530,10 +532,11 @@ function buildApplicationServices(infra: SharedInfra, repos: Repositories, uiTok
   // lookups (and their cache) to one per process.
   const windowSessionResolver = new WindowSessionResolver(repos.taskRepo, infra.muxDriverRegistry, repos.serverRepo, transcriptSourceProvider, sessionCaptureService, infra.transportFactory);
   const windowActivityStatusService = new WindowActivityStatusService(repos.windowRepo, repos.serverRepo, windowSessionResolver);
+  const windowSnapshotService = new WindowSnapshotService(repos.windowRepo, repos.serverRepo, infra.muxDriverRegistry);
   const usageService = new UsageService(infra.agentRegistry);
   const agentSignalService = new AgentSignalService(repos.agentTurnRepo, infra.turnSignalHub, repos.logRepo, repos.auditLogService);
   return {
-    sessionStrategyFactory, sessionCaptureService, transcriptSourceProvider, windowSessionResolver, windowActivityStatusService,
+    sessionStrategyFactory, sessionCaptureService, transcriptSourceProvider, windowSessionResolver, windowActivityStatusService, windowSnapshotService,
     windowRespawnService, windowSleepService, taskRestoreService, usageService, agentSignalService, taskEvents,
     originationService, taskPaneEnvironmentService,
   };
@@ -701,6 +704,7 @@ function buildAgentActivityMonitor(
     (serverName, target, windowId, from, to, event) => {
       console.log(`[session-update] window=${windowId} ${(from ?? 'null').slice(0, 8)}→${to.slice(0, 8)} event=${event} server=${serverName} target=${target}`);
     },
+    repos.taskRepo,
   );
 }
 

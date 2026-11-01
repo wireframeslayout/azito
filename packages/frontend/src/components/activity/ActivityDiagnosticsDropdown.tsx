@@ -5,7 +5,7 @@ import { Notice } from '../ui/Notice';
 import { paths } from '../../paths';
 import { ACTIVITY_DIAGNOSTICS_ANCHOR } from '../settings/sections/ActivityDiagnosticsPanel';
 import { openActivityTarget } from '../../lib/activityOpen';
-import { useNotificationCenter } from '../../hooks/useNotificationCenter';
+import { useCrossProjectNavigation } from '../../hooks/useCrossProjectNavigation';
 import type { ActivityDiagnosticRow } from '../../hooks/useActivityDiagnostics';
 import {
   DIM, MONO, StateCell, StateDot, TierCell, TransitionCell,
@@ -45,10 +45,10 @@ function CompactSupervisorCell({ row }: { row: ActivityDiagnosticRow }) {
 export function ActivityDiagnosticsDropdown({ rows, error, onClose }: ActivityDiagnosticsDropdownProps) {
   const { t } = useTranslation(['settings', 'common']);
   const navigate = useNavigate();
-  // 行クリックの遷移は通知センターの navigation-aware な opener を共有する。ステータスバーは
+  // 行クリックの遷移はLayout 配下の CrossProjectNavigation の opener を共有する。ステータスバーは
   // Workspace の外（Layout 直下）にあり、Settings 等のグローバルページ表示中はタブを作っても
   // 画面が切り替わらないため、プロジェクト解決＋ワークスペースへの遷移まで面倒を見る経路が要る。
-  const { openTask: openTaskAnywhere, openTerminal } = useNotificationCenter();
+  const { openTask: openTaskAnywhere, openTerminal } = useCrossProjectNavigation();
 
   // オフラインは「稼働していない」ことの確認にしか使わず、件数が多くパネルを埋めてしまうので
   // 全件表（Settings）に任せ、ここでは件数だけをフッターで知らせる。

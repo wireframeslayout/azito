@@ -1,3 +1,4 @@
+import { formatWindowTitleLine, resolveWindowTitle } from '@azito/shared';
 // ─── Fastify instance assembly ───
 //
 // Registers plugins, HTTP routes, WebSocket handlers, static files, and the
@@ -104,7 +105,7 @@ export async function buildServer(app: FastifyInstance, wiring: Wiring, port: nu
     tmuxClient, transportFactory, worktreeServiceFactory, gitProvider, storageClient,
     agentInstaller, agentBundler, harnessInstaller, tmuxInstaller, muxDriverRegistry,
     executeTaskUseCase, agentActivityMonitor, interactionMonitor, paneHandleResolver, windowRespawnService, windowSleepService, taskRestoreService, sessionStrategyFactory, sessionCaptureService, usageService,
-    transcriptSourceProvider, windowSessionResolver, windowActivityStatusService,
+    transcriptSourceProvider, windowSessionResolver, windowActivityStatusService, windowSnapshotService,
     pushService, vapidKeys, notificationBus, sidekickPackageService, sidekickPackageLoader,
     sidekickSyncService, unitTypeLoader, chatCommandLoader, agentSignalService, supervisorRegistry, agentTurnRepo, turnSignalHub,
     browserSessionManager, browserGroupRepo, deployModeDetector, systemUpdateService, channelResolver, auditLogService,
@@ -171,7 +172,8 @@ export async function buildServer(app: FastifyInstance, wiring: Wiring, port: nu
   // those is exactly the false-completion class this reason field exists to end.
   notificationBus.on((event) => {
     if (event.type !== 'agent:activity') return;
-    const { serverName, target, label, taskId, running, status, reason } = event.payload;
+    const { serverName, target, taskId, running, status, reason } = event.payload;
+    const label = formatWindowTitleLine(resolveWindowTitle({ ...event.payload, id: event.payload.windowId, tmuxTarget: target }));
 
     const resolveUrl = (): string => agentActivityPushUrl(event.payload, (id) => taskRepo.findById(id)?.projectId);
 
@@ -179,7 +181,7 @@ export async function buildServer(app: FastifyInstance, wiring: Wiring, port: nu
       const url = resolveUrl();
       const subs = pushSubRepo.findAll();
       pushService.sendToAll(subs, (sub) => ({
-        ...getPushMessage(sub.lang, 'agent.finished', { label: label || target, serverName }),
+        ...getPushMessage(sub.lang, 'agent.finished', { label, serverName }),
         data: { url, serverName, target },
       })).catch(() => {});
       return;
@@ -189,7 +191,7 @@ export async function buildServer(app: FastifyInstance, wiring: Wiring, port: nu
       const url = resolveUrl();
       const subs = pushSubRepo.findAll();
       pushService.sendToAll(subs, (sub) => ({
-        ...getPushMessage(sub.lang, 'agent.approvalRequired', { label: label || target, serverName }),
+        ...getPushMessage(sub.lang, 'agent.approvalRequired', { label, serverName }),
         data: { url, serverName, target, taskId },
       })).catch(() => {});
     }
@@ -604,7 +606,7 @@ export async function buildServer(app: FastifyInstance, wiring: Wiring, port: nu
     windowRepo, projectRepo, taskRepo, tmux: tmuxClient, muxDriverRegistry, serverRepo, transportFactory,
     respawnService: windowRespawnService, sleepService: windowSleepService,
     sessionStrategyFactory, sessionCaptureService, supervisorRegistry,
-    windowActivityStatusService, notificationBus, resourceGuard, harnessPrefix, invalidateSessionCache,
+    windowActivityStatusService, windowSnapshotService, notificationBus, resourceGuard, harnessPrefix, invalidateSessionCache,
     uiToken: wiring.uiToken, buildSecondaryWindowEnv, serverIsolationMutex,
     destroyPrimaryTaskWindow: (taskId, windowName, serverName, target, reason, kill, onDestroyed) => {
       const launchId = supervisorRegistry.resolveLaunchForExpiry(serverName, target);
@@ -683,7 +685,7 @@ export async function buildServer(app: FastifyInstance, wiring: Wiring, port: nu
     serverRepo,
     transcriptPaneService: new TranscriptPaneService(claudeTranscriptSource, muxDriverRegistry, serverRepo),
     windowSessionResolver,
-    windowInputService: new WindowInputService(windowRepo, muxDriverRegistry, serverRepo),
+    windowInputService: new WindowInputService(windowRepo, muxDriverRegistry, serverRepo, transportFactory),
     windowRepo,
     interactionMonitor,
   });

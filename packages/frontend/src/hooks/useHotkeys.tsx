@@ -25,7 +25,7 @@ interface HotkeysContextValue {
   setBinding: (action: HotkeyAction, spec: KeySpec | null) => 'ok' | 'conflict' | 'storage-error';
   setChordMs: (ms: number) => 'ok' | 'storage-error';
   register: (id: symbol, reg: Registration) => () => void;
-  addOverlay: (id: symbol, element: HTMLElement, returnFocusTo: HTMLElement | null) => () => void;
+  addOverlay: (id: symbol, element: HTMLElement, returnFocusTo: HTMLElement | null, fallbackFocusTo?: HTMLElement | null) => () => void;
   stack: StackEntry[];
   dispatchFromTerminal: (e: KeyboardEvent) => boolean;
 }
@@ -54,9 +54,10 @@ export function HotkeyProvider({ children }: { children: ReactNode }) {
     registrations.current.set(id, reg);
     return () => { registrations.current.delete(id); matchers.current.delete(id); };
   };
-  const addOverlay = (id: symbol, element: HTMLElement, returnFocusTo: HTMLElement | null) => {
+  const addOverlay = (id: symbol, element: HTMLElement, returnFocusTo: HTMLElement | null, fallbackFocusTo?: HTMLElement | null) => {
     setStack(current => [...current.filter(entry => entry.id !== id), { id, element }]);
     return () => {
+      if (fallbackFocusTo) pendingFocus.current.push(fallbackFocusTo);
       if (returnFocusTo) pendingFocus.current.push(returnFocusTo);
       setStack(current => current.filter(entry => entry.id !== id));
     };
@@ -130,7 +131,7 @@ export function useHotkeyBindings(): Pick<HotkeysContextValue, 'bindings' | 'set
 export function useHotkeyDispatch(): Pick<HotkeysContextValue, 'dispatchFromTerminal'> {
   const { dispatchFromTerminal } = useStableContext(); return { dispatchFromTerminal };
 }
-export function useOverlayStack(open: boolean, elementRef: RefObject<HTMLElement | null>, returnFocus = false): { id: symbol; isTop: boolean } {
+export function useOverlayStack(open: boolean, elementRef: RefObject<HTMLElement | null>, returnFocus = false, fallbackFocusTo?: HTMLElement | null): { id: symbol; isTop: boolean } {
   const { addOverlay } = useStableContext();
   const stack = useContext(StackContext);
   const id = useRef(Symbol('overlay'));
@@ -142,7 +143,7 @@ export function useOverlayStack(open: boolean, elementRef: RefObject<HTMLElement
   wasOpen.current = open;
   useEffect(() => {
     if (!open || !elementRef.current) return;
-    return addRef.current(id.current, elementRef.current, opener.current);
-  }, [open, elementRef]);
+    return addRef.current(id.current, elementRef.current, opener.current, fallbackFocusTo);
+  }, [open, elementRef, fallbackFocusTo]);
   return { id: id.current, isTop: stack.at(-1)?.id === id.current };
 }

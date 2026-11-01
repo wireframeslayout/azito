@@ -21,12 +21,14 @@ export interface WindowPaneLayout {
 export interface Window {
   id: number;
   ownerType: 'project' | 'task';
+  role?: string;
   projectId?: number;
   taskId?: number;
   serverName: string;
   tmuxTarget: string;
   muxRef?: MuxRef;
   label?: string;
+  labelSource?: 'auto' | 'user';
   isPrimary: boolean;
   windowType: 'terminal' | 'agent';
   workerType?: string;
@@ -38,6 +40,14 @@ export interface Window {
   sleeping?: boolean;
 }
 export interface Repository { id: number; url: string; name?: string; provider?: string; owner?: string; repoName?: string; }
+export interface ProjectListItem {
+  id: number;
+  name: string;
+  icon?: string;
+  color?: string;
+  windows?: Window[];
+}
+
 export interface Project {
   id: number; name: string; slug: string; description?: string; workingDirectory?: string;
   defaultUnitId?: number | null;

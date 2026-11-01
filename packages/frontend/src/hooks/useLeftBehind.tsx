@@ -15,7 +15,7 @@ type ShowLeftBehind = (serverName: string, steps: UninstallStep[]) => void;
 
 const LeftBehindContext = createContext<ShowLeftBehind | null>(null);
 
-/** Shows what the removal of a server's agent left on its host on purpose (see `leftBehindOf`). Must be called under {@link LeftBehindProvider}. */
+/** Shows MCP results and items left on the host (see `leftBehindOf`). Must be called under {@link LeftBehindProvider}. */
 export function useLeftBehind(): ShowLeftBehind {
   const ctx = useContext(LeftBehindContext);
   if (!ctx) throw new Error('useLeftBehind must be used within LeftBehindProvider');
@@ -24,7 +24,7 @@ export function useLeftBehind(): ShowLeftBehind {
 
 /**
  * Mounted once (in Layout), like the confirm dialog: the server's page is gone by the time the person reads this, so the result cannot
- * live in it. A dialog with the steps that were left in place and their reasons, the commands as text that can be copied, and a Close button.
+ * live in it. The dialog shows MCP results, items left in place, and commands that can be copied.
  */
 export function LeftBehindProvider({ children }: { children: ReactNode }) {
   const { t } = useTranslation('servers');

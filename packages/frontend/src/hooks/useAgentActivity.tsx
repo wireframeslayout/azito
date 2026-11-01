@@ -29,6 +29,12 @@ export interface AgentActivityInfo {
   windowId?: number;
   projectId?: number;
   label?: string;
+  labelSource?: 'auto' | 'user';
+  taskTitle?: string;
+  workerType?: string;
+  windowType?: string;
+  paneTitle?: string;
+  paneCommand?: string;
   status: 'working' | 'blocked';
   paneName?: string;
 }
@@ -42,6 +48,12 @@ interface AgentActivitySnapshotEntry {
   windowId?: number;
   projectId?: number;
   label?: string;
+  labelSource?: 'auto' | 'user';
+  taskTitle?: string;
+  workerType?: string;
+  windowType?: string;
+  paneTitle?: string;
+  paneCommand?: string;
   status?: 'working' | 'blocked';
   paneName?: string;
 }
@@ -98,11 +110,43 @@ function snapshotToMap(snapshot: AgentActivitySnapshotEntry[]): Map<string, Agen
       windowId: e.windowId,
       projectId: e.projectId,
       label: e.label,
+      labelSource: e.labelSource,
+      taskTitle: e.taskTitle,
+      workerType: e.workerType,
+      windowType: e.windowType,
+      paneTitle: e.paneTitle,
+      paneCommand: e.paneCommand,
       status: e.status ?? 'working',
       paneName: e.paneName,
     });
   }
   return map;
+}
+
+function applyActivity(map: Map<string, AgentActivityInfo>, payload: AgentActivityPayload): void {
+  const key = activityKey(payload.serverName, payload.target, payload.windowId);
+  if (!payload.running) {
+    map.delete(key);
+    return;
+  }
+  map.set(key, {
+    serverName: payload.serverName,
+    target: payload.target,
+    running: true,
+    source: payload.source,
+    taskId: payload.taskId,
+    windowId: payload.windowId,
+    projectId: payload.projectId,
+    label: payload.label,
+    labelSource: payload.labelSource,
+    taskTitle: payload.taskTitle,
+    workerType: payload.workerType,
+    windowType: payload.windowType,
+    paneTitle: payload.paneTitle,
+    paneCommand: payload.paneCommand,
+    status: payload.status ?? 'working',
+    paneName: payload.paneName,
+  });
 }
 
 function useBrowserFocused(): boolean {
@@ -169,38 +213,41 @@ export function AgentActivityProvider({ children }: { children: React.ReactNode 
   // WS ハンドラは ref 経由で最新の isWatched を読む（ハンドラ自体は購読時に固定されるため）。
   const isWatchedRef = useRef<(serverName: string, target: string, taskId: number | undefined) => boolean>(() => false);
 
+  const snapshotGeneration = useRef(0);
+  const pendingEvents = useRef<AgentActivityPayload[] | null>(null);
+
   const fetchSnapshot = () => {
+    const generation = ++snapshotGeneration.current;
+    pendingEvents.current = [];
     api<AgentActivitySnapshotEntry[]>('/agent-activity')
-      .then((snapshot) => setEntries(snapshotToMap(snapshot)))
-      .catch(() => { /* WS events will still keep state converging */ });
+      .then((snapshot) => {
+        if (generation !== snapshotGeneration.current) return;
+        const next = snapshotToMap(snapshot);
+        for (const event of pendingEvents.current ?? []) applyActivity(next, event);
+        pendingEvents.current = null;
+        setEntries(next);
+      })
+      .catch(() => {
+        if (generation === snapshotGeneration.current) pendingEvents.current = null;
+      });
   };
 
   useEffect(() => {
     fetchSnapshot();
+    return () => {
+      snapshotGeneration.current++;
+      pendingEvents.current = null;
+    };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   useNotificationChannel({
     onAgentActivity: (payload: AgentActivityPayload) => {
       const key = activityKey(payload.serverName, payload.target, payload.windowId);
+      pendingEvents.current?.push(payload);
       setEntries((prev) => {
         const next = new Map(prev);
-        if (payload.running) {
-          next.set(key, {
-            serverName: payload.serverName,
-            target: payload.target,
-            running: true,
-            source: payload.source,
-            taskId: payload.taskId,
-            windowId: payload.windowId,
-            projectId: payload.projectId,
-            label: payload.label,
-            status: payload.status ?? 'working',
-            paneName: payload.paneName,
-          });
-        } else {
-          next.delete(key);
-        }
+        applyActivity(next, payload);
         return next;
       });
       if (payload.running) return;
@@ -216,6 +263,12 @@ export function AgentActivityProvider({ children }: { children: React.ReactNode 
         target: payload.target,
         windowId: payload.windowId,
         label: payload.label,
+        labelSource: payload.labelSource,
+        taskTitle: payload.taskTitle,
+        workerType: payload.workerType,
+        windowType: payload.windowType,
+        paneTitle: payload.paneTitle,
+        paneCommand: payload.paneCommand,
         taskId: payload.taskId,
         projectId: payload.projectId,
         finishedAt: Date.now(),

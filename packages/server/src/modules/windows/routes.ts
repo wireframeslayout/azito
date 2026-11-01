@@ -1,3 +1,5 @@
+import { windowSnapshotSchema } from './windowSnapshotSchema';
+import type { WindowSnapshotService } from './WindowSnapshotService';
 import type { FastifyPluginCallback } from 'fastify';
 import { resourceCheckBody, type ResourceGuard, type ResourceUnavailable } from '../servers/resources/ResourceGuard';
 import { workerStartsAsProgram } from '../../shared/os/hostFeature';
@@ -29,7 +31,7 @@ import { muxRefFromTmuxTarget, parseMuxRef, type MuxRef, type PaneOrdinal, type 
 import { MuxDriverUnavailableError, type MuxDriverUnavailableReason } from '../tmux/MuxCapabilityError';
 import { muxWindowTarget } from '../tmux/muxWindowTarget';
 import { labelAddedWindowOrRemove } from '../tmux/labelRegisteredWindow';
-import { kindOfStoredWindow, windowKindOf } from '../tmux/windowIdentity';
+import { kindOfStoredWindow, windowKindOf, persistRenamedWindowLabel } from '../tmux/windowIdentity';
 import { AmbiguousWindowKindError, rawTargetProbeOf, resolveRawTarget } from '../tmux/storedWindowKind';
 import { resolveWindowById, isRefKindCompatible, resolvePaneHandle, closePaneInWindow, resolvePaneAddEnv, killWindowCore, execResultError, type KillWindowDeps } from './windowPaneOps';
 import type { SessionCaptureService } from './SessionCaptureService';
@@ -50,6 +52,7 @@ export interface WindowsRouteOptions {
   sessionCaptureService: SessionCaptureService;
   supervisorRegistry: SupervisorRegistry;
   windowActivityStatusService: WindowActivityStatusService;
+  windowSnapshotService: WindowSnapshotService;
   notificationBus?: NotificationBus;
   resourceGuard?: ResourceGuard;
   harnessPrefix: string;
@@ -72,6 +75,12 @@ const windowsRoutes: FastifyPluginCallback<WindowsRouteOptions> = (fastify, opts
     const availability = opts.muxDriverRegistry.availabilityFor(kind, srv);
     return availability.available ? null : { error: 'mux_driver_unavailable', kind, reason: availability.reason };
   };
+
+  fastify.get('/api/windows/snapshots', async (request, reply) => {
+    const query = windowSnapshotSchema.safeParse(request.query);
+    if (!query.success) return reply.status(400).send({ error: 'Invalid snapshot query' });
+    return { snapshots: await opts.windowSnapshotService.capture(query.data.ids, query.data.lines, query.data.since) };
+  });
 
   // Issue #471: resolve a task's execution-allowed status for the MCP
   // blocking decision. Delegates to respawnService.isTaskExecutionAllowed()
@@ -343,7 +352,8 @@ const windowsRoutes: FastifyPluginCallback<WindowsRouteOptions> = (fastify, opts
         }
         if (existing.ownerType !== 'task' || existing.taskId !== id) {
           windowRepo.adoptForTask(existing.id, id);
-          const label = (body['label'] as string) || undefined;
+          // A label the user set (rename) outlives the adoption; only an automatic one is replaced.
+          const label = existing.labelSource === 'user' ? undefined : (body['label'] as string) || undefined;
           const windowType = (body['window_type'] as string) === 'agent' ? 'agent' as const : undefined;
           if (label || windowType) windowRepo.update(existing.id, { ...(label ? { label } : {}), ...(windowType ? { windowType } : {}) });
           return { ok: true, id: existing.id, adopted: true, tmuxTarget: existing.tmuxTarget };
@@ -391,7 +401,12 @@ const windowsRoutes: FastifyPluginCallback<WindowsRouteOptions> = (fastify, opts
 
       const body = request.body as Record<string, unknown>;
       const data: Record<string, unknown> = {};
-      if ('label' in body) data['label'] = (body['label'] as string)?.trim() || null;
+      if ('label' in body) {
+        // The label edit is the user's own; clearing it hands the title back to the automatic sources.
+        const label = (body['label'] as string)?.trim() || null;
+        data['label'] = label;
+        data['labelSource'] = label ? 'user' : 'auto';
+      }
       if ('agent_session_id' in body) data['agentSessionId'] = body['agent_session_id'];
       if ('launch_command' in body) data['launchCommand'] = body['launch_command'];
       if ('worker_model' in body) {
@@ -692,6 +707,9 @@ const windowsRoutes: FastifyPluginCallback<WindowsRouteOptions> = (fastify, opts
       const result = await driverFor(srv).renameWindowByRef(srv, ref, name);
       const err = execResultError(result);
       if (err) return reply.status(err.status).send({ error: err.error });
+      if (!persistRenamedWindowLabel(() => windowRepo.update(win.id, { label: name, labelSource: 'user' }), () => notifyWindowsChanged(win.serverName), request.log, win.id)) {
+        return reply.status(500).send({ error: 'Window renamed, but saving its label failed' });
+      }
       notifyWindowsChanged(win.serverName);
       return { ok: true };
     },

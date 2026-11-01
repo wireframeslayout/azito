@@ -129,6 +129,7 @@ export function MobileTabChipRow({
       <button
         type="button"
         onClick={onOpenMenu}
+        data-mobile-nav-trigger
         aria-label={t('mobile.menu')}
         className="icon-btn"
         style={{

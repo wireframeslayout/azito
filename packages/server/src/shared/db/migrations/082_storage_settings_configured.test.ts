@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import Database from 'better-sqlite3';
 import { up as createStorage } from './009_storage_settings';
-import { up } from './081_storage_settings_configured';
+import { up } from './082_storage_settings_configured';
 import { seal } from '../../crypto/SecretBox';
 
 describe('storage configured migration', () => {

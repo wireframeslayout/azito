@@ -253,6 +253,7 @@
     "notice": "端末や入力欄に文字を打っているあいだは反応しません。",
     "maximize": "拡大を開くキー",
     "conflict": "このキーは別の操作に割り当てられています。",
-    "storageError": "設定を保存できませんでした。"
+    "storageError": "設定を保存できませんでした。",
+    "intervalOnlySpace": "Space 2 回を選んだときに設定できます。"
   }
 }

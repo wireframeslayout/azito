@@ -18,7 +18,7 @@ export type NotificationEvent =
   | { type: 'window:destroyed'; payload: { serverName: string; sessionName: string; windowName: string; windowId?: number } }
   | { type: 'window:renamed'; payload: { serverName: string; sessionName: string; oldName: string; newName: string; windowId?: number } }
   | { type: 'pane:exited'; payload: { serverName: string; sessionName: string; windowName: string; windowId?: number } }
-  | { type: 'agent:activity'; payload: { serverName: string; target: string; running: boolean; source: 'operation' | 'manual' | 'supervised'; operation: boolean; taskId?: number; label?: string; projectId?: number; status?: 'working' | 'blocked'; paneName?: string; reason?: AgentActivityStopReason; windowId?: number } }
+  | { type: 'agent:activity'; payload: { serverName: string; target: string; running: boolean; source: 'operation' | 'manual' | 'supervised'; operation: boolean; taskId?: number; label?: string; labelSource?: 'auto' | 'user'; taskTitle?: string; workerType?: string; windowType?: string; paneTitle?: string; paneCommand?: string; projectId?: number; status?: 'working' | 'blocked'; paneName?: string; reason?: AgentActivityStopReason; windowId?: number } }
   | { type: 'supervisor:ready'; payload: { serverName: string; target: string; taskId?: number; windowId?: number } }
   | { type: 'browser:opened'; payload: { serverName: string; groupId: string; tabId: string; url: string | null; taskId?: number; label?: string } }
   | { type: 'workspace:refresh'; payload: Record<string, never> };

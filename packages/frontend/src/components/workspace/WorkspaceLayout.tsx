@@ -1,4 +1,4 @@
-import React, { useCallback, useRef, useState } from 'react';
+import React, { useCallback, useId, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { useTranslation } from 'react-i18next';
 import { Icon } from '../ui/Icon';
@@ -12,6 +12,7 @@ import type { ContextMenuItem } from '../ContextMenu';
 import LocalMenu from './LocalMenu';
 import LocalMenuPopover from './LocalMenuPopover';
 import { ProjectAvatar } from '../ui/ProjectAvatar';
+import { RightPanel } from './RightPanel';
 
 interface ProjectItem {
   id: number;
@@ -47,7 +48,7 @@ function buildProjectMenuItems(
     : projectItems;
 }
 
-interface WorkspaceLayoutProps {
+interface WorkspaceLayoutBaseProps {
   mobile: boolean;
   sidebarMode: SidebarMode;
   switchSidebarMode: (mode: SidebarMode) => void;
@@ -73,7 +74,15 @@ interface WorkspaceLayoutProps {
   taskWindows?: Array<{ serverName: string; tmuxTarget: string; taskId: number }>;
   /** SP の M1 メニュー「オブジェクト」行に表示する総件数（Issue #69 T1）。 */
   objectsCount?: number;
+  rightPanelActions?: React.ReactNode;
+  rightPanelId?: string;
+  rightPanelToggleRef?: React.RefObject<HTMLButtonElement | null>;
 }
+
+type WorkspaceLayoutProps = WorkspaceLayoutBaseProps & (
+  | { rightPanel: React.ReactElement; rightPanelOpen: boolean; onRightPanelOpenChange: (open: boolean) => void }
+  | { rightPanel?: null | undefined; rightPanelOpen?: never; onRightPanelOpenChange?: never }
+);
 
 export default function WorkspaceLayout({
   mobile,
@@ -100,8 +109,15 @@ export default function WorkspaceLayout({
   openTask,
   taskWindows,
   objectsCount,
+  rightPanel,
+  rightPanelOpen,
+  onRightPanelOpenChange,
+  rightPanelActions,
+  rightPanelId,
+  rightPanelToggleRef,
 }: WorkspaceLayoutProps) {
   const { t } = useTranslation(['workspace', 'common', 'projects']);
+  const generatedRightPanelId = useId();
   const navigate = useNavigate();
   const currentProjectItem = allProjects.find((p) => p.id === project?.id) ?? null;
   const projectMenu = useContextMenu();
@@ -320,6 +336,12 @@ export default function WorkspaceLayout({
       >
         {children}
       </div>
+
+      {!mobile && React.isValidElement(rightPanel) && rightPanelOpen !== undefined && onRightPanelOpenChange && (
+        <RightPanel id={rightPanelId ?? generatedRightPanelId} title={t('workspace:rightPanel.title')} open={rightPanelOpen} onOpenChange={onRightPanelOpenChange} toggleRef={rightPanelToggleRef} actions={rightPanelActions}>
+          {rightPanel}
+        </RightPanel>
+      )}
 
       {modals}
 

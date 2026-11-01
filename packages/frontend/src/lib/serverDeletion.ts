@@ -9,7 +9,7 @@ export function hostRemovalSupport(server: { type: string; hostProfile?: HostPro
   return server.hostProfile?.platform === 'win32' ? 'windows' : 'unsupported';
 }
 
-export type UninstallStepId = 'task' | 'processes' | 'firewall' | 'folder' | 'misaoTask' | 'misaoProcesses' | 'misaoFolder';
+export type UninstallStepId = 'task' | 'processes' | 'firewall' | 'folder' | 'misaoTask' | 'misaoProcesses' | 'misaoFolder' | 'claudeHarnessMcp' | 'codexHarnessMcp';
 export type UninstallOutcome = 'done' | 'absent' | 'failed' | 'skipped';
 
 export interface UninstallStep {
@@ -23,7 +23,7 @@ export type HostRemovalFailure =
   | { kind: 'steps'; steps: UninstallStep[] }
   | { kind: 'error'; message: string };
 
-const STEP_IDS: ReadonlySet<string> = new Set<UninstallStepId>(['task', 'processes', 'firewall', 'folder', 'misaoTask', 'misaoProcesses', 'misaoFolder']);
+const STEP_IDS: ReadonlySet<string> = new Set<UninstallStepId>(['task', 'processes', 'firewall', 'folder', 'misaoTask', 'misaoProcesses', 'misaoFolder', 'claudeHarnessMcp', 'codexHarnessMcp']);
 const OUTCOMES: ReadonlySet<string> = new Set<UninstallOutcome>(['done', 'absent', 'failed', 'skipped']);
 
 function parseSteps(value: unknown): UninstallStep[] | null {
@@ -59,11 +59,11 @@ export function readUninstallAnswer(body: unknown): HostRemovalDone | HostRemova
 }
 
 /**
- * What the removal left on the host on purpose, with the reason (a firewall rule, a misao that is a hub's, ...): the steps that were
- * `skipped` and say why. They are shown after the row is deleted, since nothing else tells the person what is still there.
+ * Shows the MCP results after host removal, including done and absent, as well as other skipped steps with a reason.
+ * The dialog therefore also opens when the MCP registrations needed no removal.
  */
 export function leftBehindOf(steps: readonly UninstallStep[]): UninstallStep[] {
-  return steps.filter((s) => s.outcome === 'skipped' && s.detail !== undefined && s.detail !== '');
+  return steps.filter((s) => s.id === 'claudeHarnessMcp' || s.id === 'codexHarnessMcp' || (s.outcome === 'skipped' && s.detail !== undefined && s.detail !== ''));
 }
 
 /** The commands a step's text asks the person to run (one per line), to be shown where they can be copied. */
@@ -98,7 +98,7 @@ export function setRemoveMisao(choice: HostRemovalChoice, removeMisao: boolean):
 }
 
 export type DeletionResult =
-  /** `left`: what the host removal left in place on purpose (see {@link leftBehindOf}); empty when the host was not touched. */
+  /** `left`: MCP results and items left in place (see {@link leftBehindOf}); empty when the host was not touched. */
   | { kind: 'deleted'; left: UninstallStep[] }
   /** The host removal did not work: the row was NOT deleted. */
   | { kind: 'hostFailed'; failure: HostRemovalFailure }

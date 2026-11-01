@@ -1,7 +1,7 @@
 import type { Database } from 'better-sqlite3';
 import { open } from '../../crypto/SecretBox';
 
-export const version = 81;
+export const version = 82;
 export const description = 'Track whether storage has been configured';
 
 export function up(db: Database): void {
