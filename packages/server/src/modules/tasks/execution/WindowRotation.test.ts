@@ -166,7 +166,7 @@ describe('ensureSessionWithLock', () => {
   function makeTmux(overrides: { listWorkspaces?: MockMux['listWorkspaces'] } = {}): MockMux {
     return {
       listWorkspaces: overrides.listWorkspaces ?? vi.fn(async (_server: ServerConfig) => []),
-      prepareWorkspace: vi.fn(async (_server: ServerConfig, name: string, _opts?: unknown) => ({ ref: { kind: 'tmux' as const, workspace: name, window: 'default' }, result: { stdout: '', stderr: '', code: 0 } })),
+      prepareWorkspace: vi.fn(async (_server: ServerConfig, _name: string, _extraEnv?: Record<string, string>) => undefined),
     } as unknown as MockMux;
   }
 

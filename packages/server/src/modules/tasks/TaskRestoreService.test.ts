@@ -166,7 +166,7 @@ function makeDeps(overrides: Partial<TaskRestoreDeps> = {}): TaskRestoreDeps {
     muxDriverRegistry: (() => {
       const driver = {
         listWorkspaces: vi.fn(async () => [{ name: 'azito', windowCount: 0, attached: true, created: 0, windows: [] }]),
-        prepareWorkspace: vi.fn(async (_srv: unknown, name: string) => ({ ref: { kind: 'tmux' as const, workspace: name, window: 'default' }, result: { stdout: '', stderr: '', code: 0 } })),
+        prepareWorkspace: vi.fn(async () => undefined),
         openWindow: vi.fn(async (_srv: unknown, ws: string, name?: string) => ({ ref: { kind: 'tmux' as const, workspace: ws, window: name ?? 'task-1' }, result: { stdout: '', stderr: '', code: 0 }, windowName: name ?? 'task-1' })),
         closeWindow: vi.fn(async () => ({ stdout: '', stderr: '', code: 0 })),
         closePane: vi.fn(async () => ({ stdout: '', stderr: '', code: 0 })),
@@ -732,7 +732,7 @@ describe('TaskRestoreService', () => {
       ...deps,
       muxDriverRegistry: overrideDriver(deps, {
         listWorkspaces: vi.fn(async () => []),
-        prepareWorkspace: vi.fn(async (_srv: unknown, name: string) => ({ ref: { kind: 'tmux' as const, workspace: name, window: 'default' }, result: { stdout: '', stderr: '', code: 0 } })),
+        prepareWorkspace: vi.fn(async () => undefined),
       }),
     });
     service = new TaskRestoreService(deps);
@@ -774,7 +774,7 @@ describe('TaskRestoreService', () => {
       serverRepo: { ...deps.serverRepo, findByName },
       muxDriverRegistry: overrideDriver(deps, {
         listWorkspaces: vi.fn(async () => []),
-        prepareWorkspace: vi.fn(async (_srv: unknown, name: string) => ({ ref: { kind: 'tmux' as const, workspace: name, window: 'default' }, result: { stdout: '', stderr: '', code: 0 } })),
+        prepareWorkspace: vi.fn(async () => undefined),
       }),
     });
     service = new TaskRestoreService(deps);

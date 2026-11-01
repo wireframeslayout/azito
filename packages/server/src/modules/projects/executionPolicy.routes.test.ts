@@ -69,7 +69,7 @@ function makeOpts(overrides: Partial<ProjectsRouteOptions> = {}): ProjectsRouteO
       listSessions: vi.fn(async () => []),
       createSession: vi.fn(async () => {}),
       listWorkspaces: vi.fn(async () => []),
-      prepareWorkspace: vi.fn(async () => ({ ref: { kind: 'tmux', workspace: 'p', window: 'default' }, result: { stdout: '', stderr: '', code: 0 } })),
+      prepareWorkspace: vi.fn(async () => undefined),
     } as unknown as ProjectsRouteOptions['tmux'],
     muxDriverRegistry: { resolve: vi.fn(() => ({ listWorkspaces: vi.fn(async () => []), prepareWorkspace: vi.fn(async () => {}) })) } as unknown as ProjectsRouteOptions['muxDriverRegistry'],
     transportFactory: { hostProfileFor: () => null } as unknown as ProjectsRouteOptions['transportFactory'],
@@ -298,7 +298,7 @@ describe('PUT /api/projects/:id/servers/:serverName — input_policy (Issue #328
   // the assertion can tell the two apart.
   it('creates the project tmux session using the server row re-read inside the isolation lock, not the one resolved before the lock', async () => {
     let generation = 0;
-    const muxPrepareWorkspace = vi.fn(async () => ({ ref: { kind: 'tmux', workspace: 'p', window: 'default' }, result: { stdout: '', stderr: '', code: 0 } }));
+    const muxPrepareWorkspace = vi.fn(async () => undefined);
     const opts = makeOpts({
       serverRepo: {
         findAll: vi.fn(() => []),
@@ -324,7 +324,7 @@ describe('PUT /api/projects/:id/servers/:serverName — input_policy (Issue #328
         listSessions: vi.fn(async () => []),
         createSession: vi.fn(async () => {}),
         listWorkspaces: vi.fn(async () => []),
-        prepareWorkspace: vi.fn(async () => ({ ref: { kind: 'tmux', workspace: 'p', window: 'default' }, result: { stdout: '', stderr: '', code: 0 } })),
+        prepareWorkspace: vi.fn(async () => undefined),
         uiTokenEnvForServer: vi.fn(() => ({})),
       } as unknown as ProjectsRouteOptions['tmux'],
       muxDriverRegistry: { resolve: vi.fn(() => ({ listWorkspaces: vi.fn(async () => []), prepareWorkspace: muxPrepareWorkspace })) } as unknown as ProjectsRouteOptions['muxDriverRegistry'],
