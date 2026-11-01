@@ -100,7 +100,7 @@ export interface ServerHandles {
 export async function buildServer(app: FastifyInstance, wiring: Wiring, port: number): Promise<ServerHandles> {
   const {
     serverRepo, serverAliasRepo, windowRepo, projectRepo, projectServerRepo, unitRepo, taskRepo, taskTokenRepo, logRepo,
-    projectSecretRepo, storageSettingsRepo, pushSubRepo, agentWatchRepo, resourceGuardSettingsRepo, resourceGuard,
+    projectSecretRepo, storageSettingsRepo, storageStatusService, pushSubRepo, agentWatchRepo, resourceGuardSettingsRepo, resourceGuard,
     tmuxClient, transportFactory, worktreeServiceFactory, gitProvider, storageClient,
     agentInstaller, agentBundler, harnessInstaller, tmuxInstaller, muxDriverRegistry,
     executeTaskUseCase, agentActivityMonitor, interactionMonitor, paneHandleResolver, windowRespawnService, windowSleepService, taskRestoreService, sessionStrategyFactory, sessionCaptureService, usageService,
@@ -628,7 +628,7 @@ export async function buildServer(app: FastifyInstance, wiring: Wiring, port: nu
   );
 
   await app.register(phasePromptsRoutes, { sidekickLoader: sidekickPackageLoader, renderSkillPromptUseCase, unitTypeLoader });
-  await app.register(storageRoutes, { projectRepo, storageSettingsRepo, storageClient, uploadAuth: storageUploadAuth });
+  await app.register(storageRoutes, { projectRepo, storageSettingsRepo, storageClient, storageStatusService, uploadAuth: storageUploadAuth });
   await app.register(resourceGuardRoutes, { settingsRepo: resourceGuardSettingsRepo, resourceGuard, serverRepo, transportFactory, muxDriverRegistry });
   await app.register(notificationRoutes, { pushSubRepo, pushService, vapidKeys, agentWatchRepo, windowRepo });
   await app.register(usageRoutes, { usageService });

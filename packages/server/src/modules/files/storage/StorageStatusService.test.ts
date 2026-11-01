@@ -1,0 +1,33 @@
+import { describe, expect, it, vi } from 'vitest';
+import { StorageStatusService } from './StorageStatusService';
+import { resolveStorageOnboarding } from '../storageOnboarding';
+import type { IStorageSettingsRepository } from '../SqliteStorageSettingsRepository';
+import type { StorageSettings } from './MinioStorageClient';
+
+const ensureBucket = vi.fn(async (_settings: StorageSettings) => {});
+const settings: StorageSettings = { endpoint: 'http://localhost:9000', accessKey: 'a', secretKey: 'b', bucket: 'bucket', region: 'us-east-1', maxFileSize: 1, useSsl: false };
+function repo(configured: boolean): IStorageSettingsRepository {
+  return { get: () => settings, update: vi.fn(), isConfigured: () => configured, markConfigured: vi.fn() };
+}
+describe('StorageStatusService', () => {
+  it('marks a successful default connection configured', async () => {
+    const repository = repo(false);
+    const service = new StorageStatusService(repository, { probe: async () => {}, ensureBucket }, resolveStorageOnboarding(null));
+    expect(await service.getStatus()).toEqual({ state: 'ready' });
+    expect(repository.markConfigured).toHaveBeenCalledOnce();
+  });
+  it('offers onboarding for an unconfigured failed connection', async () => {
+    const service = new StorageStatusService(repo(false), { probe: async () => { throw new Error('secret'); }, ensureBucket }, resolveStorageOnboarding(null));
+    expect(await service.getStatus()).toMatchObject({ state: 'unconfigured', onboarding: { source: 'oss' } });
+  });
+  it.each([false, true])('reports a missing bucket regardless of configured=%s', async (configured) => {
+    const repository = repo(configured);
+    const service = new StorageStatusService(repository, { probe: async () => { throw Object.assign(new Error('secret'), { name: 'NoSuchBucket' }); }, ensureBucket }, resolveStorageOnboarding(null));
+    expect(await service.getStatus()).toMatchObject({ state: 'unreachable', reason: 'bucket' });
+    expect(repository.markConfigured).not.toHaveBeenCalled();
+  });
+  it('classifies configured failures without leaking details', async () => {
+    const service = new StorageStatusService(repo(true), { probe: async () => { throw Object.assign(new Error('secret'), { name: 'AccessDenied' }); }, ensureBucket }, resolveStorageOnboarding(null));
+    expect(await service.getStatus()).toEqual({ state: 'unreachable', reason: 'auth', message: 'Storage authentication failed.' });
+  });
+});

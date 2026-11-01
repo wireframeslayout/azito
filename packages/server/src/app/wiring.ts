@@ -5,6 +5,9 @@
 // main.ts; grouped into per-module factory functions for readability.
 
 import { execFileSync } from 'child_process';
+import { getDistributionInfo } from '../shared/distributionInfo';
+import { resolveStorageOnboarding } from '../modules/files/storageOnboarding';
+import { StorageStatusService } from '../modules/files/storage/StorageStatusService';
 import { EventEmitter } from 'events';
 import type { HostEnv } from '../shared/os/hostEnv';
 import { TaskTempFiles } from '../shared/os/taskTempFiles';
@@ -242,6 +245,7 @@ export interface SystemUpdateModule {
 }
 
 export interface Wiring extends SharedInfra, Repositories, PushNotificationModule, ApplicationServices, SystemUpdateModule {
+  storageStatusService: StorageStatusService;
   uiToken: string;
   webhookToken: string;
   agentBundler: AgentBundler;
@@ -760,6 +764,7 @@ export async function buildWiring(db: SqliteDatabase, publicUrl: string, localUr
   // '' = no prefix. Resolved once here and handed to everything that names the harness folder (install, prompt azitoctl path).
   const harnessPrefix = resolveHarnessPrefix(process.env.AZITO_HARNESS_PREFIX);
   const infra = buildSharedInfra(agentBundler, publicUrl, localUrl, dataPaths, uiToken, webhookToken, scopedAuthEnabled, harnessPrefix, misaoRuntime, hostEnv, secretFileGuard, hubHost, resolveWindowsAgentOptions(process.env), (name) => repos.serverRepo.findByName(name), db, fingerprintStore, repos.auditLogService);
+  const storageStatusService = new StorageStatusService(repos.storageSettingsRepo, infra.storageClient, resolveStorageOnboarding(getDistributionInfo()));
   const pushNotification = buildPushNotificationModule(repos.pushSubRepo);
   const agentHostRecorder = new AgentHostRecorder(repos.serverRepo, infra.transportFactory, Date.now, console);
   const agentUpdater = buildAgentUpdater(agentBundler, infra, repos, agentHostRecorder);
@@ -793,6 +798,7 @@ export async function buildWiring(db: SqliteDatabase, publicUrl: string, localUr
   return {
     uiToken,
     webhookToken,
+    storageStatusService,
     agentBundler,
     ...infra,
     ...repos,

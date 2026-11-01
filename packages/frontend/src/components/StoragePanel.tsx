@@ -5,6 +5,8 @@ import { LoadingState, EmptyState } from './ui';
 import { Icon } from './ui/Icon';
 import { useToast } from '../hooks/useToast';
 import { useBlobUrl } from '../hooks/useBlobUrl';
+import { useConfirm } from '../hooks/useConfirm';
+import { StorageStatusGate } from './storage/StorageStatusGate';
 
 interface PreviewItem { url: string; name: string; }
 
@@ -63,13 +65,21 @@ function StorageThumb({ apiPath, alt }: { apiPath: string; alt: string }): React
   );
 }
 
-export default function StoragePanel({ projectId, onFilePreview, activeTabId }: {
+interface StoragePanelProps {
   projectId: number;
   onFilePreview?: (file: StoredFile) => void;
   activeTabId?: string | null;
-}) {
+}
+
+export default function StoragePanel(props: StoragePanelProps) {
+  return <StorageStatusGate projectId={props.projectId}><StorageFileList {...props} /></StorageStatusGate>;
+}
+
+function StorageFileList({ projectId, onFilePreview, activeTabId }: StoragePanelProps) {
   const { t } = useTranslation('files');
   const { showToast } = useToast();
+  const confirm = useConfirm();
+  const { t: storageT } = useTranslation('storage');
   const mobile = typeof window !== 'undefined' && window.innerWidth <= 768;
   const [files, setFiles] = useState<StoredFile[]>([]);
   const [loading, setLoading] = useState(true);
@@ -143,10 +153,11 @@ export default function StoragePanel({ projectId, onFilePreview, activeTabId }: 
     for (const f of droppedFiles) doUpload(f);
   }, [doUpload, addPreviews, mobile]);
 
-  const handleDelete = useCallback(async (filename: string) => {
+  const handleDelete = useCallback(async (filename: string, name: string) => {
+    if (!await confirm({ title: storageT('delete.title'), message: storageT('delete.message', { name }), danger: true })) return;
     await api(`/projects/${projectId}/storage/${encodeURIComponent(filename)}`, { method: 'DELETE' });
     setFiles((prev) => prev.filter((f) => (f.key.split('/').pop() || '') !== filename));
-  }, [projectId]);
+  }, [projectId, confirm, storageT]);
 
   const getApiPath = useCallback((file: StoredFile): string => {
     const filename = file.key.split('/').pop() || '';
@@ -331,7 +342,7 @@ export default function StoragePanel({ projectId, onFilePreview, activeTabId }: 
                 style={{ border: 'none', cursor: 'pointer', color: 'var(--text-dim)', padding: '2px 4px', flexShrink: 0, display: 'inline-flex', alignItems: 'center' }}
               ><Icon name="external-link" size={14} /></button>
               <button
-                onClick={(e) => { e.stopPropagation(); handleDelete(filename); }}
+                onClick={(e) => { e.stopPropagation(); handleDelete(filename, f.originalName); }}
                 title={t('storage.deleteFile')}
                 className="icon-btn"
                 style={{ border: 'none', cursor: 'pointer', color: 'var(--danger)', padding: '2px 4px', flexShrink: 0, display: 'inline-flex', alignItems: 'center' }}
