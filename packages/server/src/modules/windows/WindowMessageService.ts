@@ -38,10 +38,10 @@ export class WindowMessageService {
     if (destination.sleeping) fail(409, 'Window is sleeping');
     const server = this.servers.findByName(destination.serverName);
     if (!server) fail(404, 'Server not found');
-    const driver = this.drivers.resolve(server);
     const ref = destination.muxRef ?? muxRefFromTmuxTarget(destination.tmuxTarget);
+    const driver = this.drivers.resolveKind(ref.kind, server);
     const pane = await driver.resolvePane(server, ref, 1 as PaneOrdinal);
-    await driver.pasteTextToHandle(server, pane, `[from ${sender ? formatWindowId(sender.id) : 'operator'}]\n${message}`);
+    await driver.pasteTextToHandle(server, pane, `[from ${sender ? `${formatWindowId(sender.id)} · task #${sender.taskId}` : 'operator'}]\n${message}`);
     await driver.sendKeysToHandle(server, pane, ['Enter']);
     recordAuditBestEffort(this.audit, { actorClass: principal.class, actorId: principal.id ?? null, event: 'window.message_sent', detail: { senderWindowId: sender?.id ?? null, destinationWindowId: destination.id, length: message.length } }, onAuditError);
   }

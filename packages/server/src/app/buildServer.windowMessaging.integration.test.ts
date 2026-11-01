@@ -33,7 +33,7 @@ function buildApp(scoped: boolean) {
     windowRepo: { findById: (id: number) => windows.get(id) },
     taskRepo: { findById: (id: number) => id === 7 ? { projectId: 5 } : undefined },
     serverRepo: { findByName: () => ({ name: 'local' }) },
-    muxDriverRegistry: { resolve: () => driver },
+    muxDriverRegistry: { resolveKind: () => driver },
     auditLogService: { record },
     paneHandleResolver: { invalidate: vi.fn(), resolveWindowByPaneHandle: vi.fn().mockResolvedValue({ windowId: 1 }) },
   } as unknown as WindowsRouteOptions);

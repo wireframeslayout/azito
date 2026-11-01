@@ -13,23 +13,30 @@ function setup() {
   ]);
   const driver = { resolvePane: vi.fn().mockResolvedValue('%2'), pasteTextToHandle: vi.fn().mockResolvedValue(undefined), sendKeysToHandle: vi.fn().mockResolvedValue(undefined) };
   const record = vi.fn();
+  const resolveKind = vi.fn(() => driver);
   const service = new WindowMessageService(
     { findById: (id: number) => windows.get(id) } as IWindowRepository,
     { findById: () => ({ projectId: 5 }) } as unknown as ITaskRepository,
     { findByName: () => ({ name: 'local' }) } as unknown as IServerRepository,
-    { resolve: () => driver } as unknown as MuxDriverRegistry,
+    { resolveKind } as unknown as MuxDriverRegistry,
     { record } as unknown as AuditLogService,
   );
-  return { service, driver, windows, record };
+  return { service, driver, windows, record, resolveKind };
 }
 
 describe('WindowMessageService', () => {
   it('sends and audits without recording the text', async () => {
     const { service, driver, record } = setup();
     await service.send({ class: 'task', id: 10 }, 2, 1, 'secret\ntext', vi.fn());
-    expect(driver.pasteTextToHandle).toHaveBeenCalledWith(expect.anything(), '%2', '[from W-1]\nsecret\ntext');
+    expect(driver.pasteTextToHandle).toHaveBeenCalledWith(expect.anything(), '%2', '[from W-1 · task #10]\nsecret\ntext');
     expect(driver.sendKeysToHandle).toHaveBeenCalledWith(expect.anything(), '%2', ['Enter']);
     expect(JSON.stringify(record.mock.calls)).not.toContain('secret');
+  });
+  it('selects the destination ref driver even when it differs from the server default', async () => {
+    const { service, windows, resolveKind } = setup();
+    windows.set(2, { ...windows.get(2)!, muxRef: { kind: 'misao', workspace: 'ws', window: 'w_1' } });
+    await service.send({ class: 'operator' }, 2, undefined, 'hello', vi.fn());
+    expect(resolveKind).toHaveBeenCalledWith('misao', expect.objectContaining({ name: 'local' }));
   });
   it('rejects another task and another server', async () => {
     const { service, windows, driver } = setup();
