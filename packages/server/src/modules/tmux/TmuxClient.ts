@@ -749,18 +749,20 @@ export class TmuxClient implements IMuxClient {
     for (let i = 0; i < keys.length; i++) {
       const key = keys[i];
       if (SPECIAL_KEYS.has(key)) {
-        const result = await this.runTmuxCommand(server, ['send-keys', '-t', target, key]);
-        if (result.code !== 0) throw new Error('Unable to send key');
+        await this.runTmuxCommand(server, ['send-keys', '-t', target, key]);
       } else if (Buffer.byteLength(key, 'utf8') > 500) {
         await this.sendLongText(server, target, key);
         if (keys[i + 1] === 'Enter') {
           await new Promise(resolve => setTimeout(resolve, 2000));
         }
       } else {
-        const result = await this.runTmuxCommand(server, ['send-keys', '-t', target, '-l', tmuxLiteralArg(key)]);
-        if (result.code !== 0) throw new Error('Unable to send key');
+        await this.runTmuxCommand(server, ['send-keys', '-t', target, '-l', tmuxLiteralArg(key)]);
       }
     }
+  }
+  async sendMessageEnter(server: ServerConfig, handle: PaneHandle): Promise<void> {
+    const result = await this.runTmuxCommand(server, ['send-keys', '-t', handle as string, 'Enter']);
+    if (result.code !== 0) throw new Error('Unable to submit message');
   }
   async sendTextToHandle(server: ServerConfig, handle: PaneHandle, text: string) { return this.sendLiteralText(server, handle as string, text); }
   async pasteTextToHandle(server: ServerConfig, handle: PaneHandle, text: string): Promise<void> {

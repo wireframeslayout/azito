@@ -1,3 +1,4 @@
+import { withWindowId } from '../tasks/execution/TaskPaneEnvironmentService';
 import type { ServerConfig } from '../servers/Server';
 import { serverSupportsMux, type MuxKindServer } from '../servers/muxKinds';
 import type { ExecResult } from '../servers/transport/ServerTransport';
@@ -135,9 +136,9 @@ export function resolvePaneAddEnv(window: Window | undefined, server: ServerConf
         },
       };
     }
-    return { ok: true, extraEnv: { ...deps.buildSecondaryWindowEnv(window.taskId, server), AZITO_WINDOW_ID: String(window.id) } };
+    return { ok: true, extraEnv: withWindowId(deps.buildSecondaryWindowEnv(window.taskId, server), window.id) };
   }
-  return { ok: true, extraEnv: { ...uiTokenEnvForServer(deps.uiToken, server), ...(window ? { AZITO_WINDOW_ID: String(window.id) } : {}) } };
+  return { ok: true, extraEnv: withWindowId(uiTokenEnvForServer(deps.uiToken, server), window?.id) };
 }
 
 // ─── Kill window (shared across windowId / ref / legacy target routes) ───

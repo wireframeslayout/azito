@@ -6,11 +6,10 @@ import type { IServerRepository } from '../servers/Server';
 import type { MuxDriverRegistry } from '../tmux/MuxDriverRegistry';
 import type { AuditLogService } from '../../shared/audit/AuditLogService';
 import { recordAuditBestEffort } from '../../shared/audit/recordAuditBestEffort';
-import { isBareShellCommand } from '../../shared/os/shellCommands';
+import type { TmuxClient } from '../tmux/TmuxClient';
+import { guardChatInput, type ChatInputRejection } from '../transcripts/chatInputGuard';
 
-function fail(statusCode: number, message: string): never {
-  throw Object.assign(new Error(message), { statusCode });
-}
+export type WindowMessageResult = 'ok' | 'not_found' | 'forbidden' | 'sleeping' | 'send_failed' | ChatInputRejection;
 
 export class WindowMessageService {
   constructor(
@@ -26,28 +25,39 @@ export class WindowMessageService {
     return window.taskId === null ? null : this.tasks.findById(window.taskId)?.projectId ?? null;
   }
 
-  async send(principal: Principal, destinationId: number, senderId: number | undefined, message: string, onAuditError: (err: unknown) => void): Promise<void> {
+  async send(principal: Principal, destinationId: number, senderId: number | undefined, message: string, onAuditError: (err: unknown) => void): Promise<WindowMessageResult> {
     const destination = this.windows.findById(destinationId);
-    if (!destination) fail(404, 'Window not found');
+    if (!destination) return 'not_found';
     let sender: Window | undefined;
     if (principal.class === 'task') {
       sender = senderId === undefined ? undefined : this.windows.findById(senderId);
-      if (!sender || sender.ownerType !== 'task' || sender.taskId !== principal.id) fail(403, 'Forbidden');
+      if (!sender || sender.ownerType !== 'task' || sender.taskId !== principal.id) return 'forbidden';
       const projectId = this.projectId(sender);
-      if (projectId === null || projectId !== this.projectId(destination) || sender.serverName !== destination.serverName) fail(403, 'Forbidden');
-    } else if (principal.class !== 'operator') fail(403, 'Forbidden');
-    if (destination.sleeping) fail(409, 'Window is sleeping');
+      if (projectId === null || projectId !== this.projectId(destination) || sender.serverName !== destination.serverName) return 'forbidden';
+    } else if (principal.class !== 'operator') return 'forbidden';
+    if (destination.sleeping) return 'sleeping';
     const server = this.servers.findByName(destination.serverName);
-    if (!server) fail(404, 'Server not found');
+    if (!server) return 'not_found';
     const ref = destination.muxRef ?? muxRefFromTmuxTarget(destination.tmuxTarget);
     const driver = this.drivers.resolveKind(ref.kind, server);
     const pane = await driver.resolvePane(server, ref, 1 as PaneOrdinal);
-    // The text is followed by Enter: a pane back at a shell would run every line of it as a command.
-    const foreground = await driver.paneCommandByHandle(server, pane);
-    if (!foreground) fail(409, 'Cannot verify the destination pane process');
-    if (isBareShellCommand(foreground)) fail(409, 'Destination pane is at a shell prompt');
-    await driver.pasteTextToHandle(server, pane, `[from ${sender ? `${formatWindowId(sender.id)} · task #${sender.taskId}` : 'operator'}]\n${message}`);
-    await driver.sendKeysToHandle(server, pane, ['Enter']);
-    recordAuditBestEffort(this.audit, { actorClass: principal.class, actorId: principal.id ?? null, event: 'window.message_sent', detail: { senderWindowId: sender?.id ?? null, destinationWindowId: destination.id, length: message.length } }, onAuditError);
+    if (driver.caps.copyMode && await driver.isPaneInModeByHandle(server, pane)) {
+      await driver.cancelPaneModeByHandle(server, pane);
+      await new Promise(resolve => setTimeout(resolve, 100));
+    }
+    const rejection = await guardChatInput(driver, server, pane, destination.workerType, message);
+    if (rejection) return rejection;
+    let delivered = false;
+    try {
+      await driver.pasteTextToHandle(server, pane, `[from ${sender ? `${formatWindowId(sender.id)} · task #${sender.taskId}` : 'operator'}]\n${message}`);
+      if (ref.kind === 'tmux') await (driver as TmuxClient).sendMessageEnter(server, pane);
+      else await driver.sendKeysToHandle(server, pane, ['Enter']);
+      delivered = true;
+    } catch {
+      return 'send_failed';
+    } finally {
+      recordAuditBestEffort(this.audit, { actorClass: principal.class, actorId: principal.id ?? null, event: 'window.message_sent', detail: { senderWindowId: sender?.id ?? null, destinationWindowId: destination.id, length: message.length, delivered } }, onAuditError);
+    }
+    return 'ok';
   }
 }

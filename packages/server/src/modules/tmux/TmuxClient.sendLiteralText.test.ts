@@ -129,7 +129,7 @@ describe('TmuxClient.sendLiteralText', () => {
 
   it('reports a failed Enter command', async () => {
     const client = makeClient(async () => ({ stdout: '', stderr: 'failed', code: 1 }));
-    await expect(client.sendKeysToHandle(srv, asPaneHandle('%1'), ['Enter'])).rejects.toThrow('Unable to send key');
+    await expect(client.sendMessageEnter(srv, asPaneHandle('%1'))).rejects.toThrow('Unable to submit message');
   });
 
   it('escapes a trailing semicolon in short literal keys', async () => {

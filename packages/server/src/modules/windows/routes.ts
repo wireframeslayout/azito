@@ -100,14 +100,18 @@ const windowsRoutes: FastifyPluginCallback<WindowsRouteOptions> = (fastify, opts
   const taskAuth = { auth: { classes: ['task' as const] } };
   fastify.get<{ Querystring: { windowId?: string; server?: string; paneHandle?: string } }>('/api/windows/whoami', { config: taskAuth }, async (request, reply) => {
     const { windowId, server, paneHandle } = request.query;
+    const principal = request.principal ?? OPERATOR_PRINCIPAL;
     let id: number | null = null;
     if (windowId !== undefined && !server && !paneHandle) id = parseWindowId(windowId);
-    else if (windowId === undefined && server && paneHandle) {
-      id = (await opts.paneHandleResolver.resolveWindowByPaneHandle(server, asPaneHandle(paneHandle), { fresh: true }))?.windowId ?? null;
+    else if (windowId === undefined && paneHandle) {
+      const task = principal.class === 'task' && principal.id !== undefined ? taskRepo.findById(principal.id) : null;
+      const taskServer = task?.serverName ?? (task ? windowRepo.findByTask(task.id).find((w) => w.isPrimary)?.serverName : undefined);
+      const resolvedServer = principal.class === 'task' ? taskServer : server;
+      if (!resolvedServer) return reply.status(404).send({ error: 'Cannot resolve task server' });
+      id = (await opts.paneHandleResolver.resolveWindowByPaneHandle(resolvedServer, asPaneHandle(paneHandle), { fresh: true }))?.windowId ?? null;
     } else return reply.status(400).send({ error: 'Invalid identity query' });
     const win = id === null ? undefined : windowRepo.findById(id);
     if (!win) return reply.status(404).send({ error: 'Window not found' });
-    const principal = request.principal ?? OPERATOR_PRINCIPAL;
     if (principal.class === 'task' && (win.ownerType !== 'task' || win.taskId !== principal.id)) return reply.status(403).send({ error: 'Forbidden' });
     if (principal.class !== 'task' && principal.class !== 'operator') return reply.status(403).send({ error: 'Forbidden' });
     return { windowId: win.id, idLabel: formatWindowId(win.id), taskId: win.taskId, serverName: win.serverName };
@@ -116,8 +120,12 @@ const windowsRoutes: FastifyPluginCallback<WindowsRouteOptions> = (fastify, opts
     const id = parseWindowId(request.params.id);
     const body = z.object({ from: z.object({ windowId: z.number().int().positive().safe() }).strict().optional(), text: z.string().min(1).max(MESSAGE_TEXT_MAX_LENGTH) }).strict().safeParse(request.body);
     if (id === null || !body.success) return reply.status(400).send({ error: 'Invalid message' });
-    if (/[\x00-\x08\x0b-\x1f\x7f-\x9f]/.test(body.data.text)) return reply.status(400).send({ error: 'The message contains unsupported control characters' });
-    await messageService.send(request.principal ?? OPERATOR_PRINCIPAL, id, body.data.from?.windowId, body.data.text, (err) => request.log.error({ err }, 'Message audit failed'));
+    const result = await messageService.send(request.principal ?? OPERATOR_PRINCIPAL, id, body.data.from?.windowId, body.data.text, (err) => request.log.error({ err }, 'Message audit failed'));
+    if (result === 'not_found') return reply.status(404).send({ error: 'Window not found' });
+    if (result === 'forbidden') return reply.status(403).send({ error: 'Forbidden' });
+    if (result === 'sleeping') return reply.status(409).send({ error: 'Window is sleeping' });
+    if (result === 'send_failed') return reply.status(502).send({ error: 'Message delivery failed; it may have been partially delivered' });
+    if (typeof result === 'object') return reply.status(result.code === 'invalid_control_character' ? 400 : 409).send({ error: result.error });
     return { ok: true };
   });
 

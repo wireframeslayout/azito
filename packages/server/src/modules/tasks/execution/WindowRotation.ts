@@ -268,9 +268,10 @@ export async function createRotatedWindowInLock(
   // `createSecondaryWindowInLock`/`createPlainWindowInLock`, which take no
   // such hook since they never build an untrusted-task-owned env) omits it.
   preCheck?: (freshServer: ServerConfig) => void,
+  windowId?: number,
 ): Promise<{ windowName: string; env: Record<string, string>; tokenId: number; server: ServerConfig; ref?: MuxRef; label?: string }> {
   preCheck?.(freshServer);
-  const { env, tokenId } = paneEnvService.buildEnvForNewWindow(task, freshServer);
+  const { env, tokenId } = paneEnvService.buildEnvForNewWindow(task, freshServer, windowId);
   let created: { result: ExecResult; windowName: string; ref?: MuxRef; label?: string };
   try {
     created = await create(freshServer, env);
@@ -335,8 +336,9 @@ export async function createSecondaryWindowInLock(
   freshServer: ServerConfig,
   task: Task,
   create: (freshServer: ServerConfig, env: Record<string, string>) => Promise<{ result: ExecResult; windowName: string; ref?: MuxRef; label?: string }>,
+  windowId?: number,
 ): Promise<{ windowName: string; env: Record<string, string>; server: ServerConfig; ref?: MuxRef; label?: string }> {
-  const env = paneEnvService.buildEnvForSecondaryWindow(task, freshServer);
+  const env = paneEnvService.buildEnvForSecondaryWindow(task, freshServer, windowId);
   const created = await create(freshServer, env);
   return { windowName: created.windowName, env, server: freshServer, ref: created.ref, label: created.label };
 }

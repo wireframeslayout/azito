@@ -644,7 +644,7 @@ describe('WindowRespawnService.respawn — primary vs. secondary task window tok
     await service.respawn(2, makeServer());
 
     expect(paneEnvService.buildEnvForNewWindow).not.toHaveBeenCalled();
-    expect(paneEnvService.buildEnvForSecondaryWindow).toHaveBeenCalledWith(task, expect.anything());
+    expect(paneEnvService.buildEnvForSecondaryWindow).toHaveBeenCalledWith(task, expect.anything(), 2);
     expect(tmux.openWindow).toHaveBeenCalledWith(
       expect.anything(), 'azito', 'task-5-side', { exactName: true, extraEnv: { AZITO_TASK_ID: '1', AZITO_WINDOW_ID: '2' }, kind: 'tmux' },
     );

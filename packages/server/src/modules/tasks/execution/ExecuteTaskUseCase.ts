@@ -1,3 +1,4 @@
+import { withWindowId } from './TaskPaneEnvironmentService';
 import { EventEmitter } from 'events';
 import { assertHostFeature, workerStartsAsProgram } from '../../../shared/os/hostFeature';
 import { changeDirectoryLine } from '../../../shared/os/changeDirectoryLine';
@@ -1820,7 +1821,7 @@ export class ExecuteTaskUseCase {
         }
         const created = await createRotatedWindow(this.paneEnvService, this.serverIsolationLock, server, currentTask, 'followup_create_failed', async (freshServer, env) => {
           const fuCreateDriver = this.resolveDriver(freshServer);
-          if (freshPrimary) env = { ...env, AZITO_WINDOW_ID: String(freshPrimary.id) };
+          if (freshPrimary) env = withWindowId(env, freshPrimary.id);
           if (startedAsProgram) await this.prepareClaudeLaunchFor(freshServer, unit, taskId, unitId);
           const { ref: fuRef, result, windowName: displayName } = await fuCreateDriver.openWindow(freshServer, muxWorkspace, `task-${task.id}`, { extraEnv: env, ...(program ? { program } : {}) });
           return { result, windowName: fuRef.window, ref: fuRef, label: displayName ?? fuRef.window };

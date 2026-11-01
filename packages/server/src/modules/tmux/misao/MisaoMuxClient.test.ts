@@ -268,6 +268,19 @@ describe('MisaoMuxClient reads', () => {
     expect(await client.paneCommandByHandle(server, gone)).toBeNull();
   });
 
+  it('uses the directly launched program on Windows only when the pane is running and not a shell', async () => {
+    const { daemon, client } = setup({ windowsHub: true });
+    const w = daemon.addWindow('proj', 'main');
+    const winServer = { ...server, hostProfile: { platform: 'win32', arch: 'x64' } } as typeof server;
+    const worker = daemon.addPane(w, { cmd: ['C:\\tools\\claude.exe'] });
+    const shell = daemon.addPane(w, { cmd: ['C:\\Windows\\System32\\cmd.exe'] });
+    const stopped = daemon.addPane(w, { cmd: ['claude.exe'], processState: 'stopped' });
+    expect(await client.paneCommandByHandle(winServer, handle(worker))).toBe('claude.exe');
+    expect(await client.paneCommandByHandle(winServer, handle(shell))).toBeNull();
+    expect(await client.paneCommandByHandle(winServer, handle(stopped))).toBeNull();
+    expect(await client.paneCommandByHandle(server, handle(worker))).toBeNull();
+  });
+
   it('windowActivity is the latest output time in epoch seconds, or null when nothing was printed', async () => {
     const { daemon, client } = setup();
     const w = daemon.addWindow('proj', 'main');

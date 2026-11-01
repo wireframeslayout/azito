@@ -6,6 +6,10 @@ import type { AuditLogService } from '../../../shared/audit/AuditLogService';
 import { recordAuditBestEffort } from '../../../shared/audit/recordAuditBestEffort';
 import { ISOLATION_HUB_SECRET_MASK, ISOLATION_MASKED_ENV } from '../../../shared/auth/isolationMaskedEnv';
 
+export function withWindowId(env: Record<string, string>, windowId?: number): Record<string, string> {
+  return windowId === undefined ? env : { ...env, AZITO_WINDOW_ID: String(windowId) };
+}
+
 /**
  * Single builder for the env a task's tmux pane launches with (Issue #28
  * design v3 §6, Phase A後半) — the one thing execute()/followUp()
@@ -149,7 +153,7 @@ export class TaskPaneEnvironmentService {
    * something a task pane carries at all (design v3 §2 — browser-ops moving
    * off direct CDP-in-the-task-env is a separate round, "E").
    */
-  buildEnvForNewWindow(task: Task, server: ServerConfig): { env: Record<string, string>; tokenId: number } {
+  buildEnvForNewWindow(task: Task, server: ServerConfig, windowId?: number): { env: Record<string, string>; tokenId: number } {
     // Secrets are read BEFORE the token is rotated (third-party review
     // finding): findByProjectWithValues() decrypts each secret's stored
     // value, which can throw (corrupt row, master-key mismatch, etc). The
@@ -198,7 +202,7 @@ export class TaskPaneEnvironmentService {
       env.AZITO_HUB_PUSH = '1';
     }
     applyTokenMaskingOrCompat(env, server, this.uiToken, this.scopedAuthEnabled);
-    return { env, tokenId: issued.id };
+    return { env: withWindowId(env, windowId), tokenId: issued.id };
   }
 
   /**
@@ -220,10 +224,10 @@ export class TaskPaneEnvironmentService {
    * (re)creation. Never call this for the primary window — see
    * `isPrimaryTaskWindow`'s doc comment for how callers tell the two apart.
    */
-  buildEnvForSecondaryWindow(task: Task, server: ServerConfig): Record<string, string> {
+  buildEnvForSecondaryWindow(task: Task, server: ServerConfig, windowId?: number): Record<string, string> {
     const env: Record<string, string> = { AZITO_TASK_ID: String(task.id) };
     applyTokenMaskingOrCompat(env, server, this.uiToken, this.scopedAuthEnabled);
-    return env;
+    return withWindowId(env, windowId);
   }
 
   /**
