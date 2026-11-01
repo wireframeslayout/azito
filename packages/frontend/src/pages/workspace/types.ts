@@ -38,6 +38,14 @@ export interface Window {
   sleeping?: boolean;
 }
 export interface Repository { id: number; url: string; name?: string; provider?: string; owner?: string; repoName?: string; }
+export interface ProjectListItem {
+  id: number;
+  name: string;
+  icon?: string;
+  color?: string;
+  windows?: Window[];
+}
+
 export interface Project {
   id: number; name: string; slug: string; description?: string; workingDirectory?: string;
   defaultUnitId?: number | null;
