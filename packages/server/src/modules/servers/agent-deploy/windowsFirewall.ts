@@ -121,9 +121,14 @@ exit 0
 }
 $problem = $null; $rules = @()
 try {
-  $paths = @('HKLM:\\SYSTEM\\CurrentControlSet\\Services\\SharedAccess\\Parameters\\FirewallPolicy\\FirewallRules', 'HKLM:\\SOFTWARE\\Policies\\Microsoft\\WindowsFirewall\\FirewallRules')
+  $paths = @('SYSTEM\\CurrentControlSet\\Services\\SharedAccess\\Parameters\\FirewallPolicy\\FirewallRules', 'SOFTWARE\\Policies\\Microsoft\\WindowsFirewall\\FirewallRules')
+  $base = [Microsoft.Win32.RegistryKey]::OpenBaseKey([Microsoft.Win32.RegistryHive]::LocalMachine, [Microsoft.Win32.RegistryView]::Registry64)
   $rules = @(foreach ($path in $paths) {
-    $key = Get-Item -LiteralPath $path -ErrorAction Stop
+    $key = $base.OpenSubKey($path)
+    if ($null -eq $key) {
+      if ($path -eq $paths[1]) { continue }
+      throw 'local firewall rules registry key is missing'
+    }
     foreach ($id in $key.GetValueNames()) {
       $raw = $key.GetValue($id)
       if ($raw -isnot [string] -or $raw -notmatch '^v2\\.[0-9]+\\|') { throw 'unrecognized firewall rule format' }
@@ -140,7 +145,9 @@ try {
       $remote = @($fields.RA4 | Where-Object { $_ }); if (-not $remote.Count) { $remote = @('Any') }
       [ordered]@{ name = "$id"; displayName = "$id"; action = 'Block'; profile = 'Any'; package = ''; owner = ''; service = 'Any'; protocol = "$protocol"; localPort = $ports; program = "$program"; remoteAddress = $remote; localAddress = $local }
     }
+    $key.Dispose()
   })
+  $base.Dispose()
 } catch { $problem = 'reading firewall registry rules failed: ' + $_.Exception.Message; $rules = @() }
 $info = [ordered]@{ elevated = $elevated; networkCategory = $null; store = 'Registry'; problem = $problem; rules = @($rules) }
 $global:LASTEXITCODE = 0
@@ -158,12 +165,7 @@ function buildAddScript(port: number, nodePath: string, localAddress: string): s
 $created = $false
 $problem = $null
 try {
-  $policy = New-Object -ComObject HNetCfg.FwPolicy2 -ErrorAction Stop
-  if (@($policy.Rules | Where-Object { $_.Name -eq ${q(firewallRuleName(port))} }).Count -gt 0) { throw 'a rule with this name already exists; inspect it before adding another' }
-  $rule = New-Object -ComObject HNetCfg.FWRule -ErrorAction Stop
-  $rule.Name = ${q(firewallRuleName(port))} + ' [' + [guid]::NewGuid().ToString() + ']'; $rule.Direction = 1; $rule.Action = 1; $rule.Enabled = $true; $rule.Profiles = 2147483647
-  $rule.Protocol = 6; $rule.LocalPorts = '${port}'; $rule.ApplicationName = ${q(nodePath)}; $rule.LocalAddresses = ${q(localAddress)}; $rule.RemoteAddresses = ${q(TAILNET_RANGE)}
-  $policy.Rules.Add($rule)
+  $null = New-NetFirewallRule -DisplayName ${q(firewallRuleName(port))} -Direction Inbound -Action Allow -Protocol TCP -LocalPort ${port} -Program ${q(nodePath)} -LocalAddress ${q(localAddress)} -RemoteAddress ${q(TAILNET_RANGE)} -Profile Any
   $created = $true
 } catch { $problem = $_.Exception.Message }
 $info = [ordered]@{ created = $created; problem = $problem }

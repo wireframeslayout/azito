@@ -117,11 +117,17 @@ describe('the scripts', () => {
 
   it('adds the rule for this program, address and port, from the tailnet only', () => {
     const script = decodeEncodedCommand(buildFirewallAddCommand(3902, "C:\\Program Files\\node's\\node.exe", IP));
-    expect(script).toContain("$rule.Name = 'AZITO Agent (TCP 3902)'");
-    expect(script).toContain("$rule.LocalPorts = '3902'");
-    expect(script).toContain("$rule.ApplicationName = 'C:\\Program Files\\node''s\\node.exe'");
-    expect(script).toContain("$rule.LocalAddresses = '100.64.0.9'");
-    expect(script).toContain("$rule.RemoteAddresses = '100.64.0.0/10'");
+    expect(script).toContain("-DisplayName 'AZITO Agent (TCP 3902)'");
+    expect(script).toContain("-LocalPort 3902 -Program 'C:\\Program Files\\node''s\\node.exe' -LocalAddress '100.64.0.9' -RemoteAddress '100.64.0.0/10' -Profile Any");
+    expect(script).not.toContain('already exists');
+  });
+
+  it('treats an absent policy key as empty while propagating registry access errors', () => {
+    const script = decodeEncodedCommand(buildFirewallDumpCommand(IP));
+    expect(script).toContain('$key = $base.OpenSubKey($path)');
+    expect(script).toContain("if ($path -eq $paths[1]) { continue }");
+    expect(script).toContain("throw 'local firewall rules registry key is missing'");
+    expect(script).toContain("reading firewall registry rules failed: ");
   });
 
   it.each([
@@ -170,6 +176,16 @@ describe('checkFirewall', () => {
     expect(exec).toHaveBeenCalledTimes(2);
   });
 
+  it('adds a rule for the new node path when an older rule has the same display name', async () => {
+    const oldRule = rule({ displayName: 'AZITO Agent (TCP 3002)', program: 'C:\\old\\node.exe' });
+    const { exec, result } = run([dumped({ rules: [oldRule] }), added(true)]);
+    expect(await result()).toMatchObject({ ruleFound: false, created: true });
+    expect(exec).toHaveBeenCalledTimes(2);
+    const addScript = decodeEncodedCommand(exec.mock.calls[1]![0]);
+    expect(addScript).toContain("New-NetFirewallRule -DisplayName 'AZITO Agent (TCP 3002)'");
+    expect(addScript).not.toContain('already exists');
+  });
+
   it('adds nothing beside a Block rule, or from a session that is not elevated', async () => {
     const blockedRun = run([dumped({ rules: [rule({ action: 'Block', displayName: 'cancelled prompt', localPort: ['3002'] })] })]);
     expect(await blockedRun.result()).toMatchObject({ ruleFound: false, created: false, blockedBy: ['cancelled prompt'] });
@@ -209,6 +225,15 @@ describe('checkFirewall', () => {
     const result = await block.result();
     expect(result).toMatchObject({ ruleFound: null, blockedBy: ['a rule'] });
     expect(describeFirewallProblem(result, 3002, NODE, IP)).toContain('could not be verified');
+  });
+
+  it('reports a readable local Block when the policy key has no rules, and reports denied access as unknown', async () => {
+    const block = run([dumped({ store: 'Registry', elevated: false, networkCategory: null, rules: [rule({ action: 'Block', displayName: 'local block' })] })]);
+    expect(await block.result()).toMatchObject({ ruleFound: null, blockedBy: ['local block'] });
+    const denied = run([dumped({ store: 'Registry', elevated: false, networkCategory: null, problem: 'reading firewall registry rules failed: access denied' })]);
+    const result = await denied.result();
+    expect(result).toMatchObject({ ruleFound: null, blockedBy: [] });
+    expect(describeFirewallProblem(result, 3002, NODE, IP)).toContain('access denied');
   });
 
   it('does not add a rule when the effective policy is unknown, even if elevated', async () => {

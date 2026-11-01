@@ -109,10 +109,12 @@ export function misaoHubScript(input: MisaoHubInput): string {
   return [
     `$root = ${q(input.root)}`,
     ...(input.hubRoot !== undefined ? [`$hubRoot = ${q(input.hubRoot)}`] : []),
-    '$me = [Security.Principal.WindowsIdentity]::GetCurrent().User.Value',
-    '$elevated = ([Security.Principal.WindowsPrincipal][Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)',
     ...RESOLVE_LONG,
-    ...WINDOWS_PROCESS_RECORDS,
+    ...(input.looksForHub ? [
+      '$me = [Security.Principal.WindowsIdentity]::GetCurrent().User.Value',
+      '$elevated = ([Security.Principal.WindowsPrincipal][Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)',
+      ...WINDOWS_PROCESS_RECORDS,
+    ] : []),
     ...(input.hubRoot !== undefined ? [
       '$here = Resolve-Long $root; $hub = Resolve-Long $hubRoot',
       // A folder that is there but cannot be resolved (a link on the way, unreadable) may be the hub's; one that is not there has nothing to remove.

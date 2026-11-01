@@ -150,7 +150,7 @@ describe('AgentInstaller on a Windows host', () => {
     expect(uploads).toEqual([`w806-agent/azito-agent-${VERSION}.tar.gz`, 'w806-agent/agent.env.new', 'w806-agent/w806-AzitoAgent.task.xml']);
     expect(host.uploaded.get('w806-agent/agent.env.new')!.toString('utf8')).toContain('PORT="3902"\n');
     expect(host.calls.filter((c) => c.kind === 'schtasks').some((c) => c.schtasksArgs!.includes('w806-AzitoAgent'))).toBe(true);
-    expect(host.calls.filter((c) => c.kind === 'firewall').some((c) => c.text.includes("$rule.LocalPorts = '3902'"))).toBe(true);
+    expect(host.calls.filter((c) => c.kind === 'firewall').some((c) => c.text.includes('-LocalPort 3902'))).toBe(true);
     expect(fetch).toHaveBeenCalledWith('http://100.64.0.9:3902/health', expect.anything());
   });
 
@@ -520,6 +520,16 @@ describe('AgentInstaller on a Windows host', () => {
       const prune = host.calls.find((c) => c.text.includes('REMOVED'))!.text;
       expect(prune).toContain(`$keep = @('${VERSION}', '${OLD}')`);
       expect(host.calls.some((c) => c.kind === 'firewall')).toBe(true); // checked as in the install, before anything is stopped
+    });
+
+    it('updates when an existing rule has the same name but the old node path', async () => {
+      const { installer, host } = makeRunning({ nodePath: 'C:\\new\\node.exe', previousFirewallProgram: 'C:\\old\\node.exe', firewall: { ruleFound: false, elevated: true, created: true, problem: null } });
+      stubAgent(() => (host.uploaded.size > 0 ? VERSION : undefined));
+      const result = await withTimers(() => installer.update('user@win', '100.64.0.9', 'tok', WIN));
+      expect(result).toEqual({ success: true, version: VERSION });
+      const add = host.calls.find((call) => call.kind === 'firewall' && call.text.includes('AZITO_FIREWALL_ADD_BEGIN'));
+      expect(add?.text).toContain("New-NetFirewallRule -DisplayName 'AZITO Agent (TCP 3002)'");
+      expect(add?.text).toContain("-Program 'C:\\new\\node.exe'");
     });
 
     it('reports an old release that could not be removed as a warning of a successful update', async () => {

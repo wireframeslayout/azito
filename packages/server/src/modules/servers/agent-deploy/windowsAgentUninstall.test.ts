@@ -945,6 +945,8 @@ describe('the scripts it sends', () => {
 
   it('a path with a junction or symbolic link on the way is not resolved, and a folder that is there but cannot be resolved may be the hub\'s', () => {
     const guard = misaoHubScript({ root: 'C:\\h\\m', hubRoot: 'C:\\h\\m', looksForHub: false });
+    expect(guard).not.toContain('Add-Type');
+    expect(() => powershellDialect.wrapScript(guard)).not.toThrow();
     expect(guard).toContain('[System.IO.FileAttributes]::ReparsePoint');
     expect(guard).toContain('Test-Path -LiteralPath $root');
     expect(guard).toContain("Write-Output 'MAYBEHUB'");
