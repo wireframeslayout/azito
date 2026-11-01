@@ -424,7 +424,7 @@ describe('uninstallWindowsAgent', () => {
       await run(host);
       const script = host.bodyOf('Looking for the Windows Firewall rule');
       expect(script).toContain("$name = 'AZITO Agent (TCP 3002)'");
-      expect(script).toContain('Get-NetFirewallRule -Direction Inbound -ErrorAction Stop');
+      expect(script).toContain('HNetCfg.FwPolicy2');
       expect(script).not.toContain('SilentlyContinue');
     });
 
@@ -777,6 +777,10 @@ describe('what the scripts answer', () => {
 
   it('firewall: no rule, or the rules found (never a removal)', () => {
     expect(parseFirewallOutput('ABSENT', 'R')).toEqual({ outcome: 'absent' });
+    expect(parseFirewallOutput('UNKNOWN', 'R')).toMatchObject({ outcome: 'skipped', detail: expect.stringContaining('could not be conclusively inspected') });
+    const com = parseFirewallOutput('COMRULE|R|Allow|7|C:\\node.exe|6|3002|*|*', 'R');
+    expect(com).toMatchObject({ outcome: 'skipped', detail: expect.stringContaining('Windows Firewall with Advanced Security') });
+    expect(com.detail).not.toContain('Remove-NetFirewallRule');
     const found = parseFirewallOutput("RULE|{G}|Allow|Any|C:\\x.exe|TCP|3002|1.2.3.4|Any\nRULE|{O'Q}|Block|Any||TCP|3002||", 'R');
     expect(found.outcome).toBe('skipped');
     expect(found.detail).toContain("Remove-NetFirewallRule -Name '{G}'");
@@ -977,14 +981,14 @@ describe('WindowsAgentDeployer.uninstall', () => {
       if (last?.kind !== 'script') return result;
       if (last.text.includes('AZITO_MCP_SRC')) return { ...result, stdout: 'AZITO_MCP_RESULT:{"outcome":"absent"}\r\n' };
       if (last.text.includes('Remove-Tree')) return { ...result, stdout: 'DONE\r\n' };
-      if (last.text.includes('Get-NetFirewallRule')) return { ...result, stdout: 'ABSENT\r\n' };
+      if (last.text.includes('COMRULE|')) return { ...result, stdout: 'UNKNOWN\r\n' };
       if (last.text.includes('Find-Left')) return { ...result, stdout: 'CLEAR\r\n' };
       if (last.text.includes('$a = Resolve-Long')) return { ...result, stdout: 'SAME\r\n' };
       return result;
     };
     const deployer = new WindowsAgentDeployer(exec, { putFile: async () => undefined, putBuffer: async (_host, data, file) => { fake.uploaded.set(file, data); } }, OPTIONS);
     const result = await deployer.uninstall('h', info, { removeMisao: false });
-    expect(outcomes(result)).toEqual({ task: 'done', processes: 'absent', firewall: 'absent', folder: 'done' });
+    expect(outcomes(result)).toEqual({ task: 'done', processes: 'absent', firewall: 'skipped', folder: 'done' });
     expect(fake.taskState).toBe('absent');
     const [file, bytes] = [...fake.uploaded.entries()].find(([name]) => name.startsWith('.azito-script-'))!;
     const loader = commands.find((command) => command.includes('[IO.File]::ReadAllBytes'))!;

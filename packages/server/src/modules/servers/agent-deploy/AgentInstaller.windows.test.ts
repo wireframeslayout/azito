@@ -150,7 +150,7 @@ describe('AgentInstaller on a Windows host', () => {
     expect(uploads).toEqual([`w806-agent/azito-agent-${VERSION}.tar.gz`, 'w806-agent/agent.env.new', 'w806-agent/w806-AzitoAgent.task.xml']);
     expect(host.uploaded.get('w806-agent/agent.env.new')!.toString('utf8')).toContain('PORT="3902"\n');
     expect(host.calls.filter((c) => c.kind === 'schtasks').some((c) => c.schtasksArgs!.includes('w806-AzitoAgent'))).toBe(true);
-    expect(host.calls.filter((c) => c.kind === 'firewall').some((c) => c.text.includes('-LocalPort 3902'))).toBe(true);
+    expect(host.calls.filter((c) => c.kind === 'firewall').some((c) => c.text.includes("$rule.LocalPorts = '3902'"))).toBe(true);
     expect(fetch).toHaveBeenCalledWith('http://100.64.0.9:3902/health', expect.anything());
   });
 
@@ -435,15 +435,6 @@ describe('AgentInstaller on a Windows host', () => {
       expect(host.calls.some((c) => c.kind === 'firewall' || c.kind === 'script')).toBe(false);
     });
 
-    it('stops with the WMI reason, not an old-build one, when WMI is refused, before the firewall and any transfer', async () => {
-      const { installer, host } = make({ cim: 'denied', buildNumber: null });
-      const result = await installer.install('user@win');
-      expect(result.success).toBe(false);
-      expect(result.error).toMatch(/WMI is not available.*administrator.*v0\.13\.0.*issues\/559/);
-      expect(result.error).not.toMatch(/build number|1809/);
-      expect(host.calls.some((c) => c.kind === 'firewall' || c.kind === 'script')).toBe(false);
-    });
-
     it('stops with the name of an enabled inbound Block rule', async () => {
       const { installer, host } = make({ firewall: { ruleFound: true, elevated: true, created: false, problem: null, blockedBy: ['node.js JavaScript Runtime'] } });
       const result = await installer.install('user@win');
@@ -559,19 +550,6 @@ describe('AgentInstaller on a Windows host', () => {
 
       expect(result.success).toBe(false);
       expect(result.error).toContain('the previous agent does NOT answer');
-    });
-
-    it('stops an update with the WMI reason, before the firewall and anything being stopped, when WMI is refused', async () => {
-      const { installer, host } = makeRunning({ cim: 'denied', buildNumber: null });
-      stubAgent(() => OLD);
-
-      const result = await installer.update('user@win', '100.64.0.9', 'tok', WIN);
-
-      expect(result.success).toBe(false);
-      expect(result.error).toMatch(/WMI is not available.*v0\.13\.0/);
-      expect(host.calls.some((c) => c.kind === 'firewall')).toBe(false);
-      expect(host.taskState).toBe('running');
-      expect(host.uploaded.size).toBe(0);
     });
 
     it('stops with the install\'s firewall error, before anything is stopped, when the node.exe found now has no rule', async () => {

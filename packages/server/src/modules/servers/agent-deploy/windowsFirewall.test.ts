@@ -106,17 +106,19 @@ describe('parseAddressSpec', () => {
 describe('the scripts', () => {
   it('collects inbound rules and their filters (the in-force store first), and decides nothing itself', () => {
     const script = decodeEncodedCommand(buildFirewallDumpCommand(IP));
-    for (const cmdlet of ['Get-NetFirewallRule', 'Get-NetFirewallPortFilter', 'Get-NetFirewallApplicationFilter', 'Get-NetFirewallAddressFilter', 'Get-NetFirewallServiceFilter']) expect(script).toContain(cmdlet);
-    expect(script).not.toMatch(/Get-NetIPAddress|Get-NetConnectionProfile/);
-    expect(script).toContain('ActiveStore');
-    expect(script).toContain('PersistentStore');
+    expect(script).toContain('HNetCfg.FwPolicy2');
+    expect(script).not.toMatch(/Get-NetFirewall|Get-NetIPAddress|Get-NetConnectionProfile/);
+    expect(script).toContain("store = 'COM'");
     expect(script).not.toContain('New-NetFirewallRule');
   });
 
   it('adds the rule for this program, address and port, from the tailnet only', () => {
     const script = decodeEncodedCommand(buildFirewallAddCommand(3902, "C:\\Program Files\\node's\\node.exe", IP));
-    expect(script).toContain("-DisplayName 'AZITO Agent (TCP 3902)'");
-    expect(script).toContain("-LocalPort 3902 -Program 'C:\\Program Files\\node''s\\node.exe' -LocalAddress '100.64.0.9' -RemoteAddress '100.64.0.0/10' -Profile Any");
+    expect(script).toContain("$rule.Name = 'AZITO Agent (TCP 3902)'");
+    expect(script).toContain("$rule.LocalPorts = '3902'");
+    expect(script).toContain("$rule.ApplicationName = 'C:\\Program Files\\node''s\\node.exe'");
+    expect(script).toContain("$rule.LocalAddresses = '100.64.0.9'");
+    expect(script).toContain("$rule.RemoteAddresses = '100.64.0.0/10'");
   });
 
   it.each([
@@ -188,6 +190,21 @@ describe('checkFirewall', () => {
     expect(await absent.result()).toMatchObject({ ruleFound: false, created: true });
     const block = run([dumped({ store: 'PersistentStore', rules: [rule({ action: 'Block' })] })]);
     expect(await block.result()).toMatchObject({ ruleFound: null, blockedBy: ['a rule'] });
+  });
+
+  it('treats a non-elevated COM rule listing as unknown while retaining reported blocks', async () => {
+    const allow = run([dumped({ store: 'COM', elevated: false, networkCategory: null, rules: [rule()] })]);
+    expect(await allow.result()).toMatchObject({ ruleFound: null, allowedBy: [], created: false });
+    const block = run([dumped({ store: 'COM', elevated: false, networkCategory: null, rules: [rule({ action: 'Block' })] })]);
+    expect(await block.result()).toMatchObject({ ruleFound: null, blockedBy: ['a rule'], created: false });
+  });
+
+  it('adds a uniquely named rule when elevated and skips an existing agent rule', async () => {
+    const add = run([dumped({ store: 'COM', elevated: true, networkCategory: null }), added(true)]);
+    expect(await add.result()).toMatchObject({ ruleFound: null, created: true });
+    const existing = run([dumped({ store: 'COM', elevated: true, networkCategory: null, rules: [rule({ displayName: 'AZITO Agent (TCP 3002) [abc]' })] })]);
+    expect(await existing.result()).toMatchObject({ ruleFound: null, created: false });
+    expect(existing.exec).toHaveBeenCalledTimes(1);
   });
 
   it('refuses garbage', () => {

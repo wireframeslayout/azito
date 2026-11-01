@@ -16,13 +16,13 @@ export function firewallInspectScript(displayName: string): string {
   const q = powershellDialect.quote;
   return [
     `$name = ${q(displayName)}`,
-    'function Join-All($values) { (@($values) | ForEach-Object { "$_" }) -join \',\' }',
     'function Clean($text) { ("$text" -replace \'[\\r\\n|]+\', \' \') }',
-    '$rules = @(Get-NetFirewallRule -Direction Inbound -ErrorAction Stop | Where-Object { $_.DisplayName -eq $name })',
-    'if ($rules.Count -eq 0) { Write-Output \'ABSENT\'; exit 0 }',
-    'foreach ($rule in $rules) {',
-    '  $app = $rule | Get-NetFirewallApplicationFilter; $ports = $rule | Get-NetFirewallPortFilter; $address = $rule | Get-NetFirewallAddressFilter',
-    '  Write-Output (\'RULE|\' + (Clean $rule.Name) + \'|\' + (Clean $rule.Action) + \'|\' + (Clean $rule.Profile) + \'|\' + (Clean $app.Program) + \'|\' + (Clean $ports.Protocol) + \'|\' + (Clean (Join-All $ports.LocalPort)) + \'|\' + (Clean (Join-All $address.LocalAddress)) + \'|\' + (Clean (Join-All $address.RemoteAddress)))',
+    '$policy = New-Object -ComObject HNetCfg.FwPolicy2 -ErrorAction Stop',
+    '$matches = @($policy.Rules | Where-Object { $_.Direction -eq 1 -and ($_.Name -eq $name -or $_.Name.StartsWith($name + \' [\')) })',
+    'if ($matches.Count -eq 0) { Write-Output \'UNKNOWN\'; exit 0 }',
+    'foreach ($r in $matches) {',
+    '  $action = if ($r.Action -eq 0) { \'Block\' } else { \'Allow\' }',
+    '  Write-Output (\'COMRULE|\' + (Clean $r.Name) + \'|\' + $action + \'|\' + (Clean $r.Profiles) + \'|\' + (Clean $r.ApplicationName) + \'|\' + (Clean $r.Protocol) + \'|\' + (Clean $r.LocalPorts) + \'|\' + (Clean $r.LocalAddresses) + \'|\' + (Clean $r.RemoteAddresses))',
     '}',
   ].join('\n');
 }
@@ -31,6 +31,12 @@ export function parseFirewallOutput(output: string, displayName: string): Script
   const all = lines(output);
   if (all.length === 0) throw unreadable(output);
   if (all.length === 1 && all[0] === 'ABSENT') return { outcome: 'absent' };
+  if (all.length === 1 && all[0] === 'UNKNOWN') return { outcome: 'skipped', detail: 'Windows Firewall rules could not be conclusively inspected. Check for the agent rule in Windows Firewall with Advanced Security.' };
+  const comRules = all.filter((line) => line.startsWith('COMRULE|'));
+  if (comRules.length > 0) {
+    const listed = comRules.map((line) => `- ${redactSecretText(line.slice(8)).slice(0, 1000).replace(/\|/g, ', ')}`).join('\n');
+    return { outcome: 'skipped', detail: `Windows reported ${comRules.length} inbound rule(s) named "${displayName}"; their identity and effective policy cannot be verified here. They were left in place:\n${listed}\nInspect them in Windows Firewall with Advanced Security before removing any rule.` };
+  }
   const rules = all.filter((l) => l.startsWith('RULE|')).map((l) => {
     const [, name = '', action = '', profile = '', program = '', protocol = '', port = '', local = '', remote = ''] = l.split('|').map((v) => redactSecretText(v).slice(0, 200));
     return { name, action, profile, program, protocol, port, local, remote };

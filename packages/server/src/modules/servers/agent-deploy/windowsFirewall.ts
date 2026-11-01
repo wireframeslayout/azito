@@ -1,5 +1,6 @@
 import { z } from 'zod';
 import { powershellDialect } from '../../../shared/os/shellDialect';
+import { compressPowerShellScript } from '../../../shared/os/compressPowerShellScript';
 import { redactSecretText } from '../../../shared/redactSecretText';
 
 const DUMP_BEGIN = '<<AZITO_FIREWALL_DUMP_BEGIN>>';
@@ -67,7 +68,7 @@ const dumpSchema = z.object({
   elevated: z.boolean(),
   /** The network category of the adapter that carries the agent's address (`Public`, `Private`, `DomainAuthenticated`); null = unreadable. */
   networkCategory: z.string().nullable(),
-  /** Which policy store the rules were read from: `ActiveStore` (what is in force, group policy included) or `PersistentStore` (local rules only). */
+  /** Which source the rules were read from; COM does not establish the effective policy. */
   store: z.string(),
   /** Why the rules could not be read; then `rules` is empty. */
   problem: z.string().nullable(),
@@ -78,36 +79,25 @@ export type FirewallDump = z.infer<typeof dumpSchema>;
 
 /**
  * Reads every enabled inbound rule with its filters. The matching is done by {@link evaluateFirewallRules} on this side, where it
- * can be tested and read: the script only collects, so it is short enough for one cmd.exe command line (8191 characters)
- * whatever the host has. The in-force rules (ActiveStore: group policy included) are read when the host lets this session;
- * otherwise the local ones (PersistentStore) and `store` says so.
+ * can be tested and read. COM does not establish which rules are effective, so its results are never taken as a confirmed Allow.
  */
 function buildDumpScript(): string {
   return `
 $elevated = ([Security.Principal.WindowsPrincipal][Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)
-$networkCategory = $null
-$store = 'ActiveStore'
-$problem = $null
-$rules = @()
-function Read-Filters($command, $policyStore) {
-  $byRule = @{}
-  foreach ($filter in & $command -PolicyStore $policyStore) { $byRule[$filter.InstanceID] = $filter }
-  $byRule
-}
-function Join-Values($values) { , @($values | ForEach-Object { "$_" }) }
+$problem = $null; $rules = @()
 try {
-  try { $null = Get-NetFirewallRule -PolicyStore ActiveStore -ErrorAction Stop | Select-Object -First 1 } catch { $store = 'PersistentStore' }
-  $ports = Read-Filters Get-NetFirewallPortFilter $store
-  $apps = Read-Filters Get-NetFirewallApplicationFilter $store
-  $addresses = Read-Filters Get-NetFirewallAddressFilter $store
-  $services = Read-Filters Get-NetFirewallServiceFilter $store
-  $rules = @(foreach ($rule in Get-NetFirewallRule -PolicyStore $store -Direction Inbound -Enabled True) {
-    $id = $rule.Name
-    if ($null -eq $ports[$id] -or $null -eq $apps[$id] -or $null -eq $addresses[$id] -or $null -eq $services[$id]) { throw 'a firewall rule has unreadable filters' }
-    [ordered]@{ name = "$id"; displayName = "$($rule.DisplayName)"; action = "$($rule.Action)"; profile = "$($rule.Profile)"; package = "$($apps[$id].Package)"; owner = "$($rule.Owner)"; service = "$($services[$id].Service)"; protocol = "$($ports[$id].Protocol)"; localPort = Join-Values $ports[$id].LocalPort; program = "$($apps[$id].Program)"; remoteAddress = Join-Values $addresses[$id].RemoteAddress; localAddress = Join-Values $addresses[$id].LocalAddress }
+  $policy = New-Object -ComObject HNetCfg.FwPolicy2 -ErrorAction Stop
+  function Values($text) { if (-not $text -or $text -eq '*') { return ,@('Any') }; return ,@("$text".Split(',')) }
+  function Profiles($bits) { if ($bits -eq 2147483647) { return 'Any' }; $names = @(); if ($bits -band 1) { $names += 'Domain' }; if ($bits -band 2) { $names += 'Private' }; if ($bits -band 4) { $names += 'Public' }; return $names -join ', ' }
+  $rules = @(foreach ($r in $policy.Rules) {
+    if (-not $r.Enabled -or $r.Direction -ne 1) { continue }
+    $action = if ($r.Action -eq 0) { 'Block' } else { 'Allow' }
+    $protocol = if ($r.Protocol -eq 256) { 'Any' } else { "$($r.Protocol)" }
+    $program = if ($r.ApplicationName) { "$($r.ApplicationName)" } else { 'Any' }
+    [ordered]@{ name = "$($r.Name)"; displayName = "$($r.Name)"; action = $action; profile = Profiles $r.Profiles; package = "$($r.LocalAppPackageId)"; owner = "$($r.LocalUserOwner)"; service = "$($r.ServiceName)"; protocol = $protocol; localPort = Values $r.LocalPorts; program = $program; remoteAddress = Values $r.RemoteAddresses; localAddress = Values $r.LocalAddresses }
   })
 } catch { $problem = 'reading the rules failed: ' + $_.Exception.Message; $rules = @() }
-$info = [ordered]@{ elevated = $elevated; networkCategory = $networkCategory; store = $store; problem = $problem; rules = @($rules) }
+$info = [ordered]@{ elevated = $elevated; networkCategory = $null; store = 'COM'; problem = $problem; rules = @($rules) }
 $global:LASTEXITCODE = 0
 Write-Output '${DUMP_BEGIN}'
 $json = ConvertTo-Json -InputObject $info -Compress -Depth 5
@@ -123,7 +113,12 @@ function buildAddScript(port: number, nodePath: string, localAddress: string): s
 $created = $false
 $problem = $null
 try {
-  $null = New-NetFirewallRule -DisplayName ${q(firewallRuleName(port))} -Direction Inbound -Action Allow -Protocol TCP -LocalPort ${port} -Program ${q(nodePath)} -LocalAddress ${q(localAddress)} -RemoteAddress ${q(TAILNET_RANGE)} -Profile Any
+  $policy = New-Object -ComObject HNetCfg.FwPolicy2 -ErrorAction Stop
+  if (@($policy.Rules | Where-Object { $_.Name -eq ${q(firewallRuleName(port))} }).Count -gt 0) { throw 'a rule with this name already exists; inspect it before adding another' }
+  $rule = New-Object -ComObject HNetCfg.FWRule -ErrorAction Stop
+  $rule.Name = ${q(firewallRuleName(port))} + ' [' + [guid]::NewGuid().ToString() + ']'; $rule.Direction = 1; $rule.Action = 1; $rule.Enabled = $true; $rule.Profiles = 2147483647
+  $rule.Protocol = 6; $rule.LocalPorts = '${port}'; $rule.ApplicationName = ${q(nodePath)}; $rule.LocalAddresses = ${q(localAddress)}; $rule.RemoteAddresses = ${q(TAILNET_RANGE)}
+  $policy.Rules.Add($rule)
   $created = $true
 } catch { $problem = $_.Exception.Message }
 $info = [ordered]@{ created = $created; problem = $problem }
@@ -136,7 +131,7 @@ Write-Output '${ADD_END}'
 }
 
 export function buildFirewallDumpCommand(_localAddress: string): string {
-  return powershellDialect.wrapScript(buildDumpScript());
+  return powershellDialect.wrapScript(compressPowerShellScript(buildDumpScript()));
 }
 
 export function buildFirewallAddCommand(port: number, nodePath: string, localAddress: string): string {
@@ -331,7 +326,7 @@ export interface FirewallResult {
   problem: string | null;
   blockedBy: string[];
   allowedBy: string[];
-  /** Which policy store was read (`ActiveStore` includes group policy; `PersistentStore` is the local rules only). */
+  /** Which source was read. */
   store: string;
 }
 
@@ -350,7 +345,11 @@ export async function checkFirewall(exec: FirewallExec, port: number, nodePath: 
   }
   const verdict = evaluateFirewallRules(dump.rules, { port, nodePath, localAddress, networkCategory: dump.networkCategory });
   if (dump.store !== 'ActiveStore') {
-    return { ruleFound: null, elevated: dump.elevated, created: false, problem: 'the effective firewall policy could not be read', blockedBy: verdict.blockedBy, allowedBy: [], store: dump.store };
+    const unknown = { ruleFound: null, elevated: dump.elevated, created: false, problem: 'the effective firewall policy could not be read', blockedBy: verdict.blockedBy, allowedBy: [], store: dump.store };
+    if (dump.store !== 'COM' || !dump.elevated || verdict.blockedBy.length > 0 || dump.rules.some((rule) => (rule.displayName === firewallRuleName(port) || rule.displayName.startsWith(`${firewallRuleName(port)} [`)))) return unknown;
+    const added = await exec(buildFirewallAddCommand(port, nodePath, localAddress));
+    const result = parseFirewallAdd(added.stdout, added.stderr, added.code);
+    return { ...unknown, created: result.created, problem: result.problem ?? unknown.problem };
   }
   const found = verdict.allowedBy.length > 0;
   const allowedInSomeProfile = dump.networkCategory === null && ['Domain', 'Private', 'Public'].some((profile) =>
