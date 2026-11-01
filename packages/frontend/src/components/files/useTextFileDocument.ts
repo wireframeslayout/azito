@@ -15,6 +15,9 @@ export function useTextFileDocument(backend: FilesBackend, path: string, onDirty
   const generation = useRef(0);
   const savingRef = useRef<number | null>(null);
   const dirty = document !== null && content !== document.content;
+  const backendRef = useRef(backend);
+  backendRef.current = backend;
+  const source = backend.source;
   const notifyRef = useRef(onDirtyChange);
   notifyRef.current = onDirtyChange;
   useEffect(() => { notifyRef.current?.(dirty); }, [dirty]);
@@ -23,7 +26,7 @@ export function useTextFileDocument(backend: FilesBackend, path: string, onDirty
     const current = ++generation.current;
     setLoading(true); setError(null); setSaved(false);
     try {
-      const result = await backend.read(path);
+      const result = await backendRef.current.read(path);
       if (generation.current !== current) return;
       if (result.kind === 'unavailable') { setDocument(null); setError(result.reason); }
       else { setDocument(result); contentRef.current = result.content; setContent(result.content); }
@@ -31,7 +34,7 @@ export function useTextFileDocument(backend: FilesBackend, path: string, onDirty
     } catch (err) {
       if (generation.current === current) setError(err instanceof Error ? err.message : String(err));
     } finally { if (generation.current === current) setLoading(false); }
-  }, [backend, path]);
+  }, [source, path]);
 
   useEffect(() => { setDocument(null); setContent(''); setSaving(false); savingRef.current = null; contentRef.current = ''; void load(); return () => { generation.current++; }; }, [load]);
   const change = useCallback((value: string) => { contentRef.current = value; setContent(value); setSaved(false); }, []);
@@ -41,13 +44,13 @@ export function useTextFileDocument(backend: FilesBackend, path: string, onDirty
     const snapshot = contentRef.current;
     savingRef.current = current; setSaving(true); setError(null);
     try {
-      const result = await backend.save(path, snapshot, document.version, force);
+      const result = await backendRef.current.save(path, snapshot, document.version, force);
       if (generation.current !== current) return;
       if (result.kind === 'conflict') setConflict(result.latest);
       else { setDocument({ ...document, content: snapshot, version: result.version }); setConflict(undefined); setSaved(contentRef.current === snapshot); }
     } catch (err) {
       if (generation.current === current) setError(err instanceof Error ? err.message : String(err));
     } finally { if (savingRef.current === current) savingRef.current = null; if (generation.current === current) setSaving(false); }
-  }, [backend, path, document]);
+  }, [path, document]);
   return { document, content, loading, error, saving, saved, dirty, conflict, change, save, reload: load };
 }

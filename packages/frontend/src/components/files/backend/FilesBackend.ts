@@ -14,6 +14,8 @@ export type FileSaveResult =
   | { kind: 'conflict'; latest: FileReadResult | null };
 
 export interface FilesBackend {
+  /** Identifies where documents live; a new backend instance with the same source reads the same files. */
+  readonly source: string;
   list(path: string): Promise<FileEntry[]>;
   read(path: string): Promise<FileReadResult>;
   save(path: string, content: string, version: string, force: boolean): Promise<FileSaveResult>;

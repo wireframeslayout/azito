@@ -4,8 +4,8 @@ import { describe, expect, it, vi } from 'vitest';
 import type { FilesBackend, FileSaveResult } from './backend/FilesBackend';
 import { useTextFileDocument } from './useTextFileDocument';
 
-function backend(save: FilesBackend['save']): FilesBackend {
-  return { read: vi.fn(async () => ({ kind: 'text' as const, content: 'base', language: 'text', version: 'v1' })), save, list: vi.fn(), create: vi.fn(), rename: vi.fn(), delete: vi.fn(), download: vi.fn() };
+function backend(save: FilesBackend['save'], source = 'test'): FilesBackend {
+  return { source, read: vi.fn(async () => ({ kind: 'text' as const, content: 'base', language: 'text', version: 'v1' })), save, list: vi.fn(), create: vi.fn(), rename: vi.fn(), delete: vi.fn(), download: vi.fn() };
 }
 
 describe('useTextFileDocument', () => {
@@ -38,4 +38,27 @@ describe('useTextFileDocument', () => {
     expect(result.current.dirty).toBe(true);
   });
 
+  it('keeps unsaved edits when the backend instance is recreated for the same source', async () => {
+    const first = backend(vi.fn());
+    const save = vi.fn<FilesBackend['save']>().mockResolvedValue({ kind: 'saved', version: 'v2' });
+    const second = backend(save);
+    const { result, rerender } = renderHook(({ instance }) => useTextFileDocument(instance, 'file'), { initialProps: { instance: first } });
+    await waitFor(() => expect(result.current.document).not.toBeNull());
+    act(() => result.current.change('local'));
+    rerender({ instance: second });
+    expect(result.current.content).toBe('local');
+    expect(result.current.dirty).toBe(true);
+    expect(second.read).not.toHaveBeenCalled();
+    await act(async () => { await result.current.save(); });
+    expect(save).toHaveBeenCalledWith('file', 'local', 'v1', false);
+    expect(first.save).not.toHaveBeenCalled();
+  });
+  it('reads again when the source changes', async () => {
+    const first = backend(vi.fn(), 'server:a');
+    const second = backend(vi.fn(), 'server:b');
+    const { result, rerender } = renderHook(({ instance }) => useTextFileDocument(instance, 'file'), { initialProps: { instance: first } });
+    await waitFor(() => expect(result.current.document).not.toBeNull());
+    rerender({ instance: second });
+    await waitFor(() => expect(second.read).toHaveBeenCalledTimes(1));
+  });
 });

@@ -18,6 +18,7 @@ interface ListResponse extends StorageResponse {
 
 export class StorageFilesBackend implements FilesBackend {
   constructor(private readonly projectId: number) {}
+  get source(): string { return `storage:${this.projectId}`; }
   private get root(): string { return `/projects/${this.projectId}/storage`; }
   private relative(path: string): string {
     const root = `projects/${this.projectId}/`;

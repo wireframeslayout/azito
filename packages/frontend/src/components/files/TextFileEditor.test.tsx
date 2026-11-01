@@ -16,6 +16,7 @@ vi.mock('../editor/EditorStatusBar', () => ({ default: () => null }));
 describe('TextFileEditor', () => {
   it('retains local text and presents a comparison when saving conflicts', async () => {
     const backend: FilesBackend = {
+      source: 'test',
       read: vi.fn(async () => ({ kind: 'text' as const, content: 'base', version: 'v1', language: 'text' })),
       save: vi.fn(async () => ({ kind: 'conflict' as const, latest: { kind: 'text' as const, content: 'remote', version: 'v2', language: 'text' } })),
       list: vi.fn(), create: vi.fn(), rename: vi.fn(), delete: vi.fn(), download: vi.fn(),
@@ -32,6 +33,7 @@ describe('TextFileEditor', () => {
   });
   it('ignores Ctrl+S while the file is unchanged or a conflict is unresolved', async () => {
     const backend: FilesBackend = {
+      source: 'test',
       read: vi.fn(async () => ({ kind: 'text' as const, content: 'base', version: 'v1', language: 'text' })),
       save: vi.fn(async () => ({ kind: 'conflict' as const, latest: null })),
       list: vi.fn(), create: vi.fn(), rename: vi.fn(), delete: vi.fn(), download: vi.fn(),

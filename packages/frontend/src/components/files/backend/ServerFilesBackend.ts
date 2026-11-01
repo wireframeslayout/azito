@@ -6,6 +6,8 @@ interface ResponseBody { error?: string; content?: string; language?: string; mt
 export class ServerFilesBackend implements FilesBackend {
   constructor(private readonly serverName: string, private readonly projectId?: number) {}
 
+  get source(): string { return `server:${this.serverName}`; }
+
   private get root(): string { return `/servers/${encodeURIComponent(this.serverName)}/files`; }
 
   async list(path: string): Promise<FileEntry[]> {
