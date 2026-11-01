@@ -98,7 +98,7 @@ const AgentActivityContext = createContext<AgentActivityContextValue>({
   dismissFinished: () => {},
 });
 
-function snapshotToMap(snapshot: AgentActivitySnapshotEntry[]): Map<string, AgentActivityInfo> {
+export function snapshotToMap(snapshot: AgentActivitySnapshotEntry[]): Map<string, AgentActivityInfo> {
   const map = new Map<string, AgentActivityInfo>();
   for (const e of snapshot) {
     if (!e.running) continue;
@@ -122,6 +122,20 @@ function snapshotToMap(snapshot: AgentActivitySnapshotEntry[]): Map<string, Agen
     });
   }
   return map;
+}
+
+export function transitionActivityEntries(
+  entries: Map<string, AgentActivityInfo>, payload: AgentActivityPayload,
+): { entries: Map<string, AgentActivityInfo>; previous?: AgentActivityInfo } {
+  const key = activityKey(payload.serverName, payload.target, payload.windowId);
+  const previous = entries.get(key);
+  const next = new Map(entries);
+  if (payload.running) {
+    next.set(key, { ...payload, status: payload.status ?? 'working' });
+  } else {
+    next.delete(key);
+  }
+  return { entries: next, previous };
 }
 
 function useBrowserFocused(): boolean {
@@ -207,30 +221,7 @@ export function AgentActivityProvider({ children }: { children: React.ReactNode 
   useNotificationChannel({
     onAgentActivity: (payload: AgentActivityPayload) => {
       const key = activityKey(payload.serverName, payload.target, payload.windowId);
-      const previous = entriesRef.current.get(key);
-      const next = new Map(entriesRef.current);
-      if (payload.running) {
-        next.set(key, {
-          serverName: payload.serverName,
-          target: payload.target,
-          running: true,
-          source: payload.source,
-          taskId: payload.taskId,
-          windowId: payload.windowId,
-          projectId: payload.projectId,
-          label: payload.label,
-          labelSource: payload.labelSource,
-          taskTitle: payload.taskTitle,
-          workerType: payload.workerType,
-          windowType: payload.windowType,
-          paneTitle: payload.paneTitle,
-          paneCommand: payload.paneCommand,
-          status: payload.status ?? 'working',
-          paneName: payload.paneName,
-        });
-      } else {
-        next.delete(key);
-      }
+      const { entries: next, previous } = transitionActivityEntries(entriesRef.current, payload);
       entriesRef.current = next;
       setEntries(next);
       if (payload.running) return;
