@@ -2,16 +2,19 @@ import fs from 'node:fs';
 import { createTranscriptFixture } from '../fixtures/transcript';
 import { test, expect } from '../fixtures/test';
 
+test.use({ serviceWorkers: 'block' });
+
 test('mobile agent defaults to chat and an explicit terminal choice survives resize and reload', async ({ app, harness }) => {
   const label = 'e2e-mobile-window-view';
   const projectId = await harness.createProject(label);
   const agent = await harness.startFakeAgent(label, 'scroll', { supervised: false });
   const windowId = await harness.registerAgentWindow(projectId, agent.target, { label });
-  await app.setViewportSize({ width: 390, height: 800 });
-  await app.route('**/api/transcripts/resolve-window?*', (route) => route.fulfill({ status: 500, contentType: 'application/json', body: '{"error":"failed"}' }));
+  await app.setViewportSize({ width: 1280, height: 800 });
+  await app.route(/\/api\/transcripts\/resolve-window\?/,  (route) => route.fulfill({ status: 500, contentType: 'application/json', body: '{"error":"failed"}' }));
   await app.goto(`${harness.baseUrl}/workspace/${projectId}`);
   await app.getByPlaceholder('タイトル・ID・ブランチで検索…').fill(label);
   await app.locator('.row-hover').first().click();
+  await app.setViewportSize({ width: 390, height: 800 });
   const terminal = app.getByRole('button', { name: '端末で開く' });
   await expect(terminal).toBeVisible();
   expect((await terminal.boundingBox())?.height).toBeGreaterThanOrEqual(44);
@@ -51,10 +54,11 @@ test('mobile shell defaults to terminal', async ({ app, harness }) => {
   const { id } = await harness.api<{ id: number }>(`/projects/${projectId}/windows`, {
     method: 'POST', body: JSON.stringify({ server_name: 'local', tmux_target: agent.target, label, window_type: 'shell' }),
   });
-  await app.setViewportSize({ width: 390, height: 800 });
+  await app.setViewportSize({ width: 1280, height: 800 });
   await app.goto(`${harness.baseUrl}/workspace/${projectId}`);
   await app.getByPlaceholder('タイトル・ID・ブランチで検索…').fill(label);
   await app.locator('.row-hover').first().click();
+  await app.setViewportSize({ width: 390, height: 800 });
   await expect(app.locator('.xterm').first()).toBeVisible();
   expect(await app.evaluate((windowId) => localStorage.getItem(`azito.windowView.${windowId}`), id)).toBeNull();
   await harness.deleteWindow(id);
