@@ -4,9 +4,12 @@ import { Icon } from '../ui/Icon';
 
 interface PathBreadcrumbProps {
   path: string;
+  onNavigate?: (path: string) => void;
+  rootLabel?: string;
+  navigationLabel?: string;
 }
 
-export function PathBreadcrumb({ path }: PathBreadcrumbProps) {
+export function PathBreadcrumb({ path, onNavigate, rootLabel, navigationLabel }: PathBreadcrumbProps) {
   const { t } = useTranslation('files');
   const { showToast } = useToast();
 
@@ -15,6 +18,14 @@ export function PathBreadcrumb({ path }: PathBreadcrumbProps) {
       showToast(t('rootSwitcher.pathCopied'));
     });
   };
+
+  if (onNavigate) {
+    const segments = path.split('/').filter(Boolean);
+    return <nav aria-label={navigationLabel} style={{ display: 'flex', flexWrap: 'wrap', minWidth: 0 }}>
+      <button type="button" onClick={() => onNavigate('')}>{rootLabel}</button>
+      {segments.map((segment, index) => <span key={index}> / <button type="button" onClick={() => onNavigate(`${segments.slice(0, index + 1).join('/')}/`)}>{segment}</button></span>)}
+    </nav>;
+  }
 
   return (
     <div

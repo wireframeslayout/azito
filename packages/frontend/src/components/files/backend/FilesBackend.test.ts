@@ -36,6 +36,23 @@ describe('ServerFilesBackend', () => {
 });
 
 describe('StorageFilesBackend', () => {
+  it('fetches one page and preserves the cursor', async () => {
+    const fetchMock = vi.fn().mockResolvedValue(response({ folders: [{ name: 'sub', prefix: 'dir/sub/' }], files: [{ key: 'projects/1/dir/a', displayName: 'a', size: 3, lastModified: '2026-01-01T00:00:00.000Z' }], nextCursor: 'more' }));
+    vi.stubGlobal('fetch', fetchMock);
+    expect(await new StorageFilesBackend(1).listPage('dir/', 'first')).toEqual({ entries: [{ name: 'sub', type: 'directory', path: 'dir/sub/' }, { name: 'a', type: 'file', path: 'dir/a', size: 3, lastModified: '2026-01-01T00:00:00.000Z' }], nextCursor: 'more' });
+    expect(fetchMock.mock.calls[0][0]).toContain('prefix=dir%2F&cursor=first');
+  });
+  it('sends multiple relative paths in one request and reads folder statistics', async () => {
+    const fetchMock = vi.fn().mockResolvedValueOnce(response({ count: 2, totalSize: 17 })).mockImplementation(async () => response({ ok: true }));
+    vi.stubGlobal('fetch', fetchMock);
+    const backend = new StorageFilesBackend(1);
+    expect(await backend.stat('dir/')).toEqual({ count: 2, totalSize: 17 });
+    const selection = [{ name: 'a', type: 'file' as const, path: 'a' }, { name: 'dir', type: 'directory' as const, path: 'dir/' }];
+    await backend.deleteMany(selection);
+    await backend.moveMany(selection, 'destination/');
+    expect(JSON.parse(fetchMock.mock.calls[1][1].body)).toEqual({ keys: ['projects/1/a'], prefixes: ['dir/'] });
+    expect(JSON.parse(fetchMock.mock.calls[2][1].body)).toEqual({ keys: ['projects/1/a'], prefixes: ['dir/'], destPrefix: 'destination/' });
+  });
   it('lists every page and maps keys and prefixes', async () => {
     vi.stubGlobal('fetch', vi.fn().mockResolvedValueOnce(response({ folders: [{ name: 'dir', prefix: 'dir/' }], files: [], nextCursor: 'next' })).mockResolvedValueOnce(response({ folders: [], files: [{ key: 'projects/1/a', displayName: 'a', size: 3 }], nextCursor: null })));
     expect(await new StorageFilesBackend(1).list('')).toEqual([{ name: 'dir', type: 'directory', path: 'dir/' }, { name: 'a', type: 'file', path: 'a', size: 3 }]);
@@ -52,6 +69,24 @@ describe('StorageFilesBackend', () => {
     expect(JSON.parse(fetchMock.mock.calls[1][1].body)).toEqual({ keys: ['projects/1/a'], prefixes: [], destPrefix: 'dir/' });
     expect(JSON.parse(fetchMock.mock.calls[2][1].body)).toEqual({ keys: [], prefixes: ['dir/'] });
     expect(JSON.parse(fetchMock.mock.calls[3][1].body)).toEqual({ prefix: 'new/' });
+  });
+  it('accepts a folder conflict only after confirming the exact folder exists', async () => {
+    const fetchMock = vi.fn().mockResolvedValueOnce(response({ error: 'Folder already exists', code: 'exists' }, 409))
+      .mockResolvedValueOnce(response({ folders: [], files: [], nextCursor: 'next' }))
+      .mockResolvedValueOnce(response({ folders: [{ name: 'sub', prefix: 'dir/sub/' }], files: [], nextCursor: null }));
+    vi.stubGlobal('fetch', fetchMock);
+    await expect(new StorageFilesBackend(1).ensureFolder('dir/sub/')).resolves.toBeUndefined();
+    expect(fetchMock.mock.calls[1][0]).toContain('prefix=dir%2F');
+    expect(fetchMock.mock.calls[2][0]).toContain('cursor=next');
+  });
+  it('reports unconfirmed conflicts and other folder creation failures', async () => {
+    const fetchMock = vi.fn().mockResolvedValueOnce(response({ error: 'Folder already exists', code: 'exists' }, 409))
+      .mockResolvedValueOnce(response({ folders: [], files: [], nextCursor: null }))
+      .mockResolvedValueOnce(response({ error: 'Access denied', code: 'forbidden' }, 403));
+    vi.stubGlobal('fetch', fetchMock);
+    const backend = new StorageFilesBackend(1);
+    await expect(backend.ensureFolder('missing/')).rejects.toThrow('Folder already exists');
+    await expect(backend.ensureFolder('denied/')).rejects.toThrow('Access denied');
   });
   it('creates a file through upload and returns its opaque key', async () => {
     const fetchMock = vi.fn().mockImplementation(async () => response({ file: { key: 'projects/1/dir/123_a.txt' } }));

@@ -13,9 +13,12 @@ interface StorageResponse {
 }
 interface ListResponse extends StorageResponse {
   folders: Array<{ name: string; prefix: string }>;
-  files: Array<{ key: string; displayName: string; size: number }>;
+  files: Array<{ key: string; displayName: string; size: number; lastModified: string }>;
   nextCursor: string | null;
 }
+
+export interface StoragePage { entries: FileEntry[]; nextCursor: string | null }
+export interface StorageStat { count: number; totalSize: number }
 
 export class StorageFilesBackend implements FilesBackend {
   constructor(private readonly projectId: number) {}
@@ -28,20 +31,36 @@ export class StorageFilesBackend implements FilesBackend {
   }
   private key(path: string): string { return `projects/${this.projectId}/${path}`; }
   async list(path: string): Promise<FileEntry[]> {
-    const prefix = path.startsWith(`projects/${this.projectId}/`) ? this.relative(path) : path;
     const entries: FileEntry[] = [];
     let cursor: string | null = null;
     do {
-      const query = new URLSearchParams({ prefix });
-      if (cursor) query.set('cursor', cursor);
-      const { status, body } = await apiWithStatus<ListResponse>(`${this.root}/entries?${query}`);
-      if (status >= 400) throw new Error(body.error || 'Failed to load directory');
-      entries.push(...body.folders.map((f) => ({ name: f.name, type: 'directory' as const, path: f.prefix })));
-      entries.push(...body.files.map((f) => ({ name: f.displayName, type: 'file' as const, path: this.relative(f.key), size: f.size })));
-      cursor = body.nextCursor;
+      const page = await this.listPage(path, cursor);
+      entries.push(...page.entries);
+      cursor = page.nextCursor;
     } while (cursor);
     return entries;
   }
+  async listPage(path: string, cursor: string | null): Promise<StoragePage> {
+    const prefix = path.startsWith(`projects/${this.projectId}/`) ? this.relative(path) : path;
+    const query = new URLSearchParams({ prefix });
+    if (cursor !== null) query.set('cursor', cursor);
+    const { status, body } = await apiWithStatus<ListResponse>(`${this.root}/entries?${query}`);
+    if (status >= 400 || body.error) throw new Error(body.error || 'Failed to load directory');
+    return { entries: [
+      ...body.folders.map((f) => ({ name: f.name, type: 'directory' as const, path: f.prefix })),
+      ...body.files.map((f) => ({ name: f.displayName, type: 'file' as const, path: this.relative(f.key), size: f.size, ...(f.lastModified ? { lastModified: f.lastModified } : {}) })),
+    ], nextCursor: body.nextCursor };
+  }
+  async stat(prefix: string): Promise<StorageStat> {
+    const { status, body } = await apiWithStatus<StorageStat & StorageResponse>(`${this.root}/stat?${new URLSearchParams({ prefix })}`);
+    if (status >= 400 || body.error) throw new Error(body.error || 'Failed to inspect folder');
+    return { count: body.count, totalSize: body.totalSize };
+  }
+  private selection(entries: FileEntry[]): { keys: string[]; prefixes: string[] } {
+    return { keys: entries.filter((entry) => entry.type === 'file').map((entry) => this.key(entry.path)), prefixes: entries.filter((entry) => entry.type === 'directory').map((entry) => entry.path) };
+  }
+  deleteMany(entries: FileEntry[]): Promise<void> { return this.mutate('/delete', 'POST', this.selection(entries)); }
+  moveMany(entries: FileEntry[], destination: string): Promise<void> { return this.mutate('/move', 'POST', { ...this.selection(entries), destPrefix: destination }); }
   private toRead(body: StorageResponse): FileReadResult {
     if (typeof body.content !== 'string' || typeof body.language !== 'string' || typeof body.etag !== 'string') throw new Error('Invalid file response');
     return { kind: 'text', content: body.content, language: body.language, version: body.etag };
@@ -86,6 +105,21 @@ export class StorageFilesBackend implements FilesBackend {
     if (result.error) throw new Error(result.error);
     if (!result.file?.key) throw new Error('Invalid upload response');
     return this.relative(result.file.key);
+  }
+  async ensureFolder(path: string): Promise<void> {
+    const prefix = path.endsWith('/') ? path : `${path}/`;
+    const result = await apiWithStatus<StorageResponse>(`${this.root}/folders`, { method: 'POST', body: JSON.stringify({ prefix }) });
+    if (result.status < 400 && !result.body.error) return;
+    if (result.status === 409 && result.body.code === 'exists') {
+      const parent = prefix.slice(0, -1).split('/').slice(0, -1).join('/');
+      let cursor: string | null = null;
+      do {
+        const page = await this.listPage(parent ? `${parent}/` : '', cursor);
+        if (page.entries.some((entry) => entry.type === 'directory' && entry.path === prefix)) return;
+        cursor = page.nextCursor;
+      } while (cursor !== null);
+    }
+    throw new Error(result.body.error || 'Storage operation failed');
   }
   rename(path: string, newName: string): Promise<void> {
     return this.mutate('/entries', 'PATCH', path.endsWith('/') ? { prefix: path, newName } : { key: this.key(path), displayName: newName });

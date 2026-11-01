@@ -6,6 +6,16 @@ import type { TreeNode } from './useFileTree';
 import type { PendingCreate, PendingRename } from './useFileCrud';
 import InlineNameInput from './InlineNameInput';
 
+interface CustomFileTreeProps {
+  nodes: TreeNode[];
+  renderRow: (node: TreeNode) => React.ReactNode;
+}
+
+export default function FileTree(props: FileTreeProps | CustomFileTreeProps): React.ReactElement {
+  if ('renderRow' in props) return <>{props.nodes.map(props.renderRow)}</>;
+  return <DefaultFileTree {...props} />;
+}
+
 interface FileTreeProps {
   nodes: TreeNode[];
   selectedPath: string | null;
@@ -28,7 +38,7 @@ interface FileTreeProps {
   };
 }
 
-export default function FileTree({
+function DefaultFileTree({
   nodes, selectedPath, rootPath, pathApi, pendingCreate, pendingRename,
   onSelect, onContextMenu, onLongPress,
   onCommitCreate, onCancelCreate, onCommitRename, onCancelRename,

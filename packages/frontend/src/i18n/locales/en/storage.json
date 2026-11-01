@@ -36,5 +36,38 @@
   "delete": {
     "title": "Delete file?",
     "message": "Delete {{name}}? This cannot be undone."
+  },
+  "list": {
+    "moveDestination": "Move destination",
+    "parent": "Parent folder",
+    "loading": "Loading…",
+    "loadMore": "Load more",
+    "moveHere": "Move here",
+    "cancel": "Cancel",
+    "operationError": "Could not complete the operation",
+    "deleteTitle": "Delete selected items?",
+    "deleteMessage": "Delete {{names}}? Folders contain {{count}} files ({{size}} bytes). This cannot be undone.",
+    "newFolder": "New folder",
+    "filter": "Filter",
+    "sort": "Sort",
+    "nameAsc": "Name A–Z",
+    "nameDesc": "Name Z–A",
+    "path": "Path",
+    "count": "{{count}} shown, {{selected}} selected",
+    "moreAvailable": "More items are available",
+    "rename": "Rename",
+    "move": "Move",
+    "delete": "Delete",
+    "clearSelection": "Clear selection",
+    "invalidDestination": "A folder cannot be moved into itself",
+    "uploadProgress": "Uploading {{completed}} / {{total}}",
+    "empty": "No items",
+    "select": "Select {{name}}",
+    "uploadFailures": "Some items could not be uploaded",
+    "actions": "Actions ({{count}} selected)",
+    "sizeAsc": "Size: smallest first",
+    "sizeDesc": "Size: largest first",
+    "dateAsc": "Updated: oldest first",
+    "dateDesc": "Updated: newest first"
   }
 }
