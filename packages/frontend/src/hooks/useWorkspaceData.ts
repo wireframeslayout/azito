@@ -1,8 +1,9 @@
 import { useState, useEffect, useRef, useCallback, useMemo } from 'react';
 import { api } from '../api/client';
+import { useWorkspaceCatalog } from './useWorkspaceCatalog';
 import { useNotificationChannel } from './useNotificationChannel';
 import type { PersistedTab } from './useTabPersistence';
-import type { Project, Unit, Task, Server, Session, SidebarMode, Window } from '../pages/workspace/types';
+import type { Project, Unit, Server, Session, SidebarMode, Window } from '../pages/workspace/types';
 import { fetchSessionListing, keepUnavailableKinds } from '../lib/fetchServerSessions';
 
 export function useWorkspaceData(
@@ -20,7 +21,9 @@ export function useWorkspaceData(
 
   const [project, setProject] = useState<Project | null>(null);
   const [allUnits, setAllUnits] = useState<Unit[]>([]);
-  const [tasks, setTasks] = useState<Task[]>([]);
+  const { allProjects, allTasks, projectsLoaded, refresh: refreshCatalog } = useWorkspaceCatalog();
+  const tasks = allTasks.filter(t => t.projectId === Number(projectId));
+  const projectList = allProjects;
   const [servers, setServers] = useState<Server[]>([]);
   const [sessionData, setSessionData] = useState<Record<string, Session[]>>({});
 
@@ -29,22 +32,6 @@ export function useWorkspaceData(
   // 参照が変わり、それに依存する useEffect（初回fetch/ポーリング）が再実行されてしまうため避ける。
   const tasksRef = useRef(tasks);
   tasksRef.current = tasks;
-
-  // Project list for cross-project tab colors
-  const [projectList, setProjectList] = useState<{ id: number; name: string }[]>([]);
-
-  // Project list for the project switcher menu
-  const [allProjects, setAllProjects] = useState<Array<{ id: number; name: string; icon?: string; color?: string; windows?: Window[] }>>([]);
-  const [projectsLoaded, setProjectsLoaded] = useState(false);
-  useEffect(() => {
-    api<Array<{ id: number; name: string; icon?: string; color?: string; windows?: Window[] }>>('/projects').then((data) => {
-      setAllProjects(data);
-      setProjectsLoaded(true);
-    }).catch(() => {});
-  }, []);
-
-  // All tasks (cross-project fallback for TaskPanel and findTaskByTarget)
-  const [allTasks, setAllTasks] = useState<Task[]>([]);
 
   // File browser: per-server file browsing
   const [projectServers, setProjectServers] = useState<{serverName: string; workingDirectory?: string}[]>([]);
@@ -56,22 +43,16 @@ export function useWorkspaceData(
     const requestedProjectId = projectId;
     const pid = parseInt(projectId || '', 10);
     if (!pid) return;
-    const [proj, allUn, allTsk, srvs, allProj] = await Promise.all([
+    const [proj, allUn, srvs] = await Promise.all([
       api<Project & { error?: string }>(`/projects/${pid}`),
       api<Unit[]>('/units'),
-      api<Task[]>('/tasks'),
       api<Server[]>('/servers'),
-      api<Array<{ id: number; name: string; icon?: string; color?: string; windows?: Window[] }>>('/projects'),
     ]);
     if (projectIdRef.current !== requestedProjectId) return; // stale response, a newer project is now active
     if ((proj as any).error) return;
     setProject(proj);
     setAllUnits(allUn);
-    setAllTasks(allTsk);
-    setTasks(allTsk.filter((t) => t.projectId === pid));
     setServers(srvs);
-    setAllProjects(allProj);
-    setProjectsLoaded(true);
   }, [projectId]);
 
   const refreshSessions = useCallback(async () => {
@@ -147,11 +128,6 @@ export function useWorkspaceData(
     }
   }, [taskWindowKeysKey, refreshSessions]);
 
-  // Load project list for project bar
-  useEffect(() => {
-    api<{ id: number; name: string }[]>('/projects').then(setProjectList).catch(() => {});
-  }, []);
-
   // Fetch project servers for file browser
   useEffect(() => {
     if (!projectId) return;
@@ -173,6 +149,8 @@ export function useWorkspaceData(
     if (projectId && selectedFileServer) localStorage.setItem(`workspace-file-server-${projectId}`, selectedFileServer);
   }, [selectedFileServer, projectId]);
 
+  const refreshWorkspaceAndCatalog = useCallback(() => { void refreshWorkspace(); void refreshCatalog(); }, [refreshWorkspace, refreshCatalog]);
+
   return {
     project,
     allUnits,
@@ -186,7 +164,7 @@ export function useWorkspaceData(
     projectServers,
     selectedFileServer,
     setSelectedFileServer,
-    refreshWorkspace,
+    refreshWorkspace: refreshWorkspaceAndCatalog,
     refreshSessions,
   };
 }

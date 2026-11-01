@@ -1,14 +1,10 @@
 import React, { createContext, useCallback, useContext, useEffect, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
-import { useLocation, useNavigate } from 'react-router-dom';
-import { api } from '../api/client';
 import type { AgentActivityPayload, AppNotification, AppNotificationKind } from '../types/notification';
 import { useAgentActivity } from './useAgentActivity';
 import { useNotificationChannel } from './useNotificationChannel';
-import { useWorkspaceTargets } from './useWorkspaceTargets';
-import type { TerminalOpenTarget } from '../lib/terminalTargetOpen';
+import { useCrossProjectNavigation } from './useCrossProjectNavigation';
 import { Icon } from '../components/ui/Icon';
-import { paths, matchWorkspacePath } from '../paths';
 
 const STORAGE_KEY = 'azito-notifications';
 const MAX_NOTIFICATIONS = 100;
@@ -21,9 +17,6 @@ const TOAST_DURATION_MS = 5000;
 // フォーカス再描画による誤通知は onAgentActivity 側の isWatched チェックで抑える。
 const AGENT_DEDUPE_WINDOW_MS = 8_000;
 const AGENT_DEDUPE_SCAN_LIMIT = 50;
-// プロジェクト跨ぎナビゲーション後、Workspace が onOpenTask を再登録しない場合に保留を破棄するTTL
-const PENDING_OPEN_TASK_TTL_MS = 5000;
-
 const FAILED_STATUSES = new Set(['error', 'send_error', 'worker_not_ready', 'codex_error', 'stopped_by_user']);
 
 const NOTIFICATION_KINDS: readonly AppNotificationKind[] = [
@@ -44,12 +37,7 @@ interface NotificationCenterContextValue {
   toasts: EphemeralToast[];
   dismissToast: (id: string) => void;
   openNotification: (notification: AppNotification) => void;
-  openTask: (taskId: number) => void;
-  /**
-   * ターミナルタブを開く。プロジェクトが現在のワークスペースと異なる場合（グローバルページ
-   * 表示中を含む）は、そのプロジェクトのワークスペースへ遷移してからタブを開く。
-   */
-  openTerminal: (req: TerminalOpenTarget, projectId?: number) => void;
+
 }
 
 const defaultValue: NotificationCenterContextValue = {
@@ -61,8 +49,6 @@ const defaultValue: NotificationCenterContextValue = {
   toasts: [],
   dismissToast: () => {},
   openNotification: () => {},
-  openTask: () => {},
-  openTerminal: () => {},
 };
 
 const NotificationCenterContext = createContext<NotificationCenterContextValue>(defaultValue);
@@ -175,24 +161,14 @@ export function NotificationCenterProvider({ children }: { children: React.React
   const { t } = useTranslation('notifications');
   const [notifications, setNotifications] = useState<AppNotification[]>(loadNotifications);
   const [toasts, setToasts] = useState<EphemeralToast[]>([]);
-  const navigate = useNavigate();
-  const location = useLocation();
-  const { onOpenTask, onOpenInTerminal } = useWorkspaceTargets();
+  const { openTask, openTerminal } = useCrossProjectNavigation();
   const { isWatched } = useAgentActivity();
-  const onOpenTaskRef = useRef(onOpenTask);
-  const onOpenInTerminalRef = useRef(onOpenInTerminal);
-  onOpenTaskRef.current = onOpenTask;
-  onOpenInTerminalRef.current = onOpenInTerminal;
-  const locationRef = useRef(location);
-  locationRef.current = location;
 
   // WSイベントが再レンダー前に連続到達してもデデュープ・上限制御が効くよう、stateと同値のミラーを持つ
   const notificationsRef = useRef(notifications);
   const toastsRef = useRef<EphemeralToast[]>([]);
   const toastTimersRef = useRef(new Map<string, ReturnType<typeof setTimeout>>());
-  const pendingOpenTaskRef = useRef<{ taskId: number; projectId: number } | null>(null);
-  const pendingOpenTerminalRef = useRef<{ req: TerminalOpenTarget; projectId: number } | null>(null);
-  const pendingOpenTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
 
   useEffect(() => {
     saveNotifications(notifications);
@@ -204,10 +180,7 @@ export function NotificationCenterProvider({ children }: { children: React.React
     return () => {
       for (const timer of timers.values()) clearTimeout(timer);
       timers.clear();
-      if (pendingOpenTimerRef.current) {
-        clearTimeout(pendingOpenTimerRef.current);
-        pendingOpenTimerRef.current = null;
-      }
+
     };
   }, []);
 
@@ -305,61 +278,13 @@ export function NotificationCenterProvider({ children }: { children: React.React
     updateNotifications([]);
   }, [updateNotifications]);
 
-  // projectId が現在ルートと異なる場合は navigate＋pending 機構でプロジェクト遷移後に開く
-  const openTaskInProject = useCallback((taskId: number, projectId: number | undefined) => {
-    const wsMatch = matchWorkspacePath(locationRef.current.pathname);
-    const currentProjectId = wsMatch ? parseInt(wsMatch.id, 10) : null;
-    if (projectId !== undefined && projectId !== currentProjectId) {
-      pendingOpenTaskRef.current = { taskId, projectId };
-      pendingOpenTerminalRef.current = null;
-      if (pendingOpenTimerRef.current) clearTimeout(pendingOpenTimerRef.current);
-      pendingOpenTimerRef.current = setTimeout(() => {
-        pendingOpenTaskRef.current = null;
-        pendingOpenTimerRef.current = null;
-      }, PENDING_OPEN_TASK_TTL_MS);
-      navigate(paths.workspace(projectId));
-    } else {
-      onOpenTaskRef.current?.(taskId);
-    }
-  }, [navigate]);
-
-  // projectId 不明のタスクを開く: タスクを取得して所属プロジェクトを解決してから開く。
-  // 取得失敗時は現在のコンテキストで直接開く（TaskPanel の allTasks フォールバックが受け止める）
-  const openTask = useCallback((taskId: number) => {
-    api<{ projectId?: number }>(`/tasks/${taskId}`)
-      .then((task) => {
-        openTaskInProject(taskId, typeof task.projectId === 'number' ? task.projectId : undefined);
-      })
-      .catch(() => {
-        onOpenTaskRef.current?.(taskId);
-      });
-  }, [openTaskInProject]);
-
-  // projectId が現在ルートと異なる場合は navigate＋pending 機構でプロジェクト遷移後にターミナルを開く
-  const openTerminalInProject = useCallback((req: TerminalOpenTarget, projectId: number | undefined) => {
-    const wsMatch = matchWorkspacePath(locationRef.current.pathname);
-    const currentProjectId = wsMatch ? parseInt(wsMatch.id, 10) : null;
-    if (projectId !== undefined && projectId !== currentProjectId) {
-      pendingOpenTerminalRef.current = { req, projectId };
-      pendingOpenTaskRef.current = null;
-      if (pendingOpenTimerRef.current) clearTimeout(pendingOpenTimerRef.current);
-      pendingOpenTimerRef.current = setTimeout(() => {
-        pendingOpenTerminalRef.current = null;
-        pendingOpenTimerRef.current = null;
-      }, PENDING_OPEN_TASK_TTL_MS);
-      navigate(paths.workspace(projectId));
-    } else {
-      onOpenInTerminalRef.current?.(req);
-    }
-  }, [navigate]);
-
   const openNotification = useCallback((notification: AppNotification) => {
     markRead(notification.id);
     dismissToast(notification.id);
 
     if (notification.taskId !== undefined && (notification.kind === 'qa' || notification.kind === 'plan_approval' || notification.kind === 'execution_approval' || notification.kind === 'task_done' || notification.kind === 'task_failed')) {
       if (notification.projectId !== undefined) {
-        openTaskInProject(notification.taskId, notification.projectId);
+        openTask(notification.taskId, notification.projectId);
       } else {
         openTask(notification.taskId);
       }
@@ -371,43 +296,15 @@ export function NotificationCenterProvider({ children }: { children: React.React
         // taskId 付き agent 通知はタスク取得でプロジェクトを解決して開く
         openTask(notification.taskId);
       } else {
-        openTerminalInProject({ serverName: notification.serverName, target: notification.target, windowId: notification.windowId }, notification.projectId);
+        openTerminal({ serverName: notification.serverName, target: notification.target, windowId: notification.windowId }, notification.projectId);
       }
     }
-  }, [markRead, dismissToast, openTaskInProject, openTask, openTerminalInProject]);
-
-  // プロジェクト跨ぎで保留したタスクオープンを、遷移完了＋onOpenTask再登録後に実行する
-  useEffect(() => {
-    const pending = pendingOpenTaskRef.current;
-    if (!pending || !onOpenTask) return;
-    const wsMatch = matchWorkspacePath(location.pathname);
-    if (!wsMatch || parseInt(wsMatch.id, 10) !== pending.projectId) return;
-    pendingOpenTaskRef.current = null;
-    if (pendingOpenTimerRef.current) {
-      clearTimeout(pendingOpenTimerRef.current);
-      pendingOpenTimerRef.current = null;
-    }
-    onOpenTask(pending.taskId);
-  }, [location.pathname, onOpenTask]);
-
-  // プロジェクト跨ぎで保留したターミナルオープンを、遷移完了＋onOpenInTerminal再登録後に実行する
-  useEffect(() => {
-    const pending = pendingOpenTerminalRef.current;
-    if (!pending || !onOpenInTerminal) return;
-    const wsMatch = matchWorkspacePath(location.pathname);
-    if (!wsMatch || parseInt(wsMatch.id, 10) !== pending.projectId) return;
-    pendingOpenTerminalRef.current = null;
-    if (pendingOpenTimerRef.current) {
-      clearTimeout(pendingOpenTimerRef.current);
-      pendingOpenTimerRef.current = null;
-    }
-    onOpenInTerminal(pending.req);
-  }, [location.pathname, onOpenInTerminal]);
+  }, [markRead, dismissToast, openTask, openTerminal]);
 
   const unreadCount = notifications.reduce((acc, n) => acc + (n.read ? 0 : 1), 0);
 
   return (
-    <NotificationCenterContext.Provider value={{ notifications, unreadCount, markRead, markAllRead, clear, toasts, dismissToast, openNotification, openTask, openTerminal: openTerminalInProject }}>
+    <NotificationCenterContext.Provider value={{ notifications, unreadCount, markRead, markAllRead, clear, toasts, dismissToast, openNotification }}>
       {children}
       <NotificationToastStack />
     </NotificationCenterContext.Provider>
