@@ -275,6 +275,14 @@
     "killPaneMessage": "ペイン \"{{name}}\" を終了しますか？"
   },
   "misaoService": {
+    "otherTask": "別の導入",
+    "unknownTask": "タスクの所有先が不明",
+    "otherTaskDetail": "AzitoMisao は別のフォルダーに属しています。引き継ぐと、そのフォルダーの misao はこのタスクから起動されなくなり、その導入のペインは使えなくなります。",
+    "otherTaskRunning": "別の導入の AzitoMisao は稼働中です。引き継ぐ前に停止してください。停止後、再確認してください。",
+    "unknownTaskDetail": "タスクの所有先を判定できません。操作する前に AzitoMisao のタスク定義を確認してください。",
+    "takeoverTitle": "AzitoMisao を引き継ぎますか？",
+    "takeoverMessage": "引き継ぐと、別の導入のフォルダーの misao はこのタスクから起動されなくなり、その導入のペインは使えなくなります。続けますか？",
+    "takeoverConfirm": "引き継いでインストール",
     "loading": "misao のサービスを確認中…",
     "loadFailed": "misao のサービス状態を取得できませんでした。",
     "service": "サービス",
@@ -343,5 +351,9 @@
     "updateConfirmTitle": "misao を更新しますか？",
     "updateConfirmMessage": "更新のため、このサーバーの misao を停止します。このサーバーで実行中のペインはすべて終了し、中のエージェントの作業は中断されます。必要な作業を終えてから続けてください。",
     "updateConfirmLabel": "停止して更新"
+  },
+  "localNetwork": {
+    "guidance": "macOS のローカルネットワークの許可が接続を妨げている可能性があります。agent の Tailscale アドレスを試すか、システム設定 › プライバシーとセキュリティ › ローカルネットワークでハブの許可を確認し、再試行してください。許可の表示と効果は未検証です。",
+    "detail": "元のエラー"
   }
 }

@@ -3,6 +3,7 @@ import * as fs from 'fs';
 import * as path from 'path';
 import SSHConfig from 'ssh-config';
 import type { ExecResult } from '../transport/ServerTransport';
+import { diagnoseLocalNetworkError } from '../localNetworkDiagnosis';
 import { resolveSshAgent, windowsNamedPipeExists } from './sshAgentSocket';
 
 // ─── Types ───
@@ -121,7 +122,7 @@ export class SshClient {
 
   private readonly reportedNoAgent = new Set<string>();
 
-  constructor(private env: SshClientEnv, private fingerprintStore?: FingerprintStore, configPath?: string) {
+  constructor(private env: SshClientEnv, private fingerprintStore?: FingerprintStore, configPath?: string, private isLaunchd = false) {
     this.configPath = configPath ?? path.join(env.homeDir, '.ssh', 'config');
   }
 
@@ -377,7 +378,7 @@ export class SshClient {
         });
       });
 
-      conn.on('error', (err: Error) => { clearTimeout(timeout); reject(err); });
+      conn.on('error', (err: Error) => { clearTimeout(timeout); reject(diagnoseLocalNetworkError(err, this.env.platform, this.isLaunchd)); });
       conn.connect(connectOpts);
     });
   }

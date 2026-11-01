@@ -11,7 +11,7 @@ import { MISAO_RELEASE_FILES, MISAO_RELEASE_FILE_NAMES } from '../../servers/tra
 import { DuplicateLoadError, type ServiceInspection, type ServiceManager } from '../serviceManager';
 import { MisaoServiceError } from './MisaoServiceError';
 import { renderMisaoUnit } from './misaoUnit';
-import { taskStartsMisaoOf, type LocalMisaoWindows } from './misaoLocalWindows';
+import { taskMisaoRoot, taskStartsMisaoOf, type LocalMisaoWindows } from './misaoLocalWindows';
 import { isManagedMisaoDown } from './MisaoWindowsInstaller';
 import { underMisaoRootLock } from './misaoRootLock';
 import { FOREIGN_LOCK_PREFIX } from '../../../shared/recoveryBackoff';
@@ -127,16 +127,19 @@ export class MisaoServiceService {
     return controller?.isInstalled() ?? false;
   }
 
-  /** The service's state and whether it is installed. Windows: from ONE query of the task (a status poll is two process starts otherwise). */
-  private async inspectService(): Promise<{ installed: boolean; inspection?: ServiceInspection }> {
+  /** The service's state and whether it is installed. Windows: one query of the task plus, when it exists, its definition (to tell whose folder it starts). */
+  private async inspectService(): Promise<{ installed: boolean; inspection?: ServiceInspection; windowsTaskOwner?: 'none' | 'hub' | 'other' | 'unknown'; windowsTaskRunning?: boolean }> {
     const { windows, controller } = this.deps;
     if (!windows) {
       const installed = await this.isServiceInstalled();
       return { installed, ...(controller && installed ? { inspection: await controller.inspect() } : {}) };
     }
     const task = await windows.tasks.query(windows.taskName);
-    if (!task.exists) return { installed: false };
-    return { installed: true, inspection: { state: task.running ? 'active' : task.failed ? 'failed' : 'inactive', domains: [] } };
+    if (!task.exists) return { installed: false, windowsTaskOwner: 'none' };
+    const xml = await windows.tasks.exportXml(windows.taskName);
+    if (!taskMisaoRoot(xml)) return { installed: false, windowsTaskOwner: 'unknown' };
+    if (!taskStartsMisaoOf(xml, this.paths.root)) return { installed: false, windowsTaskOwner: 'other', windowsTaskRunning: task.running };
+    return { installed: true, windowsTaskOwner: 'hub', inspection: { state: task.running ? 'active' : task.failed ? 'failed' : 'inactive', domains: [] } };
   }
 
   async status(): Promise<MisaoServiceStatus> {
@@ -145,7 +148,7 @@ export class MisaoServiceService {
     const daemon: MisaoDaemonInfo = hub
       ? await hub.probeDaemon()
       : { reachable: this.deps.paths ? await isSocketListening(this.deps.paths.socket) : false };
-    const { installed: serviceInstalled, inspection } = await this.inspectService();
+    const { installed: serviceInstalled, inspection, windowsTaskOwner, windowsTaskRunning } = await this.inspectService();
     const unmanagedDetail = this.deps.pathsError ?? (reason === 'unsupported_platform' ? this.deps.controllerError : undefined);
     const installedVersion = this.installedVersion();
     const socketSetting = this.socketSetting();
@@ -160,6 +163,8 @@ export class MisaoServiceService {
       ...(unmanagedDetail ? { unmanagedDetail } : {}),
       ...(controller ? { serviceManager: controller.kind } : {}),
       serviceInstalled,
+      ...(windowsTaskOwner ? { windowsTaskOwner } : {}),
+      ...(windowsTaskRunning !== undefined ? { windowsTaskRunning } : {}),
       ...(inspection ? { serviceState: inspection.state } : {}),
       ...(inspection?.domains.length === 1 ? { serviceDomain: inspection.domains[0] } : {}),
       ...(inspection && inspection.domains.length > 1 ? { serviceDuplicateLoad: true } : {}),
@@ -239,6 +244,9 @@ export class MisaoServiceService {
     if (replace || !(await windows.tasks.query(windows.taskName)).exists) return;
     const xml = await windows.tasks.exportXml(windows.taskName);
     if (!taskStartsMisaoOf(xml, this.paths.root)) {
+      if (taskMisaoRoot(xml) === undefined) {
+        throw new MisaoServiceError('custom_socket', `The task "${windows.taskName}" has a definition whose misao folder cannot be determined. Installing here would take it over; run \`azito misao install --replace-socket\` to do that on purpose.`);
+      }
       throw new MisaoServiceError('custom_socket', `The task "${windows.taskName}" is registered for a misao in another folder, not ${this.paths.root}. Installing here would take it over; run \`azito misao install --replace-socket\` to do that on purpose.`);
     }
   }

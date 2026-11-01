@@ -1,3 +1,4 @@
+import { LocalNetworkPermissionError } from '../localNetworkDiagnosis';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { HOST_PROBE_COMMAND } from '../../../shared/os/hostProfile';
 import { HOST_OS_PROBE_COMMAND } from './hostOsProbe';
@@ -397,6 +398,16 @@ describe('AgentInstaller', () => {
     expect(text).not.toMatch(/azito-misao/);
     expect(text).not.toMatch(/pkill[^\n]*misao/);
     expect(text).toContain('pkill -f azito-agent.cjs');
+  });
+
+  it('preserves a local network diagnosis in the result and progress', async () => {
+    const error = new LocalNetworkPermissionError('connect EHOSTUNREACH 192.168.1.2:22');
+    const ssh = { resolveHost: () => ({ username: 'u', host: '192.168.1.2', port: 22 }), execIsolated: async () => { throw error; } };
+    const installer = new AgentInstaller(ssh as never, makeBundler() as never, DEFAULT_WINDOWS_AGENT_OPTIONS);
+    const steps: InstallProgress[] = [];
+    const result = await installer.install('u@192.168.1.2', (step) => steps.push(step));
+    expect(result).toMatchObject({ success: false, code: error.code, detail: error.detail });
+    expect(steps.at(-1)).toMatchObject({ status: 'error', code: error.code, detail: error.detail });
   });
 
   describe('host OS / architecture preflight', () => {
