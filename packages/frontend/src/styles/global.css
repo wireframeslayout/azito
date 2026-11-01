@@ -409,13 +409,15 @@ a:hover {
 
 /* ---- Dense Rows (ListRow / ListRowGroup, Issue #274) ---- */
 .list-row { background: transparent; }
-.list-row:hover {
+.list-row:hover:not(:disabled) {
   background: var(--bg-hover);
 }
 .list-row.row-selected { background: var(--selected-bg-strong); }
-.list-row.row-selected:hover { background: var(--selected-bg-strong); }
+.list-row.row-selected:hover:not(:disabled) { background: var(--selected-bg-strong); }
 
-.list-row:hover .list-row-arrow {
+.list-row:disabled { color: var(--text-dim); opacity: 0.4; cursor: not-allowed; }
+
+.list-row:hover:not(:disabled) .list-row-arrow {
   opacity: 1;
 }
 
