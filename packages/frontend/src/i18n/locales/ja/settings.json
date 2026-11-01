@@ -7,7 +7,8 @@
     "notifications": "通知",
     "security": "セキュリティ",
     "system": "システム",
-    "keyboard": "キーボード"
+    "keyboard": "キーボード",
+    "terminal": "端末"
   },
   "auditLog": {
     "description": "直近{{count}}件のセキュリティ監査イベント（task トークンの発行/失効、拒否されたリクエスト、承認、supervisor 登録など）。これは運用上の記録であり、改ざん耐性はありません。",
@@ -255,5 +256,23 @@
     "conflict": "このキーは別の操作に割り当てられています。",
     "storageError": "設定を保存できませんでした。",
     "intervalOnlySpace": "Space 2 回を選んだときに設定できます。"
+  },
+  "terminal": {
+    "policy": "復帰方針",
+    "policyDescription": "tmux の窓を起こす方法を選びます。",
+    "ask": "毎回確認",
+    "misao": "misao で開く",
+    "tmux": "tmux のまま開く",
+    "defaults": "新規窓の既定",
+    "defaultsDescription": "対応サーバーの既定を変更します。",
+    "noServers": "対応サーバーはありません",
+    "allMisao": "すべて misao に変更",
+    "allTmux": "すべて tmux に変更",
+    "updated": "変更済み",
+    "updateFailed": "変更に失敗",
+    "loadFailed": "設定を取得できませんでした",
+    "saveFailed": "設定を保存できませんでした",
+    "retry": "再試行",
+    "confirmDefaults": "{{count}} 台のサーバーの既定を {{mux}} に変更しますか？"
   }
 }

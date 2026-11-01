@@ -57,7 +57,8 @@ export default function ContextMenu({ menu, onClose }: { menu: ContextMenuState;
           <div key={i} style={{ borderTop: '1px solid var(--border)', margin: '4px 0' }} />
         ) : (
         <button key={i}
-          disabled={item.disabled}
+          disabled={item.disabled && !item.title}
+          aria-disabled={item.disabled || undefined}
           title={item.title}
           onClick={() => { if (item.disabled) return; item.onClick(); onClose(); }}
           className={`row-hover${item.selected ? ' row-selected' : ''}`}

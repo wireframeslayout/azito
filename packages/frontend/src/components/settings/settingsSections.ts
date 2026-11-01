@@ -1,6 +1,6 @@
 import type { IconName } from '../ui/Icon';
 
-export type SettingsSectionId = 'appearance' | 'keyboard' | 'providers' | 'storage' | 'resources' | 'notifications' | 'security' | 'system';
+export type SettingsSectionId = 'appearance' | 'terminal' | 'keyboard' | 'providers' | 'storage' | 'resources' | 'notifications' | 'security' | 'system';
 
 export interface SettingsSectionMeta {
   id: SettingsSectionId;
@@ -10,6 +10,7 @@ export interface SettingsSectionMeta {
 
 export const SETTINGS_SECTIONS: SettingsSectionMeta[] = [
   { id: 'appearance', labelKey: 'settings:sections.appearance', icon: 'palette' },
+  { id: 'terminal', labelKey: 'settings:sections.terminal', icon: 'terminal' },
   { id: 'keyboard', labelKey: 'settings:sections.keyboard', icon: 'keyboard' },
   { id: 'providers', labelKey: 'settings:sections.providers', icon: 'chip' },
   { id: 'storage', labelKey: 'settings:sections.storage', icon: 'storage' },

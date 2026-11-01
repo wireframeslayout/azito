@@ -118,6 +118,31 @@ test.describe('misao ドライバ', () => {
     })).rejects.toThrow(/400.*Invalid kind/);
   });
 
+  test('tmux の窓を misao で開き直す', async ({ app, harness }) => {
+    const created = await harness.api<{ ref: string }>('/servers/local/mux/workspaces', {
+      method: 'POST', body: JSON.stringify({ name: 'e2e-wake-switch', windowName: 'main', kind: 'tmux' }),
+    });
+    const registered = await harness.api<{ id: number }>(`/projects/${projectId}/windows`, {
+      method: 'POST', body: JSON.stringify({ server_name: 'local', ref: created.ref, label: 'wake switch', window_type: 'terminal' }),
+    });
+    const plan = await harness.api<{ mux: string; shouldAsk: boolean }>(`/windows/${registered.id}/respawn-plan`);
+    expect(plan).toMatchObject({ mux: 'tmux', shouldAsk: true });
+    await app.goto(`${harness.baseUrl}/workspace/${projectId}`);
+    const row = app.getByText(`W-${registered.id}`, { exact: true }).first();
+    await row.click({ button: 'right' });
+    await app.getByRole('button', { name: 'misao で開き直す…' }).click();
+    await expect(app.getByRole('dialog')).toBeVisible();
+    await app.keyboard.press('Escape');
+    await expect(app.getByRole('dialog')).toHaveCount(0);
+    await row.click({ button: 'right' });
+    await app.getByRole('button', { name: 'misao で開き直す…' }).click();
+    await app.keyboard.press('Enter');
+    await expect(app.getByRole('dialog')).toHaveCount(0);
+    await expect.poll(async () => (await harness.api<Array<{ id: number; muxRef?: { kind: string } }>>(`/projects/${projectId}/windows`)).find((window) => window.id === registered.id)?.muxRef?.kind).toBe('misao');
+    const windows = await harness.api<Array<{ id: number; muxRef?: { kind: string }; label?: string }>>(`/projects/${projectId}/windows`);
+    expect(windows.find((window) => window.id === registered.id)).toMatchObject({ muxRef: { kind: 'misao' }, label: 'wake switch' });
+  });
+
   test('端末 attach: ブラウザ端末への入力が misao のペインへ届き、出力が返る', async ({ app, harness }) => {
     const { label } = await createRegisteredWindow(harness, projectId, 'attach');
 

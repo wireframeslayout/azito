@@ -2150,14 +2150,15 @@ export default function TaskPanel({
             <p style={{ fontSize: 'var(--font-md)', color: 'var(--text-dim)', lineHeight: 1.5, marginBottom: 20 }}>{windowActions.confirmDialog.message}</p>
             <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8 }}>
               <Button onClick={() => windowActions.setConfirmDialog(null)} disabled={windowActions.windowActionLoading}>{t('common:actions.cancel')}</Button>
-              <Button variant="danger" onClick={windowActions.confirmDialog.onConfirm} loading={windowActions.windowActionLoading} loadingLabel={t('common:actions.processing')}>
-                {t('common:actions.confirm')}
+              <Button variant={windowActions.confirmDialog.confirmVariant ?? 'danger'} onClick={windowActions.confirmDialog.onConfirm} loading={windowActions.windowActionLoading} loadingLabel={t('common:actions.processing')}>
+                {windowActions.confirmDialog.confirmLabel ?? t('common:actions.confirm')}
               </Button>
             </div>
           </div>
         </div>
       )}
 
+      {windowActions.wakeDialog}
       <ResourceWarningDialog
         open={windowActions.respawnResourceWarning !== null}
         title={t('workspace:resourceWarning.title')}

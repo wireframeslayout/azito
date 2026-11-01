@@ -205,7 +205,16 @@
       "resuming": "Resuming…",
       "openFirstPane": "Open the window's first pane",
       "closeTab": "Close this tab"
-    }
+    },
+    "muxPlanFailed": "Could not load wake options",
+    "muxSaveFailed": "Could not save the preference",
+    "muxSwitchTitle": "Reopen with misao?",
+    "muxKeepTmux": "Keep tmux",
+    "muxUseMisao": "Use misao",
+    "muxSwitchDescription": "{{title}} will be reopened with the same working directory and conversation. Current processes are not moved.",
+    "muxRemember": "Remember this choice",
+    "muxRetryTmux": "Retry with tmux",
+    "muxInstallLink": "Set up misao on this server"
   },
   "resourceWarning": {
     "title": "Server resources are constrained",

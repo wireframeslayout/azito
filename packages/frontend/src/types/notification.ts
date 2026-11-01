@@ -43,7 +43,8 @@ export type AppNotificationKind =
   | 'execution_approval'
   | 'task_done'
   | 'task_failed'
-  | 'agent_finished';
+  | 'agent_finished'
+  | 'mux_wake';
 
 export interface AppNotification {
   id: string;
@@ -63,6 +64,7 @@ export interface AppNotification {
 }
 
 export type NotificationEvent =
+  | { type: 'window:mux-wake'; payload: { windowId: number; serverName: string; title: string; target: string; reason: string } }
   | { type: 'sessions:updated'; payload: { serverName: string } }
   | { type: 'task:status'; payload: { taskId: number; status: string; title?: string; projectId?: number } }
   | { type: 'phase:completed'; payload: { taskId: number; unitId: number; phase: string; summary: Record<string, unknown> | null } }

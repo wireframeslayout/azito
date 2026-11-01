@@ -205,7 +205,16 @@
       "resuming": "再開中…",
       "openFirstPane": "ウィンドウの先頭のペインを開く",
       "closeTab": "このタブを閉じる"
-    }
+    },
+    "muxPlanFailed": "復帰方法を取得できませんでした",
+    "muxSaveFailed": "設定を保存できませんでした",
+    "muxSwitchTitle": "misao で開き直しますか？",
+    "muxKeepTmux": "tmux のまま",
+    "muxUseMisao": "misao で開く",
+    "muxSwitchDescription": "{{title}} を同じ作業ディレクトリで開き直し、会話を再開します。現在のプロセスは移送されません。",
+    "muxRemember": "この選択を記憶する",
+    "muxRetryTmux": "tmux で再試行",
+    "muxInstallLink": "このサーバーに misao をセットアップ"
   },
   "resourceWarning": {
     "title": "サーバーのリソースがひっ迫しています",

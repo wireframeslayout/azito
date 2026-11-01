@@ -7,7 +7,8 @@
     "notifications": "Notifications",
     "security": "Security",
     "system": "System",
-    "keyboard": "Keyboard"
+    "keyboard": "Keyboard",
+    "terminal": "Terminal"
   },
   "auditLog": {
     "description": "The {{count}} most recent security audit events (task token issuance/revocation, denied requests, approvals, supervisor registration, etc.). This is an operational record, not tamper-evident.",
@@ -255,5 +256,23 @@
     "conflict": "This key is already assigned to another action.",
     "storageError": "Could not save the settings.",
     "intervalOnlySpace": "Available when Space twice is selected."
+  },
+  "terminal": {
+    "policy": "Wake policy",
+    "policyDescription": "Choose how tmux windows are reopened.",
+    "ask": "Ask each time",
+    "misao": "Use misao",
+    "tmux": "Keep tmux",
+    "defaults": "Default for new windows",
+    "defaultsDescription": "Change the default on supported servers.",
+    "noServers": "No supported servers",
+    "allMisao": "Set all to misao",
+    "allTmux": "Set all to tmux",
+    "updated": "Updated",
+    "updateFailed": "Update failed",
+    "loadFailed": "Could not load settings",
+    "saveFailed": "Could not save settings",
+    "retry": "Retry",
+    "confirmDefaults": "Change the default to {{mux}} on {{count}} servers?"
   }
 }

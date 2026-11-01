@@ -1,3 +1,5 @@
+import { paths } from '../paths';
+import { useWakeWindow } from '../hooks/useWakeWindow';
 import { useState, useCallback, useEffect, useMemo, useRef } from 'react';
 import { useTranslation } from 'react-i18next';
 import { IconButton } from './ui/IconButton';
@@ -15,7 +17,8 @@ import { TerminalChatToggle } from './ui/TerminalChatToggle';
 import { MobileKeyboardOverlay } from './ui/MobileKeyboardOverlay';
 import { PaneUnavailableNotice, type PaneNoticeOutcome } from './terminal/PaneUnavailableNotice';
 import { api } from '../api/client';
-import { formatWindowId } from '@azito/shared';
+import { formatWindowId, formatWindowTitleLine, resolveWindowTitle } from '@azito/shared';
+import { windowTitleInput } from '../lib/windowDisplay';
 import { useServerStatuses } from '../hooks/useServerStatuses';
 import { isInsufficientResources } from '../hooks/useAddWindowModal';
 import { useWindowViewMode } from '../hooks/useWindowViewMode';
@@ -143,6 +146,7 @@ export function TerminalContainer({ registeredWindow, serverName, target: rawTar
   const prevReconnectKey = useRef(reconnectKey);
   useEffect(() => {
     if (reconnectKey !== undefined && reconnectKey !== prevReconnectKey.current) {
+      setFailedMisao(false);
       setWindowMissing(false);
       setPaneUnavailable(null);
       setDisconnected(false);
@@ -152,8 +156,12 @@ export function TerminalContainer({ registeredWindow, serverName, target: rawTar
     }
     prevReconnectKey.current = reconnectKey;
   }, [reconnectKey]);
+  const wake = useWakeWindow();
   const [respawning, setRespawning] = useState(false);
   const [respawnError, setRespawnError] = useState<string | null>(null);
+  const [failedMisao, setFailedMisao] = useState(false);
+  const [misaoNotInstalled, setMisaoNotInstalled] = useState(false);
+  const [muxPlanError, setMuxPlanError] = useState(false);
   const [resourceWarning, setResourceWarning] = useState<{ resources: ResourceStatus; retry: () => void } | null>(null);
 
   // Issue #28 Phase D-2 / Issue #69 Phase E-2: computed unconditionally (not just when
@@ -172,6 +180,16 @@ export function TerminalContainer({ registeredWindow, serverName, target: rawTar
   // Callers without project / task data (the server detail page) name the registered window themselves.
   const respawnWindowId = dbWindow?.id ?? registeredWindow?.id ?? null;
   const canResume = resumableWindowId(dbWindow ?? registeredWindow) !== null;
+  useEffect(() => {
+    setMisaoNotInstalled(false);
+    setMuxPlanError(false);
+    if (!dbWindow?.sleeping || respawnWindowId === null) return;
+    let active = true;
+    api<{ misaoInstalled?: boolean }>(`/windows/${respawnWindowId}/respawn-plan`).then((plan) => {
+      if (active && plan.misaoInstalled === false) setMisaoNotInstalled(true);
+    }).catch(() => { if (active) setMuxPlanError(true); });
+    return () => { active = false; };
+  }, [dbWindow?.sleeping, respawnWindowId]);
 
   const [style, setStyle] = useTranscriptStyle();
 
@@ -207,26 +225,29 @@ export function TerminalContainer({ registeredWindow, serverName, target: rawTar
     if (!showQuickKeyBar) setKeyboardOverlayOpen(false);
   }, [showQuickKeyBar, keyboardOverlayOpen]);
 
-  const handleRespawn = useCallback(async function perform(force = false) {
+  const handleRespawn = useCallback(async function perform(force = false, chosenMux?: 'tmux' | 'misao') {
     if (respawnWindowId === null) return;
     setRespawning(true);
     setRespawnError(null);
     try {
+      const mux = chosenMux ?? await wake.choose(respawnWindowId, formatWindowTitleLine(resolveWindowTitle({ ...windowTitleInput(dbWindow ?? registeredWindow ?? {}), tmuxTarget: target })));
+      if (!mux) return;
       const res = await api<{ tmuxTarget: string; error?: string; message?: string; windowId?: number; sessionId?: string }>(`/windows/${respawnWindowId}/respawn`, {
         method: 'POST',
-        body: JSON.stringify({ force }),
+        body: JSON.stringify({ force, mux }),
       });
       if (isInsufficientResources(res)) {
         setResourceWarning({
           resources: res.resources,
           retry: () => {
             setResourceWarning(null);
-            void perform(true);
+            void perform(true, mux);
           },
         });
         return;
       }
       if (!res.tmuxTarget) {
+        setFailedMisao(mux === 'misao');
         if (res.error === 'session_already_running' && res.windowId != null && res.sessionId) {
           setRespawnError(t('terminal.sessionAlreadyRunning', { windowId: formatWindowId(res.windowId), sessionId: res.sessionId.slice(0, 8) }));
         } else {
@@ -234,6 +255,7 @@ export function TerminalContainer({ registeredWindow, serverName, target: rawTar
         }
         return;
       }
+      setFailedMisao(false);
       setWindowMissing(false);
       setPaneUnavailable(null);
       setDisconnected(false);
@@ -247,7 +269,7 @@ export function TerminalContainer({ registeredWindow, serverName, target: rawTar
     } finally {
       setRespawning(false);
     }
-  }, [respawnWindowId, serverName, onRetargetTab, onWindowChanged]);
+  }, [respawnWindowId, serverName, onRetargetTab, onWindowChanged, wake.choose, dbWindow, registeredWindow, target]);
 
   // The pane-unavailable notice can open a pane in the window, which needs the window's MuxRef.
   const windowMuxRef = useMemo<string | null>(() => {
@@ -325,6 +347,7 @@ export function TerminalContainer({ registeredWindow, serverName, target: rawTar
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', height: '100%' }}>
+      {wake.dialog}
       <div
         role="toolbar"
         style={{
@@ -540,6 +563,10 @@ export function TerminalContainer({ registeredWindow, serverName, target: rawTar
             <div style={{ color: 'var(--text-dim)', fontSize: 'var(--font-base)', marginBottom: 4 }}>
               {t('terminal.sleeping')}
             </div>
+            {muxPlanError && <div role="status">{t('terminal.muxPlanFailed')}</div>}
+            {misaoNotInstalled && <a href={paths.server(serverName, 'setup')}>{t('terminal.muxInstallLink')}</a>}
+            {respawnError && <div role="alert" style={{ color: 'var(--danger)' }}>{respawnError}</div>}
+            {failedMisao && <button className="btn btn-sm" disabled={respawning} onClick={() => void handleRespawn(false, 'tmux')}>{t('terminal.muxRetryTmux')}</button>}
             <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
               <button
                 className="btn btn-primary btn-sm"

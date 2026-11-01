@@ -3,6 +3,7 @@ import type { AgentActivityPayload, BrowserOpenedPayload, NotificationEvent } fr
 import { buildWsUrl } from '../api/wsUrl';
 
 export interface NotificationHandlers {
+  onMuxWake?: (payload: { windowId: number; serverName: string; title: string; target: string; reason: string }) => void;
   onSessionsUpdated?: (serverName: string) => void;
   onTaskStatus?: (payload: { taskId: number; status: string; title?: string; projectId?: number }) => void;
   onPaneExited?: (serverName: string) => void;
@@ -87,6 +88,9 @@ export function useNotificationChannel(handlers: NotificationHandlers): void {
     const listener: Listener = (event) => {
       const h = handlersRef.current;
       switch (event.type) {
+        case 'window:mux-wake':
+          h.onMuxWake?.(event.payload);
+          break;
         case 'sessions:updated':
           h.onSessionsUpdated?.(event.payload.serverName);
           break;
