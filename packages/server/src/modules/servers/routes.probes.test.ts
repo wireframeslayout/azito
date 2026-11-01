@@ -110,7 +110,7 @@ describe('GET /api/servers/:name/install-status probes', () => {
     fetchHealth.mockRejectedValue(new AgentLocalNetworkPermissionError('srv', 'unreachable', 'connect EHOSTUNREACH 192.168.1.2:3002'));
     const res = await app.inject({ method: 'GET', url: '/api/servers/srv/install-status' });
     expect(res.statusCode).toBe(503);
-    expect(res.json()).toMatchObject({ code: 'macos_local_network_permission', detail: 'connect EHOSTUNREACH 192.168.1.2:3002' });
+    expect(res.json()).toMatchObject({ error: 'agent_unreachable', server: 'srv', reason: 'unreachable', status: 'offline', code: 'macos_local_network_permission', detail: 'connect EHOSTUNREACH 192.168.1.2:3002' });
     expect(specs).toHaveLength(0);
   });
 

@@ -126,7 +126,7 @@ export function hasIsolationCleanupReportField(body: unknown): body is { isolati
 async function fetchInstallStatus(encodedName: string): Promise<{ status: InstallStatusResponse | null; error: 'offline' | 'failed' | null; detail?: string }> {
   try {
     const r = await api<InstallStatusResponse | { error: string; code?: string; detail?: string }>(`/servers/${encodedName}/install-status`);
-    if ('error' in r) return { status: null, error: r.error === 'agent_unreachable' || r.code === 'macos_local_network_permission' ? 'offline' : 'failed', ...(r.code === 'macos_local_network_permission' ? { detail: r.detail } : {}) };
+    if ('error' in r) return { status: null, error: r.error === 'agent_unreachable' ? 'offline' : 'failed', ...(r.code === 'macos_local_network_permission' ? { detail: r.detail } : {}) };
     return { status: r, error: null };
   } catch {
     return { status: null, error: 'failed' };
