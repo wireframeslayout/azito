@@ -11,7 +11,7 @@
 export type AgentActivityStopReason = 'completed' | 'interrupted' | 'deleted' | 'offline' | 'api_error' | 'unknown';
 
 export type NotificationEvent =
-  | { type: 'window:mux-wake'; payload: { windowId: number; serverName: string; title: string; target: string; reason: string } }
+  | { type: 'window:mux_switch_suggested'; payload: { windowId: number; serverName: string; taskId?: number; reason: 'ask' | 'misao_unavailable' } }
   | { type: 'sessions:updated'; payload: { serverName: string } }
   | { type: 'task:status'; payload: { taskId: number; status: string; title?: string; projectId?: number } }
   | { type: 'phase:completed'; payload: { taskId: number; unitId: number; phase: string; summary: Record<string, unknown> | null } }

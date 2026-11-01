@@ -214,7 +214,9 @@
     "muxSwitchDescription": "{{title}} will be reopened with the same working directory and conversation. Current processes are not moved.",
     "muxRemember": "Remember this choice",
     "muxRetryTmux": "Retry with tmux",
-    "muxInstallLink": "Set up misao on this server"
+    "muxInstallLink": "Set up misao on this server",
+    "muxNotInstalled": "misao is not installed on {{serverName}}; this window will open with tmux.",
+    "muxWaking": "Reopening with misao…"
   },
   "resourceWarning": {
     "title": "Server resources are constrained",

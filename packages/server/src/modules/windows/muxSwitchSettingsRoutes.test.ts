@@ -11,11 +11,11 @@ describe('mux switch settings API', () => {
     up(db);
     const app = Fastify();
     await app.register(muxSwitchSettingsRoutes, { settingsRepo: new SqliteMuxSwitchSettingsRepository(db), serverRepo: { findAll: () => [] } as never, muxDriverRegistry: {} as never });
-    expect((await app.inject({ method: 'GET', url: '/api/settings/mux-switch' })).json()).toMatchObject({ policy: 'ask', servers: [] });
-    expect((await app.inject({ method: 'PUT', url: '/api/settings/mux-switch', payload: { policy: 'misao' } })).statusCode).toBe(200);
-    expect((await app.inject({ method: 'GET', url: '/api/settings/mux-switch' })).json()).toMatchObject({ policy: 'misao' });
-    expect((await app.inject({ method: 'PUT', url: '/api/settings/mux-switch', payload: { policy: 'tmux', extra: true } })).statusCode).toBe(400);
-    expect((await app.inject({ method: 'PUT', url: '/api/settings/mux-switch', payload: { policy: 'invalid' } })).statusCode).toBe(400);
+    expect((await app.inject({ method: 'GET', url: '/api/settings/mux-switch' })).json()).toMatchObject({ mode: 'ask' });
+    expect((await app.inject({ method: 'PUT', url: '/api/settings/mux-switch', payload: { mode: 'misao' } })).statusCode).toBe(200);
+    expect((await app.inject({ method: 'GET', url: '/api/settings/mux-switch' })).json()).toMatchObject({ mode: 'misao' });
+    expect((await app.inject({ method: 'PUT', url: '/api/settings/mux-switch', payload: { mode: 'tmux', extra: true } })).statusCode).toBe(400);
+    expect((await app.inject({ method: 'PUT', url: '/api/settings/mux-switch', payload: { mode: 'invalid' } })).statusCode).toBe(400);
     await app.close(); db.close();
   });
 });

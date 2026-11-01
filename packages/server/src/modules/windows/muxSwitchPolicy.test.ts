@@ -13,7 +13,7 @@ describe('mux switch settings', () => {
       expect(repo.get()).toBe('ask');
       repo.set('misao');
       expect(repo.get()).toBe('misao');
-      expect(() => db.prepare("UPDATE mux_switch_settings SET policy = 'invalid'").run()).toThrow();
+      expect(() => db.prepare("UPDATE mux_switch_settings SET mode = 'invalid'").run()).toThrow();
       expect(() => db.prepare("INSERT INTO mux_switch_settings (id) VALUES (2)").run()).toThrow();
     } finally { db.close(); }
   });

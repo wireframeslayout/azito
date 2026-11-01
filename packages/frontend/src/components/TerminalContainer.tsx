@@ -158,6 +158,7 @@ export function TerminalContainer({ registeredWindow, serverName, target: rawTar
   }, [reconnectKey]);
   const wake = useWakeWindow();
   const [respawning, setRespawning] = useState(false);
+  const [wakeMux, setWakeMux] = useState<'tmux' | 'misao' | null>(null);
   const [respawnError, setRespawnError] = useState<string | null>(null);
   const [failedMisao, setFailedMisao] = useState(false);
   const [misaoNotInstalled, setMisaoNotInstalled] = useState(false);
@@ -185,8 +186,8 @@ export function TerminalContainer({ registeredWindow, serverName, target: rawTar
     setMuxPlanError(false);
     if (!dbWindow?.sleeping || respawnWindowId === null) return;
     let active = true;
-    api<{ misaoInstalled?: boolean }>(`/windows/${respawnWindowId}/respawn-plan`).then((plan) => {
-      if (active && plan.misaoInstalled === false) setMisaoNotInstalled(true);
+    api<{ misao?: { hosted: boolean } }>(`/windows/${respawnWindowId}/respawn-plan`).then((plan) => {
+      if (active && plan.misao?.hosted === false) setMisaoNotInstalled(true);
     }).catch(() => { if (active) setMuxPlanError(true); });
     return () => { active = false; };
   }, [dbWindow?.sleeping, respawnWindowId]);
@@ -229,10 +230,12 @@ export function TerminalContainer({ registeredWindow, serverName, target: rawTar
     if (respawnWindowId === null) return;
     setRespawning(true);
     setRespawnError(null);
+    let mux: 'tmux' | 'misao' | null | undefined = chosenMux;
     try {
-      const mux = chosenMux ?? await wake.choose(respawnWindowId, formatWindowTitleLine(resolveWindowTitle({ ...windowTitleInput(dbWindow ?? registeredWindow ?? {}), tmuxTarget: target })));
+      mux = mux ?? await wake.choose(respawnWindowId, formatWindowTitleLine(resolveWindowTitle({ ...windowTitleInput(dbWindow ?? registeredWindow ?? {}), tmuxTarget: target })));
       if (!mux) return;
-      const res = await api<{ tmuxTarget: string; error?: string; message?: string; windowId?: number; sessionId?: string }>(`/windows/${respawnWindowId}/respawn`, {
+      setWakeMux(mux);
+      const res = await api<{ tmuxTarget: string; error?: string; reason?: string; message?: string; windowId?: number; sessionId?: string }>(`/windows/${respawnWindowId}/respawn`, {
         method: 'POST',
         body: JSON.stringify({ force, mux }),
       });
@@ -241,17 +244,17 @@ export function TerminalContainer({ registeredWindow, serverName, target: rawTar
           resources: res.resources,
           retry: () => {
             setResourceWarning(null);
-            void perform(true, mux);
+            void perform(true, mux ?? undefined);
           },
         });
         return;
       }
       if (!res.tmuxTarget) {
-        setFailedMisao(mux === 'misao');
+        setFailedMisao(mux === 'misao' && dbWindow?.muxRef?.kind !== 'misao');
         if (res.error === 'session_already_running' && res.windowId != null && res.sessionId) {
           setRespawnError(t('terminal.sessionAlreadyRunning', { windowId: formatWindowId(res.windowId), sessionId: res.sessionId.slice(0, 8) }));
         } else {
-          setRespawnError(res.message || res.error || 'Respawn failed');
+          setRespawnError(res.message || (res.reason ? `${res.error}: ${res.reason}` : res.error) || 'Respawn failed');
         }
         return;
       }
@@ -265,8 +268,10 @@ export function TerminalContainer({ registeredWindow, serverName, target: rawTar
       onRetargetTab?.(serverName, respawnWindowId, await fetchSessionsOrUndefined(serverName));
       onWindowChanged?.();
     } catch (err) {
+      setFailedMisao(mux === 'misao' && dbWindow?.muxRef?.kind !== 'misao');
       setRespawnError(err instanceof Error ? err.message : 'Respawn failed');
     } finally {
+      setWakeMux(null);
       setRespawning(false);
     }
   }, [respawnWindowId, serverName, onRetargetTab, onWindowChanged, wake.choose, dbWindow, registeredWindow, target]);
@@ -564,7 +569,7 @@ export function TerminalContainer({ registeredWindow, serverName, target: rawTar
               {t('terminal.sleeping')}
             </div>
             {muxPlanError && <div role="status">{t('terminal.muxPlanFailed')}</div>}
-            {misaoNotInstalled && <a href={paths.server(serverName, 'setup')}>{t('terminal.muxInstallLink')}</a>}
+            {misaoNotInstalled && <div>{t('terminal.muxNotInstalled', { serverName })} <a href={paths.server(serverName, 'setup')}>{t('terminal.muxInstallLink')}</a></div>}
             {respawnError && <div role="alert" style={{ color: 'var(--danger)' }}>{respawnError}</div>}
             {failedMisao && <button className="btn btn-sm" disabled={respawning} onClick={() => void handleRespawn(false, 'tmux')}>{t('terminal.muxRetryTmux')}</button>}
             <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
@@ -589,7 +594,7 @@ export function TerminalContainer({ registeredWindow, serverName, target: rawTar
                     }}
                   />
                 )}
-                {respawning ? t('terminal.respawning') : t('terminal.wake')}
+                {respawning ? t(wakeMux === 'misao' ? 'terminal.muxWaking' : 'terminal.respawning') : t('terminal.wake')}
               </button>
               {onCloseTab && (
                 <button className="btn btn-sm" onClick={onCloseTab}>

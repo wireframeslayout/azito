@@ -16,7 +16,7 @@ function Example({ onChoice }: { onChoice: (value: string | null) => void }) {
 beforeEach(() => {
   mobile.value = false;
   vi.mocked(apiWithStatus).mockReset();
-  vi.mocked(apiWithStatus).mockResolvedValue({ status: 200, body: { mux: 'tmux', policy: 'ask', shouldAsk: true } });
+  vi.mocked(apiWithStatus).mockResolvedValue({ status: 200, body: { currentMux: 'tmux', mode: 'ask', misao: { hosted: true, available: true }, shouldAsk: true } });
 });
 
 describe('wake selection', () => {
@@ -28,10 +28,25 @@ describe('wake selection', () => {
     fireEvent.click(dialog.querySelector('input')!);
     fireEvent.submit(dialog.querySelector('form')!);
     await waitFor(() => expect(chosen).toHaveBeenCalledWith('misao'));
-    expect(apiWithStatus).toHaveBeenCalledWith('/settings/mux-switch', expect.objectContaining({ method: 'PUT', body: JSON.stringify({ policy: 'misao' }) }));
+    expect(apiWithStatus).toHaveBeenCalledWith('/settings/mux-switch', expect.objectContaining({ method: 'PUT', body: JSON.stringify({ mode: 'misao' }) }));
+  });
+  it('uses tmux without asking when misao is not installed even in misao mode', async () => {
+    vi.mocked(apiWithStatus).mockResolvedValueOnce({ status: 200, body: { currentMux: 'tmux', mode: 'misao', misao: { hosted: false, available: false, reason: 'not_installed' }, shouldAsk: false } });
+    const chosen = vi.fn();
+    render(<HotkeyProvider><Example onChoice={chosen} /></HotkeyProvider>);
+    fireEvent.click(screen.getByText('Wake'));
+    await waitFor(() => expect(chosen).toHaveBeenCalledWith('tmux'));
+    expect(screen.queryByRole('dialog')).toBeNull();
+  });
+  it('chooses misao when installed but stopped, leaving failure to the respawn request', async () => {
+    vi.mocked(apiWithStatus).mockResolvedValueOnce({ status: 200, body: { currentMux: 'tmux', mode: 'misao', misao: { hosted: true, available: false, reason: 'daemon_unreachable' }, shouldAsk: false } });
+    const chosen = vi.fn();
+    render(<HotkeyProvider><Example onChoice={chosen} /></HotkeyProvider>);
+    fireEvent.click(screen.getByText('Wake'));
+    await waitFor(() => expect(chosen).toHaveBeenCalledWith('misao'));
   });
   it('shows a failed preference save and leaves the choice pending', async () => {
-    vi.mocked(apiWithStatus).mockResolvedValueOnce({ status: 200, body: { mux: 'tmux', policy: 'ask', shouldAsk: true } }).mockResolvedValueOnce({ status: 500, body: {} });
+    vi.mocked(apiWithStatus).mockResolvedValueOnce({ status: 200, body: { currentMux: 'tmux', mode: 'ask', misao: { hosted: true, available: true }, shouldAsk: true } }).mockResolvedValueOnce({ status: 500, body: {} });
     const chosen = vi.fn();
     render(<HotkeyProvider><Example onChoice={chosen} /></HotkeyProvider>);
     fireEvent.click(screen.getByText('Wake'));
@@ -48,8 +63,9 @@ describe('wake selection', () => {
     const chosen = vi.fn();
     render(<HotkeyProvider><Example onChoice={chosen} /></HotkeyProvider>);
     fireEvent.click(screen.getByText('Wake'));
-    await screen.findByRole('dialog', { name: 'Reopen with misao?' });
+    const sheet = await screen.findByRole('dialog', { name: 'Reopen with misao?' });
     await waitFor(() => expect(screen.getByText('Use misao')).toHaveFocus());
+    expect(Array.from(sheet.querySelectorAll('button')).map((button) => button.textContent)).toEqual(['Use misao', 'Keep tmux', 'Cancel']);
     fireEvent.keyDown(document, { key: 'Escape' });
     await waitFor(() => expect(chosen).toHaveBeenCalledWith(null));
   });

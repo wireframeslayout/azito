@@ -319,7 +319,7 @@ function buildService(opts: {
     revokeForDestroyedWindow: vi.fn(),
   } as any;
 
-  const muxDriverRegistry = { resolve: vi.fn(() => tmux) } as any;
+  const muxDriverRegistry = { resolve: vi.fn(() => tmux), supportedKinds: vi.fn(() => ['tmux', 'misao']) } as any;
   const conversationProbe: ConversationProbe = opts.conversationProbe ?? { exists: vi.fn(async () => true) };
 
   const service = new WindowRespawnService(
@@ -2890,6 +2890,21 @@ describe('switching mux on respawn', () => {
 });
 
 describe('automatic wake policy', () => {
+  it('records an automatic switch without failing the wake if auditing fails', async () => {
+    const win = makeWindow({ id: 7, taskId: null, sleeping: true });
+    const { service, muxDriverRegistry, windowRepo } = buildService({ window: win, task: null });
+    muxDriverRegistry.availabilityFor = vi.fn(() => ({ available: true }));
+    const record = vi.fn(() => { throw new Error('audit failed'); });
+    const log = vi.spyOn(console, 'error').mockImplementation(() => {});
+    (service as unknown as { muxSwitch: unknown }).muxSwitch = { settings: { get: () => 'misao' }, notifications: { emit: vi.fn() }, audit: { record } };
+    vi.mocked(windowRepo.findById).mockReturnValueOnce(win).mockReturnValue({ ...win, muxRef: { kind: 'misao', workspace: 'azito', window: 'w_01M3XFD8H97JCPKS5Y5BH3JZQJ' } });
+    vi.spyOn(service, 'respawn').mockResolvedValue({ tmuxTarget: 'azito:w_01M3XFD8H97JCPKS5Y5BH3JZQJ' });
+    try {
+      await expect(service.wakeWindow(7, win.serverName)).resolves.toHaveProperty('tmuxTarget');
+      expect(record).toHaveBeenCalledWith(expect.objectContaining({ event: 'window.mux_switched', detail: expect.objectContaining({ trigger: 'auto' }) }));
+    } finally { log.mockRestore(); }
+  });
+
   it('uses tmux and announces when misao is unavailable', async () => {
     const win = makeWindow({ id: 7, taskId: null, sleeping: true });
     const { service, muxDriverRegistry } = buildService({ window: win, task: null });
@@ -2899,6 +2914,6 @@ describe('automatic wake policy', () => {
     const respawn = vi.spyOn(service, 'respawn').mockResolvedValue({ tmuxTarget: win.tmuxTarget });
     await service.wakeWindow(7, win.serverName);
     expect(respawn).toHaveBeenCalledWith(7, expect.anything(), expect.objectContaining({ mux: 'tmux', autoSwitch: true }));
-    expect(emit).toHaveBeenCalledWith(expect.objectContaining({ type: 'window:mux-wake', payload: expect.objectContaining({ reason: 'daemon_unreachable' }) }));
+    expect(emit).toHaveBeenCalledWith(expect.objectContaining({ type: 'window:mux_switch_suggested', payload: expect.objectContaining({ reason: 'misao_unavailable' }) }));
   });
 });

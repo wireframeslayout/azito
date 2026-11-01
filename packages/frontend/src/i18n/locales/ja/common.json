@@ -214,7 +214,9 @@
     "muxSwitchDescription": "{{title}} を同じ作業ディレクトリで開き直し、会話を再開します。現在のプロセスは移送されません。",
     "muxRemember": "この選択を記憶する",
     "muxRetryTmux": "tmux で再試行",
-    "muxInstallLink": "このサーバーに misao をセットアップ"
+    "muxInstallLink": "このサーバーに misao をセットアップ",
+    "muxNotInstalled": "{{serverName}} には misao が入っていないため、tmux で開きます。",
+    "muxWaking": "misao で開いています…"
   },
   "resourceWarning": {
     "title": "サーバーのリソースがひっ迫しています",

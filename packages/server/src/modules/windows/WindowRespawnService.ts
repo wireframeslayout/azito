@@ -1,5 +1,5 @@
+import { recordAuditBestEffort } from '../../shared/audit/recordAuditBestEffort';
 import { selectAutoWakeMux } from './muxSwitchPolicy';
-import { resolveWindowTitle, formatWindowTitleLine } from '@azito/shared';
 import type { SqliteMuxSwitchSettingsRepository } from './SqliteMuxSwitchSettingsRepository';
 import type { NotificationBus } from '../notifications/NotificationBus';
 import type { AuditLogService } from '../../shared/audit/AuditLogService';
@@ -318,16 +318,11 @@ export class WindowRespawnService {
     // stops the respawn with its reason, and one that was never written is started fresh under the same id (#542).
     const launchPlan = opts?.skipAgentLaunch ? null : await this.planAgentLaunches(server, win, windowId);
 
-    const supervise = shouldSupervise(server.type, win.windowType, opts?.mux ?? windowKindOf(win));
-    // task/unitId already resolved above for the execution gate — reused
-    // here instead of re-querying the repositories a second time.
-    let supervision: SupervisionContext = { supervise, taskId: win.taskId, unitId, windowId };
-
     // A host that starts a worker as a program (Windows) gets it as the first pane of the window created below: argv and directory are
     // decided here, before anything is destroyed, and nothing is typed into a shell or replaced afterwards.
     let respawnProgram: PaneProgram | undefined;
     if (this.startsWorkerAsProgram(server) && win.workerType && !opts?.skipAgentLaunch) {
-      if (supervise) throw new Error(`A worker started as a program cannot run under a supervisor (${server.name}).`);
+      if (shouldSupervise(server.type, win.windowType, opts?.mux ?? windowKindOf(win))) throw new Error(`A worker started as a program cannot run under a supervisor (${server.name}).`);
       const single = launchPlan?.single;
       const launch = this.sessionStrategyFactory.create(win.workerType).buildRespawnLaunch(single?.sessionId ?? null, win.workerModel, null, blockMcp, single?.conversation);
       // A window whose launch cannot be rebuilt (a custom command is not stored, so a generic worker has none) would be destroyed and
@@ -406,9 +401,10 @@ export class WindowRespawnService {
       // The window is re-created in the mux it lived in (its row's kind), not the server's default mux.
       const sourceKind = windowKindOf(currentWin);
       let windowKind = opts?.mux ?? sourceKind;
+      let supervision: SupervisionContext = { supervise: shouldSupervise(server.type, currentWin.windowType, windowKind), taskId: currentWin.taskId, unitId, windowId };
       if (sourceKind === 'misao' && windowKind === 'tmux') throw new Error('misao_to_tmux_unsupported');
-      const openName = sourceKind === 'misao'
-        ? (windowDisplayName(currentWin) ?? (task ? `task-${task.id}-w${windowId}` : `win-w${windowId}`))
+      const openName = windowKind === 'misao'
+        ? (windowDisplayName(currentWin) ?? (sourceKind === 'tmux' ? windowPart : (task ? `task-${task.id}-w${windowId}` : `win-w${windowId}`)))
         : windowPart;
 
       // Issue #29 review, 14th pass, Important finding 1: the per-server
@@ -503,7 +499,8 @@ export class WindowRespawnService {
           : workspaceExists && (workspace?.windows.some((w: { name: string }) => w.name === windowPart) ?? false);
 
         if (windowKind !== sourceKind) {
-          const availability = this.muxDriverRegistry.availabilityFor(windowKind, freshServer);
+          const supported = this.muxDriverRegistry.supportedKinds(freshServer).includes(windowKind);
+          const availability = supported ? this.muxDriverRegistry.availabilityFor(windowKind, freshServer) : { available: false as const, reason: 'not_installed' as const };
           if (!availability.available) {
             if (!opts?.autoSwitch) throw new MuxDriverUnavailableError(windowKind, availability.reason);
             windowKind = sourceKind;
@@ -727,17 +724,19 @@ export class WindowRespawnService {
     if (!this.muxSwitch) return this.respawn(windowId, server, opts);
     const source = windowKindOf(win);
     const policy = this.muxSwitch.settings.get();
-    const availability = this.muxDriverRegistry.availabilityFor('misao', server);
+    const supported = this.muxDriverRegistry.supportedKinds(server).includes('misao');
+    const availability = supported ? this.muxDriverRegistry.availabilityFor('misao', server) : { available: false as const, reason: 'not_installed' as const };
     const mux = selectAutoWakeMux(source, policy, availability.available);
     const result = await this.respawn(windowId, server, { ...opts, mux, autoSwitch: true });
     const actualMux = windowKindOf(this.windowRepo.findById(windowId)!);
-    const title = formatWindowTitleLine(resolveWindowTitle({ id: win.id, label: win.label, labelSource: win.labelSource, tmuxTarget: win.tmuxTarget, workerType: win.workerType ?? undefined, windowType: win.windowType }));
     if (source === 'tmux' && policy === 'ask') {
-      this.muxSwitch!.notifications.emit({ type: 'window:mux-wake', payload: { windowId, serverName, title, target: result.tmuxTarget, reason: 'ask' } });
+      this.muxSwitch!.notifications.emit({ type: 'window:mux_switch_suggested', payload: { windowId, serverName, ...(win.taskId !== null ? { taskId: win.taskId } : {}), reason: 'ask' } });
     } else if (source === 'tmux' && policy === 'misao' && actualMux === 'tmux') {
-      this.muxSwitch!.notifications.emit({ type: 'window:mux-wake', payload: { windowId, serverName, title, target: result.tmuxTarget, reason: availability.available ? 'daemon_unreachable' : availability.reason } });
+      this.muxSwitch!.notifications.emit({ type: 'window:mux_switch_suggested', payload: { windowId, serverName, ...(win.taskId !== null ? { taskId: win.taskId } : {}), reason: 'misao_unavailable' } });
     }
-    if (source !== actualMux) this.muxSwitch!.audit.record({ actorClass: 'runtime', actorId: null, event: 'windows.mux_switch', detail: { windowId, serverName, from: source, to: actualMux, mode: 'auto' } });
+    if (source !== actualMux) {
+      recordAuditBestEffort(this.muxSwitch.audit, { actorClass: 'runtime', actorId: null, event: 'window.mux_switched', detail: { windowId, serverName, from: source, to: actualMux, trigger: 'auto' } }, (err) => console.error('Mux switch audit failed', err));
+    }
     return result;
   }
 

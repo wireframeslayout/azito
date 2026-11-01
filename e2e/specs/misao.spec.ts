@@ -125,8 +125,8 @@ test.describe('misao ドライバ', () => {
     const registered = await harness.api<{ id: number }>(`/projects/${projectId}/windows`, {
       method: 'POST', body: JSON.stringify({ server_name: 'local', ref: created.ref, label: 'wake switch', window_type: 'terminal' }),
     });
-    const plan = await harness.api<{ mux: string; shouldAsk: boolean }>(`/windows/${registered.id}/respawn-plan`);
-    expect(plan).toMatchObject({ mux: 'tmux', shouldAsk: true });
+    const plan = await harness.api<{ currentMux: string; shouldAsk: boolean }>(`/windows/${registered.id}/respawn-plan`);
+    expect(plan).toMatchObject({ currentMux: 'tmux', shouldAsk: true });
     await app.goto(`${harness.baseUrl}/workspace/${projectId}`);
     const row = app.getByText(`W-${registered.id}`, { exact: true }).first();
     await row.click({ button: 'right' });

@@ -785,25 +785,32 @@ describe('respawn mux API', () => {
     const win = makeWindow({ sleeping: true });
     const server = makeServer();
     const respawn = vi.fn().mockResolvedValue({ tmuxTarget: 'proj:replacement' });
+    const record = vi.fn(() => { throw new Error('audit failed'); });
+    const registry = { availabilityFor: vi.fn(() => ({ available: true } as { available: true } | { available: false; reason: 'daemon_unreachable' })), supportedKinds: () => ['tmux', 'misao'] };
     await app.register(windowsRoutes, {
       harnessPrefix: '', windowRepo: { findById: () => win } as any,
       projectRepo: {} as any, taskRepo: {} as any, tmux: {} as any,
-      muxDriverRegistry: { availabilityFor: () => ({ available: true }) } as any,
+      muxDriverRegistry: registry as any,
       serverRepo: { findByName: () => server } as any, transportFactory: { hostProfileFor: () => null },
       respawnService: { respawn } as any, sleepService: {} as any, sessionStrategyFactory: {} as any,
       sessionCaptureService: {} as any, supervisorRegistry: {} as any, windowActivityStatusService: {} as any,
       windowSnapshotService: {} as any, uiToken: '', buildSecondaryWindowEnv: () => ({}), serverIsolationMutex: new KeyedMutex(),
       muxSwitchSettingsRepo: { get: () => 'ask' } as any, agentActivityMonitor: { snapshot: () => [] } as any,
-      auditLogService: { record: vi.fn() } as any,
+      auditLogService: { record } as any,
     });
     const plan = await app.inject({ method: 'GET', url: '/api/windows/1/respawn-plan' });
-    expect(plan.json()).toMatchObject({ mux: 'tmux', misaoInstalled: true, policy: 'ask', shouldAsk: true });
+    expect(plan.json()).toMatchObject({ currentMux: 'tmux', misao: { hosted: true, available: true }, mode: 'ask', shouldAsk: true });
     const bad = await app.inject({ method: 'POST', url: '/api/windows/1/respawn', payload: { mux: 'misao', extra: true } });
     expect(bad.statusCode).toBe(400);
     expect(respawn).not.toHaveBeenCalled();
+    registry.availabilityFor.mockReturnValueOnce({ available: false, reason: 'daemon_unreachable' });
+    const unavailable = await app.inject({ method: 'POST', url: '/api/windows/1/respawn', payload: { mux: 'misao' } });
+    expect(unavailable.statusCode).toBe(409);
+    expect(unavailable.json()).toEqual({ error: 'misao_unavailable', reason: 'daemon_unreachable' });
     const good = await app.inject({ method: 'POST', url: '/api/windows/1/respawn', payload: { mux: 'misao' } });
     expect(good.statusCode).toBe(200);
     expect(respawn).toHaveBeenCalledWith(1, server, expect.objectContaining({ mux: 'misao' }));
+    expect(record).toHaveBeenCalledWith(expect.objectContaining({ event: 'window.mux_switched', detail: expect.objectContaining({ trigger: 'manual' }) }));
     await app.close();
   });
 });
