@@ -139,6 +139,9 @@ describe('uninstallWindowsAgent', () => {
     host.answers['Checking claude MCP registration'] = '{"outcome":"failed","detail":"settings failed"}';
     host.answers['Checking codex MCP registration'] = '{"outcome":"done"}';
     const result = await run(host);
+    expect(host.bodies.filter((b) => b.what.includes('MCP registration')).map((b) => b.what)).toEqual([
+      'Checking claude MCP registration', 'Checking codex MCP registration',
+    ]);
     expect(result.ok).toBe(false);
     expect(result.steps.filter((s) => s.id.endsWith('HarnessMcp'))).toEqual([
       { id: 'claudeHarnessMcp', outcome: 'failed', detail: 'settings failed' },
@@ -942,7 +945,7 @@ describe('WindowsAgentDeployer.uninstall', () => {
       const result = await fake.exec(h, command);
       const last = fake.calls[fake.calls.length - 1];
       if (last?.kind !== 'script') return result;
-      if (last.text.includes('[IO.Compression.GzipStream]')) return { ...result, stdout: '{"outcome":"absent"}\r\n' };
+      if (last.text.includes('AZITO_MCP_SRC')) return { ...result, stdout: '{"outcome":"absent"}\r\n' };
       if (last.text.includes('Remove-Tree')) return { ...result, stdout: 'DONE\r\n' };
       if (last.text.includes('Get-NetFirewallRule')) return { ...result, stdout: 'ABSENT\r\n' };
       if (last.text.includes('Find-Left')) return { ...result, stdout: 'CLEAR\r\n' };

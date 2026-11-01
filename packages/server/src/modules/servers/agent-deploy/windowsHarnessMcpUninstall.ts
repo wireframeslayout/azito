@@ -85,8 +85,9 @@ catch { result('failed', kind === 'claude' ? 'Claude settings could not be read 
 
 export function harnessMcpScript(kind: 'claude' | 'codex', node: string, home: string, expected: string): string {
   const q = powershellDialect.quote;
-  const encoded = gzipSync(Buffer.from(HOST_SCRIPT, 'utf8')).toString('base64');
-  return `$bytes = [Convert]::FromBase64String(${q(encoded)}); $stream = [IO.Compression.GzipStream]::new([IO.MemoryStream]::new(,$bytes), [IO.Compression.CompressionMode]::Decompress); $reader = [IO.StreamReader]::new($stream); $source = $reader.ReadToEnd(); $reader.Dispose()\n& ${q(node)} -e $source ${q(kind)} ${q(home)} ${q(expected)}\nif ($LASTEXITCODE -ne 0) { throw 'MCP inspection failed' }`;
+  const encoded = gzipSync(Buffer.from(JSON.stringify({ source: HOST_SCRIPT, args: [kind, home, expected] }), 'utf8')).toString('base64');
+  const launcher = 'const p=JSON.parse(require(`zlib`).gunzipSync(Buffer.from(process.env.AZITO_MCP_SRC,`base64`)));process.argv=[process.execPath,...p.args];eval(p.source)';
+  return `$env:AZITO_MCP_SRC = ${q(encoded)}\n& ${q(node)} -e ${q(launcher)}\nif ($LASTEXITCODE -ne 0) { throw 'MCP inspection failed' }`;
 }
 
 export function parseHarnessMcpOutput(output: string): ScriptOutcome {

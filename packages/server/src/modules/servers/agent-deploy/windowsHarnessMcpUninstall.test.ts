@@ -7,6 +7,22 @@ import { join } from 'node:path';
 import { harnessMcpScript, parseHarnessMcpOutput } from './windowsHarnessMcpUninstall';
 
 describe('Claude harness MCP removal', () => {
+  it('passes the compressed script and arguments through the Node launcher', () => {
+    const home = mkdtempSync(join(tmpdir(), 'azito mcp-'));
+    try {
+      const settings = join(home, '.claude', 'settings.json');
+      const target = join(home, 'index.js');
+      mkdirSync(join(home, '.claude'));
+      writeFileSync(target, '');
+      writeFileSync(settings, JSON.stringify({ mcpServers: { 'azt-mcp': { command: 'node', args: [target] } } }));
+      const script = harnessMcpScript('claude', process.execPath, home, target);
+      const payload = /AZITO_MCP_SRC = '([^']+)'/.exec(script)![1];
+      const launcher = / -e '([^']+)'/.exec(script)![1];
+      expect(launcher).not.toMatch(/["'\\]/);
+      const output = execFileSync(process.execPath, ['-e', launcher], { encoding: 'utf8', env: { ...process.env, AZITO_MCP_SRC: payload } });
+      expect(parseHarnessMcpOutput(output).outcome).toBe('done');
+    } finally { rmSync(home, { recursive: true, force: true }); }
+  });
   it('removes only a matching entry and is safe to repeat', () => {
     const home = mkdtempSync(join(tmpdir(), 'azito-mcp-'));
     try {
@@ -16,9 +32,9 @@ describe('Claude harness MCP removal', () => {
       writeFileSync(target, '');
       writeFileSync(settings, JSON.stringify({ other: true, mcpServers: { 'azt-mcp': { command: 'node', args: [target], env: { TOKEN: 'secret' } }, other: { command: 'other' } } }));
       const script = harnessMcpScript('claude', process.execPath, home, target);
-      const encoded = /FromBase64String\('([^']+)'\)/.exec(script)?.[1];
+      const encoded = /AZITO_MCP_SRC = '([^']+)'/.exec(script)?.[1];
       expect(encoded).toBeDefined();
-      const source = gunzipSync(Buffer.from(encoded!, 'base64')).toString('utf8');
+      const source = JSON.parse(gunzipSync(Buffer.from(encoded!, 'base64')).toString('utf8')).source;
       const run = () => parseHarnessMcpOutput(execFileSync(process.execPath, ['-e', source, 'claude', home, target], { encoding: 'utf8' }));
       expect(run().outcome).toBe('done');
       expect(JSON.parse(readFileSync(settings, 'utf8'))).toEqual({ other: true, mcpServers: { other: { command: 'other' } } });
@@ -38,8 +54,8 @@ describe('Claude harness MCP removal', () => {
       writeFileSync(executable, `#!/bin/sh\nif [ "$2" = get ]; then /bin/cat "${response}"; else /usr/bin/touch "${marker}"; fi\n`);
       chmodSync(executable, 0o755);
       const script = harnessMcpScript('codex', process.execPath, home, target);
-      const encoded = /FromBase64String\('([^']+)'\)/.exec(script)![1];
-      const source = gunzipSync(Buffer.from(encoded, 'base64')).toString('utf8');
+      const encoded = /AZITO_MCP_SRC = '([^']+)'/.exec(script)![1];
+      const source = JSON.parse(gunzipSync(Buffer.from(encoded, 'base64')).toString('utf8')).source;
       const run = () => parseHarnessMcpOutput(execFileSync(process.execPath, ['-e', source, 'codex', home, target], { encoding: 'utf8', env: { ...process.env, PATH: home, PATHEXT: '.EXE', CODEX_HOME: join(home, 'custom') } }));
       // The host script uses Windows PATH separators.
       writeFileSync(response, JSON.stringify({ transport: { command: 'node', args: [target] } }));
