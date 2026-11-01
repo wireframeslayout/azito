@@ -1066,7 +1066,6 @@ input[aria-invalid="true"]:focus-visible { outline-color: var(--danger) !importa
   box-shadow: none !important;
 }
 
-<<<<<<< HEAD
 .md-content { max-width: 760px; min-width: 0; font-family: var(--font-prose); font-size: var(--font-base); line-height: 1.8; color: var(--text); overflow-wrap: anywhere; }
 .md-content h1, .md-content h2, .md-content h3, .md-content h4 { margin: 1.3em 0 .8em; font-weight: 700; line-height: 1.5; }
 .md-content h1, .md-content h2 { font-size: 15.5px; border-bottom: 1px solid var(--hairline); padding-bottom: .3em; }
@@ -1103,7 +1102,7 @@ input[aria-invalid="true"]:focus-visible { outline-color: var(--danger) !importa
 .tool-run > summary:hover, .tool-run[open] > summary { background: var(--bg-hover); }
 .tool-run > summary:focus-visible { outline: 2px solid var(--text); outline-offset: 2px; }
 .tool-run-errors { color: var(--danger); }
-=======
+
 .overlay-backdrop {
   position: fixed;
   inset: 0;
@@ -1127,4 +1126,3 @@ input[aria-invalid="true"]:focus-visible { outline-color: var(--danger) !importa
 .overlay-panel:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 @keyframes overlay-enter { from { opacity: 0; transform: translateY(var(--space-1)); } to { opacity: 1; transform: translateY(0); } }
 @media (prefers-reduced-motion: reduce) { .overlay-panel { animation: none; } }
->>>>>>> origin/mission/v0.13.0
