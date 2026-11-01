@@ -423,12 +423,35 @@ describe.skipIf(process.platform !== 'win32')('the Windows agent install on a re
       } catch (err) {
         throw new Error(`${(err as Error).message}\nagent log:\n${readLog(layoutOf().logFile)}`);
       }
-      // conhost is the parent of node; neither has a window.
+      // The launcher carries paths encoded, while the node process names the agent folder.
       const running = await agentProcesses(layoutOf().root);
-      expect(running.map((p) => p.name).sort()).toEqual(['conhost.exe', 'node.exe']);
+      expect(running.map((p) => p.name)).toEqual(['node.exe']);
       expect(running.every((p) => p.handle === 0)).toBe(true);
 
+      await ps([
+        `$root = ${powershellDialect.quote(layoutOf().root)}`,
+        'Get-CimInstance Win32_Process -Filter "Name = \'node.exe\'" | Where-Object { $_.CommandLine -and $_.CommandLine.Contains($root) } | ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction Stop }',
+      ].join('\n'));
+      await waitForNoHealth(OPTIONS.port, 30_000);
+      await waitForHealth(OPTIONS.port, version, 60_000);
+      expect(readLog(layoutOf().logFile)).toMatch(/launcher:.*retry/);
+
       await deployer.restart('ci', host);
+      await waitForHealth(OPTIONS.port, version, 60_000);
+
+      await cmdExec('ci', `"${schtasksPath()}" /Change /TN ${OPTIONS.taskName} /DISABLE`, 60_000);
+      try {
+        await ps([
+          `$root = ${powershellDialect.quote(layoutOf().root)}`,
+          'Get-CimInstance Win32_Process -Filter "Name = \'node.exe\'" | Where-Object { $_.CommandLine -and $_.CommandLine.Contains($root) } | ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction Stop }',
+        ].join('\n'));
+        await waitForNoHealth(OPTIONS.port, 30_000);
+        await new Promise((r) => setTimeout(r, 8000));
+        expect(await agentProcesses(layoutOf().root)).toEqual([]);
+      } finally {
+        await cmdExec('ci', `"${schtasksPath()}" /Change /TN ${OPTIONS.taskName} /ENABLE`, 60_000);
+      }
+      await deployer.start('ci', host);
       await waitForHealth(OPTIONS.port, version, 60_000);
 
       // The Task Scheduler's own /End (what the docs tell a person to run, and what its "End" button does) is enough: the agent

@@ -57,7 +57,7 @@ export function misaoWindowsReleasePaths(versionDir: string): string[] {
  * allowed to depend on this module, builds the very same text to recognise the task by).
  */
 export function misaoTaskArguments(input: { systemRoot: string; layout: MisaoWindowsLayout; pipe: string }): string {
-  return misaoTaskArgumentsOf({ systemRoot: input.systemRoot, exe: input.layout.exe, root: input.layout.root, logFile: input.layout.logFile, pipe: input.pipe });
+  return misaoTaskArgumentsOf({ systemRoot: input.systemRoot, exe: input.layout.exe, root: input.layout.root, logFile: input.layout.logFile, pipe: input.pipe, taskName: win32.basename(input.layout.taskXmlFile).replace(/\.task\.xml$/, '') });
 }
 
 export interface MisaoTaskInput {

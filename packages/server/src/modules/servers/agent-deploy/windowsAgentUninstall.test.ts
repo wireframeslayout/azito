@@ -1,3 +1,4 @@
+import { legacyMisaoTaskArgumentsOf } from '../../../shared/os/taskScheduler/misaoTaskArguments';
 import { describe, expect, it } from 'vitest';
 import { powershellDialect } from '../../../shared/os/shellDialect';
 import { buildTaskXml } from '../../../shared/os/taskScheduler/taskDefinition';
@@ -663,7 +664,7 @@ describe('uninstallWindowsAgent', () => {
       const taskWith = (argumentsLine: string, executable = conhost): string => buildTaskXml({
         userId: 'PC\\dev', description: 'x', executable, argumentsLine, workingDirectory: HOME, restartOnFailure: { intervalMinutes: 1, count: 1 },
       });
-      const exactLine = /<Arguments>([^<]*)<\/Arguments>/.exec(MISAO_XML)![1]!.replace(/&quot;/g, '"').replace(/&amp;/g, '&').replace(/&gt;/g, '>').replace(/&lt;/g, '<');
+      const exactLine = legacyMisaoTaskArgumentsOf({ systemRoot: 'C:\\Windows', root: MISAO_ROOT, exe: `${MISAO_ROOT}\\0.3.0\\misao.exe`, logFile: `${MISAO_ROOT}\\misao.log`, pipe: windowsMisaoPipe(MISAO_ROOT, 'dev') });
 
       it('takes the task the install writes (the plain form, and the launcher form for a folder with a space), whatever release it runs', async () => {
         expect(outcomes(await run(new FakeUninstallHost({ AzitoMisao: { xml: MISAO_XML } }), true)).misaoTask).toBe('done');

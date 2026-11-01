@@ -65,7 +65,7 @@ function misaoLauncherArguments(input: MisaoTaskArgumentsInput): string {
  * differently runs through the launcher script instead (same `cmd.exe` line, paths in environment variables).
  * The pipe is named explicitly so that the daemon, the agent's relay and `misao stop` all use the one the hub chose.
  */
-export function misaoTaskArgumentsOf(input: MisaoTaskArgumentsInput): string {
+export function legacyMisaoTaskArgumentsOf(input: MisaoTaskArgumentsInput): string {
   const { pipe } = input;
   const cmd = win32.join(input.systemRoot, 'System32', 'cmd.exe');
   // A quote ends the quoting of a cmd.exe line and a line break ends the line, in either form: no Windows path has one.
@@ -79,3 +79,45 @@ export function misaoTaskArgumentsOf(input: MisaoTaskArgumentsInput): string {
   return `--headless ${quoteWindowsArg(cmd)} /d /c "${inner}"`;
 }
 
+
+/** A launcher keeps retrying a failed daemon while its Task Scheduler conhost is alive. */
+export function misaoTaskArgumentsOf(input: MisaoTaskArgumentsInput & { taskName: string }): string {
+  // Apply the same path validation as the old task before embedding the values in a script.
+  legacyMisaoTaskArgumentsOf(input);
+  const q = powershellDialect.quote;
+  const script = [
+    `$info = New-Object System.Diagnostics.ProcessStartInfo`,
+    `$info.FileName = ${q(win32.join(input.systemRoot, 'System32', 'cmd.exe'))}`,
+    `$info.Arguments = ${q('/d /v:off /s /c ""%AZITO_MISAO_EXE%" serve --socket "%AZITO_MISAO_PIPE%" --data "%AZITO_MISAO_ROOT%" >>"%AZITO_MISAO_LOG%" 2>&1"')}`,
+    '$info.UseShellExecute = $false; $info.CreateNoWindow = $true',
+    `$info.EnvironmentVariables['AZITO_MISAO_EXE'] = ${q(input.exe)}`,
+    `$info.EnvironmentVariables['AZITO_MISAO_PIPE'] = ${q(input.pipe)}`,
+    `$info.EnvironmentVariables['AZITO_MISAO_ROOT'] = ${q(input.root)}`,
+    `$info.EnvironmentVariables['AZITO_MISAO_LOG'] = ${q(input.logFile)}`,
+    `$log = ${q(input.logFile)}`,
+    'function Log($m) { try { [IO.File]::AppendAllText($log, "[$([DateTime]::UtcNow.ToString(\'o\'))] launcher: $m`r`n") } catch { } }',
+    'try { $parentId = (Get-CimInstance Win32_Process -Filter "ProcessId = $PID").ParentProcessId; $parentStart = (Get-Process -Id $parentId).StartTime } catch { Log "cannot identify parent: $_"; exit 1 }',
+    'function ParentAlive { $p = Get-Process -Id $parentId -ErrorAction SilentlyContinue; return ($null -ne $p -and $p.StartTime -eq $parentStart) }',
+    `function Enabled { try { return (Get-ScheduledTask -TaskPath \'\\\' -TaskName ${q(input.taskName)} -ErrorAction Stop).Settings.Enabled } catch { Log "cannot read task state: $_"; return $false } }`,
+    '$delay = 5',
+    'while ((ParentAlive) -and (Enabled)) {',
+    '  if (-not (ParentAlive)) { exit 0 }',
+    '  $began = [DateTime]::UtcNow; $code = $null',
+    '  try {',
+    '    $process = [System.Diagnostics.Process]::Start($info)',
+    `    while (-not $process.WaitForExit(1000)) { if (-not (ParentAlive)) { & ${q(win32.join(input.systemRoot, 'System32', 'taskkill.exe'))} /PID $process.Id /T /F | Out-Null; exit 0 } }`,
+    '    $code = $process.ExitCode',
+    '  } catch { Log "start failed: $_" }',
+    '  if ($code -eq 0) { Log "daemon stopped normally"; exit 0 }',
+    '  if (-not (ParentAlive)) { exit 0 }',
+    '  if (([DateTime]::UtcNow - $began).TotalSeconds -ge 300) { $delay = 5 }',
+    '  Log "daemon exited with code $code; retrying in ${delay}s"',
+    '  for ($i = 0; $i -lt $delay; $i++) { Start-Sleep -Seconds 1; if (-not (ParentAlive)) { exit 0 } }',
+    '  $delay = [Math]::Min($delay * 2, 60)',
+    '}',
+  ].join('\n');
+  const powershell = win32.join(input.systemRoot, 'System32', 'WindowsPowerShell', 'v1.0', 'powershell.exe');
+  const argumentsLine = joinWindowsArgs(['--headless', powershell, ...powershellEncodedArgs(script)]);
+  if (argumentsLine.length + win32.join(input.systemRoot, 'System32', 'conhost.exe').length + 3 > 8191) throw new Error('The misao task command line exceeds the Windows limit');
+  return argumentsLine;
+}

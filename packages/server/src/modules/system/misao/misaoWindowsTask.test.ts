@@ -1,10 +1,12 @@
+import { legacyMisaoTaskArgumentsOf } from '../../../shared/os/taskScheduler/misaoTaskArguments';
 import { describe, expect, it } from 'vitest';
 import { windowsMisaoPipe } from '../../servers/transport/agentMisaoSocket';
-import { buildMisaoTaskXml, misaoTaskArguments, misaoWindowsLayout, misaoWindowsReleasePaths } from './misaoWindowsTask';
+import { buildMisaoTaskXml, misaoTaskArguments as newMisaoTaskArguments, misaoWindowsLayout, misaoWindowsReleasePaths } from './misaoWindowsTask';
 
 const ROOT = 'C:\\Users\\dev\\.azito\\misao';
 const PIPE = windowsMisaoPipe(ROOT, 'dev');
 const layout = misaoWindowsLayout({ misaoRoot: ROOT }, '0.3.0', 'AzitoMisao');
+const misaoTaskArguments = (input: { systemRoot: string; layout: typeof layout; pipe: string }): string => legacyMisaoTaskArgumentsOf({ systemRoot: input.systemRoot, exe: input.layout.exe, root: input.layout.root, logFile: input.layout.logFile, pipe: input.pipe });
 
 describe('the Windows misao layout', () => {
   it('puts each release in its own folder under the misao folder, with no link', () => {
@@ -81,7 +83,16 @@ describe('the misao task', () => {
     expect(xml).toContain('<WorkingDirectory>C:\\Users\\dev</WorkingDirectory>');
     expect(xml).toContain('<RestartOnFailure>');
     expect(xml).toContain('<RunLevel>LeastPrivilege</RunLevel>');
-    // The redirects are XML-escaped in the element text.
-    expect(xml).toContain('&gt;&gt; "C:\\Users\\dev\\.azito\\misao\\misao.log" 2&gt;&amp;1"</Arguments>');
+    expect(xml).toContain(newMisaoTaskArguments({ systemRoot: 'C:\\Windows', layout, pipe: PIPE }));
   });
+});
+
+it('the new launcher retries failures and tracks its parent', () => {
+  const line = newMisaoTaskArguments({ systemRoot: 'C:\\Windows', layout, pipe: PIPE });
+  const script = Buffer.from(line.split(' ').pop()!, 'base64').toString('utf16le');
+  expect(script).toContain('$delay = 5');
+  expect(script).toContain('[Math]::Min($delay * 2, 60)');
+  expect(script).toContain('TotalSeconds -ge 300');
+  expect(script).toContain('ParentAlive');
+  expect(script).toContain('/T /F');
 });

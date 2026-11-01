@@ -1,5 +1,6 @@
+import { misaoTaskVersion } from '../../../shared/os/taskScheduler/misaoTaskIdentity';
+import { soleExecAction } from '../../../shared/os/taskScheduler/taskXmlRead';
 import { createHash } from 'crypto';
-import path from 'path';
 import type { CommandSpec } from '../../../shared/exec/commandSpec';
 import { runCommandSpec, runHostOf } from '../../../shared/exec/runCommandSpec';
 import { LocalFileOps, localFileOpsHost } from '../../../shared/fs/LocalFileOps';
@@ -10,7 +11,6 @@ import { readMisaoSocketStatus, stageMisaoReleaseFile, type AgentMisaoHost } fro
 import { MisaoWindowsInstaller, type WindowsTarget } from './MisaoWindowsInstaller';
 import { MISAO_SERVICE, type MisaoPaths } from './misaoPaths';
 import { taskMisaoRoot } from './misaoWindowsTask';
-import { resolveRealPath } from '../../../shared/os/realPath';
 import type { ProcessLock } from '../../../shared/processLock';
 import { createMisaoRootLock } from './misaoRootLock';
 
@@ -65,7 +65,7 @@ export function createLocalMisaoWindows(hostEnv: LocalWindowsHostEnv, paths: Mis
     },
   };
   return {
-    installer: new MisaoWindowsInstaller({ taskName: MISAO_SERVICE.windowsTaskName }),
+    installer: new MisaoWindowsInstaller({ taskName: MISAO_SERVICE.windowsTaskName, refuseTaskOfAnotherRoot: true }),
     target,
     tasks: new SchtasksClient(rawRunnerOf((command) => runCommandSpec(command, { ...runHost, rawOutput: true })), hostEnv),
     taskName: MISAO_SERVICE.windowsTaskName,
@@ -81,14 +81,8 @@ export async function misaoWindowsTaskExists(hostEnv: Pick<HostEnv, 'platform' |
 
 export { taskMisaoRoot };
 
-/**
- * Whether the task starts the misao of `root` (the hub's own folder, already in its real spelling). Both sides are the same host's
- * paths, so the task's folder is resolved here too (a task written with a short name still names the same folder); they compare as
- * Windows paths, without regard to case.
- */
-export function taskStartsMisaoOf(xml: string, root: string): boolean {
-  const taskRoot = taskMisaoRoot(xml);
-  if (taskRoot === undefined) return false;
-  const same = (a: string, b: string): boolean => path.win32.normalize(a).toLowerCase() === path.win32.normalize(b).toLowerCase();
-  return same(resolveRealPath(taskRoot), resolveRealPath(root));
+/** Recognise only a task whose complete action is generated for this installation. */
+export function taskStartsMisaoOf(xml: string, root: string, systemRoot: string, pipe: string, taskName: string): boolean {
+  const action = soleExecAction(xml);
+  return action !== undefined && misaoTaskVersion(action, systemRoot, root, pipe, taskName) !== undefined;
 }

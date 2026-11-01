@@ -113,7 +113,11 @@ describe.skipIf(process.platform !== 'win32' || !fs.existsSync(MISAO_CLI))('misa
 
   const taskExists = async (): Promise<boolean> => (await tasks().query(TASK_NAME)).exists;
 
-  const registered = async (): Promise<string> => tasks().exportXml(TASK_NAME);
+  const registered = async (): Promise<string> => {
+    const xml = await tasks().exportXml(TASK_NAME);
+    const encoded = /-EncodedCommand ([A-Za-z0-9+/=]+)/.exec(xml)?.[1];
+    return `${xml}\n${encoded ? Buffer.from(encoded, 'base64').toString('utf16le') : ''}`;
+  };
 
   const driver = () => registry.resolveKind('misao', server);
 
@@ -436,6 +440,45 @@ describe.skipIf(process.platform !== 'win32' || !fs.existsSync(MISAO_CLI))('misa
     await vi.waitFor(async () => expect(await transport.fetchMisaoStatus()).toMatchObject({ socketPresent: true, installedVersion: '0.4.0' }), { timeout: 60_000, interval: 500 });
     expect((await daemonProcesses()).length).toBe(1);
   }, 300_000);
+
+  it('restarts an abruptly terminated daemon and leaves it down after the task is ended', async (ctx) => {
+    if (!viaTask) ctx.skip('the daemon was started directly (no logon session)');
+    const [pid] = await daemonProcesses();
+    expect(pid).toBeDefined();
+    await powershell(`Stop-Process -Id ${pid} -Force`);
+    await vi.waitFor(async () => {
+      const processes = await daemonProcesses();
+      expect(processes).toHaveLength(1);
+      expect(processes[0]).not.toBe(pid);
+      expect((await transport.fetchMisaoStatus()).socketPresent).toBe(true);
+    }, { timeout: 60_000, interval: 500 });
+    await tasks().stop(TASK_NAME);
+    await vi.waitFor(async () => expect(await daemonProcesses()).toEqual([]), { timeout: 30_000, interval: 500 });
+    await new Promise((resolve) => setTimeout(resolve, 7000));
+    expect(await daemonProcesses()).toEqual([]);
+    await tasks().start(TASK_NAME);
+    await vi.waitFor(async () => expect((await transport.fetchMisaoStatus()).socketPresent).toBe(true), { timeout: 60_000, interval: 500 });
+  }, 180_000);
+
+  it('does not retry a failed daemon after its task is disabled', async (ctx) => {
+    if (!viaTask) ctx.skip('the daemon was started directly (no logon session)');
+    const [pid] = await daemonProcesses();
+    expect(pid).toBeDefined();
+    const name = powershellDialect.quote(TASK_NAME);
+    await powershell(`Stop-Process -Id ${pid} -Force; & schtasks.exe /Change /TN ${name} /Disable; if ($LASTEXITCODE -ne 0) { throw 'disable failed' }`);
+    try {
+      await new Promise((resolve) => setTimeout(resolve, 8000));
+      expect(await daemonProcesses()).toEqual([]);
+    } finally {
+      await powershell(`& schtasks.exe /Change /TN ${name} /Enable; if ($LASTEXITCODE -ne 0) { throw 'enable failed' }`);
+    }
+    await vi.waitFor(async () => {
+      const state = await tasks().query(TASK_NAME);
+      expect(state.exists && !state.running).toBe(true);
+    }, { timeout: 30_000, interval: 500 });
+    await tasks().start(TASK_NAME);
+    await vi.waitFor(async () => expect((await transport.fetchMisaoStatus()).socketPresent).toBe(true), { timeout: 60_000, interval: 500 });
+  }, 180_000);
 
   it('misao stop through the pipe ends the daemon, and the task is not restarted for a clean exit', async () => {
     const exe = path.win32.join(ROOT, viaTask ? currentVersion : OLD_VERSION, 'misao.exe');

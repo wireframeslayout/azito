@@ -11,7 +11,7 @@ import { checkFirewall, describeFirewallProblem } from './windowsFirewall';
 import { MISAO_WINDOWS_DIR, type WindowsAgentOptions } from './windowsAgentConfig';
 import type { WindowsPreflightInfo } from './windowsPreflight';
 import { agentTaskAction, agentTaskIdentity } from './windowsAgentTask';
-import { soleExecAction } from '../../../shared/os/taskScheduler/taskXmlRead';
+import { soleExecAction, taskHasUserId } from '../../../shared/os/taskScheduler/taskXmlRead';
 import { uninstallWindowsAgent, type WindowsUninstallChoice, type WindowsUninstallResult } from './windowsAgentUninstall';
 
 /** Runs one command line on the Windows host through its SSH login shell. */
@@ -79,16 +79,6 @@ const RESTART_COUNT = 999;
 const SAFE_VERSION = /^[A-Za-z0-9][A-Za-z0-9._-]*$/;
 /** The folder name of an agent release: `build-agent.ts` names a bundle by the first 12 hex digits of its content hash. Only such folders are ever pruned. */
 const RELEASE_DIR_PATTERN = '^[0-9a-f]{12}$';
-/** The version folder a task definition runs its entry from (`...\<version>\azito-agent.cjs`). */
-const ENTRY_VERSION = /([A-Za-z0-9][A-Za-z0-9._-]*)\\azito-agent\.cjs/;
-
-/** The version a task definition (its XML) starts the agent from; undefined when the definition names no such entry. */
-export function versionOfTaskXml(xml: string): string | undefined {
-  const args = /<Arguments>([^<]*)<\/Arguments>/.exec(xml)?.[1];
-  const version = args === undefined ? undefined : ENTRY_VERSION.exec(args)?.[1];
-  return version !== undefined && SAFE_VERSION.test(version) ? version : undefined;
-}
-
 const sleep = (ms: number): Promise<void> => new Promise((resolve) => setTimeout(resolve, ms));
 
 /** Where everything of one agent install lives on the host. */
@@ -243,7 +233,7 @@ export class WindowsAgentDeployer {
       await this.prepareRoot(input.sshHost, layout);
       await this.transfer.putFile(input.sshHost, input.tarballPath, `${layout.rootRelative}/azito-agent-${input.version}.tar.gz`);
       await this.verifySha256(input.sshHost, layout.tarball, input.expectedSha256);
-      previous = await this.capturePrevious(client, input.host.systemRoot, layout);
+      previous = await this.capturePrevious(client, input.host, layout);
       await this.stopTask(input.sshHost, client, layout.envFile);
       await this.extract(input, layout);
       progress.versionCreated = true;
@@ -272,12 +262,18 @@ export class WindowsAgentDeployer {
   }
 
   /** Stops and starts the registered task. A task that is not registered is an error (nothing is installed to restart); one disabled by hand is not touched. */
-  async restart(sshHost: string, host: WindowsPreflightInfo): Promise<'restarted' | 'disabled'> {
+  async restart(sshHost: string, host: WindowsPreflightInfo): Promise<'restarted' | 'disabled' | 'starting'> {
     const client = this.schtasks(sshHost, host);
     const state = await client.query(this.options.taskName);
     if (!state.exists) throw new Error(`The task "${this.options.taskName}" is not registered on the host: install the agent first`);
     // Disabled by hand (`schtasks /Change /DISABLE`): that is how the agent is kept stopped, so it is left alone.
-    if (isTaskDefinitionDisabled(await client.exportXml(this.options.taskName))) return 'disabled';
+    const xml = await client.exportXml(this.options.taskName);
+    if (isTaskDefinitionDisabled(xml)) return 'disabled';
+    const action = soleExecAction(xml);
+    const root = windowsAgentRoot(host.home, this.options);
+    const identity = action && agentTaskIdentity(action, host.systemRoot, root, windowsAgentEnvFile(host.home, this.options), this.options.taskName);
+    if (!identity || !taskHasUserId(xml, host.userId)) throw new Error(`The task "${this.options.taskName}" is not a recognised agent task for ${root}`);
+    if (identity.launcher && state.running) return 'starting';
     await this.stopTask(sshHost, client, windowsAgentEnvFile(host.home, this.options));
     await client.start(this.options.taskName);
     return 'restarted';
@@ -360,7 +356,7 @@ export class WindowsAgentDeployer {
    * `--headless` (Windows 10 1809 and later) gives the process a console that has no window.
    */
   private buildTask(input: WindowsDeployInput, layout: WindowsAgentLayout): string {
-    const action = agentTaskAction(input.host.systemRoot, input.nodePath, layout.envFile, layout.entry);
+    const action = agentTaskAction(input.host.systemRoot, input.nodePath, layout.envFile, layout.entry, this.options.taskName);
     return buildTaskXml({
       userId: input.host.userId,
       description: 'AZITO Agent: started at logon by the AZITO hub',
@@ -372,13 +368,13 @@ export class WindowsAgentDeployer {
   }
 
   /** Reads what is registered now. A definition that cannot be read stops the deploy, before anything is changed. */
-  private async capturePrevious(client: SchtasksClient, systemRoot: string, layout: WindowsAgentLayout): Promise<Previous> {
+  private async capturePrevious(client: SchtasksClient, host: WindowsPreflightInfo, layout: WindowsAgentLayout): Promise<Previous> {
     const state = await client.query(this.options.taskName);
     if (!state.exists) return { taskXml: undefined, version: undefined, wasRunning: false };
     const taskXml = await client.exportXml(this.options.taskName);
     const action = soleExecAction(taskXml);
-    const identity = action && agentTaskIdentity(action, systemRoot, layout.root, layout.envFile);
-    if (!identity) throw new Error(`The task "${this.options.taskName}" is not a recognised agent task for ${layout.root}; it was left unchanged`);
+    const identity = action && agentTaskIdentity(action, host.systemRoot, layout.root, layout.envFile, this.options.taskName);
+    if (!identity || !taskHasUserId(taskXml, host.userId)) throw new Error(`The task "${this.options.taskName}" is not a recognised agent task for ${layout.root}; it was left unchanged`);
     return { taskXml, version: identity.version, wasRunning: state.running };
   }
 

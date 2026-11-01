@@ -11,13 +11,13 @@ import { encodeTaskXml } from '../src/shared/os/taskScheduler/taskDefinition';
 /**
  * End-to-end check, on a real Windows (Windows PowerShell 5.1, the real schtasks.exe, node.exe, misao.exe), that the hub and the
  * hub's own misao come back from a crash by themselves (#380): `conhost.exe --headless` reports exit code 0 whatever its child did,
- * so the Task Scheduler never restarts either of them, and what does is the hub's launcher (AzitoHub) and the hub's watchdog (AzitoMisao).
+ * so the Task Scheduler never restarts either of them; each task's launcher retries its own process.
  *
  * install.ps1 WITHOUT -NoService into a throwaway prefix, then:
  *  - the hub's node.exe is ended forcibly: /api/health answers again by itself, hub.log and `azito status` say so, and a second crash
  *    waits twice as long;
  *  - `azito service restart` still leaves exactly one hub (no port conflict) and a launcher with no restarts of its own;
- *  - misao.exe is ended forcibly: the hub's watchdog starts the task again and the pipe answers;
+ *  - misao.exe is ended forcibly: its launcher starts it again, including while the hub is stopped;
  *  - `azito stop` leaves the hub down (the launcher does not outlive the task);
  *  - a hub that follows a process that is gone shuts down gracefully with exit code 0 (so the launcher does not start it again);
  *  - the task as the first 0.12 builds registered it is replaced by `azito service install`.
@@ -227,18 +227,18 @@ async function main(): Promise<void> {
     assert(hubNodePids(entryFragment).length === 1, 'exactly one hub node.exe after the restart');
     assert(/launcher:\s+no restart since the launcher began/.test(azito(azitoCmd, 'status').output), 'the new launcher starts with no restarts');
 
-    step('misao.exe crashes (ended forcibly): the hub starts its task again');
+    step('misao.exe crashes (ended forcibly): its launcher starts it again');
     const misaoBefore = misaoPids(pipe);
     assert(misaoBefore.length === 1, 'one misao.exe before the crash');
     const misaoKilledAt = Date.now();
     killForcibly(misaoBefore);
-    await waitFor('the misao daemon to answer again (the hub\'s watchdog)', () => {
+    await waitFor('the misao daemon to answer again', () => {
       const now = misaoPids(pipe);
       return now.length === 1 && now[0] !== misaoBefore[0] && /daemon:\s+reachable/.test(azito(azitoCmd, 'misao status').output);
     }, 240_000, () => `${readLog(hubLog)}\n--- misao.log ---\n${readLog(misaoLog)}`);
     console.log(`[smoke-recovery] misao back after ${Math.round((Date.now() - misaoKilledAt) / 1000)}s`);
     log = readLog(hubLog);
-    assert(/\[misao-recovery\] the misao does not answer; trying to bring it back in 60s/.test(log) && /\[misao-recovery\] tried to bring the misao back \(attempt 1\): started/.test(log), 'hub.log must record the watchdog\'s attempt', log);
+    assert(/launcher:.*retry/i.test(readLog(misaoLog)), 'misao.log must record the launcher retry', readLog(misaoLog));
 
     step('azito stop: the hub stays down (the launcher ends with the task) and misao keeps running');
     const misaoNow = misaoPids(pipe);
@@ -248,6 +248,39 @@ async function main(): Promise<void> {
     assert(hubNodePids(entryFragment).length === 0 && (await healthStatus()) === null, 'the hub must stay down after azito stop');
     assert(JSON.stringify(misaoPids(pipe)) === JSON.stringify(misaoNow), 'azito stop must leave misao as it was');
     assert(!/launcher: start \d+ in/.test(readLog(hubLog).slice(log.length)), 'no restart may be logged after azito stop', readLog(hubLog).slice(log.length));
+
+    step('misao recovers while the hub is stopped');
+    killForcibly(misaoNow);
+    await waitFor('misao to restart without the hub', () => {
+      const now = misaoPids(pipe);
+      return now.length === 1 && now[0] !== misaoNow[0];
+    }, 60_000, () => readLog(misaoLog));
+    assert((await healthStatus()) === null, 'the hub must remain stopped');
+
+    step('misao stop exits cleanly without a launcher retry');
+    misaoStopCommand();
+    await waitFor('misao to stop', () => misaoPids(pipe).length === 0, 30_000, () => readLog(misaoLog));
+    await sleep(8000);
+    assert(misaoPids(pipe).length === 0, 'a clean stop must not be retried', readLog(misaoLog));
+    assert(schtasks(['/Run', '/TN', MISAO_TASK]).status === 0, 'misao task must start again');
+    await waitFor('misao to restart explicitly', () => misaoPids(pipe).length === 1, 60_000, () => readLog(misaoLog));
+
+    step('ending the misao task leaves no daemon or retry');
+    assert(schtasks(['/End', '/TN', MISAO_TASK]).status === 0, 'could not end the misao task');
+    await waitFor('misao to stop after /End', () => misaoPids(pipe).length === 0, 30_000, () => readLog(misaoLog));
+    await sleep(8000);
+    assert(misaoPids(pipe).length === 0, '/End must not be retried', readLog(misaoLog));
+    assert(schtasks(['/Run', '/TN', MISAO_TASK]).status === 0, 'misao task must start again after /End');
+    await waitFor('misao to restart after /End', () => misaoPids(pipe).length === 1, 60_000, () => readLog(misaoLog));
+
+    step('a disabled misao task does not retry after a crash');
+    assert(schtasks(['/Change', '/TN', MISAO_TASK, '/DISABLE']).status === 0, 'could not disable the misao task');
+    killForcibly(misaoPids(pipe));
+    await sleep(8000);
+    assert(misaoPids(pipe).length === 0, 'a disabled task must not retry', readLog(misaoLog));
+    assert(schtasks(['/Change', '/TN', MISAO_TASK, '/ENABLE']).status === 0, 'could not re-enable the misao task');
+    assert(schtasks(['/Run', '/TN', MISAO_TASK]).status === 0, 'misao task must start again after enabling');
+    await waitFor('misao to restart after enabling', () => misaoPids(pipe).length === 1, 60_000, () => readLog(misaoLog));
 
     step('a hub whose followed process is gone shuts down gracefully with exit code 0');
     const sacrificial = spawn(POWERSHELL, ['-NoProfile', '-Command', 'Start-Sleep -Seconds 600'], { stdio: 'ignore' });

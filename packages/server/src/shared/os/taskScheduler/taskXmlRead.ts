@@ -62,3 +62,13 @@ export function misaoRootOfCommandLine(decoded: string): string | undefined {
   }
   return /--data "([^"]*)"/.exec(decoded)?.[1];
 }
+
+/** Match the registered principal against the account performing the operation. */
+export function taskHasUserId(xml: string, userId: string): boolean {
+  const principals = /<Principals\b[^>]*>([\s\S]*?)<\/Principals>/.exec(xml)?.[1];
+  if (!principals) return false;
+  const matches = [...principals.matchAll(/<Principal\b[^>]*>([\s\S]*?)<\/Principal>/g)];
+  if (matches.length !== 1) return false;
+  const users = [...matches[0]![1]!.matchAll(/<UserId>([^<]+)<\/UserId>/g)];
+  return users.length === 1 && unescapeTaskXml(users[0]![1]!).toLowerCase() === userId.toLowerCase();
+}

@@ -1,7 +1,4 @@
-import fs from 'fs';
-import os from 'os';
-import path from 'path';
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { describe, expect, it } from 'vitest';
 import { taskMisaoRoot, taskStartsMisaoOf } from './misaoLocalWindows';
 import { buildMisaoTaskXml, misaoWindowsLayout } from './misaoWindowsTask';
 import { windowsMisaoPipe } from '../../servers/transport/agentMisaoSocket';
@@ -26,22 +23,13 @@ describe('taskMisaoRoot', () => {
 });
 
 describe('taskStartsMisaoOf', () => {
-  let dir: string;
-  beforeEach(() => { dir = fs.realpathSync.native(fs.mkdtempSync(path.join(os.tmpdir(), 'azo-'))); });
-  afterEach(() => fs.rmSync(dir, { recursive: true, force: true }));
-
-  it('says yes for the same folder spelled through a link (a short name on Windows), before and after the folder exists, and no for a sibling or another folder', () => {
-    const real = path.join(dir, 'real');
-    fs.mkdirSync(real);
-    const alias = path.join(dir, 'alias');
-    fs.symlinkSync(real, alias, 'dir');
-    const root = path.join(real, 'misao');
-    // The task was written with the alias spelling (as an agent that reported a short name would have it), the hub's root is the real one.
-    expect(taskStartsMisaoOf(xmlFor(path.join(alias, 'misao')), root)).toBe(true);
-    fs.mkdirSync(root);
-    expect(taskStartsMisaoOf(xmlFor(path.join(alias, 'misao')), root)).toBe(true);
-    expect(taskStartsMisaoOf(xmlFor(`${root}2`), root)).toBe(false);
-    expect(taskStartsMisaoOf(xmlFor(path.join(dir, 'else', 'misao')), root)).toBe(false);
-    expect(taskStartsMisaoOf('<Task/>', root)).toBe(false);
+  it('accepts the generated task and rejects extra actions or another installation', () => {
+    const root = 'C:\\Users\\dev\\.azito\\misao';
+    const matches = (xml: string): boolean => taskStartsMisaoOf(xml, root, 'C:\\Windows', windowsMisaoPipe(root, 'dev'), 'AzitoMisao');
+    const xml = xmlFor(root);
+    expect(matches(xml)).toBe(true);
+    expect(matches(xml.replace('</Exec>', '</Exec><Exec><Command>C:\\other.exe</Command></Exec>'))).toBe(false);
+    expect(matches(xmlFor(`${root}2`))).toBe(false);
+    expect(matches('<Task/>')).toBe(false);
   });
 });
