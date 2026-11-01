@@ -16,10 +16,10 @@ export function cycleFocus(event: KeyboardEvent, container: HTMLElement): void {
   }
   const first = elements[0];
   const last = elements[elements.length - 1];
-  if (event.shiftKey && (document.activeElement === first || !container.contains(document.activeElement))) {
+  if (event.shiftKey && (document.activeElement === container || document.activeElement === first || !container.contains(document.activeElement))) {
     event.preventDefault();
     last.focus();
-  } else if (!event.shiftKey && (document.activeElement === last || !container.contains(document.activeElement))) {
+  } else if (!event.shiftKey && (document.activeElement === container || document.activeElement === last || !container.contains(document.activeElement))) {
     event.preventDefault();
     first.focus();
   }

@@ -244,7 +244,7 @@
     "supervisorConnected": "接続中"
   },
   "keyboard": {
-    "search": "検索を開くキー",
+    "search": "検索を開く",
     "spaceTwice": "Space 2 回",
     "disabled": "使わない",
     "interval": "2 回押しの間隔",

@@ -15,4 +15,15 @@ describe('overlay focus', () => {
     expect(document.activeElement).toBe(elements[1]);
     container.remove();
   });
+  it('moves focus from the panel to the first or last control', () => {
+    const container = document.createElement('div'); container.tabIndex = -1;
+    container.innerHTML = '<button>First</button><button>Last</button>'; document.body.append(container);
+    const buttons = container.querySelectorAll('button');
+    for (const shiftKey of [false, true]) {
+      container.focus(); const event = new KeyboardEvent('keydown', { key: 'Tab', shiftKey, cancelable: true });
+      cycleFocus(event, container); expect(event.defaultPrevented).toBe(true);
+      expect(document.activeElement).toBe(buttons[shiftKey ? 1 : 0]);
+    }
+    container.remove();
+  });
 });

@@ -7,7 +7,7 @@ const BINDINGS_KEY = 'azito-hotkeys';
 const CHORD_KEY = 'azito-hotkeys-chord-ms';
 const defaults = (): Bindings => ({ 'search.open': parseKeySpec('Space Space'), 'maximize.open': parseKeySpec('Ctrl+Shift+M') });
 const storedSpec = z.object({ text: z.string(), windowMs: z.number().positive().optional() }).strict().nullable();
-const schema = z.object({ 'search.open': storedSpec, 'maximize.open': storedSpec }).strict();
+const schema = z.object({ 'search.open': storedSpec.optional(), 'maximize.open': storedSpec.optional() });
 function decodeSpec(value: z.infer<typeof storedSpec>): KeySpec | null {
   if (value === null) return null;
   return { ...parseKeySpec(value.text), ...(value.windowMs === undefined ? {} : { windowMs: value.windowMs }) };
@@ -27,7 +27,11 @@ export function loadBindings(): Bindings {
     const raw = localStorage.getItem(BINDINGS_KEY);
     if (raw === null) return defaults();
     const value = schema.parse(JSON.parse(raw));
-    const result: Bindings = { 'search.open': decodeSpec(value['search.open']), 'maximize.open': decodeSpec(value['maximize.open']) };
+    const result = defaults();
+    for (const action of Object.keys(result) as HotkeyAction[]) {
+      const saved = value[action];
+      if (saved !== undefined) result[action] = decodeSpec(saved);
+    }
     if (hasDuplicateBindings(result)) throw new Error('Duplicate bindings');
     return result;
   } catch (error) { console.warn('Invalid or unavailable hotkey bindings', error); return defaults(); }

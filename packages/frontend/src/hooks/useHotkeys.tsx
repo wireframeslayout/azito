@@ -29,9 +29,13 @@ interface HotkeysContextValue {
   stack: StackEntry[];
   dispatchFromTerminal: (e: KeyboardEvent) => boolean;
 }
-const Context = createContext<HotkeysContextValue | null>(null);
-function useContextValue(): HotkeysContextValue {
-  const value = useContext(Context);
+type StableContextValue = Pick<HotkeysContextValue, 'register' | 'addOverlay' | 'dispatchFromTerminal'>;
+type BindingsContextValue = Pick<HotkeysContextValue, 'bindings' | 'chordMs' | 'setBinding' | 'setChordMs'>;
+const StableContext = createContext<StableContextValue | null>(null);
+const BindingsContext = createContext<BindingsContextValue | null>(null);
+const StackContext = createContext<StackEntry[]>([]);
+function useStableContext(): StableContextValue {
+  const value = useContext(StableContext);
   if (!value) throw new Error('HotkeyProvider is required');
   return value;
 }
@@ -107,25 +111,28 @@ export function HotkeyProvider({ children }: { children: ReactNode }) {
     setBindings(next); return 'ok' as const;
   };
   const setChordMs = (ms: number) => { if (!saveChordMs(ms)) return 'storage-error' as const; updateChordMs(ms); return 'ok' as const; };
-  return <Context.Provider value={{ bindings, chordMs, setBinding, setChordMs, register, addOverlay, stack, dispatchFromTerminal: e => dispatchRef.current(e, true) }}>{children}</Context.Provider>;
+  const stable = useRef<StableContextValue>({ register, addOverlay, dispatchFromTerminal: e => dispatchRef.current(e, true) });
+  return <StableContext.Provider value={stable.current}><BindingsContext.Provider value={{ bindings, chordMs, setBinding, setChordMs }}><StackContext.Provider value={stack}>{children}</StackContext.Provider></BindingsContext.Provider></StableContext.Provider>;
 }
 
 export function useHotkey(reg: HotkeyRegistration, enabled = true): void {
-  const { register } = useContextValue();
+  const { register } = useStableContext();
   const ref = useRef(reg); ref.current = reg;
   const id = useRef(Symbol('hotkey'));
   const registerRef = useRef(register); registerRef.current = register;
   useEffect(() => enabled ? registerRef.current(id.current, ref) : undefined, [enabled]);
 }
 export function useHotkeyBindings(): Pick<HotkeysContextValue, 'bindings' | 'setBinding' | 'chordMs' | 'setChordMs'> {
-  const { bindings, setBinding, chordMs, setChordMs } = useContextValue();
-  return { bindings, setBinding, chordMs, setChordMs };
+  const value = useContext(BindingsContext);
+  if (!value) throw new Error('HotkeyProvider is required');
+  return value;
 }
 export function useHotkeyDispatch(): Pick<HotkeysContextValue, 'dispatchFromTerminal'> {
-  const { dispatchFromTerminal } = useContextValue(); return { dispatchFromTerminal };
+  const { dispatchFromTerminal } = useStableContext(); return { dispatchFromTerminal };
 }
 export function useOverlayStack(open: boolean, elementRef: RefObject<HTMLElement | null>, returnFocus = false): { id: symbol; isTop: boolean } {
-  const { addOverlay, stack } = useContextValue();
+  const { addOverlay } = useStableContext();
+  const stack = useContext(StackContext);
   const id = useRef(Symbol('overlay'));
   const addRef = useRef(addOverlay); addRef.current = addOverlay;
   const wasOpen = useRef(false);

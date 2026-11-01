@@ -1,8 +1,8 @@
 import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { afterEach, expect, it, vi } from 'vitest';
-import { useRef, useState } from 'react';
-import { HotkeyProvider, useHotkey, useHotkeyBindings, useOverlayStack } from './useHotkeys';
+import { memo, useRef, useState } from 'react';
+import { HotkeyProvider, useHotkey, useHotkeyBindings, useHotkeyDispatch, useOverlayStack } from './useHotkeys';
 import { formatKeySpec, parseKeySpec } from '../lib/hotkeys/keySpec';
 afterEach(() => { localStorage.clear(); vi.restoreAllMocks(); });
 function Global({ handler }: { handler: () => void }) {
@@ -54,4 +54,14 @@ it('refuses keys already assigned to any other action', async () => {
   expect(screen.getByLabelText('result')).toHaveTextContent('conflict'); expect(screen.getByLabelText('maximize')).toHaveTextContent('Ctrl+Shift+M');
   await user.click(screen.getByRole('button', { name: 'Take maximize keys' }));
   expect(screen.getByLabelText('result')).toHaveTextContent('conflict'); expect(localStorage.getItem('azito-hotkeys')).toBeNull();
+});
+
+it('does not rerender hotkey and terminal consumers when overlays open or close', async () => {
+  const renderHotkey = vi.fn(); const renderTerminal = vi.fn();
+  const HotkeyConsumer = memo(() => { renderHotkey(); useHotkey({ action: 'search.open', scope: 'global', handler: () => {} }); return null; });
+  const TerminalConsumer = memo(() => { renderTerminal(); useHotkeyDispatch(); return null; });
+  function App() { const [open, setOpen] = useState(false); return <><button onClick={() => setOpen(value => !value)}>Toggle</button><HotkeyConsumer /><TerminalConsumer />{open && <Layer handler={() => {}} />}</>; }
+  const user = userEvent.setup(); render(<HotkeyProvider><App /></HotkeyProvider>);
+  await user.click(screen.getByText('Toggle')); await user.click(screen.getByText('Toggle'));
+  expect(renderHotkey).toHaveBeenCalledTimes(1); expect(renderTerminal).toHaveBeenCalledTimes(1);
 });

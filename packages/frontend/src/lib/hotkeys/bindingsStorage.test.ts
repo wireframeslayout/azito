@@ -6,6 +6,14 @@ afterEach(() => vi.unstubAllGlobals());
 describe('binding storage', () => {
   it('round trips disabled and assigned bindings', () => { vi.stubGlobal('localStorage', storage()); expect(saveBindings({ 'search.open': null, 'maximize.open': parseKeySpec('Ctrl+Shift+M') })).toBe(true); expect(loadBindings()['search.open']).toBeNull(); expect(saveChordMs(500)).toBe(true); expect(loadChordMs()).toBe(500); expect(localStorage.getItem('azito-hotkeys')).not.toBeNull(); expect(localStorage.getItem('azito-hotkeys-chord-ms')).toBe('500'); });
   it('restores defaults on corrupt data', () => { const s = storage(); s.setItem('azito-hotkeys', '{'); vi.stubGlobal('localStorage', s); vi.spyOn(console, 'warn').mockImplementation(() => {}); expect(formatKeySpec(loadBindings()['search.open']!)).toBe('Space Space'); vi.restoreAllMocks(); });
+  it('fills missing actions from defaults while preserving assigned and disabled values', () => {
+    const s = storage(); s.setItem('azito-hotkeys', JSON.stringify({ 'search.open': null })); vi.stubGlobal('localStorage', s);
+    expect(loadBindings()['search.open']).toBeNull(); expect(formatKeySpec(loadBindings()['maximize.open']!)).toBe('Ctrl+Shift+M');
+  });
+  it('ignores unknown actions without discarding known bindings', () => {
+    const s = storage(); s.setItem('azito-hotkeys', JSON.stringify({ 'search.open': { text: 'Ctrl+K' }, 'future.action': { text: 'Ctrl+R' } })); vi.stubGlobal('localStorage', s);
+    expect(formatKeySpec(loadBindings()['search.open']!)).toBe('Ctrl+K'); expect(formatKeySpec(loadBindings()['maximize.open']!)).toBe('Ctrl+Shift+M');
+  });
   it('reports inaccessible storage', () => { vi.stubGlobal('localStorage', { setItem: () => { throw Error('denied'); } }); vi.spyOn(console, 'warn').mockImplementation(() => {}); expect(saveChordMs(300)).toBe(false); vi.restoreAllMocks(); });
 });
 describe('findConflictingAction', () => {
