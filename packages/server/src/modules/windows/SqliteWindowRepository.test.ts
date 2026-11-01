@@ -244,3 +244,28 @@ describe('window label source', () => {
     db.close();
   });
 });
+
+describe('Claude configuration directories', () => {
+  it('preserves each pane session when capturing a layout and clears a changed window session', () => {
+    const db = buildSeededDb();
+    const repo = new SqliteWindowRepository(db);
+    const projectId = insertProject(db, 'Claude');
+    const id = repo.add(baseWindow({ projectId }));
+    repo.updateClaudeSessionByPane('local-server', 'proj:win1', 1, 'first', '/first');
+    repo.updateClaudeSessionByPane('local-server', 'proj:win1', 2, 'second', '/second');
+    repo.updatePaneLayout(id, { layout: '', panes: [
+      { index: 0, ordinal: 1, command: null, workingDirectory: null, title: null },
+      { index: 1, ordinal: 2, command: null, workingDirectory: null, title: null },
+    ] });
+    expect(repo.findById(id)?.paneLayout?.panes.map((p) => [p.agentSessionId, p.claudeConfigDir])).toEqual([
+      ['first', '/first'], ['second', '/second'],
+    ]);
+    repo.updateClaudeSessionByPane('local-server', 'proj:win1', 2, 'third', '/third');
+    expect(repo.findById(id)?.paneLayout?.panes[1]).toMatchObject({ agentSessionId: 'third', claudeConfigDir: '/third' });
+    repo.updateAgentSessionIdByWindow('local-server', 'proj:win1', 'new');
+    expect(repo.findById(id)?.claudeConfigDir).toBeNull();
+    expect(repo.findById(id)?.paneLayout?.panes[0]).toMatchObject({ agentSessionId: 'new' });
+    expect(repo.findById(id)?.paneLayout?.panes[0].claudeConfigDir).toBeUndefined();
+    db.close();
+  });
+});

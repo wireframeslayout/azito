@@ -1,3 +1,4 @@
+import path from 'node:path';
 import type { FastifyPluginCallback } from 'fastify';
 import type { SqliteTaskRepository } from '../tasks/SqliteTaskRepository';
 import type { AgentHookSignal } from '../operations/AgentActivityMonitor';
@@ -14,7 +15,8 @@ const SESSION_ID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]
 export interface MisaoWebhookOptions {
   /** The window a misao pane belongs to, or null when no registered window owns it or the daemon cannot be reached. */
   resolvePane: (serverName: string, paneId: string) => Promise<ResolvedWindow | null>;
-  recordAgentActivity: (serverName: string, tmuxTarget: string, event: AgentHookSignal['event'], sessionId?: string) => void;
+  recordClaudeSessionHook?: (serverName: string, paneId: string, sessionId: string, configDir: string, timestamp: string) => boolean;
+  recordAgentActivity: (serverName: string, tmuxTarget: string, event: AgentHookSignal['event'], sessionId?: string, claudeConfigDir?: string, paneOrdinal?: number) => void;
 }
 
 export interface WebhookRouteOptions {
@@ -177,8 +179,18 @@ const webhookRoutes: FastifyPluginCallback<WebhookRouteOptions> = (fastify, opts
       muxPaneRef?: unknown;
       misaoPaneId?: unknown;
       sessionId?: unknown;
+      claudeConfigDir?: unknown;
+      hookTimestamp?: unknown;
     };
 
+    if (body.claudeConfigDir !== undefined && (typeof body.claudeConfigDir !== 'string' || body.claudeConfigDir.length === 0 || body.claudeConfigDir.length > 4096 || body.claudeConfigDir.includes('\0') || !path.posix.isAbsolute(body.claudeConfigDir))) {
+      return reply.status(400).send({ error: 'claudeConfigDir must be an absolute POSIX path of at most 4096 characters' });
+    }
+    if (body.hookTimestamp !== undefined && (typeof body.hookTimestamp !== 'string' || !/^[0-9]{1,20}$/.test(body.hookTimestamp))) {
+      return reply.status(400).send({ error: 'hookTimestamp must be a nanosecond timestamp' });
+    }
+    const hookTimestamp = typeof body.hookTimestamp === 'string' ? body.hookTimestamp : undefined;
+    const claudeConfigDir = body.event === 'session' && typeof body.claudeConfigDir === 'string' ? body.claudeConfigDir : undefined;
     const sessionId = typeof body.sessionId === 'string' && SESSION_ID_RE.test(body.sessionId)
       ? body.sessionId : undefined;
     const misaoPaneId = readMisaoPaneId(body);
@@ -192,9 +204,12 @@ const webhookRoutes: FastifyPluginCallback<WebhookRouteOptions> = (fastify, opts
       if (body.event !== 'start' && body.event !== 'stop' && body.event !== 'session') {
         return reply.status(400).send({ error: 'event must be "start", "stop" or "session"' });
       }
+      if (body.event === 'session' && sessionId && claudeConfigDir && hookTimestamp && misao.recordClaudeSessionHook) {
+        if (misao.recordClaudeSessionHook(resolveServerName(body.serverName), misaoPaneId, sessionId, claudeConfigDir, hookTimestamp)) return { ok: true };
+      }
       const resolved = await misao.resolvePane(resolveServerName(body.serverName), misaoPaneId);
       // Only the first pane carries the window's agent state; a split pane's hook must not stand in for it.
-      if (resolved && resolved.ordinal === 1) misao.recordAgentActivity(resolveServerName(body.serverName), resolved.tmuxTarget, body.event, sessionId);
+      if (resolved && (resolved.ordinal === 1 || body.event === 'session')) misao.recordAgentActivity(resolveServerName(body.serverName), resolved.tmuxTarget, body.event, sessionId, claudeConfigDir, resolved.ordinal);
       return { ok: true };
     }
 
@@ -229,6 +244,8 @@ const webhookRoutes: FastifyPluginCallback<WebhookRouteOptions> = (fastify, opts
       event: body.event,
       muxPaneRef,
       sessionId,
+      claudeConfigDir,
+      hookTimestamp,
     });
 
     return { ok: true };

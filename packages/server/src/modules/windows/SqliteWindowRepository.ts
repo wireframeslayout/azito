@@ -45,6 +45,8 @@ interface WindowRow {
   worker_type: string | null;
   worker_model: string | null;
   agent_session_id: string | null;
+  claude_config_dir: string | null;
+  claude_pane_sessions: string | null;
   launch_command: string | null;
   working_directory: string | null;
   pane_layout: string | null;
@@ -207,7 +209,7 @@ export class SqliteWindowRepository implements IWindowRepository {
   }
 
   update(id: number, data: Partial<Pick<Window,
-    'tmuxTarget' | 'muxRef' | 'label' | 'labelSource' | 'agentSessionId' | 'launchCommand' | 'paneLayout' | 'workerModel' | 'workingDirectory' | 'windowType' | 'workerType' | 'sleeping' | 'projectId'
+    'tmuxTarget' | 'muxRef' | 'label' | 'labelSource' | 'agentSessionId' | 'claudeConfigDir' | 'launchCommand' | 'paneLayout' | 'workerModel' | 'workingDirectory' | 'windowType' | 'workerType' | 'sleeping' | 'projectId'
   >>): void {
     const fields: string[] = [];
     const values: unknown[] = [];
@@ -226,7 +228,13 @@ export class SqliteWindowRepository implements IWindowRepository {
     }
     if (data.label !== undefined) { fields.push('label = ?'); values.push(data.label); }
     if (data.labelSource !== undefined) { fields.push('label_source = ?'); values.push(data.labelSource); }
-    if (data.agentSessionId !== undefined) { fields.push('agent_session_id = ?'); values.push(data.agentSessionId); }
+    if (data.agentSessionId !== undefined) {
+      this.clearFirstPaneSession(id, data.agentSessionId);
+      fields.push("claude_pane_sessions = CASE WHEN agent_session_id IS ? THEN claude_pane_sessions ELSE json_remove(claude_pane_sessions, '$.1') END"); values.push(data.agentSessionId);
+      fields.push('claude_config_dir = CASE WHEN agent_session_id IS ? THEN claude_config_dir ELSE NULL END'); values.push(data.agentSessionId);
+      fields.push('agent_session_id = ?'); values.push(data.agentSessionId);
+    }
+    if (data.claudeConfigDir !== undefined) { fields.push('claude_config_dir = ?'); values.push(data.claudeConfigDir); }
     if (data.launchCommand !== undefined) { fields.push('launch_command = ?'); values.push(data.launchCommand); }
     if (data.paneLayout !== undefined) { fields.push('pane_layout = ?'); values.push(data.paneLayout ? JSON.stringify(data.paneLayout) : null); }
     if (data.workerModel !== undefined) { fields.push('worker_model = ?'); values.push(data.workerModel); }
@@ -252,8 +260,40 @@ export class SqliteWindowRepository implements IWindowRepository {
     const rows = this.findByServerStmt.all(serverName) as WindowRow[];
     const ids = rows.filter((r) => isSameWindowTarget(r.tmux_target, tmuxTarget)).map((r) => r.id);
     if (ids.length === 0) return;
+    for (const id of ids) this.clearFirstPaneSession(id, sessionId);
     const placeholders = ids.map(() => '?').join(',');
-    this.db.prepare(`UPDATE windows SET agent_session_id = ? WHERE id IN (${placeholders})`).run(sessionId, ...ids);
+    this.db.prepare(`UPDATE windows SET claude_pane_sessions = CASE WHEN agent_session_id IS ? THEN claude_pane_sessions ELSE json_remove(claude_pane_sessions, '$.1') END, claude_config_dir = CASE WHEN agent_session_id IS ? THEN claude_config_dir ELSE NULL END, agent_session_id = ? WHERE id IN (${placeholders})`).run(sessionId, sessionId, sessionId, ...ids);
+  }
+
+  private clearFirstPaneSession(id: number, sessionId: string | null): void {
+    const row = this.findByIdStmt.get(id) as WindowRow | undefined;
+    if (!row?.pane_layout || row.agent_session_id === sessionId) return;
+    const layout = JSON.parse(row.pane_layout) as PaneLayout;
+    const panes = layout.panes.map((pane, index) => {
+      if (index !== 0) return pane;
+      const { agentSessionId: _sessionId, claudeConfigDir: _configDir, ...rest } = pane;
+      return { ...rest, ...(sessionId ? { agentSessionId: sessionId } : {}) };
+    });
+    this.updatePaneLayoutStmt.run(JSON.stringify({ ...layout, panes }), id);
+  }
+
+  updateClaudeSessionByPane(serverName: string, tmuxTarget: string, paneOrdinal: number | null, sessionId: string, configDir: string): void {
+    const rows = this.findByServerStmt.all(serverName) as WindowRow[];
+    for (const row of rows.filter((r) => isSameWindowTarget(r.tmux_target, tmuxTarget))) {
+      const sessions = row.claude_pane_sessions ? JSON.parse(row.claude_pane_sessions) as Record<string, { sessionId: string; configDir: string }> : {};
+      if (paneOrdinal !== null) sessions[String(paneOrdinal)] = { sessionId, configDir };
+      if (row.pane_layout && paneOrdinal !== null) {
+        const layout = JSON.parse(row.pane_layout) as PaneLayout;
+        const panes = layout.panes.map((pane, index) => (pane.ordinal ?? index + 1) === paneOrdinal
+          ? { ...pane, agentSessionId: sessionId, claudeConfigDir: configDir } : pane);
+        this.updatePaneLayoutStmt.run(JSON.stringify({ ...layout, panes }), row.id);
+      }
+      if (paneOrdinal === null || paneOrdinal === 1) {
+        this.db.prepare('UPDATE windows SET agent_session_id = ?, claude_config_dir = ?, claude_pane_sessions = ? WHERE id = ?').run(sessionId, configDir, JSON.stringify(sessions), row.id);
+      } else {
+        this.db.prepare('UPDATE windows SET claude_pane_sessions = ? WHERE id = ?').run(JSON.stringify(sessions), row.id);
+      }
+    }
   }
 
   remove(id: number): void {
@@ -269,7 +309,14 @@ export class SqliteWindowRepository implements IWindowRepository {
   }
 
   updatePaneLayout(id: number, layout: PaneLayout): void {
-    this.updatePaneLayoutStmt.run(JSON.stringify(layout), id);
+    const row = this.findByIdStmt.get(id) as WindowRow | undefined;
+    const sessions = row?.claude_pane_sessions ? JSON.parse(row.claude_pane_sessions) as Record<string, { sessionId: string; configDir: string }> : {};
+    const panes = layout.panes.map((pane) => {
+      const session = sessions[String(pane.ordinal)];
+      if (!session || (pane.agentSessionId && pane.agentSessionId !== session.sessionId)) return pane;
+      return { ...pane, agentSessionId: session.sessionId, claudeConfigDir: session.configDir };
+    });
+    this.updatePaneLayoutStmt.run(JSON.stringify({ ...layout, panes }), id);
   }
 
   private toWindow(row: WindowRow): Window {
@@ -297,6 +344,8 @@ export class SqliteWindowRepository implements IWindowRepository {
       workerType: row.worker_type,
       workerModel: row.worker_model,
       agentSessionId: row.agent_session_id,
+      claudeConfigDir: row.claude_config_dir,
+      claudePaneSessions: row.claude_pane_sessions ? Object.values(JSON.parse(row.claude_pane_sessions) as Record<string, { sessionId: string; configDir: string }>) : [],
       launchCommand: row.launch_command,
       workingDirectory: row.working_directory,
       paneLayout,

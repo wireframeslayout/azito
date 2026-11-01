@@ -1,5 +1,6 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { EventEmitter } from 'events';
+import { execFileSync } from 'node:child_process';
 import { chmodSync, mkdtempSync, mkdirSync, realpathSync, rmSync, symlinkSync, writeFileSync } from 'fs';
 import { tmpdir } from 'os';
 import * as path from 'path';
@@ -205,7 +206,7 @@ function buildService(opts: {
     findByServerAndRef: vi.fn(() => undefined),
     findByServerAndSession: vi.fn(() => []),
     update: vi.fn(),
-    updateAgentSessionIdByWindow: vi.fn(),
+    updateAgentSessionIdByWindow: vi.fn(), updateClaudeSessionByPane: vi.fn(),
     remove: vi.fn(),
     removeByServerAndTarget: vi.fn(() => 0),
     updatePaneLayout: vi.fn(),
@@ -1751,7 +1752,7 @@ describe('WindowRespawnService.respawn — concurrent respawns for the same task
       update: vi.fn((_id: number, fields: Partial<Window>) => {
         windowRow = { ...windowRow, ...fields };
       }),
-      updateAgentSessionIdByWindow: vi.fn(),
+      updateAgentSessionIdByWindow: vi.fn(), updateClaudeSessionByPane: vi.fn(),
       remove: vi.fn(),
       removeByServerAndTarget: vi.fn(() => 0),
       updatePaneLayout: vi.fn(),
@@ -2673,6 +2674,49 @@ describe('WindowRespawnService.respawn — a conversation that was never written
     expect(built.windowRepo.update).not.toHaveBeenCalled();
     expect(built.sentCommands).toEqual([]);
   }
+
+  it('passes the recorded directory through the pane environment without putting it in the shell command', async () => {
+    const directory = "/tmp/Claude $HOME 'quoted'";
+    const probe = { exists: vi.fn(async () => true) };
+    const { tmux, sentCommands, outcome } = await respawnWith(makeWindow({ agentSessionId: SESSION, claudeConfigDir: directory }), probe);
+    expect(outcome).toBeNull();
+    expect(probe.exists).toHaveBeenCalledWith(expect.anything(), 'claude', SESSION, directory);
+    const options = tmux.openWindow.mock.calls[0][3] as unknown as { extraEnv: Record<string, string> };
+    expect(options.extraEnv.AZITO_RESUME_CLAUDE_CONFIG_DIR).toBe(directory);
+    expect(sentCommands.join('\n')).toContain('CLAUDE_CONFIG_DIR="$AZITO_RESUME_CLAUDE_CONFIG_DIR"');
+    expect(sentCommands.join('\n')).not.toContain(directory);
+    const actual = execFileSync('bash', ['-c', `export CLAUDE_CONFIG_DIR=/shell-override; CLAUDE_CONFIG_DIR="$AZITO_RESUME_CLAUDE_CONFIG_DIR" bash -c 'printf %s "$CLAUDE_CONFIG_DIR"'`], {
+      env: { ...process.env, AZITO_RESUME_CLAUDE_CONFIG_DIR: directory }, encoding: 'utf8',
+    });
+    expect(actual).toBe(directory);
+  });
+
+  it('restores separate pane directories through their pane environments', async () => {
+    const paneLayout = { layout: '', panes: [
+      { index: 0, command: null, workingDirectory: null, title: null, workerType: 'claude', agentSessionId: SESSION, claudeConfigDir: '/config one' },
+      { index: 1, command: null, workingDirectory: null, title: null, workerType: 'claude', agentSessionId: 'second', claudeConfigDir: '/config two' },
+    ] };
+    const probe = { exists: vi.fn(async () => true) };
+    const built = buildService({ window: makeWindow({ paneLayout, agentSessionId: SESSION }), strategyFactory: claudeFactory, conversationProbe: probe });
+    built.tmux.listPanesByRef.mockResolvedValue([{ ordinal: 1, handle: '%0', title: '', command: 'bash', active: true }, { ordinal: 2, handle: '%1', title: '', command: 'bash', active: false }]);
+    await built.service.respawn(1, makeServer());
+    expect(probe.exists).toHaveBeenCalledWith(expect.anything(), 'claude', SESSION, '/config one');
+    expect(probe.exists).toHaveBeenCalledWith(expect.anything(), 'claude', 'second', '/config two');
+    expect(built.tmux.splitPaneByHandle.mock.calls[0][3]).toMatchObject({ AZITO_RESUME_CLAUDE_CONFIG_DIR_0: '/config one', AZITO_RESUME_CLAUDE_CONFIG_DIR_1: '/config two' });
+    expect(built.sentCommands.join('\n')).toContain('CLAUDE_CONFIG_DIR="$AZITO_RESUME_CLAUDE_CONFIG_DIR_0"');
+    expect(built.sentCommands.join('\n')).toContain('CLAUDE_CONFIG_DIR="$AZITO_RESUME_CLAUDE_CONFIG_DIR_1"');
+  });
+
+  it('resumes a sleeping window from before the migration using the process source', async () => {
+    conversation('old');
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    try {
+      const { sentCommands, outcome } = await respawnWith(makeWindow({ sleeping: true, agentSessionId: SESSION }), probeOver());
+      expect(outcome).toBeNull();
+      expect(sentCommands.join('\n')).toContain(`claude --resume ${SESSION}`);
+      expect(warn).toHaveBeenCalledWith(expect.stringContaining('no recorded Claude config directory'));
+    } finally { warn.mockRestore(); }
+  });
 
   it('starts a window whose conversation file exists nowhere with --session-id <id>', async () => {
     const { sentCommands, outcome } = await respawnWith(makeWindow({ agentSessionId: SESSION, workingDirectory: '/work/app' }), probeOver());

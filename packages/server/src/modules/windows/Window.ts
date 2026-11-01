@@ -18,6 +18,8 @@ export interface Window {
   workerType: string | null;
   workerModel: string | null;
   agentSessionId: string | null;
+  claudeConfigDir?: string | null;
+  claudePaneSessions?: Array<{ sessionId: string; configDir: string }>;
   launchCommand: string | null;
   workingDirectory: string | null;
   paneLayout: PaneLayout | null;
@@ -32,11 +34,13 @@ export interface PaneLayout {
 
 export interface PaneConfig {
   index: number;
+  ordinal?: number;
   command: string | null;
   workingDirectory: string | null;
   title: string | null;
   workerType?: string;
   agentSessionId?: string;
+  claudeConfigDir?: string;
 }
 
 export interface TerminalWindow extends Window {
@@ -129,9 +133,10 @@ export interface IWindowRepository {
    */
   adoptForTask(id: number, taskId: number): void;
   update(id: number, data: Partial<Pick<Window,
-    'tmuxTarget' | 'muxRef' | 'label' | 'labelSource' | 'agentSessionId' | 'launchCommand' | 'paneLayout' | 'workerModel' | 'workingDirectory' | 'windowType' | 'workerType' | 'sleeping' | 'projectId'
+    'tmuxTarget' | 'muxRef' | 'label' | 'labelSource' | 'agentSessionId' | 'claudeConfigDir' | 'launchCommand' | 'paneLayout' | 'workerModel' | 'workingDirectory' | 'windowType' | 'workerType' | 'sleeping' | 'projectId'
   >>): void;
   updateAgentSessionIdByWindow(serverName: string, tmuxTarget: string, sessionId: string): void;
+  updateClaudeSessionByPane(serverName: string, tmuxTarget: string, paneOrdinal: number | null, sessionId: string, configDir: string): void;
   remove(id: number): void;
   removeByServerAndTarget(serverName: string, tmuxTarget: string): number;
   updatePaneLayout(id: number, layout: PaneLayout): void;

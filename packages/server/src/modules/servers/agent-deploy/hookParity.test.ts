@@ -98,7 +98,12 @@ async function exercise(kind: 'bash' | 'node', c: Case): Promise<Received[]> {
 async function expectSame(c: Case): Promise<Received[]> {
   const fromBash = await exercise('bash', c);
   const fromNode = await exercise('node', c);
-  expect(fromNode).toEqual(fromBash);
+  const normalize = (requests: Received[]) => requests.map((request) => {
+    const body = JSON.parse(request.body);
+    if (body.hookTimestamp) body.hookTimestamp = '<timestamp>';
+    return { ...request, body };
+  });
+  expect(normalize(fromNode)).toEqual(normalize(fromBash));
   expect(fromBash.length).toBe(c.expectNone ? 0 : 1);
   return fromNode;
 }
@@ -157,7 +162,10 @@ describeOnPosix('azito-hook.mjs sends what the bash hooks send', () => {
 
   it('session sends event "session" and needs a valid session id', async () => {
     const [req] = await expectSame({ hook: 'session', stdin: JSON.stringify({ session_id: SESSION }), env: { ...fullEnv(), MISAO_PANE_ID: MISAO_PANE } });
-    expect(JSON.parse(req.body)).toEqual({ serverName: 'srv one', misaoPaneId: MISAO_PANE, event: 'session', sessionId: SESSION });
+    expect(JSON.parse(req.body)).toEqual({ serverName: 'srv one', misaoPaneId: MISAO_PANE, event: 'session', sessionId: SESSION, claudeConfigDir: `${home}/.claude`, hookTimestamp: expect.stringMatching(/^[0-9]+$/) });
+    const specialDir = '/tmp/quote"-backslash\\-line\n';
+    const [special] = await expectSame({ hook: 'session', stdin: JSON.stringify({ session_id: SESSION }), env: { ...fullEnv(), MISAO_PANE_ID: MISAO_PANE, CLAUDE_CONFIG_DIR: specialDir } });
+    expect(JSON.parse(special.body).claudeConfigDir).toBe(specialDir);
     await expectSame({ hook: 'session', stdin: '{"session_id":"x"}', env: { ...fullEnv(), MISAO_PANE_ID: MISAO_PANE }, expectNone: true });
   });
 

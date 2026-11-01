@@ -14,6 +14,7 @@ import type { ReadSessionBeforeResult, ReadSessionResult, TranscriptEntry } from
 import { getAgentTranscriptProfile, type InterruptKey } from './sources/profiles';
 import { sessionIdSchema, subagentIdSchema } from './sources/agentTranscriptProtocol';
 import { ParentSessionCache } from './ParentSessionCache';
+import { configDirForSession } from './windowConfigDir';
 
 export interface TranscriptsRouteOptions {
   /** ハブ自身のマシン（local）の会話ログ。windowId の無い読み取り・一覧・旧ルートの対象。 */
@@ -218,14 +219,14 @@ const transcriptsRoutes: FastifyPluginCallback<TranscriptsRouteOptions> = (fasti
    * 指定でウィンドウが無ければ 'window_not_found'、サーバーが無い・会話ログを読めない種別なら 'unsupported'
    * （同じ UUID のハブ上の会話を誤って返さないため、local へはフォールバックしない）。
    */
-  function sourcesForRead(windowIdRaw: string | undefined): TranscriptSource[] | 'window_not_found' | 'unsupported' {
+  function sourcesForRead(windowIdRaw: string | undefined, sessionId?: string): TranscriptSource[] | 'window_not_found' | 'unsupported' {
     const windowId = parsePositiveInt(windowIdRaw);
     if (windowId === undefined || windowId === 'invalid') return sources;
     const window = windowRepo.findById(windowId);
     if (!window) return 'window_not_found';
     const server = serverRepo.findByName(window.serverName);
     if (!server) return 'unsupported';
-    return sourceProvider.forServer(server) ?? 'unsupported';
+    return sourceProvider.forServer(server, configDirForSession(window, sessionId)) ?? 'unsupported';
   }
 
   // ── GET /api/transcripts/resolve-window ── ウィンドウからエージェント会話セッションを自動解決する
@@ -271,8 +272,8 @@ const transcriptsRoutes: FastifyPluginCallback<TranscriptsRouteOptions> = (fasti
     return resolved.sessionId;
   }
 
-  function findSubagentSource(window: Window, reply: FastifyReply): SubagentTranscriptSource | null {
-    const scoped = sourcesForRead(String(window.id));
+  function findSubagentSource(window: Window, sessionId: string, reply: FastifyReply): SubagentTranscriptSource | null {
+    const scoped = sourcesForRead(String(window.id), sessionId);
     if (typeof scoped === 'string') { reply.status(501).send({ error: 'unsupported_server' }); return null; }
     const source = findSource(scoped, SUBAGENT_CAPABLE_AGENT_TYPE);
     if (!source?.listSubagents || !source.readSubagent) { reply.status(501).send({ error: 'unsupported_agent' }); return null; }
@@ -290,7 +291,7 @@ const transcriptsRoutes: FastifyPluginCallback<TranscriptsRouteOptions> = (fasti
       const cached = parentSessions.get(window);
       const sessionId = cached && (expectedSession === undefined || cached === expectedSession) ? cached : await resolveParentSession(window, reply);
       if (!sessionId) return;
-      const source = findSubagentSource(window, reply);
+      const source = findSubagentSource(window, sessionId, reply);
       if (!source) return;
       const subagents = await source.listSubagents(sessionId);
       if (!subagents) return reply.status(404).send({ error: 'session_not_found' });
@@ -318,7 +319,7 @@ const transcriptsRoutes: FastifyPluginCallback<TranscriptsRouteOptions> = (fasti
           if (!parent) return;
           if (sessionId !== parent) return reply.status(409).send({ error: 'parent_session_changed' });
         }
-        const source = findSubagentSource(window, reply);
+        const source = findSubagentSource(window, sessionId, reply);
         if (!source) return;
         const result = await source.readSubagent(sessionId, request.params.agentId, offset, before);
         if (!result) return reply.status(404).send({ error: 'session_not_found' });
@@ -428,7 +429,7 @@ const transcriptsRoutes: FastifyPluginCallback<TranscriptsRouteOptions> = (fasti
   fastify.get<{ Params: { agent: string; id: string }; Querystring: { offset?: string; before?: string; windowId?: string } }>(
     '/api/transcripts/:agent/:id',
     async (request, reply) => {
-      const scoped = sourcesForRead(request.query.windowId);
+      const scoped = sourcesForRead(request.query.windowId, request.params.id);
       if (scoped === 'window_not_found') return reply.status(404).send({ error: 'Window not found' });
       if (scoped === 'unsupported') return reply.status(501).send({ error: 'unsupported_server' });
       const source = findSource(scoped, request.params.agent);
