@@ -85,7 +85,9 @@ export class FakeWindowsHost {
     }
     const decoded = decodeEncodedCommand(command);
     const packed = /\$packed = \[Convert\]::FromBase64String\('([^']+)'\)/.exec(decoded);
-    const script = packed ? gunzipSync(Buffer.from(packed[1]!, 'base64')).toString('utf8') : decoded;
+    const unpacked = packed ? gunzipSync(Buffer.from(packed[1]!, 'base64')).toString('utf8') : decoded;
+    const staged = /\$file = '([^']+\\(\.azito-script-[^']+))'/.exec(unpacked);
+    const script = staged && this.uploaded.has(staged[2]!) ? this.uploaded.get(staged[2]!)!.toString('utf8') : unpacked;
     const failing = this.options.failScript;
     if (failing && script.includes(failing.containing)) {
       this.calls.push({ kind: 'script', text: script });

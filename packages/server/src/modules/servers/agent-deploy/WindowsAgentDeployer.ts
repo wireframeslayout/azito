@@ -1,4 +1,5 @@
 import * as path from 'path';
+import { createHash, randomUUID } from 'node:crypto';
 import type { ExecResult } from '../transport/ServerTransport';
 import { CREATE_SCRIPT, INSPECT_SCRIPT, PROTECT_SCRIPT, evaluateAcl, parseAclSnapshot } from '../../../shared/os/windowsSecretFileGuard';
 import { powershellDialect } from '../../../shared/os/shellDialect';
@@ -332,7 +333,9 @@ export class WindowsAgentDeployer {
       {
         tasks: client,
         endTask: (taskName) => this.endTask(client, taskName),
-        script: (what, body, timeoutMs) => this.script(sshHost, what, body, timeoutMs),
+        script: (what, body, timeoutMs) => body.length > 3000
+          ? this.transferredScript(sshHost, host.home, what, body, timeoutMs)
+          : this.script(sshHost, what, body, timeoutMs),
       },
       { home: host.home, systemRoot: host.systemRoot, nodePath: host.nodePath, userId: host.userId },
       this.options,
@@ -426,6 +429,27 @@ export class WindowsAgentDeployer {
       throw new Error(`${what} failed on the Windows host (exit ${result.code})${reason ? `: ${redactSecretText(reason).slice(0, 600)}` : ''}`);
     }
     return result.stdout;
+  }
+
+  private async transferredScript(sshHost: string, home: string, what: string, body: string, timeoutMs = QUICK_MS): Promise<string> {
+    const name = `.azito-script-${randomUUID()}.tmp`;
+    const remote = path.win32.join(home, name);
+    const bytes = Buffer.from(body, 'utf8');
+    const hash = createHash('sha256').update(bytes).digest('hex');
+    const q = powershellDialect.quote;
+    try {
+      await this.transfer.putBuffer(sshHost, bytes, name);
+      return await this.script(sshHost, what, [
+        `$file = ${q(remote)}`,
+        '$bytes = [IO.File]::ReadAllBytes($file)',
+        `$hash = ([BitConverter]::ToString([Security.Cryptography.SHA256]::Create().ComputeHash($bytes))).Replace('-', '').ToLowerInvariant()`,
+        `if ($hash -ne ${q(hash)}) { throw 'The uploaded script failed its SHA256 check' }`,
+        'Remove-Item -LiteralPath $file -Force -ErrorAction Stop',
+        'Invoke-Expression ([Text.Encoding]::UTF8.GetString($bytes))',
+      ].join('\n'), timeoutMs);
+    } finally {
+      await this.script(sshHost, 'Removing the temporary script', `Remove-Item -LiteralPath ${q(remote)} -Force -ErrorAction SilentlyContinue`, QUICK_MS);
+    }
   }
 
   /**

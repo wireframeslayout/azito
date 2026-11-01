@@ -1,3 +1,4 @@
+import { WINDOWS_PROCESS_RECORDS } from '../../../shared/os/windowsProcessInfo';
 import { powershellDialect } from '../../../shared/os/shellDialect';
 import { redactSecretText } from '../../../shared/redactSecretText';
 import { RESOLVE_LONG, USES_FOLDER, lines, tailBelow, unreadable, type ScriptOutcome } from './windowsAgentUninstallScripts';
@@ -97,13 +98,7 @@ export function misaoHubScript(input: MisaoHubInput): string {
     ...(input.hubRoot !== undefined ? [`$hubRoot = ${q(input.hubRoot)}`] : []),
     '$me = [Security.Principal.WindowsIdentity]::GetCurrent().User.Value',
     ...RESOLVE_LONG,
-    'function Get-Owner($process) {',
-    '  try {',
-    '    $r = Invoke-CimMethod -InputObject $process -MethodName GetOwnerSid -ErrorAction Stop',
-    '    if ($r.ReturnValue -ne 0 -or -not $r.Sid) { return \'unknown\' }',
-    '    if ($r.Sid -eq $me) { return \'mine\' } else { return \'other\' }',
-    '  } catch { return \'unknown\' }',
-    '}',
+    ...WINDOWS_PROCESS_RECORDS,
     ...(input.hubRoot !== undefined ? [
       '$here = Resolve-Long $root; $hub = Resolve-Long $hubRoot',
       // A folder that is there but cannot be resolved (a link on the way, unreadable) may be the hub's; one that is not there has nothing to remove.
@@ -112,8 +107,11 @@ export function misaoHubScript(input: MisaoHubInput): string {
     ] : []),
     ...(input.looksForHub ? [
       `$hubPattern = ${q(HUB_COMMAND_LINE_PATTERN)}`,
-      'foreach ($candidate in @(Get-CimInstance Win32_Process -Filter "Name = \'node.exe\'" | Where-Object { $_.CommandLine -and ($_.CommandLine -match $hubPattern) })) {',
-      '  $owner = Get-Owner $candidate',
+      'foreach ($candidate in @(All | Where-Object { $_.Name -eq \'node.exe\' })) {',
+      '  $owner = if (-not $candidate.OwnerSid) { \'unknown\' } elseif ($candidate.OwnerSid -eq $me) { \'mine\' } else { \'other\' }',
+      '  if ($owner -eq \'other\') { continue }',
+      '  if (-not $candidate.CommandLine) { Write-Output ("UNKNOWN " + $candidate.ProcessId); exit 0 }',
+      '  if ($candidate.CommandLine -notmatch $hubPattern) { continue }',
       '  if ($owner -eq \'unknown\') { Write-Output ("UNKNOWN " + $candidate.ProcessId); exit 0 }',
       '  if ($owner -eq \'mine\') { Write-Output ("HUB " + $candidate.ProcessId); exit 0 }',
       '}',
@@ -134,21 +132,22 @@ export function misaoDaemonScript(root: string, home: string): string {
   return [
     `$root = ${q(root)}; $tail = ${q(tailBelow(home, root))}`,
     ...USES_FOLDER,
-    'function All { @(Get-CimInstance Win32_Process -ErrorAction Stop | Where-Object { $_.ProcessId -ne $PID }) }',
     'foreach ($d in @(All | Where-Object { $_.Name -eq \'misao.exe\' -and (Uses $_) })) {',
     '  $o = Owner $d',
     '  if ($o -eq \'unknown\') { Write-Output ("UNKNOWN " + $d.ProcessId); exit 0 }',
     '  if ($o -ne \'mine\') { continue }',
-    '  $id = $d.ParentProcessId; $byTask = $false',
+    '  $id = $d.ParentProcessId; $childStart = $d.CreationDate; $byTask = $false',
     '  for ($i = 0; $i -lt 4 -and $id; $i++) {',
-    '    $parent = Get-CimInstance Win32_Process -Filter "ProcessId = $id"',
-    '    if (-not $parent) { break }',
+    '    $process = Get-Process -Id $id -ErrorAction SilentlyContinue; $parent = if ($process) { Read-Process $process } else { $null }',
+    '    if (-not $parent -or -not $parent.CreationDate -or -not $childStart -or $parent.CreationDate -gt $childStart) { break }',
+    '    if ((Owner $parent) -ne \'mine\') { break }',
     '    if ($parent.Name -eq \'conhost.exe\' -and $parent.CommandLine -match \'--headless\') { $byTask = $true; break }',
+    '    $childStart = $parent.CreationDate',
     '    $id = $parent.ParentProcessId',
     '  }',
     '  if (-not $byTask) { Write-Output ("FOREIGN " + $d.ProcessId); exit 0 }',
     '}',
-    'foreach ($b in @(All | Where-Object { (Blind $_) -and (Matters $_) -and (Owner $_) -eq \'mine\' })) { Write-Output ("UNKNOWN " + $b.ProcessId); exit 0 }',
+    'foreach ($b in @(All | Where-Object { (Blind $_) -and (Matters $_) -and (Owner $_) -ne \'other\' })) { Write-Output ("UNKNOWN " + $b.ProcessId); exit 0 }',
     'Write-Output \'CLEAR\'',
   ].join('\n');
 }

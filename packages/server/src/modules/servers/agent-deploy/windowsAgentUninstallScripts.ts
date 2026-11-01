@@ -1,5 +1,6 @@
 import { powershellDialect } from '../../../shared/os/shellDialect';
 import { redactSecretText } from '../../../shared/redactSecretText';
+import { WINDOWS_PROCESS_RECORDS } from '../../../shared/os/windowsProcessInfo';
 import { PIPE_HOLDER_HELPER } from '../../../shared/os/pipeHolderHelper';
 
 /**
@@ -124,6 +125,7 @@ export const RESOLVE_LONG = [
  */
 export const USES_FOLDER = [
   ...RESOLVE_LONG,
+  ...WINDOWS_PROCESS_RECORDS,
   '$me = [Security.Principal.WindowsIdentity]::GetCurrent().User.Value',
   'function Norm($t) { if ($t) { ($t -replace \'/\', \'\\\').ToLowerInvariant() } else { \'\' } }',
   '$needles = New-Object System.Collections.ArrayList',
@@ -134,9 +136,8 @@ export const USES_FOLDER = [
   'function Blind($p) { (-not $p.ExecutablePath) -or (-not $p.CommandLine) }',
   'function Matters($p) { @(\'node.exe\', \'misao.exe\', \'conhost.exe\', \'cmd.exe\', \'powershell.exe\', \'pwsh.exe\') -contains "$($p.Name)".ToLowerInvariant() }',
   'function Owner($p) {',
-  '  try { $r = Invoke-CimMethod -InputObject $p -MethodName GetOwnerSid -ErrorAction Stop } catch { return \'unknown\' }',
-  '  if ($r.ReturnValue -ne 0 -or -not $r.Sid) { return \'unknown\' }',
-  '  if ($r.Sid -eq $me) { \'mine\' } else { \'other\' }',
+  '  if (-not $p.OwnerSid) { return \'unknown\' }',
+  '  if ($p.OwnerSid -eq $me) { \'mine\' } else { \'other\' }',
   '}',
 ];
 
@@ -160,12 +161,11 @@ export function leftoverProcessesScript(root: string, home: string): string {
   return [
     `$root = ${q(root)}; $tail = ${q(tailBelow(home, root))}`,
     ...USES_FOLDER,
-    'function All { @(Get-CimInstance Win32_Process -ErrorAction Stop | Where-Object { $_.ProcessId -ne $PID }) }',
     'function Find-Left { @(All | Where-Object { Uses $_ }) }',
     '$left = Find-Left',
     'for ($i = 0; $i -lt 20 -and $left.Count -gt 0; $i++) { Start-Sleep -Milliseconds 500; $left = Find-Left }',
-    '$mineBlind = @(All | Where-Object { (Blind $_) -and -not (Uses $_) -and (Owner $_) -eq \'mine\' })',
-    '$blind = @($mineBlind | Where-Object { Matters $_ }); $hidden = @($mineBlind | Where-Object { -not (Matters $_) })',
+    '$unclear = @(All | Where-Object { (Blind $_) -and -not (Uses $_) -and (Owner $_) -ne \'other\' })',
+    '$blind = @($unclear | Where-Object { Matters $_ }); $hidden = @($unclear | Where-Object { -not (Matters $_) -and (Owner $_) -eq \'mine\' })',
     'function Clean($t) { "$t" -replace \'[\\r\\n|]+\', \' \' }',
     'foreach ($p in $left) { Write-Output (\'LEFT|\' + $p.ProcessId + \'|\' + (Clean $p.Name) + \'|\' + (Clean $p.ExecutablePath)) }',
     'foreach ($p in $blind) { Write-Output (\'BLIND|\' + $p.ProcessId + \'|\' + (Clean $p.Name)) }',
@@ -201,7 +201,7 @@ export function parseLeftoverOutput(output: string, root: string, advice = ''): 
   }
   if (blind.length > 0) {
     const listed = blind.map((p) => `${p.name} (process ${p.pid})`).join('; ');
-    parts.push(`The host did not give the program or the command line of ${blind.length === 1 ? 'a process of yours' : `${blind.length} processes of yours`}, so it cannot be told whether ${blind.length === 1 ? 'it uses' : 'they use'} ${root}: ${listed}. Check ${blind.length === 1 ? 'it' : 'them'}.`);
+    parts.push(`The host did not give the program or the command line of ${blind.length === 1 ? 'a process' : `${blind.length} processes`} whose owner is yours or unknown, so it cannot be told whether ${blind.length === 1 ? 'it uses' : 'they use'} ${root}: ${listed}. Check ${blind.length === 1 ? 'it' : 'them'}.`);
   }
   return { outcome: 'failed', detail: `${parts.join(' ')} The folder was left; delete it, or remove the server again, once that is settled. (Processes of other users cannot be seen from this session.)${note === undefined ? '' : ` ${note}`}` };
 }

@@ -910,7 +910,7 @@ describe('the scripts it sends', () => {
     await uninstallWindowsAgent(long.asHost(), factsOf(home, NODE), OPTIONS, { removeMisao: true });
     expect(long.bodies.length).toBeGreaterThanOrEqual(6);
     for (const { what, body } of long.bodies) {
-      expect(() => powershellDialect.wrapScript(`$ProgressPreference = 'SilentlyContinue'\n${body}`), what).not.toThrow();
+      if (body.length <= 3000) expect(() => powershellDialect.wrapScript(`$ProgressPreference = 'SilentlyContinue'\n${body}`), what).not.toThrow();
     }
   });
 
@@ -926,7 +926,7 @@ describe('the scripts it sends', () => {
       firewallInspectScript('AZITO Agent (TCP 3002)'),
       sameFileScript(`${long}\\a\\b\\node.exe`, `${long}\\c\\d\\node.exe`),
     ];
-    for (const body of scripts) expect(() => powershellDialect.wrapScript(`$ProgressPreference = 'SilentlyContinue'\n${body}`)).not.toThrow();
+    for (const body of scripts.filter((value) => value.length <= 3000)) expect(() => powershellDialect.wrapScript(`$ProgressPreference = 'SilentlyContinue'\n${body}`)).not.toThrow();
   });
 
   it('a path with a junction or symbolic link on the way is not resolved, and a folder that is there but cannot be resolved may be the hub\'s', () => {
@@ -957,7 +957,8 @@ describe('the scripts it sends', () => {
   it('the leftover look touches nothing and fails on a list it cannot read', () => {
     const script = leftoverProcessesScript(AGENT_ROOT, HOME);
     expect(script).not.toMatch(/Stop-Process|Kill|taskkill/i);
-    expect(script).toContain('Get-CimInstance Win32_Process -ErrorAction Stop');
+    expect(script).toContain('Get-Process -ErrorAction Stop');
+    expect(script).not.toMatch(/Get-CimInstance|Invoke-CimMethod/);
   });
 });
 
@@ -978,7 +979,7 @@ describe('WindowsAgentDeployer.uninstall', () => {
       if (last.text.includes('$a = Resolve-Long')) return { ...result, stdout: 'SAME\r\n' };
       return result;
     };
-    const deployer = new WindowsAgentDeployer(exec, { putFile: async () => undefined, putBuffer: async () => undefined }, OPTIONS);
+    const deployer = new WindowsAgentDeployer(exec, { putFile: async () => undefined, putBuffer: async (_host, data, file) => { fake.uploaded.set(file, data); } }, OPTIONS);
     const result = await deployer.uninstall('h', info, { removeMisao: false });
     expect(outcomes(result)).toEqual({ task: 'done', processes: 'absent', firewall: 'absent', folder: 'done' });
     expect(fake.taskState).toBe('absent');
