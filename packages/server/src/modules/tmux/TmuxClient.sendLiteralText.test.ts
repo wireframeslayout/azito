@@ -1,4 +1,5 @@
 import { describe, it, expect, vi } from 'vitest';
+import { asPaneHandle } from '@azito/shared';
 import { TmuxClient } from './TmuxClient';
 import type { ServerConfig } from '../servers/Server';
 import type { TransportFactory } from '../servers/transport/TransportFactory';
@@ -14,6 +15,14 @@ function makeClient(handler: (args: string[]) => Promise<{ stdout: string; stder
 }
 
 describe('TmuxClient.sendLiteralText', () => {
+  it('pastes multiline text as one named tmux buffer', async () => {
+    const calls: string[][] = [];
+    const client = makeClient(async (args) => { calls.push(args); return { stdout: '', stderr: '', code: 0 }; });
+    await client.pasteTextToHandle(srv, asPaneHandle('%1'), 'one\ntwo');
+    expect(calls[0]).toEqual(['set-buffer', '-b', expect.any(String), '--', 'one\ntwo']);
+    expect(calls[1]).toEqual(['paste-buffer', '-p', '-r', '-d', '-b', calls[0][2], '-t', '%1']);
+  });
+
   it('sends short text via send-keys -l, never as a special-key match', async () => {
     const calls: string[][] = [];
     const client = makeClient(async (args) => {

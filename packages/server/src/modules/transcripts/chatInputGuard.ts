@@ -8,7 +8,6 @@ export interface ChatInputRejection { code: string; error: string }
 
 export async function guardChatInput(driver: IMuxClient, server: ServerConfig, handle: PaneHandle, workerType: string | null, text: string): Promise<ChatInputRejection | null> {
   if (/[\x00-\x09\x0b-\x1f\x7f-\x9f]/.test(text)) return { code: 'invalid_control_character', error: 'The message contains unsupported control characters.' };
-  if (text.includes('\n')) return { code: 'multiline_unavailable', error: 'Multiline input cannot be sent safely to this pane.' };
   const kind = tuiAgentKindOfWorkerType(workerType);
   if (!kind) return { code: 'unsupported_worker', error: 'Cannot verify that this pane is ready for chat input.' };
   try {

@@ -28,7 +28,6 @@ describe('guardChatInput', () => {
     ['unknown worker', driver('node', ready), 'generic', 'hello'],
     ['draft', driver('node', ready.replace('❯', '❯ draft')), 'claude', 'hello'],
     ['escape', driver('node', ready), 'claude', 'hello\x1b[201~'],
-    ['multiline', driver('node', ready), 'claude', 'hello\nworld'],
   ])('rejects %s', async (_name, mux, kind, text) => {
     expect(await guardChatInput(mux, server, pane, kind, text)).not.toBeNull();
   });

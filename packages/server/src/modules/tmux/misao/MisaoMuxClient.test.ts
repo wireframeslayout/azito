@@ -707,6 +707,15 @@ describe('MisaoMuxClient input', () => {
     expect(daemon.writes()).toEqual(['Enter', 'line1\nline2']);
   });
 
+  it('sends a multiline paste in a single bracketed write', async () => {
+    const wait = vi.fn(async () => {});
+    const { daemon, client } = setup({ wait });
+    const p = daemon.addPane(daemon.addWindow('proj', 'main'));
+    await client.pasteTextToHandle(server, handle(p), 'one\ntwo');
+    expect(daemon.writes()).toEqual(['\x1b[200~one\ntwo\x1b[201~']);
+    expect(wait).toHaveBeenCalledWith(3000);
+  });
+
   it('waits after a long text before returning, so a following Enter is not folded into the paste', async () => {
     const wait = vi.fn(async () => {});
     const { daemon, client } = setup({ wait });
@@ -780,12 +789,12 @@ describe('MisaoMuxClient behind WindowInputService', () => {
     const { daemon, client } = setup();
     const w = daemon.addWindow('proj', 'main');
     const other = daemon.addWindow('proj', 'other');
-    const pane = daemon.addPane(w);
+    const pane = daemon.addPane(w, { fgCommand: 'claude', screen: '──────────────\n❯\n──────────────\nbypass permissions on' });
     const otherPane = daemon.addPane(other);
     const isPaneInMode = vi.spyOn(client, 'isPaneInModeByHandle');
     const registry = new MuxDriverRegistry();
     registry.register('misao', client);
-    const window = { id: 5, serverName: 'local', tmuxTarget: '', muxRef: refOf('proj', w), workerType: null } as unknown as Window;
+    const window = { id: 5, serverName: 'local', tmuxTarget: '', muxRef: refOf('proj', w), workerType: 'claude' } as unknown as Window;
     const service = new WindowInputService(
       { findById: () => window } as unknown as IWindowRepository,
       registry,

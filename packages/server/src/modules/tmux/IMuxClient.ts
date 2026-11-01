@@ -67,6 +67,7 @@ export interface IMuxClient {
   captureScreen(server: ServerConfig, handle: PaneHandle, start?: number, end?: number): Promise<ExecResult>;
   sendKeysToHandle(server: ServerConfig, handle: PaneHandle, keys: string[]): Promise<void>;
   sendTextToHandle(server: ServerConfig, handle: PaneHandle, text: string): Promise<void>;
+  pasteTextToHandle(server: ServerConfig, handle: PaneHandle, text: string): Promise<void>;
   panePidByHandle(server: ServerConfig, handle: PaneHandle): Promise<number | null>;
   paneCommandByHandle(server: ServerConfig, handle: PaneHandle): Promise<string | null>;
 

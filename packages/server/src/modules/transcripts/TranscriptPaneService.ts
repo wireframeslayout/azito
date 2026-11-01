@@ -89,7 +89,8 @@ export class TranscriptPaneService {
 
     const rejection = await guardChatInput(driver, server, handle, 'claude', text);
     if (rejection) return rejection;
-    await driver.sendTextToHandle(server, handle, text);
+    if (text.includes('\n')) await driver.pasteTextToHandle(server, handle, text);
+    else await driver.sendTextToHandle(server, handle, text);
     await driver.sendKeysToHandle(server, handle, ['Enter']);
     return 'ok';
   }

@@ -1,3 +1,4 @@
+import { randomUUID } from 'node:crypto';
 import type { ExecResult, ITerminalStream } from '../servers/transport/ServerTransport';
 import type { TransportFactory } from '../servers/transport/TransportFactory';
 export { ServerConfig } from '../servers/Server';
@@ -754,6 +755,18 @@ export class TmuxClient implements IMuxClient {
     }
   }
   async sendTextToHandle(server: ServerConfig, handle: PaneHandle, text: string) { return this.sendLiteralText(server, handle as string, text); }
+  async pasteTextToHandle(server: ServerConfig, handle: PaneHandle, text: string): Promise<void> {
+    const buffer = `azito-chat-${randomUUID()}`;
+    const loaded = await this.runTmuxCommand(server, ['set-buffer', '-b', buffer, '--', text]);
+    if (loaded.code !== 0) throw new Error('Unable to prepare chat paste');
+    try {
+      const pasted = await this.runTmuxCommand(server, ['paste-buffer', '-p', '-r', '-d', '-b', buffer, '-t', handle]);
+      if (pasted.code !== 0) throw new Error('Unable to paste chat input');
+      await new Promise(resolve => setTimeout(resolve, 3000));
+    } finally {
+      await this.runTmuxCommand(server, ['delete-buffer', '-b', buffer]);
+    }
+  }
   async panePidByHandle(server: ServerConfig, handle: PaneHandle) { return this.getPanePid(server, handle as string); }
   async paneCommandByHandle(server: ServerConfig, handle: PaneHandle) { return this.getPaneCurrentCommand(server, handle as string); }
   async startOutputStream(server: ServerConfig, handle: PaneHandle, outputPath: string) { return this.startPipePane(server, handle as string, outputPath); }

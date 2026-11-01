@@ -161,6 +161,16 @@ describe('TranscriptPaneService', () => {
   });
 
   describe('sendInput', () => {
+    it('uses paste before Enter for multiline input', async () => {
+      const { claudeTranscriptSource, muxDriverRegistry, serverRepo } = buildDeps();
+      const driver = muxDriverRegistry.resolve(LOCAL_SERVER);
+      driver.pasteTextToHandle = vi.fn(async () => {});
+      driver.sendKeysToHandle = vi.fn(async () => {});
+      expect(await new TranscriptPaneService(claudeTranscriptSource, muxDriverRegistry, serverRepo).sendInput(SID, asPaneHandle('%1'), 'one\ntwo')).toBe('ok');
+      expect(driver.pasteTextToHandle).toHaveBeenCalledWith(LOCAL_SERVER, '%1', 'one\ntwo');
+      expect(driver.sendKeysToHandle).toHaveBeenCalledWith(LOCAL_SERVER, '%1', ['Enter']);
+    });
+
     it.each([{ foreground: 'bash' }, { screen: 'Do you trust this folder?' }])('does not send into a shell or dialog', async (opts) => {
       const sendTextToHandle = vi.fn();
       const sendKeysToHandle = vi.fn();

@@ -59,7 +59,8 @@ export class WindowInputService {
     await this.preparePaneForInput(server, handle);
     const rejection = await guardChatInput(driver, server, handle, window.workerType, text);
     if (rejection) return rejection;
-    await driver.sendTextToHandle(server, handle, text);
+    if (text.includes('\n')) await driver.pasteTextToHandle(server, handle, text);
+    else await driver.sendTextToHandle(server, handle, text);
     const submitDelayMs = this.resolveSubmitDelay(window.workerType);
     if (submitDelayMs > 0) await this.wait(submitDelayMs);
     await driver.sendKeysToHandle(server, handle, ['Enter']);
