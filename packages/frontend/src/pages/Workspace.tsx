@@ -24,8 +24,6 @@ import { useRecentTasks } from '../hooks/useRecentTasks';
 import { useWorkspaceData } from '../hooks/useWorkspaceData';
 import { useSidebarState } from '../hooks/useSidebarState';
 import { findWindowTerminalTabs } from '../lib/retargetTab';
-import { dirtyTabsReplacedByOpen } from '../lib/dirtyTabsReplacedByOpen';
-import { fileTabPath } from '../lib/serverPath';
 import { resolveActiveTabAfterPaneClose } from '../lib/paneCloseActiveTab';
 import { fetchSessionsOrUndefined } from '../lib/fetchServerSessions';
 import { useWindowActions } from '../hooks/useWindowActions';
@@ -105,7 +103,15 @@ function WorkspaceInner() {
     setThemeProjectId(activeProjectId || null);
   }, [activeProjectId, setThemeProjectId]);
 
-  const { tabs, activeTabId, setActiveTabId, connectPane: connectPaneRaw, connectTarget: connectTargetRaw, migrateSavedTabs, closeTab, retargetTabs: retargetTabsRaw, retargetTabPane: retargetTabPaneRaw, openFile: openFileRaw, openUnit: openUnitRaw, openTask: openTaskRaw, openTaskForm: openTaskFormRaw, openUnitForm, openSidekickForm, openIssue: openIssueRaw, openIssueList: openIssueListRaw, openServer: _openServerTab, openBrowser, updateBrowserActiveTab, openStorageFile: openStorageFileRaw, openDiff: openDiffRaw, openProjectTasks, openSettings: openSettingsRaw, togglePin, setTabDirty } = useTabPersistence();
+  const confirm = useConfirm();
+  // Every way of opening a tab replaces the unpinned ones; unsaved edits among them go only after this agrees.
+  const confirmDiscardDirtyTabs = useCallback((discarded: PersistedTab[]): Promise<boolean> => confirm({
+    title: t('workspace:tab.replaceDirtyTitle'),
+    message: t('workspace:tab.replaceDirtyMessage', { name: discarded.map((tab) => tab.label).join(', ') }),
+    confirmLabel: t('workspace:tab.replaceDirtyConfirm'),
+    danger: true,
+  }), [confirm, t]);
+  const { tabs, activeTabId, setActiveTabId, connectPane: connectPaneRaw, connectTarget: connectTargetRaw, migrateSavedTabs, closeTab, retargetTabs: retargetTabsRaw, retargetTabPane: retargetTabPaneRaw, openFile: openFileRaw, openUnit: openUnitRaw, openTask: openTaskRaw, openTaskForm: openTaskFormRaw, openUnitForm, openSidekickForm, openIssue: openIssueRaw, openIssueList: openIssueListRaw, openServer: _openServerTab, openBrowser, updateBrowserActiveTab, openStorageFile: openStorageFileRaw, openDiff: openDiffRaw, openProjectTasks, openSettings: openSettingsRaw, togglePin, setTabDirty } = useTabPersistence(undefined, { confirmDiscard: confirmDiscardDirtyTabs });
 
   const openServer = useCallback((serverName: string) => {
     navigate(paths.server(serverName, 'overview'));
@@ -198,7 +204,6 @@ function WorkspaceInner() {
   const { menu: contextMenu, show: showContextMenu, showAt: showContextMenuAt, hide: hideContextMenu } = useContextMenu();
 
   const { showToast } = useToast();
-  const confirm = useConfirm();
   const { recordOpened: recordTaskOpened } = useRecentTasks();
 
   useNotificationChannel({
@@ -534,17 +539,6 @@ function WorkspaceInner() {
 
   const { focus, setFocus } = useGlobalFocus();
 
-  const confirmReplaceDirtyTabs = useCallback((targetId: string): Promise<boolean> => {
-    const discarded = dirtyTabsReplacedByOpen(tabs, targetId);
-    if (discarded.length === 0) return Promise.resolve(true);
-    return confirm({
-      title: t('files:editor.switchConfirm'),
-      message: t('files:editor.switchMessage', { name: discarded.map((tab) => tab.label).join(', ') }),
-      confirmLabel: t('files:editor.switchDiscard'),
-      danger: true,
-    });
-  }, [tabs, confirm, t]);
-
   // `projectId` is the caller's own tab.projectId (or, for callers with no owning tab yet — e.g. the
   // sidebar FileExplorer, which is always scoped to the routed project — currentProjectId), never
   // inferred from "whichever project is currently routed" here. A split-pane tab opening a file from
@@ -554,13 +548,8 @@ function WorkspaceInner() {
   const openFile = useCallback((serverName: string, filePath: string, projectId?: number, line?: number) => {
     const pathApi = serverPathApi(serverName);
     if (!pathApi) return; // the server's OS is not known yet: the tab's identity depends on it
-    const open = () => openFileRaw(serverName, filePath, projectId ?? currentProjectId, line, pathApi);
-    void confirmReplaceDirtyTabs(`file:${serverName}:${fileTabPath(pathApi, filePath)}`).then((ok) => { if (ok) open(); });
-  }, [openFileRaw, currentProjectId, serverPathApi, confirmReplaceDirtyTabs]);
-
-  const openStorageFile = useCallback((projectId: number, filename: string, originalName: string, size: number) => {
-    void confirmReplaceDirtyTabs(`storage-file:${projectId}:${filename}`).then((ok) => { if (ok) openStorageFileRaw(projectId, filename, originalName, size); });
-  }, [confirmReplaceDirtyTabs, openStorageFileRaw]);
+    openFileRaw(serverName, filePath, projectId ?? currentProjectId, line, pathApi);
+  }, [openFileRaw, currentProjectId, serverPathApi]);
 
   const openDiff = useCallback((serverName: string, path: string, baseBranch?: string) => {
     openDiffRaw(serverName, path, baseBranch, currentProjectId);
@@ -1224,7 +1213,7 @@ function WorkspaceInner() {
       showContextMenuAt={showContextMenuAt}
       onCapturePanes={windowActions.handleCapturePanes}
       onStopOperation={stopTask}
-      openStorageFileRaw={openStorageFile}
+      openStorageFileRaw={openStorageFileRaw}
       projectSettings={sidebarProjectSettings}
       onOpenDiff={openDiff}
       respawningWindowIds={windowActions.respawningWindowIds}

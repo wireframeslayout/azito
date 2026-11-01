@@ -2,7 +2,10 @@
   "tab": {
     "closeDirtyTitle": "未保存の変更があるタブを閉じますか？",
     "closeDirtyMessage": "「{{name}}」には未保存の変更があります。このタブを閉じると変更は破棄されます。",
-    "closeDirtyConfirm": "破棄して閉じる"
+    "closeDirtyConfirm": "破棄して閉じる",
+    "replaceDirtyTitle": "未保存の変更があるタブを置き換えますか？",
+    "replaceDirtyMessage": "新しいタブを開くと「{{name}}」の未保存の変更は破棄されます。残すには、キャンセルしてタブをピン留めするか保存してください。",
+    "replaceDirtyConfirm": "破棄して開く"
   },
   "pane": {
     "splitRight": "右に分割",
