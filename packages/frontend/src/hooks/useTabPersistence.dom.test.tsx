@@ -15,7 +15,7 @@ describe('misao terminal tab persistence', () => {
     const first = renderHook(() => useTabPersistence('test-tabs'));
     act(() => first.result.current.connectPane(ref));
     expect(first.result.current.tabs[0].label).toBe('Window');
-    await waitFor(() => expect(localStorage.getItem('test-tabs')).toContain(ref.ref.replaceAll('"', '\\"')));
+    await waitFor(() => expect(localStorage.getItem('test-tabs')).toContain(ref.ref.replace(/"/g, '\\"')));
     first.unmount();
     const restored = renderHook(() => useTabPersistence('test-tabs'));
     expect(restored.result.current.tabs[0].terminalRef).toEqual(ref);
