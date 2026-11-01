@@ -1,8 +1,8 @@
 import { createContext, useCallback, useContext, useEffect, useRef, useState } from 'react';
 import { api } from '../api/client';
 import type { AgentActivityPayload } from '../types/notification';
-import { stripPaneSuffix, isSameWindowTarget } from '@azito/shared';
-import { parseTerminalTabId, refTabMatchesTarget } from '../lib/terminalRef';
+import { stripPaneSuffix } from '@azito/shared';
+import { isWatchedWindow } from '../lib/isWatched';
 import { useNotificationChannel } from './useNotificationChannel';
 import { useWorkspaceTargets } from './useWorkspaceTargets';
 import {
@@ -66,7 +66,7 @@ interface AgentActivityContextValue {
   isRunning: (serverName: string, target: string) => boolean;
   shouldShowActivity: (serverName: string, target: string) => boolean;
   shouldShowTaskActivity: (taskId: number) => boolean;
-  isWatched: (serverName: string, target: string, taskId?: number, windowId?: number) => boolean;
+  isWatched: (serverName: string, target: string, windowId?: number) => boolean;
   windowIndicator: (serverName: string, target: string) => ActivityIndicator;
   /**
    * Raw running/blocked status, with no "currently watched window" suppression and with
@@ -203,7 +203,7 @@ export function AgentActivityProvider({ children }: { children: React.ReactNode 
   const [finished, setFinished] = useState<FinishedEntry[]>(loadFinishedEntries);
 
   // WS ハンドラは ref 経由で最新の isWatched を読む（ハンドラ自体は購読時に固定されるため）。
-  const isWatchedRef = useRef<(serverName: string, target: string, taskId: number | undefined) => boolean>(() => false);
+  const isWatchedRef = useRef<(serverName: string, target: string, windowId?: number) => boolean>(() => false);
 
   const snapshotGeneration = useRef(0);
   const pendingEvents = useRef<AgentActivityPayload[] | null>(null);
@@ -247,7 +247,7 @@ export function AgentActivityProvider({ children }: { children: React.ReactNode 
         return;
       }
       if (payload.reason !== 'completed') return;
-      if (isWatchedRef.current(payload.serverName, payload.target, payload.taskId)) return;
+      if (isWatchedRef.current(payload.serverName, payload.target, payload.windowId)) return;
       setFinished((cur) => upsertFinished(cur, mergeFinishedEntry({
         serverName: payload.serverName,
         target: payload.target,
@@ -268,23 +268,8 @@ export function AgentActivityProvider({ children }: { children: React.ReactNode 
     onConnected: fetchSnapshot,
   });
 
-  const isWatched = useCallback((serverName: string, target: string, _taskId: number | undefined, windowId?: number): boolean => {
-    if (!browserFocused) return false;
-    if (activeTabId) {
-      const parsed = parseTerminalTabId(activeTabId);
-      if (parsed) {
-        if (windowId != null && parsed.kind === 'windowId' && parsed.windowId === windowId) return true;
-        if (parsed.kind === 'legacy' && isSameWindowTarget(parsed.target, target)) return true;
-        if (parsed.kind === 'ref') {
-          if (refTabMatchesTarget(parsed.ref, target)) return true;
-        }
-      }
-    }
-    if (focusedTarget) {
-      if (windowId != null && focusedTarget === `wid:${windowId}`) return true;
-      if (focusedTarget === activityKey(serverName, target)) return true;
-    }
-    return false;
+  const isWatched = useCallback((serverName: string, target: string, windowId?: number): boolean => {
+    return isWatchedWindow(browserFocused, activeTabId, focusedTarget, serverName, target, windowId);
   }, [browserFocused, activeTabId, focusedTarget]);
   isWatchedRef.current = isWatched;
 
@@ -302,7 +287,7 @@ export function AgentActivityProvider({ children }: { children: React.ReactNode 
   }, []);
 
   useEffect(() => {
-    const watchedFinished = finished.filter((e) => isWatched(e.serverName, e.target, e.taskId, e.windowId));
+    const watchedFinished = finished.filter((e) => isWatched(e.serverName, e.target, e.windowId));
     if (watchedFinished.length > 0) {
       const watchedKeys = new Set(watchedFinished.map(activityKeyForEntry));
       setFinished((cur) => cur.filter((e) => !watchedKeys.has(activityKeyForEntry(e))));
@@ -350,20 +335,20 @@ export function AgentActivityProvider({ children }: { children: React.ReactNode 
   const shouldShowActivity = (serverName: string, target: string): boolean => {
     const info = findEntry(serverName, target);
     if (!info?.running) return false;
-    return !isWatched(serverName, target, info.taskId);
+    return !isWatched(serverName, target, info.windowId);
   };
 
   const shouldShowTaskActivity = (taskId: number): boolean => {
     for (const info of entries.values()) {
       if (!info.running || info.taskId !== taskId) continue;
-      if (!isWatched(info.serverName, info.target, info.taskId)) return true;
+      if (!isWatched(info.serverName, info.target, info.windowId)) return true;
     }
     return false;
   };
 
   const windowIndicator = useCallback((serverName: string, target: string): ActivityIndicator => {
     const info = findEntry(serverName, target);
-    if (info?.running && !isWatched(serverName, target, info.taskId)) {
+    if (info?.running && !isWatched(serverName, target, info.windowId)) {
       return info.status;
     }
     if (findFinished(serverName, target)) {

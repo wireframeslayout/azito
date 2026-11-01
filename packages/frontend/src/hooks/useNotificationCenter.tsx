@@ -253,11 +253,11 @@ export function NotificationCenterProvider({ children }: { children: React.React
       // 「完了」として通知しない — 稼働していなかったキーにも running:false は流れてくる。
       const isManualLaunch = !payload.operation;
       if (!payload.running && payload.reason === 'completed' && isManualLaunch
-        && !isWatched(payload.serverName, payload.target, payload.taskId)) {
+        && !isWatched(payload.serverName, payload.target, payload.windowId)) {
         pushNotification(buildAgentNotification('agent_finished', 'notifications:kinds.agentFinished', { label: agentLabelOf(payload) }, payload));
       }
       if (!payload.running && payload.reason === 'api_error'
-        && !isWatched(payload.serverName, payload.target, payload.taskId)) {
+        && !isWatched(payload.serverName, payload.target, payload.windowId)) {
         pushNotification(buildAgentNotification('agent_finished', 'notifications:kinds.agentApiError', { label: agentLabelOf(payload) }, payload));
       }
     }, [pushNotification, isWatched]),
