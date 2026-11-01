@@ -622,8 +622,14 @@ describe.skipIf(process.platform !== 'win32')('the Windows agent install on a re
       const token = currentToken();
       const b = await makeBundle();
 
+      const beforeTask = await deployer.describeTask('ci', host);
+      const beforeProcesses = await agentProcesses(root);
       const result = await updateWindowsAgent(deps(), { ...b, token }, OPTIONS.port, layoutOf().logFile);
-
+      if (!result.success) {
+        const afterTask = await deployer.describeTask('ci', host);
+        const afterProcesses = await agentProcesses(root);
+        console.error(`[agent update diagnostic] before task: ${beforeTask}; processes: ${JSON.stringify(beforeProcesses)}; after task: ${afterTask}; processes: ${JSON.stringify(afterProcesses)}; agent log: ${readLog(layoutOf().logFile).slice(-12000)}`);
+      }
       expect(result, JSON.stringify(result)).toMatchObject({ success: true, version: b.version });
       await checkHealth(b.version);
       expect(currentToken()).toBe(token);
