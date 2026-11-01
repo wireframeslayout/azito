@@ -1069,7 +1069,7 @@ input[aria-invalid="true"]:focus-visible { outline-color: var(--danger) !importa
 .md-content { max-width: 760px; min-width: 0; font-family: var(--font-prose); font-size: var(--font-base); line-height: 1.8; color: var(--text); overflow-wrap: anywhere; }
 .md-content h1, .md-content h2, .md-content h3, .md-content h4 { margin: 1.3em 0 .8em; font-weight: 700; line-height: 1.5; }
 .md-content h1, .md-content h2 { font-size: 15.5px; border-bottom: 1px solid var(--hairline); padding-bottom: .3em; }
-.md-content h3 { font-size: 15.5px; }
+.md-content h3 { font-size: var(--font-base); }
 .md-content h4 { font-size: var(--font-base); margin-top: 1.1em; }
 .md-content p { margin: .8em 0; }
 .md-content > :first-child { margin-top: 0; }
