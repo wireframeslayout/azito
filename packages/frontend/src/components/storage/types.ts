@@ -13,6 +13,6 @@ export interface StorageOnboardingInfo {
 }
 
 export type StorageStatus =
-  | { status: 'ready' }
-  | { status: 'unreachable'; reason: string; message: string }
-  | { status: 'unconfigured'; onboarding: StorageOnboardingInfo };
+  | { state: 'ready' }
+  | { state: 'unreachable'; reason: string; message: string }
+  | { state: 'unconfigured'; onboarding: StorageOnboardingInfo };
