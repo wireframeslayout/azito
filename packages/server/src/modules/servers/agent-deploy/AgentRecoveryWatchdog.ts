@@ -26,7 +26,7 @@ export interface AgentRecoveryDeps {
 
 /** What {@link AgentRecoveryDeps.inspectFirewall} reports. */
 export interface FirewallVerdict {
-  ruleFound: boolean | null;
+  ruleFound: false | null;
   blockedBy: string[];
   problem: string | null;
   allowCommand: string;
@@ -254,17 +254,12 @@ export class AgentRecoveryWatchdog {
    */
   private async firewallBlocks(server: ServerConfig, identity: string): Promise<boolean> {
     if (!this.deps.inspectFirewall) return false;
-    let diagnosis: FirewallDiagnosis | undefined;
+    let diagnosis: FirewallDiagnosis;
     try {
       diagnosis = diagnoseFirewall(await this.deps.inspectFirewall(server), this.deps.now());
     } catch (err) {
       this.deps.logger.warn(`${server.name}: firewall inspection failed: ${describe(err)}`);
       diagnosis = { state: 'unknown', blockedBy: [], commands: [], checkedAt: this.deps.now(), networkCategory: null };
-    }
-    if (diagnosis === undefined) {
-      this.firewall.delete(server.name);
-      this.firewallNotified.delete(server.name);
-      return false;
     }
     this.firewall.set(server.name, { ...diagnosis, identity });
     if (diagnosis.state === 'unknown') return false;
@@ -289,8 +284,7 @@ export class AgentRecoveryWatchdog {
   }
 }
 
-/** undefined = the policy lets the hub reach the agent. */
-function diagnoseFirewall(result: FirewallVerdict, checkedAt: number): FirewallDiagnosis | undefined {
+function diagnoseFirewall(result: FirewallVerdict, checkedAt: number): FirewallDiagnosis {
   const networkCategory = result.networkCategory;
   if (result.networkCategory === null || result.ruleFound === null) {
     return { state: 'unknown', blockedBy: [], commands: [], checkedAt, networkCategory };
@@ -298,7 +292,6 @@ function diagnoseFirewall(result: FirewallVerdict, checkedAt: number): FirewallD
   if (result.blockedBy.length > 0) {
     return { state: 'blocked', blockedBy: result.blockedBy, commands: result.blockCommands, checkedAt, networkCategory };
   }
-  if (result.ruleFound) return undefined;
   return { state: 'missing_allow', blockedBy: [], commands: [result.allowCommand], checkedAt, networkCategory };
 }
 

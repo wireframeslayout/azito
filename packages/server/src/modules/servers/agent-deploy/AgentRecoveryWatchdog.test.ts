@@ -13,7 +13,7 @@ function server(name: string, platform: 'win32' | 'linux' = 'win32', type: Serve
 
 /** A hub whose servers, agents and misao are scripted, and whose clock moves only when told. */
 function verdict(over: Partial<FirewallVerdict>): FirewallVerdict {
-  return { ruleFound: true, blockedBy: [], problem: null, allowCommand: 'allow', blockCommands: [], networkCategory: 'Private', ...over };
+  return { ruleFound: null, blockedBy: [], problem: null, allowCommand: 'allow', blockCommands: [], networkCategory: 'Private', ...over };
 }
 
 class Harness {
@@ -23,7 +23,7 @@ class Harness {
   misaoDown = false;
   misaoStatusFails = false;
   recoverFails = false;
-  firewall: FirewallVerdict = verdict({ ruleFound: true });
+  firewall: FirewallVerdict = verdict({ ruleFound: null });
   readonly firewallNotices: import('./AgentRecoveryWatchdog').FirewallDiagnosis[] = [];
   reviveResult = 'started';
   /** The agent is up again once recoverAgent was called this many times. */
@@ -70,7 +70,7 @@ class Harness {
 }
 
 describe('AgentRecoveryWatchdog: the agent', () => {
-  it('pauses on confirmed firewall blocks and resumes when the policy changes', async () => {
+  it('pauses on confirmed firewall blocks and resumes when the policy becomes inconclusive', async () => {
     const h = new Harness();
     h.agentUp = false;
     h.firewall = verdict({ ruleFound: false, blockedBy: ['deny'], blockCommands: ['inspect deny'], networkCategory: 'Private' });
@@ -80,7 +80,7 @@ describe('AgentRecoveryWatchdog: the agent', () => {
     expect(h.watchdog.firewallStatus(h.servers[0]!)).toMatchObject({ state: 'blocked', checkedAt: h.clock, networkCategory: 'Private' });
     expect(h.firewallNotices).toHaveLength(1);
     expect(h.firewallNotices[0]?.commands).toContain('inspect deny');
-    h.firewall = verdict({ ruleFound: true });
+    h.firewall = verdict({ ruleFound: null });
     await h.advance(TIMING.maxMs);
     expect(h.recoverForces).toEqual([false]);
     await h.watchdog.tick();

@@ -202,6 +202,17 @@ describe('firewall recovery inspection', () => {
     expect(result.blockCommands).toEqual(["Get-NetFirewallRule -PolicyStore ActiveStore -Name 'rule''one' | Format-List *"]);
   });
 
+  it('quotes a host containing PowerShell expansion and uses the variable in the health URL', async () => {
+    const { info, deployer, scripts } = await setup('not healthy');
+    await expect(deployer.inspectFirewall('h', info, "host$(Write-Output injected)", 3002)).rejects.toThrow(/health/);
+    const { gunzipSync } = await import('node:zlib');
+    const encoded = /FromBase64String\('([^']+)'\)/.exec(scripts[0]!)![1]!;
+    const body = gunzipSync(Buffer.from(encoded, 'base64')).toString('utf8');
+    expect(body).toContain("$address = 'host$(Write-Output injected)'");
+    expect(body).toContain('Create("http://" + $address + ":" + $port + "/health")');
+    expect(body).not.toContain('http://host$(Write-Output injected)');
+  });
+
   it('requires the managed listener and uses a read-only command', async () => {
     const { host, info, deployer, scripts } = await setup('AZITO_AGENT_HEALTHY');
     await deployer.inspectFirewall('h', info, info.tailscaleIp, 3002);

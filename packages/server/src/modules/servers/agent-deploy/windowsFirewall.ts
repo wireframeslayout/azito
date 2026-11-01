@@ -397,7 +397,7 @@ export async function readFirewallDump(exec: FirewallExec, address: string): Pro
 }
 
 /** Recovery requires proof: uncertain filters, partial Allows and policy defaults never pause it. */
-export function evaluateRecoveryFirewall(dump: FirewallDump, target: FirewallTarget): { state: 'blocked' | 'missing_allow' | 'unknown' | 'allowed'; blockedBy: Array<{ name: string; displayName: string }> } {
+export function evaluateRecoveryFirewall(dump: FirewallDump, target: FirewallTarget): { state: 'blocked' | 'missing_allow' | 'unknown'; blockedBy: Array<{ name: string; displayName: string }> } {
   const unknown = { state: 'unknown' as const, blockedBy: [] };
   const profile = firewallProfileOf(target.networkCategory);
   if (dump.problem || dump.store !== 'ActiveStore' || !profile) return unknown;

@@ -26,7 +26,7 @@ export function needsTransferredScript(body: string): boolean {
 }
 
 /** The firewall verdict for the recognised agent task, with the commands an administrator would run to inspect or allow it. */
-export type FirewallInspection = FirewallResult & { allowCommand: string; blockCommands: string[] };
+export type FirewallInspection = Omit<FirewallResult, 'ruleFound'> & { ruleFound: false | null; allowCommand: string; blockCommands: string[] };
 
 /** Puts bytes on the host over SFTP. The remote path is relative to the user's home, with `/` separators (what Windows OpenSSH's sftp-server takes). */
 export interface WindowsFileTransfer {
@@ -296,7 +296,7 @@ export class WindowsAgentDeployer {
       'if ($parent.ProcessName -ine "powershell" -or [AzitoProcessList]::Owner($parent.Id) -ne $me -or -not $parentData[1] -or $parentData[1] -notmatch "(?i)-EncodedCommand\\s+([A-Za-z0-9+/=]+)") { throw "Cannot identify the managed launcher" }',
       '$sha = [Security.Cryptography.SHA256]::Create(); try { $hash = ([BitConverter]::ToString($sha.ComputeHash([Text.Encoding]::ASCII.GetBytes($Matches[1])))).Replace("-", "").ToLowerInvariant() } finally { $sha.Dispose() }',
       'if ($hash -ne $launcherHash -or $parent.StartTime.ToUniversalTime() -gt $start) { throw "Cannot identify the managed launcher" }',
-      '$request = [System.Net.HttpWebRequest]::Create("http://${address}:${port}/health"); $request.Proxy = $null; $request.Timeout = 5000; $request.AllowAutoRedirect = $false',
+      '$request = [System.Net.HttpWebRequest]::Create("http://" + $address + ":" + $port + "/health"); $request.Proxy = $null; $request.Timeout = 5000; $request.AllowAutoRedirect = $false',
       '$response = $request.GetResponse(); try { if ([int]$response.StatusCode -ne 200) { throw "Agent health is not 200" } } finally { $response.Dispose() }',
       'if ((Get-Process -Id $p.Id -ErrorAction Stop).StartTime.ToUniversalTime() -ne $start) { throw "Agent process changed" }',
       'Write-Output "AZITO_AGENT_HEALTHY"',
@@ -306,7 +306,7 @@ export class WindowsAgentDeployer {
     const dump = await readFirewallDump((command) => this.sshExec(sshHost, command, FIREWALL_MS), address);
     const verdict = evaluateRecoveryFirewall(dump, { port, nodePath: identity.nodePath, localAddress: address, networkCategory: dump.networkCategory });
     return {
-      ruleFound: verdict.state === 'unknown' ? null : verdict.state === 'allowed',
+      ruleFound: verdict.state === 'unknown' ? null : false,
       elevated: dump.elevated, created: false, problem: verdict.state === 'unknown' ? 'the effective firewall policy could not be confirmed' : null,
       blockedBy: verdict.blockedBy.map((r) => r.displayName), allowedBy: [], store: dump.store, networkCategory: dump.networkCategory,
       allowCommand: firewallRuleCommand(port, identity.nodePath, address),
