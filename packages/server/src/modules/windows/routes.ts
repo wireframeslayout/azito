@@ -45,9 +45,9 @@ import type { SessionCaptureService } from './SessionCaptureService';
 import type { WindowActivityStatusService } from './WindowActivityStatusService';
 
 export interface WindowsRouteOptions {
-  muxSwitchSettingsRepo?: SqliteMuxSwitchSettingsRepository;
-  auditLogService?: AuditLogService;
-  agentActivityMonitor?: AgentActivityMonitor;
+  muxSwitchSettingsRepo: SqliteMuxSwitchSettingsRepository;
+  auditLogService: AuditLogService;
+  agentActivityMonitor: AgentActivityMonitor;
   windowRepo: IWindowRepository;
   projectRepo: IProjectRepository;
   taskRepo: ITaskRepository;
@@ -550,7 +550,7 @@ const windowsRoutes: FastifyPluginCallback<WindowsRouteOptions> = (fastify, opts
     if (!server) return reply.status(404).send({ error: 'Server not found' });
     const kind = windowKindOf(win);
     const availability = opts.muxDriverRegistry.availabilityFor('misao', server);
-    const mode = opts.muxSwitchSettingsRepo!.get();
+    const mode = opts.muxSwitchSettingsRepo.get();
     const hosted = opts.muxDriverRegistry.supportedKinds(server).includes('misao') && (availability.available || (availability.reason !== 'not_installed' && availability.reason !== 'driver_not_registered' && availability.reason !== 'unsupported_os'));
     return { currentMux: kind, misao: { hosted, available: availability.available, ...(availability.available ? {} : { reason: availability.reason }) }, mode, shouldAsk: shouldAskMuxSwitch(kind, mode, hosted && availability.available) };
   });
@@ -590,7 +590,7 @@ const windowsRoutes: FastifyPluginCallback<WindowsRouteOptions> = (fastify, opts
       // /api/tasks/:id/recover-session and /api/units/:id/execute|follow-up.
       let result: { tmuxTarget: string };
       try {
-        result = await respawnService.respawn(id, srv, { mux, isBusy: (windowId) => opts.agentActivityMonitor!.snapshot().some((entry) => entry.windowId === windowId || (entry.serverName === win.serverName && isSameWindowTarget(entry.target, win.tmuxTarget))) });
+        result = await respawnService.respawn(id, srv, { mux, isBusy: (windowId) => opts.agentActivityMonitor.snapshot().some((entry) => entry.windowId === windowId || (entry.serverName === win.serverName && isSameWindowTarget(entry.target, win.tmuxTarget))) });
         if (mux && mux !== sourceMux) {
           const actor = request.principal ?? OPERATOR_PRINCIPAL;
           recordAuditBestEffort(opts.auditLogService, { actorClass: actor.class, actorId: actor.id ?? null, event: 'window.mux_switched', detail: { windowId: id, serverName: srv.name, from: sourceMux, to: mux, trigger: 'manual' } }, (err) => request.log.error({ err, windowId: id }, 'Mux switch audit failed'));

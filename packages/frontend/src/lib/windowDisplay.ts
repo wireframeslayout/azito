@@ -1,4 +1,4 @@
-import { isMisaoWindowId, stripPaneSuffix, parseMuxRef, resolveWindowTitle, formatWindowTitleLine, type WindowTitleInput } from '@azito/shared';
+import { isMisaoWindowId, stripPaneSuffix, parseMuxRef, resolveWindowTitle, formatWindowTitleLine, type MuxDriverKind, type WindowTitleInput } from '@azito/shared';
 import type { Session } from '../pages/workspace/types';
 
 
@@ -56,6 +56,12 @@ export function misaoRefWindowTitle(sessions: Session[], ref: string, pane: numb
 
 export function isMisaoTarget(target: string): boolean {
   return isMisaoWindowId(stripPaneSuffix(target).split(':').pop() ?? '');
+}
+
+/** The mux a registered window lives in: its ref's kind, else a misao window id in its target; anything else is tmux. */
+export function windowMuxKind(w: { muxRef?: { kind: MuxDriverKind } | null; tmuxTarget: string }): MuxDriverKind {
+  if (w.muxRef) return w.muxRef.kind;
+  return isMisaoTarget(w.tmuxTarget) ? 'misao' : 'tmux';
 }
 
 export function windowTitleInput(w: { id?: number; label?: string | null; labelSource?: 'auto' | 'user'; workerType?: string | null; windowType?: string }): WindowTitleInput {

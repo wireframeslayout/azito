@@ -228,12 +228,12 @@ export function TerminalContainer({ registeredWindow, serverName, target: rawTar
 
   const handleRespawn = useCallback(async function perform(force = false, chosenMux?: 'tmux' | 'misao') {
     if (respawnWindowId === null) return;
-    setRespawning(true);
     setRespawnError(null);
     let mux: 'tmux' | 'misao' | null | undefined = chosenMux;
     try {
       mux = mux ?? await wake.choose(respawnWindowId, formatWindowTitleLine(resolveWindowTitle({ ...windowTitleInput(dbWindow ?? registeredWindow ?? {}), tmuxTarget: target })));
       if (!mux) return;
+      setRespawning(true);
       setWakeMux(mux);
       const res = await api<{ tmuxTarget: string; error?: string; reason?: string; message?: string; windowId?: number; sessionId?: string }>(`/windows/${respawnWindowId}/respawn`, {
         method: 'POST',
@@ -568,8 +568,8 @@ export function TerminalContainer({ registeredWindow, serverName, target: rawTar
             <div style={{ color: 'var(--text-dim)', fontSize: 'var(--font-base)', marginBottom: 4 }}>
               {t('terminal.sleeping')}
             </div>
-            {muxPlanError && <div role="status">{t('terminal.muxPlanFailed')}</div>}
-            {misaoNotInstalled && <div>{t('terminal.muxNotInstalled', { serverName })} <a href={paths.server(serverName, 'setup')}>{t('terminal.muxInstallLink')}</a></div>}
+            {muxPlanError && <div role="status" style={{ fontSize: 'var(--font-sm)', color: 'var(--text-dim)' }}>{t('terminal.muxPlanFailed')}</div>}
+            {misaoNotInstalled && <div style={{ fontSize: 'var(--font-sm)', color: 'var(--text-dim)' }}>{t('terminal.muxNotInstalled', { serverName })} · <a href={paths.server(serverName, 'setup')}>{t('terminal.muxInstallLink')}</a></div>}
             {respawnError && <div role="alert" style={{ color: 'var(--danger)' }}>{respawnError}</div>}
             {failedMisao && <button className="btn btn-sm" disabled={respawning} onClick={() => void handleRespawn(false, 'tmux')}>{t('terminal.muxRetryTmux')}</button>}
             <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
@@ -594,7 +594,7 @@ export function TerminalContainer({ registeredWindow, serverName, target: rawTar
                     }}
                   />
                 )}
-                {respawning ? t(wakeMux === 'misao' ? 'terminal.muxWaking' : 'terminal.respawning') : t('terminal.wake')}
+                {respawning ? (wakeMux === 'misao' && respawnWindowId !== null ? t('terminal.muxWaking', { windowId: formatWindowId(respawnWindowId) }) : t('terminal.respawning')) : t('terminal.wake')}
               </button>
               {onCloseTab && (
                 <button className="btn btn-sm" onClick={onCloseTab}>

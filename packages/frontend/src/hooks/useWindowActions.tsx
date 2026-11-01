@@ -12,7 +12,7 @@ import { useToast } from './useToast';
 import { Icon } from '../components/ui/Icon';
 import type { ResourceStatus } from '../components/ResourceWarningDialog';
 import { isInsufficientResources } from './useAddWindowModal';
-import { windowTitleInput } from '../lib/windowDisplay';
+import { windowMuxKind, windowTitleInput } from '../lib/windowDisplay';
 import { canRenamePane } from '../lib/windowRowPlan';
 import { buildWindowMenuItems, windowMenuInfo, type WindowMenuItemDescriptor, type WindowMenuParams } from '../lib/windowMenuItems';
 import { paneDeletePath, refTabMatchesTarget, tabsToCloseAfterPaneDelete } from '../lib/terminalRef';
@@ -179,9 +179,15 @@ export function useWindowActions(
     refreshWorkspace();
   }, [refreshWorkspace]);
 
-  const handleRespawnWindow = useCallback(async function perform(windowId: number, serverName?: string, force = false, chosenMux?: MuxDriverKind, sourceMux: MuxDriverKind = 'tmux') {
+  const handleRespawnWindow = useCallback(async function perform(windowId: number, serverName?: string, force = false, chosenMux?: MuxDriverKind, offerTmuxRetry = false) {
     setRespawningWindowIds((prev) => new Set(prev).add(windowId));
     let mux: MuxDriverKind | null | undefined = chosenMux;
+    // Waking a sleeping tmux window into misao can be retried in tmux; an awake window is never offered that (it would be killed).
+    const reportFailure = (message: string): void => {
+      if (mux === 'misao' && offerTmuxRetry) {
+        setConfirmDialog({ title: t('windows.respawnFailed'), message, confirmLabel: t('common:terminal.muxRetryTmux'), confirmVariant: 'primary', onConfirm: () => { setConfirmDialog(null); void perform(windowId, serverName, false, 'tmux'); } });
+      } else showToast(message);
+    };
     try {
       mux = mux ?? await wake.choose(windowId, formatWindowTitleLine(resolveWindowTitle({ id: windowId })));
       if (!mux) return;
@@ -194,16 +200,13 @@ export function useWindowActions(
           resources: result.resources,
           retry: () => {
             setRespawnResourceWarning(null);
-            void perform(windowId, serverName, true, mux ?? undefined, sourceMux);
+            void perform(windowId, serverName, true, mux ?? undefined, offerTmuxRetry);
           },
         });
         return;
       }
       if (!result.tmuxTarget) {
-        const message = result.reason ? `${result.error}: ${result.reason}` : result.error || t('windows.respawnFailed');
-        if (mux === 'misao' && sourceMux === 'tmux') {
-          setConfirmDialog({ title: t('windows.respawnFailed'), message, confirmLabel: t('common:terminal.muxRetryTmux'), confirmVariant: 'primary', onConfirm: () => { setConfirmDialog(null); void perform(windowId, serverName, false, 'tmux'); } });
-        } else showToast(message);
+        reportFailure(result.reason ? `${result.error}: ${result.reason}` : result.error || t('windows.respawnFailed'));
         return;
       }
       refreshWorkspace();
@@ -212,9 +215,7 @@ export function useWindowActions(
         await reconnectWindow?.({ serverName, windowId, tmuxTarget: result.tmuxTarget });
       }
     } catch (err) {
-      const message = err instanceof Error ? err.message : t('windows.respawnFailed');
-      if (mux === 'misao' && sourceMux === 'tmux') setConfirmDialog({ title: t('windows.respawnFailed'), message, confirmLabel: t('common:terminal.muxRetryTmux'), confirmVariant: 'primary', onConfirm: () => { setConfirmDialog(null); void perform(windowId, serverName, false, 'tmux'); } });
-      else showToast(message);
+      reportFailure(err instanceof Error ? err.message : t('windows.respawnFailed'));
     } finally {
       setRespawningWindowIds((prev) => {
         const next = new Set(prev);
@@ -222,7 +223,7 @@ export function useWindowActions(
         return next;
       });
     }
-  }, [refreshWorkspace, refreshSessions, reconnectWindow, showToast, wake.choose]);
+  }, [refreshWorkspace, refreshSessions, reconnectWindow, showToast, wake.choose, t]);
 
   const handleSleepWindow = useCallback(async (windowId: number) => {
     try {
@@ -272,7 +273,7 @@ export function useWindowActions(
       paneOrdinal: extra?.paneOrdinal,
       paneHandle: extra?.paneHandle,
       canRenamePane: canRenamePane(w),
-      muxKind: w.muxRef?.kind,
+      muxKind: windowMuxKind(w),
       windowType: w.windowType,
       agentSessionId: w.agentSessionId,
       sleeping: w.sleeping,
@@ -286,8 +287,8 @@ export function useWindowActions(
       'rename-pane': { icon: <Icon name="edit" size={16} />, run: (d) => void handleRenamePane(w.serverName, extra!.paneTarget!, extra!.paneTitle || '', w.id, d.paneOrdinal) },
       'capture-panes': { icon: <Icon name="camera" size={16} />, run: () => void handleCapturePanes(w.id) },
       sleep: { icon: <Icon name="moon" size={16} />, run: () => void handleSleepWindow(w.id) },
-      'switch-misao': { icon: <Icon name="terminal" size={16} />, run: () => { void (async () => { try { const mux = await wake.choose(w.id, formatWindowTitleLine(resolveWindowTitle({ ...windowTitleInput(w), tmuxTarget: w.tmuxTarget })), true); if (mux) await handleRespawnWindow(w.id, w.serverName, false, mux, 'tmux'); } catch (err) { showToast(err instanceof Error ? err.message : t('windows.respawnFailed')); } })(); } },
-      respawn: { icon: <Icon name="refresh" size={16} />, run: () => void handleRespawnWindow(w.id, w.serverName, false, undefined, w.muxRef?.kind ?? 'tmux') },
+      'switch-misao': { icon: <Icon name="terminal" size={16} />, run: () => { void (async () => { try { const mux = await wake.choose(w.id, formatWindowTitleLine(resolveWindowTitle({ ...windowTitleInput(w), tmuxTarget: w.tmuxTarget })), true); if (mux) await handleRespawnWindow(w.id, w.serverName, false, mux, false); } catch (err) { showToast(err instanceof Error ? err.message : t('windows.respawnFailed')); } })(); } },
+      respawn: { icon: <Icon name="refresh" size={16} />, run: () => void handleRespawnWindow(w.id, w.serverName, false, undefined, windowMuxKind(w) === 'tmux') },
       'show-task': { icon: <Icon name="tasks" size={16} />, run: () => openTask(linkedTask!.id, linkedTask!.title) },
       detach: { icon: <Icon name="external-link" size={16} />, run: () => void handleDetachWindow(w.id) },
       'delete-pane': { icon: <Icon name="trash" size={16} />, run: (d) => handleDeletePane(w.serverName, w.id, d.paneOrdinal!, d.paneHandle, extra!.paneTitle || extra!.paneTarget!, w.muxRef?.kind) },

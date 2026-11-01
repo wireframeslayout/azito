@@ -64,8 +64,8 @@ describe('wake selection', () => {
     render(<HotkeyProvider><Example onChoice={chosen} /></HotkeyProvider>);
     fireEvent.click(screen.getByText('Wake'));
     const sheet = await screen.findByRole('dialog', { name: 'Reopen with misao?' });
-    await waitFor(() => expect(screen.getByText('Use misao')).toHaveFocus());
-    expect(Array.from(sheet.querySelectorAll('button')).map((button) => button.textContent)).toEqual(['Use misao', 'Keep tmux', 'Cancel']);
+    await waitFor(() => expect(screen.getByText('Open with misao')).toHaveFocus());
+    expect(Array.from(sheet.querySelectorAll('button')).map((button) => button.textContent)).toEqual(['Open with misao', 'Open with tmux', 'Cancel']);
     fireEvent.keyDown(document, { key: 'Escape' });
     await waitFor(() => expect(chosen).toHaveBeenCalledWith(null));
   });
@@ -74,7 +74,7 @@ describe('wake selection', () => {
     render(<HotkeyProvider><Example onChoice={chosen} /></HotkeyProvider>);
     fireEvent.click(screen.getByText('Wake'));
     await screen.findByRole('dialog');
-    await waitFor(() => expect(screen.getByText('Use misao')).toHaveFocus());
+    await waitFor(() => expect(screen.getByText('Open with misao')).toHaveFocus());
     fireEvent.keyDown(document, { key: 'Escape' });
     await waitFor(() => expect(chosen).toHaveBeenCalledWith(null));
   });

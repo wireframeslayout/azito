@@ -1,12 +1,6 @@
 {
-  "rightPanel": {
-    "title": "Linked windows",
-    "open": "Open linked windows panel",
-    "close": "Close linked windows panel"
-  },
-  "navigation": {
-    "taskOpenFailed": "Could not open the task."
-  },
+  "rightPanel": {"title": "Linked windows", "open": "Open linked windows panel", "close": "Close linked windows panel"},
+  "navigation": { "taskOpenFailed": "Could not open the task." },
   "tab": {
     "closeDirtyTitle": "Close tab with unsaved changes?",
     "closeDirtyMessage": "\"{{name}}\" has unsaved changes. Closing this tab will discard them.",
@@ -97,7 +91,7 @@
     "deletePane": "Delete pane",
     "quickAddTitle": "Add {{label}} — {{serverName}}",
     "switchMisao": "Reopen with misao…",
-    "switchMisaoBusy": "Unavailable while the agent is working or blocked",
+    "switchMisaoBusy": "Not available while working (wait until it is idle)",
     "switchMisaoUnavailable": "misao is not available on this server"
   },
   "addWindow": {

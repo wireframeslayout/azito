@@ -1,12 +1,6 @@
 {
-  "rightPanel": {
-    "title": "連携中の窓",
-    "open": "連携中の窓を開く",
-    "close": "連携中の窓を閉じる"
-  },
-  "navigation": {
-    "taskOpenFailed": "タスクを開けませんでした。"
-  },
+  "rightPanel": {"title": "連携中の窓", "open": "連携中の窓を開く", "close": "連携中の窓を閉じる"},
+  "navigation": { "taskOpenFailed": "タスクを開けませんでした。" },
   "tab": {
     "closeDirtyTitle": "未保存の変更があるタブを閉じますか？",
     "closeDirtyMessage": "「{{name}}」には未保存の変更があります。このタブを閉じると変更は破棄されます。",
@@ -97,7 +91,7 @@
     "deletePane": "ペインを削除",
     "quickAddTitle": "{{label}} を追加 — {{serverName}}",
     "switchMisao": "misao で開き直す…",
-    "switchMisaoBusy": "稼働中または承認待ちのため切り替えられません",
+    "switchMisaoBusy": "稼働中は選べません（待機中にしてから）",
     "switchMisaoUnavailable": "このサーバーでは misao を利用できません"
   },
   "addWindow": {

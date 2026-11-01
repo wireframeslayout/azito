@@ -1,4 +1,4 @@
-import { isMisaoTarget } from '../../lib/windowDisplay';
+import { windowMuxKind } from '../../lib/windowDisplay';
 import React, { useState, useCallback } from 'react';
 import { useTranslation } from 'react-i18next';
 import { Icon } from './Icon';
@@ -180,6 +180,11 @@ function TaskIdBadge({ taskId }: { taskId: number }) {
   );
 }
 
+/** Marks a window that still lives in tmux; a misao window shows nothing (#509, #329). */
+function TmuxKindChip({ w }: { w: { muxRef?: MuxRef | null; tmuxTarget: string } }) {
+  return windowMuxKind(w) === 'tmux' ? <Chip>tmux</Chip> : null;
+}
+
 function OfflineRow({ w, active, onPaneClick, onContextMenu, onLongPress, extra, isRespawning, renderTaskBadge, renderSubtitle, renderTitle }: {
   w: WindowItem;
   active?: boolean;
@@ -222,7 +227,7 @@ function OfflineRow({ w, active, onPaneClick, onContextMenu, onLongPress, extra,
       <div style={{ flex: 1, overflow: 'hidden', minWidth: 0 }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
           {showIdChip && <WindowIdChip id={w.id!} />}
-          {w.muxRef?.kind !== 'misao' && !isMisaoTarget(w.tmuxTarget) && <span style={{ color: 'var(--text-dim)', fontSize: 'var(--font-xs)' }}>tmux</span>}
+          <TmuxKindChip w={w} />
           <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
             {title}
           </span>
@@ -283,7 +288,7 @@ function SleepingRow({ w, active, onPaneClick, onContextMenu, onLongPress, extra
       <div style={{ flex: 1, overflow: 'hidden', minWidth: 0 }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
           {showIdChip && <WindowIdChip id={w.id!} />}
-          {w.muxRef?.kind !== 'misao' && !isMisaoTarget(w.tmuxTarget) && <span style={{ color: 'var(--text-dim)', fontSize: 'var(--font-xs)' }}>tmux</span>}
+          <TmuxKindChip w={w} />
           <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
             {title}
           </span>
@@ -353,7 +358,7 @@ function EmptyWindowRow({ w, sessionWindow, title, plainTitle, showIdChip, activ
         <div style={{ position: 'relative', flex: 1, overflow: 'hidden', minWidth: 0 }}>
           <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
             {showIdChip && <WindowIdChip id={w.id!} />}
-          {w.muxRef?.kind !== 'misao' && !isMisaoTarget(w.tmuxTarget) && <span style={{ color: 'var(--text-dim)', fontSize: 'var(--font-xs)' }}>tmux</span>}
+          <TmuxKindChip w={w} />
             <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', opacity: stale ? DIMMED_PANE_OPACITY : undefined }}>{title}</span>
             {stale && <StaleChip />}
             {w.taskId != null && (renderTaskBadge ? renderTaskBadge(w, w.taskId) : <TaskIdBadge taskId={w.taskId} />)}
@@ -461,7 +466,7 @@ function WindowRow({ w, sessionData, isActive, expandedWindows, onToggle, onUnzo
         <div style={{ flex: 1, overflow: 'hidden', minWidth: 0 }}>
           <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
             {winShowIdChip && <WindowIdChip id={w.id!} />}
-            {w.muxRef?.kind !== 'misao' && !isMisaoTarget(w.tmuxTarget) && <span style={{ color: 'var(--text-dim)', fontSize: 'var(--font-xs)' }}>tmux</span>}
+            <TmuxKindChip w={w} />
             <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', opacity: isPaneLive(pane) && !plan.stale ? undefined : DIMMED_PANE_OPACITY }}>
               {winTitle}
             </span>
@@ -519,7 +524,7 @@ function WindowRow({ w, sessionData, isActive, expandedWindows, onToggle, onUnzo
         <div style={{ flex: 1, overflow: 'hidden', minWidth: 0 }}>
           <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
             {winShowIdChip && <WindowIdChip id={w.id!} />}
-            {w.muxRef?.kind !== 'misao' && !isMisaoTarget(w.tmuxTarget) && <span style={{ color: 'var(--text-dim)', fontSize: 'var(--font-xs)' }}>tmux</span>}
+            <TmuxKindChip w={w} />
             <span
               onClick={() => onToggle(expandKey)}
               style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', cursor: 'pointer', opacity: plan.stale ? DIMMED_PANE_OPACITY : undefined }}

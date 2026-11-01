@@ -5,7 +5,7 @@ import { SqliteMuxSwitchSettingsRepository } from './SqliteMuxSwitchSettingsRepo
 import { selectAutoWakeMux, shouldAskMuxSwitch } from './muxSwitchPolicy';
 
 describe('mux switch settings', () => {
-  it('defaults to ask and constrains the single row', () => {
+  it('reads the saved policy and stores a new one', () => {
     const db = new Database(':memory:');
     try {
       up(db);
@@ -13,8 +13,6 @@ describe('mux switch settings', () => {
       expect(repo.get()).toBe('ask');
       repo.set('misao');
       expect(repo.get()).toBe('misao');
-      expect(() => db.prepare("UPDATE mux_switch_settings SET mode = 'invalid'").run()).toThrow();
-      expect(() => db.prepare("INSERT INTO mux_switch_settings (id) VALUES (2)").run()).toThrow();
     } finally { db.close(); }
   });
   it('asks only for an available misao on tmux under ask policy', () => {

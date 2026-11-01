@@ -319,7 +319,7 @@ function buildService(opts: {
     revokeForDestroyedWindow: vi.fn(),
   } as any;
 
-  const muxDriverRegistry = { resolve: vi.fn(() => tmux), supportedKinds: vi.fn(() => ['tmux', 'misao']) } as any;
+  const muxDriverRegistry = { resolve: vi.fn(() => tmux), supportedKinds: vi.fn(() => ['tmux', 'misao']), availabilityFor: vi.fn(() => ({ available: true })) } as any;
   const conversationProbe: ConversationProbe = opts.conversationProbe ?? { exists: vi.fn(async () => true) };
 
   const service = new WindowRespawnService(
@@ -344,6 +344,7 @@ function buildService(opts: {
     () => ({ AZITO_UI_TOKEN: 'ui-token-fixture' }),
     '',
     conversationProbe,
+    { settings: { get: () => 'tmux' }, notifications: { emit: vi.fn() }, audit: { record: vi.fn() } as never },
   );
 
   return { service, windowRepo, tmux, muxDriverRegistry, sessionStrategyFactory, sentCommands, clearExitMarker, taskRepo, logRepo, serverRepo, projectSecretRepo, events, paneEnvService };
@@ -1863,6 +1864,7 @@ describe('WindowRespawnService.respawn — concurrent respawns for the same task
       () => ({ AZITO_UI_TOKEN: 'ui-token-fixture' }),
       '',
       { exists: vi.fn(async () => true) },
+      { settings: { get: () => 'tmux' }, notifications: { emit: vi.fn() }, audit: { record: vi.fn() } as never },
     );
 
     const server = makeServer();
@@ -2915,5 +2917,37 @@ describe('automatic wake policy', () => {
     await service.wakeWindow(7, win.serverName);
     expect(respawn).toHaveBeenCalledWith(7, expect.anything(), expect.objectContaining({ mux: 'tmux', autoSwitch: true }));
     expect(emit).toHaveBeenCalledWith(expect.objectContaining({ type: 'window:mux_switch_suggested', payload: expect.objectContaining({ reason: 'misao_unavailable' }) }));
+  });
+
+  it('suggests misao after waking with tmux under the ask policy when misao is available', async () => {
+    const win = makeWindow({ id: 7, taskId: null, sleeping: true });
+    const { service } = buildService({ window: win, task: null });
+    const emit = vi.fn();
+    (service as unknown as { muxSwitch: unknown }).muxSwitch = { settings: { get: () => 'ask' }, notifications: { emit }, audit: { record: vi.fn() } };
+    const respawn = vi.spyOn(service, 'respawn').mockResolvedValue({ tmuxTarget: win.tmuxTarget });
+    await service.wakeWindow(7, win.serverName);
+    expect(respawn).toHaveBeenCalledWith(7, expect.anything(), expect.objectContaining({ mux: 'tmux' }));
+    expect(emit).toHaveBeenCalledWith(expect.objectContaining({ type: 'window:mux_switch_suggested', payload: expect.objectContaining({ reason: 'ask' }) }));
+  });
+
+  it('does not suggest misao under the ask policy when the server cannot use it', async () => {
+    const win = makeWindow({ id: 7, taskId: null, sleeping: true });
+    const { service, muxDriverRegistry } = buildService({ window: win, task: null });
+    muxDriverRegistry.availabilityFor = vi.fn(() => ({ available: false, reason: 'not_installed' }));
+    const emit = vi.fn();
+    (service as unknown as { muxSwitch: unknown }).muxSwitch = { settings: { get: () => 'ask' }, notifications: { emit }, audit: { record: vi.fn() } };
+    vi.spyOn(service, 'respawn').mockResolvedValue({ tmuxTarget: win.tmuxTarget });
+    await service.wakeWindow(7, win.serverName);
+    expect(emit).not.toHaveBeenCalled();
+  });
+
+  it('keeps a window that is still alive in tmux instead of failing the automatic wake', async () => {
+    const win = makeWindow({ id: 7, taskId: null, tmuxTarget: 'azito:old', sleeping: true });
+    const { service, tmux, windowRepo } = buildService({ window: win, task: null });
+    tmux.listWorkspaces.mockResolvedValue([{ name: 'azito', windowCount: 1, attached: false, created: 0, windows: [{ name: 'old', index: 0, active: true, panes: [], activity: 0 }] }]);
+    await service.respawn(7, makeServer(), { mux: 'misao', autoSwitch: true, skipAgentLaunch: true });
+    expect(tmux.openWindow).toHaveBeenCalledWith(expect.anything(), 'azito', 'old', expect.objectContaining({ kind: 'tmux' }));
+    expect(tmux.openWorkspace).not.toHaveBeenCalledWith(expect.anything(), expect.anything(), expect.objectContaining({ kind: 'misao' }));
+    expect(windowRepo.update).toHaveBeenCalledWith(7, expect.not.objectContaining({ label: expect.anything() }));
   });
 });

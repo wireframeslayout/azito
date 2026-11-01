@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { formatMuxRef } from '@azito/shared';
-import { sessionWindowLabel, misaoRefWindowTitle } from './windowDisplay';
+import { sessionWindowLabel, misaoRefWindowTitle, windowMuxKind } from './windowDisplay';
 
 const MISAO_WINDOW = 'w_0123456789ABCDEFGHJKMNPQRS';
 
@@ -24,5 +24,14 @@ describe('misaoRefWindowTitle', () => {
     expect(misaoRefWindowTitle([], ref, 1, 'Window')).toBe('Window');
     expect(misaoRefWindowTitle(sessions, ref, 1, 'Window')).toBe('Editor');
     expect(misaoRefWindowTitle(sessions, 'different', 1, 'Window')).toBe('Window');
+  });
+});
+
+describe('windowMuxKind', () => {
+  it('reads the ref kind first, then a misao window id in the target, else tmux', () => {
+    expect(windowMuxKind({ muxRef: { kind: 'misao' }, tmuxTarget: 'azito:old' })).toBe('misao');
+    expect(windowMuxKind({ muxRef: { kind: 'tmux' }, tmuxTarget: 'azito:old' })).toBe('tmux');
+    expect(windowMuxKind({ tmuxTarget: 'azito:w_01M3XFD8H97JCPKS5Y5BH3JZQJ.1' })).toBe('misao');
+    expect(windowMuxKind({ tmuxTarget: 'azito:old' })).toBe('tmux');
   });
 });

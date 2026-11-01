@@ -209,14 +209,14 @@
     "muxPlanFailed": "Could not load wake options",
     "muxSaveFailed": "Could not save the preference",
     "muxSwitchTitle": "Reopen with misao?",
-    "muxKeepTmux": "Keep tmux",
-    "muxUseMisao": "Use misao",
+    "muxKeepTmux": "Open with tmux",
+    "muxUseMisao": "Open with misao",
     "muxSwitchDescription": "{{title}} will be reopened with the same working directory and conversation. Current processes are not moved.",
-    "muxRemember": "Remember this choice",
-    "muxRetryTmux": "Retry with tmux",
-    "muxInstallLink": "Set up misao on this server",
-    "muxNotInstalled": "misao is not installed on {{serverName}}; this window will open with tmux.",
-    "muxWaking": "Reopening with misao…"
+    "muxRemember": "Open the same way next time without asking",
+    "muxRetryTmux": "Open with tmux instead",
+    "muxInstallLink": "Install misao",
+    "muxNotInstalled": "misao is not installed on {{serverName}}, so this window opens with tmux",
+    "muxWaking": "Opening with misao… resuming the conversation ({{windowId}})"
   },
   "resourceWarning": {
     "title": "Server resources are constrained",

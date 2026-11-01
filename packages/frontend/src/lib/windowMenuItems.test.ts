@@ -6,6 +6,15 @@ const kinds = (params: WindowMenuParams) => buildWindowMenuItems(params).map((i)
 const find = (params: WindowMenuParams, kind: string) => buildWindowMenuItems(params).find((i) => i.kind === kind);
 
 describe('buildWindowMenuItems', () => {
+  it('offers reopening with misao only on an awake tmux window, disabled while busy or without misao', () => {
+    expect(find({ ...base, muxKind: 'tmux', misaoSupported: true }, 'switch-misao')?.disabled).toBeFalsy();
+    expect(find({ ...base, muxKind: 'tmux', misaoSupported: true, busy: true }, 'switch-misao')?.disabled).toBe(true);
+    expect(find({ ...base, muxKind: 'tmux', misaoSupported: false }, 'switch-misao')?.disabled).toBe(true);
+    expect(kinds({ ...base, muxKind: 'misao', misaoSupported: true })).not.toContain('switch-misao');
+    expect(kinds({ ...base, muxKind: 'tmux', misaoSupported: true, sleeping: true })).not.toContain('switch-misao');
+    expect(kinds({ ...base, online: false, muxKind: 'tmux', misaoSupported: true })).not.toContain('switch-misao');
+  });
+
   it('offers delete-pane and delete-entire-window on a pane row of a multi-pane window', () => {
     const params = { ...base, paneTarget: 's:main.2', paneOrdinal: 2, paneHandle: '%7' };
     expect(kinds(params)).toContain('delete-pane');

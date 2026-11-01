@@ -36,6 +36,7 @@ async function setup(defaultMux: 'tmux' | 'misao' = 'misao', has: { tmux: string
   } as unknown as IMuxClient, () => (misaoUp ? { available: true } : { available: false, reason: 'daemon_unreachable' }));
   const app = Fastify();
   await app.register(windowsRoutes, {
+    muxSwitchSettingsRepo: {} as never, auditLogService: {} as never, agentActivityMonitor: {} as never,
     windowRepo: repo,
     projectRepo: { findById: () => ({ id: projectId }) },
     taskRepo: { findById: () => ({ id: taskId }) },

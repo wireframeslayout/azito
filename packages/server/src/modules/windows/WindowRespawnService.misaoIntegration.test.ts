@@ -114,6 +114,7 @@ describe.skipIf(!fs.existsSync(MISAO_CLI))('WindowRespawnService against a real 
       () => ({}),
       '',
       { exists: async () => true },
+      { settings: { get: () => 'tmux' }, notifications: { emit: () => {} }, audit: { record: () => {} } as never },
     );
   });
 
