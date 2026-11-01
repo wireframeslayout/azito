@@ -15,6 +15,7 @@ import type {
   TranscriptReader,
   ReadBudget,
   ListSessionsOptions,
+  SubagentSummary,
 } from './TranscriptSource';
 
 // ─── Constants ───
@@ -706,7 +707,7 @@ function tryHandleLocalCommandRecord(
  */
 function buildParseLine(
   askUserQuestionCache: Map<string, AskUserQuestionItem[]>,
-  options: { io?: { fd: number; size: number }; allowCacheWrite?: boolean; keepAskUserQuestionBlocks?: boolean } = {},
+  options: { io?: { fd: number; size: number }; allowCacheWrite?: boolean; keepAskUserQuestionBlocks?: boolean; includeSidechain?: boolean } = {},
 ): (line: string, lineStart: number) => TranscriptEntry | null {
   const allowCacheWrite = options.allowCacheWrite ?? true;
   const keepAskUserQuestionBlocks = options.keepAskUserQuestionBlocks ?? false;
@@ -721,20 +722,21 @@ function buildParseLine(
     }
     if (!isRecord(record)) return null;
 
-    const commandResult = tryHandleLocalCommandRecord(record, pendingCommand);
+    const entryRecord = options.includeSidechain && record.isSidechain === true ? { ...record, isSidechain: false } : record;
+    const commandResult = tryHandleLocalCommandRecord(entryRecord, pendingCommand);
     if (commandResult.handled) {
       pendingCommand = commandResult.nextPending;
       return commandResult.entry;
     }
     pendingCommand = null;
 
-    const taskNotificationEntry = tryHandleTaskNotificationRecord(record);
+    const taskNotificationEntry = tryHandleTaskNotificationRecord(entryRecord);
     if (taskNotificationEntry) return taskNotificationEntry;
 
-    const interactionEntry = tryHandleAskUserQuestionResult(record, askUserQuestionCache, lineStart, options.io);
+    const interactionEntry = tryHandleAskUserQuestionResult(entryRecord, askUserQuestionCache, lineStart, options.io);
     if (interactionEntry) return interactionEntry;
 
-    return normalizeEntry(record, askUserQuestionCache, allowCacheWrite, keepAskUserQuestionBlocks);
+    return normalizeEntry(entryRecord, askUserQuestionCache, allowCacheWrite, keepAskUserQuestionBlocks);
   };
 }
 
@@ -789,6 +791,81 @@ export class ClaudeTranscriptSource implements TranscriptReader {
     for (const { file } of files) {
       this.sessionFileCache.set(path.basename(file, '.jsonl'), file);
     }
+  }
+
+  private subagentDirectory(sessionId: string): string | null {
+    if (!SESSION_ID_PATTERN.test(sessionId)) throw new Error('Invalid session id');
+    // Verify discovery separately so an unreadable project directory is not an empty list.
+    if (!this.sessionExists(sessionId)) return null;
+    const parent = this.findSessionFile(sessionId);
+    if (!parent) throw new Error('Unable to locate session');
+    const parentDir = path.join(path.dirname(parent), sessionId);
+    const subagentsDir = path.join(parentDir, 'subagents');
+    for (const dir of [parentDir, subagentsDir]) {
+      try {
+        if (!fs.lstatSync(dir).isDirectory()) throw new Error(`Not a directory: ${dir}`);
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException).code === 'ENOENT') return subagentsDir;
+        throw error;
+      }
+    }
+    return subagentsDir;
+  }
+
+  listSubagents(sessionId: string): SubagentSummary[] | null {
+    const dir = this.subagentDirectory(sessionId);
+    if (!dir) return null;
+    let files: string[];
+    try { files = fs.readdirSync(dir); } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === 'ENOENT') return [];
+      throw error;
+    }
+    const result: SubagentSummary[] = [];
+    for (const file of files) {
+      const match = /^agent-([a-zA-Z0-9_-]+)\.meta\.json$/.exec(file);
+      if (!match) continue;
+      let value: unknown;
+      try {
+        const metaPath = path.join(dir, file);
+        if (!fs.lstatSync(metaPath).isFile()) continue;
+        value = JSON.parse(fs.readFileSync(metaPath, 'utf8'));
+      } catch (error) {
+        if (error instanceof SyntaxError || (error as NodeJS.ErrnoException).code === 'ENOENT') continue;
+        throw error;
+      }
+      if (!isRecord(value) || typeof value.agentType !== 'string' || typeof value.description !== 'string') continue;
+      if (value.name !== undefined && typeof value.name !== 'string') continue;
+      if (value.model !== undefined && typeof value.model !== 'string') continue;
+      if (value.finished !== undefined && typeof value.finished !== 'boolean') continue;
+      result.push({ id: match[1], name: typeof value.name === 'string' ? value.name : match[1], description: value.description, agentType: value.agentType,
+        model: typeof value.model === 'string' ? value.model : null, status: value.finished === true ? 'finished' : 'unknown' });
+    }
+    return result;
+  }
+
+  readSubagent(sessionId: string, agentId: string, offset?: number, before?: number, budget: ReadBudget = {}): ReadSessionResult | ReadSessionBeforeResult | null {
+    if (!/^[a-zA-Z0-9_-]+$/.test(agentId)) throw new Error('Invalid subagent id');
+    const dir = this.subagentDirectory(sessionId);
+    if (!dir) return null;
+    const file = path.join(dir, `agent-${agentId}.jsonl`);
+    let fd: number;
+    try {
+      if (!fs.lstatSync(file).isFile()) throw new Error('Subagent transcript is not a regular file');
+      fd = fs.openSync(file, 'r');
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === 'ENOENT') return null;
+      throw error;
+    }
+    try {
+      const size = fs.fstatSync(fd).size;
+      const parseLine = buildParseLine(this.getAskUserQuestionCache(`${sessionId}/${agentId}`), {
+        io: { fd, size }, includeSidechain: true, allowCacheWrite: before === undefined,
+      });
+      if (before !== undefined) return readBeforeWindow(fd, size, before, this.incrementalReadMaxBytes, parseLine, budget);
+      return offset === undefined
+        ? readInitialWindow(fd, size, this.initialReadMaxBytes, parseLine, TAIL_ENTRY_LIMIT)
+        : readIncrementalWindow(fd, size, offset, this.incrementalReadMaxBytes, parseLine);
+    } finally { fs.closeSync(fd); }
   }
 
   listSessions(limit = 50, options: ListSessionsOptions = {}): SessionSummary[] {

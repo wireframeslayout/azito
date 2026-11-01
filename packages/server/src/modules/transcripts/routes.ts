@@ -12,6 +12,7 @@ import type { IWindowRepository } from '../windows/Window';
 import type { InteractionMonitor, InteractionQuestion } from '../notifications/InteractionMonitor';
 import type { ReadSessionBeforeResult, ReadSessionResult, TranscriptEntry } from './sources/TranscriptSource';
 import { getAgentTranscriptProfile, type InterruptKey } from './sources/profiles';
+import { sessionIdSchema, subagentIdSchema } from './sources/agentTranscriptProtocol';
 
 export interface TranscriptsRouteOptions {
   /** ハブ自身のマシン（local）の会話ログ。windowId の無い読み取り・一覧・旧ルートの対象。 */
@@ -229,6 +230,56 @@ const transcriptsRoutes: FastifyPluginCallback<TranscriptsRouteOptions> = (fasti
     const slashCommandsVisibleInLog = result.agentType ? getAgentTranscriptProfile(result.agentType)?.slashCommandsVisibleInLog : undefined;
     return { ...result, slashCommandsVisibleInLog };
   });
+
+  async function resolveSubagentSource(windowIdRaw: string, reply: FastifyReply): Promise<{ source: TranscriptSource; sessionId: string } | null> {
+    const windowId = parsePositiveInt(windowIdRaw);
+    if (windowId === undefined || windowId === 'invalid') { reply.status(400).send({ error: 'Invalid windowId' }); return null; }
+    const window = windowRepo.findById(windowId);
+    if (!window) { reply.status(404).send({ error: 'Window not found' }); return null; }
+    const resolved = await windowSessionResolver.resolve(window);
+    if (!resolved.resolved) {
+      const status = resolved.reason === 'agent_unreachable' ? 503 : resolved.reason === 'agent_bad_response' ? 502
+        : resolved.reason === 'no_recent_session' ? 409 : 501;
+      reply.status(status).send({ error: resolved.reason });
+      return null;
+    }
+    if (resolved.agentType !== 'claude') { reply.status(501).send({ error: 'unsupported_agent' }); return null; }
+    const scoped = sourcesForRead(windowIdRaw);
+    if (typeof scoped === 'string') { reply.status(501).send({ error: 'unsupported_server' }); return null; }
+    const source = findSource(scoped, resolved.agentType);
+    if (!source?.listSubagents || !source.readSubagent) { reply.status(501).send({ error: 'unsupported_agent' }); return null; }
+    return { source, sessionId: resolved.sessionId };
+  }
+
+  fastify.get<{ Params: { windowId: string } }>('/api/transcripts/windows/:windowId/subagents', async (request, reply) => {
+    try {
+      const resolved = await resolveSubagentSource(request.params.windowId, reply);
+      if (!resolved) return;
+      const subagents = await resolved.source.listSubagents!(resolved.sessionId);
+      if (!subagents) return reply.status(404).send({ error: 'session_not_found' });
+      return { sessionId: resolved.sessionId, subagents };
+    } catch (err) { return replyHostReadError(err, reply); }
+  });
+
+  fastify.get<{ Params: { windowId: string; agentId: string }; Querystring: { sessionId?: string; offset?: string; before?: string } }>(
+    '/api/transcripts/windows/:windowId/subagents/:agentId/entries', async (request, reply) => {
+      const { sessionId, offset: rawOffset, before: rawBefore } = request.query;
+      if (!sessionIdSchema.safeParse(sessionId).success || !subagentIdSchema.safeParse(request.params.agentId).success)
+        return reply.status(400).send({ error: 'invalid_id' });
+      const offset = parseNonNegativeInt(rawOffset);
+      const before = parseNonNegativeInt(rawBefore);
+      if (offset === 'invalid' || before === 'invalid' || (offset !== undefined && before !== undefined))
+        return reply.status(400).send({ error: 'invalid_paging' });
+      try {
+        const resolved = await resolveSubagentSource(request.params.windowId, reply);
+        if (!resolved) return;
+        if (sessionId !== resolved.sessionId) return reply.status(409).send({ error: 'parent_session_changed' });
+        const result = await resolved.source.readSubagent!(resolved.sessionId, request.params.agentId, offset, before);
+        if (!result) return reply.status(404).send({ error: 'session_not_found' });
+        return 'prevOffset' in result ? toReadBeforeResponse(result) : toReadResponse(result);
+      } catch (err) { return replyHostReadError(err, reply); }
+    },
+  );
 
   // ── POST /api/transcripts/window-input ── ウィンドウの pane へ直接テキストを送信する
   // （Issue #69 仕様調整3）。セッション JSONL の存在を前提としないため、resolve-window が

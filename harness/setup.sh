@@ -269,6 +269,7 @@ ACTIVITY_HOOK_SCRIPT="$HARNESS_DIR/hooks/azito-activity.sh"
 INTERACTION_HOOK_SCRIPT="$HARNESS_DIR/hooks/azito-interaction.sh"
 QUESTION_HOOK_SCRIPT="$HARNESS_DIR/hooks/azito-question.sh"
 SESSION_HOOK_SCRIPT="$HARNESS_DIR/hooks/azito-session.sh"
+SUBAGENT_HOOK_SCRIPT="$HARNESS_DIR/hooks/azito-subagent.sh"
 if [ -z "${AZITO_URL:-}" ]; then
   echo "WARNING: --azito-url が未指定のため http://localhost:3001 を使用します。" >&2
   echo "リモートサーバーでは必ず --azito-url で hub の URL を指定してください。" >&2
@@ -302,6 +303,7 @@ ACTIVITY_STOP_CMD="${PROFILE_PREFIX}bash $ACTIVITY_HOOK_SCRIPT stop"
 INTERACTION_CMD="${PROFILE_PREFIX}bash $INTERACTION_HOOK_SCRIPT"
 QUESTION_CMD="${PROFILE_PREFIX}bash $QUESTION_HOOK_SCRIPT"
 SESSION_CMD="${PROFILE_PREFIX}bash $SESSION_HOOK_SCRIPT"
+SUBAGENT_CMD="${PROFILE_PREFIX}bash $SUBAGENT_HOOK_SCRIPT"
 
 if [[ -f "$NOTIFY_HOOK_SCRIPT" ]]; then
   chmod +x "$NOTIFY_HOOK_SCRIPT"
@@ -547,6 +549,9 @@ elif command -v node >/dev/null 2>&1; then
     const sessionCmd = process.argv[21];
     const sessionHookExists = process.argv[22] === 'true';
     const sessionHookPath = process.argv[23];
+    const subagentCmd = process.argv[24];
+    const subagentHookExists = process.argv[25] === 'true';
+    const subagentHookPath = process.argv[26];
 
     let settings = {};
     try {
@@ -704,6 +709,11 @@ elif command -v node >/dev/null 2>&1; then
         messages.push('  質問内容取得フック: スキップ (hook スクリプトが見つかりません)');
       }
 
+      if (subagentHookExists) {
+        upsertHook('SubagentStart', subagentHookPath, subagentCmd, 'SubagentStart hook');
+        upsertHook('SubagentStop', subagentHookPath, subagentCmd, 'SubagentStop hook');
+      }
+
       // SessionStart hook: /resume や /subtask 等でセッション ID が変わったとき、
       // agent-activity webhook（event: session）経由で windows.agent_session_id を
       // 最新化する。稼働状態（Tier 1）は変更しない。
@@ -737,7 +747,10 @@ elif command -v node >/dev/null 2>&1; then
     "$([[ "$AZITO_PURGE_OPERATOR_TOKEN" == "1" ]] && echo true || echo false)" \
     "$SESSION_CMD" \
     "$([[ -f "$SESSION_HOOK_SCRIPT" ]] && echo true || echo false)" \
-    "$SESSION_HOOK_SCRIPT"; then
+    "$SESSION_HOOK_SCRIPT" \
+    "$SUBAGENT_CMD" \
+    "$([[ -f "$SUBAGENT_HOOK_SCRIPT" ]] && echo true || echo false)" \
+    "$SUBAGENT_HOOK_SCRIPT"; then
     SETUP_HAD_ERRORS=1
   fi
 

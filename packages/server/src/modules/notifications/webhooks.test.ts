@@ -14,6 +14,7 @@ function buildOptions(overrides: Partial<WebhookRouteOptions> = {}): WebhookRout
     resolveServerName: (name) => name,
     recordAgentActivity: vi.fn(),
     recordInteractionSignal: vi.fn(),
+    recordSubagentSignal: vi.fn(),
     misao: { resolvePane: vi.fn().mockResolvedValue(null), recordAgentActivity: vi.fn() },
     ...overrides,
   };
@@ -34,6 +35,20 @@ const validActivityBody = {
   paneIndex: 1,
   event: 'start',
 };
+
+describe('POST /api/webhooks/agent-subagent', () => {
+  it('authenticates and validates the parent and pane before dispatch', async () => {
+    const options = buildOptions();
+    const app = await buildApp(options);
+    const payload = { serverName: 'local', misaoPaneId: 'p_0123456789ABCDEFGHJKMNPQRS', event: 'subagent', sessionId: '12345678-1234-1234-1234-123456789abc' };
+    const inject = (body: object, auth = true) => app.inject({ method: 'POST', url: '/api/webhooks/agent-subagent', headers: auth ? { authorization: `Bearer ${TOKEN}` } : {}, payload: body });
+    expect((await inject(payload, false)).statusCode).toBe(401);
+    expect((await inject({ ...payload, sessionId: '../bad' })).statusCode).toBe(400);
+    expect((await inject(payload)).statusCode).toBe(200);
+    expect(options.recordSubagentSignal).toHaveBeenCalledOnce();
+    await app.close();
+  });
+});
 
 describe('POST /api/webhooks/agent-activity', () => {
   let app: FastifyInstance;

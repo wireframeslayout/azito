@@ -640,6 +640,17 @@ export async function buildServer(app: FastifyInstance, wiring: Wiring, port: nu
     resolveServerName: (name) => serverAliasRepo.resolve(name),
     recordAgentActivity: (signal) => agentActivityMonitor.recordHookSignal(signal),
     recordInteractionSignal: (signal) => interactionMonitor.recordSignal(signal),
+    recordSubagentSignal: async (serverName, paneId, sessionId) => {
+      try {
+        const resolved = await paneHandleResolver.resolveWindowByPaneHandle(serverName, asPaneHandle(paneId));
+        if (!resolved || resolved.ordinal !== 1) return;
+        const win = windowRepo.findById(resolved.windowId);
+        if (win?.agentSessionId?.toLowerCase() !== sessionId.toLowerCase()) return;
+        notificationBus.emit({ type: 'subagents:updated', payload: { windowId: win.id, sessionId: win.agentSessionId } });
+      } catch (err) {
+        app.log.warn(`Could not resolve subagent hook pane: ${err instanceof Error ? err.message : String(err)}`);
+      }
+    },
     misao: {
       // A hook is fire-and-forget: an unreachable daemon is answered like an unknown pane (200, nothing recorded).
       resolvePane: async (serverName, paneId) => {

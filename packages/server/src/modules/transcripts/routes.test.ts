@@ -1423,3 +1423,24 @@ describe('GET /api/transcripts/:agent/:id for a window on another server', () =>
     expect(res.json()).toEqual({ error: 'agent_bad_response' });
   });
 });
+
+describe('window subagent API', () => {
+  it('reads only the resolved parent and rejects stale parent selections', async () => {
+    const readSubagent = vi.fn(() => ({ entries: [], nextOffset: 0, truncated: false, startOffset: 0, hasOlder: false }));
+    const source = buildClaudeSource({
+      listSubagents: () => [{ id: 'a123', name: 'worker', description: 'test', agentType: 'Explore', model: null, status: 'unknown' }],
+      readSubagent,
+    });
+    const app = buildApp([source], {}, { windowSessionResolver: { resolve: async () => ({ resolved: true, agentType: 'claude', sessionId: SID, paneId: PANE_ID, agentDetected: true }) } });
+    const list = await app.inject({ method: 'GET', url: '/api/transcripts/windows/10/subagents' });
+    expect(list.statusCode).toBe(200);
+    expect(list.json().sessionId).toBe(SID);
+    const stale = await app.inject({ method: 'GET', url: '/api/transcripts/windows/10/subagents/a123/entries?sessionId=aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa' });
+    expect(stale.statusCode).toBe(409);
+    expect(readSubagent).not.toHaveBeenCalled();
+    const result = await app.inject({ method: 'GET', url: `/api/transcripts/windows/10/subagents/a123/entries?sessionId=${SID}&before=12` });
+    expect(result.statusCode).toBe(200);
+    expect(readSubagent).toHaveBeenCalledWith(SID, 'a123', undefined, 12);
+    await app.close();
+  });
+});
