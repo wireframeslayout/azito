@@ -1,4 +1,5 @@
 {
+  "rightPanel": {"title": "Linked windows", "open": "Open linked windows panel", "close": "Close linked windows panel"},
   "navigation": { "taskOpenFailed": "Could not open the task." },
   "tab": {
     "closeDirtyTitle": "Close tab with unsaved changes?",

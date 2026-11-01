@@ -190,7 +190,7 @@ describe('POST /api/windows/:id/launch-agent — MCP blocking', () => {
       sessionStrategyFactory: { create: () => strategy } as unknown as ISessionStrategyFactory,
       sessionCaptureService: { scheduleInitialScan: vi.fn() } as unknown as SessionCaptureService,
       supervisorRegistry: makeSupervisorRegistry(),
-      windowActivityStatusService: { list: async () => [] } as unknown as WindowActivityStatusService,
+      windowSnapshotService: {} as never, windowActivityStatusService: { list: async () => [] } as unknown as WindowActivityStatusService,
       uiToken: 'test-token', serverIsolationMutex: new KeyedMutex(), buildSecondaryWindowEnv: () => ({}),
     });
     await instance.ready();

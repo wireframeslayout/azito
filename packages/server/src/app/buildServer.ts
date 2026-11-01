@@ -105,7 +105,7 @@ export async function buildServer(app: FastifyInstance, wiring: Wiring, port: nu
     tmuxClient, transportFactory, worktreeServiceFactory, gitProvider, storageClient,
     agentInstaller, agentBundler, harnessInstaller, tmuxInstaller, muxDriverRegistry,
     executeTaskUseCase, agentActivityMonitor, interactionMonitor, paneHandleResolver, windowRespawnService, windowSleepService, taskRestoreService, sessionStrategyFactory, sessionCaptureService, usageService,
-    transcriptSourceProvider, windowSessionResolver, windowActivityStatusService,
+    transcriptSourceProvider, windowSessionResolver, windowActivityStatusService, windowSnapshotService,
     pushService, vapidKeys, notificationBus, sidekickPackageService, sidekickPackageLoader,
     sidekickSyncService, unitTypeLoader, chatCommandLoader, agentSignalService, supervisorRegistry, agentTurnRepo, turnSignalHub,
     browserSessionManager, browserGroupRepo, deployModeDetector, systemUpdateService, channelResolver, auditLogService,
@@ -606,7 +606,7 @@ export async function buildServer(app: FastifyInstance, wiring: Wiring, port: nu
     windowRepo, projectRepo, taskRepo, tmux: tmuxClient, muxDriverRegistry, serverRepo, transportFactory,
     respawnService: windowRespawnService, sleepService: windowSleepService,
     sessionStrategyFactory, sessionCaptureService, supervisorRegistry,
-    windowActivityStatusService, notificationBus, resourceGuard, harnessPrefix, invalidateSessionCache,
+    windowActivityStatusService, windowSnapshotService, notificationBus, resourceGuard, harnessPrefix, invalidateSessionCache,
     uiToken: wiring.uiToken, buildSecondaryWindowEnv, serverIsolationMutex,
     destroyPrimaryTaskWindow: (taskId, windowName, serverName, target, reason, kill, onDestroyed) => {
       const launchId = supervisorRegistry.resolveLaunchForExpiry(serverName, target);

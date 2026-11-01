@@ -117,6 +117,7 @@ import { WindowRespawnService } from '../modules/windows/WindowRespawnService';
 import { WindowSleepService } from '../modules/windows/WindowSleepService';
 import { SessionCaptureService } from '../modules/windows/SessionCaptureService';
 import { WindowActivityStatusService } from '../modules/windows/WindowActivityStatusService';
+import { WindowSnapshotService } from '../modules/windows/WindowSnapshotService';
 import { WindowSessionResolver } from '../modules/transcripts/WindowSessionResolver';
 import { TRANSCRIPT_SOURCES } from '../modules/transcripts/sources/registry';
 import { TranscriptConversationProbe } from '../modules/transcripts/TranscriptConversationProbe';
@@ -213,6 +214,7 @@ export interface ApplicationServices {
   transcriptSourceProvider: TranscriptSourceProvider;
   windowSessionResolver: WindowSessionResolver;
   windowActivityStatusService: WindowActivityStatusService;
+  windowSnapshotService: WindowSnapshotService;
   windowRespawnService: WindowRespawnService;
   windowSleepService: WindowSleepService;
   taskRestoreService: TaskRestoreService;
@@ -530,10 +532,11 @@ function buildApplicationServices(infra: SharedInfra, repos: Repositories, uiTok
   // lookups (and their cache) to one per process.
   const windowSessionResolver = new WindowSessionResolver(repos.taskRepo, infra.muxDriverRegistry, repos.serverRepo, transcriptSourceProvider, sessionCaptureService, infra.transportFactory);
   const windowActivityStatusService = new WindowActivityStatusService(repos.windowRepo, repos.serverRepo, windowSessionResolver);
+  const windowSnapshotService = new WindowSnapshotService(repos.windowRepo, repos.serverRepo, infra.muxDriverRegistry);
   const usageService = new UsageService(infra.agentRegistry);
   const agentSignalService = new AgentSignalService(repos.agentTurnRepo, infra.turnSignalHub, repos.logRepo, repos.auditLogService);
   return {
-    sessionStrategyFactory, sessionCaptureService, transcriptSourceProvider, windowSessionResolver, windowActivityStatusService,
+    sessionStrategyFactory, sessionCaptureService, transcriptSourceProvider, windowSessionResolver, windowActivityStatusService, windowSnapshotService,
     windowRespawnService, windowSleepService, taskRestoreService, usageService, agentSignalService, taskEvents,
     originationService, taskPaneEnvironmentService,
   };

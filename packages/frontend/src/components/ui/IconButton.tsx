@@ -12,7 +12,7 @@ export function IconButton({
   onClick?: React.MouseEventHandler<HTMLButtonElement>;
   children: React.ReactNode;
   size?: 'sm' | 'md';
-} & React.ButtonHTMLAttributes<HTMLButtonElement>) {
+} & React.ButtonHTMLAttributes<HTMLButtonElement> & React.RefAttributes<HTMLButtonElement>) {
   const sizeStyles = size === 'sm'
     ? { padding: '2px 4px', fontSize: 'var(--font-sm)' }
     : { padding: '4px 8px', fontSize: 'var(--font-base)' };
