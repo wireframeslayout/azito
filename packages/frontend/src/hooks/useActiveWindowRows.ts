@@ -22,6 +22,7 @@ export interface ActiveWindowRow {
   status: 'running' | 'finished';
   activityStatus?: 'working' | 'blocked';
   finishedAt?: number;
+  seenAt?: number;
   paneName?: string;
 }
 
@@ -70,12 +71,16 @@ export function useActiveWindowRows(data: ActivityTitleData) {
         projectId: e.projectId,
         status: 'finished',
         finishedAt: e.finishedAt,
+        seenAt: e.seenAt,
         paneName: e.paneName,
       }));
-    return [...running, ...finishedRows];
+    return [...running, ...finishedRows].sort((a, b) => {
+      const rank = (r: ActiveWindowRow) => r.status === 'running' ? (r.activityStatus === 'blocked' ? 0 : 1) : r.seenAt == null ? 2 : 3;
+      return rank(a) - rank(b) || (b.finishedAt ?? 0) - (a.finishedAt ?? 0);
+    });
   }, [entries, finishedEntries, data]);
 
   const blockedCount = rows.filter((r) => r.status === 'running' && r.activityStatus === 'blocked').length;
 
-  return { rows, blockedCount, totalCount: rows.length };
+  return { rows, blockedCount, totalCount: rows.filter((r) => r.status === 'running' || r.seenAt == null).length };
 }

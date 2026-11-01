@@ -36,27 +36,3 @@ export function groupRunningRows(rows: ActiveWindowRow[]): BlockedAwareGroup[] {
   }
   return Array.from(map.values());
 }
-
-const READ_KEY_SEP = '::';
-
-/**
- * 既読IDを `key::finishedAt` で作る。row.key だけを既読キーにすると、同一ウィンドウが
- * 再稼働→再完了した際に finishedAt が更新されても同じキーのままなため既読扱いが残り、
- * 新しい完了が未読カウントされなくなる。finishedAt を含めることで完了イベントごとに
- * 別IDになる。
- */
-export function readKeyFor(row: Pick<ActiveWindowRow, 'key' | 'finishedAt'>): string {
-  return `${row.key}${READ_KEY_SEP}${row.finishedAt ?? 0}`;
-}
-
-function finishedAtOfReadKey(readKey: string): number {
-  const idx = readKey.lastIndexOf(READ_KEY_SEP);
-  if (idx < 0) return 0;
-  const parsed = Number(readKey.slice(idx + READ_KEY_SEP.length));
-  return Number.isFinite(parsed) ? parsed : 0;
-}
-
-/** 時間窓（cutoffMs 以降）から外れた既読IDを取り除いた新しい Set を返す。 */
-export function pruneStaleReadKeys(keys: Iterable<string>, cutoffMs: number): Set<string> {
-  return new Set(Array.from(keys).filter((k) => finishedAtOfReadKey(k) >= cutoffMs));
-}

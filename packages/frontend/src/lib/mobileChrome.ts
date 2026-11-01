@@ -1,0 +1,1 @@
+export const MOBILE_STATUS_BAR_HEIGHT = 26;

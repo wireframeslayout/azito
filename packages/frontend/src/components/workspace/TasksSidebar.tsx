@@ -64,7 +64,8 @@ export default function TasksSidebar({
   const searchRef = useRef<HTMLInputElement>(null);
   const treeRef = useRef<HTMLDivElement>(null);
 
-  const { rows: activityRows } = useActiveWindowRows(titleData);
+  const { rows: allActivityRows } = useActiveWindowRows(titleData);
+  const activityRows = allActivityRows.filter((row) => row.status === 'running' || row.seenAt == null);
   const { openedAt } = useRecentTasks();
 
   const groups = useMemo(

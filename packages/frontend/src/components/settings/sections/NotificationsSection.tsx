@@ -3,9 +3,13 @@ import { useTranslation } from 'react-i18next';
 import { api } from '../../../api/client';
 import { registerServiceWorker, subscribeToPush, unsubscribeFromPush } from '../../../utils/pushNotifications';
 import { Button, LoadingState } from '../../ui';
+import { Slider } from '../../ui/Slider';
+import { useAgentActivity } from '../../../hooks/useAgentActivity';
+import { RETENTION_PERIODS } from '../../../lib/finishedRetentionSettings';
 
 export default function NotificationsSection() {
   const { t, i18n } = useTranslation('settings');
+  const { retention, setRetention } = useAgentActivity();
   const [browserAutoOpen, setBrowserAutoOpen] = useState(() => localStorage.getItem('browser-auto-open') === 'true');
   const [supported, setSupported] = useState(false);
   const [permission, setPermission] = useState<NotificationPermission>('default');
@@ -88,19 +92,17 @@ export default function NotificationsSection() {
     }
   }, [t]);
 
-  if (loading) return <LoadingState />;
-  if (!supported) {
-    return (
-      <div>
-        <p style={{ fontSize: 'var(--font-md)', color: 'var(--text-dim)', lineHeight: 1.5 }}>
-          {t('notifications.notSupported')}
-        </p>
-      </div>
-    );
-  }
 
   return (
     <div>
+      <section style={{ background: 'var(--bg-card)', border: '1px solid var(--border)', borderRadius: 'var(--radius-md)', padding: 'var(--space-4)', marginBottom: 'var(--space-4)' }}>
+        <h3>{t('history.title')}</h3>
+        <Slider label={t('history.maxCount')} min={0} max={50} value={retention.maxCount} onChange={(maxCount) => setRetention({ ...retention, maxCount })} />
+        <label>{t('history.period')} <select value={retention.retentionMs} onChange={(e) => setRetention({ ...retention, retentionMs: Number(e.target.value) })}>
+          {RETENTION_PERIODS.map((period, i) => <option key={period} value={period}>{t(`history.periods.${i}`)}</option>)}
+        </select></label>
+      </section>
+      {loading ? <LoadingState /> : !supported ? <p>{t('notifications.notSupported')}</p> : <>
       <p style={{ fontSize: 'var(--font-md)', color: 'var(--text-dim)', marginBottom: 20, lineHeight: 1.5 }}>
         {t('notifications.description')}
       </p>
@@ -169,6 +171,7 @@ export default function NotificationsSection() {
           </label>
         </div>
       </div>
+      </>}
     </div>
   );
 }

@@ -17,10 +17,12 @@ export interface FinishedEntry {
   taskId?: number;
   projectId?: number;
   finishedAt: number;
+  seenAt?: number;
   paneName?: string;
 }
 
 import { isSameWindowTarget, windowKey } from '@azito/shared';
+import { DEFAULT_FINISHED_RETENTION, type FinishedRetentionSettings } from './finishedRetentionSettings';
 
 export function activityKey(serverName: string, target: string, windowId?: number): string {
   if (windowId != null) return `wid:${windowId}`;
@@ -38,8 +40,10 @@ export function activityKeyForEntry(entry: FinishedEntry): string {
 export const FINISHED_TTL_MS = 60 * 60 * 1000;
 
 /** TTL を過ぎた完了行を落とす。落とすものが無ければ同一参照を返す（無駄な再レンダリングを避ける）。 */
-export function pruneFinished(entries: FinishedEntry[], now: number): FinishedEntry[] {
-  const kept = entries.filter((e) => now - e.finishedAt < FINISHED_TTL_MS);
+export function pruneFinished(entries: FinishedEntry[], now: number, settings: FinishedRetentionSettings = DEFAULT_FINISHED_RETENTION): FinishedEntry[] {
+  const unexpired = entries.filter((e) => now - e.finishedAt < settings.retentionMs);
+  const keptSeen = new Set(unexpired.filter((e) => e.seenAt != null).sort((a, b) => b.finishedAt - a.finishedAt).slice(0, settings.maxCount));
+  const kept = unexpired.filter((e) => e.seenAt == null || keptSeen.has(e));
   return kept.length === entries.length ? entries : kept;
 }
 

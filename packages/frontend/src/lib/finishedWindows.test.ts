@@ -118,3 +118,16 @@ describe('mergeFinishedEntry', () => {
     expect(JSON.parse(JSON.stringify(result))).toEqual(result);
   });
 });
+
+describe('confirmed history retention', () => {
+  it('keeps unread entries and the newest confirmed entries, then expires both', () => {
+    const rows = [
+      { serverName: 's', target: 's:1', finishedAt: 100, seenAt: 101 },
+      { serverName: 's', target: 's:2', finishedAt: 200, seenAt: 201 },
+      { serverName: 's', target: 's:3', finishedAt: 300 },
+    ];
+    expect(pruneFinished(rows, 400, { maxCount: 1, retentionMs: 1000 }).map((r) => r.target)).toEqual(['s:2', 's:3']);
+    expect(pruneFinished(rows, 400, { maxCount: 0, retentionMs: 1000 }).map((r) => r.target)).toEqual(['s:3']);
+    expect(pruneFinished(rows, 400, { maxCount: 10, retentionMs: 150 }).map((r) => r.target)).toEqual(['s:3']);
+  });
+});

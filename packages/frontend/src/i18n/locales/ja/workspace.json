@@ -1,6 +1,12 @@
 {
-  "rightPanel": {"title": "連携中の窓", "open": "連携中の窓を開く", "close": "連携中の窓を閉じる"},
-  "navigation": { "taskOpenFailed": "タスクを開けませんでした。" },
+  "rightPanel": {
+    "title": "連携中の窓",
+    "open": "連携中の窓を開く",
+    "close": "連携中の窓を閉じる"
+  },
+  "navigation": {
+    "taskOpenFailed": "タスクを開けませんでした。"
+  },
   "tab": {
     "closeDirtyTitle": "未保存の変更があるタブを閉じますか？",
     "closeDirtyMessage": "「{{name}}」には未保存の変更があります。このタブを閉じると変更は破棄されます。",
@@ -35,7 +41,10 @@
     "overflowFull": "アクティブウィンドウ (+{{count}})",
     "done": "完了",
     "planReview": "承認待ち",
-    "noActive": "稼働中のウィンドウはありません"
+    "noActive": "稼働中のウィンドウはありません",
+    "history": "履歴 {{count}} / {{max}}",
+    "clearHistory": "履歴を消去",
+    "deleteHistory": "履歴から削除"
   },
   "activityPill": {
     "ariaLabel": "稼働ステータス",

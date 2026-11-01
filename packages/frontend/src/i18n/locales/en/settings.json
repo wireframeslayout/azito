@@ -255,5 +255,17 @@
     "conflict": "This key is already assigned to another action.",
     "storageError": "Could not save the settings.",
     "intervalOnlySpace": "Available when Space twice is selected."
+  },
+  "history": {
+    "title": "Window history",
+    "maxCount": "Maximum confirmed entries",
+    "period": "Retention period",
+    "periods": [
+      "30 minutes",
+      "1 hour",
+      "6 hours",
+      "24 hours",
+      "7 days"
+    ]
   }
 }

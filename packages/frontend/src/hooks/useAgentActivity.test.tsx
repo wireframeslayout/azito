@@ -7,13 +7,16 @@ import { AgentActivityProvider, useAgentActivity } from './useAgentActivity';
 vi.mock('../api/client', () => ({ api: vi.fn() }));
 const events = vi.hoisted(() => ({ handlers: {} as { onAgentActivity: (payload: AgentActivityPayload) => void; onConnected: () => void } }));
 vi.mock('./useNotificationChannel', () => ({ useNotificationChannel: (handlers: typeof events.handlers) => { events.handlers = handlers; } }));
-vi.mock('./useWorkspaceTargets', () => ({ useWorkspaceTargets: () => ({ activeTabId: null, focusedTarget: null }) }));
+const targets = vi.hoisted(() => ({ activeTabId: null as string | null, focusedTarget: null as string | null }));
+vi.mock('./useWorkspaceTargets', () => ({ useWorkspaceTargets: () => targets }));
 
 const running: AgentActivityPayload = { serverName: 'local', target: 's:1', running: true, source: 'manual', operation: false };
 let pending: Array<{ resolve: (value: AgentActivityPayload[]) => void; reject: (reason: Error) => void }>;
 function View() {
   const activity = useAgentActivity();
-  return <output>{JSON.stringify({ entries: [...activity.entries.values()], finished: activity.finishedEntries, indicator: activity.windowIndicator('local', 's:1') })}</output>;
+  return <><output>{JSON.stringify({ entries: [...activity.entries.values()], finished: activity.finishedEntries, indicator: activity.windowIndicator('local', 's:1') })}</output>
+    <button onClick={() => activity.markFinishedSeen('local', 's:1')}>seen</button>
+    <button onClick={() => activity.setRetention({ maxCount: 0, retentionMs: 3600000 })}>zero</button></>;
 }
 function state() { return JSON.parse(screen.getByRole('status').textContent!); }
 function send(payload: AgentActivityPayload) { act(() => events.handlers.onAgentActivity(payload)); }
@@ -22,6 +25,8 @@ function mount() { return render(<AgentActivityProvider><View /></AgentActivityP
 
 beforeEach(() => {
   localStorage.clear();
+  targets.activeTabId = null;
+  targets.focusedTarget = null;
   pending = [];
   vi.mocked(api).mockReset().mockImplementation(() => new Promise((resolve, reject) => pending.push({ resolve, reject })));
 });
@@ -80,4 +85,42 @@ it.each([undefined, 1])('removes a completed row on deletion with windowId %s an
   send({ ...running, windowId, running: false, reason: 'deleted' });
   expect(state().finished).toMatchObject([{ target: 's:2', windowId: 2 }]);
   expect(JSON.parse(localStorage.getItem('active-windows-finished')!)).toMatchObject([{ target: 's:2', windowId: 2 }]);
+});
+
+it('keeps a confirmed completion until retention removes it, and a later completion is unread', async () => {
+  mount();
+  await resolve(0, []);
+  send({ ...running, running: false, reason: 'completed' });
+  act(() => screen.getByText('seen').click());
+  expect(state().finished[0].seenAt).toEqual(expect.any(Number));
+  expect(state().indicator).toBeNull();
+  send({ ...running, running: false, reason: 'completed' });
+  expect(state().finished[0].seenAt).toBeUndefined();
+  expect(state().indicator).toBe('finished');
+  act(() => screen.getByText('zero').click());
+  expect(state().finished).toHaveLength(1);
+  act(() => screen.getByText('seen').click());
+  expect(state().finished).toHaveLength(0);
+});
+
+it('records a completion in the focused window as seen', async () => {
+  targets.activeTabId = 'terminal:local::w42.1';
+  vi.spyOn(document, 'hasFocus').mockReturnValue(true);
+  mount();
+  await resolve(0, []);
+  send({ ...running, windowId: 42, running: false, reason: 'completed' });
+  expect(state().finished[0].seenAt).toEqual(expect.any(Number));
+  vi.restoreAllMocks();
+});
+
+it('restores a confirmed row on remount', async () => {
+  const view = mount();
+  await resolve(0, []);
+  send({ ...running, running: false, reason: 'completed' });
+  act(() => screen.getByText('seen').click());
+  expect(JSON.parse(localStorage.getItem('active-windows-finished')!)).toHaveLength(1);
+  view.unmount();
+  mount();
+  await resolve(1, []);
+  expect(state().finished).toHaveLength(1);
 });

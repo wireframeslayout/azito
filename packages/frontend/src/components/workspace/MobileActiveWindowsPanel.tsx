@@ -1,3 +1,4 @@
+import { MOBILE_STATUS_BAR_HEIGHT } from '../../lib/mobileChrome';
 import type { ActivityTitleData } from '../../lib/windowDisplay';
 import { useActiveWindowRows } from '../../hooks/useActiveWindowRows';
 import { useAgentActivity } from '../../hooks/useAgentActivity';
@@ -7,7 +8,9 @@ import { formatRelativeTime } from '../../utils/time';
 import { selectTaskTerminal } from './TaskPanel';
 import { useOpenTerminalTarget } from '../../hooks/useTerminalTargetOpener';
 import type { TerminalRef } from '../../lib/terminalRef';
-import { useMemo } from 'react';
+import { useEffect, useMemo, useState } from 'react';
+import { IconButton } from '../ui/IconButton';
+import { Icon } from '../ui/Icon';
 import { useTranslation } from 'react-i18next';
 
 export interface MobileActiveWindowsPanelProps {
@@ -22,7 +25,9 @@ export function MobileActiveWindowsPanel({ titleData, onClose, connectPane, open
   const openTerminal = useOpenTerminalTarget(connectPane);
   const { t } = useTranslation(['workspace', 'tasks']);
   const { rows } = useActiveWindowRows(titleData);
-  const { dismissFinished } = useAgentActivity();
+  const { markFinishedSeen, markAllFinishedSeen, clearSeenFinished, dismissFinished, retention } = useAgentActivity();
+  const [historyOpen, setHistoryOpen] = useState(false);
+  useEffect(() => { markAllFinishedSeen(); }, [markAllFinishedSeen]);
   const windowTaskMap = useMemo(() => buildWindowTaskMap(taskWindows), [taskWindows]);
 
   return (
@@ -32,7 +37,7 @@ export function MobileActiveWindowsPanel({ titleData, onClose, connectPane, open
       className="glass-popover"
       style={{
         position: 'fixed',
-        bottom: 'calc(76px + env(safe-area-inset-bottom))',
+        bottom: `calc(${MOBILE_STATUS_BAR_HEIGHT}px + env(safe-area-inset-bottom))`,
         right: 14,
         borderRadius: 'var(--radius-lg)',
         background: 'rgba(22, 27, 34, 0.86)',
@@ -43,7 +48,7 @@ export function MobileActiveWindowsPanel({ titleData, onClose, connectPane, open
         padding: 6,
         width: 260,
         maxWidth: 'calc(100vw - 28px)',
-        maxHeight: 'calc(100vh - 140px)',
+        maxHeight: `calc(100vh - ${MOBILE_STATUS_BAR_HEIGHT}px - env(safe-area-inset-bottom))`,
         overflowY: 'auto',
         zIndex: 130,
       }}
@@ -52,12 +57,14 @@ export function MobileActiveWindowsPanel({ titleData, onClose, connectPane, open
         {t('activeWindows.title')}
       </div>
 
+      <div style={{ display: 'flex', flexDirection: 'column' }}>
+      {rows.some((r) => r.seenAt != null) && <div style={{ display: 'flex', alignItems: 'center', order: 1 }}><button type="button" aria-expanded={historyOpen} onClick={() => setHistoryOpen((v) => !v)} style={{ flex: 1, minHeight: 44, color: 'var(--text)', background: 'none', border: 0, textAlign: 'left' }}>{t('activeWindows.history', { count: rows.filter((r) => r.seenAt != null).length, max: retention.maxCount })}</button><IconButton type="button" aria-label={t('activeWindows.clearHistory')} onClick={clearSeenFinished} style={{ minHeight: 44, minWidth: 44 }}><Icon name="trash" size={14} /></IconButton></div>}
       {rows.length === 0 ? (
         <div style={{ padding: '14px 10px', fontSize: 'var(--font-md)', color: 'var(--text-dim)', textAlign: 'center' }}>
           {t('activeWindows.noActive')}
         </div>
       ) : (
-        rows.map((row) => {
+        rows.filter((row) => row.seenAt == null || historyOpen).map((row) => {
           const taskId = row.taskId ?? lookupWindowTask(windowTaskMap, row.serverName, row.target);
           const displayName = row.title;
           const isFinished = row.status === 'finished';
@@ -70,13 +77,13 @@ export function MobileActiveWindowsPanel({ titleData, onClose, connectPane, open
             } else {
               openTerminal({ serverName: row.serverName, target: row.target, windowId: row.windowId }, row.projectId);
             }
-            if (isFinished) dismissFinished(row.serverName, row.target, row.windowId);
+            if (isFinished) markFinishedSeen(row.serverName, row.target, row.windowId);
             onClose();
           };
 
           return (
+            <div key={row.key} style={{ display: 'flex', alignItems: 'center', order: row.seenAt == null ? 0 : 2 }}>
             <button
-              key={row.key}
               type="button"
               onClick={handleRowOpen}
               className="row-hover"
@@ -85,6 +92,7 @@ export function MobileActiveWindowsPanel({ titleData, onClose, connectPane, open
                 alignItems: 'center',
                 gap: 8,
                 padding: '8px 10px',
+                minHeight: 44,
                 borderRadius: 'var(--radius-md)',
                 background: isBlocked ? 'rgba(210, 153, 34, 0.06)' : 'transparent',
                 border: 'none',
@@ -95,7 +103,7 @@ export function MobileActiveWindowsPanel({ titleData, onClose, connectPane, open
                 width: '100%',
               }}
             >
-              {isFinished ? <FinishedIndicator /> : isBlocked ? <BlockedDot /> : <BrailleSpinner />}
+              {isFinished ? <FinishedIndicator seen={row.seenAt != null} /> : isBlocked ? <BlockedDot /> : <BrailleSpinner />}
               <div style={{ flex: 1, overflow: 'hidden', minWidth: 0 }}>
                 <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
                   <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
@@ -119,9 +127,12 @@ export function MobileActiveWindowsPanel({ titleData, onClose, connectPane, open
                 </span>
               )}
             </button>
+            {row.seenAt != null && <IconButton type="button" aria-label={t('activeWindows.deleteHistory')} onClick={() => dismissFinished(row.serverName, row.target, row.windowId)} style={{ minWidth: 44, minHeight: 44 }}><Icon name="close" size={14} /></IconButton>}
+            </div>
           );
         })
       )}
+      </div>
     </div>
   );
 }

@@ -39,8 +39,9 @@ function useMaxVisible(containerRef: React.RefObject<HTMLDivElement | null>): nu
 export default function ActiveWindowIcons({ titleData, connectPane, openTask, taskWindows }: ActiveWindowIconsProps) {
   const openTerminal = useOpenTerminalTarget(connectPane);
   const { t } = useTranslation(['workspace', 'tasks']);
-  const { rows } = useActiveWindowRows(titleData);
-  const { dismissFinished } = useAgentActivity();
+  const { rows: allRows } = useActiveWindowRows(titleData);
+  const rows = allRows.filter((row) => row.status === 'running' || row.seenAt == null);
+  const { markFinishedSeen } = useAgentActivity();
   const windowTaskMap = useMemo(() => buildWindowTaskMap(taskWindows), [taskWindows]);
   const containerRef = useRef<HTMLDivElement>(null);
   const maxVisible = useMaxVisible(containerRef);
@@ -55,7 +56,7 @@ export default function ActiveWindowIcons({ titleData, connectPane, openTask, ta
     } else {
       openTerminal({ serverName: row.serverName, target: row.target, windowId: row.windowId }, row.projectId);
     }
-    if (row.status === 'finished') dismissFinished(row.serverName, row.target, row.windowId);
+    if (row.status === 'finished') markFinishedSeen(row.serverName, row.target, row.windowId);
   };
 
   useEffect(() => {

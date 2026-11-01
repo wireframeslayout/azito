@@ -3,6 +3,7 @@ import { api } from '../api/client';
 import type { AgentActivityPayload } from '../types/notification';
 import { stripPaneSuffix } from '@azito/shared';
 import { isWatchedWindow } from '../lib/isWatched';
+import { loadFinishedRetention, saveFinishedRetention, type FinishedRetentionSettings } from '../lib/finishedRetentionSettings';
 import { useNotificationChannel } from './useNotificationChannel';
 import { useWorkspaceTargets } from './useWorkspaceTargets';
 import {
@@ -82,6 +83,11 @@ interface AgentActivityContextValue {
    * タスクウィンドウ（`session:win.1`）が引けないため、完了表示の照合は必ずこれを使う。
    */
   findFinished: (serverName: string, target: string, windowId?: number) => FinishedEntry | undefined;
+  retention: FinishedRetentionSettings;
+  setRetention: (settings: FinishedRetentionSettings) => void;
+  markFinishedSeen: (serverName: string, target: string, windowId?: number) => void;
+  markAllFinishedSeen: () => void;
+  clearSeenFinished: () => void;
   dismissFinished: (serverName: string, target: string, windowId?: number) => void;
 }
 
@@ -95,6 +101,11 @@ const AgentActivityContext = createContext<AgentActivityContextValue>({
   activityStatus: () => null,
   finishedEntries: [],
   findFinished: () => undefined,
+  retention: { maxCount: 10, retentionMs: 3600000 },
+  setRetention: () => {},
+  markFinishedSeen: () => {},
+  markAllFinishedSeen: () => {},
+  clearSeenFinished: () => {},
   dismissFinished: () => {},
 });
 
@@ -165,7 +176,7 @@ const FINISHED_STORAGE_KEY = 'active-windows-finished';
 /** TTL の定期掃除間隔（タブを開きっぱなしでも完了行が寿命を超えて残らないようにする）。 */
 const FINISHED_PRUNE_INTERVAL_MS = 5 * 60 * 1000;
 
-function loadFinishedEntries(): FinishedEntry[] {
+function loadFinishedEntries(settings: FinishedRetentionSettings): FinishedEntry[] {
   try {
     const raw = localStorage.getItem(FINISHED_STORAGE_KEY);
     if (!raw) return [];
@@ -175,9 +186,10 @@ function loadFinishedEntries(): FinishedEntry[] {
       typeof e === 'object' && e !== null &&
       typeof (e as FinishedEntry).serverName === 'string' &&
       typeof (e as FinishedEntry).target === 'string' &&
-      typeof (e as FinishedEntry).finishedAt === 'number',
+      typeof (e as FinishedEntry).finishedAt === 'number' && Number.isFinite((e as FinishedEntry).finishedAt) &&
+      ((e as FinishedEntry).seenAt == null || (typeof (e as FinishedEntry).seenAt === 'number' && Number.isFinite((e as FinishedEntry).seenAt))),
     );
-    return pruneFinished(valid, Date.now());
+    return pruneFinished(valid, Date.now(), settings);
   } catch {
     return [];
   }
@@ -200,7 +212,13 @@ export function AgentActivityProvider({ children }: { children: React.ReactNode 
   const entriesRef = useRef(entries);
   const { activeTabId, focusedTarget } = useWorkspaceTargets();
   const browserFocused = useBrowserFocused();
-  const [finished, setFinished] = useState<FinishedEntry[]>(loadFinishedEntries);
+  const [retention, setRetentionState] = useState(loadFinishedRetention);
+  const [finished, setFinished] = useState<FinishedEntry[]>(() => loadFinishedEntries(retention));
+  const setRetention = useCallback((settings: FinishedRetentionSettings) => {
+    setRetentionState(settings);
+    saveFinishedRetention(settings);
+    setFinished((cur) => pruneFinished(cur, Date.now(), settings));
+  }, []);
 
   // WS ハンドラは ref 経由で最新の isWatched を読む（ハンドラ自体は購読時に固定されるため）。
   const isWatchedRef = useRef<(serverName: string, target: string, windowId?: number) => boolean>(() => false);
@@ -247,7 +265,7 @@ export function AgentActivityProvider({ children }: { children: React.ReactNode 
         return;
       }
       if (payload.reason !== 'completed') return;
-      if (isWatchedRef.current(payload.serverName, payload.target, payload.windowId)) return;
+      const seenAt = isWatchedRef.current(payload.serverName, payload.target, payload.windowId) ? Date.now() : undefined;
       setFinished((cur) => upsertFinished(cur, mergeFinishedEntry({
         serverName: payload.serverName,
         target: payload.target,
@@ -262,6 +280,7 @@ export function AgentActivityProvider({ children }: { children: React.ReactNode 
         taskId: payload.taskId,
         projectId: payload.projectId,
         finishedAt: Date.now(),
+        seenAt,
         paneName: payload.paneName,
       }, previous)));
     },
@@ -281,23 +300,34 @@ export function AgentActivityProvider({ children }: { children: React.ReactNode 
   // TTL の定期適用。読み込み時（loadFinishedEntries）と保存時（下の effect）にも同じ規則が効く。
   useEffect(() => {
     const timer = setInterval(() => {
-      setFinished((cur) => pruneFinished(cur, Date.now()));
+      setFinished((cur) => pruneFinished(cur, Date.now(), retention));
     }, FINISHED_PRUNE_INTERVAL_MS);
     return () => clearInterval(timer);
-  }, []);
+  }, [retention]);
 
   useEffect(() => {
-    const watchedFinished = finished.filter((e) => isWatched(e.serverName, e.target, e.windowId));
-    if (watchedFinished.length > 0) {
-      const watchedKeys = new Set(watchedFinished.map(activityKeyForEntry));
-      setFinished((cur) => cur.filter((e) => !watchedKeys.has(activityKeyForEntry(e))));
-    }
-  }, [finished, isWatched]);
+    setFinished((cur) => {
+      const now = Date.now();
+      const next = cur.map((e) => e.seenAt == null && isWatched(e.serverName, e.target, e.windowId) ? { ...e, seenAt: now } : e);
+      return pruneFinished(next, now, retention);
+    });
+  }, [isWatched, retention]);
 
   useEffect(() => {
-    saveFinishedEntries(pruneFinished(finished, Date.now()));
-  }, [finished]);
+    const pruned = pruneFinished(finished, Date.now(), retention);
+    saveFinishedEntries(pruned);
+    if (pruned !== finished) setFinished(pruned);
+  }, [finished, retention]);
 
+  const markFinishedSeen = useCallback((serverName: string, target: string, windowId?: number) => {
+    const key = activityKey(serverName, target, windowId);
+    setFinished((cur) => pruneFinished(cur.map((e) => activityKeyForEntry(e) === key && e.seenAt == null ? { ...e, seenAt: Date.now() } : e), Date.now(), retention));
+  }, [retention]);
+  const markAllFinishedSeen = useCallback(() => {
+    const now = Date.now();
+    setFinished((cur) => pruneFinished(cur.map((e) => e.seenAt == null ? { ...e, seenAt: now } : e), now, retention));
+  }, [retention]);
+  const clearSeenFinished = useCallback(() => setFinished((cur) => cur.filter((e) => e.seenAt == null)), []);
   const dismissFinished = useCallback((serverName: string, target: string, windowId?: number) => {
     const key = activityKey(serverName, target, windowId);
     setFinished((cur) => cur.filter((e) => activityKeyForEntry(e) !== key));
@@ -351,7 +381,8 @@ export function AgentActivityProvider({ children }: { children: React.ReactNode 
     if (info?.running && !isWatched(serverName, target, info.windowId)) {
       return info.status;
     }
-    if (findFinished(serverName, target)) {
+    const finishedEntry = findFinished(serverName, target);
+    if (finishedEntry && finishedEntry.seenAt == null) {
       return 'finished';
     }
     return null;
@@ -370,6 +401,7 @@ export function AgentActivityProvider({ children }: { children: React.ReactNode 
         finishedEntries: finished,
         findFinished,
         dismissFinished,
+        retention, setRetention, markFinishedSeen, markAllFinishedSeen, clearSeenFinished,
       }}
     >
       {children}

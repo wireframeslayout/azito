@@ -1,3 +1,4 @@
+import { parseTerminalTabId } from '../lib/terminalRef';
 import { useOpenGlobalSearch } from './search/GlobalSearch';
 import { useState, useMemo, useEffect, useRef, useCallback } from 'react';
 import { useTranslation } from 'react-i18next';
@@ -38,7 +39,7 @@ export function StatusBar({ servers }: StatusBarProps) {
   const { t } = useTranslation('common');
   const { t: tn } = useTranslation('navigation');
   const openSearch = useOpenGlobalSearch();
-  const { focusedTarget } = useWorkspaceTargets();
+  const { focusedTarget, activeTabId } = useWorkspaceTargets();
   const { status: updateStatus, startUpdate, checkNow } = useSystemUpdate();
   const { showToast } = useToast();
   const [openItemId, setOpenItemId] = useState<string | null>(null);
@@ -59,8 +60,9 @@ export function StatusBar({ servers }: StatusBarProps) {
   const focusedServer = useMemo(() => {
     if (!focusedTarget) return null;
     const idx = focusedTarget.indexOf('::');
-    return idx > 0 ? focusedTarget.slice(0, idx) : null;
-  }, [focusedTarget]);
+    if (idx > 0) return focusedTarget.slice(0, idx);
+    return activeTabId ? parseTerminalTabId(activeTabId)?.serverName ?? null : null;
+  }, [focusedTarget, activeTabId]);
 
   const contextLabel = useMemo(() => {
     if (!focusedTarget) return null;

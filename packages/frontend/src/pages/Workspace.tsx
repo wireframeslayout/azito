@@ -61,7 +61,8 @@ import { ACTIVE_PROJECT_KEY, getProjectColorFallback } from './workspace/types';
 import { buildObjectSections } from '../lib/workspaceObjects';
 import { GlobalFocusProvider, useGlobalFocus } from '../hooks/useGlobalFocus';
 import { parseTerminalTabId, terminalRefDisplayLabel, type TerminalRef } from '../lib/terminalRef';
-import { resolveWindowTitle, formatWindowTitleLine, parseMuxRef } from '@azito/shared';
+import { resolveWindowTitle, formatWindowTitleLine, parseMuxRef, tmuxTargetFromMuxRef } from '@azito/shared';
+import { activityKey } from '../lib/finishedWindows';
 import { buildWindowIndex, misaoRefWindowTitle } from '../lib/windowDisplay';
 import { findTaskByTarget as findTaskByTargetLib } from '../lib/findTaskByTarget';
 import { describeUnsupportedOs, isUnsupportedOsAnswer } from '../lib/hostFeature';
@@ -517,11 +518,17 @@ function WorkspaceInner() {
     const parsed = parseTerminalTabId(focusedActiveTabId);
     if (!parsed) return;
     if (parsed.kind === 'legacy') {
-      setFocusedTarget(`${parsed.serverName}::${parsed.target}`);
+      setFocusedTarget(activityKey(parsed.serverName, parsed.target));
     } else if (parsed.kind === 'windowId') {
-      setFocusedTarget(`${parsed.serverName}::w${parsed.windowId}`);
+      setFocusedTarget(activityKey(parsed.serverName, '', parsed.windowId));
     } else {
-      setFocusedTarget(`${parsed.serverName}::ref:${parsed.ref}`);
+      try {
+        const ref = parseMuxRef(parsed.ref);
+        const target = ref.kind === 'tmux' ? tmuxTargetFromMuxRef(ref) : `${ref.workspace}:${ref.window}`;
+        setFocusedTarget(activityKey(parsed.serverName, target));
+      } catch {
+        setFocusedTarget(null);
+      }
     }
     return () => setFocusedTarget(null);
   }, [focusedActiveTabId, setFocusedTarget]);

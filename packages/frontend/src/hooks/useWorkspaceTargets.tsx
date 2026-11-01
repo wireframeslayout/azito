@@ -1,5 +1,4 @@
 import { createContext, useCallback, useContext, useState } from 'react';
-import { windowKey } from '@azito/shared';
 import type { TerminalOpenTarget } from '../lib/terminalTargetOpen';
 
 interface WorkspaceTargetsContextValue {
@@ -32,7 +31,6 @@ const defaultValue: WorkspaceTargetsContextValue = {
 
 const WorkspaceTargetsContext = createContext<WorkspaceTargetsContextValue>(defaultValue);
 
-export { windowKey as activityKey };
 
 export function WorkspaceTargetsProvider({ children }: { children: React.ReactNode }) {
   const [onOpenInTerminal, setOnOpenInTerminal] = useState<((req: TerminalOpenTarget) => void) | null>(null);
