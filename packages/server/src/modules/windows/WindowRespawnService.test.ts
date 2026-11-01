@@ -2737,7 +2737,8 @@ describe('WindowRespawnService.respawn — a conversation that was never written
       const { sentCommands, outcome } = await respawnWith(makeWindow({ sleeping: true, agentSessionId: SESSION }), probeOver());
       expect(outcome).toBeNull();
       expect(sentCommands.join('\n')).toContain(`claude --resume ${SESSION}`);
-      expect(warn).toHaveBeenCalledWith(expect.stringContaining('no recorded Claude config directory'));
+      if (process.platform === 'win32') expect(warn).not.toHaveBeenCalledWith(expect.stringContaining('no recorded Claude config directory'));
+      else expect(warn).toHaveBeenCalledWith(expect.stringContaining('no recorded Claude config directory'));
     } finally { warn.mockRestore(); }
   });
 
