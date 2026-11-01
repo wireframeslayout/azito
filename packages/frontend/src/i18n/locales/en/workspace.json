@@ -1,5 +1,5 @@
 {
-  "rightPanel": {"open": "Open linked windows panel", "close": "Close linked windows panel"},
+  "rightPanel": {"title": "Linked windows", "open": "Open linked windows panel", "close": "Close linked windows panel"},
   "tab": {
     "closeDirtyTitle": "Close tab with unsaved changes?",
     "closeDirtyMessage": "\"{{name}}\" has unsaved changes. Closing this tab will discard them.",

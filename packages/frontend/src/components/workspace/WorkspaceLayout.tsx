@@ -1,4 +1,4 @@
-import React, { useCallback, useRef, useState } from 'react';
+import React, { useCallback, useId, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { useTranslation } from 'react-i18next';
 import { Icon } from '../ui/Icon';
@@ -12,6 +12,8 @@ import type { ContextMenuItem } from '../ContextMenu';
 import LocalMenu from './LocalMenu';
 import LocalMenuPopover from './LocalMenuPopover';
 import { ProjectAvatar } from '../ui/ProjectAvatar';
+import { RightPanel } from './RightPanel';
+import { RightPanelToggle } from './RightPanelToggle';
 
 interface ProjectItem {
   id: number;
@@ -74,6 +76,9 @@ interface WorkspaceLayoutProps {
   /** SP の M1 メニュー「オブジェクト」行に表示する総件数（Issue #69 T1）。 */
   objectsCount?: number;
   rightPanel?: React.ReactNode;
+  rightPanelOpen?: boolean;
+  onRightPanelOpenChange?: (open: boolean) => void;
+  rightPanelActions?: React.ReactNode;
 }
 
 export default function WorkspaceLayout({
@@ -102,8 +107,13 @@ export default function WorkspaceLayout({
   taskWindows,
   objectsCount,
   rightPanel,
+  rightPanelOpen,
+  onRightPanelOpenChange,
+  rightPanelActions,
 }: WorkspaceLayoutProps) {
   const { t } = useTranslation(['workspace', 'common', 'projects']);
+  const rightPanelId = useId();
+  const rightPanelToggleRef = useRef<HTMLButtonElement>(null);
   const navigate = useNavigate();
   const currentProjectItem = allProjects.find((p) => p.id === project?.id) ?? null;
   const projectMenu = useContextMenu();
@@ -323,7 +333,16 @@ export default function WorkspaceLayout({
         {children}
       </div>
 
-      {!mobile && rightPanel}
+      {!mobile && rightPanel != null && rightPanelOpen !== undefined && onRightPanelOpenChange && (
+        <>
+          <div hidden={rightPanelOpen}>
+            <RightPanelToggle buttonRef={rightPanelToggleRef} open={false} controls={rightPanelId} onToggle={() => onRightPanelOpenChange(true)} />
+          </div>
+          <RightPanel id={rightPanelId} title={t('workspace:rightPanel.title')} open={rightPanelOpen} onOpenChange={onRightPanelOpenChange} toggleRef={rightPanelToggleRef} actions={rightPanelActions}>
+            {rightPanel}
+          </RightPanel>
+        </>
+      )}
 
       {modals}
 
