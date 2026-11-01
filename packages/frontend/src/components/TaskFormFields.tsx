@@ -1,4 +1,5 @@
 import FormField from './FormField';
+import { isMisaoTarget } from '../lib/windowDisplay';
 import { useTranslation } from 'react-i18next';
 import { FormInput, FormTextarea, FormSelect, SubagentConfigCard } from './ui';
 import BranchInput from './BranchInput';
@@ -41,6 +42,7 @@ const STATUS_KEY_MAP: Record<string, string> = {
 
 export default function TaskFormFields({ value, onChange, mode, projects, units, showAdvanced, projectId: projectIdProp, descriptionRows = 4, projectServers, defaultUnitId }: TaskFormFieldsProps) {
   const { t } = useTranslation(['tasks', 'common', 'units']);
+  const isMisaoWindow = isMisaoTarget(value.tmuxWindow);
   const selectedUnit = units.find((s) => String(s.id) === value.unitId);
   const serverName = value.serverName || '';
   const projectId = projectIdProp ?? parseInt(value.projectId, 10);
@@ -173,9 +175,9 @@ export default function TaskFormFields({ value, onChange, mode, projects, units,
 
       <FormField label={t('fields.tmuxWindow')}>
         <FormInput
-          value={value.tmuxWindow}
+          value={isMisaoWindow ? '' : value.tmuxWindow}
           onChange={(e) => set(value, 'tmuxWindow', e.target.value, onChange)}
-          placeholder={t('fields.tmuxWindowPlaceholder')}
+          placeholder={isMisaoWindow ? t('common:labels.window') : t('fields.tmuxWindowPlaceholder')}
         />
       </FormField>
 

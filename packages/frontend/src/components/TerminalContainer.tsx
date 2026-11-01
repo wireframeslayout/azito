@@ -18,6 +18,8 @@ import { api } from '../api/client';
 import { formatWindowId } from '@azito/shared';
 import { useServerStatuses } from '../hooks/useServerStatuses';
 import { isInsufficientResources } from '../hooks/useAddWindowModal';
+import { useWindowViewMode } from '../hooks/useWindowViewMode';
+import { resolveWindowViewMode, type WindowViewMode } from '../lib/windowViewMode';
 import { useIsMobile } from '../hooks/useIsMobile';
 import { useWorkspaceTargets } from '../hooks/useWorkspaceTargets';
 import type { Project, Task, Session } from '../pages/workspace/types';
@@ -29,12 +31,6 @@ import { paneDisplayName } from '../lib/paneDisplay';
 import { missingPaneOutcome, resumableWindowId, type PaneUnavailableReason } from '../lib/paneState';
 import { refKindOf } from '../lib/sessionKind';
 import { shouldShowSplitButton } from '../lib/shouldShowSplitButton';
-
-export type WindowViewMode = 'terminal' | 'chat';
-
-export function viewModeStorageKey(windowId: number): string {
-  return `azito.windowView.${windowId}`;
-}
 
 const SPINNER_KEYFRAMES_ID = 'terminal-container-spinner-keyframes';
 
@@ -95,12 +91,13 @@ interface TerminalContainerProps {
    * 省略時（デスクトップ・タスク外の単体ウィンドウタブ等）は従来どおり内部状態＋
    * localStorage（windowId 単位）で自律的に管理する。
    */
+  isAgent?: boolean;
   viewMode?: WindowViewMode;
   /** viewMode が外部制御（controlled）のときのみ使う変更コールバック。 */
   onViewModeChange?: (mode: WindowViewMode) => void;
 }
 
-export function TerminalContainer({ registeredWindow, serverName, target: rawTarget, terminalRef: terminalRefProp, resolveOnServer, projectId, taskId, project, allTasks, sessions, onSplitPane, onOpenTask, onDisconnect, onWindowChanged, onCloseTab, onTargetRemoved, onRetargetPane, onRetargetTab, reconnectKey, leading, trailing, viewMode: viewModeProp, onViewModeChange }: TerminalContainerProps) {
+export function TerminalContainer({ registeredWindow, serverName, target: rawTarget, terminalRef: terminalRefProp, resolveOnServer, projectId, taskId, project, allTasks, sessions, onSplitPane, onOpenTask, onDisconnect, onWindowChanged, onCloseTab, onTargetRemoved, onRetargetPane, onRetargetTab, reconnectKey, leading, trailing, isAgent, viewMode: viewModeProp, onViewModeChange }: TerminalContainerProps) {
   // Tabs opened through connectPane carry a TerminalRef and a `w<id>` placeholder target;
   // everything below that still keys off a tmux target (window-exists check, status dropdown,
   // pane-loading-state fallback) needs the real `<session>:<window>.<pane>`, resolved from
@@ -178,30 +175,13 @@ export function TerminalContainer({ registeredWindow, serverName, target: rawTar
 
   const [style, setStyle] = useTranscriptStyle();
 
-  const [internalViewMode, setInternalViewModeState] = useState<WindowViewMode>('terminal');
-  useEffect(() => {
-    if (viewModeProp !== undefined) return; // caller owns the value — see viewMode prop doc
-    if (windowId === null) {
-      setInternalViewModeState('terminal');
-      return;
-    }
-    const stored = localStorage.getItem(viewModeStorageKey(windowId));
-    setInternalViewModeState(stored === 'chat' ? 'chat' : 'terminal');
-  }, [windowId, viewModeProp]);
-
-  const setViewMode = useCallback((mode: WindowViewMode) => {
-    setInternalViewModeState(mode);
-    if (windowId !== null) localStorage.setItem(viewModeStorageKey(windowId), mode);
-  }, [windowId]);
-
-  const viewMode = viewModeProp ?? internalViewMode;
-
-  // 下端ミニトグル（TerminalChatToggle、qbar/PromptInputBar 左端）が呼ぶ実際の変更経路。
-  // 外部制御（viewModeProp が渡されている＝TaskPanel 配下）のときは呼び出し元通知のみ、
-  // それ以外（タスク外の単体ウィンドウタブ等）は内部状態＋localStorage を自律更新する。
+  const isMobile = useIsMobile();
+  const hasAgent = isAgent ?? currentWindow?.windowType === 'agent';
+  const [internalViewMode, selectViewMode] = useWindowViewMode(windowId, isMobile, hasAgent);
+  const viewMode = resolveWindowViewMode(windowId, viewModeProp ?? internalViewMode, isMobile, hasAgent);
   const changeViewMode = viewModeProp !== undefined
     ? (mode: WindowViewMode) => onViewModeChange?.(mode)
-    : setViewMode;
+    : (mode: WindowViewMode) => selectViewMode(mode, windowId);
 
   const viewModeOptions: SegmentedToggleOption<WindowViewMode>[] = useMemo(() => [
     { value: 'terminal', label: t('terminal.viewMode.terminal'), icon: 'terminal' },
@@ -212,7 +192,6 @@ export function TerminalContainer({ registeredWindow, serverName, target: rawTar
   // マウントする。キー送出は XTermView が公開する sendKey ハンドル（既存の
   // wsRef.send(SPECIAL_KEY_MAP[key]) 経路）をそのまま呼ぶだけで、ここでは新規の送出
   // 実装を持たない。⌨トグルの MobileKeyboardOverlay も同じハンドル経由で送出する。
-  const isMobile = useIsMobile();
   const xtermRef = useRef<XTermViewHandle>(null);
   const [keyboardOverlayOpen, setKeyboardOverlayOpen] = useState(false);
   const { onOpenTabSwitcher } = useWorkspaceTargets();
@@ -396,7 +375,7 @@ export function TerminalContainer({ registeredWindow, serverName, target: rawTar
             <SegmentedToggle
               options={viewModeOptions}
               value={viewMode}
-              onChange={setViewMode}
+              onChange={changeViewMode}
               ariaLabel={t('terminal.viewMode.ariaLabel')}
             />
           )}
@@ -424,6 +403,7 @@ export function TerminalContainer({ registeredWindow, serverName, target: rawTar
             windowId={windowId}
             viewMode={isMobile ? viewMode : undefined}
             onChangeViewMode={isMobile ? changeViewMode : undefined}
+            onOpenTerminal={() => changeViewMode('terminal')}
           />
         ) : (
           <>
@@ -663,8 +643,8 @@ export function TerminalContainer({ registeredWindow, serverName, target: rawTar
           keyboardOpen={keyboardOverlayOpen}
           onToggleKeyboard={() => setKeyboardOverlayOpen((open) => !open)}
           onOpenTabSwitcher={() => onOpenTabSwitcher?.()}
-          viewMode={viewMode}
-          onChangeViewMode={changeViewMode}
+          viewMode={windowId !== null ? viewMode : undefined}
+          onChangeViewMode={windowId !== null ? changeViewMode : undefined}
         />
       )}
       {showQuickKeyBar && keyboardOverlayOpen && (

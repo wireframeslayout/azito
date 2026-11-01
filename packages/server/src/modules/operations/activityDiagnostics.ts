@@ -1,4 +1,4 @@
-import type { IWindowRepository } from '../windows/Window';
+import type { IWindowRepository, Window } from '../windows/Window';
 import { isAgentWindow } from '../windows/Window';
 import { windowKey, asPaneHandle } from '@azito/shared';
 import type { SupervisorRegistry } from '../supervisors/SupervisorRegistry';
@@ -13,6 +13,7 @@ import type { PaneHandleResolver } from './PaneHandleResolver';
  */
 export interface ActivityDiagnosticRow extends ActivityDiagnosticEntry {
   windowId?: number;
+  windowDisplay?: Pick<Window, 'label' | 'labelSource' | 'workerType' | 'windowType' | 'muxRef'>;
   /** 行から該当ウィンドウのタブへ遷移するために UI が使う（`windows.project_id`）。 */
   projectId?: number;
   supervisor?: {
@@ -105,6 +106,7 @@ export function buildActivityDiagnostics(
   const windowIds = new Map<string, number>();
   const windowProjectIds = new Map<string, number | null>();
   const windowTaskIds = new Map<string, number | null>();
+  const windowDisplays = new Map<string, ActivityDiagnosticRow['windowDisplay']>();
   for (const w of windowRepo.findAll()) {
     if (!isAgentWindow(w)) continue;
     const key = windowKey(w.serverName, w.tmuxTarget);
@@ -112,6 +114,7 @@ export function buildActivityDiagnostics(
       windowIds.set(key, w.id);
       windowProjectIds.set(key, w.projectId);
       windowTaskIds.set(key, w.taskId);
+      windowDisplays.set(key, { label: w.label, labelSource: w.labelSource, workerType: w.workerType, windowType: w.windowType, muxRef: w.muxRef });
     }
   }
 
@@ -144,6 +147,7 @@ export function buildActivityDiagnostics(
         ? { decidedBy: 'none' as const, state: 'none' as const, refinedBy: undefined }
         : {}),
       windowId: winId,
+      windowDisplay: windowDisplays.get(key),
       projectId: windowProjectIds.get(key) ?? undefined,
       supervisor: supervisor && {
         pid: supervisor.pid,
@@ -168,6 +172,7 @@ export function buildActivityDiagnostics(
       state: 'none',
       decidedBy: 'none',
       windowId: windowIds.get(key),
+      windowDisplay: windowDisplays.get(key),
       projectId: windowProjectIds.get(key) ?? undefined,
       supervisor: {
         pid: supervisor.pid,

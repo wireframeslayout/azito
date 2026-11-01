@@ -1,0 +1,100 @@
+import { apiWithStatus, fetchBlob, uploadFile } from '../../../api/client';
+import { unavailableFrom, type FileEntry, type FileReadResult, type FileSaveResult, type FilesBackend } from './FilesBackend';
+
+interface StorageResponse {
+  error?: string;
+  code?: string;
+  content?: string;
+  language?: string;
+  etag?: string;
+  contentType?: string;
+  latest?: StorageResponse | null;
+  file?: { key: string };
+}
+interface ListResponse extends StorageResponse {
+  folders: Array<{ name: string; prefix: string }>;
+  files: Array<{ key: string; displayName: string; size: number }>;
+  nextCursor: string | null;
+}
+
+export class StorageFilesBackend implements FilesBackend {
+  constructor(private readonly projectId: number) {}
+  get source(): string { return `storage:${this.projectId}`; }
+  private get root(): string { return `/projects/${this.projectId}/storage`; }
+  private relative(path: string): string {
+    const root = `projects/${this.projectId}/`;
+    if (!path.startsWith(root)) throw new Error('Invalid storage key');
+    return path.slice(root.length);
+  }
+  private key(path: string): string { return `projects/${this.projectId}/${path}`; }
+  async list(path: string): Promise<FileEntry[]> {
+    const prefix = path.startsWith(`projects/${this.projectId}/`) ? this.relative(path) : path;
+    const entries: FileEntry[] = [];
+    let cursor: string | null = null;
+    do {
+      const query = new URLSearchParams({ prefix });
+      if (cursor) query.set('cursor', cursor);
+      const { status, body } = await apiWithStatus<ListResponse>(`${this.root}/entries?${query}`);
+      if (status >= 400) throw new Error(body.error || 'Failed to load directory');
+      entries.push(...body.folders.map((f) => ({ name: f.name, type: 'directory' as const, path: f.prefix })));
+      entries.push(...body.files.map((f) => ({ name: f.displayName, type: 'file' as const, path: this.relative(f.key), size: f.size })));
+      cursor = body.nextCursor;
+    } while (cursor);
+    return entries;
+  }
+  private toRead(body: StorageResponse): FileReadResult {
+    if (typeof body.content !== 'string' || typeof body.language !== 'string' || typeof body.etag !== 'string') throw new Error('Invalid file response');
+    return { kind: 'text', content: body.content, language: body.language, version: body.etag };
+  }
+  async read(path: string): Promise<FileReadResult> {
+    const { status, body } = await apiWithStatus<StorageResponse>(`${this.root}/content?key=${encodeURIComponent(this.key(path))}`);
+    if (status >= 400) {
+      const unavailable = unavailableFrom(status === 403 ? 'forbidden' : body.code, body.error || 'Cannot edit file');
+      if (unavailable) return unavailable;
+      throw new Error(body.error || 'Failed to load file');
+    }
+    return this.toRead(body);
+  }
+  async save(path: string, content: string, version: string, force: boolean): Promise<FileSaveResult> {
+    const { status, body } = await apiWithStatus<StorageResponse>(`${this.root}/content`, { method: 'PUT', body: JSON.stringify({ key: this.key(path), content, baseEtag: force ? undefined : version, force }) });
+    if (status === 409 && body.error === 'conflict') {
+      if (typeof body.content === 'string' && typeof body.etag === 'string') return { kind: 'conflict', latest: { kind: 'text', content: body.content, version: body.etag, language: 'text' } };
+      const latest = body.latest ?? null;
+      // A latest version the host could not offer as text carries its reason; an unexplained one is reported as unreadable.
+      if (latest?.error !== undefined) return { kind: 'conflict', latest: unavailableFrom(latest.code, latest.error) };
+      return { kind: 'conflict', latest: latest ? this.toRead(latest) : null };
+    }
+    if (status >= 400 || body.error) throw new Error(body.error || 'Failed to save file');
+    if (typeof body.etag !== 'string') throw new Error('Invalid save response');
+    return { kind: 'saved', version: body.etag };
+  }
+  private async mutate(endpoint: string, method: string, body: object): Promise<void> {
+    const result = await apiWithStatus<StorageResponse>(`${this.root}${endpoint}`, { method, body: JSON.stringify(body) });
+    if (result.status >= 400 || result.body.error) throw new Error(result.body.error || 'Storage operation failed');
+  }
+  async create(path: string, type: 'file' | 'directory'): Promise<string> {
+    if (type === 'directory') {
+      const prefix = path.endsWith('/') ? path : `${path}/`;
+      await this.mutate('/folders', 'POST', { prefix });
+      return prefix;
+    }
+    const relative = path.startsWith(`projects/${this.projectId}/`) ? this.relative(path) : path;
+    const slash = relative.lastIndexOf('/');
+    const prefix = relative.slice(0, slash + 1);
+    const name = relative.slice(slash + 1);
+    const result = await uploadFile<StorageResponse>(`${this.root}/upload?prefix=${encodeURIComponent(prefix)}`, new File([''], name, { type: 'text/plain' }));
+    if (result.error) throw new Error(result.error);
+    if (!result.file?.key) throw new Error('Invalid upload response');
+    return this.relative(result.file.key);
+  }
+  rename(path: string, newName: string): Promise<void> {
+    return this.mutate('/entries', 'PATCH', path.endsWith('/') ? { prefix: path, newName } : { key: this.key(path), displayName: newName });
+  }
+  delete(path: string, type: 'file' | 'directory'): Promise<void> {
+    return this.mutate('/delete', 'POST', type === 'directory' ? { keys: [], prefixes: [path] } : { keys: [this.key(path)], prefixes: [] });
+  }
+  move(path: string, type: 'file' | 'directory', destination: string): Promise<void> {
+    return this.mutate('/move', 'POST', { keys: type === 'file' ? [this.key(path)] : [], prefixes: type === 'directory' ? [path] : [], destPrefix: destination });
+  }
+  download(path: string): Promise<Blob> { return fetchBlob(`${this.root}/${encodeURIComponent(path)}/raw?download=true`); }
+}

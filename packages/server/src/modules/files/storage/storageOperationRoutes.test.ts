@@ -21,6 +21,33 @@ describe('storage operation routes', () => {
       expect(response.json()).toEqual({ code: 'auth', error: 'Storage authentication failed.' });
     } finally { await app.close(); }
   });
+  it('validates project keys and returns the latest content on a conflict', async () => {
+    const text = { read: vi.fn(async () => ({ content: 'latest', etag: 'v2', language: 'text', size: 6 })), write: vi.fn(async () => { throw new StorageOperationError(409, 'conflict', 'File has changed'); }) };
+    const app = Fastify();
+    await app.register(storageRoutes, {
+      projectRepo: { findById: (id: number) => id === 1 ? { id } : null },
+      storageSettingsRepo: { get: () => ({}) }, storageClient: { textContent: () => text },
+      storageStatusService: {},
+    } as unknown as StorageRouteOptions);
+    try {
+      const root = '/api/projects/1/storage/content';
+      expect((await app.inject({ method: 'GET', url: root + '?key=projects%2F2%2Ffile' })).statusCode).toBe(400);
+      expect((await app.inject({ method: 'GET', url: root + '?key=projects%2F1%2Ffile' })).json()).toEqual({ content: 'latest', etag: 'v2', language: 'text', size: 6 });
+      expect((await app.inject({ method: 'PUT', url: root, payload: { key: 'projects/1/file', content: 'edit' } })).statusCode).toBe(400);
+      const response = await app.inject({ method: 'PUT', url: root, payload: { key: 'projects/1/file', content: 'edit', baseEtag: 'v1' } });
+      expect(response.statusCode).toBe(409);
+      expect(response.json()).toEqual({ error: 'conflict', content: 'latest', etag: 'v2' });
+      expect(text.write).toHaveBeenCalledWith('file', 'edit', 'v1');
+
+      text.read.mockRejectedValueOnce(new StorageOperationError(400, 'binary', 'File contains NUL bytes'));
+      const binary = await app.inject({ method: 'PUT', url: root, payload: { key: 'projects/1/file', content: 'edit', baseEtag: 'v1' } });
+      expect(binary.json()).toEqual({ error: 'conflict', latest: { error: 'File contains NUL bytes', code: 'binary' } });
+
+      text.read.mockRejectedValueOnce(new StorageOperationError(404, 'not_found', 'File not found'));
+      const deleted = await app.inject({ method: 'PUT', url: root, payload: { key: 'projects/1/file', content: 'edit', baseEtag: 'v1' } });
+      expect(deleted.json()).toEqual({ error: 'conflict', latest: null });
+    } finally { await app.close(); }
+  });
   it('uses the documented contracts and enforces project boundaries', async () => {
     const operations = {
       listPage: vi.fn(async () => ({ prefix: 'a/', folders: [], files: [], nextCursor: null })),

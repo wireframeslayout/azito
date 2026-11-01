@@ -101,6 +101,7 @@
       "agent_outdated": "The agent on this server is outdated — update it to use the chat view",
       "agent_bad_response": "The agent server returned an unexpected response"
     },
+    "openTerminal": "Open terminal",
     "retry": "Retry",
     "empty": {
       "title": "No conversation yet",

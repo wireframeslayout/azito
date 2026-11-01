@@ -63,7 +63,7 @@ it('retains live state on failure and processes later events', async () => {
   expect(state().entries).toMatchObject([{ status: 'blocked' }]);
 });
 
-it('discards a response after unmount and displays the new snapshot', async () => {
+it('a remount shows only its own snapshot', async () => {
   const view = mount();
   view.unmount();
   mount();

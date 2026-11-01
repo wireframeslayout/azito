@@ -120,3 +120,8 @@ https://<host>/api/projects/<projectId>/storage/<filename>/raw
 ## フォルダ・ファイル操作
 
 ストレージ API のパスはプロジェクト相対です。フォルダは末尾 `/` を付け、0 バイトの印で表します。`GET storage/entries` は `prefix`、`limit`（既定 200）、`cursor` を受け付けます。`POST storage/folders` は `prefix`、`PATCH storage/entries` はファイルの `key` と `displayName` またはフォルダの `prefix` と `newName`、`POST storage/move` は `keys`、`prefixes` と `destPrefix`、`POST storage/delete` は `keys` と `prefixes`、`GET storage/stat` は `prefix` を受け付けます。アップロードにはmultipart の任意フィールド `prefix` を指定できます。ファイルのキーはプロジェクトのルートを含み、フォルダの prefix はプロジェクト相対です。フォルダ移動は 1,000 オブジェクトが上限で、コピー後に元を削除し、部分失敗を報告します。外部からの書き込みに対して存在確認とコピーを原子的には実行できません。ファイル名の変更はキーを維持し、表示名をメタデータに保存します。現在の画面は従来のフラット一覧を表示します。
+
+ストレージ一覧からテキストや Markdown を開き、ワークスペースで編集できます。保存時はオブジェクトの ETag で変更を検出します。競合した場合は最新内容との差分を確認し、再読み込みまたは明示的な上書きを選べます。編集できるのは 500 KiB 以下の UTF-8 ファイルです。S3 互換サービスが条件付き PUT を無視する場合、メタデータ確認後から保存までの間に行われた変更を上書きする可能性があります。
+
+テキストの `GET /api/projects/:id/storage/content?key=...` は `content`, `etag`, `language`, `size` を返します。`PUT` は `key`, `content`, `baseEtag` を受け取り、明示的な上書きには `force: true` を使います。競合は HTTP 409 で `error: "conflict"`, `etag`, `content` を返し、S3 の 412 も 409 に変換します。保存前に ETag を確認しますが、IfMatch を無視する S3 互換先では確認後の更新を検出できない競合の窓が残ります。
+最新の内容がテキストとして読めない場合、409 は `error: "conflict"` と、理由を示す `latest: { error, code }` または取得できない場合の `latest: null` を返します。

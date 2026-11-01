@@ -1,3 +1,4 @@
+import type { ActivityTitleData } from '../../lib/windowDisplay';
 import React, { useCallback, useId, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { useTranslation } from 'react-i18next';
@@ -49,6 +50,7 @@ function buildProjectMenuItems(
 }
 
 interface WorkspaceLayoutBaseProps {
+  titleData: ActivityTitleData;
   mobile: boolean;
   sidebarMode: SidebarMode;
   switchSidebarMode: (mode: SidebarMode) => void;
@@ -85,6 +87,7 @@ type WorkspaceLayoutProps = WorkspaceLayoutBaseProps & (
 );
 
 export default function WorkspaceLayout({
+  titleData,
   mobile,
   sidebarMode,
   switchSidebarMode,
@@ -183,6 +186,7 @@ export default function WorkspaceLayout({
           return (
             <>
               <LocalMenu
+                titleData={titleData}
                 collapsed
                 sidebarMode={sidebarMode}
                 onModeClick={(mode, e) => handleCollapsedModeClick(mode, e)}
@@ -278,6 +282,7 @@ export default function WorkspaceLayout({
             </div>
             <div style={{ flex: 1, display: 'flex', overflow: 'hidden' }}>
               <LocalMenu
+                titleData={titleData}
                 collapsed={false}
                 sidebarMode={sidebarMode}
                 onModeClick={switchSidebarMode}
@@ -298,6 +303,7 @@ export default function WorkspaceLayout({
       {mobile && (() => {
         const sheet = (
           <MobileNavSheet
+                titleData={titleData}
             open={sidebarOpen}
             onClose={() => setSidebarOpen(false)}
             project={project}

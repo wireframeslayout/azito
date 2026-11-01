@@ -21,6 +21,7 @@ export interface WindowPaneLayout {
 export interface Window {
   id: number;
   ownerType: 'project' | 'task';
+  role?: string;
   projectId?: number;
   taskId?: number;
   serverName: string;

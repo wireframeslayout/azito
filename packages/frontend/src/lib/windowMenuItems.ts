@@ -1,3 +1,5 @@
+import { formatWindowId, resolveWindowTitle, formatWindowTitleLine, type MuxRef } from '@azito/shared';
+import { windowTitleInput } from './windowDisplay';
 import { canActOnMux } from './windowRowPlan';
 
 export type WindowMenuItemKind =
@@ -34,6 +36,7 @@ export interface WindowMenuParams {
   paneHandle?: string;
   /** misao cannot set a pane title. */
   canRenamePane: boolean;
+  muxKind?: 'tmux' | 'misao';
   windowType?: string;
   agentSessionId?: string;
   sleeping?: boolean;
@@ -52,7 +55,7 @@ export function buildWindowMenuItems(params: WindowMenuParams): WindowMenuItemDe
   if (online && params.paneTarget && params.canRenamePane) {
     items.push({ kind: 'rename-pane', labelKey: 'windows.renamePane', disabled, paneOrdinal });
   }
-  if (online) {
+  if (online && params.muxKind !== 'misao') {
     items.push({ kind: 'capture-panes', labelKey: 'windows.capturePanes', disabled });
   }
   if (online && params.windowType === 'agent' && params.agentSessionId && !params.sleeping) {
@@ -74,4 +77,10 @@ export function buildWindowMenuItems(params: WindowMenuParams): WindowMenuItemDe
     items.push({ kind: 'delete-window', labelKey: 'windows.deleteWindow', danger: true, disabled });
   }
   return items;
+}
+
+export function windowMenuInfo(w: { id: number; tmuxTarget: string; label?: string; labelSource?: 'auto' | 'user'; workerType?: string; windowType?: string; muxRef?: MuxRef }): string {
+  return w.muxRef?.kind === 'misao'
+    ? `misao · ${formatWindowTitleLine(resolveWindowTitle(windowTitleInput(w)))}`
+    : `${formatWindowId(w.id)} · tmux ${w.tmuxTarget}`;
 }

@@ -1,8 +1,12 @@
-import { useCallback } from 'react';
+import { useCallback, useMemo } from 'react';
+import { StorageFilesBackend } from './files/backend/StorageFilesBackend';
+import { TextFileEditor } from './files/TextFileEditor';
 import { useTranslation } from 'react-i18next';
 import { useToast } from '../hooks/useToast';
 import { Icon } from './ui/Icon';
 import { useBlobUrl } from '../hooks/useBlobUrl';
+import { useFileDownload } from './files/useFileDownload';
+import { Button } from './ui';
 
 function formatSize(bytes: number): string {
   if (bytes < 1024) return `${bytes} B`;
@@ -34,9 +38,10 @@ interface StorageFilePreviewProps {
   filename: string;
   originalName: string;
   size: number;
+  onDirtyChange?: (dirty: boolean) => void;
 }
 
-export default function StorageFilePreview({ projectId, filename, originalName, size }: StorageFilePreviewProps) {
+function MediaStorageFilePreview({ projectId, filename, originalName, size }: StorageFilePreviewProps) {
   const { t } = useTranslation('files');
   const { showToast } = useToast();
   const apiPath = `/projects/${projectId}/storage/${encodeURIComponent(filename)}/raw`;
@@ -169,4 +174,13 @@ export default function StorageFilePreview({ projectId, filename, originalName, 
       )}
     </div>
   );
+}
+
+export default function StorageFilePreview(props: StorageFilePreviewProps) {
+  const backend = useMemo(() => new StorageFilesBackend(props.projectId), [props.projectId]);
+  const { t } = useTranslation('files');
+  const download = useFileDownload(backend, props.filename, props.originalName);
+  if (isPdf(props.originalName) || isImage(props.originalName)) return <MediaStorageFilePreview {...props} />;
+  const downloadAction = <Button size="sm" variant="ghost" onClick={() => void download()} title={t('explorer.download')}><Icon name="download" size={14} /> {t('explorer.download')}</Button>;
+  return <TextFileEditor backend={backend} path={props.filename} name={props.originalName} headerActions={downloadAction} downloadAction={downloadAction} onDirtyChange={props.onDirtyChange} />;
 }

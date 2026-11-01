@@ -368,6 +368,12 @@ const MUX_UNAVAILABLE_HOLD_MS = 120_000;
  */
 const SCREEN_CHECK_CONCURRENCY = 4;
 
+/** Only a first pane whose foreground command is known to be a shell; an unknown command or window is not. */
+function isFirstPaneKnownShell(window: TmuxWindow | null): boolean {
+  const firstPane = window?.panes[0];
+  return !!firstPane && firstPane.commandKnown !== false && isBareShellCommand(firstPane.command);
+}
+
 /** Whether the window lives in the misao mux: told by the window's own ref, not by the server's default mux. */
 function isMisaoWindow(w: Pick<AgentWindow, 'muxRef'>): boolean {
   return w.muxRef?.kind === 'misao';
@@ -1407,7 +1413,9 @@ export class AgentActivityMonitor {
       // rather than polled. Bypasses Tier 1/2/3 but sits below a supervisor
       // (whose rules are AZITO-controlled).
       const muxState = this.muxStates.get(key);
-      if (muxState) {
+      const shellBytes = muxState?.status === 'working' && muxState.decidedBy === 'bytes' && isMisaoWindow(w)
+        && isFirstPaneKnownShell(findLiveWindow(sessionsByServer.get(w.serverName) ?? [], w.tmuxTarget, w.muxRef));
+      if (muxState && !shellBytes) {
         const mapped = this.mapMuxStatus(muxState.status);
         if (mapped) {
           if (mapped.state === 'idle') {

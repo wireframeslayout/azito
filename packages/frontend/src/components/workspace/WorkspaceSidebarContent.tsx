@@ -1,3 +1,5 @@
+import type { ActivityTitleData } from '../../lib/windowDisplay';
+import { storageRelativeKey } from '../files/storageKey';
 import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import type { SidebarMode, Project, Session, Window, Task } from '../../pages/workspace/types';
@@ -19,6 +21,7 @@ import ObjectsSidebar from './ObjectsSidebar';
 import TasksSidebar from './TasksSidebar';
 
 interface WorkspaceSidebarContentProps {
+  titleData: ActivityTitleData;
   sidebarMode: SidebarMode;
   project: Project | null;
   sessionData: Record<string, Session[]>;
@@ -77,6 +80,7 @@ interface WorkspaceSidebarContentProps {
 
 
 export default function WorkspaceSidebarContent({
+  titleData,
   sidebarMode,
   project,
   sessionData,
@@ -183,6 +187,7 @@ export default function WorkspaceSidebarContent({
       )}
       {sidebarMode === 'tasks' && project && (
         <TasksSidebar
+          titleData={titleData}
           tasks={tasks}
           onOpenTask={(taskId, title) => {
             openTask(taskId, title);
@@ -280,7 +285,7 @@ export default function WorkspaceSidebarContent({
       )}
       {sidebarMode === 'storage' && project && (
         <StoragePanel projectId={project.id} activeTabId={activeTabId} onFilePreview={(f) => {
-          const fn = f.key.split('/').pop() || '';
+          const fn = storageRelativeKey(project.id, f.key);
           openStorageFileRaw(project.id, fn, f.originalName, f.size);
           if (mobile) onCloseMobileSidebar();
         }} />

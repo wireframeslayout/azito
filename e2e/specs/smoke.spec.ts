@@ -28,10 +28,17 @@ test('ログイン → プロジェクト作成 → ウィンドウ登録 → �
 
   // ── プロジェクト作成（実フォーム） ──
   const projectName = 'e2e-smoke-project';
+  const servers = await harness.api<Array<{ name: string; type: string }>>('/servers');
+  expect(servers.map(({ name, type }) => ({ name, type }))).toEqual([{ name: 'local', type: 'local' }]);
   await page.goto(`${harness.baseUrl}/projects/new`);
   await page.getByPlaceholder('プロジェクト名').fill(projectName);
   await page.getByPlaceholder('project-slug').fill(projectName);
-  await page.getByRole('button', { name: 'プロジェクトを作成' }).click();
+  await page.getByRole('button', { name: '次へ' }).click();
+  await expect(page.getByRole('radio', { name: /まだ決めない/ })).toBeChecked();
+  await page.getByRole('button', { name: '次へ' }).click();
+  await expect(page.getByText(projectName, { exact: true })).toBeVisible();
+  await expect(page.getByText('未定（あとで設定）')).toBeVisible();
+  await page.getByRole('button', { name: '作成', exact: true }).click();
   // 作成が成功するとプロジェクト一覧へ戻る（失敗時はフォームに留まってエラーが出る）。
   await expect(page).toHaveURL(/\/projects$/);
 
@@ -42,7 +49,7 @@ test('ログイン → プロジェクト作成 → ウィンドウ登録 → �
   // ── ウィンドウ登録 ──
   // 実 tmux ウィンドウが要るので、隔離 tmux 上に偽エージェントを立ててから登録する。
   const agent = await harness.startFakeAgent('smoke', 'agent', { supervised: false });
-  await harness.registerAgentWindow(project!.id, agent.target, { label: 'e2e-smoke-window' });
+  const windowId = await harness.registerAgentWindow(project!.id, agent.target, { label: 'e2e-smoke-window' });
 
   // ── オブジェクト一覧に現れる ──
   await page.goto(`${harness.baseUrl}/workspace/${project!.id}`);
@@ -55,7 +62,8 @@ test('ログイン → プロジェクト作成 → ウィンドウ登録 → �
     await expect(header).toBeVisible({ timeout: 20_000 });
     if (await header.getAttribute('aria-expanded') === 'false') await header.click();
   }
-  await expect(page.getByText('e2e-smoke-window').first()).toBeVisible({ timeout: 20_000 });
+  // 表示名はペインタイトルが優先されるため、登録したウィンドウを ID で確認する。
+  await expect(page.getByText(`W-${windowId}`, { exact: true })).toBeVisible({ timeout: 20_000 });
 
   // ── ステータスバーの稼働検知パネル ──
   // 表示資格（diagnosticsEnabled）はサーバー判定で、E2E ハブはソースコード版なので有効。

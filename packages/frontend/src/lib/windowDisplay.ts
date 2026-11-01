@@ -1,11 +1,12 @@
-import { parseMuxRef, type WindowTitleInput } from '@azito/shared';
+import { isMisaoWindowId, stripPaneSuffix, parseMuxRef, resolveWindowTitle, formatWindowTitleLine, type WindowTitleInput } from '@azito/shared';
+import type { Session } from '../pages/workspace/types';
 
 
 export interface WindowIndexEntry {
   id: number;
   serverName: string;
   tmuxTarget: string;
-  label?: string;
+  label?: string | null;
   labelSource?: 'auto' | 'user';
   workerType?: string;
   windowType?: string;
@@ -39,6 +40,43 @@ export function sessionWindowLabel(sessionName: string, win: { name: string; ref
 }
 
 /** Adapt activity rows to the shared window title input. */
-export function activeWindowTitleInput(row: { windowId?: number; target: string; paneTitle?: string; paneName?: string; paneCommand?: string; label?: string; labelSource?: 'auto' | 'user'; taskTitle?: string; workerType?: string; windowType?: string }): WindowTitleInput {
-  return { id: row.windowId, label: row.label, labelSource: row.labelSource, paneTitle: row.paneTitle ?? row.paneName, paneCommand: row.paneCommand, taskTitle: row.taskTitle, workerType: row.workerType, windowType: row.windowType, tmuxTarget: row.target };
+export function activeWindowTitleInput(row: { windowId?: number; target: string; paneTitle?: string; paneName?: string; paneCommand?: string; label?: string | null; labelSource?: 'auto' | 'user'; taskTitle?: string; workerType?: string; windowType?: string }): WindowTitleInput {
+  return { id: row.windowId, label: row.label, labelSource: row.labelSource, paneTitle: row.paneTitle || row.paneName, paneCommand: row.paneCommand, taskTitle: row.taskTitle, workerType: row.workerType, windowType: row.windowType, tmuxTarget: row.target };
+}
+
+export interface ActivityTitleData {
+  windowById: Map<number, WindowIndexEntry>;
+  taskById: Map<number, { title: string }>;
+}
+
+export function resolveActivityTitle(row: Parameters<typeof activeWindowTitleInput>[0] & { taskId?: number }, data: ActivityTitleData): string {
+  const win = row.windowId == null ? undefined : data.windowById.get(row.windowId);
+  const taskId = win?.taskId ?? row.taskId;
+  const task = taskId == null ? undefined : data.taskById.get(taskId);
+  return formatWindowTitleLine(resolveWindowTitle(activeWindowTitleInput({
+    ...row,
+    label: win?.label === null ? undefined : win?.label ?? row.label,
+    labelSource: win?.label === null ? win.labelSource : win?.labelSource ?? row.labelSource,
+    workerType: win?.workerType ?? row.workerType,
+    windowType: win?.windowType ?? row.windowType,
+    taskTitle: task?.title ?? row.taskTitle,
+  })));
+}
+
+/** Resolve an unregistered misao ref within one server's sessions. */
+export function misaoRefWindowTitle(sessions: Session[], ref: string, pane: number, fallback: string): string {
+  const match = sessions.flatMap((session) => session.windows.map((window) => ({ session, window })))
+    .find(({ window }) => window.ref === ref);
+  const name = match ? sessionWindowLabel(match.session.name, match.window) : fallback;
+  const display = resolveWindowTitle({ label: name, tmuxTarget: fallback });
+  const suffix = match && match.window.panes.length > 1 ? `.${pane}` : '';
+  return `${formatWindowTitleLine(display)}${suffix}`;
+}
+
+export function isMisaoTarget(target: string): boolean {
+  return isMisaoWindowId(stripPaneSuffix(target).split(':').pop() ?? '');
+}
+
+export function windowTitleInput(w: { id?: number; label?: string | null; labelSource?: 'auto' | 'user'; workerType?: string | null; windowType?: string }): WindowTitleInput {
+  return { id: w.id, label: w.label ?? undefined, labelSource: w.labelSource, workerType: w.workerType ?? undefined, windowType: w.windowType };
 }

@@ -61,8 +61,8 @@ import { ACTIVE_PROJECT_KEY, getProjectColorFallback } from './workspace/types';
 import { buildObjectSections } from '../lib/workspaceObjects';
 import { GlobalFocusProvider, useGlobalFocus } from '../hooks/useGlobalFocus';
 import { parseTerminalTabId, terminalRefDisplayLabel, type TerminalRef } from '../lib/terminalRef';
-import { resolveWindowTitle, formatWindowTitleLine } from '@azito/shared';
-import { buildWindowIndex } from '../lib/windowDisplay';
+import { resolveWindowTitle, formatWindowTitleLine, parseMuxRef } from '@azito/shared';
+import { buildWindowIndex, misaoRefWindowTitle } from '../lib/windowDisplay';
 import { findTaskByTarget as findTaskByTargetLib } from '../lib/findTaskByTarget';
 import { describeUnsupportedOs, isUnsupportedOsAnswer } from '../lib/hostFeature';
 export default function Workspace() {
@@ -104,7 +104,15 @@ function WorkspaceInner() {
     setThemeProjectId(activeProjectId || null);
   }, [activeProjectId, setThemeProjectId]);
 
-  const { tabs, activeTabId, setActiveTabId, connectPane: connectPaneRaw, connectTarget: connectTargetRaw, migrateSavedTabs, closeTab, retargetTabs: retargetTabsRaw, retargetTabPane: retargetTabPaneRaw, openFile: openFileRaw, openUnit: openUnitRaw, openTask: openTaskRaw, openTaskForm: openTaskFormRaw, openUnitForm, openSidekickForm, openIssue: openIssueRaw, openIssueList: openIssueListRaw, openServer: _openServerTab, openBrowser, updateBrowserActiveTab, openStorageFile: openStorageFileRaw, openDiff: openDiffRaw, openProjectTasks, openSettings: openSettingsRaw, togglePin, setTabDirty } = useTabPersistence();
+  const confirm = useConfirm();
+  // Every way of opening a tab replaces the unpinned ones; unsaved edits among them go only after this agrees.
+  const confirmDiscardDirtyTabs = useCallback((discarded: PersistedTab[]): Promise<boolean> => confirm({
+    title: t('workspace:tab.replaceDirtyTitle'),
+    message: t('workspace:tab.replaceDirtyMessage', { name: discarded.map((tab) => tab.label).join(', ') }),
+    confirmLabel: t('workspace:tab.replaceDirtyConfirm'),
+    danger: true,
+  }), [confirm, t]);
+  const { tabs, activeTabId, setActiveTabId, connectPane: connectPaneRaw, connectTarget: connectTargetRaw, migrateSavedTabs, closeTab, retargetTabs: retargetTabsRaw, retargetTabPane: retargetTabPaneRaw, openFile: openFileRaw, openUnit: openUnitRaw, openTask: openTaskRaw, openTaskForm: openTaskFormRaw, openUnitForm, openSidekickForm, openIssue: openIssueRaw, openIssueList: openIssueListRaw, openServer: _openServerTab, openBrowser, updateBrowserActiveTab, openStorageFile: openStorageFileRaw, openDiff: openDiffRaw, openProjectTasks, openSettings: openSettingsRaw, togglePin, setTabDirty } = useTabPersistence(undefined, { confirmDiscard: confirmDiscardDirtyTabs });
 
   const openServer = useCallback((serverName: string) => {
     navigate(paths.server(serverName, 'overview'));
@@ -197,7 +205,6 @@ function WorkspaceInner() {
   const { menu: contextMenu, show: showContextMenu, showAt: showContextMenuAt, hide: hideContextMenu } = useContextMenu();
 
   const { showToast } = useToast();
-  const confirm = useConfirm();
   const { recordOpened: recordTaskOpened } = useRecentTasks();
 
   useNotificationChannel({
@@ -590,6 +597,14 @@ function WorkspaceInner() {
     buildWindowIndex(allProjects, allTasks, project),
   [allProjects, allTasks, project]);
 
+  const taskById = useMemo(() => {
+    const map = new Map<number, Task>();
+    for (const t of allTasks) map.set(t.id, t);
+    return map;
+  }, [allTasks]);
+
+  const titleData = useMemo(() => ({ windowById, taskById }), [windowById, taskById]);
+
   const findTaskByTarget = useCallback(
     (target: string) => findTaskByTargetLib(target, [tasks, allTasks], windowById),
     [tasks, allTasks, windowById],
@@ -884,12 +899,6 @@ function WorkspaceInner() {
     return map;
   }, [windowById]);
 
-  const taskById = useMemo(() => {
-    const map = new Map<number, Task>();
-    for (const t of allTasks) map.set(t.id, t);
-    return map;
-  }, [allTasks]);
-
   const sessionWindowByWindowId = useMemo(() => {
     const map = new Map<number, { panes: Array<{ index: number; title: string; command: string; active?: boolean }> }>();
     for (const sessions of Object.values(sessionData)) {
@@ -978,6 +987,9 @@ function WorkspaceInner() {
     // 旧形式 session:index.pane のタブ
     const m = target.match(/^(.+):(\d+)\.(\d+)$/);
     if (!m) {
+      if (ref?.kind === 'ref' && parseMuxRef(ref.ref).kind === 'misao') {
+        return { label: misaoRefWindowTitle(sessionData[serverName] ?? [], ref.ref, ref.pane, t('common:labels.window')) };
+      }
       const fallbackName = ref ? terminalRefDisplayLabel(ref) : target;
       const fallbackDisplay = resolveWindowTitle({ tmuxTarget: fallbackName });
       return { label: formatWindowTitleLine(fallbackDisplay) };
@@ -1033,7 +1045,7 @@ function WorkspaceInner() {
     });
     const fallbackTitleWithPane = hasManyPanes ? `${fallbackDisplay.title}${paneSuffix}` : fallbackDisplay.title;
     return { label: fallbackTitleWithPane };
-  }, [sessionData, sessionWindowByWindowId, sessionWindowIdByRef, windowById, windowByLegacyKey, taskById]);
+  }, [sessionData, sessionWindowByWindowId, sessionWindowIdByRef, windowById, windowByLegacyKey, taskById, t]);
 
   const buildTabItem = useCallback((tab: PersistedTab): TabItem => {
     const iconName: IconName | null = tab.type === 'terminal' ? 'terminal'
@@ -1147,9 +1159,9 @@ function WorkspaceInner() {
   // としての空状態（既存の dragHint）はそのまま維持する。
   const renderPaneEmpty = useCallback(() => (
     tabs.length === 0
-      ? <HomeFeed allTasks={allTasks} allProjects={allProjects} openTask={openTaskFromActiveWindow} connectPane={connectPaneFromActiveWindow} onAddWindow={handleOpenAddTabFromSwitcher} />
+      ? <HomeFeed titleData={titleData} allTasks={allTasks} allProjects={allProjects} openTask={openTaskFromActiveWindow} connectPane={connectPaneFromActiveWindow} onAddWindow={handleOpenAddTabFromSwitcher} />
       : <EmptyState title={t('workspace:pane.dragHint')} />
-  ), [tabs.length, allTasks, allProjects, openTaskFromActiveWindow, connectPaneFromActiveWindow, handleOpenAddTabFromSwitcher, t]);
+  ), [tabs.length, titleData, allTasks, allProjects, openTaskFromActiveWindow, connectPaneFromActiveWindow, handleOpenAddTabFromSwitcher, t]);
 
   if (!project) {
     if (projectsLoaded && allProjects.length === 0) {
@@ -1160,6 +1172,7 @@ function WorkspaceInner() {
 
   const sidebarContent = (
     <WorkspaceSidebarContent
+      titleData={titleData}
       sidebarMode={sidebarMode}
       project={project}
       sessionData={sessionData}
@@ -1220,6 +1233,7 @@ function WorkspaceInner() {
 
   const activeWindowsSection = (
     <ActiveWindowsSection
+      titleData={titleData}
       connectPane={connectPaneFromActiveWindow}
       openTask={openTaskFromActiveWindow}
       taskWindows={taskWindows}
@@ -1325,6 +1339,7 @@ function WorkspaceInner() {
 
   return (
     <WorkspaceLayout
+      titleData={titleData}
       mobile={mobile}
       sidebarMode={sidebarMode}
       switchSidebarMode={handleSwitchSidebarMode}
@@ -1385,14 +1400,14 @@ function WorkspaceInner() {
 
             <div style={{ flex: 1, position: 'relative', background: 'var(--ws-content)' }}>
               {tabs.length === 0 && (
-                <HomeFeed allTasks={allTasks} allProjects={allProjects} openTask={openTaskFromActiveWindow} connectPane={connectPaneFromActiveWindow} onAddWindow={handleOpenAddTabFromSwitcher} />
+                <HomeFeed titleData={titleData} allTasks={allTasks} allProjects={allProjects} openTask={openTaskFromActiveWindow} connectPane={connectPaneFromActiveWindow} onAddWindow={handleOpenAddTabFromSwitcher} />
               )}
 
               {tabs.map((tab) => renderTabContent(tab, { position: 'absolute', inset: 0 }, tab.id === activeTabId, closeTabAndRefreshBrowser))}
             </div>
 
             {(() => {
-              const bar = <MobileStatusBar allTasks={allTasks} openTask={openTaskFromActiveWindow} connectPane={connectPaneFromActiveWindow} />;
+              const bar = <MobileStatusBar titleData={titleData} allTasks={allTasks} openTask={openTaskFromActiveWindow} connectPane={connectPaneFromActiveWindow} />;
               // mobile-shell-slot と同じ理由（Layout がグローバルページ表示中にこのサブツリーを
               // display:none で隠しても、ポータル先はその外側にあるため常駐し続ける）で
               // mobile-status-slot（Layout.tsx）へ portal する。

@@ -1,13 +1,8 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 
-// タスクが「実行中」（何らかの形で走っている/一時停止中で継続の見込みがある）とみなす status 集合。
-// フェーズ実行中の主状態は 'running'、follow-up 中断時は 'in_progress'、計画承認待ち/質問回答待ちは
-// 'phase_review'/'waiting_input'。他の実行中判定（例: オペレーション停止メニューの表示条件）でも
-// この集合を再利用する。
-export const RUNNING_STATUSES = new Set([
-  'running', 'in_progress', 'phase_review', 'waiting_input',
-]);
+import { RUNNING_STATUSES, statusLabelKey } from '../../lib/taskStatus';
+export { RUNNING_STATUSES } from '../../lib/taskStatus';
 
 // 'pending_approval' is locked the same way — never a MANUAL_OPTIONS target
 // and never selectable while current (see isDisabled below). Manually
@@ -33,16 +28,8 @@ const badgeColors: Record<string, { bg: string; color: string }> = {
   archived: { bg: 'var(--bg-elevated)', color: 'var(--text-dim)' },
 };
 
-const STATUS_KEY_MAP: Record<string, string> = {
-  waiting_input: 'waitingInput',
-  phase_review: 'phaseReview',
-  pending_approval: 'pendingApproval',
-  in_progress: 'inProgress',
-};
-
 function statusLabel(status: string, t: (key: string) => string): string {
-  const key = STATUS_KEY_MAP[status] ?? status;
-  return t(`status.${key}`);
+  return t(`status.${statusLabelKey(status)}`);
 }
 
 interface StatusDropdownProps {

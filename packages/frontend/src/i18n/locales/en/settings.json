@@ -253,6 +253,7 @@
     "notice": "The shortcut does not respond while typing in a terminal or input field.",
     "maximize": "Open maximize",
     "conflict": "This key is already assigned to another action.",
-    "storageError": "Could not save the settings."
+    "storageError": "Could not save the settings.",
+    "intervalOnlySpace": "Available when Space twice is selected."
   }
 }

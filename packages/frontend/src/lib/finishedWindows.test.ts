@@ -1,3 +1,4 @@
+import { mergeFinishedEntry } from "./finishedWindows";
 import { describe, it, expect } from 'vitest';
 import {
   activityKey,
@@ -99,5 +100,21 @@ describe('removeDeletedFinished', () => {
       .toEqual([rows[3], rows[4]]);
     expect(removeDeletedFinished(rows, { serverName: 'remote', target: 'other', windowId: 1 }))
       .toEqual([rows[1], rows[2], rows[3], rows[4]]);
+  });
+});
+
+describe('removeDeletedFinished pane targets', () => {
+  it.each([['azito:win--a.1', 'azito:win--a'], ['azito:win--a', 'azito:win--a.2']])('matches %s with %s when an ID is missing', (rowTarget, deletedTarget) => {
+    expect(removeDeletedFinished([entry({ target: rowTarget, windowId: 1 })], { serverName: 'local', target: deletedTarget })).toEqual([]);
+    expect(removeDeletedFinished([entry({ target: rowTarget })], { serverName: 'local', target: deletedTarget, windowId: 1 })).toEqual([]);
+  });
+});
+
+describe('mergeFinishedEntry', () => {
+  it('retains prior display metadata when completion omits it', () => {
+    const previous = { serverName: 'local', target: 's:w', paneName: 'Latest', taskTitle: 'Task', paneTitle: 'Pane' };
+    const result = mergeFinishedEntry({ serverName: 'local', target: 's:w', paneName: '', finishedAt: 1 }, previous);
+    expect(result).toMatchObject({ paneName: 'Latest', taskTitle: 'Task', paneTitle: 'Pane' });
+    expect(JSON.parse(JSON.stringify(result))).toEqual(result);
   });
 });

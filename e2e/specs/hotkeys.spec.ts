@@ -5,8 +5,9 @@ test('キーボード設定が再読込後も維持される', async ({ app, har
   await app.goto(`${harness.baseUrl}/settings/keyboard`);
   const search = app.getByRole('tablist', { name: '検索を開く' });
   const interval = app.getByRole('tablist', { name: '2 回押しの間隔' });
-  await search.getByRole('tab', { name: 'Ctrl+K' }).click();
   await interval.getByRole('tab', { name: '0.5 秒' }).click();
+  await search.getByRole('tab', { name: 'Ctrl+K' }).click();
+  await expect(interval.getByRole('tab', { name: '0.5 秒' })).toBeDisabled();
   expect(await app.evaluate(() => localStorage.getItem('azito-hotkeys'))).not.toBeNull();
   expect(await app.evaluate(() => localStorage.getItem('azito-hotkeys-chord-ms'))).toBe('500');
   expect(await app.evaluate(() => document.documentElement.scrollWidth <= document.documentElement.clientWidth)).toBe(true);

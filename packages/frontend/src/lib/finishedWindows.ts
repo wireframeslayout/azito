@@ -20,7 +20,7 @@ export interface FinishedEntry {
   paneName?: string;
 }
 
-import { windowKey } from '@azito/shared';
+import { isSameWindowTarget, windowKey } from '@azito/shared';
 
 export function activityKey(serverName: string, target: string, windowId?: number): string {
   if (windowId != null) return `wid:${windowId}`;
@@ -64,7 +64,24 @@ export function removeDeletedFinished(
 ): FinishedEntry[] {
   const kept = entries.filter((entry) => {
     if (entry.windowId != null && deleted.windowId != null) return entry.windowId !== deleted.windowId;
-    return entry.serverName !== deleted.serverName || entry.target !== deleted.target;
+    return entry.serverName !== deleted.serverName || !isSameWindowTarget(entry.target, deleted.target);
   });
   return kept.length === entries.length ? entries : kept;
+}
+
+/** Preserve display metadata omitted by the completion event. */
+export function mergeFinishedEntry(entry: FinishedEntry, previous?: Omit<FinishedEntry, 'finishedAt'>): FinishedEntry {
+  return {
+    ...entry,
+    taskId: entry.taskId ?? previous?.taskId,
+    projectId: entry.projectId ?? previous?.projectId,
+    label: entry.label ?? previous?.label,
+    labelSource: entry.labelSource ?? previous?.labelSource,
+    taskTitle: entry.taskTitle ?? previous?.taskTitle,
+    workerType: entry.workerType ?? previous?.workerType,
+    windowType: entry.windowType ?? previous?.windowType,
+    paneTitle: entry.paneTitle || previous?.paneTitle,
+    paneCommand: entry.paneCommand ?? previous?.paneCommand,
+    paneName: entry.paneName || previous?.paneName,
+  };
 }

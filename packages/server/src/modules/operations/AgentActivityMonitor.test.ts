@@ -2764,6 +2764,74 @@ describe('AgentActivityMonitor', () => {
       expect(monitor.snapshot()[0]).toEqual(expect.objectContaining({ running: true }));
     });
 
+    it.each([
+      ['bash', true, 'bytes', false],
+      ['claude', true, 'bytes', true],
+      ['bash', false, 'bytes', true],
+      ['bash', true, 'title', true],
+      ['bash', true, 'profile', true],
+    ])('applies the shell exception only to known shell bytes (%s, %s, %s)', async (command, commandKnown, decidedBy, tier0) => {
+      arrange();
+      listSessions.mockImplementation(async () => {
+        const sessions = makeSessions('azito', 'agent-1', 0, paneActivity, [makePane({ command, commandKnown })]);
+        sessions[0].windows[0].ref = MISAO_REF;
+        return sessions;
+      });
+      monitor.recordMuxSignal('local', 'azito:agent-1', 'working', { decidedBy });
+      await drain();
+      expect(diagnosticsRow()?.decidedBy === 'tier0_mux').toBe(tier0);
+    });
+
+    it('releases bytes working when the first pane returns to a shell', async () => {
+      arrange();
+      monitor.recordMuxSignal('local', 'azito:agent-1', 'working', { decidedBy: 'bytes' });
+      await drain();
+      expect(diagnosticsRow()?.decidedBy).toBe('tier0_mux');
+      listSessions.mockImplementation(async () => {
+        const sessions = makeSessions('azito', 'agent-1', 0, nowSec(), [makePane({ command: 'bash' })]);
+        sessions[0].windows[0].ref = MISAO_REF;
+        return sessions;
+      });
+      await monitor.tick();
+      expect(diagnosticsRow()?.decidedBy).not.toBe('tier0_mux');
+      expect(stopPayloads()).toEqual([expect.objectContaining({ reason: 'offline' })]);
+    });
+
+    it('uses the first pane even when another pane is running an agent', async () => {
+      arrange();
+      listSessions.mockImplementation(async () => {
+        const sessions = makeSessions('azito', 'agent-1', 0, nowSec(), [makePane({ command: 'bash' }), makePane({ index: 2, command: 'claude' })]);
+        sessions[0].windows[0].ref = MISAO_REF;
+        return sessions;
+      });
+      monitor.recordMuxSignal('local', 'azito:agent-1', 'working', { decidedBy: 'bytes' });
+      await drain();
+      expect(diagnosticsRow()?.decidedBy).not.toBe('tier0_mux');
+    });
+
+    it('keeps bytes working when the workspace listing is unavailable', async () => {
+      arrange();
+      listSessions.mockRejectedValue(new Error('unavailable'));
+      monitor.recordMuxSignal('local', 'azito:agent-1', 'working', { decidedBy: 'bytes' });
+      await drain();
+      expect(diagnosticsRow()?.decidedBy).toBe('tier0_mux');
+    });
+
+    it('falls through an empty codex title to the heuristic and its unknown stop reason', async () => {
+      arrange({ muxRef: MISAO_REF, workerType: 'codex' });
+      listSessions.mockImplementation(async () => {
+        const sessions = makeSessions('azito', 'agent-1', 0, nowSec() - 100, [makePane({ command: 'codex', title: '' })]);
+        sessions[0].windows[0].ref = MISAO_REF;
+        return sessions;
+      });
+      monitor.recordMuxSignal('local', 'azito:agent-1', 'working', { decidedBy: 'title' });
+      await drain();
+      monitor.recordMuxSignal('local', 'azito:agent-1', 'unknown');
+      await drain();
+      expect(diagnosticsRow()).toEqual(expect.objectContaining({ decidedBy: 'tier3_heuristic', state: 'idle' }));
+      expect(stopPayloads()).toEqual([expect.objectContaining({ reason: 'unknown' })]);
+    });
+
     it('exposes the mux material (status, rule name, time) in diagnostics', async () => {
       arrange();
       monitor.recordMuxSignal('local', 'azito:agent-1', 'working', { decidedBy: 'bytes' });

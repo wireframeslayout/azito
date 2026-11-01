@@ -1,3 +1,5 @@
+import { useOpenGlobalSearch } from '../search/GlobalSearch';
+import type { ActivityTitleData } from '../../lib/windowDisplay';
 import { type CSSProperties, type ReactNode, useEffect, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { useNavigate } from 'react-router-dom';
@@ -29,6 +31,7 @@ const MODE_TITLE_KEY: Record<SidebarMode, string> = {
 };
 
 interface MobileNavSheetProps {
+  titleData: ActivityTitleData;
   open: boolean;
   onClose: () => void;
   project: { id: number; name: string } | null;
@@ -62,6 +65,7 @@ const headerStyle: CSSProperties = {
  * サイドバー・レール表示には一切関与しない（WorkspaceLayout 側で mobile 分岐時のみ描画）。
  */
 export function MobileNavSheet({
+  titleData,
   open,
   onClose,
   project,
@@ -77,10 +81,11 @@ export function MobileNavSheet({
 }: MobileNavSheetProps) {
   const { t } = useTranslation(['workspace', 'projects', 'common']);
   const navigate = useNavigate();
+  const openSearch = useOpenGlobalSearch();
   const [stack, setStack] = useState<StackEntry[]>(['menu']);
   const [activeWindowsOpen, setActiveWindowsOpen] = useState(false);
 
-  const { totalCount: awCount, blockedCount: awBlockedCount } = useActiveWindowRows();
+  const { totalCount: awCount, blockedCount: awBlockedCount } = useActiveWindowRows(titleData);
   const currentProjectItem = allProjects.find((p) => p.id === project?.id) ?? null;
 
   // シートを開き直すたびにメニュー階層をリセットする（前回どこまで潜っていたかを持ち越さない）。
@@ -172,6 +177,11 @@ export function MobileNavSheet({
             <div style={{ flex: 1, overflow: 'auto', display: 'flex', flexDirection: 'column' }}>
               {top === 'menu' && (
                 <MobileNavMenu
+                  onOpenSearch={() => {
+                    const trigger = document.querySelector<HTMLElement>('[data-mobile-nav-trigger]');
+                    onClose();
+                    openSearch(trigger);
+                  }}
                   project={project ? { id: project.id, name: project.name, icon: currentProjectItem?.icon, color: currentProjectItem?.color } : null}
                   onOpenProjectSwitch={() => push('projectSwitch')}
                   objectsCount={objectsCount}
@@ -198,6 +208,7 @@ export function MobileNavSheet({
 
       {activeWindowsOpen && connectPane && openTask && (
         <MobileActiveWindowsPanel
+                titleData={titleData}
           onClose={() => setActiveWindowsOpen(false)}
           connectPane={connectPane}
           openTask={openTask}
