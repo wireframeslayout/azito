@@ -13,6 +13,7 @@ function baseWindow(overrides: Partial<Omit<Window, 'id' | 'createdAt'>> = {}): 
     serverName: 'local-server',
     tmuxTarget: 'proj:win1',
     label: null,
+    labelSource: 'auto',
     isPrimary: false,
     windowType: 'terminal',
     workerType: null,
@@ -224,5 +225,22 @@ describe('SqliteWindowRepository.adoptForTask', () => {
     expect(w.projectId).toBe(projectId);
     expect(repo.findByTask(taskA).map((x) => x.id)).toEqual([id]);
     expect(repo.findByServerAndTarget('local-server', 'azito:win--qvp6')?.id).toBe(id);
+  });
+});
+
+
+describe('window label source', () => {
+  it('defaults new rows to auto and persists user labels atomically', () => {
+    const db = buildSeededDb();
+    const repo = new SqliteWindowRepository(db);
+    const projectId = insertProject(db, 'Labels');
+    const id = repo.add(baseWindow({ projectId, label: 'generated' }));
+    expect(repo.findById(id)?.labelSource).toBe('auto');
+    repo.update(id, { label: 'chosen', labelSource: 'user' });
+    expect(repo.findById(id)).toMatchObject({ label: 'chosen', labelSource: 'user' });
+    repo.add(baseWindow({ projectId, label: 'generated again' }));
+    expect(repo.findById(id)).toMatchObject({ label: 'chosen', labelSource: 'user' });
+    expect(() => db.prepare("UPDATE windows SET label_source = 'invalid' WHERE id = ?").run(id)).toThrow();
+    db.close();
   });
 });

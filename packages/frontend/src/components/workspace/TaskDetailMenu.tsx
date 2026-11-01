@@ -7,7 +7,7 @@ import { BrailleSpinner } from '../ui/WindowActivityIndicator';
 import { useAgentActivity } from '../../hooks/useAgentActivity';
 import { useLongPress, longPressStyle } from '../../hooks/useLongPress';
 import { isSameWindowTarget } from '@azito/shared';
-import { resolveWindowDisplay, formatWindowDisplayLabel } from '../../lib/windowDisplay';
+import { resolveWindowTitle, formatWindowTitleLine } from '@azito/shared';
 import StatusDropdown from '../task/StatusDropdown';
 import type { Task, Window } from '../../pages/workspace/types';
 
@@ -173,9 +173,9 @@ function WindowMenuRow({ w, taskTitle, isCurrent, onSelect, onLongPress, onDelet
       </span>
       <span style={{ display: 'flex', alignItems: 'center', gap: 6, flex: 1, minWidth: 0 }}>
         <span style={{ minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-          {formatWindowDisplayLabel(resolveWindowDisplay({
-            windowId: w.id,
-            label: w.label,
+          {formatWindowTitleLine(resolveWindowTitle({
+            id: w.id,
+            label: w.label, labelSource: w.labelSource,
             taskTitle,
             workerType: w.workerType,
             windowType: w.windowType,

@@ -697,6 +697,7 @@ function buildAgentActivityMonitor(
     (serverName, target, windowId, from, to, event) => {
       console.log(`[session-update] window=${windowId} ${(from ?? 'null').slice(0, 8)}→${to.slice(0, 8)} event=${event} server=${serverName} target=${target}`);
     },
+    repos.taskRepo,
   );
 }
 

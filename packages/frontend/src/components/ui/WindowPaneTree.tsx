@@ -8,7 +8,7 @@ import { PaneStateChip, DIMMED_PANE_OPACITY } from './PaneStateChip';
 import { Chip } from './Chip';
 import { isPaneLive } from '../../lib/paneState';
 import { paneRowBadge } from '../../lib/paneRowBadge';
-import { resolveWindowDisplay } from '../../lib/windowDisplay';
+import { resolveWindowTitle } from '@azito/shared';
 import { canActOnMux, planWindowRow } from '../../lib/windowRowPlan';
 import { EmptyWindowActions } from '../terminal/EmptyWindowActions';
 import { useGlobalFocus } from '../../hooks/useGlobalFocus';
@@ -16,7 +16,7 @@ import { useLongPress, longPressStyle } from '../../hooks/useLongPress';
 import type { Session, TmuxWindow, Window } from '../../pages/workspace/types';
 import type { MuxRef } from '@azito/shared';
 
-export type WindowItem = Pick<Window, 'id' | 'serverName' | 'tmuxTarget' | 'label' | 'taskId'> & { windowType?: string; workerType?: string; isPrimary?: boolean; sleeping?: boolean; muxRef?: MuxRef };
+export type WindowItem = Pick<Window, 'id' | 'serverName' | 'tmuxTarget' | 'label' | 'labelSource' | 'taskId'> & { windowType?: string; workerType?: string; isPrimary?: boolean; sleeping?: boolean; muxRef?: MuxRef };
 
 export type EmptyWindowOutcome = Parameters<React.ComponentProps<typeof EmptyWindowActions>['onChanged']>[0];
 
@@ -199,7 +199,7 @@ function OfflineRow({ w, active, onPaneClick, onContextMenu, onLongPress, extra,
   const bindLongPress = useLongPress();
   const clickable = !!onPaneClick;
   const subtitle = renderSubtitle?.(w);
-  const display = resolveWindowDisplay({ windowId: w.id, label: w.label, workerType: w.workerType, windowType: w.windowType, tmuxTarget: w.tmuxTarget });
+  const display = resolveWindowTitle({ id: w.id, label: w.label, labelSource: w.labelSource, workerType: w.workerType, windowType: w.windowType, tmuxTarget: w.tmuxTarget });
   const title = renderTitle?.(w) ?? display.title;
   const showIdChip = renderTitle?.(w) != null ? w.id != null : !!display.idLabel;
   return (
@@ -259,7 +259,7 @@ function SleepingRow({ w, active, onPaneClick, onContextMenu, onLongPress, extra
   const bindLongPress = useLongPress();
   const clickable = !!onPaneClick;
   const subtitle = renderSubtitle?.(w);
-  const display = resolveWindowDisplay({ windowId: w.id, label: w.label, workerType: w.workerType, windowType: w.windowType, tmuxTarget: w.tmuxTarget });
+  const display = resolveWindowTitle({ id: w.id, label: w.label, labelSource: w.labelSource, workerType: w.workerType, windowType: w.windowType, tmuxTarget: w.tmuxTarget });
   const title = renderTitle?.(w) ?? display.title;
   const showIdChip = renderTitle?.(w) != null ? w.id != null : !!display.idLabel;
   return (
@@ -398,8 +398,8 @@ function WindowRow({ w, sessionData, isActive, expandedWindows, onToggle, onUnzo
   const expandKey = `${w.id}-${sw.index}`;
   const isExpanded = expandedWindows.has(expandKey);
 
-  // resolveWindowDisplay を先に計算し、idChip の重複を防ぐ
-  const winDisplay = resolveWindowDisplay({ windowId: w.id, paneTitle: sw.panes[0]?.title, paneCommand: sw.panes[0]?.command, label: w.label, workerType: w.workerType, windowType: w.windowType, tmuxTarget: w.tmuxTarget });
+  // resolveWindowTitle を先に計算し、idChip の重複を防ぐ
+  const winDisplay = resolveWindowTitle({ id: w.id, paneTitle: (sw.panes.find(p => p.active) ?? sw.panes[0])?.title, paneCommand: (sw.panes.find(p => p.active) ?? sw.panes[0])?.command, label: w.label, labelSource: w.labelSource, workerType: w.workerType, windowType: w.windowType, tmuxTarget: w.tmuxTarget });
   const winTitle = renderTitle?.(w) ?? winDisplay.title;
   const winShowIdChip = renderTitle?.(w) != null ? w.id != null : !!winDisplay.idLabel;
 
