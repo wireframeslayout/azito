@@ -4,6 +4,7 @@ import type { ActiveWindowRow } from '../hooks/useActiveWindowRows';
 
 function row(overrides: Partial<ActiveWindowRow> & { key: string }): ActiveWindowRow {
   return {
+    title: 'Window',
     serverName: 's1',
     target: 'main:0',
     status: 'running',

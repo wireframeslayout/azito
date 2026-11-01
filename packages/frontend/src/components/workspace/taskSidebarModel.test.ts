@@ -22,6 +22,7 @@ function makeTask(overrides: Partial<Task> & { id: number }): Task {
 
 function makeActivity(taskId: number, status: 'running' | 'finished', extra?: Partial<ActiveWindowRow>): ActiveWindowRow {
   return {
+    title: 'Window',
     key: `srv/${taskId}`,
     serverName: 'srv',
     target: `task-${taskId}:0`,

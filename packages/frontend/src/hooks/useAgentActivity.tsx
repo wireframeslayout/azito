@@ -12,6 +12,7 @@ import {
   pruneFinished,
   removeFinished,
   upsertFinished,
+  mergeFinishedEntry,
   type FinishedEntry,
 } from '../lib/finishedWindows';
 
@@ -178,8 +179,9 @@ function saveFinishedEntries(entries: FinishedEntry[]): void {
 export function AgentActivityProvider({ children }: { children: React.ReactNode }) {
   // 稼働状態の単一ソース: GET /api/agent-activity のスナップショット＋`agent:activity` WS イベント。
   // 優先順位の調停（supervisor > hook > ペイン分類 > process/transcript）はすべてサーバー側の
-  // AgentActivityMonitor が行うため、ここには合成・補完ロジックを一切置かない。
+  // AgentActivityMonitor が行う。完了表示には最後の表示メタデータを保持する。
   const [entries, setEntries] = useState<Map<string, AgentActivityInfo>>(new Map());
+  const entriesRef = useRef(entries);
   const { activeTabId, focusedTarget } = useWorkspaceTargets();
   const browserFocused = useBrowserFocused();
   const [finished, setFinished] = useState<FinishedEntry[]>(loadFinishedEntries);
@@ -189,7 +191,11 @@ export function AgentActivityProvider({ children }: { children: React.ReactNode 
 
   const fetchSnapshot = () => {
     api<AgentActivitySnapshotEntry[]>('/agent-activity')
-      .then((snapshot) => setEntries(snapshotToMap(snapshot)))
+      .then((snapshot) => {
+        const next = snapshotToMap(snapshot);
+        entriesRef.current = next;
+        setEntries(next);
+      })
       .catch(() => { /* WS events will still keep state converging */ });
   };
 
@@ -201,32 +207,32 @@ export function AgentActivityProvider({ children }: { children: React.ReactNode 
   useNotificationChannel({
     onAgentActivity: (payload: AgentActivityPayload) => {
       const key = activityKey(payload.serverName, payload.target, payload.windowId);
-      setEntries((prev) => {
-        const next = new Map(prev);
-        if (payload.running) {
-          next.set(key, {
-            serverName: payload.serverName,
-            target: payload.target,
-            running: true,
-            source: payload.source,
-            taskId: payload.taskId,
-            windowId: payload.windowId,
-            projectId: payload.projectId,
-            label: payload.label,
-            labelSource: payload.labelSource,
-            taskTitle: payload.taskTitle,
-            workerType: payload.workerType,
-            windowType: payload.windowType,
-            paneTitle: payload.paneTitle,
-            paneCommand: payload.paneCommand,
-            status: payload.status ?? 'working',
-            paneName: payload.paneName,
-          });
-        } else {
-          next.delete(key);
-        }
-        return next;
-      });
+      const previous = entriesRef.current.get(key);
+      const next = new Map(entriesRef.current);
+      if (payload.running) {
+        next.set(key, {
+          serverName: payload.serverName,
+          target: payload.target,
+          running: true,
+          source: payload.source,
+          taskId: payload.taskId,
+          windowId: payload.windowId,
+          projectId: payload.projectId,
+          label: payload.label,
+          labelSource: payload.labelSource,
+          taskTitle: payload.taskTitle,
+          workerType: payload.workerType,
+          windowType: payload.windowType,
+          paneTitle: payload.paneTitle,
+          paneCommand: payload.paneCommand,
+          status: payload.status ?? 'working',
+          paneName: payload.paneName,
+        });
+      } else {
+        next.delete(key);
+      }
+      entriesRef.current = next;
+      setEntries(next);
       if (payload.running) return;
 
       if (payload.reason === 'deleted') {
@@ -235,7 +241,7 @@ export function AgentActivityProvider({ children }: { children: React.ReactNode 
       }
       if (payload.reason !== 'completed') return;
       if (isWatchedRef.current(payload.serverName, payload.target, payload.taskId)) return;
-      setFinished((cur) => upsertFinished(cur, {
+      setFinished((cur) => upsertFinished(cur, mergeFinishedEntry({
         serverName: payload.serverName,
         target: payload.target,
         windowId: payload.windowId,
@@ -250,7 +256,7 @@ export function AgentActivityProvider({ children }: { children: React.ReactNode 
         projectId: payload.projectId,
         finishedAt: Date.now(),
         paneName: payload.paneName,
-      }));
+      }, previous)));
     },
     onConnected: fetchSnapshot,
   });
