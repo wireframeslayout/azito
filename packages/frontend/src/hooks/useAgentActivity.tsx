@@ -3,7 +3,7 @@ import { api } from '../api/client';
 import type { AgentActivityPayload, WindowRenamedPayload } from '../types/notification';
 import { isSameWindowTarget, stripPaneSuffix } from '@azito/shared';
 import { isWatchedWindow } from '../lib/isWatched';
-import { renameActivity } from '../lib/renameActivity';
+import { matchesRename, renameActivity } from '../lib/renameActivity';
 import { DEFAULT_FINISHED_RETENTION, loadFinishedRetention, saveFinishedRetention, type FinishedRetentionSettings } from '../lib/finishedRetentionSettings';
 import { useNotificationChannel } from './useNotificationChannel';
 import { useWorkspaceTargets } from './useWorkspaceTargets';
@@ -230,9 +230,13 @@ export function AgentActivityProvider({ children }: { children: React.ReactNode 
   const applyRenames = <T extends { serverName: string; target: string; windowId?: number; label?: string; labelSource?: 'auto' | 'user' }>(entry: T): T =>
     activeRenames.current.reduce((current, event) => renameActivity(current, event), entry);
   const rememberRename = (event: WindowRenamedPayload, current: Map<string, AgentActivityInfo>) => {
-    if (![...current.values()].some((entry) => renameActivity(entry, event) !== entry)) return;
+    if (![...current.values()].some((entry) => matchesRename(entry, event))) return;
     activeRenames.current = activeRenames.current.filter((old) => old.serverName !== event.serverName || !isSameWindowTarget(old.target, event.target));
     activeRenames.current.push(event);
+  };
+
+  const pruneActiveRenames = (current: Map<string, AgentActivityInfo>) => {
+    activeRenames.current = activeRenames.current.filter((event) => [...current.values()].some((entry) => matchesRename(entry, event)));
   };
 
   const fetchSnapshot = () => {
@@ -253,7 +257,7 @@ export function AgentActivityProvider({ children }: { children: React.ReactNode 
           }
           if (i < buffered.length) applyActivity(next, applyRenames(buffered[i]));
         }
-        activeRenames.current = activeRenames.current.filter((event) => [...next.values()].some((entry) => renameActivity(entry, event) !== entry));
+        pruneActiveRenames(next);
         pendingEvents.current = null;
         pendingRenames.current = null;
         entriesRef.current = next;
@@ -276,12 +280,20 @@ export function AgentActivityProvider({ children }: { children: React.ReactNode 
 
   useNotificationChannel({
     onWindowRenamed: (event) => {
+      if (event.windowId != null) return;
       pendingRenames.current?.push({ event, after: pendingEvents.current?.length ?? 0 });
       rememberRename(event, entriesRef.current);
-      const next = new Map([...entriesRef.current].map(([key, entry]) => [key, renameActivity(entry, event)]));
-      entriesRef.current = next;
-      setEntries(next);
-      setFinished((cur) => cur.map((entry) => renameActivity(entry, event)));
+      const current = entriesRef.current;
+      const changed = [...current].map(([key, entry]) => [key, renameActivity(entry, event)] as const);
+      if (changed.some(([key, entry]) => current.get(key) !== entry)) {
+        const next = new Map(changed);
+        entriesRef.current = next;
+        setEntries(next);
+      }
+      setFinished((cur) => {
+        const next = cur.map((entry) => renameActivity(entry, event));
+        return next.some((entry, i) => entry !== cur[i]) ? next : cur;
+      });
     },
     onAgentActivity: (rawPayload: AgentActivityPayload) => {
       const payload = applyRenames(rawPayload);
@@ -290,7 +302,7 @@ export function AgentActivityProvider({ children }: { children: React.ReactNode 
       entriesRef.current = next;
       setEntries(next);
       if (payload.running) return;
-      activeRenames.current = activeRenames.current.filter((event) => [...next.values()].some((entry) => renameActivity(entry, event) !== entry));
+      pruneActiveRenames(next);
 
       if (payload.reason === 'deleted') {
         setFinished((cur) => removeDeletedFinished(cur, payload));

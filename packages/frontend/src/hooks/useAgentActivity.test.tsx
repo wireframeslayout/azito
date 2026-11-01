@@ -166,3 +166,19 @@ it('retains an unregistered rename through status, reconnect and completion, the
   send({ ...running, label: 'Replacement' });
   expect(state().entries).toMatchObject([{ label: 'Replacement' }]);
 });
+
+it('updates a registered active row title when its window label changes', async () => {
+  function Rows({ label }: { label: string }) {
+    const { rows } = useActiveWindowRows({
+      windowById: new Map([[42, { id: 42, serverName: 'local', tmuxTarget: 's:1', label, labelSource: 'user' }]]),
+      taskById: new Map(),
+    });
+    return <output>{rows.map((row) => row.title).join(',')}</output>;
+  }
+  const view = render(<AgentActivityProvider><Rows label="Old" /></AgentActivityProvider>);
+  await resolve(0, [{ ...running, windowId: 42 }]);
+  expect(screen.getByRole('status')).toHaveTextContent('Old · W-42');
+  act(() => events.handlers.onWindowRenamed({ serverName: 'local', target: 's:1', newName: 'New', windowId: 42 }));
+  view.rerender(<AgentActivityProvider><Rows label="New" /></AgentActivityProvider>);
+  expect(screen.getByRole('status')).toHaveTextContent('New · W-42');
+});
