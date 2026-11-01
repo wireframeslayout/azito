@@ -7,3 +7,12 @@ export class AgentUnreachableError extends Error {
     this.name = 'AgentUnreachableError';
   }
 }
+
+/** An unreachable agent whose socket failure may be caused by macOS Local Network privacy. */
+export class AgentLocalNetworkPermissionError extends AgentUnreachableError {
+  readonly code = 'macos_local_network_permission';
+  constructor(serverName: string, reason: AgentUnreachableReason, readonly detail: string) {
+    super(serverName, reason);
+    this.name = 'AgentLocalNetworkPermissionError';
+  }
+}

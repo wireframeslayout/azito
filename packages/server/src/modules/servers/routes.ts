@@ -1,4 +1,3 @@
-import { LocalNetworkPermissionError } from './localNetworkDiagnosis';
 import type { FastifyPluginCallback } from 'fastify';
 import { execFileSync } from 'child_process';
 import os from 'os';
@@ -18,7 +17,7 @@ import type { AgentInstaller, InstallProgress } from './agent-deploy/AgentInstal
 import type { AgentBundler } from './agent-deploy/AgentBundler';
 import type { AgentHostRecorder } from './agent-deploy/AgentHostRecorder';
 import type { TransportFactory } from './transport/TransportFactory';
-import { AgentUnreachableError } from './transport/AgentUnreachableError';
+import { AgentLocalNetworkPermissionError, AgentUnreachableError } from './transport/AgentUnreachableError';
 import type { HarnessInstaller, HarnessInstallProgress, HarnessInstallResult } from './agent-deploy/HarnessInstaller';
 import type { HarnessUpdater } from './agent-deploy/HarnessUpdater';
 import { buildHarnessInstallOptions } from './agent-deploy/harnessInstallOptions';
@@ -1257,10 +1256,10 @@ const serversRoutes: FastifyPluginCallback<ServersRouteOptions> = (fastify, opts
       try {
         // An agent that cannot be reached is answered here, before any row is built (the OS probe used to be the first
         // contact). Any other health failure is left to the agent row below to report.
-        if (agentTransport) await agentTransport.fetchHealth().catch((err: unknown) => { if (err instanceof AgentUnreachableError || err instanceof LocalNetworkPermissionError) throw err; });
+        if (agentTransport) await agentTransport.fetchHealth().catch((err: unknown) => { if (err instanceof AgentUnreachableError) throw err; });
         osName = await resolveOsName(transport, transportFactory.hostProfileFor(srv));
       } catch (err: unknown) {
-        if (err instanceof LocalNetworkPermissionError) {
+        if (err instanceof AgentLocalNetworkPermissionError) {
           return reply.status(503).send({ error: err.message, code: err.code, detail: err.detail });
         }
         if (err instanceof AgentUnreachableError) {

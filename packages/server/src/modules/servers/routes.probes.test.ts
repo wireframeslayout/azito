@@ -1,4 +1,4 @@
-import { LocalNetworkPermissionError } from './localNetworkDiagnosis';
+import { AgentLocalNetworkPermissionError } from './transport/AgentUnreachableError';
 import { describe, it, expect, vi } from 'vitest';
 import Fastify from 'fastify';
 import serversRoutes from './routes';
@@ -107,7 +107,7 @@ describe('GET /api/servers/:name/install-status probes', () => {
 
   it('preserves the local network diagnosis in the install status response', async () => {
     const { app, fetchHealth, specs } = await build(server(), { platform: 'linux', arch: 'x64' });
-    fetchHealth.mockRejectedValue(new LocalNetworkPermissionError('connect EHOSTUNREACH 192.168.1.2:3002'));
+    fetchHealth.mockRejectedValue(new AgentLocalNetworkPermissionError('srv', 'unreachable', 'connect EHOSTUNREACH 192.168.1.2:3002'));
     const res = await app.inject({ method: 'GET', url: '/api/servers/srv/install-status' });
     expect(res.statusCode).toBe(503);
     expect(res.json()).toMatchObject({ code: 'macos_local_network_permission', detail: 'connect EHOSTUNREACH 192.168.1.2:3002' });
