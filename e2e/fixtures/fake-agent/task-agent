@@ -4,7 +4,7 @@
 // 絶対パスで渡される）。
 //
 // 仕様:
-//  - ハブがペインへ書き込むフェーズプロンプトを raw モードで受け取り、画面へエコーする。
+//  - ハブがペインへ書き込むプロンプト、またはプロンプトファイルへの指示を受け取り、画面へエコーする。
 //    PhaseLoopRunner は最初のプロンプトから 3 秒後に画面が着手の兆候
 //    （`</completion_signal>` や `AZITO_DONE_` 等）に合致しないと再送するため、受信内容を
 //    そのまま出せば足りる。
@@ -24,6 +24,7 @@ const RESPONSE_DELAY_MS = 8000;
 const OUTPUT_FILE_RE = /cat > (\S+) <<'AZITO_EOF'/;
 const DONE_RE = /echo "(AZITO_DONE_[^"\s]+)" >> (\S+)/;
 const PHASE_RE = /AZITO_PHASE_SUMMARY: \{"phase":"([^"]+)"/;
+const PROMPT_FILE_RE = /(?:^|[\r\n])AZITO prompt file\. Read the file named at the end of this line and carry out every instruction in it exactly: ([^\r\n]+)(?:[\r\n]|$)/;
 
 let received = '';
 let quietTimer = null;
@@ -50,10 +51,11 @@ function respond(prompt) {
 
 function onQuiet() {
   quietTimer = null;
-  // 完了シグナルのブロックまで届いていなければ、残りを待つ。
-  if (!received.includes('</completion_signal>')) return;
-  const prompt = received;
+  const file = PROMPT_FILE_RE.exec(received);
+  if (!file && !received.includes('</completion_signal>')) return;
+  const prompt = file ? fs.readFileSync(file[1], 'utf8') : received;
   received = '';
+  if (file) process.stdout.write('\r\n⏺ e2e fake agent: reading prompt file\r\n');
   setTimeout(() => respond(prompt), RESPONSE_DELAY_MS);
 }
 
