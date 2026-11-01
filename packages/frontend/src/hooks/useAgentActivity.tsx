@@ -1,8 +1,9 @@
 import { createContext, useCallback, useContext, useEffect, useRef, useState } from 'react';
 import { api } from '../api/client';
-import type { AgentActivityPayload } from '../types/notification';
+import type { AgentActivityPayload, NotificationEvent } from '../types/notification';
 import { stripPaneSuffix } from '@azito/shared';
 import { isWatchedWindow } from '../lib/isWatched';
+import { renameActivity } from '../lib/renameActivity';
 import { DEFAULT_FINISHED_RETENTION, loadFinishedRetention, saveFinishedRetention, type FinishedRetentionSettings } from '../lib/finishedRetentionSettings';
 import { useNotificationChannel } from './useNotificationChannel';
 import { useWorkspaceTargets } from './useWorkspaceTargets';
@@ -223,21 +224,31 @@ export function AgentActivityProvider({ children }: { children: React.ReactNode 
 
   const snapshotGeneration = useRef(0);
   const pendingEvents = useRef<AgentActivityPayload[] | null>(null);
+  const pendingRenames = useRef<Array<{ event: Extract<NotificationEvent, { type: 'window:renamed' }>['payload']; after: number }> | null>(null);
 
   const fetchSnapshot = () => {
     const generation = ++snapshotGeneration.current;
     pendingEvents.current = [];
+    pendingRenames.current = [];
     api<AgentActivitySnapshotEntry[]>('/agent-activity')
       .then((snapshot) => {
         if (generation !== snapshotGeneration.current) return;
         const next = snapshotToMap(snapshot);
-        for (const event of pendingEvents.current ?? []) applyActivity(next, event);
+        const buffered = pendingEvents.current ?? [];
+        const renames = pendingRenames.current ?? [];
+        for (let i = 0; i <= buffered.length; i++) {
+          for (const { event } of renames.filter((rename) => rename.after === i)) {
+            for (const [key, entry] of next) next.set(key, renameActivity(entry, event));
+          }
+          if (i < buffered.length) applyActivity(next, buffered[i]);
+        }
         pendingEvents.current = null;
+        pendingRenames.current = null;
         entriesRef.current = next;
         setEntries(next);
       })
       .catch(() => {
-        if (generation === snapshotGeneration.current) pendingEvents.current = null;
+        if (generation === snapshotGeneration.current) { pendingEvents.current = null; pendingRenames.current = null; }
       });
   };
 
@@ -246,11 +257,19 @@ export function AgentActivityProvider({ children }: { children: React.ReactNode 
     return () => {
       snapshotGeneration.current++;
       pendingEvents.current = null;
+      pendingRenames.current = null;
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   useNotificationChannel({
+    onWindowRenamed: (event) => {
+      pendingRenames.current?.push({ event, after: pendingEvents.current?.length ?? 0 });
+      const next = new Map([...entriesRef.current].map(([key, entry]) => [key, renameActivity(entry, event)]));
+      entriesRef.current = next;
+      setEntries(next);
+      setFinished((cur) => cur.map((entry) => renameActivity(entry, event)));
+    },
     onAgentActivity: (payload: AgentActivityPayload) => {
       pendingEvents.current?.push(payload);
       const { entries: next, previous } = transitionActivityEntries(entriesRef.current, payload);

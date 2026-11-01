@@ -70,7 +70,7 @@ export type NotificationEvent =
   | { type: 'phase:completed'; payload: { taskId: number; unitId: number; phase: string; summary: Record<string, unknown> | null } }
   | { type: 'window:created'; payload: { serverName: string; sessionName: string; windowName: string } }
   | { type: 'window:destroyed'; payload: { serverName: string; sessionName: string; windowName: string } }
-  | { type: 'window:renamed'; payload: { serverName: string; sessionName: string; oldName: string; newName: string } }
+  | { type: 'window:renamed'; payload: { serverName: string; target: string; newName: string; windowId?: number } }
   | { type: 'pane:exited'; payload: { serverName: string; sessionName: string; windowName: string } }
   | { type: 'agent:activity'; payload: AgentActivityPayload }
   | { type: 'browser:opened'; payload: BrowserOpenedPayload }

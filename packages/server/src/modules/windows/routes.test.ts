@@ -784,8 +784,10 @@ describe('PUT /api/windows/:id/rename', () => {
   it.each([0, 1])('updates the label only when mux returns %i', async (code) => {
     const win = makeWindow();
     const update = vi.fn();
+    const emit = vi.fn();
     const app = Fastify();
     await app.register(windowsRoutes, {
+      notificationBus: { emit } as never,
       muxSwitchSettingsRepo: {} as never, auditLogService: {} as never, agentActivityMonitor: {} as never,
       harnessPrefix: '',
       windowRepo: { findById: () => win, update } as unknown as IWindowRepository,
@@ -807,6 +809,7 @@ describe('PUT /api/windows/:id/rename', () => {
     expect(res.statusCode).toBe(code === 0 ? 200 : 500);
     if (code === 0) expect(update).toHaveBeenCalledWith(1, { label: 'chosen', labelSource: 'user' });
     else expect(update).not.toHaveBeenCalled();
+    expect(emit.mock.calls.some(([event]) => event.type === 'window:renamed')).toBe(code === 0);
     await app.close();
   });
 });

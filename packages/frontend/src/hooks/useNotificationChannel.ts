@@ -3,6 +3,7 @@ import type { AgentActivityPayload, BrowserOpenedPayload, NotificationEvent } fr
 import { buildWsUrl } from '../api/wsUrl';
 
 export interface NotificationHandlers {
+  onWindowRenamed?: (payload: Extract<NotificationEvent, { type: 'window:renamed' }>['payload']) => void;
   onMuxWake?: (payload: { windowId: number; serverName: string; title?: string; taskId?: number; reason: 'ask' | 'misao_unavailable' }) => void;
   onSessionsUpdated?: (serverName: string) => void;
   onTaskStatus?: (payload: { taskId: number; status: string; title?: string; projectId?: number }) => void;
@@ -91,6 +92,9 @@ export function useNotificationChannel(handlers: NotificationHandlers): void {
       switch (event.type) {
         case 'window:mux_switch_suggested':
           h.onMuxWake?.(event.payload);
+          break;
+        case 'window:renamed':
+          h.onWindowRenamed?.(event.payload);
           break;
         case 'sessions:updated':
           h.onSessionsUpdated?.(event.payload.serverName);

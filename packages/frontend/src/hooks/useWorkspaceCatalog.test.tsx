@@ -5,7 +5,7 @@ import { apiWithStatus } from '../api/client';
 import { PROJECTS_CHANGED_EVENT } from '../lib/projectsChanged';
 
 vi.mock('../api/client', () => ({ apiWithStatus: vi.fn() }));
-const events = vi.hoisted(() => ({ handlers: {} as { onTaskStatus?: () => void; onWorkspaceRefresh?: () => void } }));
+const events = vi.hoisted(() => ({ handlers: {} as { onTaskStatus?: () => void; onWorkspaceRefresh?: () => void; onWindowRenamed?: () => void } }));
 vi.mock('./useNotificationChannel', () => ({ useNotificationChannel: (handlers: typeof events.handlers) => { events.handlers = handlers; } }));
 const api = vi.mocked(apiWithStatus);
 beforeEach(() => { api.mockReset(); });
@@ -40,8 +40,8 @@ it('refreshes in response to task and workspace events', async () => {
   api.mockResolvedValue({ status: 200, body: [] });
   render(<WorkspaceCatalogProvider><View /></WorkspaceCatalogProvider>);
   await waitFor(() => expect(api).toHaveBeenCalledTimes(2));
-  act(() => { events.handlers.onTaskStatus?.(); events.handlers.onWorkspaceRefresh?.(); });
-  await waitFor(() => expect(api).toHaveBeenCalledTimes(6));
+  act(() => { events.handlers.onTaskStatus?.(); events.handlers.onWorkspaceRefresh?.(); events.handlers.onWindowRenamed?.(); });
+  await waitFor(() => expect(api).toHaveBeenCalledTimes(8));
 });
 it('rejects use outside the provider', () => {
   expect(() => renderHook(() => useWorkspaceCatalog())).toThrow('useWorkspaceCatalog must be used within WorkspaceCatalogProvider');

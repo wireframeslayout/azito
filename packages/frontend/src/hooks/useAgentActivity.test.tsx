@@ -3,9 +3,10 @@ import { beforeEach, expect, it, vi } from 'vitest';
 import { api } from '../api/client';
 import type { AgentActivityPayload } from '../types/notification';
 import { AgentActivityProvider, useAgentActivity } from './useAgentActivity';
+import { useActiveWindowRows } from './useActiveWindowRows';
 
 vi.mock('../api/client', () => ({ api: vi.fn() }));
-const events = vi.hoisted(() => ({ handlers: {} as { onAgentActivity: (payload: AgentActivityPayload) => void; onConnected: () => void } }));
+const events = vi.hoisted(() => ({ handlers: {} as { onAgentActivity: (payload: AgentActivityPayload) => void; onConnected: () => void; onWindowRenamed: (payload: { serverName: string; target: string; newName: string; windowId?: number }) => void } }));
 vi.mock('./useNotificationChannel', () => ({ useNotificationChannel: (handlers: typeof events.handlers) => { events.handlers = handlers; } }));
 const targets = vi.hoisted(() => ({ activeTabId: null as string | null, focusedTarget: null as string | null }));
 vi.mock('./useWorkspaceTargets', () => ({ useWorkspaceTargets: () => targets }));
@@ -136,4 +137,17 @@ it('marks an unread completion when focus and the event change together', async 
   });
   expect(state().finished[0].seenAt).toEqual(expect.any(Number));
   vi.restoreAllMocks();
+});
+
+it('shows rename in active rows without an activity transition, including during snapshot loading', async () => {
+  function Rows() {
+    const { rows } = useActiveWindowRows({ windowById: new Map(), taskById: new Map() });
+    return <output>{rows.map((row) => row.title).join(',')}</output>;
+  }
+  render(<AgentActivityProvider><Rows /></AgentActivityProvider>);
+  send(running);
+  act(() => events.handlers.onWindowRenamed({ serverName: 'local', target: 's:1', newName: 'Renamed' }));
+  expect(screen.getByRole('status')).toHaveTextContent('Renamed');
+  await resolve(0, [running]);
+  expect(screen.getByRole('status')).toHaveTextContent('Renamed');
 });

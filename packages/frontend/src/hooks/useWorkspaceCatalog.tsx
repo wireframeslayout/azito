@@ -29,7 +29,7 @@ export function WorkspaceCatalogProvider({ children }: { children: React.ReactNo
     }
   }, []);
   const [state, setState] = useState<Catalog>(() => ({ allProjects: [], allTasks: [], projectsLoaded: false, loading: true, error: null, refresh }));
-  useNotificationChannel({ onTaskStatus: refresh, onWorkspaceRefresh: refresh });
+  useNotificationChannel({ onTaskStatus: refresh, onWorkspaceRefresh: refresh, onWindowRenamed: refresh });
   useEffect(() => {
     mounted.current = true;
     void refresh();

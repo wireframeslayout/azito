@@ -39,7 +39,9 @@ export function useWorkspaceData(
     localStorage.getItem(`workspace-file-server-${projectId}`) || ''
   );
 
+  const workspaceSequence = useRef(0);
   const refreshWorkspace = useCallback(async () => {
+    const request = ++workspaceSequence.current;
     const requestedProjectId = projectId;
     const pid = parseInt(projectId || '', 10);
     if (!pid) return;
@@ -48,7 +50,7 @@ export function useWorkspaceData(
       api<Unit[]>('/units'),
       api<Server[]>('/servers'),
     ]);
-    if (projectIdRef.current !== requestedProjectId) return; // stale response, a newer project is now active
+    if (projectIdRef.current !== requestedProjectId || request !== workspaceSequence.current) return; // stale response
     if ((proj as any).error) return;
     setProject(proj);
     setAllUnits(allUn);
@@ -86,6 +88,7 @@ export function useWorkspaceData(
 
   // Event-driven refresh via WebSocket
   useNotificationChannel({
+    onWindowRenamed: refreshWorkspace,
     onSessionsUpdated: useCallback(() => {
       refreshSessions();
     }, [refreshSessions]),
