@@ -753,8 +753,8 @@ const windowsRoutes: FastifyPluginCallback<WindowsRouteOptions> = (fastify, opts
         if (!paneEnv.ok) return reply.status(paneEnv.status).send(paneEnv.body);
 
         const parsedBody = parseStrictBody(paneBody, request.body);
-      if (!parsedBody.ok) return reply.status(400).send(parsedBody.body);
-      const body = parsedBody.data;
+        if (!parsedBody.ok) return reply.status(400).send(parsedBody.body);
+        const body = parsedBody.data;
         const direction = (body.direction || 'v') as 'h' | 'v';
         const ordinal = (body.ordinal ?? 1) as PaneOrdinal;
         const handle = await resolvePaneHandle(driverFor(srv), srv, ref, ordinal);

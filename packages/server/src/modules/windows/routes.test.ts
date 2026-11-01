@@ -108,8 +108,8 @@ describe('POST /api/windows/:id/launch-agent', () => {
     await app.register(windowsRoutes, {
       harnessPrefix: '',
       windowRepo: windowRepo as IWindowRepository,
-      projectRepo: {} as IProjectRepository,
-      taskRepo: {} as ITaskRepository,
+      projectRepo: { findById: () => ({ id: 1 }) } as unknown as IProjectRepository,
+      taskRepo: { findById: () => ({ id: 1 }) } as unknown as ITaskRepository,
       tmux: tmux as TmuxClient,
       muxDriverRegistry: { resolve: () => tmux } as any,
       serverRepo: serverRepo as IServerRepository,
@@ -133,6 +133,31 @@ describe('POST /api/windows/:id/launch-agent', () => {
       uiToken: 'test-token', serverIsolationMutex: new KeyedMutex(), buildSecondaryWindowEnv: () => ({}),
     });
     await app.ready();
+  });
+
+  it.each([
+    ['POST', '/api/projects/1/windows', ['server_name', 'tmux_target', 'ref', 'worker_type', 'worker_model', 'working_directory', 'agent_session_id', 'label', 'window_type', 'launch_command']],
+    ['POST', '/api/projects/1/windows/session', ['server_name', 'session', 'kind']],
+    ['POST', '/api/tasks/1/windows', ['server_name', 'tmux_target', 'ref', 'label', 'window_type', 'worker_type', 'worker_model', 'working_directory']],
+    ['PUT', '/api/windows/1', ['label', 'agent_session_id', 'launch_command', 'worker_model', 'working_directory', 'window_type', 'worker_type']],
+    ['POST', '/api/windows/1/launch-agent', ['command', 'force']],
+    ['POST', '/api/windows/1/respawn', ['force']],
+    ['PUT', '/api/windows/1/rename', ['name']],
+    ['POST', '/api/windows/1/panes', ['ordinal', 'direction']],
+    ['POST', '/api/windows/1/panes/1/send-keys', ['keys']],
+    ['PUT', '/api/windows/1/panes/1/rename', ['name']],
+  ] as const)('%s %s rejects unknown fields', async (method, url, accepted) => {
+    const res = await app.inject({ method, url, payload: { extra: true } });
+    expect(res.statusCode).toBe(400);
+    expect(res.json()).toEqual({ error: 'unknown_fields', unknown: ['extra'], accepted });
+  });
+
+  it('keeps the missing keys error and rejects a wrong keys type', async () => {
+    const url = '/api/windows/1/panes/1/send-keys';
+    const missing = await app.inject({ method: 'POST', url, payload: {} });
+    expect(missing.json()).toEqual({ error: 'keys array required' });
+    const invalid = await app.inject({ method: 'POST', url, payload: { keys: 'Enter' } });
+    expect(invalid.json()).toMatchObject({ error: 'invalid_body' });
   });
 
   it('rejects unknown and invalid launch fields before sending keys', async () => {

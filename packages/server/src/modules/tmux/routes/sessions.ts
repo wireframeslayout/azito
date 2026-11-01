@@ -1,4 +1,4 @@
-import { directionBody, nameBody, titleBody, keysBody, paneBody, commandBody, refBody, workspaceRenameBody } from './actionBodies';
+import { directionBody, nameBody, titleBody, keysBody, paneBody, refBody, workspaceRenameBody } from './actionBodies';
 import { persistRenamedWindowLabel } from '../windowIdentity';
 import type { FastifyPluginCallback, FastifyReply } from 'fastify';
 import { resourceCheckBody, type ResourceGuard, type ResourceUnavailable } from '../../servers/resources/ResourceGuard';
@@ -1012,8 +1012,8 @@ const sessionsRoutes: FastifyPluginCallback<SessionsRouteOptions> = (fastify, op
         if (!paneEnv.ok) return reply.status(paneEnv.status).send(paneEnv.body);
 
         const parsedBody = parseStrictBody(paneBody, request.body);
-      if (!parsedBody.ok) return reply.status(400).send(parsedBody.body);
-      const body = parsedBody.data;
+        if (!parsedBody.ok) return reply.status(400).send(parsedBody.body);
+        const body = parsedBody.data;
         const direction = (body.direction || 'v') as 'h' | 'v';
         const ordinal = (body.ordinal ?? 1) as PaneOrdinal;
         const muxClient = opts.muxDriverRegistry?.resolve(freshSrv) ?? tmux;
@@ -1034,9 +1034,7 @@ const sessionsRoutes: FastifyPluginCallback<SessionsRouteOptions> = (fastify, op
   fastify.post<{ Params: { name: string; ref: string }; Body: { command?: string } | undefined }>(
     '/api/servers/:name/mux/windows/:ref/panes/open',
     async (request, reply) => {
-      const parsedBody = parseStrictBody(commandBody, request.body);
-      if (!parsedBody.ok) return reply.status(400).send(parsedBody.body);
-      const command = parsedBody.data.command;
+      const command = request.body?.command;
       if (command !== undefined && (typeof command !== 'string' || command.trim() === '')) {
         return reply.status(400).send({ error: 'command must be a non-empty string' });
       }

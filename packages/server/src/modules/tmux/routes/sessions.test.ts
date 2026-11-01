@@ -989,15 +989,6 @@ describe('POST /api/servers/:name/mux/windows/:ref/panes/open', () => {
     await app.close();
   });
 
-  it('rejects unknown and invalid open-pane bodies', async () => {
-    await build();
-    const unknown = await app.inject({ method: 'POST', url, payload: { command: 1, extra: true } });
-    expect(unknown.json()).toEqual({ error: 'unknown_fields', unknown: ['extra'], accepted: ['command'] });
-    const invalid = await app.inject({ method: 'POST', url, payload: [] });
-    expect(invalid.json()).toMatchObject({ error: 'invalid_body' });
-    expect(openPaneInWindow).not.toHaveBeenCalled();
-  });
-
   it('opens a pane with the command and notifies sessions changed', async () => {
     const emit = await build();
     const res = await app.inject({ method: 'POST', url, payload: { command: 'claude' } });
@@ -1754,5 +1745,30 @@ describe('mux create routes answer failures of the mux call (#312 review)', () =
     await build(localTmux, {});
     const res = await post('', { name: 'dev', kind: '' });
     expect(res.statusCode).toBe(400);
+  });
+});
+
+
+describe('action bodies reject unknown fields', () => {
+  const ref = encodeURIComponent(JSON.stringify({ kind: 'tmux', workspace: 's', window: 'w' }));
+  it.each([
+    ['POST', '/api/servers/srv1/sessions/s/windows/w/panes', ['direction']],
+    ['PUT', '/api/servers/srv1/sessions/s/rename', ['name']],
+    ['PUT', '/api/servers/srv1/windows/s%3Aw/rename', ['name']],
+    ['PUT', '/api/servers/srv1/panes/%250/rename', ['title']],
+    ['POST', '/api/servers/srv1/panes/%250/send-keys', ['keys']],
+    ['PUT', `/api/servers/srv1/mux/windows/${ref}/rename`, ['name']],
+    ['POST', `/api/servers/srv1/mux/windows/${ref}/panes`, ['ordinal', 'direction']],
+    ['POST', `/api/servers/srv1/mux/windows/${ref}/panes/1/send-keys`, ['keys']],
+    ['PUT', `/api/servers/srv1/mux/windows/${ref}/panes/1/rename`, ['name']],
+    ['POST', '/api/servers/srv1/mux/focus', ['ref']],
+    ['PUT', '/api/servers/srv1/mux/workspaces/s/rename', ['name', 'kind']],
+  ] as const)('%s %s', async (method, url, accepted) => {
+    const app = await buildApp({ tmux: { resolvePane: vi.fn(async () => '%0') } as unknown as Partial<TmuxClient>, windowRepo: makeWindowRepo() });
+    try {
+      const res = await app.inject({ method, url, payload: { extra: true } });
+      expect(res.statusCode).toBe(400);
+      expect(res.json()).toEqual({ error: 'unknown_fields', unknown: ['extra'], accepted });
+    } finally { await app.close(); }
   });
 });
