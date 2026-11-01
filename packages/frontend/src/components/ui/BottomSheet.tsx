@@ -1,4 +1,6 @@
-import { useEffect, useState } from 'react';
+import { useHotkey, useOverlayStack } from '../../hooks/useHotkeys';
+import { parseKeySpec } from '../../lib/hotkeys/keySpec';
+import { useEffect, useRef, useState } from 'react';
 
 interface BottomSheetProps {
   open: boolean;
@@ -8,6 +10,9 @@ interface BottomSheetProps {
 }
 
 export function BottomSheet({ open, onClose, title, children }: BottomSheetProps) {
+  const ref = useRef<HTMLDivElement>(null);
+  const { id, isTop } = useOverlayStack(open, ref);
+  useHotkey({ action: 'local:overlay-close', spec: parseKeySpec('Escape'), scope: 'overlay', overlayId: id, handler: onClose }, open);
   const [shouldRender, setShouldRender] = useState(open);
 
   useEffect(() => {
@@ -19,20 +24,12 @@ export function BottomSheet({ open, onClose, title, children }: BottomSheetProps
     return () => window.clearTimeout(timer);
   }, [open]);
 
-  useEffect(() => {
-    if (!open) return;
-    const handleKeyDown = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') onClose();
-    };
-    document.addEventListener('keydown', handleKeyDown);
-    return () => document.removeEventListener('keydown', handleKeyDown);
-  }, [open, onClose]);
 
   return (
     <>
       {open && (
         <div
-          onClick={onClose}
+          onClick={() => { if (isTop) onClose(); }}
           style={{
             position: 'fixed',
             inset: 0,
@@ -42,6 +39,7 @@ export function BottomSheet({ open, onClose, title, children }: BottomSheetProps
         />
       )}
       <div
+        ref={ref}
         role="dialog"
         aria-modal="true"
         inert={!open}

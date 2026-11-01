@@ -1,3 +1,5 @@
+import { useHotkey, useOverlayStack } from '../../hooks/useHotkeys';
+import { parseKeySpec } from '../../lib/hotkeys/keySpec';
 import { useEffect, useRef } from 'react';
 
 export interface GlassPopoverItem {
@@ -24,22 +26,19 @@ export interface GlassPopoverProps {
  */
 export function GlassPopover({ open, onClose, label, items, align = 'left', ariaLabel }: GlassPopoverProps) {
   const ref = useRef<HTMLDivElement>(null);
+  const { id, isTop } = useOverlayStack(open, ref);
+  useHotkey({ action: 'local:overlay-close', spec: parseKeySpec('Escape'), scope: 'overlay', overlayId: id, handler: onClose }, open);
 
   useEffect(() => {
     if (!open) return;
     const handlePointerDown = (e: PointerEvent) => {
-      if (ref.current && !ref.current.contains(e.target as Node)) onClose();
-    };
-    const handleKeyDown = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') onClose();
+      if (isTop && ref.current && !ref.current.contains(e.target as Node)) onClose();
     };
     document.addEventListener('pointerdown', handlePointerDown);
-    document.addEventListener('keydown', handleKeyDown);
     return () => {
       document.removeEventListener('pointerdown', handlePointerDown);
-      document.removeEventListener('keydown', handleKeyDown);
     };
-  }, [open, onClose]);
+  }, [open, onClose, isTop]);
 
   const horizontal: React.CSSProperties = align === 'right'
     ? { right: 14 }

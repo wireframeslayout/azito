@@ -6,6 +6,7 @@ import { useIsMobile } from '../../hooks/useIsMobile';
 import ProviderSection from './ProviderSection';
 import SettingsSectionNav from './SettingsSectionNav';
 import SettingsSectionList from './SettingsSectionList';
+import KeyboardSection from './sections/KeyboardSection';
 import StorageSection from './sections/StorageSection';
 import ResourceGuardSection from './sections/ResourceGuardSection';
 import NotificationsSection from './sections/NotificationsSection';
@@ -66,6 +67,7 @@ export default function GlobalSettingsPage({ initialSection }: GlobalSettingsPag
   const detailContent = (
     <Suspense fallback={<LoadingState />}>
       {activeSection === 'appearance' && <AppearanceSection />}
+      {activeSection === 'keyboard' && <KeyboardSection />}
       {activeSection === 'providers' && <ProviderSection layout="inline" />}
       {activeSection === 'storage' && <StorageSection />}
       {activeSection === 'resources' && <ResourceGuardSection />}

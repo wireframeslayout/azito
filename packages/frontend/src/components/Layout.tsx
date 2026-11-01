@@ -6,6 +6,7 @@ import { AgentActivityProvider } from '../hooks/useAgentActivity';
 import { NotificationCenterProvider } from '../hooks/useNotificationCenter';
 import { ToastProvider } from '../hooks/useToast';
 import { ConfirmProvider } from '../hooks/useConfirm';
+import { HotkeyProvider } from '../hooks/useHotkeys';
 import { LeftBehindProvider } from '../hooks/useLeftBehind';
 import { TerminalThemeProvider } from '../hooks/useTerminalTheme';
 import TerminalBackdrop from './TerminalBackdrop';
@@ -31,6 +32,8 @@ export default function Layout() {
   return (
     <TerminalThemeProvider>
     <ToastProvider>
+    {/* ConfirmDialog is rendered by ConfirmProvider and shares the same overlay stack. */}
+    <HotkeyProvider>
     <ConfirmProvider>
     <LeftBehindProvider>
     <WorkspaceTargetsProvider>
@@ -106,6 +109,7 @@ export default function Layout() {
     </WorkspaceTargetsProvider>
     </LeftBehindProvider>
     </ConfirmProvider>
+    </HotkeyProvider>
     </ToastProvider>
     </TerminalThemeProvider>
   );
