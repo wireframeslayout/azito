@@ -475,6 +475,7 @@ function NotificationToastStack() {
           <span style={{ fontSize: 'var(--font-lg)', lineHeight: 1 }}>{notificationIcon(toast.notification.kind)}</span>
           <span style={{ flex: 1, fontSize: 'var(--font-md)', color: 'var(--text)', lineHeight: 1.4 }}>
             {toast.notification.messageKey ? t(toast.notification.messageKey, toast.notification.messageParams) : (toast.notification.title ?? '')}
+            {toast.notification.body && <span style={{ display: 'block', overflowWrap: 'anywhere', whiteSpace: 'pre-wrap' }}>{toast.notification.body}</span>}
           </span>
           <button
             aria-label={t('notifications:toast.dismissAriaLabel')}

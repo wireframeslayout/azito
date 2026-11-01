@@ -375,6 +375,7 @@ export interface FirewallResult {
   allowedBy: string[];
   /** Which source was read. */
   store: string;
+  networkCategory: string | null;
 }
 
 /** Runs one command line on the host through its SSH login shell. */
@@ -388,20 +389,20 @@ export async function inspectFirewall(exec: FirewallExec, port: number, nodePath
   const dumped = await exec(buildFirewallDumpCommand(localAddress));
   const dump = parseFirewallDump(dumped.stdout, dumped.stderr, dumped.code);
   if (dump.problem !== null) {
-    return { ruleFound: null, elevated: dump.elevated, created: false, problem: dump.problem, blockedBy: [], allowedBy: [], store: dump.store };
+    return { ruleFound: null, elevated: dump.elevated, created: false, problem: dump.problem, blockedBy: [], allowedBy: [], store: dump.store, networkCategory: dump.networkCategory };
   }
   const verdict = evaluateFirewallRules(dump.rules, { port, nodePath, localAddress, networkCategory: dump.networkCategory });
   if (dump.store !== 'ActiveStore') {
-    return { ruleFound: null, elevated: dump.elevated, created: false, problem: 'the effective firewall policy could not be read', blockedBy: verdict.blockedBy, allowedBy: [], store: dump.store };
+    return { ruleFound: null, elevated: dump.elevated, created: false, problem: 'the effective firewall policy could not be read', blockedBy: verdict.blockedBy, allowedBy: [], store: dump.store, networkCategory: dump.networkCategory };
   }
   const found = verdict.allowedBy.length > 0;
   const allowedInSomeProfile = dump.networkCategory === null && ['Domain', 'Private', 'Public'].some((profile) =>
     evaluateFirewallRules(dump.rules, { port, nodePath, localAddress, networkCategory: profile }).allowedBy.length > 0,
   );
   if (!found && verdict.blockedBy.length === 0 && allowedInSomeProfile) {
-    return { ruleFound: null, elevated: dump.elevated, created: false, problem: 'the network profile could not be read', blockedBy: [], allowedBy: [], store: dump.store };
+    return { ruleFound: null, elevated: dump.elevated, created: false, problem: 'the network profile could not be read', blockedBy: [], allowedBy: [], store: dump.store, networkCategory: dump.networkCategory };
   }
-  const base = { ruleFound: found, elevated: dump.elevated, created: false, problem: null, blockedBy: verdict.blockedBy, allowedBy: verdict.allowedBy, store: dump.store };
+  const base = { ruleFound: found, elevated: dump.elevated, created: false, problem: null, blockedBy: verdict.blockedBy, allowedBy: verdict.allowedBy, store: dump.store, networkCategory: dump.networkCategory };
   return base;
 }
 

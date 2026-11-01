@@ -31,11 +31,12 @@ class Harness {
   readonly lock = new KeyedMutex();
   /** Runs while a recovery holds the lock. */
   duringRecover: (() => Promise<void>) | undefined;
+  duringInspect: (() => Promise<void>) | undefined;
 
   readonly watchdog = new AgentRecoveryWatchdog({
     listServers: () => this.servers,
     checkAgent: async () => { if (!this.agentUp) throw new Error('unreachable'); },
-    inspectFirewall: async () => this.firewall,
+    inspectFirewall: async () => { await this.duringInspect?.(); return this.firewall; },
     recoverAgent: async (s, force) => {
       this.recovered.push(s.name);
       this.recoverForces.push(force);
@@ -70,7 +71,7 @@ describe('AgentRecoveryWatchdog: the agent', () => {
     await h.watchdog.tick();
     await h.advance(MIN);
     expect(h.recovered).toEqual([]);
-    expect(h.watchdog.firewallStatus(h.servers[0]!)?.state).toBe('blocked');
+    expect(h.watchdog.firewallStatus(h.servers[0]!)).toMatchObject({ state: 'blocked', checkedAt: h.clock, networkCategory: null });
     h.firewall = { ruleFound: true, blockedBy: [], problem: null };
     await h.advance(TIMING.maxMs);
     expect(h.recoverForces).toEqual([false]);
@@ -455,6 +456,23 @@ describe('AgentRecoveryWatchdog: more servers than looks at once', () => {
 });
 
 describe('AgentRecoveryWatchdog: stopping', () => {
+  it('does not recover when stopped during firewall inspection', async () => {
+    const h = new Harness();
+    h.agentUp = false;
+    await h.watchdog.tick();
+    h.clock += MIN;
+    let release!: () => void;
+    let entered!: () => void;
+    const inspecting = new Promise<void>((resolve) => { entered = resolve; });
+    h.duringInspect = () => new Promise<void>((resolve) => { release = resolve; entered(); });
+    const tick = h.watchdog.tick();
+    await inspecting;
+    h.watchdog.stop();
+    release();
+    await tick;
+    expect(h.recovered).toEqual([]);
+  });
+
   it('does not recover what had not begun when it was stopped while waiting for the lock', async () => {
     const h = new Harness();
     h.agentUp = false;

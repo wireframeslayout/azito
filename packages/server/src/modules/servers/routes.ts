@@ -166,7 +166,7 @@ function describeMux(registry: MuxDriverRegistry, srv: ServerConfig): Record<str
 }
 
 export interface ServersRouteOptions {
-  firewallStatus?: (server: ServerConfig) => { state: string; detail: string } | undefined;
+  firewallStatus?: (server: ServerConfig) => { state: string; detail: string; checkedAt: number; networkCategory: string | null } | undefined;
   serverAliasRepo: IServerAliasRepository;
   serverRepo: IServerRepository;
   tmux: TmuxClient;

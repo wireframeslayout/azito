@@ -264,14 +264,15 @@ export class WindowsAgentDeployer {
   }
 
   /** Inspect the policy for the executable named by the recognised task without changing it. */
-  async inspectFirewall(sshHost: string, host: WindowsPreflightInfo, address: string, port: number): Promise<FirewallResult & { allowCommand: string }> {
+  async inspectFirewall(sshHost: string, host: WindowsPreflightInfo, address: string, port: number): Promise<FirewallResult & { allowCommand: string; blockCommands: string[] }> {
     const xml = await this.schtasks(sshHost, host).exportXml(this.options.taskName);
     const action = soleExecAction(xml);
     const root = windowsAgentRoot(host.home, this.options);
     const identity = action && agentTaskIdentity(action, host.systemRoot, root, windowsAgentEnvFile(host.home, this.options), this.options.taskName);
     if (!identity || !await this.taskOwnedByHost(sshHost, xml, host.userId)) throw new Error(`The task "${this.options.taskName}" is not a recognised agent task for ${root}`);
     const result = await inspectFirewall((command) => this.sshExec(sshHost, command, FIREWALL_MS), port, identity.nodePath, address);
-    return { ...result, allowCommand: firewallRuleCommand(port, identity.nodePath, address) };
+    return { ...result, allowCommand: firewallRuleCommand(port, identity.nodePath, address),
+      blockCommands: result.blockedBy.map((name) => `Get-NetFirewallRule -PolicyStore ActiveStore | Where-Object { $_.DisplayName -eq ${powershellDialect.quote(name)} } | Format-List *`) };
   }
 
   /** Stops the task if it is running and waits until it is not (`/End` returns before the process is gone). */

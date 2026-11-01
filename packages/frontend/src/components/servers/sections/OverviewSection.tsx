@@ -1,3 +1,4 @@
+import { FirewallDiagnostic } from '../FirewallDiagnostic';
 import { useTranslation } from 'react-i18next';
 import type { Server, Session } from '../../../hooks/useServerManagement';
 import type { IsolationReport } from '../../../hooks/useServerDetail';
@@ -245,9 +246,10 @@ export default function OverviewSection({
                     {status?.versionMatch === false && <Chip tone="orange">{t('overview.outdated')}</Chip>}
                   </>
                 )}
-                {status?.message && <span>{isAgent ? `(${status.message})` : status.message}</span>}
+                {status?.message && !status.firewall && <span>{isAgent ? `(${status.message})` : status.message}</span>}
               </div>
             )}
+            {status?.firewall && <FirewallDiagnostic diagnostic={status.firewall} />}
           </div>
         </div>
 

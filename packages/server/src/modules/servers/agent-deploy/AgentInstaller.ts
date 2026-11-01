@@ -714,7 +714,7 @@ export class AgentInstaller {
    * (e.g. SSH connection failure) — the caller is expected to catch and re-check health
    * afterward regardless of outcome.
    */
-  async inspectAgentFirewall(sshHost: string, address: string, port: number): Promise<import('./windowsFirewall').FirewallResult & { allowCommand: string }> {
+  async inspectAgentFirewall(sshHost: string, address: string, port: number): Promise<import('./windowsFirewall').FirewallResult & { allowCommand: string; blockCommands: string[] }> {
     const probe = await this.sshClient.execIsolated(sshHost, buildWindowsPreflightCommand());
     const host = parseWindowsPreflight(probe.stdout, probe.stderr, probe.code);
     return this.windowsDeployer().inspectFirewall(sshHost, host, address, port);

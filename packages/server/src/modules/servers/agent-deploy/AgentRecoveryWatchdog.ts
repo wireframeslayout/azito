@@ -9,7 +9,7 @@ export interface AgentRecoveryDeps {
   /** Resolves when the agent answers `/health`; rejects when it cannot be reached (the circuit breaker being open is such a case). */
   checkAgent(server: ServerConfig): Promise<void>;
   onFirewallProblem?(server: ServerConfig, detail: string): void;
-  inspectFirewall?(server: ServerConfig): Promise<{ ruleFound: boolean | null; blockedBy: string[]; problem: string | null; allowCommand?: string }>;
+  inspectFirewall?(server: ServerConfig): Promise<{ ruleFound: boolean | null; blockedBy: string[]; problem: string | null; allowCommand?: string; blockCommands?: string[]; networkCategory?: string | null }>;
   /** Starts the agent again (`recoverAgent`: `/Query`, `/End`, `/Run` of its task). Resolves with what it did; `disabled` is a task disabled by hand, which is left alone. */
   recoverAgent(server: ServerConfig, force: boolean): Promise<string>;
   /** Asks the (reachable) agent whether the managed misao it hosts is installed by AZITO and does not answer. Rejects when the agent cannot say (an older one). */
@@ -48,11 +48,11 @@ const MAX_CONCURRENT_LOOKS = 4;
  */
 export class AgentRecoveryWatchdog {
   private readonly agents = new Map<string, Backoff>();
-  private readonly firewall = new Map<string, { identity: string; state: 'blocked' | 'missing_allow' | 'unknown'; detail: string }>();
+  private readonly firewall = new Map<string, { identity: string; state: 'blocked' | 'missing_allow' | 'unknown'; detail: string; checkedAt: number; networkCategory: string | null }>();
 
-  firewallStatus(server: ServerConfig): { state: 'blocked' | 'missing_allow' | 'unknown'; detail: string } | undefined {
+  firewallStatus(server: ServerConfig): { state: 'blocked' | 'missing_allow' | 'unknown'; detail: string; checkedAt: number; networkCategory: string | null } | undefined {
     const value = this.firewall.get(server.name);
-    return value?.identity === identityOf(server) ? { state: value.state, detail: value.detail } : undefined;
+    return value?.identity === identityOf(server) ? { state: value.state, detail: value.detail, checkedAt: value.checkedAt, networkCategory: value.networkCategory } : undefined;
   }
   private readonly misaos = new Map<string, Backoff>();
   /** The looks going on, by server. */
@@ -196,19 +196,20 @@ export class AgentRecoveryWatchdog {
             const result = await this.deps.inspectFirewall(current);
             const state = result.ruleFound === null ? 'unknown' : result.blockedBy.length ? 'blocked' : result.ruleFound ? undefined : 'missing_allow';
             if (state) {
-              const detail = state === 'blocked' ? `Windows Firewall blocks the agent: ${result.blockedBy.join(', ')}. Ask an administrator to inspect the active rule before disabling it.` : state === 'missing_allow' ? `Windows Firewall has no effective Allow rule for the agent. Ask an administrator to inspect the active policy before adding a rule in an Administrator PowerShell: ${result.allowCommand}` : `Windows Firewall policy could not be verified: ${result.problem ?? 'unknown reason'}.`;
+              const detail = state === 'blocked' ? `Windows Firewall blocks the agent: ${result.blockedBy.join(', ')}. Ask an administrator to inspect the active rule before changing it in Administrator PowerShell: ${result.blockCommands?.join('; ')}` : state === 'missing_allow' ? `Windows Firewall has no effective Allow rule for the agent. Ask an administrator to inspect the active policy before adding a rule in an Administrator PowerShell: ${result.allowCommand}` : `Windows Firewall policy could not be verified: ${result.problem ?? 'unknown reason'}.`;
               const previous = this.firewall.get(current.name);
-              this.firewall.set(current.name, { identity, state, detail });
+              this.firewall.set(current.name, { identity, state, detail, checkedAt: this.deps.now(), networkCategory: result.networkCategory ?? null });
               if (previous?.state !== state || previous.detail !== detail) this.deps.onFirewallProblem?.(current, detail);
               if (state !== 'unknown') { outcome = 'firewall_blocked'; return; }
             } else this.firewall.delete(current.name);
           } catch (err) {
             const detail = `Windows Firewall policy could not be verified: ${describe(err)}`;
             const previous = this.firewall.get(current.name);
-            this.firewall.set(current.name, { identity, state: 'unknown', detail });
+            this.firewall.set(current.name, { identity, state: 'unknown', detail, checkedAt: this.deps.now(), networkCategory: null });
             if (previous?.state !== 'unknown' || previous.detail !== detail) this.deps.onFirewallProblem?.(current, detail);
           }
         }
+        if (this.stopped) return;
         outcome = await act(current);
       });
     } catch (err) {

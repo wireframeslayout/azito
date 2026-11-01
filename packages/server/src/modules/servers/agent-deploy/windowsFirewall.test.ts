@@ -294,7 +294,7 @@ describe('checkFirewall', () => {
 });
 
 describe('describeFirewallProblem', () => {
-  const base: FirewallResult = { ruleFound: false, elevated: false, created: false, problem: null, blockedBy: [], allowedBy: [], store: 'ActiveStore' };
+  const base: FirewallResult = { ruleFound: false, elevated: false, created: false, problem: null, blockedBy: [], allowedBy: [], store: 'ActiveStore', networkCategory: 'Public' };
   it('is null when a rule exists or was just added', () => {
     expect(describeFirewallProblem({ ...base, ruleFound: true }, 3002, NODE, IP)).toBeNull();
     expect(describeFirewallProblem({ ...base, elevated: true, created: true }, 3002, NODE, IP)).toBeNull();
