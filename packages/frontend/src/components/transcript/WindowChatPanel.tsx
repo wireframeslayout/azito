@@ -3,6 +3,7 @@ import { useTranslation } from 'react-i18next';
 import { apiWithStatus } from '../../api/client';
 import { Button, EmptyState, LoadingState } from '../ui';
 import ConversationView from './ConversationView';
+import SubagentChat from './SubagentChat';
 import PromptInputBar from './PromptInputBar';
 import { hostUnavailableReason, type HostUnavailableReason } from './hostUnavailable';
 import type { ResolveWindowResult, TranscriptErrorResponse, UnresolvedReason } from './transcriptTypes';
@@ -192,8 +193,11 @@ export default function WindowChatPanel({ windowId, viewMode, onChangeViewMode }
     );
   }
 
+  const Chat = state.agentType === 'claude' ? SubagentChat : ConversationView;
   return (
-    <ConversationView
+    <Chat
+      key={`${windowId}:${state.sessionId}`}
+      onParentChanged={resolve}
       windowId={windowId}
       sessionId={state.sessionId}
       agentType={state.agentType}

@@ -16,7 +16,7 @@ const describeOnPosix = process.platform === 'win32' ? describe.skip : describe;
 interface Received { path: string; authorization: string | undefined; body: string }
 
 interface Case {
-  hook: 'activity' | 'interaction' | 'question' | 'session' | 'notify';
+  hook: 'activity' | 'interaction' | 'question' | 'session' | 'subagent' | 'notify';
   event?: 'start' | 'stop';
   stdin?: string;
   env?: Record<string, string>;
@@ -145,6 +145,14 @@ describeOnPosix('azito-hook.mjs sends what the bash hooks send', () => {
   it('leaves an invalid session id out of an activity event', async () => {
     const [req] = await expectSame({ hook: 'activity', event: 'stop', stdin: '{"session_id":"not-a-uuid"}', env: { ...fullEnv(), MISAO_PANE_ID: MISAO_PANE } });
     expect(JSON.parse(req.body)).not.toHaveProperty('sessionId');
+  });
+
+  it('subagent sends the parent session as a refresh signal', async () => {
+    const [req] = await expectSame({ hook: 'subagent', stdin: JSON.stringify({ session_id: SESSION }), env: { ...fullEnv(), MISAO_PANE_ID: MISAO_PANE } });
+    expect(JSON.parse(req.body)).toEqual({ serverName: 'srv one', misaoPaneId: MISAO_PANE, event: 'subagent', sessionId: SESSION });
+    const [tmux] = await expectSame({ hook: 'subagent', stdin: JSON.stringify({ session_id: SESSION }), env: { ...fullEnv(), TMUX_PANE: '%3' } });
+    expect(JSON.parse(tmux.body)).toMatchObject({ serverName: 'srv one', sessionName: 'main', windowIndex: 2, windowName: 'work', paneIndex: 1, event: 'subagent', sessionId: SESSION });
+    await expectSame({ hook: 'subagent', stdin: '{"session_id":"x"}', env: { ...fullEnv(), MISAO_PANE_ID: MISAO_PANE }, expectNone: true });
   });
 
   it('session sends event "session" and needs a valid session id', async () => {
