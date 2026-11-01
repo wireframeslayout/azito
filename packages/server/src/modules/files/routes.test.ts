@@ -194,6 +194,20 @@ describe('PUT /api/servers/:name/files/content — baseMtime/baseHash enforcemen
   const validHash = () => createHash('sha256').update('original\n', 'utf-8').digest('hex');
   const currentMtime = () => fs.statSync(filePath).mtimeMs;
 
+  it('GET content reports why a file cannot be edited as text with a code', async () => {
+    const cases: Array<[string, Buffer, string]> = [
+      ['nul.txt', Buffer.from([0x61, 0x00]), 'binary'],
+      ['latin1.txt', Buffer.from([0x63, 0xe9]), 'invalid_utf8'],
+      ['big.txt', Buffer.alloc(500 * 1024 + 1, 0x61), 'too_large'],
+    ];
+    for (const [name, bytes, code] of cases) {
+      fs.writeFileSync(path.join(tmpDir, name), bytes);
+      const res = await app.inject({ method: 'GET', url: `/api/servers/test-local/files/content?path=${encodeURIComponent(path.join(tmpDir, name))}` });
+      expect(res.statusCode).toBe(400);
+      expect(res.json()).toMatchObject({ code });
+    }
+  });
+
   it('rejects with 400 when baseMtime and baseHash are both omitted (no force)', async () => {
     const res = await app.inject({
       method: 'PUT',

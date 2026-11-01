@@ -3,18 +3,9 @@ import type { ServerConfig } from '../servers/Server';
 import type { TransportFactory } from '../servers/transport/TransportFactory';
 import { FileOpsError, type IFileOps } from '../../shared/fs/fileOps';
 import { pathApiFor } from '../../shared/os/hostPath';
+import { EXT_LANG } from './fileLanguage';
 
 // ─── File type lookup tables ───
-
-export const EXT_LANG: Record<string, string> = {
-  '.ts': 'typescript', '.tsx': 'typescript',
-  '.js': 'javascript', '.jsx': 'javascript',
-  '.json': 'json', '.css': 'css', '.html': 'html',
-  '.md': 'markdown', '.py': 'python',
-  '.sh': 'shell', '.bash': 'shell',
-  '.yml': 'yaml', '.yaml': 'yaml',
-  '.sql': 'sql', '.toml': 'toml',
-};
 
 export const IMAGE_EXTS = new Set(['.png', '.jpg', '.jpeg', '.gif', '.svg', '.webp', '.ico', '.bmp']);
 
@@ -58,9 +49,12 @@ export const MIME_TYPES: Record<string, string> = {
 
 // ─── Errors ───
 
+/** Why a file cannot be opened as editable text; lets the UI explain it in the user's language. */
+export type FileBrowseErrorCode = 'too_large' | 'binary' | 'invalid_utf8' | 'forbidden';
+
 /** Service-level error carrying the HTTP status the route should respond with. */
 export class FileBrowseError extends Error {
-  constructor(message: string, public readonly status: number) {
+  constructor(message: string, public readonly status: number, public readonly code?: FileBrowseErrorCode) {
     super(message);
   }
 }
@@ -103,8 +97,8 @@ function toBrowseError(err: unknown, messages: BrowseMessages = {}): unknown {
     case 'NOT_FOUND': return new FileBrowseError('Not found', 404);
     case 'NOT_A_FILE': return new FileBrowseError('Not a regular file', 400);
     case 'NOT_A_DIRECTORY': return new FileBrowseError('Not a directory', 400);
-    case 'TOO_LARGE': return new FileBrowseError(messages.tooLarge?.(err.details.size ?? 0) ?? err.message, 400);
-    case 'PERMISSION_DENIED': return new FileBrowseError(err.message, 403);
+    case 'TOO_LARGE': return new FileBrowseError(messages.tooLarge?.(err.details.size ?? 0) ?? err.message, 400, 'too_large');
+    case 'PERMISSION_DENIED': return new FileBrowseError(err.message, 403, 'forbidden');
     case 'INVALID_PATH': return new FileBrowseError('Invalid path', 400);
     case 'SYMLINK_REFUSED': return new FileBrowseError('Refusing to write through a symlink', 400);
     case 'FAILED': return new FileBrowseError(err.message, 500);
@@ -219,7 +213,7 @@ export class FileBrowseService {
     }
 
     if (BINARY_EXTS.has(ext)) {
-      throw new FileBrowseError('Binary file cannot be displayed', 400);
+      throw new FileBrowseError('Binary file cannot be displayed', 400, 'binary');
     }
 
     const { data, stat } = await browsing(() => ops.read(filePath, { maxBytes: MAX_FILE_SIZE }), {
@@ -227,9 +221,15 @@ export class FileBrowseService {
     });
     // The bytes are checked, hashed and sized together, so the hash a later save sends back is the one the host computes.
     if (data.includes(0)) {
-      throw new FileBrowseError('Binary file cannot be displayed', 400);
+      throw new FileBrowseError('Binary file cannot be displayed', 400, 'binary');
     }
-    return { content: data.toString('utf-8'), path: filePath, size: stat.size, language: EXT_LANG[ext] || 'text', mtime: stat.mtimeMs, hash: sha256Hex(data) };
+    let content: string;
+    try {
+      content = new TextDecoder('utf-8', { fatal: true, ignoreBOM: true }).decode(data);
+    } catch {
+      throw new FileBrowseError('File is not valid UTF-8', 400, 'invalid_utf8');
+    }
+    return { content, path: filePath, size: stat.size, language: EXT_LANG[ext] || 'text', mtime: stat.mtimeMs, hash: sha256Hex(data) };
   }
 
   async writeFileContent(
@@ -239,6 +239,7 @@ export class FileBrowseService {
     baseMtime?: number,
     baseHash?: string,
   ): Promise<{ mtime: number; hash: string }> {
+    if (content.includes('\0')) throw new FileBrowseError('File contains NUL bytes', 400);
     if (Buffer.byteLength(content, 'utf-8') > MAX_FILE_SIZE) {
       throw new FileBrowseError(`Content too large. Maximum is 500KB.`, 400);
     }

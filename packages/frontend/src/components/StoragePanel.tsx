@@ -1,3 +1,4 @@
+import { storageRelativeKey } from './files/storageKey';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { api, fetchBlob, uploadFile } from '../api/client';
@@ -29,10 +30,6 @@ function isImage(name: string): boolean {
 
 function isPdf(name: string): boolean {
   return /\.pdf$/i.test(name);
-}
-
-function isPreviewable(name: string): boolean {
-  return isImage(name) || isPdf(name);
 }
 
 function timeAgo(dateStr: string): string {
@@ -156,11 +153,11 @@ function StorageFileList({ projectId, onFilePreview, activeTabId }: StoragePanel
   const handleDelete = useCallback(async (filename: string, name: string) => {
     if (!await confirm({ title: storageT('delete.title'), message: storageT('delete.message', { name }), danger: true })) return;
     await api(`/projects/${projectId}/storage/${encodeURIComponent(filename)}`, { method: 'DELETE' });
-    setFiles((prev) => prev.filter((f) => (f.key.split('/').pop() || '') !== filename));
+    setFiles((prev) => prev.filter((f) => storageRelativeKey(projectId, f.key) !== filename));
   }, [projectId, confirm, storageT]);
 
   const getApiPath = useCallback((file: StoredFile): string => {
-    const filename = file.key.split('/').pop() || '';
+    const filename = storageRelativeKey(projectId, file.key);
     return `/projects/${projectId}/storage/${encodeURIComponent(filename)}/raw`;
   }, [projectId]);
 
@@ -291,17 +288,17 @@ function StorageFileList({ projectId, onFilePreview, activeTabId }: StoragePanel
           <EmptyState title={t('storage.emptyMessage')} />
         )}
         {files.map((f) => {
-          const filename = f.key.split('/').pop() || '';
+          const filename = storageRelativeKey(projectId, f.key);
           const isImg = isImage(f.originalName);
-          const canPreview = isPreviewable(f.originalName) && onFilePreview;
+          const canPreview = Boolean(onFilePreview);
           const tabId = `storage-file:${projectId}:${filename}`;
           const isActive = activeTabId === tabId;
           return (
             <div key={f.key}
-              onClick={() => { if (canPreview) onFilePreview(f); }}
+              onClick={() => { if (canPreview) onFilePreview?.(f); }}
               role={canPreview ? 'button' : undefined}
               tabIndex={canPreview ? 0 : undefined}
-              onKeyDown={(e) => { if (canPreview && (e.key === 'Enter' || e.key === ' ')) { e.preventDefault(); onFilePreview(f); } }}
+              onKeyDown={(e) => { if (canPreview && (e.key === 'Enter' || e.key === ' ')) { e.preventDefault(); onFilePreview?.(f); } }}
               className={`row-hover${isActive ? ' row-selected' : ''}`}
               style={{
               padding: '8px 12px', fontSize: 'var(--font-md)', borderRadius: 'var(--radius-sm)', margin: '1px 0',

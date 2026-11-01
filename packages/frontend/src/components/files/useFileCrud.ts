@@ -1,6 +1,6 @@
 import { useCallback, useState } from 'react';
 import { useTranslation } from 'react-i18next';
-import { api } from '../../api/client';
+import type { FilesBackend } from './backend/FilesBackend';
 import type { HostPathApi } from '@azito/shared';
 import { useToast } from '../../hooks/useToast';
 import { joinRelative, parentOrRoot } from '../../lib/serverPath';
@@ -16,8 +16,7 @@ export interface PendingRename {
 }
 
 interface UseFileCrudOptions {
-  serverName: string;
-  projectId: number | undefined;
+  backend: FilesBackend;
   rootPath: string;
   /** The path functions of the server's host OS. */
   pathApi: HostPathApi;
@@ -27,7 +26,7 @@ interface UseFileCrudOptions {
   onFileCreated?: (filePath: string) => void;
 }
 
-export function useFileCrud({ serverName, projectId, rootPath, pathApi, loadRoot, expandDir, refreshDir, onFileCreated }: UseFileCrudOptions) {
+export function useFileCrud({ backend, rootPath, pathApi, loadRoot, expandDir, refreshDir, onFileCreated }: UseFileCrudOptions) {
   const { t } = useTranslation('files');
   const { showToast } = useToast();
   const [pendingCreate, setPendingCreate] = useState<PendingCreate | null>(null);
@@ -42,14 +41,10 @@ export function useFileCrud({ serverName, projectId, rootPath, pathApi, loadRoot
   }, [expandDir]);
 
   const commitCreate = useCallback(async (name: string) => {
-    if (!pendingCreate || !projectId) return;
+    if (!pendingCreate) return;
     const fullPath = joinRelative(pathApi, pendingCreate.parentPath, name);
     try {
-      const res = await api<{ ok?: boolean; error?: string }>(`/servers/${serverName}/files`, {
-        method: 'POST',
-        body: JSON.stringify({ projectId, path: fullPath, type: pendingCreate.type }),
-      });
-      if (res.error) throw new Error(res.error);
+      const createdPath = await backend.create(fullPath, pendingCreate.type);
       setPendingCreate(null);
       if (pendingCreate.parentPath === rootPath) {
         await loadRoot();
@@ -57,12 +52,12 @@ export function useFileCrud({ serverName, projectId, rootPath, pathApi, loadRoot
         await refreshDir(pendingCreate.parentPath);
       }
       if (pendingCreate.type === 'file' && onFileCreated) {
-        onFileCreated(fullPath);
+        onFileCreated(createdPath);
       }
-    } catch {
-      showToast(t('explorer.createFailed'));
+    } catch (error) {
+      showToast(error instanceof Error ? error.message : t('explorer.createFailed'));
     }
-  }, [pendingCreate, projectId, serverName, rootPath, pathApi, loadRoot, refreshDir, onFileCreated, showToast, t]);
+  }, [pendingCreate, backend, rootPath, pathApi, loadRoot, refreshDir, onFileCreated, showToast, t]);
 
   const cancelCreate = useCallback(() => setPendingCreate(null), []);
 
@@ -72,13 +67,9 @@ export function useFileCrud({ serverName, projectId, rootPath, pathApi, loadRoot
   }, []);
 
   const commitRename = useCallback(async (newName: string) => {
-    if (!pendingRename || !projectId) return;
+    if (!pendingRename) return;
     try {
-      const res = await api<{ ok?: boolean; error?: string }>(`/servers/${serverName}/files`, {
-        method: 'PATCH',
-        body: JSON.stringify({ projectId, path: pendingRename.path, newName }),
-      });
-      if (res.error) throw new Error(res.error);
+      await backend.rename(pendingRename.path, newName);
       const parentDir = parentOrRoot(pathApi, pendingRename.path, rootPath);
       setPendingRename(null);
       if (parentDir === rootPath) {
@@ -86,10 +77,10 @@ export function useFileCrud({ serverName, projectId, rootPath, pathApi, loadRoot
       } else {
         await refreshDir(parentDir);
       }
-    } catch {
-      showToast(t('explorer.renameFailed'));
+    } catch (error) {
+      showToast(error instanceof Error ? error.message : t('explorer.renameFailed'));
     }
-  }, [pendingRename, projectId, serverName, rootPath, pathApi, loadRoot, refreshDir, showToast, t]);
+  }, [pendingRename, backend, rootPath, pathApi, loadRoot, refreshDir, showToast, t]);
 
   const cancelRename = useCallback(() => setPendingRename(null), []);
 
@@ -98,14 +89,10 @@ export function useFileCrud({ serverName, projectId, rootPath, pathApi, loadRoot
   }, []);
 
   const confirmDelete = useCallback(async () => {
-    if (!deleteTarget || !projectId) return;
+    if (!deleteTarget) return;
     setDeleteLoading(true);
     try {
-      const res = await api<{ ok?: boolean; error?: string }>(`/servers/${serverName}/files`, {
-        method: 'DELETE',
-        body: JSON.stringify({ projectId, path: deleteTarget.path }),
-      });
-      if (res.error) throw new Error(res.error);
+      await backend.delete(deleteTarget.path, deleteTarget.type);
       const parentDir = parentOrRoot(pathApi, deleteTarget.path, rootPath);
       setDeleteTarget(null);
       if (parentDir === rootPath) {
@@ -113,11 +100,11 @@ export function useFileCrud({ serverName, projectId, rootPath, pathApi, loadRoot
       } else {
         await refreshDir(parentDir);
       }
-    } catch {
-      showToast(t('explorer.deleteFailed'));
+    } catch (error) {
+      showToast(error instanceof Error ? error.message : t('explorer.deleteFailed'));
     }
     setDeleteLoading(false);
-  }, [deleteTarget, projectId, serverName, rootPath, pathApi, loadRoot, refreshDir, showToast, t]);
+  }, [deleteTarget, backend, rootPath, pathApi, loadRoot, refreshDir, showToast, t]);
 
   const cancelDelete = useCallback(() => setDeleteTarget(null), []);
 

@@ -56,6 +56,11 @@ export async function apiWithStatus<T = unknown>(
     throw new Error('Unauthorized');
   }
   const body = (await res.json()) as T;
+  if (isOperatorRequiredError(res.status, body)) {
+    reportIfOperatorRequired(res.status, body);
+    clearUiToken();
+    throw new Error('OperatorRequired');
+  }
   return { status: res.status, body };
 }
 

@@ -85,5 +85,30 @@
     "orphanedNotice": "この worktree に対応するタスクが見つかりません",
     "copyPath": "パスをコピー",
     "pathCopied": "パスをコピーしました"
+  },
+  "editor": {
+    "viewMode": "Markdown 表示モード",
+    "saving": "保存中…",
+    "save": "保存",
+    "unsaved": "未保存の変更",
+    "conflict": "ファイルが他の場所で変更されました。",
+    "diff": "変更を比較",
+    "discardConfirm": "変更を破棄して再読み込みしますか？",
+    "reload": "再読み込み",
+    "overwrite": "上書き",
+    "retry": "再試行",
+    "closeDiff": "比較を閉じる",
+    "diffUnavailable": "このファイルの差分は表示できません。",
+    "saved": "保存しました",
+    "latestUnavailable": "最新内容を読み込めませんでした。",
+    "latest": "最新内容",
+    "yours": "自分の編集",
+    "unavailable": {
+      "too_large": "500 KiB を超えるファイルは編集できません。ダウンロードして確認してください。",
+      "binary": "バイナリファイルは編集できません。",
+      "invalid_utf8": "UTF-8 ではないファイルは編集できません。",
+      "not_text": "テキストファイルではないため編集できません。",
+      "forbidden": "このファイルを読み込む権限がありません。"
+    }
   }
 }

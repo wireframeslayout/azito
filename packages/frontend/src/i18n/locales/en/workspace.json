@@ -4,7 +4,10 @@
   "tab": {
     "closeDirtyTitle": "Close tab with unsaved changes?",
     "closeDirtyMessage": "\"{{name}}\" has unsaved changes. Closing this tab will discard them.",
-    "closeDirtyConfirm": "Discard and close"
+    "closeDirtyConfirm": "Discard and close",
+    "replaceDirtyTitle": "Replace tabs with unsaved changes?",
+    "replaceDirtyMessage": "Opening the new tab discards the unsaved changes in \"{{name}}\". To keep them, cancel and save or pin the tab.",
+    "replaceDirtyConfirm": "Discard and open"
   },
   "pane": {
     "splitRight": "Split right",
