@@ -8,8 +8,10 @@ export interface AgentRecoveryDeps {
   listServers(): ServerConfig[];
   /** Resolves when the agent answers `/health`; rejects when it cannot be reached (the circuit breaker being open is such a case). */
   checkAgent(server: ServerConfig): Promise<void>;
+  /** Told once per new confirmed firewall verdict (`blocked` / `missing_allow`) that pauses the recovery of the agent. */
   onFirewallProblem?(server: ServerConfig, detail: string): void;
-  inspectFirewall?(server: ServerConfig): Promise<{ ruleFound: boolean | null; blockedBy: string[]; problem: string | null; allowCommand?: string; blockCommands?: string[]; networkCategory?: string | null }>;
+  /** Reads the host's firewall policy for the agent (never changes it) before an attempt; a confirmed block pauses the recovery. */
+  inspectFirewall?(server: ServerConfig): Promise<FirewallVerdict>;
   /** Starts the agent again (`recoverAgent`: `/Query`, `/End`, `/Run` of its task). Resolves with what it did; `disabled` is a task disabled by hand, which is left alone. */
   recoverAgent(server: ServerConfig, force: boolean): Promise<string>;
   /** Asks the (reachable) agent whether the managed misao it hosts is installed by AZITO and does not answer. Rejects when the agent cannot say (an older one). */
@@ -20,6 +22,24 @@ export interface AgentRecoveryDeps {
   lock: Pick<KeyedMutex, 'withLock'>;
   now(): number;
   logger: { info(message: string): void; warn(message: string): void };
+}
+
+/** What {@link AgentRecoveryDeps.inspectFirewall} reports. */
+export interface FirewallVerdict {
+  ruleFound: boolean | null;
+  blockedBy: string[];
+  problem: string | null;
+  allowCommand: string;
+  blockCommands: string[];
+  networkCategory: string | null;
+}
+
+/** The last firewall diagnosis of an agent that does not answer, as the server status shows it. */
+export interface FirewallDiagnosis {
+  state: 'blocked' | 'missing_allow' | 'unknown';
+  detail: string;
+  checkedAt: number;
+  networkCategory: string | null;
 }
 
 /** How many servers are looked at at the same time (one waiting for a lock or an SSH timeout must not hold the others back). */
@@ -48,12 +68,8 @@ const MAX_CONCURRENT_LOOKS = 4;
  */
 export class AgentRecoveryWatchdog {
   private readonly agents = new Map<string, Backoff>();
-  private readonly firewall = new Map<string, { identity: string; state: 'blocked' | 'missing_allow' | 'unknown'; detail: string; checkedAt: number; networkCategory: string | null }>();
-
-  firewallStatus(server: ServerConfig): { state: 'blocked' | 'missing_allow' | 'unknown'; detail: string; checkedAt: number; networkCategory: string | null } | undefined {
-    const value = this.firewall.get(server.name);
-    return value?.identity === identityOf(server) ? { state: value.state, detail: value.detail, checkedAt: value.checkedAt, networkCategory: value.networkCategory } : undefined;
-  }
+  /** The last firewall diagnosis by server, kept while the agent does not answer. */
+  private readonly firewall = new Map<string, FirewallDiagnosis & { identity: string }>();
   private readonly misaos = new Map<string, Backoff>();
   /** The looks going on, by server. */
   private readonly looking = new Map<string, Promise<void>>();
@@ -165,6 +181,13 @@ export class AgentRecoveryWatchdog {
     await this.attempt(this.misaos, server, 'misao', (s) => this.deps.reviveMisao(s, force), (s) => this.deps.isMisaoDown(s).catch(() => false));
   }
 
+  /** The firewall diagnosis of the server's agent, while it does not answer and the server is still the one diagnosed. */
+  firewallStatus(server: ServerConfig): FirewallDiagnosis | undefined {
+    const value = this.firewall.get(server.name);
+    if (value?.identity !== identityOf(server)) return undefined;
+    return { state: value.state, detail: value.detail, checkedAt: value.checkedAt, networkCategory: value.networkCategory };
+  }
+
   private async answers(server: ServerConfig): Promise<boolean> {
     return this.deps.checkAgent(server).then(() => true, () => false);
   }
@@ -191,23 +214,9 @@ export class AgentRecoveryWatchdog {
           return;
         }
         if (!(await stillDown(current)) || this.stopped) return; // after the stop: not begun, so not begun
-        if (what === 'agent' && this.deps.inspectFirewall) {
-          try {
-            const result = await this.deps.inspectFirewall(current);
-            const state = result.ruleFound === null ? 'unknown' : result.blockedBy.length ? 'blocked' : result.ruleFound ? undefined : 'missing_allow';
-            if (state) {
-              const detail = state === 'blocked' ? `Windows Firewall blocks the agent: ${result.blockedBy.join(', ')}. Ask an administrator to inspect the active rule before changing it in Administrator PowerShell: ${result.blockCommands?.join('; ')}` : state === 'missing_allow' ? `Windows Firewall has no effective Allow rule for the agent. Ask an administrator to inspect the active policy before adding a rule in an Administrator PowerShell: ${result.allowCommand}` : `Windows Firewall policy could not be verified: ${result.problem ?? 'unknown reason'}.`;
-              const previous = this.firewall.get(current.name);
-              this.firewall.set(current.name, { identity, state, detail, checkedAt: this.deps.now(), networkCategory: result.networkCategory ?? null });
-              if (previous?.state !== state || previous.detail !== detail) this.deps.onFirewallProblem?.(current, detail);
-              if (state !== 'unknown') { outcome = 'firewall_blocked'; return; }
-            } else this.firewall.delete(current.name);
-          } catch (err) {
-            const detail = `Windows Firewall policy could not be verified: ${describe(err)}`;
-            const previous = this.firewall.get(current.name);
-            this.firewall.set(current.name, { identity, state: 'unknown', detail, checkedAt: this.deps.now(), networkCategory: null });
-            if (previous?.state !== 'unknown' || previous.detail !== detail) this.deps.onFirewallProblem?.(current, detail);
-          }
+        if (what === 'agent' && (await this.firewallBlocks(current, identity))) {
+          outcome = 'firewall_blocked';
+          return;
         }
         if (this.stopped) return;
         outcome = await act(current);
@@ -233,6 +242,30 @@ export class AgentRecoveryWatchdog {
     waits.set(server.name, afterAttempt(wait, this.deps.now(), this.timing));
   }
 
+  /**
+   * Diagnoses the firewall before an agent recovery and keeps the diagnosis for the server status. True = a confirmed block
+   * (a Block rule, or no Allow rule in the effective policy): restarting cannot make the agent reachable, so the attempt is paused.
+   * A policy that cannot be read is kept as `unknown` and does not stop the attempt; only a new confirmed verdict is announced.
+   */
+  private async firewallBlocks(server: ServerConfig, identity: string): Promise<boolean> {
+    if (!this.deps.inspectFirewall) return false;
+    let diagnosis: FirewallDiagnosis | undefined;
+    try {
+      diagnosis = diagnoseFirewall(await this.deps.inspectFirewall(server), this.deps.now());
+    } catch (err) {
+      diagnosis = { state: 'unknown', detail: `Windows Firewall policy could not be verified: ${describe(err)}`, checkedAt: this.deps.now(), networkCategory: null };
+    }
+    const previous = this.firewall.get(server.name);
+    if (diagnosis === undefined) {
+      this.firewall.delete(server.name);
+      return false;
+    }
+    this.firewall.set(server.name, { ...diagnosis, identity });
+    if (diagnosis.state === 'unknown') return false;
+    if (previous?.state !== diagnosis.state || previous.detail !== diagnosis.detail) this.deps.onFirewallProblem?.(server, diagnosis.detail);
+    return true;
+  }
+
   private report(name: string, what: 'agent' | 'misao', outcome: string, attempt: number): void {
     if (QUIET_OUTCOMES.has(outcome)) return;
     if (NOTHING_TO_DO_WARNED.has(outcome)) {
@@ -244,6 +277,21 @@ export class AgentRecoveryWatchdog {
     }
     this.deps.logger.info(`${name}: tried to bring the ${what} back (attempt ${attempt}): ${outcome}`);
   }
+}
+
+/** undefined = the policy lets the hub reach the agent. */
+function diagnoseFirewall(result: FirewallVerdict, checkedAt: number): FirewallDiagnosis | undefined {
+  const networkCategory = result.networkCategory;
+  if (result.ruleFound === null) {
+    return { state: 'unknown', detail: `Windows Firewall policy could not be verified: ${result.problem ?? 'the host gave no reason'}.`, checkedAt, networkCategory };
+  }
+  if (result.blockedBy.length > 0) {
+    const detail = `Windows Firewall blocks the agent: ${result.blockedBy.join(', ')}. Ask an administrator to inspect the active rule before changing it in an Administrator PowerShell: ${result.blockCommands.join('; ')}`;
+    return { state: 'blocked', detail, checkedAt, networkCategory };
+  }
+  if (result.ruleFound) return undefined;
+  const detail = `Windows Firewall has no effective Allow rule for the agent. Ask an administrator to inspect the active policy before adding a rule in an Administrator PowerShell: ${result.allowCommand}`;
+  return { state: 'missing_allow', detail, checkedAt, networkCategory };
 }
 
 function describe(err: unknown): string {

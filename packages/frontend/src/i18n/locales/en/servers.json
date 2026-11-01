@@ -131,7 +131,9 @@
     "hubVersionLabel": "Hub version",
     "muxRuntimeNote": "Only applies when using tmux",
     "misaoNotInstalled": "misao is not installed on this server",
-    "misaoNotInstalledSub": "Install it from Setup (Install misao). The hub sends its own copy through the agent."
+    "misaoNotInstalledSub": "Install it from Setup (Install misao). The hub sends its own copy through the agent.",
+    "firewallMeta": "Network profile: {{profile}} · Checked: {{checkedAt}}",
+    "firewallProfileUnknown": "unknown"
   },
   "setup": {
     "title": "Setup",

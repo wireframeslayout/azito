@@ -12,7 +12,7 @@ import { buildWindowsPreflightCommand, checkWindowsPreflight, parseWindowsPrefli
 import { buildSha256VerifyCommand, buildSafeExtractCommand, readSha256FromSumsFile } from './integrityVerifier';
 import { KeyedMutex } from '../../../shared/keyedMutex';
 import { CLEANUP_LOCK_DIR, CLEANUP_TIMEOUT_MS, INSTALL_ID_FILE, MANUAL_STEPS_ANY_START, SYSTEMD_MANUAL_STEPS, buildCleanupGuardScript, buildCleanupScript, buildNohupSightingScript, cleanupMarkMessage, parseCleanupGuard, nohupManualSteps, parseCleanupOutcome, parseNohupSighting, type NohupSighting } from './unixAgentCleanup';
-import { WindowsAgentDeployer, windowsAgentLayout, type WindowsDeployment } from './WindowsAgentDeployer';
+import { WindowsAgentDeployer, windowsAgentLayout, type FirewallInspection, type WindowsDeployment } from './WindowsAgentDeployer';
 import { DEFAULT_WINDOWS_AGENT_OPTIONS, type WindowsAgentOptions } from './windowsAgentConfig';
 import { updateWindowsAgent, type AgentUpdateResult } from './windowsAgentUpdate';
 import type { WindowsUninstallChoice, WindowsUninstallResult } from './windowsAgentUninstall';
@@ -707,6 +707,13 @@ export class AgentInstaller {
     await this.sshClient.execIsolated(sshHost, cmd);
   }
 
+  /** Reads (never changes) the Windows Firewall policy that decides whether the hub reaches the agent of the recognised task. */
+  async inspectAgentFirewall(sshHost: string, address: string, port: number): Promise<FirewallInspection> {
+    const probe = await this.sshClient.execIsolated(sshHost, buildWindowsPreflightCommand());
+    const host = parseWindowsPreflight(probe.stdout, probe.stderr, probe.code);
+    return this.windowsDeployer().inspectFirewall(sshHost, host, address, port);
+  }
+
   /**
    * Start an already-deployed agent, used to recover an agent left stopped after an update
    * flow was interrupted (e.g. by a hub restart between stop and start). Reuses the same
@@ -714,12 +721,6 @@ export class AgentInstaller {
    * (e.g. SSH connection failure) — the caller is expected to catch and re-check health
    * afterward regardless of outcome.
    */
-  async inspectAgentFirewall(sshHost: string, address: string, port: number): Promise<import('./windowsFirewall').FirewallResult & { allowCommand: string; blockCommands: string[] }> {
-    const probe = await this.sshClient.execIsolated(sshHost, buildWindowsPreflightCommand());
-    const host = parseWindowsPreflight(probe.stdout, probe.stderr, probe.code);
-    return this.windowsDeployer().inspectFirewall(sshHost, host, address, port);
-  }
-
   recoverAgent(sshHost: string, tailscaleIp: string, token: string, hostProfile: HostProfile | null, muxRuntime?: string, force = false): Promise<'systemd' | 'nohup' | 'taskscheduler' | 'disabled' | 'starting'> {
     return this.hostLocks.withLock(this.lockKey(sshHost), () => this.recoverAgentLocked(sshHost, tailscaleIp, token, hostProfile, muxRuntime, force));
   }

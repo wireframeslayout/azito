@@ -131,7 +131,9 @@
     "hubVersionLabel": "Hub バージョン",
     "muxRuntimeNote": "tmux を使うときだけ有効",
     "misaoNotInstalled": "このサーバーには misao が入っていません",
-    "misaoNotInstalledSub": "セットアップの「misao をインストール」から入れられます。ハブが持っている misao をエージェント経由で送ります。"
+    "misaoNotInstalledSub": "セットアップの「misao をインストール」から入れられます。ハブが持っている misao をエージェント経由で送ります。",
+    "firewallMeta": "ネットワークプロファイル: {{profile}} · 確認: {{checkedAt}}",
+    "firewallProfileUnknown": "不明"
   },
   "setup": {
     "title": "セットアップ",

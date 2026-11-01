@@ -25,6 +25,9 @@ export function needsTransferredScript(body: string): boolean {
 }
 
 /** Puts bytes on the host over SFTP. The remote path is relative to the user's home, with `/` separators (what Windows OpenSSH's sftp-server takes). */
+/** The firewall verdict for the recognised agent task, with the commands an administrator would run to inspect or allow it. */
+export type FirewallInspection = FirewallResult & { allowCommand: string; blockCommands: string[] };
+
 export interface WindowsFileTransfer {
   putFile(sshHost: string, localPath: string, remoteRelativePath: string): Promise<void>;
   putBuffer(sshHost: string, data: Buffer, remoteRelativePath: string): Promise<void>;
@@ -264,7 +267,7 @@ export class WindowsAgentDeployer {
   }
 
   /** Inspect the policy for the executable named by the recognised task without changing it. */
-  async inspectFirewall(sshHost: string, host: WindowsPreflightInfo, address: string, port: number): Promise<FirewallResult & { allowCommand: string; blockCommands: string[] }> {
+  async inspectFirewall(sshHost: string, host: WindowsPreflightInfo, address: string, port: number): Promise<FirewallInspection> {
     const xml = await this.schtasks(sshHost, host).exportXml(this.options.taskName);
     const action = soleExecAction(xml);
     const root = windowsAgentRoot(host.home, this.options);

@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import type { ServerConfig } from '../Server';
 import { KeyedMutex } from '../../../shared/keyedMutex';
-import { AgentRecoveryWatchdog } from './AgentRecoveryWatchdog';
+import { AgentRecoveryWatchdog, type FirewallVerdict } from './AgentRecoveryWatchdog';
 import type { RecoveryTiming } from '../../../shared/recoveryBackoff';
 
 const TIMING: RecoveryTiming = { tickMs: 15_000, baseMs: 60_000, maxMs: 240_000 };
@@ -12,6 +12,10 @@ function server(name: string, platform: 'win32' | 'linux' = 'win32', type: Serve
 }
 
 /** A hub whose servers, agents and misao are scripted, and whose clock moves only when told. */
+function verdict(over: Partial<FirewallVerdict>): FirewallVerdict {
+  return { ruleFound: true, blockedBy: [], problem: null, allowCommand: 'allow', blockCommands: [], networkCategory: null, ...over };
+}
+
 class Harness {
   clock = 1_000_000;
   servers: ServerConfig[] = [server('win')];
@@ -19,7 +23,8 @@ class Harness {
   misaoDown = false;
   misaoStatusFails = false;
   recoverFails = false;
-  firewall: { ruleFound: boolean | null; blockedBy: string[]; problem: string | null } = { ruleFound: true, blockedBy: [], problem: null };
+  firewall: FirewallVerdict = verdict({ ruleFound: true });
+  readonly firewallNotices: string[] = [];
   reviveResult = 'started';
   /** The agent is up again once recoverAgent was called this many times. */
   recoversToStart = 1;
@@ -37,6 +42,7 @@ class Harness {
     listServers: () => this.servers,
     checkAgent: async () => { if (!this.agentUp) throw new Error('unreachable'); },
     inspectFirewall: async () => { await this.duringInspect?.(); return this.firewall; },
+    onFirewallProblem: (_s, detail) => { this.firewallNotices.push(detail); },
     recoverAgent: async (s, force) => {
       this.recovered.push(s.name);
       this.recoverForces.push(force);
@@ -67,12 +73,14 @@ describe('AgentRecoveryWatchdog: the agent', () => {
   it('pauses on confirmed firewall blocks and resumes when the policy changes', async () => {
     const h = new Harness();
     h.agentUp = false;
-    h.firewall = { ruleFound: false, blockedBy: ['deny'], problem: null };
+    h.firewall = verdict({ ruleFound: false, blockedBy: ['deny'], blockCommands: ['inspect deny'] });
     await h.watchdog.tick();
     await h.advance(MIN);
     expect(h.recovered).toEqual([]);
     expect(h.watchdog.firewallStatus(h.servers[0]!)).toMatchObject({ state: 'blocked', checkedAt: h.clock, networkCategory: null });
-    h.firewall = { ruleFound: true, blockedBy: [], problem: null };
+    expect(h.firewallNotices).toHaveLength(1);
+    expect(h.firewallNotices[0]).toContain('inspect deny');
+    h.firewall = verdict({ ruleFound: true });
     await h.advance(TIMING.maxMs);
     expect(h.recoverForces).toEqual([false]);
     await h.watchdog.tick();
@@ -82,11 +90,12 @@ describe('AgentRecoveryWatchdog: the agent', () => {
   it('continues recovery when effective policy cannot be read', async () => {
     const h = new Harness();
     h.agentUp = false;
-    h.firewall = { ruleFound: null, blockedBy: ['unverified'], problem: 'not elevated' };
+    h.firewall = verdict({ ruleFound: null, blockedBy: ['unverified'], problem: 'not elevated' });
     await h.watchdog.tick();
     await h.advance(MIN);
     expect(h.recovered).toEqual(['win']);
     expect(h.watchdog.firewallStatus(h.servers[0]!)?.state).toBe('unknown');
+    expect(h.firewallNotices).toEqual([]);
   });
 
   it('only forces a persistent failure and does not log a waiting launcher as restarted', async () => {
