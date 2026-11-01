@@ -31,6 +31,9 @@ jobs:
       - name: Type check (server)
         run: npx -w packages/server tsc --noEmit
 
+      - name: Type check (server scripts)
+        run: npx -w packages/server tsc -p tsconfig.scripts.json
+
       - name: Type check (frontend)
         run: npx -w packages/frontend tsc --noEmit
 
