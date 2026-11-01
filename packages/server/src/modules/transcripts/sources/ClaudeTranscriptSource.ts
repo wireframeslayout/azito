@@ -795,10 +795,11 @@ export class ClaudeTranscriptSource implements TranscriptReader {
 
   private subagentDirectory(sessionId: string): string | null {
     if (!SESSION_ID_PATTERN.test(sessionId)) throw new Error('Invalid session id');
-    // Verify discovery separately so an unreadable project directory is not an empty list.
-    if (!this.sessionExists(sessionId)) return null;
     const parent = this.findSessionFile(sessionId);
-    if (!parent) throw new Error('Unable to locate session');
+    if (!parent) {
+      if (!this.sessionExists(sessionId)) return null;
+      throw new Error('Unable to locate session');
+    }
     const parentDir = path.join(path.dirname(parent), sessionId);
     const subagentsDir = path.join(parentDir, 'subagents');
     for (const dir of [parentDir, subagentsDir]) {
@@ -821,14 +822,19 @@ export class ClaudeTranscriptSource implements TranscriptReader {
       throw error;
     }
     const result: SubagentSummary[] = [];
-    for (const file of files) {
+    for (const file of files.sort()) {
       const match = /^agent-([a-zA-Z0-9_-]+)\.meta\.json$/.exec(file);
       if (!match) continue;
       let value: unknown;
       try {
         const metaPath = path.join(dir, file);
         if (!fs.lstatSync(metaPath).isFile()) continue;
-        value = JSON.parse(fs.readFileSync(metaPath, 'utf8'));
+        const fd = fs.openSync(metaPath, 'r');
+        try {
+          const stat = fs.fstatSync(fd);
+          if (!stat.isFile() || stat.size > 64 * 1024) continue;
+          value = JSON.parse(fs.readFileSync(fd, 'utf8'));
+        } finally { fs.closeSync(fd); }
       } catch (error) {
         if (error instanceof SyntaxError || (error as NodeJS.ErrnoException).code === 'ENOENT') continue;
         throw error;
@@ -837,7 +843,7 @@ export class ClaudeTranscriptSource implements TranscriptReader {
       if (value.name !== undefined && typeof value.name !== 'string') continue;
       if (value.model !== undefined && typeof value.model !== 'string') continue;
       if (value.finished !== undefined && typeof value.finished !== 'boolean') continue;
-      result.push({ id: match[1], name: typeof value.name === 'string' ? value.name : match[1], description: value.description, agentType: value.agentType,
+      result.push({ id: match[1], name: typeof value.name === 'string' ? value.name : value.description, description: value.description, agentType: value.agentType,
         model: typeof value.model === 'string' ? value.model : null, status: value.finished === true ? 'finished' : 'unknown' });
     }
     return result;

@@ -150,6 +150,8 @@ describeOnPosix('azito-hook.mjs sends what the bash hooks send', () => {
   it('subagent sends the parent session as a refresh signal', async () => {
     const [req] = await expectSame({ hook: 'subagent', stdin: JSON.stringify({ session_id: SESSION }), env: { ...fullEnv(), MISAO_PANE_ID: MISAO_PANE } });
     expect(JSON.parse(req.body)).toEqual({ serverName: 'srv one', misaoPaneId: MISAO_PANE, event: 'subagent', sessionId: SESSION });
+    const [tmux] = await expectSame({ hook: 'subagent', stdin: JSON.stringify({ session_id: SESSION }), env: { ...fullEnv(), TMUX_PANE: '%3' } });
+    expect(JSON.parse(tmux.body)).toMatchObject({ serverName: 'srv one', sessionName: 'main', windowIndex: 2, windowName: 'work', paneIndex: 1, event: 'subagent', sessionId: SESSION });
     await expectSame({ hook: 'subagent', stdin: '{"session_id":"x"}', env: { ...fullEnv(), MISAO_PANE_ID: MISAO_PANE }, expectNone: true });
   });
 

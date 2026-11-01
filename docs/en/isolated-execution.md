@@ -518,16 +518,7 @@ including isolated ones. The decision, and why it does not weaken isolation:
   it as text; a prompt-injected agent can write misleading text into its own log, exactly as it can
   into its pane.
 
-In a Claude Code chat, select a subagent belonging to the window's current parent session to view
-its conversation. Subagent conversations are read-only; return to the parent conversation to send a
-prompt. The selection is kept only while the view is open and is not restored later. A status that
-cannot be determined from metadata is shown as unknown.
-
-The harness's `SubagentStart` and `SubagentStop` hooks send authenticated notifications that prompt
-the list to refresh. Status comes from the conversation files and metadata, not the notifications.
-The list is also refreshed periodically if hooks are missing, although file updates can be delayed.
-On an agent server, an older agent without this feature reports `agent_outdated`; update the agent to
-use it.
+The subagent endpoints also accept no paths: they identify conversations by parent session UUID and subagent ID.
 
 If you would rather not surface an isolated server's conversation in the hub UI, leave the window in
 Terminal mode; there is no per-server switch for this today.

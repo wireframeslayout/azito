@@ -1444,6 +1444,20 @@ describe('window subagent API', () => {
     await app.close();
   });
 
+  it('re-resolves a cached parent when the list request names a different session', async () => {
+    const OTHER = '22222222-2222-2222-2222-222222222222';
+    const source = buildClaudeSource({ listSubagents: () => [], readSubagent: () => null });
+    let parent = SID;
+    const resolve = vi.fn(async () => ({ resolved: true as const, agentType: 'claude', sessionId: parent, paneId: PANE_ID, agentDetected: true }));
+    const app = buildApp([source], {}, { windowSessionResolver: { resolve } });
+    await app.inject({ method: 'GET', url: `/api/transcripts/windows/10/subagents?sessionId=${SID}` });
+    parent = OTHER;
+    const response = await app.inject({ method: 'GET', url: `/api/transcripts/windows/10/subagents?sessionId=${OTHER}` });
+    expect(response.json().sessionId).toBe(OTHER);
+    expect(resolve).toHaveBeenCalledTimes(2);
+    await app.close();
+  });
+
   it('reuses the recent parent resolution while polling and re-checks when the window link changes', async () => {
     const OTHER = '22222222-2222-2222-2222-222222222222';
     const readSubagent = vi.fn(() => ({ entries: [], nextOffset: 0, truncated: false, startOffset: 0, hasOlder: false }));

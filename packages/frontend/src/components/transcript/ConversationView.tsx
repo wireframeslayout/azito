@@ -537,8 +537,9 @@ export default function ConversationView({ windowId, sessionId, agentType, paneI
         )}
       </div>
 
-      {!subagentId && !loading && !notFound && (
+      {(subagentId || (!loading && !notFound)) && (
         <PromptInputBar
+          readOnlyReason={subagentId ? t('subagents.readOnly') : undefined}
           windowId={windowId}
           paneId={paneId}
           draftKey={sessionId}

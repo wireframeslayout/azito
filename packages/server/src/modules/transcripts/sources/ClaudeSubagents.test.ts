@@ -29,6 +29,14 @@ describe('Claude subagents', () => {
     expect(first && 'nextOffset' in first && source.readSubagent(session, 'a123', first.nextOffset)?.entries).toEqual([]);
   });
 
+  it('orders names deterministically, uses the description, and skips oversized metadata', () => {
+    const { source, dir } = fixture();
+    fs.writeFileSync(path.join(dir, 'agent-b.meta.json'), JSON.stringify({ agentType: 'Task', description: 'Second', model: 'model' }));
+    fs.writeFileSync(path.join(dir, 'agent-a.meta.json'), JSON.stringify({ agentType: 'Task', description: 'First' }));
+    fs.writeFileSync(path.join(dir, 'agent-c.meta.json'), JSON.stringify({ agentType: 'Task', description: 'x'.repeat(65536) }));
+    expect(source.listSubagents(session)?.map(({ name }) => name)).toEqual(['First', 'Second']);
+  });
+
   it('rejects traversal, excludes symlinks and distinguishes missing sessions', () => {
     const { source, dir } = fixture();
     expect(() => source.listSubagents('../escape')).toThrow();

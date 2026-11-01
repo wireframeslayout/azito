@@ -35,7 +35,7 @@ export default function SubagentChat({ windowId, sessionId, onParentChanged, ...
   const sequence = useRef(0);
   const refresh = useCallback(() => {
     const current = ++sequence.current;
-    apiWithStatus<{ sessionId: string; subagents: Subagent[] } | { error: string }>(`/transcripts/windows/${windowId}/subagents`)
+    apiWithStatus<{ sessionId: string; subagents: Subagent[] } | { error: string }>(`/transcripts/windows/${windowId}/subagents?sessionId=${encodeURIComponent(sessionId)}`)
       .then(({ status, body }) => {
         if (current !== sequence.current) return;
         if (status !== 200 || 'error' in body) { setList({ kind: 'error', reason: 'error' in body ? hostUnavailableReason(body.error) : null }); return; }
@@ -57,21 +57,20 @@ export default function SubagentChat({ windowId, sessionId, onParentChanged, ...
   });
   return (
     <div style={{ display: 'flex', flexDirection: 'column', height: '100%', minHeight: 0 }}>
-      <section aria-label={t('subagents.title')} style={{ padding: 'var(--space-2) var(--space-3)', borderBottom: '1px solid var(--border)', maxHeight: '35%', overflowY: 'auto' }}>
+      {(list.kind !== 'ready' || list.agents.length > 0 || selected !== null) && <section aria-label={t('subagents.title')} style={{ padding: 'var(--space-2) var(--space-3)', borderBottom: '1px solid var(--border)', maxHeight: '35%', overflowY: 'auto' }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: 'var(--space-2)', flexWrap: 'wrap' }}>
           <strong style={{ fontSize: 'var(--font-sm)' }}>{t('subagents.title')}</strong>
           <Button size="sm" variant={selected === null ? 'primary' : 'default'} aria-pressed={selected === null} onClick={() => setSelected(null)}>{t('subagents.parent')}</Button>
           {list.kind === 'ready' && list.agents.map((agent) => (
-            <Button key={agent.id} style={{ maxWidth: '100%', overflowWrap: 'anywhere', textAlign: 'left' }} size="sm" variant={selected === agent.id ? 'primary' : 'default'} aria-pressed={selected === agent.id} onClick={() => setSelected(agent.id)}>
+            <Button key={agent.id} title={[agent.description, agent.model].filter(Boolean).join(' · ')} style={{ maxWidth: '100%', overflowWrap: 'anywhere', textAlign: 'left' }} size="sm" variant={selected === agent.id ? 'primary' : 'default'} aria-pressed={selected === agent.id} onClick={() => setSelected(agent.id)}>
               {agent.name} · {agent.agentType} · {t(`subagents.status.${agent.status}`)}
             </Button>
           ))}
         </div>
         <div aria-live="polite" style={{ color: 'var(--text-dim)', fontSize: 'var(--font-xs)', marginTop: 'var(--space-1)' }}>
-          {list.kind === 'loading' ? t('subagents.loading') : list.kind === 'error' ? <>{list.reason ? t(`windowChat.notFound.${list.reason}`) : t('subagents.error')} <Button size="sm" onClick={refresh}>{t('windowChat.retry')}</Button></> : list.agents.length === 0 ? t('subagents.empty') : null}
-          {selected !== null && <div>{t('subagents.readOnly')}</div>}
+          {list.kind === 'loading' ? t('subagents.loading') : list.kind === 'error' ? <>{list.reason ? t(`windowChat.notFound.${list.reason}`) : t('subagents.error')} <Button size="sm" onClick={refresh}>{t('windowChat.retry')}</Button></> : null}
         </div>
-      </section>
+      </section>}
       <div style={{ flex: 1, minHeight: 0 }}>
         <ConversationView key={selected ?? 'parent'} windowId={windowId} sessionId={sessionId} onParentChanged={onParentChanged} subagentId={selected ?? undefined} {...conversationProps} />
       </div>

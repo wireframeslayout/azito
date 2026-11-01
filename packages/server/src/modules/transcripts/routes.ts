@@ -279,13 +279,16 @@ const transcriptsRoutes: FastifyPluginCallback<TranscriptsRouteOptions> = (fasti
     return source as SubagentTranscriptSource;
   }
 
-  fastify.get<{ Params: { windowId: string } }>('/api/transcripts/windows/:windowId/subagents', async (request, reply) => {
+  fastify.get<{ Params: { windowId: string }; Querystring: { sessionId?: string } }>('/api/transcripts/windows/:windowId/subagents', async (request, reply) => {
+    const expectedSession = request.query.sessionId;
+    if (expectedSession !== undefined && !sessionIdSchema.safeParse(expectedSession).success) return reply.status(400).send({ error: 'invalid_id' });
     const window = findSubagentWindow(request.params.windowId, reply);
     if (!window) return;
     try {
       // 子の一覧そのものは毎回読み直す（通知直後の新しい子を落とさない）。重いのは親の解決だけなので、
       // それは直近の結果を使い回す（PARENT_SESSION_TTLS 参照）。
-      const sessionId = parentSessions.get(window) ?? await resolveParentSession(window, reply);
+      const cached = parentSessions.get(window);
+      const sessionId = cached && (expectedSession === undefined || cached === expectedSession) ? cached : await resolveParentSession(window, reply);
       if (!sessionId) return;
       const source = findSubagentSource(window, reply);
       if (!source) return;

@@ -195,7 +195,7 @@ After resolution, an empty `AZITO_WEBHOOK_TOKEN` or `AZITO_SERVER_NAME` makes th
 without doing anything.
 
 Scripts involved: `harness/hooks/azito-activity.sh`, `azito-interaction.sh`,
-`azito-question.sh`, `azito-session.sh`.
+`azito-question.sh`, `azito-session.sh`, `azito-subagent.sh`.
 
 ### Following the session id (SessionStart hook / `sessionId`)
 
@@ -613,3 +613,16 @@ tmux. For tmux servers nothing below is created and the tmux behavior above is u
   ignored and the tmux fields stay required.
 - **Diagnostics.** `GET /api/debug/activity` rows carry `mux: { status, decidedBy?, at }`, and the
   panel shows `tier0 misao`.
+
+### Subagent conversations
+
+In a Claude Code chat, select a subagent belonging to the window's current parent session to view
+its conversation. Subagent conversations are read-only; return to the parent conversation to send a
+prompt. The selection is kept only while the view is open and is not restored later. A status that
+cannot be determined from metadata is shown as unknown.
+
+The harness's `SubagentStart` and `SubagentStop` hooks send authenticated notifications that prompt
+the list to refresh. Status comes from the conversation files and metadata, not the notifications.
+The list is also refreshed periodically if hooks are missing, although file updates can be delayed.
+On an agent server, an older agent without this feature reports `agent_outdated`; update the agent to
+use it.
