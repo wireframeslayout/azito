@@ -1,4 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
+import { spawnSync } from 'node:child_process';
+import { powershellEncodedArgs } from '../../../shared/os/shellDialect';
 import { decodeEncodedCommand } from './testing/fakeWindowsHost';
 import {
   buildFirewallAddCommand, buildFirewallDumpCommand, checkFirewall, describeFirewallProblem, evaluateFirewallRules, firewallRuleCommand,
@@ -157,6 +159,40 @@ function dumped(over: object = {}): string {
   return `x\r\n<<AZITO_FIREWALL_DUMP_BEGIN>>\r\n${JSON.stringify(dump)}\r\n<<AZITO_FIREWALL_DUMP_END>>\r\n`;
 }
 const added = (created: boolean, problem: string | null = null): string => `<<AZITO_FIREWALL_ADD_BEGIN>>\n${JSON.stringify({ created, problem })}\n<<AZITO_FIREWALL_ADD_END>>\n`;
+
+describe.skipIf(process.platform !== 'win32')('registry collection on PowerShell', () => {
+  it.each([false, true])('distinguishes a missing policy key from denied access (denied=%s)', (denied) => {
+    const script = decodeEncodedCommand(buildFirewallDumpCommand(IP));
+    const fake = [
+      '$base = New-Object PSObject',
+      `$denyPolicy = $${denied ? 'true' : 'false'}`,
+      '$base | Add-Member ScriptMethod Dispose {}',
+      '$base | Add-Member ScriptMethod OpenSubKey { param($path)',
+      "  if ($path.StartsWith('SOFTWARE')) { if ($denyPolicy) { throw 'access denied' }; return $null }",
+      '  $key = New-Object PSObject',
+      "  $key | Add-Member ScriptMethod GetValueNames { @('local-rule') }",
+      "  $key | Add-Member ScriptMethod GetValue { param($id) 'v2.30|Action=Block|Active=TRUE|Dir=In|Protocol=6|LPort=3002|' }",
+      '  $key | Add-Member ScriptMethod Dispose {}',
+      '  return $key',
+      '}',
+    ].join('\n');
+    const modified = script
+      .replace(/^\$elevated = .*$/m, '$elevated = $false')
+      .replace(/^[ \t]*\$base = \[Microsoft\.Win32\.RegistryKey\]::OpenBaseKey\(.*\)$/m, fake);
+    expect(modified).toContain('$denyPolicy');
+    const result = spawnSync('powershell.exe', powershellEncodedArgs(modified), { encoding: 'utf8', timeout: 30_000 });
+    expect(result.status, result.stderr).toBe(0);
+    const dump = parseFirewallDump(result.stdout, result.stderr, result.status!);
+    if (denied) {
+      expect(dump.problem).toContain('access denied');
+      expect(dump.rules).toEqual([]);
+    } else {
+      expect(dump.problem).toBeNull();
+      expect(dump.rules).toHaveLength(1);
+      expect(dump.rules[0]).toMatchObject({ name: 'local-rule', action: 'Block', localPort: ['3002'] });
+    }
+  });
+});
 
 describe('checkFirewall', () => {
   const run = (answers: string[]) => {
