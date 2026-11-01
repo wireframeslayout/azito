@@ -1,25 +1,14 @@
 import type { IStorageSettingsRepository } from '../SqliteStorageSettingsRepository';
 import type { ResolvedStorageOnboarding } from '../storageOnboarding';
 import type { StorageSettings } from './MinioStorageClient';
+import { classifyStorageError, type StorageErrorCode } from './storageErrors';
 
 export type StorageStatus =
   | { state: 'ready' }
   | { state: 'unconfigured'; onboarding: ResolvedStorageOnboarding }
-  | { state: 'unreachable'; reason: 'authentication' | 'not_found' | 'timeout' | 'network' | 'unknown'; message: string };
+  | { state: 'unreachable'; reason: StorageErrorCode; message: string };
 
 interface StorageProbe { probe(settings: StorageSettings): Promise<void> }
-
-function classifyError(error: unknown): Extract<StorageStatus, { state: 'unreachable' }> {
-  const value = error as { name?: string; code?: string; $metadata?: { httpStatusCode?: number } };
-  const code = value?.code ?? value?.name;
-  const status = value?.$metadata?.httpStatusCode;
-  let reason: Extract<StorageStatus, { state: 'unreachable' }>['reason'] = 'unknown';
-  if (status === 401 || status === 403 || code === 'AccessDenied' || code === 'InvalidAccessKeyId' || code === 'SignatureDoesNotMatch') reason = 'authentication';
-  else if (status === 404 || code === 'NotFound' || code === 'NoSuchBucket') reason = 'not_found';
-  else if (code === 'TimeoutError' || code === 'AbortError') reason = 'timeout';
-  else if (code === 'ECONNREFUSED' || code === 'ENOTFOUND' || code === 'ECONNRESET' || code === 'EHOSTUNREACH') reason = 'network';
-  return { state: 'unreachable', reason, message: 'Storage is unavailable. Check the connection settings and try again.' };
-}
 
 export class StorageStatusService {
   constructor(private readonly settings: IStorageSettingsRepository, private readonly client: StorageProbe, private readonly onboarding: ResolvedStorageOnboarding) {}
@@ -30,7 +19,8 @@ export class StorageStatusService {
       await this.client.probe(settings);
     } catch (error) {
       if (!this.settings.isConfigured()) return { state: 'unconfigured', onboarding: this.onboarding };
-      return classifyError(error);
+      const failure = classifyStorageError(error);
+      return { state: 'unreachable', reason: failure.code, message: failure.error };
     }
     if (!this.settings.isConfigured()) this.settings.markConfigured();
     return { state: 'ready' };

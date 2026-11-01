@@ -2,6 +2,7 @@ import type { FastifyInstance } from 'fastify';
 import { z } from 'zod';
 import type { StorageRouteOptions } from '../routes';
 import { StorageOperationError, validateStoragePath } from './storageOperations';
+import { classifyStorageError } from './storageErrors';
 
 const path = z.string();
 const paths = z.array(path).max(1000);
@@ -25,7 +26,7 @@ export function registerStorageOperationRoutes(fastify: FastifyInstance, opts: S
       catch (error) {
         if (error instanceof StorageOperationError) return reply.status(error.status).send({ error: error.message, code: error.code });
         request.log.error(error);
-        return reply.status(502).send({ error: 'Storage operation failed', code: 'storage_error' });
+        return reply.status(502).send(classifyStorageError(error));
       }
     } });
   }

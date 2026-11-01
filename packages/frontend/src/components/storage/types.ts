@@ -14,5 +14,5 @@ export interface StorageOnboardingInfo {
 
 export type StorageStatus =
   | { state: 'ready' }
-  | { state: 'unreachable'; reason: string; message: string }
+  | { state: 'unreachable'; reason: 'dns' | 'refused' | 'timeout' | 'auth' | 'bucket' | 'unknown'; message: string }
   | { state: 'unconfigured'; onboarding: StorageOnboardingInfo };

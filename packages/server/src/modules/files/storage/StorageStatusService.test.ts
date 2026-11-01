@@ -21,6 +21,6 @@ describe('StorageStatusService', () => {
   });
   it('classifies configured failures without leaking details', async () => {
     const service = new StorageStatusService(repo(true), { probe: async () => { throw Object.assign(new Error('secret'), { name: 'AccessDenied' }); } }, resolveStorageOnboarding(null));
-    expect(await service.getStatus()).toEqual({ state: 'unreachable', reason: 'authentication', message: 'Storage is unavailable. Check the connection settings and try again.' });
+    expect(await service.getStatus()).toEqual({ state: 'unreachable', reason: 'auth', message: 'Storage authentication failed.' });
   });
 });

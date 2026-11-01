@@ -1,3 +1,4 @@
+import { classifyStorageError } from './storage/storageErrors';
 import { registerStorageOperationRoutes } from './storage/storageOperationRoutes';
 import { validateStoragePath } from './storage/storageOperations';
 import type { StorageStatusService } from './storage/StorageStatusService';
@@ -63,7 +64,7 @@ const storageRoutes: FastifyPluginCallback<StorageRouteOptions> = (fastify, opts
         const files = await storageClient.list(settings, projectId);
         return { files };
       } catch (err: unknown) {
-        return reply.status(502).send({ error: 'Storage operation failed', code: 'storage_error' });
+        return reply.status(502).send(classifyStorageError(err));
       }
     },
   );
@@ -106,7 +107,7 @@ const storageRoutes: FastifyPluginCallback<StorageRouteOptions> = (fastify, opts
         );
         return { ok: true, file };
       } catch (err: unknown) {
-        return reply.status(502).send({ error: 'Storage operation failed', code: 'storage_error' });
+        return reply.status(502).send(classifyStorageError(err));
       }
     },
   );
@@ -126,7 +127,7 @@ const storageRoutes: FastifyPluginCallback<StorageRouteOptions> = (fastify, opts
         await storageClient.delete(settings, projectId, filename);
         return { ok: true };
       } catch (err: unknown) {
-        return reply.status(502).send({ error: 'Storage operation failed', code: 'storage_error' });
+        return reply.status(502).send(classifyStorageError(err));
       }
     },
   );
@@ -146,7 +147,7 @@ const storageRoutes: FastifyPluginCallback<StorageRouteOptions> = (fastify, opts
         const url = await storageClient.getPresignedUrl(settings, projectId, filename);
         return { url };
       } catch (err: unknown) {
-        return reply.status(502).send({ error: 'Storage operation failed', code: 'storage_error' });
+        return reply.status(502).send(classifyStorageError(err));
       }
     },
   );
@@ -167,7 +168,7 @@ const storageRoutes: FastifyPluginCallback<StorageRouteOptions> = (fastify, opts
         const res = await fetch(url);
         if (!res.ok) {
           if (res.status === 404) return reply.status(404).send({ error: 'File not found' });
-          return reply.status(502).send({ error: 'Storage access denied', code: 'storage_error' });
+          return reply.status(502).send(classifyStorageError({ $metadata: { httpStatusCode: res.status } }));
         }
         const contentType = res.headers.get('content-type') || 'application/octet-stream';
         reply.header('Content-Type', contentType);
@@ -181,7 +182,7 @@ const storageRoutes: FastifyPluginCallback<StorageRouteOptions> = (fastify, opts
         const buffer = Buffer.from(await res.arrayBuffer());
         return reply.send(buffer);
       } catch (err: unknown) {
-        return reply.status(502).send({ error: 'Storage operation failed', code: 'storage_error' });
+        return reply.status(502).send(classifyStorageError(err));
       }
     },
   );

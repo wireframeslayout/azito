@@ -7,11 +7,12 @@
   "unreachable": {
     "title": "Storage is unavailable",
     "reasons": {
-      "authentication": "Authentication failed. Check the access key and secret key.",
-      "not_found": "The storage bucket was not found. Check the bucket name.",
       "timeout": "The connection timed out. Check the endpoint and try again.",
-      "network": "Could not reach the storage endpoint. Check the connection.",
-      "unknown": "Storage is unavailable. Check the connection settings and try again."
+      "unknown": "Storage is unavailable. Check the connection settings and try again.",
+      "auth": "Authentication failed. Check the access key and secret key.",
+      "bucket": "The storage bucket was not found. Check the bucket name.",
+      "dns": "Storage hostname could not be resolved.",
+      "refused": "Storage connection was refused."
     }
   },
   "onboarding": {

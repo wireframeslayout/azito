@@ -327,7 +327,7 @@ describe('storage /raw and /url routes — presigned URL usage', () => {
 
     const res = await app.inject({ method: 'GET', url: '/api/projects/1/storage/denied.png/raw' });
     expect(res.statusCode).toBe(502);
-    expect(res.json()).toEqual({ error: 'Storage access denied', code: 'storage_error' });
+    expect(res.json()).toEqual({ error: 'Storage authentication failed.', code: 'auth' });
   });
 
   it('/url returns a presigned URL', async () => {
@@ -344,7 +344,7 @@ describe('storage /raw and /url routes — presigned URL usage', () => {
 
     const res = await app.inject({ method: 'GET', url: '/api/projects/1/storage/img.png/url' });
     expect(res.statusCode).toBe(502);
-    expect(res.json()).toEqual({ error: 'Storage operation failed', code: 'storage_error' });
+    expect(res.json()).toEqual({ error: 'Storage is unavailable.', code: 'unknown' });
   });
 
   it('/raw returns 502 when presigning fails', async () => {
@@ -352,7 +352,7 @@ describe('storage /raw and /url routes — presigned URL usage', () => {
 
     const res = await app.inject({ method: 'GET', url: '/api/projects/1/storage/img.png/raw' });
     expect(res.statusCode).toBe(502);
-    expect(res.json()).toEqual({ error: 'Storage operation failed', code: 'storage_error' });
+    expect(res.json()).toEqual({ error: 'Storage is unavailable.', code: 'unknown' });
   });
 });
 
