@@ -21,6 +21,7 @@ interface SegmentedToggleProps<T extends string> {
   ariaLabel?: string;
   /** 全体を操作不可にする（読み込み中など）。 */
   disabled?: boolean;
+  wrap?: boolean;
 }
 
 /**
@@ -29,7 +30,7 @@ interface SegmentedToggleProps<T extends string> {
  * （MiniTabBar）とは用途が異なる: あちらは複数タブの並列表示、こちらは同一領域の表示モード切替。
  * デザイン方針によりボーダーは使わない（--bg-* トークンのみで階層表現）。
  */
-export function SegmentedToggle<T extends string>({ options, value, onChange, size = 'sm', ariaLabel, disabled = false }: SegmentedToggleProps<T>) {
+export function SegmentedToggle<T extends string>({ options, value, onChange, size = 'sm', ariaLabel, disabled = false, wrap = false }: SegmentedToggleProps<T>) {
   const padding = size === 'sm' ? 'var(--space-1) var(--space-2)' : 'var(--space-1) var(--space-3)';
   const fontSize = size === 'sm' ? 'var(--font-xs)' : 'var(--font-sm)';
   const iconSize = 14;
@@ -59,6 +60,8 @@ export function SegmentedToggle<T extends string>({ options, value, onChange, si
         borderRadius: 'var(--radius-md)',
         background: 'var(--bg-hover)',
         flexShrink: 0,
+        flexWrap: wrap ? 'wrap' : undefined,
+        maxWidth: wrap ? '100%' : undefined,
       }}
     >
       {options.map((opt) => {

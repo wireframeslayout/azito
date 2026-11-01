@@ -1,8 +1,6 @@
-import type { ReactNode } from 'react';
-import { useEffect } from 'react';
+import { useId, type ReactNode } from 'react';
 import { useTranslation } from 'react-i18next';
-import { shouldCloseOnKey } from './modalEscape';
-import { Button } from './ui';
+import { Button, Overlay } from './ui';
 
 interface ModalProps {
   title: string;
@@ -12,70 +10,24 @@ interface ModalProps {
   children: ReactNode;
   maxWidth?: number | string;
   maxHeight?: string;
-  /** The dialog has a button of its own that closes it (in `actions`): no second "Cancel" beside it. */
   hideCancel?: boolean;
 }
 
-export default function Modal({ title, open, onClose, actions, children, maxWidth = 500, maxHeight = '90vh', hideCancel = false }: ModalProps) {
+export function ModalContent({ title, children, actions, onClose, hideCancel = false, closeDisabled = false, titleId }: Pick<ModalProps, 'title' | 'children' | 'actions' | 'onClose' | 'hideCancel'> & { closeDisabled?: boolean; titleId: string }) {
   const { t } = useTranslation('common');
-  useEffect(() => {
-    if (!open) return;
-    const handleKey = (e: KeyboardEvent) => {
-      if (shouldCloseOnKey(e)) { e.preventDefault(); onClose(); }
-    };
-    document.addEventListener('keydown', handleKey);
-    return () => document.removeEventListener('keydown', handleKey);
-  }, [open, onClose]);
-
-  if (!open) return null;
-
-  return (
-    <div
-      style={{
-        position: 'fixed',
-        inset: 0,
-        background: 'var(--overlay)',
-        display: 'flex',
-        alignItems: 'center',
-        justifyContent: 'center',
-        zIndex: 100,
-        padding: 16,
-      }}
-      onClick={(e) => {
-        if (e.target === e.currentTarget) onClose();
-      }}
-    >
-      <div
-        style={{
-          background: 'var(--bg-elevated)',
-          border: '1px solid var(--border)',
-          borderRadius: 'var(--radius-md)',
-          boxShadow: 'inset 0 1px 0 var(--edge-hi), var(--shadow-3)',
-          padding: 20,
-          width: '100%',
-          maxWidth,
-          maxHeight,
-          overflowY: 'auto',
-        }}
-      >
-        <h2 style={{ fontSize: 'var(--font-lg)', marginBottom: 16 }}>{title}</h2>
-        <div>{children}</div>
-        <div
-          style={{
-            display: 'flex',
-            justifyContent: 'flex-end',
-            gap: 8,
-            marginTop: 16,
-          }}
-        >
-          {!hideCancel && (
-            <Button onClick={onClose}>
-              {t('actions.cancel')}
-            </Button>
-          )}
-          {actions}
-        </div>
-      </div>
+  return <>
+    <h2 id={titleId} style={{ fontSize: 'var(--font-lg)', marginBottom: 'var(--space-4)' }}>{title}</h2>
+    <div>{children}</div>
+    <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 'var(--space-2)', marginTop: 'var(--space-4)' }}>
+      {!hideCancel && <Button onClick={onClose} disabled={closeDisabled}>{t('actions.cancel')}</Button>}
+      {actions}
     </div>
-  );
+  </>;
+}
+
+export default function Modal({ title, open, onClose, actions, children, maxWidth = 500, maxHeight = '90vh', hideCancel = false }: ModalProps) {
+  const titleId = useId();
+  return <Overlay open={open} onClose={onClose} labelledBy={titleId} maxWidth={maxWidth} maxHeight={maxHeight}>
+    <ModalContent titleId={titleId} title={title} onClose={onClose} actions={actions} hideCancel={hideCancel}>{children}</ModalContent>
+  </Overlay>;
 }

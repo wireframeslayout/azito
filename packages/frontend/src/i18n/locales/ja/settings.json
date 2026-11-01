@@ -6,7 +6,8 @@
     "resources": "リソースガード",
     "notifications": "通知",
     "security": "セキュリティ",
-    "system": "システム"
+    "system": "システム",
+    "keyboard": "キーボード"
   },
   "auditLog": {
     "description": "直近{{count}}件のセキュリティ監査イベント（task トークンの発行/失効、拒否されたリクエスト、承認、supervisor 登録など）。これは運用上の記録であり、改ざん耐性はありません。",
@@ -241,5 +242,17 @@
     "emptyActive": "稼働中のウィンドウはありません。",
     "offlineHidden": "オフラインのウィンドウ（{{count}}件）は表示していません — Settings → System の全件表示へ",
     "supervisorConnected": "接続中"
+  },
+  "keyboard": {
+    "search": "検索を開くキー",
+    "spaceTwice": "Space 2 回",
+    "disabled": "使わない",
+    "interval": "2 回押しの間隔",
+    "intervalDescription": "短いほど誤って開きにくくなります。",
+    "seconds": "{{value}} 秒",
+    "notice": "端末や入力欄に文字を打っているあいだは反応しません。",
+    "maximize": "拡大を開くキー",
+    "conflict": "このキーは別の操作に割り当てられています。",
+    "storageError": "設定を保存できませんでした。"
   }
 }

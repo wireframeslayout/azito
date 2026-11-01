@@ -1,0 +1,56 @@
+import { useEffect, useRef } from 'react';
+import type { CSSProperties, ReactNode, RefObject } from 'react';
+import { createPortal } from 'react-dom';
+import { useHotkey, useOverlayStack } from '../../hooks/useHotkeys';
+import { parseKeySpec } from '../../lib/hotkeys/keySpec';
+import { cycleFocus, getFocusableElements } from './overlayLogic';
+import { shouldCloseOnKey } from '../modalEscape';
+
+interface OverlayProps {
+  open: boolean;
+  onClose: () => void;
+  labelledBy: string;
+  variant?: 'dialog' | 'alert';
+  surface?: 'elevated' | 'solid';
+  initialFocusRef?: RefObject<HTMLElement | null>;
+  children: ReactNode;
+  dismissOnBackdrop?: boolean;
+  closeDisabled?: boolean;
+  busy?: boolean;
+  maxWidth?: number | string;
+  maxHeight?: string;
+  style?: CSSProperties;
+}
+
+export function Overlay({ open, onClose, labelledBy, children, variant = 'dialog', surface = 'elevated', initialFocusRef, dismissOnBackdrop = true, closeDisabled = false, busy = false, maxWidth = 500, maxHeight = '90vh', style }: OverlayProps) {
+  const ref = useRef<HTMLDivElement>(null);
+  const { id, isTop } = useOverlayStack(open, ref);
+  useHotkey({ action: 'local:overlay-close', spec: parseKeySpec('Escape'), scope: 'overlay', overlayId: id, handler: event => { if (shouldCloseOnKey(event)) onClose(); } }, open && !closeDisabled && !busy);
+
+  useEffect(() => {
+    if (!open) return;
+    const previous = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+    const container = ref.current;
+    if (!container) return;
+    (initialFocusRef?.current ?? getFocusableElements(container)[0] ?? container).focus();
+    return () => { queueMicrotask(() => { if (previous?.isConnected) previous.focus(); }); };
+  }, [open, initialFocusRef]);
+
+  useEffect(() => {
+    if (!open || !isTop) return;
+    const handleKey = (event: KeyboardEvent) => { if (ref.current) cycleFocus(event, ref.current); };
+    document.addEventListener('keydown', handleKey);
+    return () => document.removeEventListener('keydown', handleKey);
+  }, [open, isTop]);
+
+  if (!open) return null;
+  return createPortal(
+    <div className="overlay-backdrop" onClick={(event) => {
+      if (event.target === event.currentTarget && isTop && dismissOnBackdrop && !closeDisabled && !busy) onClose();
+    }}>
+      <div ref={ref} role={variant === 'alert' ? 'alertdialog' : 'dialog'} aria-modal="true" aria-labelledby={labelledBy} aria-busy={busy || undefined} tabIndex={-1} className="overlay-panel" style={{ maxWidth, maxHeight, background: surface === 'solid' ? 'var(--bg-solid)' : 'var(--bg-elevated)', ...style }}>
+        {children}
+      </div>
+    </div>, document.body,
+  );
+}

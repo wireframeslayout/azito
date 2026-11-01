@@ -1,3 +1,5 @@
+import { shouldHandleTerminalKey } from '../lib/hotkeys/terminalDispatch';
+import { useHotkeyDispatch } from '../hooks/useHotkeys';
 import { useCallback, useEffect, useImperativeHandle, useRef, forwardRef } from 'react';
 import { useTranslation } from 'react-i18next';
 import { useTmuxTouchScroll } from '../hooks/useTmuxTouchScroll';
@@ -83,6 +85,9 @@ const XTermView = forwardRef<XTermViewHandle, XTermViewProps>(function XTermView
   // sessions arrived becomes a windowId), even when `target` stays the same. A stable string key avoids object identity churn.
   const connectionKey = terminalConnectionKey(serverName, target, terminalRef);
   const { t } = useTranslation('common');
+  const { dispatchFromTerminal } = useHotkeyDispatch();
+  const dispatchRef = useRef(dispatchFromTerminal);
+  dispatchRef.current = dispatchFromTerminal;
   const wrapperRef = useRef<HTMLDivElement>(null);
   const containerRef = useRef<HTMLDivElement>(null);
   const termRef = useRef<any>(null);
@@ -183,7 +188,6 @@ const XTermView = forwardRef<XTermViewHandle, XTermViewProps>(function XTermView
     let focusHandler: (() => void) | null = null;
     let pasteHandler: ((event: ClipboardEvent) => void) | null = null;
     let documentPasteHandler: ((event: ClipboardEvent) => void) | null = null;
-    let keydownHandler: ((event: KeyboardEvent) => void) | null = null;
     let sizeCheckInterval: ReturnType<typeof setInterval> | undefined;
     let sizeCheckTimeout: ReturnType<typeof setTimeout> | undefined;
     let onDataDisposable: { dispose: () => void } | null = null;
@@ -235,6 +239,7 @@ const XTermView = forwardRef<XTermViewHandle, XTermViewProps>(function XTermView
         }
       };
       terminal.attachCustomKeyEventHandler((event: KeyboardEvent) => {
+        if (shouldHandleTerminalKey(event, dispatchRef.current)) return false;
         if (event.type !== 'keydown') return true;
         const key = event.key.toLowerCase();
         const mod = event.ctrlKey || event.metaKey;
@@ -260,9 +265,6 @@ const XTermView = forwardRef<XTermViewHandle, XTermViewProps>(function XTermView
       terminalContainer.addEventListener('mousedown', focusHandler);
       terminalContainer.addEventListener('paste', pasteHandler, true);
       document.addEventListener('paste', documentPasteHandler, true);
-      if (keydownHandler) {
-        document.addEventListener('keydown', keydownHandler, true);
-      }
 
       let resizeTimer: ReturnType<typeof setTimeout> | undefined;
       const doFit = () => {
@@ -416,9 +418,6 @@ const XTermView = forwardRef<XTermViewHandle, XTermViewProps>(function XTermView
       }
       if (documentPasteHandler) {
         document.removeEventListener('paste', documentPasteHandler, true);
-      }
-      if (keydownHandler) {
-        document.removeEventListener('keydown', keydownHandler, true);
       }
       if (resizeHandler) {
         window.removeEventListener('resize', resizeHandler);

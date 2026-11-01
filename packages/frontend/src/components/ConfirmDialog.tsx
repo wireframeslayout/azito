@@ -1,6 +1,7 @@
+import { useId } from 'react';
 import { useTranslation } from 'react-i18next';
-import Modal from './Modal';
-import { Button } from './ui';
+import { ModalContent } from './Modal';
+import { Button, Overlay } from './ui';
 
 interface ConfirmDialogProps {
   open: boolean;
@@ -20,13 +21,18 @@ export default function ConfirmDialog({
   confirmVariant = 'danger',
 }: ConfirmDialogProps) {
   const { t } = useTranslation('common');
+  const titleId = useId();
   return (
-    <Modal
-      title={title}
+    <Overlay
+      labelledBy={titleId}
+      variant="alert"
+      dismissOnBackdrop={false}
+      busy={loading}
       open={open}
       onClose={onCancel}
       maxWidth={400}
-      actions={
+    >
+      <ModalContent titleId={titleId} title={title} onClose={onCancel} closeDisabled={loading} actions={
         <Button
           variant={confirmVariant}
           onClick={onConfirm}
@@ -34,11 +40,11 @@ export default function ConfirmDialog({
         >
           {confirmLabel ?? t('actions.confirm')}
         </Button>
-      }
-    >
+      }>
       <p style={{ fontSize: 'var(--font-md)', color: 'var(--text-dim)', lineHeight: 1.5, margin: 0 }}>
         {message}
       </p>
-    </Modal>
+      </ModalContent>
+    </Overlay>
   );
 }

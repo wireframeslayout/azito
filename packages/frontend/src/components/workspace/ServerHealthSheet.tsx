@@ -1,3 +1,5 @@
+import { useHotkey, useOverlayStack } from '../../hooks/useHotkeys';
+import { parseKeySpec } from '../../lib/hotkeys/keySpec';
 import { useEffect, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { ServerHealthDetailBody, healthReasonText } from '../statusbar/ResourceDropdown';
@@ -33,18 +35,13 @@ export function ServerHealthSheet({ open, onClose }: ServerHealthSheetProps) {
   const worstServer = servers.find((s) => getHealthLevel(s.measurement) === worstHealth) ?? null;
   const worstMemUsedPercent = worstServer?.measurement ? 100 - worstServer.measurement.memAvailablePercent : null;
 
+  const ref = useRef<HTMLDivElement>(null);
+  const { id, isTop } = useOverlayStack(open, ref);
+  useHotkey({ action: 'local:overlay-close', spec: parseKeySpec('Escape'), scope: 'overlay', overlayId: id, handler: onClose }, open);
   const [dragY, setDragY] = useState(0);
   const [dragging, setDragging] = useState(false);
   const touchStartY = useRef<number | null>(null);
 
-  useEffect(() => {
-    if (!open) return undefined;
-    const handleKeyDown = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') onClose();
-    };
-    document.addEventListener('keydown', handleKeyDown);
-    return () => document.removeEventListener('keydown', handleKeyDown);
-  }, [open, onClose]);
 
   const handleTouchStart = (e: React.TouchEvent) => {
     touchStartY.current = e.touches[0].clientY;
@@ -71,10 +68,11 @@ export function ServerHealthSheet({ open, onClose }: ServerHealthSheetProps) {
   return (
     <>
       <div
-        onClick={onClose}
+        onClick={() => { if (isTop) onClose(); }}
         style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.5)', zIndex: 129 }}
       />
       <div
+        ref={ref}
         role="dialog"
         aria-modal="true"
         aria-label={t('workspace:mobile.serverHealth')}
