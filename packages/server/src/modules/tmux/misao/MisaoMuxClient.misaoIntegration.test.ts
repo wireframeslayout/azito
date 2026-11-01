@@ -220,7 +220,7 @@ describe.skipIf(!fs.existsSync(MISAO_CLI))('MisaoMuxClient against a real misao 
   it('refuses chat input to a shell pane of a registered window, and resolves only its own panes', async () => {
     const registry = new MuxDriverRegistry();
     registry.register('misao', client);
-    const window = { id: 7, serverName: 'local', tmuxTarget: '', muxRef: ref1, workerType: 'claude' } as unknown as Window;
+    const window = { id: 7, serverName: 'local', tmuxTarget: '', muxRef: ref1, workerType: null } as unknown as Window;
     const service = new WindowInputService(
       { findById: (id: number) => (id === 7 ? window : undefined) } as unknown as IWindowRepository,
       registry,

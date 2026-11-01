@@ -6,6 +6,8 @@ import type { IMuxClient } from '../tmux/IMuxClient';
 import type { IServerRepository } from '../servers/Server';
 import type { IWindowRepository, Window } from '../windows/Window';
 import { guardChatInput, typeChatText, type ChatInputRejection } from './chatInputGuard';
+import type { TransportFactory } from '../servers/transport/TransportFactory';
+import { findAgentProcessTypes } from './agentProcessDetection';
 import { getAgentTranscriptProfile, type InterruptKey } from './sources/profiles';
 
 // ─── Types ───
@@ -43,6 +45,7 @@ export class WindowInputService {
     private readonly muxDriverRegistry: MuxDriverRegistry,
     private readonly serverRepo: IServerRepository,
     private readonly wait: (ms: number) => Promise<void> = (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
+    private readonly transportFactory?: TransportFactory,
   ) {}
 
   async sendInput(windowId: number, handle: PaneHandle, text: string): Promise<WindowInputResult> {
@@ -57,10 +60,11 @@ export class WindowInputService {
     if (!belongsToWindow) return 'pane_not_found';
 
     await this.preparePaneForInput(server, handle);
-    const rejection = await guardChatInput(driver, server, handle, window.workerType, text);
+    const workerType = window.workerType ?? await this.detectWorkerType(driver, server, window);
+    const rejection = await guardChatInput(driver, server, handle, workerType, text);
     if (rejection) return rejection;
     await typeChatText(driver, server, handle, text);
-    const submitDelayMs = this.resolveSubmitDelay(window.workerType);
+    const submitDelayMs = this.resolveSubmitDelay(workerType);
     if (submitDelayMs > 0) await this.wait(submitDelayMs);
     await driver.sendKeysToHandle(server, handle, ['Enter']);
     return 'ok';
@@ -116,6 +120,18 @@ export class WindowInputService {
     if (!inMode) return;
     await driver.cancelPaneModeByHandle(server, handle);
     await this.wait(100);
+  }
+
+  private async detectWorkerType(driver: IMuxClient, server: ServerConfig, window: Window): Promise<string | null> {
+    if (!this.transportFactory) return null;
+    const panes = await this.listWindowPanes(driver, server, window);
+    const entries = await this.transportFactory.getTransport(server).listProcesses();
+    const types = new Set<string>();
+    for (const pane of panes) {
+      const pid = await driver.panePidByHandle(server, pane.paneId as PaneHandle);
+      if (pid !== null) for (const type of findAgentProcessTypes(entries, pid)) types.add(type);
+    }
+    return types.size === 1 ? [...types][0] : null;
   }
 
   private async paneBelongsToWindow(driver: IMuxClient, server: ServerConfig, window: Window, paneId: string): Promise<boolean> {

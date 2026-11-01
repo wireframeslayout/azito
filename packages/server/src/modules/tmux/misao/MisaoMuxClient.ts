@@ -300,7 +300,7 @@ export class MisaoMuxClient implements IMuxClient {
   }
 
   async pasteTextToHandle(_server: ServerConfig, handle: PaneHandle, text: string): Promise<void> {
-    await this.write(handle, `${BRACKETED_PASTE_START}${text}${BRACKETED_PASTE_END}`);
+    await this.write(handle, `${BRACKETED_PASTE_START}${stripPasteEnd(text)}${BRACKETED_PASTE_END}`);
     await this.wait(LONG_TEXT_PASTE_SETTLE_MS);
   }
 

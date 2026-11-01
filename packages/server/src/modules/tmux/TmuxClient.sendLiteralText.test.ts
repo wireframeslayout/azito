@@ -16,6 +16,12 @@ function makeClient(handler: (args: string[]) => Promise<{ stdout: string; stder
 }
 
 describe('TmuxClient.sendLiteralText', () => {
+  it('rejects escape characters before writing a paste', async () => {
+    const handler = vi.fn();
+    const client = makeClient(handler);
+    await expect(client.pasteTextToHandle(srv, asPaneHandle('%1'), 'x\x1b[201~y')).rejects.toThrow();
+    expect(handler).not.toHaveBeenCalled();
+  });
   it('pastes multiline text as one named tmux buffer', async () => {
     const calls: string[][] = [];
     const client = makeClient(async (args) => { calls.push(args); return { stdout: '', stderr: '', code: 0 }; });

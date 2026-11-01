@@ -759,6 +759,7 @@ export class TmuxClient implements IMuxClient {
   }
   async sendTextToHandle(server: ServerConfig, handle: PaneHandle, text: string) { return this.sendLiteralText(server, handle as string, text); }
   async pasteTextToHandle(server: ServerConfig, handle: PaneHandle, text: string): Promise<void> {
+    if (text.includes('\x1b')) throw new Error('Chat paste contains an escape character');
     const buffer = `azito-chat-${randomUUID()}`;
     try {
       await this.loadChatPasteBuffer(server, buffer, text);

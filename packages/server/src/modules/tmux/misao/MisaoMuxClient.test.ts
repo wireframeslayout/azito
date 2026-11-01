@@ -716,6 +716,13 @@ describe('MisaoMuxClient input', () => {
     expect(wait).toHaveBeenCalledWith(3000);
   });
 
+  it('removes injected paste terminators from explicit pastes', async () => {
+    const { daemon, client } = setup({ wait: async () => {} });
+    const p = daemon.addPane(daemon.addWindow('proj', 'main'));
+    await client.pasteTextToHandle(server, handle(p), 'a\x1b[201~b');
+    expect(daemon.writes()).toEqual(['\x1b[200~ab\x1b[201~']);
+  });
+
   it('waits after a long text before returning, so a following Enter is not folded into the paste', async () => {
     const wait = vi.fn(async () => {});
     const { daemon, client } = setup({ wait });

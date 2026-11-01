@@ -121,10 +121,34 @@ describe('WindowInputService', () => {
       expect(driver.pasteTextToHandle).toHaveBeenCalledWith(LOCAL_SERVER, '%1', 'a\tb');
     });
 
-    it.each([{ foreground: 'bash' }, { screen: 'Do you trust this folder?' }])('does not send into a shell or dialog', async (opts) => {
+    it.each([[{ foreground: 'bash' }, 'worker_exited_to_shell'], [{ screen: 'Do you trust this folder?' }, 'trust_dialog']])('does not send into a shell or dialog', async (opts, code) => {
       const { windowRepo, muxDriverRegistry, serverRepo, calls } = buildDeps(opts);
       const result = await new WindowInputService(windowRepo, muxDriverRegistry, serverRepo).sendInput(42, asPaneHandle('%1'), 'hello');
-      expect(result).toEqual(expect.objectContaining({ code: expect.any(String) }));
+      expect(result).toEqual(expect.objectContaining({ code }));
+      expect(calls.sendTextToHandle).toEqual([]);
+      expect(calls.sendKeysToHandle).toEqual([]);
+    });
+
+    it.each([
+      ['claude', CLAUDE_SCREEN], ['codex', CODEX_SCREEN],
+    ])('detects a %s process for a window without workerType', async (kind, screen) => {
+      const { windowRepo, muxDriverRegistry, serverRepo, wait, calls } = buildDeps({ findById: () => buildWindow({ workerType: null }), screen });
+      const driver = muxDriverRegistry.resolve(LOCAL_SERVER);
+      driver.panePidByHandle = vi.fn().mockResolvedValue(100);
+      const root = { pid: 100, ppid: 1, startMs: 1, executable: null, commandLine: 'node', rssBytes: null };
+      const child = { ...root, pid: 101, ppid: 100, startMs: 2, commandLine: kind };
+      const transport = { getTransport: () => ({ listProcesses: async () => [root, child] }) } as unknown as import('../servers/transport/TransportFactory').TransportFactory;
+      expect(await new WindowInputService(windowRepo, muxDriverRegistry, serverRepo, wait, transport).sendInput(42, asPaneHandle('%1'), 'hello')).toBe('ok');
+      expect(calls.sendKeysToHandle).toEqual([[LOCAL_SERVER, '%1', ['Enter']]]);
+      if (kind === 'codex') expect(calls.wait).toContain(200);
+    });
+
+    it('refuses an unidentified process without sending', async () => {
+      const { windowRepo, muxDriverRegistry, serverRepo, calls, wait } = buildDeps({ findById: () => buildWindow({ workerType: null }) });
+      const driver = muxDriverRegistry.resolve(LOCAL_SERVER);
+      driver.panePidByHandle = vi.fn().mockResolvedValue(100);
+      const transport = { getTransport: () => ({ listProcesses: async () => [] }) } as unknown as import('../servers/transport/TransportFactory').TransportFactory;
+      expect(await new WindowInputService(windowRepo, muxDriverRegistry, serverRepo, wait, transport).sendInput(42, asPaneHandle('%1'), 'hello')).toMatchObject({ code: 'unsupported_worker' });
       expect(calls.sendTextToHandle).toEqual([]);
       expect(calls.sendKeysToHandle).toEqual([]);
     });

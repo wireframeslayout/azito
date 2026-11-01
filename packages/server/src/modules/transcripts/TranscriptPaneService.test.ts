@@ -171,12 +171,12 @@ describe('TranscriptPaneService', () => {
       expect(driver.sendKeysToHandle).toHaveBeenCalledWith(LOCAL_SERVER, '%1', ['Enter']);
     });
 
-    it.each([{ foreground: 'bash' }, { screen: 'Do you trust this folder?' }])('does not send into a shell or dialog', async (opts) => {
+    it.each([[{ foreground: 'bash' }, 'worker_exited_to_shell'], [{ screen: 'Do you trust this folder?' }, 'trust_dialog']])('does not send into a shell or dialog', async (opts, code) => {
       const sendTextToHandle = vi.fn();
       const sendKeysToHandle = vi.fn();
       const { claudeTranscriptSource, muxDriverRegistry, serverRepo } = buildDeps({ ...opts, sendTextToHandle, sendKeysToHandle });
       const result = await new TranscriptPaneService(claudeTranscriptSource, muxDriverRegistry, serverRepo).sendInput(SID, asPaneHandle('%1'), 'hello');
-      expect(result).toEqual(expect.objectContaining({ code: expect.any(String) }));
+      expect(result).toEqual(expect.objectContaining({ code }));
       expect(sendTextToHandle).not.toHaveBeenCalled();
       expect(sendKeysToHandle).not.toHaveBeenCalled();
     });
