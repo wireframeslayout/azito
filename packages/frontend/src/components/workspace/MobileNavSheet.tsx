@@ -1,3 +1,4 @@
+import { useOpenGlobalSearch } from '../search/GlobalSearch';
 import { type CSSProperties, type ReactNode, useEffect, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { useNavigate } from 'react-router-dom';
@@ -77,6 +78,7 @@ export function MobileNavSheet({
 }: MobileNavSheetProps) {
   const { t } = useTranslation(['workspace', 'projects', 'common']);
   const navigate = useNavigate();
+  const openSearch = useOpenGlobalSearch();
   const [stack, setStack] = useState<StackEntry[]>(['menu']);
   const [activeWindowsOpen, setActiveWindowsOpen] = useState(false);
 
@@ -172,6 +174,11 @@ export function MobileNavSheet({
             <div style={{ flex: 1, overflow: 'auto', display: 'flex', flexDirection: 'column' }}>
               {top === 'menu' && (
                 <MobileNavMenu
+                  onOpenSearch={() => {
+                    const trigger = document.querySelector<HTMLElement>('[data-mobile-nav-trigger]');
+                    onClose();
+                    openSearch(trigger);
+                  }}
                   project={project ? { id: project.id, name: project.name, icon: currentProjectItem?.icon, color: currentProjectItem?.color } : null}
                   onOpenProjectSwitch={() => push('projectSwitch')}
                   objectsCount={objectsCount}

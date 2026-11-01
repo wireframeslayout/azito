@@ -1,3 +1,4 @@
+import { useOpenGlobalSearch } from './search/GlobalSearch';
 import { useState, useMemo, useEffect, useRef, useCallback } from 'react';
 import { useTranslation } from 'react-i18next';
 import { useWorkspaceTargets } from '../hooks/useWorkspaceTargets';
@@ -35,6 +36,8 @@ interface RegistryItem {
 
 export function StatusBar({ servers }: StatusBarProps) {
   const { t } = useTranslation('common');
+  const { t: tn } = useTranslation('navigation');
+  const openSearch = useOpenGlobalSearch();
   const { focusedTarget } = useWorkspaceTargets();
   const { status: updateStatus, startUpdate, checkNow } = useSystemUpdate();
   const { showToast } = useToast();
@@ -194,6 +197,7 @@ export function StatusBar({ servers }: StatusBarProps) {
           </span>
         )}
         <span style={{ flex: 1 }} />
+        <button type="button" onClick={() => openSearch()} className="row-hover" style={{ padding: '2px 10px', borderRadius: 'var(--radius-sm)', color: 'var(--text-dim)', border: 'none', cursor: 'pointer', fontFamily: 'var(--mono)', fontSize: 'var(--font-xs)' }}>{tn('globalSearch.title')}</button>
         {registry.map((item) => (
           <StatusBarItem
             key={item.id}

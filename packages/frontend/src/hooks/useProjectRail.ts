@@ -21,6 +21,7 @@ export interface UseProjectRailReturn {
   touch: (projectId: number) => void;
   /** Full pinned id list in manual display order (not truncated to the visible-rail limit). */
   pinnedIds: number[];
+  recentIds: number[];
   movePinned: (projectId: number, direction: 'up' | 'down') => void;
   /** Moves `sourceId` next to `targetId` within the full pinned set (used by DnD drop). */
   movePinnedTo: (sourceId: number, targetId: number, position: 'before' | 'after') => void;
@@ -206,5 +207,5 @@ export function useProjectRail(): UseProjectRailReturn {
 
   const isPinned = useCallback((projectId: number) => pinned.includes(projectId), [pinned]);
 
-  return { pin, unpin, touch, pinnedIds: pinned, movePinned, movePinnedTo, normalize, getVisibleProjects, getAllSortedProjects, isPinned };
+  return { pin, unpin, touch, pinnedIds: pinned, recentIds: recent, movePinned, movePinnedTo, normalize, getVisibleProjects, getAllSortedProjects, isPinned };
 }

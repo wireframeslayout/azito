@@ -1,3 +1,4 @@
+import { GlobalSearchProvider } from './search/GlobalSearch';
 import { WorkspaceCatalogProvider } from '../hooks/useWorkspaceCatalog';
 import { CrossProjectNavigationProvider } from '../hooks/useCrossProjectNavigation';
 import { Suspense, lazy } from 'react';
@@ -43,6 +44,7 @@ export default function Layout() {
     <CrossProjectNavigationProvider>
       <AgentActivityProvider>
       <NotificationCenterProvider>
+      <GlobalSearchProvider>
       <ServerResourcesProvider servers={servers}>
       <ServerStatusProvider>
       <SystemUpdateProvider>
@@ -108,6 +110,7 @@ export default function Layout() {
       </SystemUpdateProvider>
       </ServerStatusProvider>
       </ServerResourcesProvider>
+      </GlobalSearchProvider>
       </NotificationCenterProvider>
       </AgentActivityProvider>
     </CrossProjectNavigationProvider>

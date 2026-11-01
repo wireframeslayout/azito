@@ -27,6 +27,7 @@ interface MobileNavMenuProject {
 }
 
 interface MobileNavMenuProps {
+  onOpenSearch: () => void;
   /** カード内 選択行に出す現在プロジェクト（色ドット・名前）。Issue #338 T11 G1: カード封筒化。 */
   project: MobileNavMenuProject | null;
   /** 選択行「切替 ⌄」タップ時。従来通り MobileNavSheet 側の projectSwitch スタックへ push する。 */
@@ -143,6 +144,7 @@ export function MobileNavMenu({
   objectsCount,
   onSelectMode,
   onNavigateGlobal,
+  onOpenSearch,
   onOpenActiveWindows,
   activeWindowsCount,
   activeWindowsBlockedCount,
@@ -151,6 +153,7 @@ export function MobileNavMenu({
 
   return (
     <div style={{ padding: '0 4px 16px' }}>
+      <button type="button" style={{ ...rowStyle, minHeight: 44 }} className="glass-popover-item" onClick={onOpenSearch}><Icon name="search" size={16} /><span style={rowLabelStyle}>{t('navigation:globalSearch.title')}</span></button>
       <div style={projectCardStyle}>
         <button type="button" onClick={onOpenProjectSwitch} style={selectionRowStyle} className="glass-popover-item">
           <ProjectAvatar project={project} size={22} />
