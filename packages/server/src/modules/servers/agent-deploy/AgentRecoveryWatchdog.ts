@@ -8,6 +8,10 @@ export interface AgentRecoveryDeps {
   listServers(): ServerConfig[];
   /** Resolves when the agent answers `/health`; rejects when it cannot be reached (the circuit breaker being open is such a case). */
   checkAgent(server: ServerConfig): Promise<void>;
+  /** Told once per new confirmed firewall verdict (`blocked` / `missing_allow`) that pauses the recovery of the agent. */
+  onFirewallProblem?(server: ServerConfig, diagnosis: FirewallDiagnosis): void;
+  /** Reads the host's firewall policy for the agent (never changes it) before an attempt; a confirmed block pauses the recovery. */
+  inspectFirewall?(server: ServerConfig): Promise<FirewallVerdict>;
   /** Starts the agent again (`recoverAgent`: `/Query`, `/End`, `/Run` of its task). Resolves with what it did; `disabled` is a task disabled by hand, which is left alone. */
   recoverAgent(server: ServerConfig, force: boolean): Promise<string>;
   /** Asks the (reachable) agent whether the managed misao it hosts is installed by AZITO and does not answer. Rejects when the agent cannot say (an older one). */
@@ -18,6 +22,25 @@ export interface AgentRecoveryDeps {
   lock: Pick<KeyedMutex, 'withLock'>;
   now(): number;
   logger: { info(message: string): void; warn(message: string): void };
+}
+
+/** What {@link AgentRecoveryDeps.inspectFirewall} reports. */
+export interface FirewallVerdict {
+  ruleFound: false | null;
+  blockedBy: string[];
+  problem: string | null;
+  allowCommand: string;
+  blockCommands: string[];
+  networkCategory: string | null;
+}
+
+/** The last firewall diagnosis of an agent that does not answer, as the server status shows it. */
+export interface FirewallDiagnosis {
+  state: 'blocked' | 'missing_allow' | 'unknown';
+  blockedBy: string[];
+  commands: string[];
+  checkedAt: number;
+  networkCategory: string | null;
 }
 
 /** How many servers are looked at at the same time (one waiting for a lock or an SSH timeout must not hold the others back). */
@@ -46,6 +69,9 @@ const MAX_CONCURRENT_LOOKS = 4;
  */
 export class AgentRecoveryWatchdog {
   private readonly agents = new Map<string, Backoff>();
+  /** The last firewall diagnosis by server, kept while the agent does not answer. */
+  private readonly firewall = new Map<string, FirewallDiagnosis & { identity: string }>();
+  private readonly firewallNotified = new Map<string, string>();
   private readonly misaos = new Map<string, Backoff>();
   /** The looks going on, by server. */
   private readonly looking = new Map<string, Promise<void>>();
@@ -95,6 +121,8 @@ export class AgentRecoveryWatchdog {
     if (this.stopped) return;
     const servers = this.deps.listServers().filter(isWindowsAgent);
     const names = new Set(servers.map((s) => s.name));
+    for (const name of this.firewall.keys()) if (!names.has(name)) this.firewall.delete(name);
+    for (const name of this.firewallNotified.keys()) if (!names.has(name)) this.firewallNotified.delete(name);
     for (const map of [this.agents, this.misaos]) for (const name of map.keys()) if (!names.has(name)) map.delete(name);
     for (const key of this.warned) if (!names.has(key.split('\0')[0]!)) this.warned.delete(key);
     for (const name of this.foreignReason.keys()) if (!names.has(name)) this.foreignReason.delete(name);
@@ -121,6 +149,8 @@ export class AgentRecoveryWatchdog {
 
   private reset(name: string): void {
     this.agents.delete(name);
+    this.firewall.delete(name);
+    this.firewallNotified.delete(name);
     this.misaos.delete(name);
     for (const key of this.warned) if (key.startsWith(`${name}\0`)) this.warned.delete(key);
     this.foreignReason.delete(name);
@@ -138,6 +168,8 @@ export class AgentRecoveryWatchdog {
       return;
     }
     this.agents.delete(server.name);
+    this.firewall.delete(server.name);
+    this.firewallNotified.delete(server.name);
     let down: boolean;
     try {
       down = await this.deps.isMisaoDown(server);
@@ -152,6 +184,13 @@ export class AgentRecoveryWatchdog {
     }
     const force = (this.misaos.get(server.name)?.attempts ?? 0) > 0;
     await this.attempt(this.misaos, server, 'misao', (s) => this.deps.reviveMisao(s, force), (s) => this.deps.isMisaoDown(s).catch(() => false));
+  }
+
+  /** The firewall diagnosis of the server's agent, while it does not answer and the server is still the one diagnosed. */
+  firewallStatus(server: ServerConfig): FirewallDiagnosis | undefined {
+    const value = this.firewall.get(server.name);
+    if (value?.identity !== identityOf(server)) return undefined;
+    return { state: value.state, blockedBy: value.blockedBy, commands: value.commands, checkedAt: value.checkedAt, networkCategory: value.networkCategory };
   }
 
   private async answers(server: ServerConfig): Promise<boolean> {
@@ -180,12 +219,21 @@ export class AgentRecoveryWatchdog {
           return;
         }
         if (!(await stillDown(current)) || this.stopped) return; // after the stop: not begun, so not begun
+        if (what === 'agent' && (await this.firewallBlocks(current, identity))) {
+          outcome = 'firewall_blocked';
+          return;
+        }
+        if (this.stopped) return;
         outcome = await act(current);
       });
     } catch (err) {
       this.deps.logger.warn(`${server.name}: could not bring the ${what} back: ${describe(err)}`);
     }
     if (waits.get(server.name) !== wait) return; // reset while waiting for the lock
+    if (outcome === 'firewall_blocked') {
+      waits.set(server.name, { ...wait, nextAt: this.deps.now() + this.timing.maxMs });
+      return;
+    }
     if (outcome === 'busy') return; // another operation holds the misao folder: not an attempt, looked at again next tick
     if (outcome !== undefined && isForeignLock(outcome)) {
       // The lock of a folder shared with the hub is held by someone who is not this user: not an attempt, said once per state.
@@ -199,6 +247,30 @@ export class AgentRecoveryWatchdog {
     waits.set(server.name, afterAttempt(wait, this.deps.now(), this.timing));
   }
 
+  /**
+   * Diagnoses the firewall before an agent recovery and keeps the diagnosis for the server status. True = a confirmed block
+   * (a Block rule, or no Allow rule in the effective policy): restarting cannot make the agent reachable, so the attempt is paused.
+   * A policy that cannot be read is kept as `unknown` and does not stop the attempt; only a new confirmed verdict is announced.
+   */
+  private async firewallBlocks(server: ServerConfig, identity: string): Promise<boolean> {
+    if (!this.deps.inspectFirewall) return false;
+    let diagnosis: FirewallDiagnosis;
+    try {
+      diagnosis = diagnoseFirewall(await this.deps.inspectFirewall(server), this.deps.now());
+    } catch (err) {
+      this.deps.logger.warn(`${server.name}: firewall inspection failed: ${describe(err)}`);
+      diagnosis = { state: 'unknown', blockedBy: [], commands: [], checkedAt: this.deps.now(), networkCategory: null };
+    }
+    this.firewall.set(server.name, { ...diagnosis, identity });
+    if (diagnosis.state === 'unknown') return false;
+    const notificationKey = JSON.stringify([identity, diagnosis.state, diagnosis.blockedBy, diagnosis.commands]);
+    if (this.firewallNotified.get(server.name) !== notificationKey) {
+      this.firewallNotified.set(server.name, notificationKey);
+      this.deps.onFirewallProblem?.(server, diagnosis);
+    }
+    return true;
+  }
+
   private report(name: string, what: 'agent' | 'misao', outcome: string, attempt: number): void {
     if (QUIET_OUTCOMES.has(outcome)) return;
     if (NOTHING_TO_DO_WARNED.has(outcome)) {
@@ -210,6 +282,17 @@ export class AgentRecoveryWatchdog {
     }
     this.deps.logger.info(`${name}: tried to bring the ${what} back (attempt ${attempt}): ${outcome}`);
   }
+}
+
+function diagnoseFirewall(result: FirewallVerdict, checkedAt: number): FirewallDiagnosis {
+  const networkCategory = result.networkCategory;
+  if (result.networkCategory === null || result.ruleFound === null) {
+    return { state: 'unknown', blockedBy: [], commands: [], checkedAt, networkCategory };
+  }
+  if (result.blockedBy.length > 0) {
+    return { state: 'blocked', blockedBy: result.blockedBy, commands: result.blockCommands, checkedAt, networkCategory };
+  }
+  return { state: 'missing_allow', blockedBy: [], commands: [result.allowCommand], checkedAt, networkCategory };
 }
 
 function describe(err: unknown): string {

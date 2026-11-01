@@ -3,7 +3,7 @@ import { spawnSync } from 'node:child_process';
 import { powershellEncodedArgs } from '../../../shared/os/shellDialect';
 import { decodeEncodedCommand } from './testing/fakeWindowsHost';
 import {
-  buildFirewallAddCommand, buildFirewallDumpCommand, checkFirewall, describeFirewallProblem, evaluateFirewallRules, firewallRuleCommand,
+  buildFirewallAddCommand, buildFirewallDumpCommand, checkFirewall, inspectFirewall, describeFirewallProblem, evaluateFirewallRules, evaluateRecoveryFirewall, firewallRuleCommand,
   parseAddressSpec, parseFirewallAdd, parseFirewallDump, type FirewallResult, type FirewallRuleRecord,
 } from './windowsFirewall';
 
@@ -200,6 +200,12 @@ describe('checkFirewall', () => {
     return { exec, result: () => checkFirewall(exec, 3002, NODE, IP) };
   };
 
+  it('inspects missing Allow without writing even when elevated', async () => {
+    const exec = vi.fn(async () => ({ stdout: dumped(), stderr: '', code: 0 }));
+    expect(await inspectFirewall(exec, 3002, NODE, IP)).toMatchObject({ ruleFound: false, created: false });
+    expect(exec).toHaveBeenCalledTimes(1);
+  });
+
   it('finds an Allow rule and adds nothing', async () => {
     const { exec, result } = run([dumped({ rules: [rule({ displayName: 'ours' })] })]);
     expect(await result()).toMatchObject({ ruleFound: true, created: false, allowedBy: ['ours'], blockedBy: [], store: 'ActiveStore' });
@@ -288,7 +294,7 @@ describe('checkFirewall', () => {
 });
 
 describe('describeFirewallProblem', () => {
-  const base: FirewallResult = { ruleFound: false, elevated: false, created: false, problem: null, blockedBy: [], allowedBy: [], store: 'ActiveStore' };
+  const base: FirewallResult = { ruleFound: false, elevated: false, created: false, problem: null, blockedBy: [], allowedBy: [], store: 'ActiveStore', networkCategory: 'Public' };
   it('is null when a rule exists or was just added', () => {
     expect(describeFirewallProblem({ ...base, ruleFound: true }, 3002, NODE, IP)).toBeNull();
     expect(describeFirewallProblem({ ...base, elevated: true, created: true }, 3002, NODE, IP)).toBeNull();
@@ -315,7 +321,38 @@ describe('describeFirewallProblem', () => {
 });
 
 describe('firewallRuleCommand', () => {
+  it('quotes PowerShell metacharacters without expansion', () => {
+    const command = firewallRuleCommand(3002, "C:\\agent$test`name's\\node.exe", IP);
+    expect(command).toContain("-Program 'C:\\agent$test`name''s\\node.exe'");
+  });
   it('limits the rule to the program, the local address, the port and the tailnet', () => {
-    expect(firewallRuleCommand(3002, NODE, IP)).toBe(`New-NetFirewallRule -DisplayName "AZITO Agent (TCP 3002)" -Direction Inbound -Action Allow -Protocol TCP -LocalPort 3002 -Program "${NODE}" -LocalAddress 100.64.0.9 -RemoteAddress 100.64.0.0/10 -Profile Any`);
+    expect(firewallRuleCommand(3002, NODE, IP)).toBe(`New-NetFirewallRule -DisplayName 'AZITO Agent (TCP 3002)' -Direction Inbound -Action Allow -Protocol TCP -LocalPort 3002 -Program '${NODE}' -LocalAddress '100.64.0.9' -RemoteAddress '100.64.0.0/10' -Profile Any`);
+  });
+});
+
+
+describe('recovery firewall certainty', () => {
+  const policy = { name: 'Public', enabled: 'True', defaultInboundAction: 'Block', allowInboundRules: 'True' };
+  const candidate = (over: Partial<FirewallRuleRecord> = {}) => rule({ interfaceType: ['Any'], interfaceAlias: ['Any'], ...over });
+  const evaluate = (rules: FirewallRuleRecord[], profiles: object[] = [policy], category: string | null = 'Public') => {
+    const dump = parseFirewallDump(dumped({ rules, profiles, networkCategory: category }), '', 0);
+    return evaluateRecoveryFirewall(dump, { ...TARGET, networkCategory: category });
+  };
+  it('requires the active profile and a blocking default', () => {
+    expect(evaluate([], [policy], null).state).toBe('unknown');
+    expect(evaluate([], [{ ...policy, enabled: 'False' }]).state).toBe('unknown');
+    expect(evaluate([], [{ ...policy, defaultInboundAction: 'Allow' }]).state).toBe('unknown');
+    expect(evaluate([], [{ ...policy, allowInboundRules: 'False' }]).state).toBe('unknown');
+    expect(evaluate([], []).state).toBe('unknown');
+    expect(evaluate([]).state).toBe('missing_allow');
+  });
+  it('treats interface restrictions and partial Allows as inconclusive', () => {
+    expect(evaluate([candidate({ action: 'Block', interfaceAlias: ['Ethernet'] })]).state).toBe('unknown');
+    expect(evaluate([candidate({ action: 'Block', interfaceType: ['Wireless'] })]).state).toBe('unknown');
+    expect(evaluate([candidate({ localPort: ['3000-3010'] })]).state).toBe('unknown');
+    expect(evaluate([candidate({ remoteAddress: ['100.64.0.0/16'] })]).state).toBe('unknown');
+  });
+  it('identifies effective block rules by name even when display names coincide', () => {
+    expect(evaluate([candidate({ name: 'one', displayName: 'Node', action: 'Block' }), candidate({ name: 'two', displayName: 'Node', action: 'Block' })])).toEqual({ state: 'blocked', blockedBy: [{ name: 'one', displayName: 'Node' }, { name: 'two', displayName: 'Node' }] });
   });
 });

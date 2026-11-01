@@ -12,7 +12,7 @@ import { buildWindowsPreflightCommand, checkWindowsPreflight, parseWindowsPrefli
 import { buildSha256VerifyCommand, buildSafeExtractCommand, readSha256FromSumsFile } from './integrityVerifier';
 import { KeyedMutex } from '../../../shared/keyedMutex';
 import { CLEANUP_LOCK_DIR, CLEANUP_TIMEOUT_MS, INSTALL_ID_FILE, MANUAL_STEPS_ANY_START, SYSTEMD_MANUAL_STEPS, buildCleanupGuardScript, buildCleanupScript, buildNohupSightingScript, cleanupMarkMessage, parseCleanupGuard, nohupManualSteps, parseCleanupOutcome, parseNohupSighting, type NohupSighting } from './unixAgentCleanup';
-import { WindowsAgentDeployer, windowsAgentLayout, type WindowsDeployment } from './WindowsAgentDeployer';
+import { WindowsAgentDeployer, windowsAgentLayout, type FirewallInspection, type WindowsDeployment } from './WindowsAgentDeployer';
 import { DEFAULT_WINDOWS_AGENT_OPTIONS, type WindowsAgentOptions } from './windowsAgentConfig';
 import { updateWindowsAgent, type AgentUpdateResult } from './windowsAgentUpdate';
 import type { WindowsUninstallChoice, WindowsUninstallResult } from './windowsAgentUninstall';
@@ -705,6 +705,13 @@ export class AgentInstaller {
     ].join(' ');
 
     await this.sshClient.execIsolated(sshHost, cmd);
+  }
+
+  /** Reads (never changes) the Windows Firewall policy that decides whether the hub reaches the agent of the recognised task. */
+  async inspectAgentFirewall(sshHost: string, address: string, port: number): Promise<FirewallInspection> {
+    const probe = await this.sshClient.execIsolated(sshHost, buildWindowsPreflightCommand());
+    const host = parseWindowsPreflight(probe.stdout, probe.stderr, probe.code);
+    return this.windowsDeployer().inspectFirewall(sshHost, host, address, port);
   }
 
   /**

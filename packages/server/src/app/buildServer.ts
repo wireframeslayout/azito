@@ -84,6 +84,7 @@ import { mapAppError } from './mapAppError';
 import { TmuxHookManager, syncTmuxChangeHooks } from '../modules/tmux/TmuxHookManager';
 import { AgentEventStream } from '../modules/servers/transport/AgentEventStream';
 import { notifyAgentWatchesOnIdle } from '../modules/notifications/agentWatchBridge';
+import { notifyFirewallPush } from '../modules/notifications/firewallPush';
 import { asPaneHandle, type PaneOrdinal } from '@azito/shared';
 import { agentMisaoUpdateAvailable } from '../modules/system/misao/agentMisaoUpdate';
 import { describeMisaoDaemon, syncMisaoNodes } from '../modules/tmux/misao/misaoDriver';
@@ -143,6 +144,11 @@ export async function buildServer(app: FastifyInstance, wiring: Wiring, port: nu
       ...getPushMessage(sub.lang, pushKey, { taskTitle: task.title }),
       data: { url: taskPushUrl(task.projectId, task.id), taskId: task.id },
     })).catch(() => {});
+  });
+
+  notificationBus.on((event) => {
+    if (event.type !== 'server:firewall') return;
+    void notifyFirewallPush(event.payload.serverName, event.payload.diagnosis, pushSubRepo, pushService).catch((err: unknown) => app.log.warn({ err }, 'Firewall push failed'));
   });
 
   // ─── Idle-watch push notifications (agent:activity → push, one-shot) ───
@@ -471,6 +477,7 @@ export async function buildServer(app: FastifyInstance, wiring: Wiring, port: nu
   const repoDiscovery = new RepoDiscoveryService(transportFactory);
   const localRepoCloneService = new LocalRepoCloneService(wiring.hubGitSupport);
   await app.register(serversRoutes, {
+    firewallStatus: (server) => wiring.agentRecoveryWatchdog.firewallStatus(server),
     serverRepo, serverAliasRepo, tmux: tmuxClient, transportFactory, agentHostRecorder: wiring.agentHostRecorder, agentInstaller, agentBundler, harnessInstaller, tmuxInstaller, projectRepo, projectServerRepo, windowRepo, webhookToken, uiToken: wiring.uiToken, harnessPrefix, harnessHash: wiring.harnessUpdater.getHarnessHash(), harnessUpdater: wiring.harnessUpdater, auditLogService, serverIsolationMutex, scopedAuthEnabled, muxDriverRegistry, repoDiscovery,
     misaoDaemonStatus: async (srv) => {
       if (srv.type === 'local') return describeMisaoDaemon(wiring.misao.connection);

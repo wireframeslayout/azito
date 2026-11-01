@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import type { ServerConfig } from '../Server';
 import { KeyedMutex } from '../../../shared/keyedMutex';
-import { AgentRecoveryWatchdog } from './AgentRecoveryWatchdog';
+import { AgentRecoveryWatchdog, type FirewallVerdict } from './AgentRecoveryWatchdog';
 import type { RecoveryTiming } from '../../../shared/recoveryBackoff';
 
 const TIMING: RecoveryTiming = { tickMs: 15_000, baseMs: 60_000, maxMs: 240_000 };
@@ -12,6 +12,10 @@ function server(name: string, platform: 'win32' | 'linux' = 'win32', type: Serve
 }
 
 /** A hub whose servers, agents and misao are scripted, and whose clock moves only when told. */
+function verdict(over: Partial<FirewallVerdict>): FirewallVerdict {
+  return { ruleFound: null, blockedBy: [], problem: null, allowCommand: 'allow', blockCommands: [], networkCategory: 'Private', ...over };
+}
+
 class Harness {
   clock = 1_000_000;
   servers: ServerConfig[] = [server('win')];
@@ -19,6 +23,8 @@ class Harness {
   misaoDown = false;
   misaoStatusFails = false;
   recoverFails = false;
+  firewall: FirewallVerdict = verdict({ ruleFound: null });
+  readonly firewallNotices: import('./AgentRecoveryWatchdog').FirewallDiagnosis[] = [];
   reviveResult = 'started';
   /** The agent is up again once recoverAgent was called this many times. */
   recoversToStart = 1;
@@ -30,10 +36,13 @@ class Harness {
   readonly lock = new KeyedMutex();
   /** Runs while a recovery holds the lock. */
   duringRecover: (() => Promise<void>) | undefined;
+  duringInspect: (() => Promise<void>) | undefined;
 
   readonly watchdog = new AgentRecoveryWatchdog({
     listServers: () => this.servers,
     checkAgent: async () => { if (!this.agentUp) throw new Error('unreachable'); },
+    inspectFirewall: async () => { await this.duringInspect?.(); return this.firewall; },
+    onFirewallProblem: (_s, diagnosis) => { this.firewallNotices.push(diagnosis); },
     recoverAgent: async (s, force) => {
       this.recovered.push(s.name);
       this.recoverForces.push(force);
@@ -61,6 +70,60 @@ class Harness {
 }
 
 describe('AgentRecoveryWatchdog: the agent', () => {
+  it('pauses on confirmed firewall blocks and resumes when the policy becomes inconclusive', async () => {
+    const h = new Harness();
+    h.agentUp = false;
+    h.firewall = verdict({ ruleFound: false, blockedBy: ['deny'], blockCommands: ['inspect deny'], networkCategory: 'Private' });
+    await h.watchdog.tick();
+    await h.advance(MIN);
+    expect(h.recovered).toEqual([]);
+    expect(h.watchdog.firewallStatus(h.servers[0]!)).toMatchObject({ state: 'blocked', checkedAt: h.clock, networkCategory: 'Private' });
+    expect(h.firewallNotices).toHaveLength(1);
+    expect(h.firewallNotices[0]?.commands).toContain('inspect deny');
+    h.firewall = verdict({ ruleFound: null });
+    await h.advance(TIMING.maxMs);
+    expect(h.recoverForces).toEqual([false]);
+    await h.watchdog.tick();
+    expect(h.watchdog.firewallStatus(h.servers[0]!)).toBeUndefined();
+  });
+
+  it('continues recovery if a Block rule is reported but the network profile is unknown', async () => {
+    const h = new Harness();
+    h.agentUp = false;
+    h.firewall = verdict({ ruleFound: false, blockedBy: ['Public block'], networkCategory: null });
+    await h.watchdog.tick();
+    await h.advance(MIN);
+    expect(h.recovered).toEqual(['win']);
+    expect(h.watchdog.firewallStatus(h.servers[0]!)?.state).toBe('unknown');
+    expect(h.firewallNotices).toEqual([]);
+  });
+
+  it('does not repeat the same confirmed notification after an inconclusive inspection', async () => {
+    const h = new Harness();
+    h.agentUp = false;
+    h.recoversToStart = Infinity;
+    const blocked = verdict({ ruleFound: false, blockedBy: ['deny'], blockCommands: ['inspect deny'] });
+    h.firewall = blocked;
+    await h.watchdog.tick();
+    await h.advance(MIN);
+    h.firewall = verdict({ ruleFound: null, problem: 'unavailable' });
+    await h.advance(TIMING.maxMs);
+    h.firewall = blocked;
+    await h.advance(MIN);
+    expect(h.firewallNotices).toHaveLength(1);
+  });
+
+  it('continues recovery when effective policy cannot be read', async () => {
+    const h = new Harness();
+    h.agentUp = false;
+    h.firewall = verdict({ ruleFound: null, blockedBy: ['unverified'], problem: 'not elevated' });
+    await h.watchdog.tick();
+    await h.advance(MIN);
+    expect(h.recovered).toEqual(['win']);
+    expect(h.watchdog.firewallStatus(h.servers[0]!)?.state).toBe('unknown');
+    expect(h.firewallNotices).toEqual([]);
+  });
+
   it('only forces a persistent failure and does not log a waiting launcher as restarted', async () => {
     const h = new Harness();
     h.agentUp = false;
@@ -428,6 +491,23 @@ describe('AgentRecoveryWatchdog: more servers than looks at once', () => {
 });
 
 describe('AgentRecoveryWatchdog: stopping', () => {
+  it('does not recover when stopped during firewall inspection', async () => {
+    const h = new Harness();
+    h.agentUp = false;
+    await h.watchdog.tick();
+    h.clock += MIN;
+    let release!: () => void;
+    let entered!: () => void;
+    const inspecting = new Promise<void>((resolve) => { entered = resolve; });
+    h.duringInspect = () => new Promise<void>((resolve) => { release = resolve; entered(); });
+    const tick = h.watchdog.tick();
+    await inspecting;
+    h.watchdog.stop();
+    release();
+    await tick;
+    expect(h.recovered).toEqual([]);
+  });
+
   it('does not recover what had not begun when it was stopped while waiting for the lock', async () => {
     const h = new Harness();
     h.agentUp = false;

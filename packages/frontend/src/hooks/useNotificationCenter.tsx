@@ -2,7 +2,7 @@ import React, { createContext, useCallback, useContext, useEffect, useRef, useSt
 import { useTranslation } from 'react-i18next';
 import { useLocation, useNavigate } from 'react-router-dom';
 import { api } from '../api/client';
-import type { AgentActivityPayload, AppNotification, AppNotificationKind } from '../types/notification';
+import type { AgentActivityPayload, AppNotification, AppNotificationKind, FirewallDiagnosis } from '../types/notification';
 import { useAgentActivity } from './useAgentActivity';
 import { useNotificationChannel } from './useNotificationChannel';
 import { useWorkspaceTargets } from './useWorkspaceTargets';
@@ -27,7 +27,7 @@ const PENDING_OPEN_TASK_TTL_MS = 5000;
 const FAILED_STATUSES = new Set(['error', 'send_error', 'worker_not_ready', 'codex_error', 'stopped_by_user']);
 
 const NOTIFICATION_KINDS: readonly AppNotificationKind[] = [
-  'qa', 'plan_approval', 'execution_approval', 'task_done', 'task_failed', 'agent_finished',
+  'qa', 'plan_approval', 'execution_approval', 'task_done', 'task_failed', 'agent_finished', 'server_firewall',
 ];
 
 interface EphemeralToast {
@@ -249,6 +249,10 @@ export function NotificationCenterProvider({ children }: { children: React.React
   }, [updateNotifications, dismissToast]);
 
   useNotificationChannel({
+    onServerFirewall: useCallback((payload: { serverName: string; diagnosis: FirewallDiagnosis }) => {
+      const { diagnosis } = payload;
+      pushNotification({ id: crypto.randomUUID(), kind: 'server_firewall', title: t('firewall.title', { serverName: payload.serverName }), body: t(`firewall.${diagnosis.state}`, { rules: diagnosis.blockedBy.join(', ') }) + (diagnosis.commands.length ? `\n${diagnosis.commands.join('\n')}` : ''), serverName: payload.serverName, read: false, createdAt: Date.now() });
+    }, [pushNotification, t]),
     onTaskStatus: useCallback((payload: { taskId: number; status: string; title?: string; projectId?: number }) => {
       const taskTitle = taskTitleOf(payload.title, payload.taskId, t('fallbackTaskTitle', { taskId: payload.taskId }));
       switch (payload.status) {
@@ -425,6 +429,7 @@ const KIND_ICON: Record<AppNotificationKind, React.ReactNode> = {
   task_done: <Icon name="check" size={16} />,
   task_failed: <Icon name="warning" size={16} />,
   agent_finished: <Icon name="stop" size={16} />,
+  server_firewall: <Icon name="warning" size={16} />,
 };
 
 export function notificationIcon(kind: AppNotificationKind): React.ReactNode {
@@ -471,6 +476,7 @@ function NotificationToastStack() {
           <span style={{ fontSize: 'var(--font-lg)', lineHeight: 1 }}>{notificationIcon(toast.notification.kind)}</span>
           <span style={{ flex: 1, fontSize: 'var(--font-md)', color: 'var(--text)', lineHeight: 1.4 }}>
             {toast.notification.messageKey ? t(toast.notification.messageKey, toast.notification.messageParams) : (toast.notification.title ?? '')}
+            {toast.notification.body && <span style={{ display: 'block', overflowWrap: 'anywhere', whiteSpace: 'pre-wrap' }}>{toast.notification.body}</span>}
           </span>
           <button
             aria-label={t('notifications:toast.dismissAriaLabel')}
