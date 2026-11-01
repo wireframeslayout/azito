@@ -110,3 +110,13 @@ https://<host>/api/projects/<projectId>/storage/<filename>/raw
 ```
 
 プロジェクトごとにディレクトリが分離されています。
+
+## 配布物の案内と接続状態
+
+ハブ実行ファイルの隣に任意の `distribution.json` を置き、`storage.onboarding.options` を指定できます。配布ビルドの `--distribution <file>` は設定を検証して同梱します。ファイルまたは onboarding がない場合は OSS の案内を使い、不正な設定では起動を停止します。onboarding には `heading`、`body`、`options` と任意の `dismissible`（既定 true）を指定します。各選択肢には `id`、`kind`、`title`、`description` を指定します。`connect-s3` と `local-minio` は各案内を開き、`link` は HTTP(S) の `href`、`managed` は HTTP(S) の `endpoint` と `bucket` を含む `defaults` を使います。managed の選択時は保存済みの認証情報を保持します。設定変更にはハブの再起動が必要です。
+
+`GET /api/projects/:id/storage/status` は `unconfigured`、`unreachable`、`ready` を区別します。状態の確認は HeadBucket のみで行い、副作用はなく、バケットを作成しません。既定設定でもバケットへの接続に成功すると設定済みになります。バケットがない場合は設定済みかどうかにかかわらず `unreachable`（`bucket`）を返し、画面の「バケットを作成」で作成できます。その他の確認失敗は設定済みなら `unreachable`、未設定なら `unconfigured` を返します。アップロード時の自動作成も維持されます。
+
+## フォルダ・ファイル操作
+
+ストレージ API のパスはプロジェクト相対です。フォルダは末尾 `/` を付け、0 バイトの印で表します。`GET storage/entries` は `prefix`、`limit`（既定 200）、`cursor` を受け付けます。`POST storage/folders` は `prefix`、`PATCH storage/entries` はファイルの `key` と `displayName` またはフォルダの `prefix` と `newName`、`POST storage/move` は `keys`、`prefixes` と `destPrefix`、`POST storage/delete` は `keys` と `prefixes`、`GET storage/stat` は `prefix` を受け付けます。アップロードにはmultipart の任意フィールド `prefix` を指定できます。ファイルのキーはプロジェクトのルートを含み、フォルダの prefix はプロジェクト相対です。フォルダ移動は 1,000 オブジェクトが上限で、コピー後に元を削除し、部分失敗を報告します。外部からの書き込みに対して存在確認とコピーを原子的には実行できません。ファイル名の変更はキーを維持し、表示名をメタデータに保存します。現在の画面は従来のフラット一覧を表示します。
