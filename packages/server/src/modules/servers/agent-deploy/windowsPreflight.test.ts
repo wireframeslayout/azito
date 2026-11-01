@@ -34,11 +34,13 @@ describe('buildWindowsPreflightCommand', () => {
     expect(script).toContain('ConvertTo-Json');
     expect(script).toContain('Tailscale\\tailscale.exe');
     expect(script).toContain("$cim = 'denied'");
+    expect(script).toContain('$os.CurrentBuildNumber');
+    expect(script).toContain('Windows NT\\CurrentVersion');
   });
 });
 
 describe('checkWindowsPreflight: the Windows build', () => {
-  const info = (buildNumber: number | null): WindowsPreflightInfo => ({ nodePath: 'C:\\node.exe', nodeVersion: '24.14.0', arch: 'x64', windowsVersion: 'Windows 10', buildNumber, tailscaleIp: '100.64.0.9', home: 'C:\\Users\\d', systemRoot: 'C:\\Windows', userId: 'PC\\d', cim: buildNumber === null ? 'unreadable' : 'ok' });
+  const info = (buildNumber: number | null): WindowsPreflightInfo => ({ nodePath: 'C:\\node.exe', nodeVersion: '24.14.0', arch: 'x64', windowsVersion: 'Windows 10', buildNumber, tailscaleIp: '100.64.0.9', home: 'C:\\Users\\d', systemRoot: 'C:\\Windows', userId: 'PC\\d', cim: 'ok' });
   it('accepts 1809 (build 17763) and later', () => {
     expect(checkWindowsPreflight(info(17763))).toEqual([]);
     expect(checkWindowsPreflight(info(26100))).toEqual([]);
@@ -65,9 +67,10 @@ describe('checkWindowsPreflight: WMI refused or unreadable', () => {
   it('keeps the other problems beside the WMI reason', () => {
     expect(checkWindowsPreflight({ ...base(), cim: 'denied', buildNumber: null, tailscaleIp: null })).toHaveLength(2);
   });
-  it('reports a WMI failure for another reason as an unreadable build, not as a refusal', () => {
+  it('stops on a WMI failure even when the registry build is readable', () => {
     const missing = checkWindowsPreflight({ ...base(), cim: 'unreadable', buildNumber: null });
-    expect(missing).toEqual([expect.stringMatching(/Could not read the Windows build number/)]);
+    expect(missing).toEqual([expect.stringMatching(/WMI could not be read/)]);
+    expect(checkWindowsPreflight({ ...base(), cim: 'unreadable' })).toEqual(missing);
   });
 });
 

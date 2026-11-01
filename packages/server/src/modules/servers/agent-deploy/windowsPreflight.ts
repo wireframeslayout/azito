@@ -48,7 +48,8 @@ function Test-AccessDenied($ex) {
 $caption = $null
 $build = $null
 $cim = 'ok'
-try { $os = Get-CimInstance -ClassName Win32_OperatingSystem -ErrorAction Stop; $caption = $os.Caption; $build = $os.BuildNumber } catch { $caption = $null; $build = $null; if (Test-AccessDenied $_.Exception) { $cim = 'denied' } else { $cim = 'unreadable' } }
+try { $os = Get-ItemProperty -LiteralPath 'HKLM:\\SOFTWARE\\Microsoft\\Windows NT\\CurrentVersion' -ErrorAction Stop; $build = $os.CurrentBuildNumber } catch { $caption = $null; $build = $null }
+try { $caption = (Get-CimInstance -ClassName Win32_OperatingSystem -ErrorAction Stop).Caption } catch { if (Test-AccessDenied $_.Exception) { $cim = 'denied' } else { $cim = 'unreadable' } }
 $info = [ordered]@{
   nodePath = $nodePath
   nodeVersion = $nodeVersion
@@ -161,8 +162,9 @@ export function checkWindowsPreflight(info: WindowsPreflightInfo): string[] {
     missing.push(`x86_64 architecture required (found: ${info.arch}; Windows on ARM is not supported)`);
   }
   if (info.cim === 'denied') {
-    // The build number (and the firewall check after this) cannot be read: say why, and do not call it an old build.
     missing.push(WMI_DENIED_MESSAGE);
+  } else if (info.cim === 'unreadable') {
+    missing.push('Windows WMI could not be read; the agent installation cannot safely continue');
   } else if (info.buildNumber === null) {
     missing.push(`Could not read the Windows build number; Windows 10 version 1809 (build ${MIN_WINDOWS_BUILD}) or later is required`);
   } else if (info.buildNumber < MIN_WINDOWS_BUILD) {
