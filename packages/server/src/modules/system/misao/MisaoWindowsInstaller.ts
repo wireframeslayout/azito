@@ -30,8 +30,9 @@ export interface MisaoWindowsInstallerOptions {
   /** How long a stopped daemon's task gets to leave the running state before it is ended. */
   taskIdleTimeoutMs?: number;
   /**
-   * Refuse (before anything is changed) when the task starts another folder's misao. Set for an agent's misao, whose folder is fixed
-   * (`~\.azito\misao`). The hub's own misao leaves it off: its caller (`MisaoServiceService`) decides that, and `--replace-socket` takes the task over on purpose.
+   * Refuse (before anything is changed) when the registered task is not exactly the one this install writes for its folder (another
+   * folder's misao, another account's task, or a definition changed by hand). Set for an agent's misao and for the hub's own: nothing
+   * takes such a task over, not even `--replace-socket`.
    */
   refuseTaskOfAnotherRoot?: boolean;
 }
@@ -181,10 +182,11 @@ export class MisaoWindowsInstaller {
 
   /**
    * The daemon AZITO installed does not answer (it died: its task reports 0 whatever happened, so the Task Scheduler does not start it
-   * again): starts the task through the agent. A task still "running" while the pipe is silent is left alone (it is starting), unless
-   * `force`: then it is ended with the `misao.exe` of this pipe first. Touches nothing (and says why) when the agent relays to a pipe
+   * again): starts the task through the agent. A task still "running" while the pipe is silent is left alone (it is starting, or its
+   * launcher is waiting to retry), unless `force` and the task is of the earlier form without a launcher: then it is ended with the
+   * `misao.exe` of this pipe first. Touches nothing (and says why) when the agent relays to a pipe
    * other than the managed one (`custom_socket`: that daemon is not ours), when the daemon answers, when AZITO did not install it,
-   * when its task is gone (the install is what recreates that), when the task starts another folder's misao (`other_task`) or when
+   * when its task is gone (the install is what recreates that), when the task is not this install's (another folder, another account or a changed definition: `other_task`) or when
    * it was disabled by hand (`disabled`).
    */
   async reviveDaemon(target: WindowsTarget, force: boolean): Promise<'running' | 'custom_socket' | 'not_installed' | 'no_task' | 'other_task' | 'disabled' | 'starting' | 'started'> {
@@ -223,7 +225,7 @@ export class MisaoWindowsInstaller {
 
   // ── Reading the host ──
 
-  /** Only an agent's installer asks for this check: see {@link MisaoWindowsInstallerOptions.refuseTaskOfAnotherRoot}. */
+  /** See {@link MisaoWindowsInstallerOptions.refuseTaskOfAnotherRoot}. */
   private async refuseTaskOfAnotherRootIfAsked(session: Session): Promise<void> {
     if (this.options.refuseTaskOfAnotherRoot) await this.refuseTaskOfAnotherRoot(session);
   }

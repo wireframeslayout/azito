@@ -237,7 +237,7 @@ export class MisaoServiceService {
   private async refuseTaskOfAnotherRoot(windows: LocalMisaoWindows): Promise<void> {
     if (!(await windows.tasks.query(windows.taskName)).exists) return;
     const xml = await windows.tasks.exportXml(windows.taskName);
-    if (!(await windows.installer.taskOwnedByCurrentUser(windows.target, xml))) throw new MisaoServiceError('custom_socket', `The task \"${windows.taskName}\" belongs to another account or its owner cannot be determined.`);
+    if (!(await windows.installer.taskOwnedByCurrentUser(windows.target, xml))) throw new MisaoServiceError('custom_socket', `The task "${windows.taskName}" belongs to another account or its owner cannot be determined; it was left unchanged.`);
     const status = await windows.target.fetchMisaoStatus();
     const systemRoot = status.host.windows?.systemRoot;
     if (!systemRoot || !taskStartsMisaoOf(xml, this.paths.root, systemRoot, this.paths.socket, windows.taskName)) {

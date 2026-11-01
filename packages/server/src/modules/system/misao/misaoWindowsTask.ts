@@ -1,7 +1,6 @@
 import * as path from 'path';
 import { MISAO_RELEASE_FILE_NAMES, misaoFileNameOn, MISAO_WINDOWS_CURRENT_FILE, type AgentMisaoWindowsHost, type MisaoReleaseFile } from '../../servers/transport/agentMisaoSocket';
 import { buildTaskXml } from '../../../shared/os/taskScheduler/taskDefinition';
-export { taskMisaoRoot } from '../../../shared/os/taskScheduler/taskXmlRead';
 import { misaoTaskArgumentsOf } from '../../../shared/os/taskScheduler/misaoTaskArguments';
 
 const win32 = path.win32;
@@ -26,6 +25,8 @@ export interface MisaoWindowsLayout {
   logFile: string;
   /** The task definition, written beside the install while it is being registered. */
   taskXmlFile: string;
+  /** The Task Scheduler task that runs the daemon (its launcher checks whether that task is still enabled). */
+  taskName: string;
 }
 
 export function misaoWindowsLayout(windows: Pick<AgentMisaoWindowsHost, 'misaoRoot'>, version: string, taskName: string): MisaoWindowsLayout {
@@ -39,6 +40,7 @@ export function misaoWindowsLayout(windows: Pick<AgentMisaoWindowsHost, 'misaoRo
     currentFile: win32.join(root, MISAO_WINDOWS_CURRENT_FILE),
     logFile: win32.join(root, 'misao.log'),
     taskXmlFile: win32.join(root, `${taskName}.task.xml`),
+    taskName,
   };
 }
 
@@ -57,7 +59,7 @@ export function misaoWindowsReleasePaths(versionDir: string): string[] {
  * allowed to depend on this module, builds the very same text to recognise the task by).
  */
 export function misaoTaskArguments(input: { systemRoot: string; layout: MisaoWindowsLayout; pipe: string }): string {
-  return misaoTaskArgumentsOf({ systemRoot: input.systemRoot, exe: input.layout.exe, root: input.layout.root, logFile: input.layout.logFile, pipe: input.pipe, taskName: win32.basename(input.layout.taskXmlFile).replace(/\.task\.xml$/, '') });
+  return misaoTaskArgumentsOf({ systemRoot: input.systemRoot, exe: input.layout.exe, root: input.layout.root, logFile: input.layout.logFile, pipe: input.pipe, taskName: input.layout.taskName });
 }
 
 export interface MisaoTaskInput {

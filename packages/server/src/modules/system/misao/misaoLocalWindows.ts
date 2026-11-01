@@ -10,7 +10,6 @@ import { rawRunnerOf, SchtasksClient } from '../../../shared/os/taskScheduler/sc
 import { readMisaoSocketStatus, stageMisaoReleaseFile, type AgentMisaoHost } from '../../servers/transport/agentMisaoSocket';
 import { MisaoWindowsInstaller, type WindowsTarget } from './MisaoWindowsInstaller';
 import { MISAO_SERVICE, type MisaoPaths } from './misaoPaths';
-import { taskMisaoRoot } from './misaoWindowsTask';
 import type { ProcessLock } from '../../../shared/processLock';
 import { createMisaoRootLock } from './misaoRootLock';
 
@@ -78,8 +77,6 @@ export async function misaoWindowsTaskExists(hostEnv: Pick<HostEnv, 'platform' |
   const tasks = new SchtasksClient(rawRunnerOf((command) => runCommandSpec(command, { ...runHostOf(hostEnv), rawOutput: true })), hostEnv);
   return (await tasks.query(MISAO_SERVICE.windowsTaskName)).exists;
 }
-
-export { taskMisaoRoot };
 
 /** Recognise only a task whose complete action is generated for this installation. */
 export function taskStartsMisaoOf(xml: string, root: string, systemRoot: string, pipe: string, taskName: string): boolean {

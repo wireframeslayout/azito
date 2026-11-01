@@ -18,6 +18,7 @@ describe('the Windows misao layout', () => {
       currentFile: `${ROOT}\\current`,
       logFile: `${ROOT}\\misao.log`,
       taskXmlFile: `${ROOT}\\AzitoMisao.task.xml`,
+      taskName: 'AzitoMisao',
     });
   });
 

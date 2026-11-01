@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { decodeEncodedCommand, FakeWindowsHost, type FakeWindowsHostOptions } from './testing/fakeWindowsHost';
+import { decodeEncodedCommand, FAKE_PREVIOUS_VERSION, FakeWindowsHost, legacyAgentTaskXml, type FakeWindowsHostOptions } from './testing/fakeWindowsHost';
 import { AgentInstaller, type AgentMisaoInstaller, type InstallProgress } from './AgentInstaller';
 import { DEFAULT_WINDOWS_AGENT_OPTIONS, type WindowsAgentOptions } from './windowsAgentConfig';
 
@@ -84,7 +84,11 @@ describe('AgentInstaller on a Windows host', () => {
     expect(host.registeredXml).toContain('<UserId>PC\\dev</UserId>');
     // Under conhost --headless: node.exe has a console without a window, so nothing appears on the user's desktop.
     expect(host.registeredXml).toContain('<Command>C:\\Windows\\System32\\conhost.exe</Command>');
-    expect(host.registeredXml).toContain('<Arguments>--headless "C:\\Program Files\\nodejs\\node.exe" --env-file=C:\\Users\\dev\\.azito\\agent\\agent.env C:\\Users\\dev\\.azito\\agent\\bundlehash1\\azito-agent.cjs</Arguments>');
+    // conhost runs the PowerShell launcher, which starts node.exe --env-file=<settings> <entry> and restarts it after a failure.
+    const args = /<Arguments>([^<]*)<\/Arguments>/.exec(host.registeredXml!)![1]!;
+    expect(args).toMatch(/^--headless C:\\Windows\\System32\\WindowsPowerShell\\v1\.0\\powershell\.exe .*-EncodedCommand [A-Za-z0-9+/=]+$/);
+    const launcher = decodeEncodedCommand(args);
+    expect(launcher).toContain("$node = 'C:\\Program Files\\nodejs\\node.exe'\n$envFile = 'C:\\Users\\dev\\.azito\\agent\\agent.env'\n$entry = 'C:\\Users\\dev\\.azito\\agent\\bundlehash1\\azito-agent.cjs'\n$taskName = 'AzitoAgent'");
     expect(host.registeredXml).toContain('<WorkingDirectory>C:\\Users\\dev\\.azito\\agent\\bundlehash1</WorkingDirectory>');
     expect(host.registeredXml).toContain('<LogonTrigger>');
     const schtasks = host.calls.filter((c) => c.kind === 'schtasks').map((c) => c.schtasksArgs![0]);
@@ -261,7 +265,7 @@ describe('AgentInstaller on a Windows host', () => {
         expect(result.error).toContain('restored the previous task definition');
         expect(result.error).toContain('started the previous agent again');
         // The definition on the host is the previous one again, and the previous agent is running.
-        expect(host.registeredXml).toBe('<Task>previous definition</Task>');
+        expect(host.registeredXml).toBe(legacyAgentTaskXml(FAKE_PREVIOUS_VERSION));
         expect(host.taskState).toBe('running');
         const scripts = host.calls.filter((c) => c.kind === 'script').map((c) => c.text);
         // The previous folder and settings are moved aside on the way in (never deleted) and moved back on the way out.
@@ -473,7 +477,7 @@ describe('AgentInstaller on a Windows host', () => {
   describe('updating an agent that is registered', () => {
     const WIN = { platform: 'win32', arch: 'x64' } as const;
     const OLD = '0123456789ab';
-    const OLD_XML = `<Task><Actions><Exec><Arguments>--headless "C:\\Program Files\\nodejs\\node.exe" --env-file=C:\\Users\\dev\\.azito\\agent\\agent.env C:\\Users\\dev\\.azito\\agent\\${OLD}\\azito-agent.cjs</Arguments></Exec></Actions></Task>`;
+    const OLD_XML = legacyAgentTaskXml(OLD);
     const makeRunning = (hostOptions: Partial<FakeWindowsHostOptions> = {}, misao?: AgentMisaoInstaller) => {
       const made = make({ existingTask: 'running', ...hostOptions }, DEFAULT_WINDOWS_AGENT_OPTIONS, misao);
       made.host.registeredXml = OLD_XML;
@@ -600,7 +604,7 @@ describe('AgentInstaller on a Windows host', () => {
   });
 
   describe('removing the agent from the host', () => {
-    const TASK_XML = '<Task><Actions><Exec><Command>C:\\Windows\\System32\\conhost.exe</Command><Arguments>--headless "C:\\Program Files\\nodejs\\node.exe" --env-file=C:\\Users\\dev\\.azito\\agent\\agent.env C:\\Users\\dev\\.azito\\agent\\abc123abc123\\azito-agent.cjs</Arguments></Exec></Actions></Task>';
+    const TASK_XML = legacyAgentTaskXml('abc123abc123');
 
     it('propagates the hub harness prefix and leaves both MCP registrations untouched', async () => {
       const { installer, host } = make({}, DEFAULT_WINDOWS_AGENT_OPTIONS, undefined, 'second-hub');
