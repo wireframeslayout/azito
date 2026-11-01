@@ -7,7 +7,8 @@
     "notifications": "Notifications",
     "security": "Security",
     "system": "System",
-    "keyboard": "Keyboard"
+    "keyboard": "Keyboard",
+    "terminal": "Terminal"
   },
   "auditLog": {
     "description": "The {{count}} most recent security audit events (task token issuance/revocation, denied requests, approvals, supervisor registration, etc.). This is an operational record, not tamper-evident.",
@@ -255,6 +256,27 @@
     "conflict": "This key is already assigned to another action.",
     "storageError": "Could not save the settings.",
     "intervalOnlySpace": "Available when Space twice is selected."
+  },
+  "terminal": {
+    "policy": "When waking a sleeping tmux window",
+    "policyDescription": "Choose how to open sleeping tmux windows.",
+    "ask": "Ask every time",
+    "misao": "Always use misao",
+    "tmux": "Keep tmux",
+    "defaults": "Default for new windows",
+    "defaultsDescription": "Change the default on supported servers.",
+    "noServers": "No supported servers",
+    "allMisao": "Change {{count}} servers to misao…",
+    "allMisaoDone": "All servers already use misao",
+    "updating": "Changing…",
+    "updated": "Updated",
+    "updateFailed": "Update failed",
+    "loadFailed": "Could not load settings",
+    "saveFailed": "Could not save settings",
+    "retry": "Retry",
+    "confirmDefaults": "Change the default to {{mux}} on {{count}} servers?",
+    "autoAskDescription": "Automatic wakes, such as task resumes, also follow this setting. With “Ask every time”, the window opens in tmux and a notification offers the switch.",
+    "defaultsCount": "{{count}} servers have tmux as default_mux."
   },
   "history": {
     "description": "These settings apply only to this device.",

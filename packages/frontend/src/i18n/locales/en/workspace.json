@@ -92,7 +92,11 @@
     "deleteWindow": "Delete window",
     "deleteEntireWindow": "Delete entire window",
     "deletePane": "Delete pane",
-    "quickAddTitle": "Add {{label}} — {{serverName}}"
+    "quickAddTitle": "Add {{label}} — {{serverName}}",
+    "switchMisao": "Reopen with misao…",
+    "switchMisaoBusy": "Not available while working (wait until it is idle)",
+    "switchMisaoUnavailable": "misao is not available on this server",
+    "switchMisaoStale": "Unavailable while the server cannot be reached."
   },
   "addWindow": {
     "title": "Add Window",

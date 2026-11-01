@@ -11,6 +11,7 @@
 export type AgentActivityStopReason = 'completed' | 'interrupted' | 'deleted' | 'offline' | 'api_error' | 'unknown';
 
 export type NotificationEvent =
+  | { type: 'window:mux_switch_suggested'; payload: { windowId: number; serverName: string; title?: string; taskId?: number; reason: 'ask' | 'misao_unavailable' } }
   | { type: 'subagents:updated'; payload: { windowId: number; sessionId: string } }
   | { type: 'sessions:updated'; payload: { serverName: string } }
   | { type: 'task:status'; payload: { taskId: number; status: string; title?: string; projectId?: number } }

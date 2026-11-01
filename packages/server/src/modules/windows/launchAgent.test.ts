@@ -177,6 +177,7 @@ describe('POST /api/windows/:id/launch-agent — MCP blocking', () => {
       return reply.status(mapped.status).send(mapped.body);
     });
     await instance.register(windowsRoutes, {
+      muxSwitchSettingsRepo: {} as never, auditLogService: {} as never, agentActivityMonitor: {} as never,
       harnessPrefix: '',
       windowRepo: windowRepo as IWindowRepository,
       projectRepo: {} as IProjectRepository,

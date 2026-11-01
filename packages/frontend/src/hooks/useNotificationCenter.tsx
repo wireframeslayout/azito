@@ -1,3 +1,4 @@
+import { formatWindowTitleLine, resolveWindowTitle } from '@azito/shared';
 import React, { createContext, useCallback, useContext, useEffect, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import type { AgentActivityPayload, AppNotification, AppNotificationKind } from '../types/notification';
@@ -20,7 +21,7 @@ const AGENT_DEDUPE_SCAN_LIMIT = 50;
 const FAILED_STATUSES = new Set(['error', 'send_error', 'worker_not_ready', 'codex_error', 'stopped_by_user']);
 
 const NOTIFICATION_KINDS: readonly AppNotificationKind[] = [
-  'qa', 'plan_approval', 'execution_approval', 'task_done', 'task_failed', 'agent_finished',
+  'qa', 'plan_approval', 'execution_approval', 'task_done', 'task_failed', 'agent_finished', 'mux_wake',
 ];
 
 interface EphemeralToast {
@@ -219,6 +220,7 @@ export function NotificationCenterProvider({ children }: { children: React.React
   }, [updateNotifications, dismissToast]);
 
   useNotificationChannel({
+    onMuxWake: (payload) => pushNotification({ id: makeId(), kind: 'mux_wake', messageKey: payload.reason === 'ask' ? 'notifications:kinds.muxWakeAsk' : 'notifications:kinds.muxWakeUnavailable', messageParams: { title: payload.title ?? formatWindowTitleLine(resolveWindowTitle({ id: payload.windowId })), serverName: payload.serverName }, serverName: payload.serverName, taskId: payload.taskId, windowId: payload.windowId, read: false, createdAt: Date.now() }),
     onTaskStatus: useCallback((payload: { taskId: number; status: string; title?: string; projectId?: number }) => {
       const taskTitle = taskTitleOf(payload.title, payload.taskId, t('fallbackTaskTitle', { taskId: payload.taskId }));
       switch (payload.status) {
@@ -319,6 +321,7 @@ const KIND_ICON: Record<AppNotificationKind, React.ReactNode> = {
   task_done: <Icon name="check" size={16} />,
   task_failed: <Icon name="warning" size={16} />,
   agent_finished: <Icon name="stop" size={16} />,
+  mux_wake: <Icon name="terminal" size={16} />,
 };
 
 export function notificationIcon(kind: AppNotificationKind): React.ReactNode {

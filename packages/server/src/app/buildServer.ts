@@ -1,3 +1,4 @@
+import { muxSwitchSettingsRoutes } from '../modules/windows/muxSwitchSettingsRoutes';
 import { formatWindowTitleLine, resolveWindowTitle } from '@azito/shared';
 // ─── Fastify instance assembly ───
 //
@@ -602,8 +603,14 @@ export async function buildServer(app: FastifyInstance, wiring: Wiring, port: nu
       });
     },
   });
+  await app.register(muxSwitchSettingsRoutes, { settingsRepo: wiring.muxSwitchSettingsRepo, serverRepo, muxDriverRegistry });
   await app.register(windowsRoutes, {
     windowRepo, projectRepo, taskRepo, tmux: tmuxClient, muxDriverRegistry, serverRepo, transportFactory,
+    muxSwitchSettingsRepo: wiring.muxSwitchSettingsRepo, auditLogService, agentActivityMonitor,
+    misaoVersion: async (server) => {
+      const connection = server.type === 'local' ? wiring.misao.connection : wiring.misao.servers.agentNode(server.name)?.connection;
+      return connection ? (await describeMisaoDaemon(connection)).daemonVersion : undefined;
+    },
     respawnService: windowRespawnService, sleepService: windowSleepService,
     sessionStrategyFactory, sessionCaptureService, supervisorRegistry,
     windowActivityStatusService, windowSnapshotService, notificationBus, resourceGuard, harnessPrefix, invalidateSessionCache,

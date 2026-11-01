@@ -1322,6 +1322,7 @@ function WorkspaceInner() {
         onCancel={() => setExecuteResourceWarning(null)}
         onForce={() => executeResourceWarning?.retry()}
       />
+      {windowActions.wakeDialog}
       <ResourceWarningDialog
         open={windowActions.respawnResourceWarning !== null}
         title={t('workspace:resourceWarning.title')}
@@ -1341,6 +1342,8 @@ function WorkspaceInner() {
       onConfirm={windowActions.confirmDialog?.onConfirm ?? (() => {})}
       onCancel={() => windowActions.setConfirmDialog(null)}
       loading={windowActions.windowActionLoading}
+      confirmLabel={windowActions.confirmDialog?.confirmLabel}
+      confirmVariant={windowActions.confirmDialog?.confirmVariant}
     />
   );
 

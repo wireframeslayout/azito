@@ -9,6 +9,7 @@ export type WindowMenuItemKind =
   | 'capture-panes'
   | 'sleep'
   | 'respawn'
+  | 'switch-misao'
   | 'show-task'
   | 'detach'
   | 'delete-pane'
@@ -19,6 +20,7 @@ export interface WindowMenuItemDescriptor {
   /** i18n key (workspace namespace unless it names another with `ns:`). */
   labelKey: string;
   disabled?: boolean;
+  disabledReasonKey?: string;
   danger?: boolean;
   /** delete-pane / rename-pane: the pane's 1-based ordinal in its window. */
   paneOrdinal?: number;
@@ -40,6 +42,8 @@ export interface WindowMenuParams {
   windowType?: string;
   agentSessionId?: string;
   sleeping?: boolean;
+  busy?: boolean;
+  misaoSupported?: boolean;
   hasLinkedTask: boolean;
 }
 
@@ -60,6 +64,9 @@ export function buildWindowMenuItems(params: WindowMenuParams): WindowMenuItemDe
   }
   if (online && params.windowType === 'agent' && params.agentSessionId && !params.sleeping) {
     items.push({ kind: 'sleep', labelKey: 'windows.sleep', disabled });
+  }
+  if (online && !params.sleeping && params.muxKind !== 'misao' && params.misaoSupported) {
+    items.push({ kind: 'switch-misao', labelKey: 'windows.switchMisao', disabled: disabled || params.busy, disabledReasonKey: disabled ? 'windows.switchMisaoStale' : params.busy ? 'windows.switchMisaoBusy' : undefined });
   }
   if (!online) {
     items.push({ kind: 'respawn', labelKey: params.sleeping ? 'common:terminal.wake' : 'windows.respawn' });

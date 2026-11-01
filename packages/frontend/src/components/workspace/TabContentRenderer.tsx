@@ -3,9 +3,7 @@ import { useTranslation } from 'react-i18next';
 import { useNavigate } from 'react-router-dom';
 import { paths } from '../../paths';
 import { TerminalContainer } from '../TerminalContainer';
-import { findWindow } from '../WindowStatusDropdown';
 import { useAgentActivity } from '../../hooks/useAgentActivity';
-import { isAgentWindow } from '../../lib/windowViewMode';
 import type { ConnectPaneFn } from '../../lib/terminalRef';
 import { FilePreviewPanel } from '../FileExplorer';
 import { ServersUnavailableNotice } from '../files/ServersUnavailableNotice';
@@ -153,7 +151,6 @@ export default function TabContentRenderer({
     }
   };
   const isTerminal = tab.type === 'terminal' && tab.serverName && tab.target;
-  const terminalWindow = isTerminal ? findWindow(tab.serverName!, tab.target!, project, allTasks, tab.terminalRef) : null;
   if (isTerminal && !isVisible) return null;
   return (
     <div
@@ -170,7 +167,7 @@ export default function TabContentRenderer({
       style={{ position: 'absolute', inset: 0, display: 'flex', flexDirection: 'column', visibility: isVisible ? 'visible' : 'hidden', pointerEvents: isVisible ? 'auto' : 'none' }}>
       {isTerminal && (
         <TerminalContainer
-              isAgent={isAgentWindow(terminalWindow?.id ?? null, terminalWindow?.windowType, entries.values())}
+              activeAgentWindowIds={new Set(Array.from(entries.values(), (entry) => entry.windowId).filter((id): id is number => id != null))}
               serverName={tab.serverName!}
               target={tab.target!}
               terminalRef={tab.terminalRef}

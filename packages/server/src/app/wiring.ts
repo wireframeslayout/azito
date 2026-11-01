@@ -80,6 +80,7 @@ import { SqliteTaskTokenRepository } from '../modules/tasks/tokens/SqliteTaskTok
 import { SqliteExecutionLogRepository } from '../modules/tasks/SqliteExecutionLogRepository';
 import { SqliteProjectServerRepository } from '../modules/projects/SqliteProjectServerRepository';
 import { SqliteProjectSecretRepository } from '../modules/projects/SqliteProjectSecretRepository';
+import { SqliteMuxSwitchSettingsRepository } from '../modules/windows/SqliteMuxSwitchSettingsRepository';
 import { SqliteStorageSettingsRepository } from '../modules/files/SqliteStorageSettingsRepository';
 import { SqlitePushSubscriptionRepository } from '../modules/notifications/SqlitePushSubscriptionRepository';
 import { SqliteAgentWatchRepository } from '../modules/notifications/SqliteAgentWatchRepository';
@@ -195,6 +196,7 @@ export interface Repositories {
   projectServerRepo: SqliteProjectServerRepository;
   projectSecretRepo: SqliteProjectSecretRepository;
   storageSettingsRepo: SqliteStorageSettingsRepository;
+  muxSwitchSettingsRepo: SqliteMuxSwitchSettingsRepository;
   pushSubRepo: SqlitePushSubscriptionRepository;
   agentTurnRepo: SqliteAgentTurnRepository;
   agentWatchRepo: SqliteAgentWatchRepository;
@@ -382,6 +384,7 @@ function buildRepositories(db: SqliteDatabase, hubHost: HostProfile | null): Rep
   const projectServerRepo = new SqliteProjectServerRepository(db);
   const projectSecretRepo = new SqliteProjectSecretRepository(db);
   const storageSettingsRepo = new SqliteStorageSettingsRepository(db);
+  const muxSwitchSettingsRepo = new SqliteMuxSwitchSettingsRepository(db);
   const pushSubRepo = new SqlitePushSubscriptionRepository(db);
   const agentTurnRepo = new SqliteAgentTurnRepository(db);
   const agentWatchRepo = new SqliteAgentWatchRepository(db);
@@ -403,6 +406,7 @@ function buildRepositories(db: SqliteDatabase, hubHost: HostProfile | null): Rep
     projectServerRepo,
     projectSecretRepo,
     storageSettingsRepo,
+    muxSwitchSettingsRepo,
     pushSubRepo,
     agentTurnRepo,
     agentWatchRepo,
@@ -502,7 +506,7 @@ function buildApplicationServices(infra: SharedInfra, repos: Repositories, uiTok
   const taskPaneEnvironmentService = new TaskPaneEnvironmentService(repos.taskTokenRepo, repos.projectSecretRepo, uiToken, scopedAuthEnabled, repos.auditLogService);
   const uiTokenEnvFn = (server: ServerConfig) => uiTokenEnvForServer(uiToken, server);
   const transcriptSourceProvider = new HostTranscriptSourceProvider(TRANSCRIPT_SOURCES, infra.transportFactory);
-  const windowRespawnService = new WindowRespawnService(repos.windowRepo, infra.muxDriverRegistry, sessionStrategyFactory, repos.taskRepo, repos.unitRepo, infra.supervisorRegistry, repos.projectServerRepo, repos.projectRepo, infra.transportFactory, repos.logRepo, infra.unitTypeLoader, infra.sidekickPackageLoader, repos.serverRepo, repos.projectSecretRepo, taskEvents, taskPaneEnvironmentService, infra.serverIsolationMutex, scopedAuthEnabled, uiTokenEnvFn, harnessPrefix, new TranscriptConversationProbe(transcriptSourceProvider), sessionCaptureService);
+  const windowRespawnService = new WindowRespawnService(repos.windowRepo, infra.muxDriverRegistry, sessionStrategyFactory, repos.taskRepo, repos.unitRepo, infra.supervisorRegistry, repos.projectServerRepo, repos.projectRepo, infra.transportFactory, repos.logRepo, infra.unitTypeLoader, infra.sidekickPackageLoader, repos.serverRepo, repos.projectSecretRepo, taskEvents, taskPaneEnvironmentService, infra.serverIsolationMutex, scopedAuthEnabled, uiTokenEnvFn, harnessPrefix, new TranscriptConversationProbe(transcriptSourceProvider), { settings: repos.muxSwitchSettingsRepo, notifications: infra.notificationBus, audit: repos.auditLogService }, sessionCaptureService);
   const windowSleepService = new WindowSleepService(repos.windowRepo, infra.muxDriverRegistry, sessionStrategyFactory, repos.serverRepo);
   const taskRestoreService = new TaskRestoreService({
     taskRepo: repos.taskRepo,

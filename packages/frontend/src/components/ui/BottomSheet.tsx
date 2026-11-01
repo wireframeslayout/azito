@@ -1,3 +1,4 @@
+import { cycleFocus, getFocusableElements } from './overlayLogic';
 import { useHotkey, useOverlayStack } from '../../hooks/useHotkeys';
 import { parseKeySpec } from '../../lib/hotkeys/keySpec';
 import { useEffect, useRef, useState } from 'react';
@@ -6,14 +7,19 @@ interface BottomSheetProps {
   open: boolean;
   onClose: () => void;
   title?: string;
+  hideTitle?: boolean;
   children: React.ReactNode;
 }
 
-export function BottomSheet({ open, onClose, title, children }: BottomSheetProps) {
+export function BottomSheet({ open, onClose, title, hideTitle, children }: BottomSheetProps) {
   const ref = useRef<HTMLDivElement>(null);
-  const { id, isTop } = useOverlayStack(open, ref);
+  const { id, isTop } = useOverlayStack(open, ref, true);
   useHotkey({ action: 'local:overlay-close', spec: parseKeySpec('Escape'), scope: 'overlay', overlayId: id, handler: onClose }, open);
   const [shouldRender, setShouldRender] = useState(open);
+
+  useEffect(() => {
+    if (open && ref.current) (ref.current.querySelector<HTMLElement>('[data-initial-focus]') ?? getFocusableElements(ref.current)[0] ?? ref.current).focus();
+  }, [open, shouldRender]);
 
   useEffect(() => {
     if (open) {
@@ -42,6 +48,9 @@ export function BottomSheet({ open, onClose, title, children }: BottomSheetProps
         ref={ref}
         role="dialog"
         aria-modal="true"
+        aria-label={title}
+        tabIndex={-1}
+        onKeyDown={(event) => { if (isTop && ref.current) cycleFocus(event.nativeEvent, ref.current); }}
         inert={!open}
         style={{
           position: 'fixed',
@@ -67,7 +76,7 @@ export function BottomSheet({ open, onClose, title, children }: BottomSheetProps
           transition: 'transform 0.25s ease, opacity 0.2s ease, visibility 0.25s ease',
         }}
       >
-        {title && (
+        {title && !hideTitle && (
           <div style={{ fontSize: 'var(--font-2xs)', letterSpacing: '0.08em', textTransform: 'uppercase', color: 'var(--text-dim)', padding: '6px 10px 4px' }}>
             {title}
           </div>

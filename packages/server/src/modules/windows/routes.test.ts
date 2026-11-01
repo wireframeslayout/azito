@@ -1,3 +1,4 @@
+import { WindowBusyError } from './muxSwitchPolicy';
 import { KeyedMutex } from '../../shared/keyedMutex';
 import { HostProfileError } from '../../shared/os/hostProfile';
 import { mapAppError } from '../../app/mapAppError';
@@ -114,6 +115,7 @@ describe('POST /api/windows/:id/launch-agent', () => {
 
     app = Fastify();
     await app.register(windowsRoutes, {
+      muxSwitchSettingsRepo: {} as never, auditLogService: {} as never, agentActivityMonitor: {} as never,
       harnessPrefix: '',
       windowRepo: windowRepo as IWindowRepository,
       projectRepo: { findById: () => ({ id: 1 }) } as unknown as IProjectRepository,
@@ -149,7 +151,7 @@ describe('POST /api/windows/:id/launch-agent', () => {
     ['POST', '/api/tasks/1/windows', ['server_name', 'tmux_target', 'ref', 'label', 'window_type', 'worker_type', 'worker_model', 'working_directory']],
     ['PUT', '/api/windows/1', ['label', 'agent_session_id', 'launch_command', 'worker_model', 'working_directory', 'window_type', 'worker_type']],
     ['POST', '/api/windows/1/launch-agent', ['command', 'force']],
-    ['POST', '/api/windows/1/respawn', ['force']],
+    ['POST', '/api/windows/1/respawn', ['force', 'mux']],
     ['PUT', '/api/windows/1/rename', ['name']],
     ['POST', '/api/windows/1/panes', ['ordinal', 'direction']],
     ['POST', '/api/windows/1/panes/1/send-keys', ['keys']],
@@ -330,6 +332,7 @@ describe('POST /api/windows/:id/launch-agent', () => {
     window = makeWindow({ workerType: 'codex' });
     const codexApp = Fastify();
     await codexApp.register(windowsRoutes, {
+      muxSwitchSettingsRepo: {} as never, auditLogService: {} as never, agentActivityMonitor: {} as never,
       harnessPrefix: '',
       windowRepo: {
         findById: (id: number) => (id === window.id ? window : undefined),
@@ -395,6 +398,7 @@ describe('GET /api/windows/pane-loading-state', () => {
     };
     const instance = Fastify();
     await instance.register(windowsRoutes, {
+      muxSwitchSettingsRepo: {} as never, auditLogService: {} as never, agentActivityMonitor: {} as never,
       harnessPrefix: '',
       windowRepo: windowRepo as IWindowRepository,
       projectRepo: {} as IProjectRepository,
@@ -520,6 +524,7 @@ describe('POST /api/windows/:id/respawn — execution gate (Issue #328 second-ro
     // The hub's own error mapping, so a host-OS refusal is answered as it is in the app.
     instance.setErrorHandler((err, _request, reply) => { const mapped = mapAppError(err); if (!mapped) throw err; return reply.status(mapped.status).send(mapped.body); });
     await instance.register(windowsRoutes, {
+      muxSwitchSettingsRepo: {} as never, auditLogService: {} as never, agentActivityMonitor: {} as never,
       harnessPrefix: '',
       windowRepo: windowRepo as IWindowRepository,
       projectRepo: {} as IProjectRepository,
@@ -625,6 +630,7 @@ describe('resource check in the answers of launch-agent and respawn (#531)', () 
     };
     const instance = Fastify();
     await instance.register(windowsRoutes, {
+      muxSwitchSettingsRepo: {} as never, auditLogService: {} as never, agentActivityMonitor: {} as never,
       harnessPrefix: '',
       windowRepo: { findById: () => window, updateAgentSessionIdByWindow: vi.fn() } as unknown as IWindowRepository,
       projectRepo: {} as IProjectRepository,
@@ -685,6 +691,7 @@ describe('GET /api/windows/activity-status (Issue #338 フォロー: process-bas
     ];
     const app = Fastify();
     await app.register(windowsRoutes, {
+      muxSwitchSettingsRepo: {} as never, auditLogService: {} as never, agentActivityMonitor: {} as never,
       harnessPrefix: '',
       windowRepo: {} as IWindowRepository,
       projectRepo: {} as IProjectRepository,
@@ -717,6 +724,7 @@ describe('POST /api/windows/:id/sleep', () => {
     const sleepFn = opts.sleepFn ?? vi.fn(async () => {});
     const app = Fastify();
     app.register(windowsRoutes, {
+      muxSwitchSettingsRepo: {} as never, auditLogService: {} as never, agentActivityMonitor: {} as never,
       harnessPrefix: '',
       windowRepo: {
         findById: (id: number) => (win && id === win.id ? win : undefined),
@@ -778,6 +786,7 @@ describe('PUT /api/windows/:id/rename', () => {
     const update = vi.fn();
     const app = Fastify();
     await app.register(windowsRoutes, {
+      muxSwitchSettingsRepo: {} as never, auditLogService: {} as never, agentActivityMonitor: {} as never,
       harnessPrefix: '',
       windowRepo: { findById: () => win, update } as unknown as IWindowRepository,
       projectRepo: {} as IProjectRepository,
@@ -806,6 +815,7 @@ describe('window label source', () => {
   async function buildApp(win: Window, update: ReturnType<typeof vi.fn>, adoptForTask = vi.fn()) {
     const app = Fastify();
     await app.register(windowsRoutes, {
+      muxSwitchSettingsRepo: {} as never, auditLogService: {} as never, agentActivityMonitor: {} as never,
       harnessPrefix: '',
       windowRepo: {
         findById: () => win, update, adoptForTask,
@@ -864,6 +874,47 @@ describe('window label source', () => {
     const res = await app.inject({ method: 'PUT', url: `/api/windows/${win.id}`, payload: { label } });
     expect(res.statusCode).toBe(200);
     expect(update).toHaveBeenCalledWith(win.id, expected);
+    await app.close();
+  });
+});
+
+describe('respawn mux API', () => {
+  it('validates the body and exposes the wake plan', async () => {
+    const app = Fastify();
+    const win = makeWindow({ sleeping: true });
+    const server = makeServer();
+    const respawn = vi.fn().mockResolvedValue({ tmuxTarget: 'proj:replacement' });
+    const record = vi.fn(() => { throw new Error('audit failed'); });
+    const registry = { availabilityFor: vi.fn(() => ({ available: true } as { available: true } | { available: false; reason: 'daemon_unreachable' })), supportedKinds: () => ['tmux', 'misao'] };
+    await app.register(windowsRoutes, {
+      harnessPrefix: '', windowRepo: { findById: () => win } as any,
+      projectRepo: {} as any, taskRepo: {} as any, tmux: {} as any,
+      muxDriverRegistry: registry as any,
+      serverRepo: { findByName: () => server } as any, transportFactory: { hostProfileFor: () => null },
+      respawnService: { respawn } as any, sleepService: {} as any, sessionStrategyFactory: {} as any,
+      sessionCaptureService: {} as any, supervisorRegistry: {} as any, windowActivityStatusService: {} as any,
+      windowSnapshotService: {} as any, uiToken: '', buildSecondaryWindowEnv: () => ({}), serverIsolationMutex: new KeyedMutex(),
+      muxSwitchSettingsRepo: { get: () => 'ask' } as any, misaoVersion: async () => '0.3.0', agentActivityMonitor: { snapshot: () => [] } as any,
+      auditLogService: { record } as any,
+    });
+    const plan = await app.inject({ method: 'GET', url: '/api/windows/1/respawn-plan' });
+    expect(plan.json()).toMatchObject({ currentMux: 'tmux', misao: { hosted: true, available: true, version: '0.3.0' }, mode: 'ask', shouldAsk: true });
+    const bad = await app.inject({ method: 'POST', url: '/api/windows/1/respawn', payload: { mux: 'misao', extra: true } });
+    expect(bad.statusCode).toBe(400);
+    expect(respawn).not.toHaveBeenCalled();
+    registry.availabilityFor.mockReturnValueOnce({ available: false, reason: 'daemon_unreachable' });
+    const unavailable = await app.inject({ method: 'POST', url: '/api/windows/1/respawn', payload: { mux: 'misao' } });
+    expect(unavailable.statusCode).toBe(409);
+    expect(unavailable.json()).toEqual({ error: 'misao_unavailable', reason: 'daemon_unreachable' });
+    respawn.mockRejectedValueOnce(new WindowBusyError('window_busy'));
+    const busy = await app.inject({ method: 'POST', url: '/api/windows/1/respawn', payload: { mux: 'misao' } });
+    expect(busy.statusCode).toBe(409);
+    expect(busy.json()).toEqual({ error: 'window_busy' });
+    expect(record).not.toHaveBeenCalled();
+    const good = await app.inject({ method: 'POST', url: '/api/windows/1/respawn', payload: { mux: 'misao' } });
+    expect(good.statusCode).toBe(200);
+    expect(respawn).toHaveBeenCalledWith(1, server, expect.objectContaining({ mux: 'misao' }));
+    expect(record).toHaveBeenCalledWith(expect.objectContaining({ event: 'window.mux_switched', detail: expect.objectContaining({ trigger: 'manual' }) }));
     await app.close();
   });
 });

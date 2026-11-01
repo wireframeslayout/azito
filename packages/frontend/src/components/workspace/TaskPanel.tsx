@@ -664,6 +664,11 @@ export default function TaskPanel({
   useEffect(() => {
     if (parseWindowTabId(mobileActiveTabId)) lastMobileWindowTabIdRef.current = mobileActiveTabId;
   }, [mobileActiveTabId]);
+  // 端末/チャットセグメント選択中に表示するウィンドウタブ id — mobileActiveTabId がまだ
+  // ウィンドウタブへ切り替わっていない最初のレンダーでも取りこぼさないよう、直近記憶値/
+  // 先頭ウィンドウへフォールバックする（承認済みモックの「ウィンドウバー」は常に何らかの
+  // ウィンドウを表示している状態を前提とするため）。Issue #338 の ⋯ メニューの ✓ に使う。
+  // 表示モード（端末/チャット）の保存先もこの窓。
   const mobileDisplayedWindowTabId = parseWindowTabId(mobileActiveTabId)
     ? mobileActiveTabId
     : (lastMobileWindowTabIdRef.current && windowTabIdsList.includes(lastMobileWindowTabIdRef.current)
@@ -1437,7 +1442,6 @@ export default function TaskPanel({
     const win = parseWindowTabId(tabId);
     if (win) {
       const { serverName, target, windowId } = resolveWindowTabTarget(win);
-      const record = windows.find((w) => w.serverName === serverName && isSameWindowTarget(w.tmuxTarget, target));
       return (
         <TerminalContainer
           key={`terminal-${serverName}-${target}`}
@@ -1457,7 +1461,7 @@ export default function TaskPanel({
           // 選択する第一級モードのため、TerminalContainer 内蔵の端末⇄チャットトグル（上部
           // ツールバー）は使わず TaskPanel が単一の真実源として制御する（Issue #69 S8）。
           // デスクトップはこの prop を渡さず、従来どおり自律的に管理する（不変）。
-          isAgent={isAgentWindow(record?.id ?? null, record?.windowType, entries.values())}
+          activeAgentWindowIds={new Set(Array.from(entries.values(), (entry) => entry.windowId).filter((id): id is number => id != null))}
           viewMode={isMobile ? mobileViewMode : undefined}
           onViewModeChange={isMobile ? (mode) => setMobileViewMode(mode, mobileWindowId) : undefined}
         />
@@ -2151,14 +2155,15 @@ export default function TaskPanel({
             <p style={{ fontSize: 'var(--font-md)', color: 'var(--text-dim)', lineHeight: 1.5, marginBottom: 20 }}>{windowActions.confirmDialog.message}</p>
             <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8 }}>
               <Button onClick={() => windowActions.setConfirmDialog(null)} disabled={windowActions.windowActionLoading}>{t('common:actions.cancel')}</Button>
-              <Button variant="danger" onClick={windowActions.confirmDialog.onConfirm} loading={windowActions.windowActionLoading} loadingLabel={t('common:actions.processing')}>
-                {t('common:actions.confirm')}
+              <Button variant={windowActions.confirmDialog.confirmVariant ?? 'danger'} onClick={windowActions.confirmDialog.onConfirm} loading={windowActions.windowActionLoading} loadingLabel={t('common:actions.processing')}>
+                {windowActions.confirmDialog.confirmLabel ?? t('common:actions.confirm')}
               </Button>
             </div>
           </div>
         </div>
       )}
 
+      {windowActions.wakeDialog}
       <ResourceWarningDialog
         open={windowActions.respawnResourceWarning !== null}
         title={t('workspace:resourceWarning.title')}

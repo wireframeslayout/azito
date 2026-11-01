@@ -19,7 +19,9 @@
     "taskDone": "Task completed: {{title}}",
     "taskFailed": "Task failed: {{title}}",
     "agentFinished": "Agent finished: {{label}}",
-    "agentApiError": "{{label}} stopped due to API error"
+    "agentApiError": "{{label}} stopped due to API error",
+    "muxWakeAsk": "{{title}} on {{serverName}} reopened with tmux. Use its menu to switch to misao.",
+    "muxWakeUnavailable": "misao is unavailable on {{serverName}}; {{title}} reopened with tmux."
   },
   "toast": {
     "dismissAriaLabel": "Dismiss notification"

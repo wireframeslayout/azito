@@ -1,3 +1,9 @@
+import { resolveWindowTitle, formatWindowTitleLine } from '@azito/shared';
+import { recordAuditBestEffort } from '../../shared/audit/recordAuditBestEffort';
+import { selectAutoWakeMux, misaoStatusFor, decideAutoWake, WindowBusyError, UnsupportedMuxSwitchError } from './muxSwitchPolicy';
+import type { SqliteMuxSwitchSettingsRepository } from './SqliteMuxSwitchSettingsRepository';
+import type { NotificationBus } from '../notifications/NotificationBus';
+import type { AuditLogService } from '../../shared/audit/AuditLogService';
 import { isPrimaryTaskWindow, type IWindowRepository, type PaneLayout, type Window } from './Window';
 import { workerStartsAsProgram } from '../../shared/os/hostFeature';
 import { HostProfileError } from '../../shared/os/hostProfile';
@@ -51,6 +57,7 @@ import type { KeyedMutex } from '../../shared/keyedMutex';
 import { resolveKillOutcome } from '../tmux/killOutcome';
 import { labelRegisteredWindow } from '../tmux/labelRegisteredWindow';
 import { muxWindowTarget } from '../tmux/muxWindowTarget';
+import { MuxDriverUnavailableError } from '../tmux/MuxCapabilityError';
 import { windowDisplayName, windowKindOf, windowRefOf } from '../tmux/windowIdentity';
 import type { UnitTypeLoader } from '../sidekicks/UnitTypeLoader';
 import type { SidekickPackageLoader } from '../sidekicks/SidekickPackageLoader';
@@ -191,6 +198,8 @@ export class WindowRespawnService {
     private harnessPrefix: string,
     // Asked before a conversation is resumed whether it exists (#542); required so a respawn can never skip the check by a forgotten wiring.
     private conversationProbe: ConversationProbe,
+    // What to do with a tmux window that is woken automatically (#509): the saved policy, the notice, the audit record.
+    private muxSwitch: { settings: Pick<SqliteMuxSwitchSettingsRepository, 'get'>; notifications: Pick<NotificationBus, 'emit'>; audit: AuditLogService },
     private sessionCaptureService?: SessionCaptureService,
   ) {}
 
@@ -202,7 +211,7 @@ export class WindowRespawnService {
     return this.muxDriverRegistry.resolve(server);
   }
 
-  async respawn(windowId: number, server: ServerConfig, opts?: { skipAgentLaunch?: boolean; gateAlreadyEnforced?: boolean; inLockGate?: (freshServer: ServerConfig) => void }): Promise<{ tmuxTarget: string }> {
+  async respawn(windowId: number, server: ServerConfig, opts?: { skipAgentLaunch?: boolean; gateAlreadyEnforced?: boolean; inLockGate?: (freshServer: ServerConfig) => void; mux?: MuxDriverKind; autoSwitch?: boolean; isBusy?: (windowId: number) => boolean }): Promise<{ tmuxTarget: string }> {
     const win = this.windowRepo.findById(windowId);
     if (!win) throw new Error('Window not found');
     // Before the window is destroyed or any row changes: what a host that starts a worker as a program (Windows, #371) cannot restore keeps the window as it is.
@@ -311,16 +320,11 @@ export class WindowRespawnService {
     // stops the respawn with its reason, and one that was never written is started fresh under the same id (#542).
     const launchPlan = opts?.skipAgentLaunch ? null : await this.planAgentLaunches(server, win, windowId);
 
-    const supervise = shouldSupervise(server.type, win.windowType, windowKindOf(win));
-    // task/unitId already resolved above for the execution gate — reused
-    // here instead of re-querying the repositories a second time.
-    const supervision: SupervisionContext = { supervise, taskId: win.taskId, unitId, windowId };
-
     // A host that starts a worker as a program (Windows) gets it as the first pane of the window created below: argv and directory are
     // decided here, before anything is destroyed, and nothing is typed into a shell or replaced afterwards.
     let respawnProgram: PaneProgram | undefined;
     if (this.startsWorkerAsProgram(server) && win.workerType && !opts?.skipAgentLaunch) {
-      if (supervise) throw new Error(`A worker started as a program cannot run under a supervisor (${server.name}).`);
+      if (shouldSupervise(server.type, win.windowType, opts?.mux ?? windowKindOf(win))) throw new Error(`A worker started as a program cannot run under a supervisor (${server.name}).`);
       const single = launchPlan?.single;
       const launch = this.sessionStrategyFactory.create(win.workerType).buildRespawnLaunch(single?.sessionId ?? null, win.workerModel, null, blockMcp, single?.conversation);
       // A window whose launch cannot be rebuilt (a custom command is not stored, so a generic worker has none) would be destroyed and
@@ -397,9 +401,13 @@ export class WindowRespawnService {
       // The name the re-created window is opened with. tmux: the window part is the name. misao: it is the
       // window id, which a new window cannot reuse — the row's label (its display name) is carried over.
       // The window is re-created in the mux it lived in (its row's kind), not the server's default mux.
-      const windowKind = windowKindOf(currentWin);
-      const openName = windowKind === 'misao'
-        ? (windowDisplayName(currentWin) ?? (task ? `task-${task.id}-w${windowId}` : `win-w${windowId}`))
+      const sourceKind = windowKindOf(currentWin);
+      let windowKind = opts?.mux ?? sourceKind;
+      let supervision: SupervisionContext = { supervise: shouldSupervise(server.type, currentWin.windowType, windowKind), taskId: currentWin.taskId, unitId, windowId };
+      if (sourceKind === 'misao' && windowKind === 'tmux') throw new UnsupportedMuxSwitchError('misao_to_tmux_unsupported');
+      // Decided by the mux the window is finally created in (an automatic wake may stay in tmux).
+      const openNameFor = (kind: MuxDriverKind): string => kind === 'misao'
+        ? (windowDisplayName(currentWin) ?? (sourceKind === 'tmux' ? windowPart : (task ? `task-${task.id}-w${windowId}` : `win-w${windowId}`)))
         : windowPart;
 
       // Issue #29 review, 14th pass, Important finding 1: the per-server
@@ -484,14 +492,26 @@ export class WindowRespawnService {
         const driver = this.resolveDriver(freshServer);
         const workspaces = await driver.listWorkspaces(freshServer);
         // Only a workspace of the window's own mux counts (a same-named session of the other mux is another one).
-        const workspace = workspaces.find((s) => s.name === sessionName && (s.kind ?? windowKind) === windowKind);
+        const workspace = workspaces.find((s) => s.name === sessionName && (s.kind ?? sourceKind) === sourceKind);
         const workspaceExists = workspace !== undefined;
-        const oldRef = windowRefOf(currentWin, windowKind);
+        const oldRef = windowRefOf(currentWin, sourceKind);
         // misao: the window id (mux_ref) decides, in whichever workspace the window is now; the
         // window part of tmux_target is an id there, not a name. tmux matches the name in its session.
-        const windowAlive = windowKind === 'misao'
+        const windowAlive = sourceKind === 'misao'
           ? await driver.windowExists(freshServer, oldRef)
           : workspaceExists && (workspace?.windows.some((w: { name: string }) => w.name === windowPart) ?? false);
+
+        if (windowKind !== sourceKind) {
+          const availability = misaoStatusFor(this.muxDriverRegistry, freshServer);
+          if (!availability.available && !opts?.autoSwitch) throw new MuxDriverUnavailableError(windowKind, availability.reason ?? 'not_installed');
+          // An automatic wake never moves a window that is still alive: its processes would be lost.
+          if (opts?.autoSwitch && (!availability.available || windowAlive)) {
+            windowKind = sourceKind;
+            supervision = { ...supervision, supervise: shouldSupervise(freshServer.type, currentWin.windowType, sourceKind) };
+          } else if (windowAlive && (!opts?.isBusy || opts.isBusy(windowId))) {
+            throw new WindowBusyError('window_busy');
+          }
+        }
 
         await confirmOldWindowGone(
           driver,
@@ -508,14 +528,14 @@ export class WindowRespawnService {
           // a window that is not a task's (Add Window) is looked at by a person, who can accept the dialog.
           if (!opts?.skipAgentLaunch && task && this.launchesClaude(win)) await this.prepareClaudeLaunchFor(fs, task.id, unitId);
           const freshWorkspaces = await createDriver.listWorkspaces(fs);
-          const freshWorkspaceExists = freshWorkspaces.some((s) => s.name === sessionName && (s.kind ?? windowKind) === windowKind);
+          const freshWorkspaceExists = freshWorkspaces.some((s) => s.name === sessionName && (s.kind ?? sourceKind) === windowKind);
           createdViaNewSession = !freshWorkspaceExists;
           try {
             if (!freshWorkspaceExists) {
-              const opened = await createDriver.openWorkspace(fs, sessionName, { windowName: openName, exactName: true, extraEnv: env, kind: windowKind, ...(respawnProgram ? { program: respawnProgram } : {}) });
+              const opened = await createDriver.openWorkspace(fs, sessionName, { windowName: openNameFor(windowKind), exactName: true, extraEnv: env, kind: windowKind, ...(respawnProgram ? { program: respawnProgram } : {}) });
               return { result: opened.result, windowName: opened.ref.window, ref: opened.ref };
             }
-            const opened = await createDriver.openWindow(fs, sessionName, openName, { exactName: true, extraEnv: env, kind: windowKind, ...(respawnProgram ? { program: respawnProgram } : {}) });
+            const opened = await createDriver.openWindow(fs, sessionName, openNameFor(windowKind), { exactName: true, extraEnv: env, kind: windowKind, ...(respawnProgram ? { program: respawnProgram } : {}) });
             return { result: opened.result, windowName: opened.ref.window, ref: opened.ref };
           } catch (err) {
             // The old window is already gone when the program cannot be started (on a POSIX host a failed line leaves the shell, so the window stays).
@@ -558,6 +578,7 @@ export class WindowRespawnService {
         this.windowRepo.update(windowId, {
           tmuxTarget: dbTarget,
           muxRef: newRef,
+          ...(sourceKind === 'tmux' && windowKind === 'misao' && !currentWin.label ? { label: windowPart } : {}),
           ...(wake ? { sleeping: false } : {}),
         });
         if (task && isPrimary && task.tmuxWindow !== newRef.window) this.taskRepo.update(task.id, { tmuxWindow: newRef.window } as Partial<Task>);
@@ -702,7 +723,24 @@ export class WindowRespawnService {
   ): Promise<{ tmuxTarget: string }> {
     const server = this.serverRepo.findByName(serverName);
     if (!server) throw new Error(`Server ${serverName} not found`);
-    return this.respawn(windowId, server, opts);
+    const win = this.windowRepo.findById(windowId);
+    if (!win) throw new Error('Window not found');
+    const source = windowKindOf(win);
+    const policy = this.muxSwitch.settings.get();
+    const status = misaoStatusFor(this.muxDriverRegistry, server);
+    const mux = selectAutoWakeMux(source, policy, status.available);
+    const result = await this.respawn(windowId, server, { ...opts, mux, autoSwitch: true });
+    const woken = this.windowRepo.findById(windowId);
+    if (!woken) throw new Error('Window not found');
+    const actualMux = windowKindOf(woken);
+    const suggestion = decideAutoWake(source, actualMux, policy, misaoStatusFor(this.muxDriverRegistry, server).available);
+    if (suggestion) {
+      this.muxSwitch.notifications.emit({ type: 'window:mux_switch_suggested', payload: { windowId, serverName, title: formatWindowTitleLine(resolveWindowTitle({ id: win.id, label: win.label, labelSource: win.labelSource, tmuxTarget: win.tmuxTarget, workerType: win.workerType ?? undefined, windowType: win.windowType })), ...(win.taskId !== null ? { taskId: win.taskId } : {}), reason: suggestion } });
+    }
+    if (source !== actualMux) {
+      recordAuditBestEffort(this.muxSwitch.audit, { actorClass: 'runtime', actorId: null, event: 'window.mux_switched', detail: { windowId, serverName, from: source, to: actualMux, trigger: 'auto' } }, (err) => console.error('Mux switch audit failed', err));
+    }
+    return result;
   }
 
   /**

@@ -1,8 +1,14 @@
+import { recordAuditBestEffort } from '../../shared/audit/recordAuditBestEffort';
+import { shouldAskMuxSwitch, misaoStatusFor, WindowBusyError, UnsupportedMuxSwitchError } from './muxSwitchPolicy';
+import type { SqliteMuxSwitchSettingsRepository } from './SqliteMuxSwitchSettingsRepository';
+import type { AuditLogService } from '../../shared/audit/AuditLogService';
+import type { AgentActivityMonitor } from '../operations/AgentActivityMonitor';
+import { OPERATOR_PRINCIPAL } from '../../shared/auth/Principal';
 import { windowSnapshotSchema } from './windowSnapshotSchema';
 import type { WindowSnapshotService } from './WindowSnapshotService';
 import { parseStrictBody } from '../tmux/routes/createBodies';
 import { nameBody, keysBody, paneBody } from '../tmux/routes/actionBodies';
-import { projectWindowBody, projectSessionBody, taskWindowBody, updateWindowBody, launchAgentBody, forceBody } from './windowBodies';
+import { projectWindowBody, projectSessionBody, taskWindowBody, updateWindowBody, launchAgentBody, respawnBody } from './windowBodies';
 import type { FastifyPluginCallback } from 'fastify';
 import { resourceCheckBody, type ResourceGuard, type ResourceUnavailable } from '../servers/resources/ResourceGuard';
 import { workerStartsAsProgram } from '../../shared/os/hostFeature';
@@ -41,6 +47,10 @@ import type { SessionCaptureService } from './SessionCaptureService';
 import type { WindowActivityStatusService } from './WindowActivityStatusService';
 
 export interface WindowsRouteOptions {
+  muxSwitchSettingsRepo: SqliteMuxSwitchSettingsRepository;
+  misaoVersion?: (server: ServerConfig) => Promise<string | undefined>;
+  auditLogService: AuditLogService;
+  agentActivityMonitor: AgentActivityMonitor;
   windowRepo: IWindowRepository;
   projectRepo: IProjectRepository;
   taskRepo: ITaskRepository;
@@ -546,6 +556,19 @@ const windowsRoutes: FastifyPluginCallback<WindowsRouteOptions> = (fastify, opts
     },
   );
 
+  fastify.get<{ Params: { id: string } }>('/api/windows/:id/respawn-plan', async (request, reply) => {
+    const win = windowRepo.findById(Number(request.params.id));
+    if (!win) return reply.status(404).send({ error: 'Window not found' });
+    const server = serverRepo.findByName(win.serverName);
+    if (!server) return reply.status(404).send({ error: 'Server not found' });
+    const kind = windowKindOf(win);
+    const status = misaoStatusFor(opts.muxDriverRegistry, server);
+    const version = status.available ? await opts.misaoVersion?.(server) : undefined;
+    const misao = { ...status, ...(version ? { version } : {}) };
+    const mode = opts.muxSwitchSettingsRepo.get();
+    return { serverName: server.name, currentMux: kind, misao, mode, shouldAsk: shouldAskMuxSwitch(kind, mode, misao.available) };
+  });
+
   // ── POST /api/windows/:id/respawn ──
   fastify.post<{ Params: { id: string } }>(
     '/api/windows/:id/respawn',
@@ -557,9 +580,16 @@ const windowsRoutes: FastifyPluginCallback<WindowsRouteOptions> = (fastify, opts
       const srv = serverRepo.findByName(win.serverName);
       if (!srv) return reply.status(404).send({ error: 'Server not found' });
 
-      const parsedBody = parseStrictBody(forceBody, request.body);
+      const parsedBody = parseStrictBody(respawnBody, request.body);
       if (!parsedBody.ok) return reply.status(400).send(parsedBody.body);
-      const force = parsedBody.data.force === true;
+      const { force, mux } = parsedBody.data;
+      const sourceMux = windowKindOf(win);
+      if (sourceMux === 'misao' && mux === 'tmux') return reply.status(400).send({ error: 'unsupported_switch' });
+      if (mux === 'misao') {
+        const status = misaoStatusFor(opts.muxDriverRegistry, srv);
+        if (!status.available) return reply.status(409).send({ error: 'misao_unavailable', reason: status.reason });
+      }
+
       let resourceSkipped: ResourceUnavailable | null = null;
       if (opts.resourceGuard && !force) {
         const status = await opts.resourceGuard.check(srv);
@@ -574,9 +604,16 @@ const windowsRoutes: FastifyPluginCallback<WindowsRouteOptions> = (fastify, opts
       // /api/tasks/:id/recover-session and /api/units/:id/execute|follow-up.
       let result: { tmuxTarget: string };
       try {
-        result = await respawnService.respawn(id, srv);
+        result = await respawnService.respawn(id, srv, { mux, isBusy: (windowId) => opts.agentActivityMonitor.snapshot().some((entry) => entry.windowId === windowId || (entry.serverName === win.serverName && isSameWindowTarget(entry.target, win.tmuxTarget))) });
+        if (mux && mux !== sourceMux) {
+          const actor = request.principal ?? OPERATOR_PRINCIPAL;
+          recordAuditBestEffort(opts.auditLogService, { actorClass: actor.class, actorId: actor.id ?? null, event: 'window.mux_switched', detail: { windowId: id, serverName: srv.name, from: sourceMux, to: mux, trigger: 'manual' } }, (err) => request.log.error({ err, windowId: id }, 'Mux switch audit failed'));
+        }
       } catch (err) {
         if (replyToExecutionGateError(err, reply)) return;
+        if (err instanceof MuxDriverUnavailableError && err.kind === 'misao') return reply.status(409).send({ error: 'misao_unavailable', reason: err.reason });
+        if (err instanceof WindowBusyError) return reply.status(409).send({ error: 'window_busy' });
+        if (err instanceof UnsupportedMuxSwitchError) return reply.status(400).send({ error: 'unsupported_switch' });
         if (err instanceof DuplicateAgentSessionError) {
           return reply.status(409).send({ error: 'session_already_running', windowId: err.windowId, sessionId: err.sessionId, message: err.message });
         }

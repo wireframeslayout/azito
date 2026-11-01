@@ -19,7 +19,9 @@
     "taskDone": "タスク完了: {{title}}",
     "taskFailed": "タスク失敗: {{title}}",
     "agentFinished": "エージェント終了: {{label}}",
-    "agentApiError": "{{label}} が API エラーで停止しました"
+    "agentApiError": "{{label}} が API エラーで停止しました",
+    "muxWakeAsk": "{{serverName}} の {{title}} を tmux で起こしました。メニューから misao に切り替えられます。",
+    "muxWakeUnavailable": "{{serverName}} で misao を利用できないため、{{title}} を tmux で起こしました。"
   },
   "toast": {
     "dismissAriaLabel": "通知を閉じる"

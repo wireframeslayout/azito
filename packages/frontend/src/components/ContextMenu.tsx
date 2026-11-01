@@ -10,6 +10,7 @@ export interface ContextMenuItem {
   selected?: boolean;
   disabled?: boolean;
   title?: string;
+  description?: string;
   separator?: boolean;
   onClick: () => void;
 }
@@ -57,7 +58,8 @@ export default function ContextMenu({ menu, onClose }: { menu: ContextMenuState;
           <div key={i} style={{ borderTop: '1px solid var(--border)', margin: '4px 0' }} />
         ) : (
         <button key={i}
-          disabled={item.disabled}
+          disabled={item.disabled && !item.title && !item.description}
+          aria-disabled={item.disabled || undefined}
           title={item.title}
           onClick={() => { if (item.disabled) return; item.onClick(); onClose(); }}
           className={`row-hover${item.selected ? ' row-selected' : ''}`}
@@ -69,7 +71,7 @@ export default function ContextMenu({ menu, onClose }: { menu: ContextMenuState;
           }}
         >
           {item.icon && <span style={{ width: 16, display: 'inline-flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}>{item.icon}</span>}
-          <span style={{ flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{item.label}</span>
+          <span style={{ flex: 1, overflow: 'hidden' }}><span style={{ display: 'block', textOverflow: 'ellipsis', whiteSpace: 'nowrap', overflow: 'hidden' }}>{item.label}</span>{item.description && <span style={{ display: 'block', fontSize: 'var(--font-sm)', color: 'var(--text-dim)' }}>{item.description}</span>}</span>
           {item.selected && <span style={{ color: 'var(--accent)', flexShrink: 0, display: 'inline-flex' }}><Icon name="check" size={14} /></span>}
         </button>
         )
