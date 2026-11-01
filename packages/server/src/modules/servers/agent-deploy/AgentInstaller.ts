@@ -124,6 +124,7 @@ export class AgentInstaller {
     /** Absent for a hub that cannot install misao (no bundled copy): the agent is installed without it. */
     private misaoInstaller?: AgentMisaoInstaller,
     private harnessPrefix = '',
+    private diagnosisHost?: { platform: string; isLaunchd: boolean },
   ) {
     // The overrides exist to try a second agent beside the real one; they are not saved per server, so a hub started without them
     // looks for the default task: say so once when they are in use.
@@ -405,7 +406,7 @@ export class AgentInstaller {
     if (!this.misaoInstaller) return undefined;
     report('misao', 'running', 'Installing misao...');
     try {
-      const transport = new AgentTransport(host, port, token, 'system', host, hostProfile);
+      const transport = new AgentTransport(host, port, token, 'system', host, hostProfile, this.diagnosisHost);
       const result = await this.misaoInstaller.install(transport, (step) => report('misao', 'running', MISAO_STEP_MESSAGES[step]));
       report('misao', 'ok', `misao ${result.version} (${result.startMethod})`);
       return undefined;

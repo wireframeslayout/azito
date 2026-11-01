@@ -1,9 +1,10 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { api } from '../../../api/client';
-import { InstallSteps, FormSelect, FormInput, Chip, Button } from '../../ui';
+import { FormSelect, FormInput, Chip, Button } from '../../ui';
 import type { InstallStep, ChipTone } from '../../ui';
 import { Icon } from '../../ui/Icon';
+import { ServerInstallSteps } from '../ServerInstallSteps';
 import type { Server } from '../../../hooks/useServerManagement';
 import { closedSetupRows, describeMisaoItem, type InstallStatusResponse, type InstallStatusItem } from '../serverSections';
 import { hostFeatureBlockReason, isUnsupportedOsAnswer, describeUnsupportedOs } from '../../../lib/hostFeature';
@@ -142,9 +143,7 @@ export default function SetupSection({ server, installStatus, installStatusError
         `/servers/${encoded}/agent/install`,
         { method: 'POST' },
       );
-      setAgentSteps(res.code === 'macos_local_network_permission' && !res.steps?.some((step) => step.code === res.code)
-        ? [...(res.steps ?? []), { step: 'error', status: 'error', message: res.error ?? '', code: res.code, detail: res.detail }]
-        : res.steps);
+      setAgentSteps(res.steps);
       if (res.ok) await refresh();
     } catch (err: unknown) {
       setAgentSteps([{ step: 'error', status: 'error', message: (err as Error).message }]);
@@ -741,7 +740,7 @@ function StepLog({ steps, installing }: { steps: InstallStep[]; installing: bool
           background: 'var(--bg)', border: '1px solid var(--border)', borderRadius: 'var(--radius-md)',
           padding: '2px 12px', marginTop: 4,
         }}>
-          <InstallSteps steps={steps} />
+          <ServerInstallSteps steps={steps} />
         </div>
       )}
     </div>

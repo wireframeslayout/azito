@@ -28,6 +28,7 @@ export function isPossibleLocalNetworkPermission(platform: string, isLaunchd: bo
     return isPrivateV4(`${high >> 8}.${high & 255}.${low >> 8}.${low & 255}`);
   }
   const first = parseInt(groups[0]!, 16);
+  if (first === 0xfd7a && parseInt(groups[1]!, 16) === 0x115c && parseInt(groups[2]!, 16) === 0xa1e0) return false;
   return (first & 0xfe00) === 0xfc00 || (first & 0xffc0) === 0xfe80;
 }
 
@@ -45,15 +46,18 @@ export class LocalNetworkPermissionError extends Error {
 }
 
 export function diagnoseLocalNetworkError(err: unknown, platform: string, isLaunchd: boolean): unknown {
-  let current: unknown = err;
+  const pending: unknown[] = [err];
   const seen = new Set<unknown>();
-  while (current && typeof current === 'object' && !seen.has(current)) {
+  while (pending.length) {
+    const current = pending.pop();
+    if (!current || typeof current !== 'object' || seen.has(current)) continue;
     seen.add(current);
-    const value = current as { code?: unknown; address?: unknown; cause?: unknown; message?: unknown };
+    const value = current as { code?: unknown; address?: unknown; cause?: unknown; errors?: unknown; message?: unknown };
     if (isPossibleLocalNetworkPermission(platform, isLaunchd, typeof value.address === 'string' ? value.address : undefined, typeof value.code === 'string' ? value.code : undefined)) {
       return new LocalNetworkPermissionError(typeof value.message === 'string' ? value.message : String(err));
     }
-    current = value.cause;
+    pending.push(value.cause);
+    if (Array.isArray(value.errors)) pending.push(...value.errors);
   }
   return err;
 }

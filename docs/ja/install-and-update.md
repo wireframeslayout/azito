@@ -422,11 +422,13 @@ launchd にはユーザーごとのドメインが 2 つあります。`gui/<uid
 launchd のサービスとして動くハブから、LAN のアドレス（例: `192.168.x.x`）の agent を導入すると、preflight が
 `connect EHOSTUNREACH <IP>:22` で失敗することがあります。同じ node を SSH のシェルから動かすと届き、Tailscale のアドレス（`100.x`）には
 launchd のハブからも届きます（v0.12.0-rc.3、macOS 26.3.1 arm64 のハブから Ubuntu 24.04 x64 の agent で確認）。macOS の
-「ローカルネットワーク」のプライバシー許可（macOS 15 以降）が関係していると考えられます。
+「ローカルネットワーク」のプライバシー許可（macOS 15 以降）が関係している可能性があります。
 
 - **回避策**: agent の宛先に Tailscale のアドレス（または MagicDNS 名）を使います（確認済み）
 - ハブと同じ macOS ユーザーでシステム設定 › プライバシーとセキュリティ › ローカルネットワークを開き、ハブの項目が表示されていれば許可して再試行してください。対象の表示名、ダイアログ、許可の効果は AZITO では未検証です。表示されない場合は Tailscale を使ってください。
 - SSH や Terminal のシェルで Node を実行して接続できても、それらには例外があり、ハブの許可を証明できません。
+
+詳細は [Apple TN3179](https://developer.apple.com/documentation/technotes/tn3179-understanding-local-network-privacy) を参照してください。
 
 この案内は可能性を示すもので、経路や相手側の問題でも同じエラーが発生します。RC R2 では LAN 失敗と案内、許可の表示と効果、Tailscale 接続、対象外の条件を実機で確認します。
 

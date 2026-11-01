@@ -431,6 +431,8 @@ Local Network privacy permission (macOS 15 and later) may be involved.
 
 The diagnostic is a possibility, not proof: routing or the remote host can produce the same error. RC R2 checks the LAN failure and guidance, permission display and effect, Tailscale connectivity, and unaffected cases on a Mac.
 
+See [Apple TN3179](https://developer.apple.com/documentation/technotes/tn3179-understanding-local-network-privacy) for details.
+
 ### `azito service` on an existing install
 
 `azito service ...` (and `azito start` / `stop` / `status` going through it on macOS) needs the `~/.local/bin/azito` wrapper that this
