@@ -91,13 +91,13 @@ interface TerminalContainerProps {
    * 省略時（デスクトップ・タスク外の単体ウィンドウタブ等）は従来どおり内部状態＋
    * localStorage（windowId 単位）で自律的に管理する。
    */
-  isAgent?: boolean;
+  activeAgentWindowIds?: ReadonlySet<number>;
   viewMode?: WindowViewMode;
   /** viewMode が外部制御（controlled）のときのみ使う変更コールバック。 */
   onViewModeChange?: (mode: WindowViewMode) => void;
 }
 
-export function TerminalContainer({ registeredWindow, serverName, target: rawTarget, terminalRef: terminalRefProp, resolveOnServer, projectId, taskId, project, allTasks, sessions, onSplitPane, onOpenTask, onDisconnect, onWindowChanged, onCloseTab, onTargetRemoved, onRetargetPane, onRetargetTab, reconnectKey, leading, trailing, isAgent, viewMode: viewModeProp, onViewModeChange }: TerminalContainerProps) {
+export function TerminalContainer({ registeredWindow, serverName, target: rawTarget, terminalRef: terminalRefProp, resolveOnServer, projectId, taskId, project, allTasks, sessions, onSplitPane, onOpenTask, onDisconnect, onWindowChanged, onCloseTab, onTargetRemoved, onRetargetPane, onRetargetTab, reconnectKey, leading, trailing, activeAgentWindowIds, viewMode: viewModeProp, onViewModeChange }: TerminalContainerProps) {
   // Tabs opened through connectPane carry a TerminalRef and a `w<id>` placeholder target;
   // everything below that still keys off a tmux target (window-exists check, status dropdown,
   // pane-loading-state fallback) needs the real `<session>:<window>.<pane>`, resolved from
@@ -176,7 +176,7 @@ export function TerminalContainer({ registeredWindow, serverName, target: rawTar
   const [style, setStyle] = useTranscriptStyle();
 
   const isMobile = useIsMobile();
-  const hasAgent = isAgent ?? currentWindow?.windowType === 'agent';
+  const hasAgent = currentWindow?.windowType === 'agent' || (windowId !== null && (activeAgentWindowIds?.has(windowId) ?? false));
   const [internalViewMode, selectViewMode] = useWindowViewMode(windowId, isMobile, hasAgent);
   const viewMode = resolveWindowViewMode(windowId, viewModeProp ?? internalViewMode, isMobile, hasAgent);
   const changeViewMode = viewModeProp !== undefined

@@ -663,6 +663,7 @@ export default function TaskPanel({
   useEffect(() => {
     if (parseWindowTabId(mobileActiveTabId)) lastMobileWindowTabIdRef.current = mobileActiveTabId;
   }, [mobileActiveTabId]);
+  // Before a window tab is selected, use the first window for the ⋯ menu checkmark (Issue #338) and view-mode storage.
   const mobileDisplayedWindowTabId = parseWindowTabId(mobileActiveTabId)
     ? mobileActiveTabId
     : (lastMobileWindowTabIdRef.current && windowTabIdsList.includes(lastMobileWindowTabIdRef.current)
@@ -1436,7 +1437,6 @@ export default function TaskPanel({
     const win = parseWindowTabId(tabId);
     if (win) {
       const { serverName, target, windowId } = resolveWindowTabTarget(win);
-      const record = windows.find((w) => w.serverName === serverName && isSameWindowTarget(w.tmuxTarget, target));
       return (
         <TerminalContainer
           key={`terminal-${serverName}-${target}`}
@@ -1456,7 +1456,7 @@ export default function TaskPanel({
           // 選択する第一級モードのため、TerminalContainer 内蔵の端末⇄チャットトグル（上部
           // ツールバー）は使わず TaskPanel が単一の真実源として制御する（Issue #69 S8）。
           // デスクトップはこの prop を渡さず、従来どおり自律的に管理する（不変）。
-          isAgent={isAgentWindow(record?.id ?? null, record?.windowType, entries.values())}
+          activeAgentWindowIds={new Set(Array.from(entries.values(), (entry) => entry.windowId).filter((id): id is number => id != null))}
           viewMode={isMobile ? mobileViewMode : undefined}
           onViewModeChange={isMobile ? (mode) => setMobileViewMode(mode, mobileWindowId) : undefined}
         />
