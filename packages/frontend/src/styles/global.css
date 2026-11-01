@@ -1063,3 +1063,27 @@ input[aria-invalid="true"]:focus-visible { outline-color: var(--danger) !importa
   border-color: var(--accent) !important;
   box-shadow: none !important;
 }
+
+.overlay-backdrop {
+  position: fixed;
+  inset: 0;
+  background: var(--overlay);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 150;
+  padding: var(--space-4);
+}
+.overlay-panel {
+  background: var(--bg-elevated);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  box-shadow: inset 0 1px 0 var(--edge-hi), var(--shadow-3);
+  padding: var(--space-5);
+  width: 100%;
+  overflow-y: auto;
+  animation: overlay-enter 120ms ease-out;
+}
+.overlay-panel:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+@keyframes overlay-enter { from { opacity: 0; transform: translateY(var(--space-1)); } to { opacity: 1; transform: translateY(0); } }
+@media (prefers-reduced-motion: reduce) { .overlay-panel { animation: none; } }
