@@ -13,13 +13,22 @@ function decodeSpec(value: z.infer<typeof storedSpec>): KeySpec | null {
   return { ...parseKeySpec(value.text), ...(value.windowMs === undefined ? {} : { windowMs: value.windowMs }) };
 }
 
+/** Returns the other action already assigned to `spec`, or null when `spec` is free for `action`. */
+export function findConflictingAction(bindings: Bindings, action: HotkeyAction, spec: KeySpec): HotkeyAction | null {
+  const text = formatKeySpec(spec);
+  const entries = Object.entries(bindings) as [HotkeyAction, KeySpec | null][];
+  return entries.find(([other, assigned]) => other !== action && assigned !== null && formatKeySpec(assigned) === text)?.[0] ?? null;
+}
+const hasDuplicateBindings = (bindings: Bindings): boolean =>
+  (Object.entries(bindings) as [HotkeyAction, KeySpec | null][]).some(([action, spec]) => spec !== null && findConflictingAction(bindings, action, spec) !== null);
+
 export function loadBindings(): Bindings {
   try {
     const raw = localStorage.getItem(BINDINGS_KEY);
     if (raw === null) return defaults();
     const value = schema.parse(JSON.parse(raw));
     const result: Bindings = { 'search.open': decodeSpec(value['search.open']), 'maximize.open': decodeSpec(value['maximize.open']) };
-    if (result['search.open'] && result['maximize.open'] && formatKeySpec(result['search.open']) === formatKeySpec(result['maximize.open'])) throw new Error('Duplicate bindings');
+    if (hasDuplicateBindings(result)) throw new Error('Duplicate bindings');
     return result;
   } catch (error) { console.warn('Invalid or unavailable hotkey bindings', error); return defaults(); }
 }

@@ -1,8 +1,8 @@
 import { createContext, useContext, useEffect, useRef, useState, type ReactNode, type RefObject } from 'react';
 import { createChordMatcher, type ChordMatcher } from '../lib/hotkeys/chordMatcher';
 import { isEditableTarget } from '../lib/hotkeys/editable';
-import { formatKeySpec, type KeySpec } from '../lib/hotkeys/keySpec';
-import { loadBindings, loadChordMs, saveBindings, saveChordMs, type Bindings, type HotkeyAction } from '../lib/hotkeys/bindingsStorage';
+import type { KeySpec } from '../lib/hotkeys/keySpec';
+import { findConflictingAction, loadBindings, loadChordMs, saveBindings, saveChordMs, type Bindings, type HotkeyAction } from '../lib/hotkeys/bindingsStorage';
 
 export type { HotkeyAction } from '../lib/hotkeys/bindingsStorage';
 export interface HotkeyRegistration {
@@ -101,8 +101,7 @@ export function HotkeyProvider({ children }: { children: ReactNode }) {
     return () => previous.forEach(([element, inert]) => { element.inert = inert; });
   }, [stack]);
   const setBinding = (action: HotkeyAction, spec: KeySpec | null) => {
-    const other = action === 'search.open' ? 'maximize.open' : 'search.open';
-    if (spec && bindings[other] && formatKeySpec(spec) === formatKeySpec(bindings[other]!)) return 'conflict' as const;
+    if (spec && findConflictingAction(bindings, action, spec)) return 'conflict' as const;
     const next = { ...bindings, [action]: spec };
     if (!saveBindings(next)) return 'storage-error' as const;
     setBindings(next); return 'ok' as const;

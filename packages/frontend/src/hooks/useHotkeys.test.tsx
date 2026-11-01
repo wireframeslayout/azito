@@ -1,8 +1,9 @@
 import { fireEvent, render, screen, waitFor } from '@testing-library/react';
+import userEvent from '@testing-library/user-event';
 import { afterEach, expect, it, vi } from 'vitest';
-import { useRef } from 'react';
+import { useRef, useState } from 'react';
 import { HotkeyProvider, useHotkey, useHotkeyBindings, useOverlayStack } from './useHotkeys';
-import { parseKeySpec } from '../lib/hotkeys/keySpec';
+import { formatKeySpec, parseKeySpec } from '../lib/hotkeys/keySpec';
 afterEach(() => { localStorage.clear(); vi.restoreAllMocks(); });
 function Global({ handler }: { handler: () => void }) {
   useHotkey({ action: 'search.open', scope: 'global', when: 'not-editable', handler });
@@ -37,4 +38,20 @@ it('decides escape after propagation even when microtasks run between listeners'
   await new Promise(resolve => setTimeout(resolve)); expect(close).not.toHaveBeenCalled();
   fireEvent.keyDown(screen.getByLabelText('plain'), { key: 'Escape' });
   await waitFor(() => expect(close).toHaveBeenCalledOnce());
+});
+function Assign() {
+  const { bindings, setBinding } = useHotkeyBindings(); const [result, setResult] = useState('');
+  return <>
+    <button onClick={() => setResult(setBinding('maximize.open', parseKeySpec('Space Space')))}>Take search keys</button>
+    <button onClick={() => setResult(setBinding('search.open', parseKeySpec('Ctrl+Shift+M')))}>Take maximize keys</button>
+    <output aria-label="result">{result}</output>
+    <output aria-label="maximize">{bindings['maximize.open'] ? formatKeySpec(bindings['maximize.open']) : 'disabled'}</output>
+  </>;
+}
+it('refuses keys already assigned to any other action', async () => {
+  const user = userEvent.setup(); render(<HotkeyProvider><Assign /></HotkeyProvider>);
+  await user.click(screen.getByRole('button', { name: 'Take search keys' }));
+  expect(screen.getByLabelText('result')).toHaveTextContent('conflict'); expect(screen.getByLabelText('maximize')).toHaveTextContent('Ctrl+Shift+M');
+  await user.click(screen.getByRole('button', { name: 'Take maximize keys' }));
+  expect(screen.getByLabelText('result')).toHaveTextContent('conflict'); expect(localStorage.getItem('azito-hotkeys')).toBeNull();
 });
