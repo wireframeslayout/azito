@@ -21,9 +21,10 @@ export interface FakeWindowsHostOptions {
   /** The hash Get-FileHash answers (default: the one the test expects). */
   sha256: string;
   firewall?: { ruleFound: boolean | null; elevated: boolean; created: boolean; problem: string | null; blockedBy?: string[] };
-  /** `null` = the build number could not be read (as when WMI is refused). */
+  /** Synthetic effective store, for testing deployment steps beyond the current COM-only firewall check. */
+  simulateActiveStore?: boolean;
+  /** `null` = the build number could not be read. */
   buildNumber?: string | null;
-  /** What the preflight's WMI query came to (default `ok`). */
   /** The task is already registered (and running) before the install. */
   existingTask?: 'running' | 'stopped';
   /** `/Run` leaves the task not running with this last result (the user is not logged on). */
@@ -84,9 +85,7 @@ export class FakeWindowsHost {
       this.calls.push({ kind: 'os-probe', text: command });
       return { stdout: 'AZITO_OS:Windows_NT:$?\r\n', stderr: '', code: 0 };
     }
-    const decoded = decodeEncodedCommand(command);
-    const packed = /\$packed = \[Convert\]::FromBase64String\('([^']+)'\)/.exec(decoded);
-    const unpacked = packed ? gunzipSync(Buffer.from(packed[1]!, 'base64')).toString('utf8') : decoded;
+    const unpacked = decodeEncodedCommand(command);
     const staged = /\$file = '([^']+\\(\.azito-script-[^']+))'/.exec(unpacked);
     const script = staged && this.uploaded.has(staged[2]!) ? this.uploaded.get(staged[2]!)!.toString('utf8') : unpacked;
     const failing = this.options.failScript;
@@ -112,7 +111,7 @@ export class FakeWindowsHost {
       const fw = { blockedBy: [] as string[], ...(this.options.firewall ?? { ruleFound: true, elevated: false, created: false, problem: null }) };
       const rule = (action: string, displayName: string) => ({ name: displayName, displayName, action, profile: 'Any', package: '', owner: '', service: 'Any', protocol: 'TCP', localPort: ['Any'], program: 'Any', remoteAddress: ['Any'], localAddress: ['Any'] });
       const rules = [...(fw.ruleFound ? [rule('Allow', 'an allow rule')] : []), ...fw.blockedBy.map((n) => rule('Block', n))];
-      const dump = { elevated: fw.elevated, networkCategory: 'Private', store: 'ActiveStore', problem: fw.ruleFound === null ? 'reading the rules failed: no NetSecurity' : null, rules: fw.ruleFound === null ? [] : rules };
+      const dump = { elevated: fw.elevated, networkCategory: this.options.simulateActiveStore ? 'Private' : null, store: this.options.simulateActiveStore ? 'ActiveStore' : 'COM', problem: fw.ruleFound === null ? 'reading the rules failed' : null, rules: fw.ruleFound === null ? [] : rules };
       return { stdout: `<<AZITO_FIREWALL_DUMP_BEGIN>>\r\n${JSON.stringify(dump)}\r\n<<AZITO_FIREWALL_DUMP_END>>\r\n`, stderr: '', code: 0 };
     }
     if (script.includes('AZITO_FIREWALL_ADD_BEGIN')) {

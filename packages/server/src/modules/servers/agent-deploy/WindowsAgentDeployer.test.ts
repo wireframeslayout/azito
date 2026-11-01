@@ -83,6 +83,8 @@ describe('the process sweep script', () => {
     expect(script).toContain('$parent.CreationDate -le $node.CreationDate');
     expect(script).toContain('(Test-Argument $parent)');
     expect(script).toContain('(Test-Mine $parent)');
+    expect(script).toContain('if ($owner -ne $me) { return }; $n = Read-Node $_');
+    expect(script).toContain('if (-not $owner) { throw');
   });
 
   it('keeps each target with its creation time, and checks it again before ending it and when asking whether it has ended', async () => {

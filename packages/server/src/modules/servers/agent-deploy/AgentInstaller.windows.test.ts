@@ -20,7 +20,8 @@ function makeBundler() {
 type SftpFake = { sftpUpload: (host: string, local: string, remote: string) => Promise<void>; sftpWrite: (host: string, data: Buffer, remote: string) => Promise<void> };
 
 function make(hostOptions: Partial<FakeWindowsHostOptions> = {}, windowsAgent: WindowsAgentOptions = DEFAULT_WINDOWS_AGENT_OPTIONS, misao?: AgentMisaoInstaller, harnessPrefix = '') {
-  const host = new FakeWindowsHost({ sha256: SHA, taskName: windowsAgent.taskName, ...hostOptions });
+  // These tests exercise deployment after a hypothetical verified policy; production currently reports COM as unknown.
+  const host = new FakeWindowsHost({ sha256: SHA, taskName: windowsAgent.taskName, simulateActiveStore: true, ...hostOptions });
   const execIsolated = vi.fn(async (sshHost: string, command: string) => host.exec(sshHost, command));
   const installer = new AgentInstaller({ execIsolated, resolveHost: (h: string) => ({ username: 'user', host: h.replace(/^.*@/, '').replace(/:\d+$/, ''), port: 22 }) } as never, makeBundler() as never, windowsAgent, misao, harnessPrefix);
   const sftp = installer as unknown as SftpFake;
@@ -184,6 +185,14 @@ describe('AgentInstaller on a Windows host', () => {
       const result = await installer.install('user@win');
       expect(result.success).toBe(false);
       expect(result.error).toContain('effective policy could not be verified');
+      expect(host.uploaded.size).toBe(0);
+    });
+
+    it('stops with the COM-only firewall response used by the real host', async () => {
+      const { installer, host } = make({ simulateActiveStore: false });
+      const result = await installer.install('user@win');
+      expect(result.success).toBe(false);
+      expect(result.error).toContain('effective firewall policy could not be read');
       expect(host.uploaded.size).toBe(0);
     });
   });
