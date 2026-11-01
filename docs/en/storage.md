@@ -101,7 +101,7 @@ For production use, consider the following changes:
 
 ## Distribution onboarding and status
 
-An optional `distribution.json` next to the hub executable may supply `storage.onboarding.options`. Build a distribution with `--distribution <file>` to validate and include it. An absent file or absent onboarding uses the OSS guidance; malformed or invalid configuration prevents startup. Each option has `type`, `title`, and `description`: types `settings` and `minio` open the corresponding guidance, `link` additionally needs an HTTP(S) `url`, and `managed` needs an HTTP(S) `endpoint` and `bucket`. Managed selection retains the saved credentials. Changes to this file require a hub restart.
+An optional `distribution.json` next to the hub executable may supply `storage.onboarding.options`. Build a distribution with `--distribution <file>` to validate and include it. An absent file or absent onboarding uses the OSS guidance; malformed or invalid configuration prevents startup. The onboarding object has `heading`, `body`, `options`, and optional `dismissible` (default true). Each option has `id`, `kind`, `title`, and `description`: `connect-s3` and `local-minio` open the corresponding guidance, `link` uses an HTTP(S) `href`, and `managed` uses `defaults` containing an HTTP(S) `endpoint` and `bucket`. Managed selection retains the saved credentials. Changes to this file require a hub restart.
 
 `GET /api/projects/:id/storage/status` distinguishes `unconfigured`, `unreachable`, and `ready`. A successful bucket probe marks even the default configuration as configured. A failed configured connection reports a safe reason, and the panel offers retry and settings.
 

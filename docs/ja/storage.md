@@ -113,7 +113,7 @@ https://<host>/api/projects/<projectId>/storage/<filename>/raw
 
 ## 配布物の案内と接続状態
 
-ハブ実行ファイルの隣に任意の `distribution.json` を置き、`storage.onboarding.options` を指定できます。配布ビルドの `--distribution <file>` は設定を検証して同梱します。ファイルまたは onboarding がない場合は OSS の案内を使い、不正な設定では起動を停止します。各選択肢に `type`、`title`、`description` を指定します。`settings` と `minio` は各案内を開き、`link` は HTTP(S) の `url`、`managed` は HTTP(S) の `endpoint` と `bucket` を追加で指定します。managed の選択時は保存済みの認証情報を保持します。設定変更にはハブの再起動が必要です。
+ハブ実行ファイルの隣に任意の `distribution.json` を置き、`storage.onboarding.options` を指定できます。配布ビルドの `--distribution <file>` は設定を検証して同梱します。ファイルまたは onboarding がない場合は OSS の案内を使い、不正な設定では起動を停止します。onboarding には `heading`、`body`、`options` と任意の `dismissible`（既定 true）を指定します。各選択肢には `id`、`kind`、`title`、`description` を指定します。`connect-s3` と `local-minio` は各案内を開き、`link` は HTTP(S) の `href`、`managed` は HTTP(S) の `endpoint` と `bucket` を含む `defaults` を使います。managed の選択時は保存済みの認証情報を保持します。設定変更にはハブの再起動が必要です。
 
 `GET /api/projects/:id/storage/status` は `unconfigured`、`unreachable`、`ready` を区別します。既定設定でもバケットへの接続に成功すると設定済みになります。設定済みの接続失敗時は安全な分類を返し、画面で再試行や設定変更ができます。
 

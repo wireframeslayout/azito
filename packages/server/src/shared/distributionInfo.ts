@@ -1,18 +1,22 @@
 import fs from 'fs';
 import path from 'path';
 import { z } from 'zod';
+import { resolveRoot } from './releaseInfo';
 
-const text = z.string().min(1);
 const httpUrl = z.url().refine((value) => ['http:', 'https:'].includes(new URL(value).protocol), 'Expected an HTTP(S) URL');
-const optionSchema = z.discriminatedUnion('type', [
-  z.object({ type: z.literal('settings'), title: text, description: text }).strict(),
-  z.object({ type: z.literal('minio'), title: text, description: text }).strict(),
-  z.object({ type: z.literal('link'), title: text, description: text, url: httpUrl }).strict(),
-  z.object({ type: z.literal('managed'), title: text, description: text, endpoint: httpUrl, bucket: text }).strict(),
-]);
+const optionSchema = z.object({
+  id: z.string().min(1),
+  title: z.string().min(1),
+  description: z.string(),
+  kind: z.enum(['connect-s3', 'local-minio', 'link', 'managed']),
+  href: httpUrl.optional(),
+  defaults: z.object({ endpoint: httpUrl, bucket: z.string() }).optional(),
+});
 export const distributionInfoSchema = z.object({
-  storage: z.object({ onboarding: z.object({ options: z.array(optionSchema).min(1) }).strict().optional() }).strict().optional(),
-}).strict();
+  storage: z.object({ onboarding: z.object({
+    heading: z.string(), body: z.string(), options: z.array(optionSchema).min(1), dismissible: z.boolean().default(true),
+  }).optional() }).optional(),
+});
 export type DistributionInfo = z.infer<typeof distributionInfoSchema>;
 export type StorageOnboarding = NonNullable<NonNullable<DistributionInfo['storage']>['onboarding']>;
 
@@ -20,7 +24,7 @@ export function readDistributionInfo(filePath: string): DistributionInfo {
   return distributionInfoSchema.parse(JSON.parse(fs.readFileSync(filePath, 'utf8')));
 }
 
-export function getDistributionInfo(basePath: string = path.dirname(process.argv[1] || __dirname)): DistributionInfo | null {
+export function getDistributionInfo(basePath: string = resolveRoot()): DistributionInfo | null {
   try {
     return readDistributionInfo(path.join(basePath, 'distribution.json'));
   } catch (error) {

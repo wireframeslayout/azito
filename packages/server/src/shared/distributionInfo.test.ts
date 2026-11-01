@@ -20,7 +20,7 @@ describe('distribution information', () => {
     try {
       fs.writeFileSync(file, '{');
       expect(() => getDistributionInfo(dir)).toThrow();
-      fs.writeFileSync(file, JSON.stringify({ storage: { onboarding: { options: [{ type: 'link', title: 'x', description: 'x', url: 'javascript:alert(1)' }] } } }));
+      fs.writeFileSync(file, JSON.stringify({ storage: { onboarding: { heading: 'Heading', body: 'Body', options: [{ id: 'x', kind: 'link', title: 'x', description: 'x', href: 'javascript:alert(1)' }] } } }));
       expect(() => getDistributionInfo(dir)).toThrow();
     } finally { fs.rmSync(dir, { recursive: true, force: true }); }
   });
