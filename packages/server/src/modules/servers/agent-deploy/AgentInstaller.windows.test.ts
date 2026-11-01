@@ -179,9 +179,11 @@ describe('AgentInstaller on a Windows host', () => {
       expect(result.error).toContain('the host refused (Access is denied)');
     });
 
-    it('goes on, leaving the health check to prove it, when the host cannot say whether a rule exists', async () => {
+    it('stops before transfer when the firewall policy is unknown', async () => {
       const { installer } = make({ firewall: { ruleFound: null, elevated: false, created: false, problem: null } });
-      expect((await installer.install('user@win')).success).toBe(true);
+      const result = await installer.install('user@win');
+      expect(result.success).toBe(false);
+      expect(result.error).toContain('effective policy could not be verified');
     });
   });
 
@@ -560,6 +562,16 @@ describe('AgentInstaller on a Windows host', () => {
 
       expect(result.success).toBe(false);
       expect(result.error).toMatch(/[Ff]irewall/);
+      expect(host.taskState).toBe('running');
+      expect(host.uploaded.size).toBe(0);
+    });
+
+    it('leaves the existing agent running when the effective firewall policy is unknown', async () => {
+      const { installer, host } = makeRunning({ firewall: { ruleFound: null, elevated: false, created: false, problem: null } });
+      stubAgent(() => OLD);
+      const result = await installer.update('user@win', '100.64.0.9', 'tok', WIN);
+      expect(result.success).toBe(false);
+      expect(result.error).toContain('effective policy could not be verified');
       expect(host.taskState).toBe('running');
       expect(host.uploaded.size).toBe(0);
     });

@@ -345,12 +345,7 @@ export async function checkFirewall(exec: FirewallExec, port: number, nodePath: 
   }
   const verdict = evaluateFirewallRules(dump.rules, { port, nodePath, localAddress, networkCategory: dump.networkCategory });
   if (dump.store !== 'ActiveStore') {
-    const unknown = { ruleFound: null, elevated: dump.elevated, created: false, problem: 'the effective firewall policy could not be read', blockedBy: verdict.blockedBy, allowedBy: [], store: dump.store };
-    if (dump.store !== 'COM' || !dump.elevated || verdict.blockedBy.length > 0 || dump.rules.some((rule) => (rule.displayName === firewallRuleName(port) || rule.displayName.startsWith(`${firewallRuleName(port)} [`)))) return unknown;
-    const added = await exec(buildFirewallAddCommand(port, nodePath, localAddress));
-    const result = parseFirewallAdd(added.stdout, added.stderr, added.code);
-    const problem = result.created ? unknown.problem : `adding the rule failed: ${result.problem ?? 'no reason given'}`;
-    return { ...unknown, created: result.created, problem };
+    return { ruleFound: null, elevated: dump.elevated, created: false, problem: 'the effective firewall policy could not be read', blockedBy: verdict.blockedBy, allowedBy: [], store: dump.store };
   }
   const found = verdict.allowedBy.length > 0;
   const allowedInSomeProfile = dump.networkCategory === null && ['Domain', 'Private', 'Public'].some((profile) =>
@@ -367,8 +362,7 @@ export async function checkFirewall(exec: FirewallExec, port: number, nodePath: 
 }
 
 /**
- * What stops the install, or null when the agent's port can be reached (a rule exists or was just added) or the host could not
- * say (`ruleFound: null`: the health check that follows is the proof, and it names the firewall when it fails).
+ * What stops the install, or null when the agent's port can be reached (a rule exists or was just added).
  */
 export function describeFirewallProblem(result: FirewallResult, port: number, nodePath: string, localAddress: string): string | null {
   if (result.blockedBy.length > 0) {
@@ -377,8 +371,8 @@ export function describeFirewallProblem(result: FirewallResult, port: number, no
     }
     return `Windows Firewall has an enabled inbound Block rule that stops the agent (TCP ${port} / ${nodePath} / ${localAddress}): ${result.blockedBy.map((n) => `"${n}"`).join(', ')}. A Block rule wins over any Allow rule. Remove or disable it (Windows creates one when the first-run firewall prompt is cancelled), then install again.`;
   }
-  if (result.ruleFound === null && result.problem?.startsWith('adding the rule failed:')) {
-    return `Windows Firewall could not add the agent rule (${result.problem}). Inspect the firewall policy and, if appropriate, run this in an Administrator PowerShell:\n  ${firewallRuleCommand(port, nodePath, localAddress)}`;
+  if (result.ruleFound === null) {
+    return `Windows Firewall's effective policy could not be verified (${result.problem ?? 'no reason given'}). The agent was not installed or updated. Inspect the active firewall policy and its rules before retrying.`;
   }
   if (result.ruleFound !== false || result.created) return null;
   const how = result.elevated

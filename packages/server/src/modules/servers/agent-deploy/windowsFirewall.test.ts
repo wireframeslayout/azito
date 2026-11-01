@@ -199,16 +199,12 @@ describe('checkFirewall', () => {
     expect(await block.result()).toMatchObject({ ruleFound: null, blockedBy: ['a rule'], created: false });
   });
 
-  it('adds a uniquely named rule when elevated and skips an existing agent rule', async () => {
-    const add = run([dumped({ store: 'COM', elevated: true, networkCategory: null }), added(true)]);
-    expect(await add.result()).toMatchObject({ ruleFound: null, created: true });
-    const existing = run([dumped({ store: 'COM', elevated: true, networkCategory: null, rules: [rule({ displayName: 'AZITO Agent (TCP 3002) [abc]' })] })]);
-    expect(await existing.result()).toMatchObject({ ruleFound: null, created: false });
-    expect(existing.exec).toHaveBeenCalledTimes(1);
-    const refused = run([dumped({ store: 'COM', elevated: true, networkCategory: null }), added(false, 'access denied')]);
-    const failure = await refused.result();
-    expect(failure.ruleFound).toBeNull();
-    expect(describeFirewallProblem(failure, 3002, NODE, IP)).toContain('access denied');
+  it('does not add a rule when the effective policy is unknown, even if elevated', async () => {
+    const runCheck = run([dumped({ store: 'COM', elevated: true, networkCategory: null })]);
+    const result = await runCheck.result();
+    expect(result).toMatchObject({ ruleFound: null, created: false });
+    expect(runCheck.exec).toHaveBeenCalledTimes(1);
+    expect(describeFirewallProblem(result, 3002, NODE, IP)).toContain('effective firewall policy could not be read');
   });
 
   it('refuses garbage', () => {
@@ -220,10 +216,10 @@ describe('checkFirewall', () => {
 
 describe('describeFirewallProblem', () => {
   const base: FirewallResult = { ruleFound: false, elevated: false, created: false, problem: null, blockedBy: [], allowedBy: [], store: 'ActiveStore' };
-  it('is null when a rule exists, was just added, or the host could not say', () => {
+  it('is null when a rule exists or was just added', () => {
     expect(describeFirewallProblem({ ...base, ruleFound: true }, 3002, NODE, IP)).toBeNull();
     expect(describeFirewallProblem({ ...base, elevated: true, created: true }, 3002, NODE, IP)).toBeNull();
-    expect(describeFirewallProblem({ ...base, ruleFound: null }, 3002, NODE, IP)).toBeNull();
+    expect(describeFirewallProblem({ ...base, ruleFound: null, problem: 'access denied' }, 3002, NODE, IP)).toContain('access denied');
   });
 
   it('says why and how to fix it when there is no rule', () => {

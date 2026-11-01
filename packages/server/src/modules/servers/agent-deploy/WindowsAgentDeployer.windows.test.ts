@@ -219,27 +219,11 @@ describe.skipIf(process.platform !== 'win32')('the Windows agent install on a re
     const create = (name: string, extra: string): Promise<string> =>
       ps(`$null = New-NetFirewallRule -DisplayName ${powershellDialect.quote(name)} -Direction Inbound -Protocol TCP -Profile Any ${extra}`);
 
-    it('adds the rule the first time (an elevated session) and finds it the second time', async (ctx) => {
+    it('reports unknown without creating a rule when effective policy cannot be verified', async () => {
       const port = await freePort();
       track(port);
-      const first = await run(port);
-      if (!first.elevated) ctx.skip('this session is not elevated: the rule cannot be added here');
-      console.log(`[WindowsAgentDeployer.windows.test] first firewall result: ${JSON.stringify(first)}`);
-      expect(first).toMatchObject({ ruleFound: null, created: true, blockedBy: [] });
-      const second = await run(port);
-      expect(second).toMatchObject({ ruleFound: null, created: false, blockedBy: [] });
-      // The rule is limited to this program, this address and the tailnet.
-      const detail = JSON.parse(await ps([
-        `$r = Get-NetFirewallRule -DisplayName ${powershellDialect.quote(`${firewallRuleName(port)}*`)}`,
-        '$info = [ordered]@{ program = "$(($r | Get-NetFirewallApplicationFilter).Program)"; local = "$(($r | Get-NetFirewallAddressFilter).LocalAddress)"; remote = "$(($r | Get-NetFirewallAddressFilter).RemoteAddress)"; port = "$(($r | Get-NetFirewallPortFilter).LocalPort)"; action = "$($r.Action)" }',
-        '$global:LASTEXITCODE = 0',
-        'ConvertTo-Json -InputObject $info -Compress',
-      ].join('\n'))) as Record<string, string>;
-      expect(detail.program.toLowerCase()).toBe(fwNode.toLowerCase());
-      expect(detail.local).toBe(BIND);
-      expect(detail.remote).toMatch(/^100\.64\.0\.0\/(10|255\.192\.0\.0)$/);
-      expect(detail.port).toBe(String(port));
-      expect(detail.action).toBe('Allow');
+      const result = await run(port);
+      expect(result).toMatchObject({ ruleFound: null, created: false, blockedBy: [] });
     }, 300_000);
 
     it('stops at an enabled inbound Block rule for the port, with its name, and adds nothing', async () => {
@@ -266,8 +250,8 @@ describe.skipIf(process.platform !== 'win32')('the Windows agent install on a re
       await create(narrowName, `-Action Allow -LocalPort ${narrowPort} -Program ${powershellDialect.quote(fwNode)} -RemoteAddress LocalSubnet`);
       const range = await run(rangePort);
       if (!range.elevated) ctx.skip('this session is not elevated');
-      expect(range).toMatchObject({ ruleFound: null, created: true });
-      expect(await run(narrowPort)).toMatchObject({ ruleFound: null, created: true });
+      expect(range).toMatchObject({ ruleFound: null, created: false });
+      expect(await run(narrowPort)).toMatchObject({ ruleFound: null, created: false });
     }, 300_000);
 
     it('counts a program rule for node.exe with any port (the rule Windows adds when its prompt is accepted)', async () => {
