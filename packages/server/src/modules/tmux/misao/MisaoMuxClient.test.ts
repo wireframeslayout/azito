@@ -690,11 +690,12 @@ describe('MisaoMuxClient input', () => {
     const p = daemon.addPane(w);
     await client.sendKeysToHandle(server, handle(p), ['x'.repeat(501), 'Enter']);
     expect(wait).toHaveBeenCalledWith(2000);
-    expect(daemon.writes()).toEqual(['x'.repeat(501), '\r']);
+    expect(daemon.writes()).toEqual([`\x1b[200~${'x'.repeat(501)}\x1b[201~`, '\r']);
     wait.mockClear();
     await client.sendKeysToHandle(server, handle(p), ['x'.repeat(500), 'Enter']);
     await client.sendKeysToHandle(server, handle(p), ['x'.repeat(501)]);
     expect(wait).not.toHaveBeenCalled();
+    expect(daemon.writes().slice(2)).toEqual(['x'.repeat(500), '\r', `\x1b[200~${'x'.repeat(501)}\x1b[201~`]);
   });
 
   it('sendTextToHandle writes the text untouched, even when it looks like a key name', async () => {
@@ -712,11 +713,30 @@ describe('MisaoMuxClient input', () => {
     const w = daemon.addWindow('proj', 'main');
     const p = daemon.addPane(w);
     await client.sendTextToHandle(server, handle(p), 'x'.repeat(501));
-    expect(daemon.writes()).toEqual(['x'.repeat(501)]);
+    expect(daemon.writes()).toEqual([`\x1b[200~${'x'.repeat(501)}\x1b[201~`]);
     expect(wait).toHaveBeenCalledWith(3000);
     wait.mockClear();
     await client.sendTextToHandle(server, handle(p), 'x'.repeat(500));
     expect(wait).not.toHaveBeenCalled();
+    expect(daemon.writes()[1]).toBe('x'.repeat(500));
+  });
+
+  it('removes embedded paste end markers from long text', async () => {
+    const { daemon, client } = setup({ wait: async () => {} });
+    const w = daemon.addWindow('proj', 'main');
+    const p = daemon.addPane(w);
+    const text = `${'あ'.repeat(167)}\x1b[201~middle\x1b[201~`;
+    await client.sendKeysToHandle(server, handle(p), [text]);
+    await client.sendTextToHandle(server, handle(p), text);
+    expect(daemon.writes()).toEqual(Array(2).fill(`\x1b[200~${'あ'.repeat(167)}middle\x1b[201~`));
+  });
+
+  it('does not leave an end marker formed by removing one', async () => {
+    const { daemon, client } = setup({ wait: async () => {} });
+    const w = daemon.addWindow('proj', 'main');
+    const p = daemon.addPane(w);
+    await client.sendTextToHandle(server, handle(p), `${'x'.repeat(501)}\x1b[20\x1b[201~1~tail`);
+    expect(daemon.writes()).toEqual([`\x1b[200~${'x'.repeat(501)}tail\x1b[201~`]);
   });
 
   it('surfaces a missing pane as an RPC error', async () => {
