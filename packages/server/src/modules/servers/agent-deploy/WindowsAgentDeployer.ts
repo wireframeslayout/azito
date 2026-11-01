@@ -325,7 +325,7 @@ export class WindowsAgentDeployer {
    * Takes the agent off the host (task, processes, firewall rule, folder, and with `removeMisao` the misao beside it). Every step reports
    * its own outcome and a failure does not stop the steps that do not depend on it; see {@link uninstallWindowsAgent}.
    */
-  async uninstall(sshHost: string, host: Pick<WindowsPreflightInfo, 'home' | 'systemRoot' | 'nodePath' | 'userId'>, choice: WindowsUninstallChoice): Promise<WindowsUninstallResult> {
+  async uninstall(sshHost: string, host: Pick<WindowsPreflightInfo, 'home' | 'systemRoot' | 'nodePath' | 'userId'>, choice: WindowsUninstallChoice, harnessPrefix = ''): Promise<WindowsUninstallResult> {
     const client = this.schtasks(sshHost, host);
     return uninstallWindowsAgent(
       {
@@ -336,6 +336,7 @@ export class WindowsAgentDeployer {
       { home: host.home, systemRoot: host.systemRoot, nodePath: host.nodePath, userId: host.userId },
       this.options,
       choice,
+      harnessPrefix,
     );
   }
 

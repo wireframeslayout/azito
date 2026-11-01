@@ -8,6 +8,7 @@ import { windowsMisaoPipe } from '../transport/agentMisaoSocket';
 import { DEFAULT_WINDOWS_AGENT_OPTIONS, MISAO_WINDOWS_TASK_NAME, type WindowsAgentOptions } from './windowsAgentConfig';
 import { WindowsAgentDeployer, windowsAgentEnvFile, type WindowsSshExec } from './WindowsAgentDeployer';
 import { FakeWindowsHost } from './testing/fakeWindowsHost';
+import { harnessMcpScript } from './windowsHarnessMcpUninstall';
 import { WINDOWS_HUB_TASK_NAME, uninstallWindowsAgent, type UninstallStepId, type WindowsUninstallHost, type WindowsUninstallResult } from './windowsAgentUninstall';
 import { decideMisaoStop, decidePathChains, folderScript, leftoverProcessesScript, misaoHolderScript, misaoStopScript, parseFolderOutput, parseLeftoverOutput, parseMisaoHolderOutput, parsePathChainOutput, pathChainScript, tailBelow } from './windowsAgentUninstallScripts';
 import { HUB_COMMAND_LINE_PATTERN, firewallInspectScript, misaoDaemonScript, misaoHubScript, parseFirewallOutput, parseMisaoGuardOutput, parseSameFileOutput, sameFileScript } from './windowsAgentOwnership';
@@ -59,6 +60,8 @@ class FakeUninstallHost {
   readonly tasks: Map<string, TaskInit & { running: boolean }>;
   /** What a script answers, by the start of its `what`; an Error is thrown. */
   answers: Record<string, string | Error> = {
+    'Checking claude MCP registration': 'AZITO_MCP_RESULT:{"outcome":"absent"}',
+    'Checking codex MCP registration': 'AZITO_MCP_RESULT:{"outcome":"absent"}',
     'Comparing the node.exe': 'SAME',
     'Looking for processes still running from the agent folder': 'CLEAR',
     'Looking for the Windows Firewall rule': 'ABSENT',
@@ -103,7 +106,7 @@ class FakeUninstallHost {
   };
 
   script = async (what: string, body: string): Promise<string> => {
-    this.log.push(`script ${what}`);
+    if (!what.includes('MCP registration')) this.log.push(`script ${what}`);
     this.bodies.push({ what, body });
     const key = Object.keys(this.answers).find((k) => what.startsWith(k));
     const answer = key === undefined ? '' : this.answers[key]!;
@@ -125,13 +128,46 @@ class FakeUninstallHost {
 }
 
 const factsOf = (home: string, nodePath: string | null) => ({ home, systemRoot: 'C:\\Windows', nodePath, userId: 'PC\\dev' });
-const outcomes = (result: WindowsUninstallResult): Record<string, string> => Object.fromEntries(result.steps.map((s) => [s.id, s.outcome]));
+const outcomes = (result: WindowsUninstallResult): Record<string, string> => Object.fromEntries(result.steps.filter((s) => s.id !== 'claudeHarnessMcp' && s.id !== 'codexHarnessMcp').map((s) => [s.id, s.outcome]));
 const detail = (result: WindowsUninstallResult, id: UninstallStepId): string => result.steps.find((s) => s.id === id)?.detail ?? '';
 const run = (host: FakeUninstallHost, removeMisao = false, options: WindowsAgentOptions = OPTIONS, hostNode: string | null = NODE): Promise<WindowsUninstallResult> => uninstallWindowsAgent(host.asHost(), factsOf(HOME, hostNode), options, { removeMisao });
 
 const LEFT_AGENT = `LEFT|4242|node.exe|C:\\Program Files\\nodejs\\node.exe`;
 
 describe('uninstallWindowsAgent', () => {
+  it('reports failure when the host returns no MCP result', async () => {
+    const host = new FakeUninstallHost({});
+    host.answers['Checking claude MCP registration'] = '';
+    const result = await run(host);
+    expect(result.ok).toBe(false);
+    expect(result.steps.find((s) => s.id === 'claudeHarnessMcp')).toMatchObject({ outcome: 'failed', detail: expect.stringContaining('expected one result marker, found 0') });
+    expect(result.steps.find((s) => s.id === 'codexHarnessMcp')?.outcome).toBe('absent');
+  });
+  it('runs both MCP steps independently of each other and the agent folder', async () => {
+    const host = new FakeUninstallHost({});
+    host.answers['Checking claude MCP registration'] = 'AZITO_MCP_RESULT:{"outcome":"failed","detail":"settings failed"}';
+    host.answers['Checking codex MCP registration'] = 'AZITO_MCP_RESULT:{"outcome":"done"}';
+    const result = await run(host);
+    expect(host.bodies.filter((b) => b.what.includes('MCP registration')).map((b) => b.what)).toEqual([
+      'Checking claude MCP registration', 'Checking codex MCP registration',
+    ]);
+    expect(result.ok).toBe(false);
+    expect(result.steps.filter((s) => s.id.endsWith('HarnessMcp'))).toEqual([
+      { id: 'claudeHarnessMcp', outcome: 'failed', detail: 'settings failed' },
+      { id: 'codexHarnessMcp', outcome: 'done' },
+    ]);
+    expect(result.steps.find((s) => s.id === 'folder')?.outcome).toBe('done');
+  });
+
+  it('keeps both MCP registrations when the agent task cannot be removed', async () => {
+    const host = new FakeUninstallHost({ AzitoAgent: { xml: AGENT_XML, running: true } });
+    host.endTaskError = new Error('cannot end task');
+    const result = await run(host);
+    expect(result.steps.find((s) => s.id === 'folder')?.outcome).toBe('skipped');
+    expect(result.steps.filter((s) => s.id.endsWith('HarnessMcp')).map((s) => s.outcome)).toEqual(['skipped', 'skipped']);
+    expect(host.bodies.some((b) => b.what.includes('MCP registration'))).toBe(false);
+  });
+
   it('ends the task, unregisters it, looks for what still runs from the folder, reports the firewall rule and removes the folder, in that order', async () => {
     const host = new FakeUninstallHost({ AzitoAgent: { xml: AGENT_XML, running: true } });
     const result = await run(host);
@@ -402,7 +438,7 @@ describe('uninstallWindowsAgent', () => {
   it('leaves the misao alone when it was not asked for', async () => {
     const host = new FakeUninstallHost({ AzitoAgent: { xml: AGENT_XML }, AzitoMisao: { xml: MISAO_XML } });
     const result = await run(host);
-    expect(result.steps.map((s) => s.id)).toEqual(['task', 'processes', 'firewall', 'folder']);
+    expect(result.steps.map((s) => s.id)).toEqual(['task', 'processes', 'firewall', 'folder', 'claudeHarnessMcp', 'codexHarnessMcp']);
     expect(host.tasks.has('AzitoMisao')).toBe(true);
     expect(host.log.filter((l) => l.includes('Misao') || l.includes('misao'))).toEqual([]);
   });
@@ -855,6 +891,13 @@ describe('the task names the uninstall relies on', () => {
 });
 
 describe('the scripts it sends', () => {
+  it('fits the MCP commands with a long non-ASCII home path', () => {
+    const home = 'C:\\Users\\佐藤花子開発環境東京横浜大阪京都札幌名古屋神戸福岡仙台広島長崎熊本金沢岡山松山';
+    const expected = `${home}\\.azito\\harness\\skills\\azt-mcp\\mcp-server\\index.js`;
+    for (const kind of ['claude', 'codex'] as const) {
+      expect(() => powershellDialect.wrapScript(`$ProgressPreference = 'SilentlyContinue'\n${harnessMcpScript(kind, NODE, home, expected)}`)).not.toThrow();
+    }
+  });
   it('each fits one command line (8191 characters once encoded) for a long user folder', async () => {
     const home = `C:\\Users\\${'a-very-long-user-name-'.repeat(4)}`;
     const long = new FakeUninstallHost({
@@ -927,6 +970,7 @@ describe('WindowsAgentDeployer.uninstall', () => {
       const result = await fake.exec(h, command);
       const last = fake.calls[fake.calls.length - 1];
       if (last?.kind !== 'script') return result;
+      if (last.text.includes('AZITO_MCP_SRC')) return { ...result, stdout: 'AZITO_MCP_RESULT:{"outcome":"absent"}\r\n' };
       if (last.text.includes('Remove-Tree')) return { ...result, stdout: 'DONE\r\n' };
       if (last.text.includes('Get-NetFirewallRule')) return { ...result, stdout: 'ABSENT\r\n' };
       if (last.text.includes('Find-Left')) return { ...result, stdout: 'CLEAR\r\n' };
