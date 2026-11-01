@@ -757,14 +757,41 @@ export class TmuxClient implements IMuxClient {
   async sendTextToHandle(server: ServerConfig, handle: PaneHandle, text: string) { return this.sendLiteralText(server, handle as string, text); }
   async pasteTextToHandle(server: ServerConfig, handle: PaneHandle, text: string): Promise<void> {
     const buffer = `azito-chat-${randomUUID()}`;
-    const loaded = await this.runTmuxCommand(server, ['set-buffer', '-b', buffer, '--', text]);
-    if (loaded.code !== 0) throw new Error('Unable to prepare chat paste');
     try {
+      await this.loadChatPasteBuffer(server, buffer, text);
       const pasted = await this.runTmuxCommand(server, ['paste-buffer', '-p', '-r', '-d', '-b', buffer, '-t', handle]);
       if (pasted.code !== 0) throw new Error('Unable to paste chat input');
       await new Promise(resolve => setTimeout(resolve, 3000));
     } finally {
       await this.runTmuxCommand(server, ['delete-buffer', '-b', buffer]);
+    }
+  }
+  private async loadChatPasteBuffer(server: ServerConfig, buffer: string, text: string): Promise<void> {
+    if (Buffer.byteLength(text, 'utf8') <= 500) {
+      const result = await this.runTmuxCommand(server, ['set-buffer', '-b', buffer, '--', text]);
+      if (result.code !== 0) throw new Error('Unable to prepare chat paste');
+      return;
+    }
+    if (server.type === 'local') {
+      const fs = await import('fs');
+      const os = await import('os');
+      const path = await import('path');
+      const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'azito-tmux-'));
+      const file = path.join(dir, 'buf');
+      try {
+        fs.writeFileSync(file, text, { mode: 0o600 });
+        const result = await this.runTmuxCommand(server, ['load-buffer', '-b', buffer, file]);
+        if (result.code !== 0) throw new Error('Unable to prepare chat paste');
+      } finally {
+        fs.rmSync(dir, { recursive: true, force: true });
+      }
+      return;
+    }
+    const characters = Array.from(text);
+    for (let i = 0; i < characters.length; i += 100) {
+      const args = ['set-buffer', ...(i === 0 ? [] : ['-a']), '-b', buffer, '--', characters.slice(i, i + 100).join('')];
+      const result = await this.runTmuxCommand(server, args);
+      if (result.code !== 0) throw new Error('Unable to prepare chat paste');
     }
   }
   async panePidByHandle(server: ServerConfig, handle: PaneHandle) { return this.getPanePid(server, handle as string); }
