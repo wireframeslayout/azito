@@ -16,6 +16,8 @@ import { requireCommandArgs, type PaneShellResolver } from './paneShell';
 import { type MisaoPane, type MisaoWorkspace, lastOutputEpochSeconds, misaoRef, paneCommand, panesOfWindow, toMuxPaneInfos, toMuxWorkspaces } from './misaoMapping';
 
 const LONG_TEXT_BYTES = 500;
+const BRACKETED_PASTE_START = '\x1b[200~';
+const BRACKETED_PASTE_END = '\x1b[201~';
 const LONG_TEXT_SUBMIT_DELAY_MS = 2000;
 /** Same settle time tmux's sendLongText waits after a paste, so a following Enter is not folded into it. */
 const LONG_TEXT_PASTE_SETTLE_MS = 3000;
@@ -37,6 +39,18 @@ export const MISAO_CAPS: MuxCapabilities = { changeEvents: true, agentState: fal
 const OK: ExecResult = { stdout: '', stderr: '', code: 0 };
 
 const unsupported = (operation: string): MuxOperationUnsupportedError => new MuxOperationUnsupportedError('misao', operation);
+
+/** Removes the paste end marker until none is left, so removing one cannot join its neighbours into a new one. */
+const stripPasteEnd = (text: string): string => {
+  let stripped = text;
+  while (stripped.includes(BRACKETED_PASTE_END)) stripped = stripped.replaceAll(BRACKETED_PASTE_END, '');
+  return stripped;
+};
+
+/** Long text goes in as a bracketed paste: Codex stops reading a long run of raw keystrokes part way (#564). */
+const pasteText = (text: string): string => Buffer.byteLength(text, 'utf8') > LONG_TEXT_BYTES
+  ? `${BRACKETED_PASTE_START}${stripPasteEnd(text)}${BRACKETED_PASTE_END}`
+  : text;
 
 /**
  * IMuxClient over the misao daemon. A window is addressed by its daemon window id (`MuxRef.window`) and a pane by
@@ -273,7 +287,7 @@ export class MisaoMuxClient implements IMuxClient {
   async sendKeysToHandle(_server: ServerConfig, handle: PaneHandle, keys: string[]): Promise<void> {
     for (let i = 0; i < keys.length; i++) {
       const bytes = encodeMisaoKey(keys[i]);
-      await this.write(handle, bytes ?? keys[i]);
+      await this.write(handle, bytes ?? pasteText(keys[i]));
       if (bytes === undefined && Buffer.byteLength(keys[i], 'utf8') > LONG_TEXT_BYTES && keys[i + 1] === 'Enter') {
         await this.wait(LONG_TEXT_SUBMIT_DELAY_MS);
       }
@@ -281,7 +295,7 @@ export class MisaoMuxClient implements IMuxClient {
   }
 
   async sendTextToHandle(_server: ServerConfig, handle: PaneHandle, text: string): Promise<void> {
-    await this.write(handle, text);
+    await this.write(handle, pasteText(text));
     if (Buffer.byteLength(text, 'utf8') > LONG_TEXT_BYTES) await this.wait(LONG_TEXT_PASTE_SETTLE_MS);
   }
 
