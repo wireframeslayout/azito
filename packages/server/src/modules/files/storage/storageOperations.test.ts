@@ -28,6 +28,27 @@ describe('storage operations', () => {
     expect(copy.input.Metadata?.['display-name']).toBe(encodeURIComponent('変更.txt'));
     expect(copy.input.ContentType).toBe('text/plain');
   });
+  it('returns a client error for a rejected cursor', async () => {
+    const send = vi.fn(async () => { throw Object.assign(new Error('bad cursor'), { $metadata: { httpStatusCode: 400 } }); });
+    const ops = new StorageOperations({ send } as unknown as S3Client, bucket, 1);
+    await expect(ops.listPage('', 200, 'bad')).rejects.toMatchObject({ status: 400, code: 'invalid_cursor' });
+  });
+  it('starts another head as soon as a worker becomes free', async () => {
+    let release!: () => void;
+    const blocked = new Promise<void>((resolve) => { release = resolve; });
+    const seen: string[] = [];
+    const send = vi.fn(async (command: unknown) => {
+      if (command instanceof ListObjectsV2Command) return { Contents: Array.from({ length: 11 }, (_, i) => ({ Key: `projects/1/${i}` })) };
+      if (command instanceof HeadObjectCommand) { seen.push(command.input.Key!); if (command.input.Key === 'projects/1/0') await blocked; return {}; }
+      throw new Error('unexpected command');
+    });
+    const ops = new StorageOperations({ send } as unknown as S3Client, bucket, 1);
+    const result = ops.listPage('', 200);
+    try {
+      await vi.waitFor(() => expect(seen).toContain('projects/1/10'));
+    } finally { release(); }
+    expect((await result).files).toHaveLength(11);
+  });
   it('skips objects deleted while a page is listed', async () => {
     const send = vi.fn(async (command: unknown) => {
       if (command instanceof HeadObjectCommand) throw Object.assign(new Error('missing'), { name: 'NotFound' });

@@ -31,7 +31,7 @@ function buildApp(uploadAuth: RouteAuthRequirement, db: SqliteDatabase): {
     projectRepo: { findById: vi.fn((id: number) => ({ id, name: 'P', slug: 'p' })) } as unknown as StorageRouteOptions['projectRepo'],
     storageSettingsRepo: { get: vi.fn(() => ({ endpoint: 'x', accessKey: 'a', secretKey: 'b', bucket: 'bkt', region: 'us-east-1', useSsl: false, maxFileSize: 10_000_000 })) } as unknown as StorageRouteOptions['storageSettingsRepo'],
     storageClient: { ensureBucket: vi.fn(async () => {}), upload: uploadSpy } as unknown as StorageRouteOptions['storageClient'],
-    storageStatusService: { getStatus: vi.fn(async () => ({ status: 'ready' })) } as unknown as StorageRouteOptions['storageStatusService'],
+    storageStatusService: { getStatus: vi.fn(async () => ({ state: 'ready' })), createBucket: vi.fn(async () => {}) } as unknown as StorageRouteOptions['storageStatusService'],
     uploadAuth,
   };
 
@@ -76,6 +76,16 @@ describe('POST /api/projects/:id/storage/upload — task-principal scoping (Issu
 
   afterEach(() => {
     db.close();
+  });
+
+  it('restricts bucket creation to operators', async () => {
+    const { app, taskTokenRepo } = buildApp(makeUploadAuth(() => 10), db);
+    const { token } = taskTokenRepo.issue(1, 1);
+    const response = await app.inject({ method: 'POST', url: '/api/projects/10/storage/bucket', headers: { authorization: `Bearer ${token}` } });
+    expect(response.statusCode).toBe(403);
+    const operator = await app.inject({ method: 'POST', url: '/api/projects/10/storage/bucket', headers: { authorization: `Bearer ${UI_TOKEN}` } });
+    expect(operator.statusCode).toBe(200);
+    await app.close();
   });
 
   it("a task principal can upload into its OWN task's project", async () => {

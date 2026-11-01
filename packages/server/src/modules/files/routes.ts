@@ -52,6 +52,13 @@ const storageRoutes: FastifyPluginCallback<StorageRouteOptions> = (fastify, opts
     return opts.storageStatusService.getStatus();
   });
 
+  fastify.post<{ Params: { id: string } }>('/api/projects/:id/storage/bucket', async (request, reply) => {
+    const id = Number(request.params.id);
+    if (!Number.isSafeInteger(id) || !projectRepo.findById(id)) return reply.status(404).send({ error: 'Project not found' });
+    try { await opts.storageStatusService.createBucket(); return { ok: true }; }
+    catch (error) { return reply.status(502).send(classifyStorageError(error)); }
+  });
+
   // ── GET /api/projects/:id/storage ──
   fastify.get<{ Params: { id: string } }>(
     '/api/projects/:id/storage',

@@ -24,13 +24,13 @@ export interface StorageOperationRouteOptions {
 
 export function registerStorageOperationRoutes(fastify: FastifyInstance, opts: StorageOperationRouteOptions): void {
   const root = '/api/projects/:id/storage';
-  function register(method: 'GET' | 'POST' | 'PATCH', suffix: string, schema: z.ZodType, action: (ops: ReturnType<MinioStorageClient['operations']>, input: never, id: number) => Promise<unknown>): void {
+  function register<S extends z.ZodType>(method: 'GET' | 'POST' | 'PATCH', suffix: string, schema: S, action: (ops: ReturnType<MinioStorageClient['operations']>, input: z.output<S>, id: number) => Promise<unknown>): void {
     fastify.route({ method, url: root + suffix, handler: async (request, reply) => {
       const id = Number((request.params as { id: string }).id);
       if (!Number.isSafeInteger(id) || !opts.projectRepo.findById(id)) return reply.status(404).send({ error: 'Project not found' });
       const parsed = schema.safeParse(method === 'GET' ? request.query : request.body);
       if (!parsed.success) return reply.status(400).send({ error: 'Invalid request', code: 'invalid_request' });
-      try { return await action(opts.storageClient.operations(opts.storageSettingsRepo.get(), id), parsed.data as never, id); }
+      try { return await action(opts.storageClient.operations(opts.storageSettingsRepo.get(), id), parsed.data, id); }
       catch (error) {
         if (error instanceof StorageOperationError) return reply.status(error.status).send({ error: error.message, code: error.code });
         request.log.error(error);

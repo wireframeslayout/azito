@@ -4,6 +4,23 @@ import storageRoutes, { type StorageRouteOptions } from '../routes';
 import { StorageOperationError } from './storageOperations';
 
 describe('storage operation routes', () => {
+  it('creates a bucket and safely classifies errors', async () => {
+    const createBucket = vi.fn(async () => {});
+    const app = Fastify();
+    await app.register(storageRoutes, {
+      projectRepo: { findById: (id: number) => id === 1 ? { id } : null },
+      storageSettingsRepo: { get: () => ({}) }, storageClient: {},
+      storageStatusService: { createBucket },
+    } as unknown as StorageRouteOptions);
+    try {
+      expect((await app.inject({ method: 'POST', url: '/api/projects/2/storage/bucket' })).statusCode).toBe(404);
+      expect((await app.inject({ method: 'POST', url: '/api/projects/1/storage/bucket' })).json()).toEqual({ ok: true });
+      createBucket.mockRejectedValueOnce(Object.assign(new Error('secret'), { name: 'AccessDenied' }));
+      const response = await app.inject({ method: 'POST', url: '/api/projects/1/storage/bucket' });
+      expect(response.statusCode).toBe(502);
+      expect(response.json()).toEqual({ code: 'auth', error: 'Storage authentication failed.' });
+    } finally { await app.close(); }
+  });
   it('uses the documented contracts and enforces project boundaries', async () => {
     const operations = {
       listPage: vi.fn(async () => ({ prefix: 'a/', folders: [], files: [], nextCursor: null })),

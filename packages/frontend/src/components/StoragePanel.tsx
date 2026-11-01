@@ -75,11 +75,7 @@ export default function StoragePanel(props: StoragePanelProps) {
   return <StorageStatusGate projectId={props.projectId}><StorageFileList {...props} /></StorageStatusGate>;
 }
 
-function StorageFileList({ projectId, onFilePreview, activeTabId }: {
-  projectId: number;
-  onFilePreview?: (file: StoredFile) => void;
-  activeTabId?: string | null;
-}) {
+function StorageFileList({ projectId, onFilePreview, activeTabId }: StoragePanelProps) {
   const { t } = useTranslation('files');
   const { showToast } = useToast();
   const confirm = useConfirm();

@@ -38,7 +38,7 @@ export function StorageStatusGate({ projectId, children }: Props) {
   if (error) return <div role="alert" style={{ padding: 'var(--space-4)' }}>{t('statusError')} <Button onClick={retry}>{t('retry')}</Button></div>;
   if (!status) return <LoadingState />;
   if (status.state === 'ready') return <>{children}</>;
-  if (status.state === 'unreachable') return <StorageUnreachable reason={status.reason} onRetry={retry} />;
+  if (status.state === 'unreachable') return <StorageUnreachable projectId={projectId} reason={status.reason} onRetry={retry} />;
   if (dismissed && status.onboarding.dismissible) return <div style={{ padding: 'var(--space-4)' }}><Button onClick={() => dismiss(false)}>{t('onboarding.title')}</Button></div>;
   return <StorageOnboarding onboarding={status.onboarding} onConfigured={retry} onLater={() => dismiss(true)} />;
 }

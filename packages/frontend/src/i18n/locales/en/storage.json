@@ -13,12 +13,14 @@
       "bucket": "The storage bucket was not found. Check the bucket name.",
       "dns": "Storage hostname could not be resolved.",
       "refused": "Storage connection was refused."
-    }
+    },
+    "createBucket": "Create bucket",
+    "creatingBucket": "Creating…",
+    "createBucketError": "Could not create the bucket. Please try again."
   },
   "onboarding": {
     "title": "Connect storage",
     "description": "Store project documents and images and share their paths with your agents.",
-    "empty": "No storage options are available. Open settings to configure storage.",
     "later": "You can also connect storage later in Settings › Storage.",
     "settings": {
       "title": "Connect S3-compatible storage",

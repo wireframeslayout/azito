@@ -44,24 +44,32 @@ export class StorageOperations {
   }
   async listPage(prefix: string, limit: number, cursor?: string) {
     validateStoragePath(prefix, true, true);
-    const page = await this.s3.send(new ListObjectsV2Command({ Bucket: this.bucket, Prefix: this.key(prefix), Delimiter: '/', MaxKeys: limit, ContinuationToken: cursor }));
+    let page;
+    try { page = await this.s3.send(new ListObjectsV2Command({ Bucket: this.bucket, Prefix: this.key(prefix), Delimiter: '/', MaxKeys: limit, ContinuationToken: cursor })); }
+    catch (error) {
+      if (cursor && (error as { $metadata?: { httpStatusCode?: number } }).$metadata?.httpStatusCode === 400) throw new StorageOperationError(400, 'invalid_cursor', 'Invalid cursor');
+      throw error;
+    }
     const folders = (page.CommonPrefixes ?? []).flatMap((p) => {
       if (!p.Prefix) return [];
       const relative = p.Prefix.slice(base(this.projectId).length);
       return [{ name: relative.slice(0, -1).split('/').pop()!, prefix: relative }];
     });
     const objects = (page.Contents ?? []).filter((o) => o.Key && o.Key !== this.key(prefix));
-    const files: Array<{ key: string; displayName: string; size: number; lastModified: string; etag: string | null }> = [];
-    for (let i = 0; i < objects.length; i += 10) {
-      const batch = await Promise.all(objects.slice(i, i + 10).map(async (obj) => {
+    const results: Array<{ key: string; displayName: string; size: number; lastModified: string; etag: string | null } | null> = new Array(objects.length);
+    let next = 0;
+    await Promise.all(Array.from({ length: Math.min(10, objects.length) }, async () => {
+      while (next < objects.length) {
+        const index = next++;
+        const obj = objects[index];
         const key = obj.Key!;
         const head = await this.head(key);
-        if (!head) return null;
+        if (!head) { results[index] = null; continue; }
         const encodedName = head.Metadata?.['display-name'];
-        return { key, displayName: encodedName ? decodeURIComponent(encodedName) : key.split('/').pop()!.replace(/^\d+_/, ''), size: obj.Size ?? 0, lastModified: obj.LastModified?.toISOString() ?? '', etag: obj.ETag ?? null };
-      }));
-      files.push(...batch.filter((file) => file !== null));
-    }
+        results[index] = { key, displayName: encodedName ? decodeURIComponent(encodedName) : key.split('/').pop()!.replace(/^\d+_/, ''), size: obj.Size ?? 0, lastModified: obj.LastModified?.toISOString() ?? '', etag: obj.ETag ?? null };
+      }
+    }));
+    const files = results.filter((file) => file !== null);
     return { prefix, folders, files, nextCursor: page.NextContinuationToken ?? null };
   }
   async createFolder(path: string): Promise<void> {
