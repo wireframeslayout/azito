@@ -1,8 +1,9 @@
 import { describe, expect, it } from 'vitest';
-import { groupToolBlocks, type ContextBlock } from './groupToolBlocks';
+import { buildBlockSegments, groupToolBlocks, type ContextBlock } from './groupToolBlocks';
+import type { TranscriptEntry } from './transcriptTypes';
 
 function item(block: ContextBlock['block'], key: string, entryKey = 'a'): ContextBlock {
-  return { block, key, entryKey, markdownText: true, thinkingSeconds: null };
+  return { block, key, entryKey, entryType: 'assistant', markdownText: true, thinkingSeconds: null };
 }
 const use = { kind: 'tool_use', name: 'Bash', input: '', truncated: false } as const;
 const result = { kind: 'tool_result', text: '', truncated: false, isError: true } as const;
@@ -21,5 +22,23 @@ describe('groupToolBlocks', () => {
     const groups = groupToolBlocks([item(text, '1'), item(use, '2'), item(text, '3')]);
     expect(groups).toHaveLength(1);
     expect(groups[0].map(({ block }) => block.kind)).toEqual(['text', 'tool_use', 'text']);
+  });
+  it('builds segments marking tool runs, entry types and per-entry thinking gaps', () => {
+    const entries: TranscriptEntry[] = [
+      { uuid: 'a', type: 'assistant', timestamp: '2026-08-10T09:00:00Z', blocks: [text, use] },
+      { uuid: 't', type: 'tool', timestamp: '2026-08-10T09:00:05Z', blocks: [result] },
+      { uuid: 'b', type: 'assistant', timestamp: '2026-08-10T09:00:10Z', blocks: [text] },
+    ];
+    const segments = buildBlockSegments(entries, '2026-08-10T08:59:58Z');
+    expect(segments.map(({ key, entryType, isToolRun }) => ({ key, entryType, isToolRun }))).toEqual([
+      { key: 'a-0', entryType: 'assistant', isToolRun: false },
+      { key: 'a-1', entryType: 'assistant', isToolRun: true },
+      { key: 'b-0', entryType: 'assistant', isToolRun: false },
+    ]);
+    expect(segments[1].blocks.map(({ entryType, markdownText }) => ({ entryType, markdownText }))).toEqual([
+      { entryType: 'assistant', markdownText: true },
+      { entryType: 'tool', markdownText: false },
+    ]);
+    expect(segments[0].blocks[0].thinkingSeconds).toBe(2);
   });
 });

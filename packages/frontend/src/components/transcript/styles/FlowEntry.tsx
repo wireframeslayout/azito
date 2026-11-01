@@ -8,7 +8,7 @@ import { InterruptedRow } from './InterruptedRow';
 import { SystemEntryText } from './SystemEntryText';
 import { SystemOtherChip } from './SystemOtherChip';
 import { BlockList } from './BlockList';
-import { groupToolBlocks } from '../groupToolBlocks';
+import { buildBlockSegments, type BlockSegment } from '../groupToolBlocks';
 import { ToolRunGroup } from '../ToolRunGroup';
 import type { StyleGroupProps } from './types';
 
@@ -21,21 +21,17 @@ function GroupEntries({ entries, prevTimestamp, isUser }: {
   prevTimestamp: string | null;
   isUser: boolean;
 }) {
-  let prevTs = prevTimestamp;
-  const blocks = entries.flatMap((entry) => {
-    const thinkingSeconds = computeThinkingGapSeconds(prevTs, entry.timestamp);
-    prevTs = entry.timestamp;
-    return entry.blocks.map((block, index) => ({ block, entryKey: entry.uuid, key: `${entry.uuid}-${index}`, markdownText: entry.type === 'assistant', thinkingSeconds, entryType: entry.type }));
-  });
-  return <>{groupToolBlocks(blocks).map((segment) => {
-    const items = segment as typeof blocks;
-    const first = items[0];
-    const isToolRun = items.length > 1 && items.every(({ block }) => block.kind === 'tool_use' || block.kind === 'tool_result');
-    const content = items.map((item) => <BlockList key={item.key} blocks={[item.block]} markdownText={item.markdownText} thinkingSeconds={item.thinkingSeconds} />);
-    if (isToolRun) return <ToolRunGroup key={first.key} blocks={items}>{content}</ToolRunGroup>;
-    if (isUser && first.entryType === 'user') return <div key={first.key} style={{ background: 'var(--bg-card)', borderRadius: 'var(--radius-lg)', padding: 'var(--space-2) var(--space-3)' }}>{content}</div>;
-    return <div key={first.key}>{content}</div>;
-  })}</>;
+  const renderSegment = (segment: BlockSegment) => {
+    const content = segment.blocks.map((item) => <BlockList key={item.key} blocks={[item.block]} markdownText={item.markdownText} thinkingSeconds={item.thinkingSeconds} />);
+    if (segment.isToolRun) return <ToolRunGroup blocks={segment.blocks}>{content}</ToolRunGroup>;
+    if (isUser && segment.entryType === 'user') return <div style={{ background: 'var(--bg-card)', borderRadius: 'var(--radius-lg)', padding: 'var(--space-2) var(--space-3)' }}>{content}</div>;
+    return content;
+  };
+  return <>{buildBlockSegments(entries, prevTimestamp).map((segment, i) => (
+    <div key={segment.key} style={{ marginTop: i > 0 ? 'var(--space-2)' : 0, minWidth: 0, maxWidth: '100%' }}>
+      {renderSegment(segment)}
+    </div>
+  ))}</>;
 }
 
 /**

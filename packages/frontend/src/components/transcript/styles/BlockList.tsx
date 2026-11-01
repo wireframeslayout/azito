@@ -6,7 +6,7 @@ import { ThinkingChip } from './ThinkingChip';
 
 function TextBlock({ text, markdown }: { text: string; markdown: boolean }) {
   if (markdown) {
-    return <MarkdownRenderer content={text}  />;
+    return <MarkdownRenderer content={text} />;
   }
   return (
     <div style={{ whiteSpace: 'pre-wrap', wordBreak: 'break-word', fontSize: 'var(--font-base)', lineHeight: 1.8, fontFamily: 'var(--font-prose)' }}>
@@ -63,4 +63,3 @@ export function BlockList({ blocks, markdownText, thinkingSeconds }: {
     </>
   );
 }
-
