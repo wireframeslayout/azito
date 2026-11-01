@@ -1,5 +1,8 @@
 import { useTranslation } from 'react-i18next';
+import { statusLabelKey } from '../../lib/taskStatus';
+import { Icon } from '../ui/Icon';
 import { WindowIdChip } from '../ui/WindowIdChip';
+import { BrailleSpinner, BlockedDot } from '../ui/WindowActivityIndicator';
 import type { SearchItem } from '../../lib/globalSearch/searchIndex';
 
 interface SearchResultRowProps {
@@ -11,10 +14,17 @@ interface SearchResultRowProps {
 }
 
 export function SearchResultRow({ item, selected, status, onSelect, onOpen }: SearchResultRowProps) {
-  const { t } = useTranslation('navigation');
+  const { t } = useTranslation(['navigation', 'common']);
+  const taskStatus = item.task?.status;
+  const blocked = taskStatus === 'phase_review' || taskStatus === 'waiting_input' || taskStatus === 'pending_approval';
   return <div id={`search-${item.kind}-${item.id}`} role="option" aria-selected={selected} className="global-search-row" onMouseMove={onSelect} onClick={onOpen}>
-    <span className="global-search-marker">{selected ? '›' : ''}</span>
-    <span className="global-search-label"><strong>{item.title}</strong><small>{item.projectName}{item.window ? ` · ${item.window?.serverName}` : item.kind === 'task' ? ` · #${item.id} · ${item.task?.status}` : ''}{status ? ` · ${t(`globalSearch.${status}`)}` : ''}</small></span>
+    <Icon name={item.kind === 'orchestrator' ? 'chip' : item.window ? 'terminal' : item.kind === 'task' ? 'tasks' : 'projects'} size={16} />
+    {blocked ? <BlockedDot /> : item.active ? <BrailleSpinner /> : null}
+    <span className="global-search-label">
+      <strong>{item.title}</strong>
+      <small>{item.projectName}{item.window ? ` · ${item.window.serverName}` : taskStatus ? ` · #${item.id} · ${t(`common:status.${statusLabelKey(taskStatus)}`)}` : ''}{status ? ` · ${t(`navigation:globalSearch.${status}`)}` : ''}</small>
+    </span>
     {item.window && <WindowIdChip id={item.id} />}
+    {selected && <kbd className="global-search-enter" aria-hidden="true">Enter</kbd>}
   </div>;
 }

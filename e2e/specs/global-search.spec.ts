@@ -45,7 +45,7 @@ test('別プロジェクトのタスクを開く', async ({ app, harness }) => {
   await expect(app.getByText('Cross project task').first()).toBeVisible();
 });
 
-test('モバイルのメニューから検索しフォーカスを戻す', async ({ app, harness }) => {
+test('モバイルのメニューから検索しシートを閉じる', async ({ app, harness }) => {
   const project = await harness.createProject('search-mobile');
   await app.setViewportSize({ width: 320, height: 800 });
   await app.goto(`${harness.baseUrl}/workspace/${project}`);
@@ -57,7 +57,22 @@ test('モバイルのメニューから検索しフォーカスを戻す', async
   await expect(input).toHaveAttribute('enterkeyhint', 'search');
   expect(await app.evaluate(() => document.documentElement.scrollWidth <= document.documentElement.clientWidth)).toBe(true);
   await input.press('Escape');
-  await expect(opener).toBeFocused();
+  await expect(opener).toHaveCount(0);
+});
+
+test('スマホでタスクを開くとナビシートが閉じる', async ({ app, harness }) => {
+  const project = await harness.createProject('search-mobile-task');
+  const task = await harness.api<{ id: number }>('/tasks', { method: 'POST', body: JSON.stringify({ project_id: project, title: 'Mobile search task' }) });
+  await app.setViewportSize({ width: 390, height: 800 });
+  await app.goto(`${harness.baseUrl}/workspace/${project}`);
+  await app.getByRole('button', { name: 'メニュー', exact: true }).click();
+  await app.getByRole('button', { name: '検索', exact: true }).click();
+  const input = app.getByRole('combobox', { name: '検索' });
+  await input.fill(`#${task.id}`);
+  await input.press('Enter');
+  await expect(app.getByRole('dialog', { name: '検索' })).toHaveCount(0);
+  await expect(app.getByText('Mobile search task').first()).toBeVisible();
+  await expect(app.getByRole('button', { name: '検索', exact: true })).toHaveCount(0);
 });
 
 test('端末に連続した空白を入力しても検索を開かない', async ({ app, harness }) => {

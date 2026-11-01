@@ -174,7 +174,7 @@ export function MobileNavSheet({
             <div style={{ flex: 1, overflow: 'auto', display: 'flex', flexDirection: 'column' }}>
               {top === 'menu' && (
                 <MobileNavMenu
-                  onOpenSearch={openSearch}
+                  onOpenSearch={() => { onClose(); openSearch(); }}
                   project={project ? { id: project.id, name: project.name, icon: currentProjectItem?.icon, color: currentProjectItem?.color } : null}
                   onOpenProjectSwitch={() => push('projectSwitch')}
                   objectsCount={objectsCount}

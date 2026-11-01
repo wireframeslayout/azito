@@ -5,19 +5,26 @@ import { useTranslation } from 'react-i18next';
 import { useHotkey } from '../../hooks/useHotkeys';
 import { useWorkspaceCatalog } from '../../hooks/useWorkspaceCatalog';
 import { useCrossProjectNavigation } from '../../hooks/useCrossProjectNavigation';
-import { useNotificationChannel } from '../../hooks/useNotificationChannel';
 import { useRecentTasks } from '../../hooks/useRecentTasks';
 import { useProjectRail } from '../../hooks/useProjectRail';
 import { useIsMobile } from '../../hooks/useIsMobile';
 import { useVirtualKeyboard } from '../../hooks/useVirtualKeyboard';
 import { useActiveWindowRows } from '../../hooks/useActiveWindowRows';
-import { fetchSessionListing, keepUnavailableKinds } from '../../lib/fetchServerSessions';
+import { useSearchServerStatus } from '../../hooks/useSearchServerStatus';
+import { recentItems } from '../../lib/globalSearch/recentItems';
 import { buildSearchIndex, searchIndex, type SearchItem, type SearchKind } from '../../lib/globalSearch/searchIndex';
 import { paths } from '../../paths';
 import { findSessionWindow } from '../../lib/windowMatch';
 import type { Session } from '../../pages/workspace/types';
 import { SearchResultRow } from './SearchResultRow';
 import { Overlay } from '../ui/Overlay';
+import { IconButton } from '../ui/IconButton';
+import { Icon } from '../ui/Icon';
+import { Chip } from '../ui/Chip';
+import { Notice } from '../ui/Notice';
+import { LoadingState } from '../ui/LoadingState';
+import { EmptyState } from '../ui/EmptyState';
+import { SearchResultList } from '../ui/SearchResultList';
 
 const Context = createContext<(() => void) | null>(null);
 export function useOpenGlobalSearch(): () => void {
@@ -70,38 +77,8 @@ function GlobalSearchPalette({ onClose }: { onClose: () => void }) {
   const [query, setQuery] = useState('');
   const [category, setCategory] = useState<Category>('all');
   const [selected, setSelected] = useState(0);
-  const [sessions, setSessions] = useState<Record<string, Session[]>>({});
-  const [failed, setFailed] = useState<string[]>([]);
-  const [unreachable, setUnreachable] = useState<string[]>([]);
-  const [loadingServers, setLoadingServers] = useState(true);
-  const [refreshKey, setRefreshKey] = useState(0);
-  useNotificationChannel({ onSessionsUpdated: () => setRefreshKey(value => value + 1) });
-  const serverNames = [...new Set([...allProjects.flatMap(p => p.windows ?? []), ...allTasks.flatMap(task => task.windows ?? [])].map(w => w.serverName))].sort();
-  const serverKey = JSON.stringify(serverNames);
-  useEffect(() => {
-    let cancelled = false;
-    setLoadingServers(true);
-    const names: string[] = JSON.parse(serverKey);
-    setFailed(previous => previous.filter(name => names.includes(name)));
-    setUnreachable(previous => previous.filter(name => names.includes(name)));
-    if (names.length === 0) setLoadingServers(false);
-    let remaining = names.length;
-    for (const name of names) {
-      void fetchSessionListing(name).then(listing => {
-        if (cancelled) return;
-        setSessions(previous => ({ ...previous, [name]: keepUnavailableKinds(previous[name], listing) }));
-        setFailed(previous => listing.unavailable.length > 0 ? [...new Set([...previous, name])] : previous.filter(value => value !== name));
-        setUnreachable(previous => previous.filter(value => value !== name));
-      }, () => {
-        if (cancelled) return;
-        setFailed(previous => [...new Set([...previous, name])]);
-        setUnreachable(previous => [...new Set([...previous, name])]);
-      }).finally(() => {
-        if (!cancelled && --remaining === 0) setLoadingServers(false);
-      });
-    }
-    return () => { cancelled = true; };
-  }, [serverKey, refreshKey]);
+  const windows = [...allProjects.flatMap(project => project.windows ?? []), ...allTasks.flatMap(task => task.windows ?? [])];
+  const { sessions, failed, unreachable, retry } = useSearchServerStatus(windows);
   const runningRows = rows.filter(row => row.status === 'running');
   const activeTargets = new Set(runningRows.map(row => windowKey(row.serverName, row.target)));
   const activeIds = new Set(runningRows.flatMap(row => row.windowId == null ? [] : [row.windowId]));
@@ -110,13 +87,9 @@ function GlobalSearchPalette({ onClose }: { onClose: () => void }) {
   }
   const index = buildSearchIndex(allProjects, allTasks, openedAt, activeIds, sessions);
   const categories: Category[] = index.some(item => item.kind === 'orchestrator') ? ['all', 'window', 'orchestrator', 'task', 'project'] : defaultCategories;
-  const recentRanks = new Map(rail.recentIds.map((id, i) => [id, rail.recentIds.length - i]));
   const activeCategory = categories.includes(category) ? category : 'all';
-  const matches = query.trim() ? searchIndex(index, query) : index.filter(item => item.window ? item.active : item.kind === 'task' ? item.recent > 0 : recentRanks.has(item.id)).sort((a, b) => b.recent - a.recent || (b.kind === 'project' ? recentRanks.get(b.id) ?? 0 : 0) - (a.kind === 'project' ? recentRanks.get(a.id) ?? 0 : 0));
-  const groups = categories.slice(1).map(kind => {
-    const items = matches.filter(item => item.kind === kind);
-    return { kind: kind as SearchKind, items: !query.trim() && kind === 'task' ? items.slice(0, 5) : items };
-  });
+  const matches = query.trim() ? searchIndex(index, query) : recentItems(index, rail.recentIds);
+  const groups = categories.slice(1).map(kind => ({ kind: kind as SearchKind, items: matches.filter(item => item.kind === kind) }));
   const shownGroups = groups.filter(group => activeCategory === 'all' || group.kind === activeCategory).map(group => ({ ...group, shown: group.items.slice(0, activeCategory === 'all' ? 8 : 50) }));
   const shown = shownGroups.flatMap(group => group.shown);
   const current = Math.min(selected, Math.max(0, shown.length - 1));
@@ -137,22 +110,26 @@ function GlobalSearchPalette({ onClose }: { onClose: () => void }) {
       if (event.key === 'ArrowDown' || event.key === 'ArrowUp') { event.preventDefault(); setSelected(shown.length ? (current + (event.key === 'ArrowDown' ? 1 : shown.length - 1)) % shown.length : 0); }
       if (event.key === 'Enter' && shown[current]) { event.preventDefault(); choose(shown[current]); }
     }}>
-      <header className="global-search-header"><h2 id="global-search-title">{t('globalSearch.title')}</h2><button ref={closeButton} type="button" onClick={onClose} aria-label={t('globalSearch.close')}>×</button></header>
+      <header className="global-search-header"><h2 id="global-search-title">{t('globalSearch.title')}</h2><IconButton ref={closeButton} type="button" onClick={onClose} aria-label={t('globalSearch.close')} style={{ minWidth: 44, minHeight: 44 }}><Icon name="close" size={16} /></IconButton></header>
       <input ref={input} role="combobox" aria-label={t('globalSearch.title')} enterKeyHint="search" aria-expanded="true" aria-controls="global-search-results" aria-activedescendant={currentId} value={query} onChange={event => { setQuery(event.target.value); setSelected(0); }} placeholder={t('globalSearch.placeholder')} />
-      <div className="global-search-tabs" role="tablist" aria-label={t('globalSearch.categories')}>{categories.map(kind => <button type="button" role="tab" aria-selected={activeCategory === kind} key={kind} onClick={() => changeCategory(kind)}>{t(`globalSearch.${kind}`)} <span>{kind === 'all' ? matches.length : groups.find(group => group.kind === kind)?.items.length}</span></button>)}</div>
-      {error && <div role="alert" className="global-search-message">{t('globalSearch.error')} <button onClick={() => void refresh()}>{t('globalSearch.retry')}</button></div>}
-      {failed.length > 0 && <div role="alert" className="global-search-message">{t('globalSearch.failed', { servers: failed.join(', ') })} <button onClick={() => setRefreshKey(value => value + 1)}>{t('globalSearch.retry')}</button></div>}
-      <div id="global-search-results" role="listbox" aria-label={t('globalSearch.results')} className="global-search-results">
-        {loading ? <div className="global-search-message" role="status">{t('globalSearch.loading')}</div>
-          : error && allProjects.length === 0 && allTasks.length === 0 ? null
-          : shown.length === 0 ? <div className="global-search-message" role="status">{query.trim() ? t('globalSearch.noResults', { query }) : t('globalSearch.empty')}</div>
-          : shownGroups.map(group => group.shown.length > 0 && <section key={group.kind} role="group" aria-label={t(`globalSearch.${group.kind}`)}>
-            <div className="global-search-group">{t(`globalSearch.${group.kind}`)} · {group.items.length}</div>
-            {group.shown.map(item => { const position = shown.indexOf(item); return <SearchResultRow key={`${item.kind}-${item.id}`} item={item} selected={position === current} status={resolveWindowStatus(item, unreachable, sessions)} onSelect={() => setSelected(position)} onOpen={() => choose(item)} />; })}
-            {group.items.length > group.shown.length && <div className="global-search-message">{t('globalSearch.more', { count: group.items.length - group.shown.length })}</div>}
-          </section>)}
-      </div><div className="global-search-footer" aria-live="polite">{loadingServers ? `${t('globalSearch.loading')} · ` : ''}{t('globalSearch.count', { count: matches.length })}{shown[current] ? ` · ${shown[current].title}` : ''} · {t('globalSearch.hint')}</div>
+      <div className="global-search-tabs" role="tablist" aria-label={t('globalSearch.categories')}>
+        {categories.map(kind => <button type="button" role="tab" aria-selected={activeCategory === kind} key={kind} onClick={() => changeCategory(kind)}>
+          <Chip tone={activeCategory === kind ? 'accent' : 'default'}>{t(`globalSearch.${kind}`)} {kind === 'all' ? matches.length : groups.find(group => group.kind === kind)?.items.length}</Chip>
+        </button>)}
+      </div>
+      {error && <Notice tone="danger" action={<button onClick={() => void refresh()}>{t('globalSearch.retry')}</button>}>{t('globalSearch.error')}</Notice>}
+      {failed.length > 0 && <div role="alert"><Notice tone="warning" action={<button onClick={retry}>{t('globalSearch.retry')}</button>}>{t('globalSearch.failed', { servers: failed.join(', ') })}</Notice></div>}
+      {loading ? <LoadingState message={t('globalSearch.loading')} />
+        : error && allProjects.length === 0 && allTasks.length === 0 ? null
+        : shown.length === 0 ? <EmptyState title={query.trim() ? t('globalSearch.noResults', { query }) : t('globalSearch.empty')} /> : null}
+      <SearchResultList id="global-search-results" label={t('globalSearch.results')}
+        groups={shownGroups.map(group => ({ key: group.kind, label: t(`globalSearch.${group.kind}`), count: group.items.length, items: group.shown, more: t('globalSearch.more', { count: group.items.length - group.shown.length }) }))}
+        renderItem={item => {
+          const position = shown.indexOf(item);
+          return <SearchResultRow key={`${item.kind}-${item.id}`} item={item} selected={position === current} status={resolveWindowStatus(item, unreachable, sessions)} onSelect={() => setSelected(position)} onOpen={() => choose(item)} />;
+        }} />
+      <div role="status" aria-live="polite" className="global-search-count">{t('globalSearch.count', { count: activeCategory === 'all' ? matches.length : groups.find(group => group.kind === activeCategory)?.items.length ?? 0 })}</div>
+      <div className="global-search-footer">{t('globalSearch.hint')}</div>
     </div>
-    <style>{` .global-search { display:flex; flex-direction:column; min-height:0; color:var(--text); } .global-search-header { display:flex; align-items:center; justify-content:space-between; padding:var(--space-3) var(--space-4); } .global-search-header h2 { margin:0; font-size:var(--font-md); } .global-search button { color:inherit; background:transparent; border:0; cursor:pointer; font:inherit; } .global-search button:hover { background:var(--bg-hover); } .global-search button:active { background:var(--bg-elevated); } .global-search button:focus-visible { outline:2px solid var(--accent); } .global-search input { margin:0 var(--space-4); padding:var(--space-3); border:1px solid var(--border); border-radius:var(--radius-md); background:var(--input-bg); color:var(--text); font:inherit; min-width:0; } .global-search input:focus-visible { outline:2px solid var(--accent); } .global-search-tabs { display:flex; gap:var(--space-1); overflow-x:auto; padding:var(--space-3) var(--space-4); border-bottom:1px solid var(--border); } .global-search-tabs button { flex-shrink:0; padding:var(--space-2); border-radius:var(--radius-sm); } .global-search-tabs button[aria-selected=true] { background:var(--bg-hover); font-weight:600; } .global-search-results { overflow-y:auto; min-height:0; max-height:50vh; } .global-search-group, .global-search-message, .global-search-footer { padding:var(--space-2) var(--space-4); color:var(--text-dim); font-size:var(--font-xs); } .global-search-row { display:flex; align-items:center; min-height:44px; cursor:pointer; padding:var(--space-2) var(--space-4); } .global-search-row[aria-selected=true] { background:var(--bg-hover); } .global-search-marker { width:var(--space-4); color:var(--accent); } .global-search-label { flex:1; display:flex; flex-direction:column; min-width:0; } .global-search-label strong, .global-search-label small { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; } .global-search-label small { color:var(--text-dim); } .global-search-footer { border-top:1px solid var(--border); } @media (max-width:768px) { .overlay-panel:has(.global-search) { width:100%; max-width:none !important; height:100dvh; max-height:100dvh; border-radius:0; padding-bottom:env(safe-area-inset-bottom) !important; } .global-search { height:100%; } .global-search-results { flex:1; max-height:none; } } `}</style>
   </Overlay>;
 }

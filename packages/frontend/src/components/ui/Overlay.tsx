@@ -1,7 +1,7 @@
 import { useEffect, useRef } from 'react';
 import type { CSSProperties, ReactNode, RefObject } from 'react';
 import { createPortal } from 'react-dom';
-import { useHotkey, useOverlayStack } from '../../hooks/useHotkeys';
+import { useHotkey, useHotkeyBindings, useOverlayStack, type HotkeyAction } from '../../hooks/useHotkeys';
 import { parseKeySpec } from '../../lib/hotkeys/keySpec';
 import { cycleFocus, getFocusableElements } from './overlayLogic';
 import { shouldCloseOnKey } from '../modalEscape';
@@ -17,7 +17,7 @@ interface OverlayProps {
   dismissOnBackdrop?: boolean;
   closeDisabled?: boolean;
   busy?: boolean;
-  toggleAction?: 'search.open';
+  toggleAction?: HotkeyAction;
   maxWidth?: number | string;
   maxHeight?: string;
   style?: CSSProperties;
@@ -26,7 +26,10 @@ interface OverlayProps {
 export function Overlay({ open, onClose, labelledBy, children, variant = 'dialog', surface = 'elevated', initialFocusRef, dismissOnBackdrop = true, closeDisabled = false, busy = false, toggleAction, maxWidth = 500, maxHeight = '90vh', style }: OverlayProps) {
   const ref = useRef<HTMLDivElement>(null);
   const { id, isTop } = useOverlayStack(open, ref, true);
-  useHotkey({ action: 'search.open', scope: 'overlay', overlayId: id, handler: () => onClose() }, open && toggleAction === 'search.open');
+  const { bindings } = useHotkeyBindings();
+  const spec = toggleAction ? bindings[toggleAction] : null;
+  const spaceChord = spec?.steps.length === 2 && spec.steps.every(step => step.key === 'space');
+  useHotkey({ action: toggleAction ?? 'local:disabled-toggle', scope: 'overlay', overlayId: id, when: spaceChord ? 'not-editable' : 'always', handler: () => onClose() }, open && !!toggleAction);
   useHotkey({ action: 'local:overlay-close', spec: parseKeySpec('Escape'), scope: 'overlay', overlayId: id, handler: event => { if (shouldCloseOnKey(event)) onClose(); } }, open && !closeDisabled && !busy);
 
   useEffect(() => {
