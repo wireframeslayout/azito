@@ -1,3 +1,4 @@
+import { diagnoseLocalNetworkError, LocalNetworkPermissionError } from '../localNetworkDiagnosis';
 import { AGENT_HOST_RESOURCES_PATH, AgentResourcesOutdatedError, parseHostResourceSample, type HostResourceSample } from '../../../shared/os/hostResources';
 import { EventEmitter } from 'events';
 import WebSocket, { createWebSocketStream } from 'ws';
@@ -133,7 +134,7 @@ export class AgentTransport implements IServerTransport, IMuxTransport, IHostBou
   private appliedSeq = 0;
 
   /** `hostProfile`: the agent's OS / architecture as recorded; null for an agent registered before it was (treated as a Unix one). */
-  constructor(host: string, port: number, token: string, muxRuntime: MuxRuntime, private serverName: string, readonly hostProfile: HostProfile | null) {
+  constructor(host: string, port: number, token: string, muxRuntime: MuxRuntime, private serverName: string, readonly hostProfile: HostProfile | null, private diagnosisHost?: { platform: string; isLaunchd: boolean }) {
     this.token = token;
     this.muxRuntime = muxRuntime;
     this.baseUrl = `http://${host}:${port}`;
@@ -497,6 +498,10 @@ export class AgentTransport implements IServerTransport, IMuxTransport, IHostBou
       }
       return { status: res.status, text };
     } catch (err) {
+      if (this.diagnosisHost) {
+        const diagnosis = diagnoseLocalNetworkError(err, this.diagnosisHost.platform, this.diagnosisHost.isLaunchd);
+        if (diagnosis instanceof LocalNetworkPermissionError) throw diagnosis;
+      }
       const reason = classifyFetchError(err);
       if (!reason) throw err;
       if (seq > this.appliedSeq) {

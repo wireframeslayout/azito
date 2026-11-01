@@ -121,7 +121,11 @@
     "osLabel": "OS",
     "osUnknown": "Unknown",
     "osUnknownHint": "The OS of this agent has not been recorded yet (it was registered before the OS was kept). It is treated as a Unix host until the agent is updated or reached again.",
-    "os": { "linux": "Linux", "macos": "macOS", "windows": "Windows" },
+    "os": {
+      "linux": "Linux",
+      "macos": "macOS",
+      "windows": "Windows"
+    },
     "agentVersionLabel": "Agent version",
     "browserSupport": "Browser runtime",
     "supported": "Supported",
@@ -343,5 +347,9 @@
     "updateConfirmTitle": "Update misao?",
     "updateConfirmMessage": "misao on this server is stopped to update it. Every running pane on this server ends and agent work in them is interrupted. Finish what you need before continuing.",
     "updateConfirmLabel": "Stop and update"
+  },
+  "localNetwork": {
+    "guidance": "Local Network permission on macOS may be blocking this connection. Try the agent’s Tailscale address, or check System Settings › Privacy & Security › Local Network for this hub and retry. The permission and its effect have not yet been verified.",
+    "detail": "Original error"
   }
 }

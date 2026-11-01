@@ -37,6 +37,13 @@ describe('AgentTransport circuit breaker', () => {
     expect(err).toMatchObject({ serverName: 'srv7', reason });
   });
 
+  it('reports a possible local network permission failure before classifying the fetch error', async () => {
+    const cause = Object.assign(new Error('connect EHOSTUNREACH 10.0.0.1:4021'), { code: 'EHOSTUNREACH', address: '10.0.0.1' });
+    fetchMock.mockRejectedValueOnce(new TypeError('fetch failed', { cause }));
+    const transport = new AgentTransport('10.0.0.1', 4021, 'tok', 'system', 'srv7', null, { platform: 'darwin', isLaunchd: true });
+    await expect(transport.fetchHealth()).rejects.toMatchObject({ code: 'macos_local_network_permission', detail: cause.message });
+  });
+
   it('maps a TimeoutError abort to reason timeout', async () => {
     fetchMock.mockRejectedValueOnce(new DOMException('timed out', 'TimeoutError'));
     await expect(make().exec('echo')).rejects.toMatchObject({ reason: 'timeout' });

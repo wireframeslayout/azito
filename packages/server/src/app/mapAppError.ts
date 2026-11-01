@@ -1,3 +1,4 @@
+import { LocalNetworkPermissionError } from '../modules/servers/localNetworkDiagnosis';
 import { MuxDriverUnavailableError, MuxOperationUnsupportedError } from '../modules/tmux/MuxCapabilityError';
 import { HostProfileError } from '../shared/os/hostProfile';
 import { AgentUnreachableError } from '../modules/servers/transport/AgentUnreachableError';
@@ -11,6 +12,7 @@ export interface AppErrorResponse {
 
 /** Maps domain errors that have a dedicated HTTP answer; null means "use the default error handler". */
 export function mapAppError(err: unknown): AppErrorResponse | null {
+  if (err instanceof LocalNetworkPermissionError) return { status: 503, body: { error: err.message, code: err.code, detail: err.detail } };
   if (err instanceof MuxDriverUnavailableError) {
     return { status: 503, body: { error: 'mux_driver_unavailable', kind: err.kind, reason: err.reason } };
   }
