@@ -1,3 +1,5 @@
+import { WorkspaceCatalogProvider } from '../hooks/useWorkspaceCatalog';
+import { CrossProjectNavigationProvider } from '../hooks/useCrossProjectNavigation';
 import { Suspense, lazy } from 'react';
 import { useLocation } from 'react-router-dom';
 import ProjectSidebar from './ProjectSidebar';
@@ -36,7 +38,9 @@ export default function Layout() {
     <HotkeyProvider>
     <ConfirmProvider>
     <LeftBehindProvider>
+    <WorkspaceCatalogProvider>
     <WorkspaceTargetsProvider>
+    <CrossProjectNavigationProvider>
       <AgentActivityProvider>
       <NotificationCenterProvider>
       <ServerResourcesProvider servers={servers}>
@@ -106,7 +110,9 @@ export default function Layout() {
       </ServerResourcesProvider>
       </NotificationCenterProvider>
       </AgentActivityProvider>
+    </CrossProjectNavigationProvider>
     </WorkspaceTargetsProvider>
+    </WorkspaceCatalogProvider>
     </LeftBehindProvider>
     </ConfirmProvider>
     </HotkeyProvider>

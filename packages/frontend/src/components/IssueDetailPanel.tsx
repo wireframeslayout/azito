@@ -2,7 +2,7 @@ import { useCallback, useEffect, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { api } from '../api/client';
 import { timeAgo } from '../utils/time';
-import MarkdownRenderer, { mdStyles } from './MarkdownRenderer';
+import MarkdownRenderer from './MarkdownRenderer';
 import { LoadingState } from './ui';
 
 interface RemoteIssue { number: number; title: string; body: string | null; state: string; labels: { name: string; color: string }[]; user: { login: string; avatarUrl: string }; createdAt: string; updatedAt: string; htmlUrl: string; }
@@ -42,7 +42,6 @@ export default function IssueDetailPanel({
 
   return (
     <div style={{ height: '100%', display: 'flex', flexDirection: 'column', background: 'var(--bg)' }}>
-      <style>{mdStyles}</style>
       {/* Header */}
       <div style={{ padding: '12px 24px', borderBottom: '1px solid var(--border)', background: 'var(--bg-card)', flexShrink: 0 }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 8, flexWrap: 'wrap' }}>
@@ -94,9 +93,9 @@ export default function IssueDetailPanel({
       )}
 
       {/* Body */}
-      <div className="md-content" style={{ flex: 1, overflowY: 'auto', padding: 24 }}>
+      <div style={{ flex: 1, overflowY: 'auto', padding: 24 }}>
         {issue.body ? (
-          <MarkdownRenderer content={issue.body} style={{ maxWidth: 800 }} />
+          <MarkdownRenderer content={issue.body} />
         ) : (
           <div style={{ color: 'var(--text-dim)', fontStyle: 'italic', fontSize: 'var(--font-base)' }}>{t('common:states.noDescription')}</div>
         )}

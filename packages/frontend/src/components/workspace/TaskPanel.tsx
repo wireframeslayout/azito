@@ -13,7 +13,7 @@ import type { MiniTab } from '../ui';
 import { useAgentActivity } from '../../hooks/useAgentActivity';
 import TaskRefBadges from '../TaskRefBadges';
 import TaskLogView from '../TaskLogView';
-import MarkdownRenderer, { mdStyles } from '../MarkdownRenderer';
+import MarkdownRenderer from '../MarkdownRenderer';
 import { TerminalContainer, viewModeStorageKey, type WindowViewMode } from '../TerminalContainer';
 import { DiffViewer, CommitList } from '../diff';
 import { Chip } from '../ui';
@@ -1306,7 +1306,6 @@ export default function TaskPanel({
           )}
           {taskData.description ? (
             <>
-              <style>{mdStyles}</style>
               <MarkdownRenderer content={taskData.description} />
             </>
           ) : (
@@ -1716,7 +1715,6 @@ export default function TaskPanel({
           </div>
           {task.planMarkdown && (
             <div style={{ padding: '0 16px 12px', maxHeight: 400, overflowY: 'auto' }}>
-              <style>{mdStyles}</style>
               <MarkdownRenderer content={task.planMarkdown} />
             </div>
           )}

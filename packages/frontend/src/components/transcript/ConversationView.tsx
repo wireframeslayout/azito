@@ -401,6 +401,7 @@ export default function ConversationView({ windowId, sessionId, agentType, paneI
       <div style={{ flex: 1, minHeight: 0, position: 'relative' }}>
         <div
           ref={containerRef}
+          className={style === 'rail' ? 'transcript-rail' : style === 'bubble' ? 'transcript-bubble' : undefined}
           role="region"
           aria-label={t('conversation.logLabel')}
           onScroll={handleScroll}

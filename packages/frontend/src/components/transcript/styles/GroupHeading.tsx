@@ -23,7 +23,7 @@ interface GroupHeadingProps {
 export function GroupHeading({ isUser, timeLabel, agentLabel, model }: GroupHeadingProps) {
   const { t } = useTranslation('transcript');
   return (
-    <div style={{ display: 'flex', alignItems: 'center', gap: 8, width: '100%', marginBottom: 6 }}>
+    <div style={{ display: 'flex', alignItems: 'center', gap: 'var(--space-2)', width: '100%', marginBottom: 'var(--space-2)' }}>
       <span
         aria-hidden="true"
         style={{

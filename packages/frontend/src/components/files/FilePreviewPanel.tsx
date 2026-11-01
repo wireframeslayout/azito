@@ -4,7 +4,7 @@ import { api, fetchBlob } from '../../api/client';
 import { useToast } from '../../hooks/useToast';
 import { useServerPath } from '../../hooks/useServerPath';
 import { fileDisplayName } from '../../lib/serverPath';
-import MarkdownRenderer, { mdStyles } from '../MarkdownRenderer';
+import MarkdownRenderer from '../MarkdownRenderer';
 import { Icon } from '../ui/Icon';
 import { LoadingState } from '../ui';
 
@@ -135,7 +135,6 @@ function MarkdownFileView({
   if (mode === 'preview') {
     return (
       <div style={{ padding: '24px 32px', maxWidth: 900, margin: '0 auto' }}>
-        <style>{mdStyles}</style>
         <MarkdownRenderer content={content} />
       </div>
     );
@@ -155,7 +154,6 @@ function MarkdownFileView({
         />
       </div>
       <div style={{ flex: 1, overflow: 'auto', padding: '24px 32px' }}>
-        <style>{mdStyles}</style>
         <MarkdownRenderer content={content} />
       </div>
     </div>
