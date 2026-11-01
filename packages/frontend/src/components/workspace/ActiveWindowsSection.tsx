@@ -1,4 +1,4 @@
-import { activeWindowTitleInput } from '../../lib/windowDisplay';
+import type { ActivityTitleData } from '../../lib/windowDisplay';
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { Icon } from '../ui/Icon';
@@ -7,7 +7,6 @@ import { useActiveWindowRows } from '../../hooks/useActiveWindowRows';
 import { BrailleSpinner, BlockedDot, FinishedIndicator } from '../ui/WindowActivityIndicator';
 import { formatRelativeTime } from '../../utils/time';
 import { buildWindowTaskMap, lookupWindowTask } from '../../lib/windowTask';
-import { resolveWindowTitle, formatWindowTitleLine } from '@azito/shared';
 import { selectTaskTerminal } from './TaskPanel';
 import { useOpenTerminalTarget } from '../../hooks/useTerminalTargetOpener';
 import type { TerminalRef } from '../../lib/terminalRef';
@@ -32,16 +31,17 @@ function saveUserCollapsed(value: boolean): void {
 }
 
 export interface ActiveWindowsSectionProps {
+  titleData: ActivityTitleData;
   connectPane: (refOrServerName: TerminalRef | string, targetOrProjectId?: string | number, projectId?: number) => void;
   openTask: (taskId: number, title: string, projectId?: number) => void;
   taskWindows: Array<{ serverName: string; tmuxTarget: string; taskId: number }>;
 }
 
-export default function ActiveWindowsSection({ connectPane, openTask, taskWindows }: ActiveWindowsSectionProps) {
+export default function ActiveWindowsSection({ titleData, connectPane, openTask, taskWindows }: ActiveWindowsSectionProps) {
   const openTerminal = useOpenTerminalTarget(connectPane);
   const { t } = useTranslation(['workspace', 'tasks']);
   const { dismissFinished } = useAgentActivity();
-  const { rows, totalCount: count } = useActiveWindowRows();
+  const { rows, totalCount: count } = useActiveWindowRows(titleData);
   const windowTaskMap = useMemo(() => buildWindowTaskMap(taskWindows), [taskWindows]);
 
   const [userCollapsed, setUserCollapsed] = useState<boolean>(loadUserCollapsed);
@@ -120,7 +120,7 @@ export default function ActiveWindowsSection({ connectPane, openTask, taskWindow
         <div style={{ flex: 1, overflowY: 'auto', padding: '0 4px 8px' }}>
           {rows.map((row) => {
             const taskId = row.taskId ?? lookupWindowTask(windowTaskMap, row.serverName, row.target);
-            const displayName = formatWindowTitleLine(resolveWindowTitle(activeWindowTitleInput(row)));
+            const displayName = row.title;
             const isFinished = row.status === 'finished';
             const isBlocked = !isFinished && row.activityStatus === 'blocked';
             const dismissIfFinished = () => {

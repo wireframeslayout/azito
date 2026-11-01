@@ -15,6 +15,7 @@ import { recentItems } from '../../lib/globalSearch/recentItems';
 import { buildSearchIndex, searchIndex, type SearchItem, type SearchKind } from '../../lib/globalSearch/searchIndex';
 import { paths } from '../../paths';
 import { findSessionWindow } from '../../lib/windowMatch';
+import { buildWindowIndex } from '../../lib/windowDisplay';
 import type { Session } from '../../pages/workspace/types';
 import { SearchResultRow } from './SearchResultRow';
 import { Overlay } from '../ui/Overlay';
@@ -60,7 +61,7 @@ function GlobalSearchPalette({ onClose, fallbackFocusTo }: { onClose: () => void
   const { openTask, openTerminal } = useCrossProjectNavigation();
   const { openedAt } = useRecentTasks();
   const rail = useProjectRail();
-  const { rows } = useActiveWindowRows();
+  const { rows } = useActiveWindowRows({ windowById: buildWindowIndex(allProjects, allTasks, null), taskById: new Map(allTasks.map(task => [task.id, task])) });
   const navigate = useNavigate();
   const isMobile = useIsMobile();
   const keyboardVisible = useVirtualKeyboard();

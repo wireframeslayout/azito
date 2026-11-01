@@ -83,6 +83,10 @@ export class MisaoMuxClient implements IMuxClient {
     return this.listWorkspaces(server);
   }
 
+  async prepareWorkspace(_server: ServerConfig, name: string, _extraEnv?: Record<string, string>): Promise<void> {
+    await this.rpc.request('workspace.create', { name });
+  }
+
   async openWorkspace(server: ServerConfig, name: string, opts?: { command?: string; windowName?: string; exactName?: boolean; extraEnv?: Record<string, string>; program?: PaneProgram }): Promise<{ ref: MuxRef; result: ExecResult; windowName?: string }> {
     await this.rpc.request('workspace.create', { name });
     const windowName = opts?.exactName && opts.windowName ? opts.windowName : generateWindowName(opts?.windowName || 'win');

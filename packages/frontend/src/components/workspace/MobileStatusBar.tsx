@@ -1,4 +1,4 @@
-import { activeWindowTitleInput } from '../../lib/windowDisplay';
+import type { ActivityTitleData } from '../../lib/windowDisplay';
 import { useMemo, useState, type CSSProperties } from 'react';
 import { useTranslation } from 'react-i18next';
 import { useActiveWindowRows } from '../../hooks/useActiveWindowRows';
@@ -8,7 +8,6 @@ import { BrailleSpinner, BlockedDot, FinishedIndicator } from '../ui/WindowActiv
 import { formatRelativeTime } from '../../utils/time';
 import { openActivityTarget } from '../../lib/activityOpen';
 import { useOpenTerminalTarget } from '../../hooks/useTerminalTargetOpener';
-import { resolveWindowTitle, formatWindowTitleLine } from '@azito/shared';
 import type { ConnectPaneFn } from '../../lib/terminalRef';
 import { groupRunningRows, readKeyFor, pruneStaleReadKeys } from '../../lib/activityPillLogic';
 import { FINISHED_TTL_MS } from '../../hooks/useAgentActivity';
@@ -29,6 +28,7 @@ import { ServerHealthSheet } from './ServerHealthSheet';
 const BAR_HEIGHT = 26;
 
 interface MobileStatusBarProps {
+  titleData: ActivityTitleData;
   allTasks: Task[];
   openTask: (taskId: number, title: string, projectId?: number) => void;
   connectPane: ConnectPaneFn;
@@ -78,10 +78,10 @@ const rowTitleStyle: CSSProperties = {
   whiteSpace: 'nowrap',
 };
 
-export function MobileStatusBar({ allTasks, openTask, connectPane }: MobileStatusBarProps) {
+export function MobileStatusBar({ titleData, allTasks, openTask, connectPane }: MobileStatusBarProps) {
   const openTerminal = useOpenTerminalTarget(connectPane);
   const { t } = useTranslation(['workspace', 'common']);
-  const { rows } = useActiveWindowRows();
+  const { rows } = useActiveWindowRows(titleData);
   const [open, setOpen] = useState(false);
   // セッション内既読管理（spec: localStorage不要）。ドロップアップを開いた時点の完了行キーを
   // 既読にし、以後バッジの未読数から外す。
@@ -106,7 +106,7 @@ export function MobileStatusBar({ allTasks, openTask, connectPane }: MobileStatu
         key: groupKey,
         taskId: row.taskId,
         projectId: row.projectId,
-        title: formatWindowTitleLine(resolveWindowTitle(activeWindowTitleInput(row))),
+        title: row.title,
         meta: task ? t(`common:status.${task.status}`) : undefined,
         isBlocked,
         row,
@@ -154,7 +154,7 @@ export function MobileStatusBar({ allTasks, openTask, connectPane }: MobileStatu
   const handleFinishedRowOpen = (row: ActiveWindowRow) => {
     openActivityTarget(
       { taskId: row.taskId, serverName: row.serverName, windowId: row.windowId, target: row.target, projectId: row.projectId },
-      formatWindowTitleLine(resolveWindowTitle(activeWindowTitleInput(row))),
+      row.title,
       openTask,
       openTerminal,
     );
@@ -209,7 +209,7 @@ export function MobileStatusBar({ allTasks, openTask, connectPane }: MobileStatu
               {finishedRows.map((row) => (
                 <button key={row.key} type="button" className="row-hover" onClick={() => handleFinishedRowOpen(row)} style={rowButtonStyle}>
                   <FinishedIndicator />
-                  <span style={rowTitleStyle}>{formatWindowTitleLine(resolveWindowTitle(activeWindowTitleInput(row)))}</span>
+                  <span style={rowTitleStyle}>{row.title}</span>
                   {row.finishedAt != null && (
                     <span style={{ flexShrink: 0, fontSize: 'var(--font-2xs)', color: 'var(--success)' }}>
                       {formatRelativeTime(row.finishedAt)}

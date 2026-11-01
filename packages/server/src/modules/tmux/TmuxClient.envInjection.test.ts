@@ -34,6 +34,19 @@ function envValue(args: string[], key: string): string | undefined {
 }
 
 describe('TmuxClient AZITO_URL injection', () => {
+  it('prepares a session with its initial window and isolation environment', async () => {
+    const calls: string[][] = [];
+    const client = makeClient(async (args) => { calls.push(args); return { stdout: '', stderr: '', code: 0 }; });
+    await client.prepareWorkspace(srv, 'prepared', { AZITO_UI_TOKEN: '' });
+    expect(calls[0]).toEqual(expect.arrayContaining(['new-session', '-d', '-s', 'prepared', '-n']));
+    expect(envValue(calls[0], 'AZITO_UI_TOKEN')).toBe('');
+  });
+
+  it('rejects workspace preparation when an agent reports a failed new-session', async () => {
+    const client = makeClient(async () => ({ stdout: '', stderr: 'duplicate session', code: 1 }));
+    await expect(client.prepareWorkspace(remoteSrv, 'prepared')).rejects.toThrow('duplicate session');
+  });
+
   it('createSession on a local server uses the loopback URL', async () => {
     const calls: string[][] = [];
     const client = makeClient(async (args) => {

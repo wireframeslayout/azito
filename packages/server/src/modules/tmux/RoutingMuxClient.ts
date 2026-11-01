@@ -103,6 +103,10 @@ export class RoutingMuxClient implements IMuxClient {
     return perKind.flat();
   }
 
+  async prepareWorkspace(server: ServerConfig, name: string, extraEnv?: Record<string, string>): Promise<void> {
+    await this.forKind(server, server.defaultMux).prepareWorkspace(server, name, extraEnv);
+  }
+
   async openWorkspace(server: ServerConfig, name: string, opts?: Parameters<IMuxClient['openWorkspace']>[2]) {
     return this.forKind(server, opts?.kind).openWorkspace(server, name, opts);
   }

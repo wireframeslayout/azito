@@ -1,9 +1,11 @@
 import { useMemo } from 'react';
+import { resolveActivityTitle, type ActivityTitleData } from '../lib/windowDisplay';
 import { useAgentActivity } from './useAgentActivity';
 import { activityKey, activityKeyForEntry } from '../lib/finishedWindows';
 import type { FinishedEntry } from '../lib/finishedWindows';
 
 export interface ActiveWindowRow {
+  title: string;
   key: string;
   serverName: string;
   target: string;
@@ -23,13 +25,14 @@ export interface ActiveWindowRow {
   paneName?: string;
 }
 
-export function useActiveWindowRows() {
+export function useActiveWindowRows(data: ActivityTitleData) {
   const { entries, finishedEntries } = useAgentActivity();
 
   const rows = useMemo<ActiveWindowRow[]>(() => {
     const running: ActiveWindowRow[] = Array.from(entries.values())
       .filter((e) => e.running)
       .map((e) => ({
+        title: resolveActivityTitle(e, data),
         key: activityKey(e.serverName, e.target, e.windowId),
         serverName: e.serverName,
         target: e.target,
@@ -51,6 +54,7 @@ export function useActiveWindowRows() {
     const finishedRows: ActiveWindowRow[] = finishedEntries
       .filter((e) => !runningKeys.has(activityKeyForEntry(e)))
       .map((e) => ({
+        title: resolveActivityTitle(e, data),
         key: activityKeyForEntry(e),
         serverName: e.serverName,
         target: e.target,
@@ -69,7 +73,7 @@ export function useActiveWindowRows() {
         paneName: e.paneName,
       }));
     return [...running, ...finishedRows];
-  }, [entries, finishedEntries]);
+  }, [entries, finishedEntries, data]);
 
   const blockedCount = rows.filter((r) => r.status === 'running' && r.activityStatus === 'blocked').length;
 
