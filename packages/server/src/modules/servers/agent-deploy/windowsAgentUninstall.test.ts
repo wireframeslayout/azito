@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest';
+import { createHash } from 'node:crypto';
 import { powershellDialect } from '../../../shared/os/shellDialect';
 import { buildTaskXml } from '../../../shared/os/taskScheduler/taskDefinition';
 import { buildMisaoTaskXml, misaoWindowsLayout } from '../../system/misao/misaoWindowsTask';
@@ -7,7 +8,7 @@ import { MISAO_SERVICE } from '../../system/misao/misaoPaths';
 import { windowsMisaoPipe } from '../transport/agentMisaoSocket';
 import { DEFAULT_WINDOWS_AGENT_OPTIONS, MISAO_WINDOWS_TASK_NAME, type WindowsAgentOptions } from './windowsAgentConfig';
 import { WindowsAgentDeployer, windowsAgentEnvFile, type WindowsSshExec } from './WindowsAgentDeployer';
-import { FakeWindowsHost } from './testing/fakeWindowsHost';
+import { decodeEncodedCommand, FakeWindowsHost } from './testing/fakeWindowsHost';
 import { harnessMcpScript } from './windowsHarnessMcpUninstall';
 import { WINDOWS_HUB_TASK_NAME, uninstallWindowsAgent, type UninstallStepId, type WindowsUninstallHost, type WindowsUninstallResult } from './windowsAgentUninstall';
 import { decideMisaoStop, decidePathChains, folderScript, leftoverProcessesScript, misaoHolderScript, misaoStopScript, parseFolderOutput, parseLeftoverOutput, parseMisaoHolderOutput, parsePathChainOutput, pathChainScript, tailBelow } from './windowsAgentUninstallScripts';
@@ -968,7 +969,9 @@ describe('WindowsAgentDeployer.uninstall', () => {
   it('runs the steps through the SSH session, the task through schtasks, and leaves the other task alone', async () => {
     const fake = new FakeWindowsHost({ sha256: 'a'.repeat(64), existingTask: 'running' });
     fake.registeredXml = AGENT_XML;
+    const commands: string[] = [];
     const exec: WindowsSshExec = async (h, command) => {
+      if (command.includes('-EncodedCommand')) commands.push(decodeEncodedCommand(command));
       const result = await fake.exec(h, command);
       const last = fake.calls[fake.calls.length - 1];
       if (last?.kind !== 'script') return result;
@@ -983,6 +986,11 @@ describe('WindowsAgentDeployer.uninstall', () => {
     const result = await deployer.uninstall('h', info, { removeMisao: false });
     expect(outcomes(result)).toEqual({ task: 'done', processes: 'absent', firewall: 'absent', folder: 'done' });
     expect(fake.taskState).toBe('absent');
+    const [file, bytes] = [...fake.uploaded.entries()].find(([name]) => name.startsWith('.azito-script-'))!;
+    const loader = commands.find((command) => command.includes('[IO.File]::ReadAllBytes'))!;
+    expect(loader).toContain(createHash('sha256').update(bytes).digest('hex'));
+    expect(loader.indexOf('Remove-Item -LiteralPath $file')).toBeLessThan(loader.indexOf('Invoke-Expression'));
+    expect(commands.some((command) => command.includes(`Remove-Item -LiteralPath '${HOME}\\${file}'`))).toBe(true);
     const verbs = fake.calls.filter((c) => c.kind === 'schtasks').map((c) => c.schtasksArgs![0]);
     expect(verbs).toContain('/End');
     expect(verbs).toContain('/Delete');
