@@ -13,7 +13,6 @@ import LocalMenu from './LocalMenu';
 import LocalMenuPopover from './LocalMenuPopover';
 import { ProjectAvatar } from '../ui/ProjectAvatar';
 import { RightPanel } from './RightPanel';
-import { RightPanelToggle } from './RightPanelToggle';
 
 interface ProjectItem {
   id: number;
@@ -79,6 +78,8 @@ interface WorkspaceLayoutProps {
   rightPanelOpen?: boolean;
   onRightPanelOpenChange?: (open: boolean) => void;
   rightPanelActions?: React.ReactNode;
+  rightPanelId?: string;
+  rightPanelToggleRef?: React.RefObject<HTMLButtonElement | null>;
 }
 
 export default function WorkspaceLayout({
@@ -110,10 +111,11 @@ export default function WorkspaceLayout({
   rightPanelOpen,
   onRightPanelOpenChange,
   rightPanelActions,
+  rightPanelId,
+  rightPanelToggleRef,
 }: WorkspaceLayoutProps) {
   const { t } = useTranslation(['workspace', 'common', 'projects']);
-  const rightPanelId = useId();
-  const rightPanelToggleRef = useRef<HTMLButtonElement>(null);
+  const generatedRightPanelId = useId();
   const navigate = useNavigate();
   const currentProjectItem = allProjects.find((p) => p.id === project?.id) ?? null;
   const projectMenu = useContextMenu();
@@ -334,14 +336,9 @@ export default function WorkspaceLayout({
       </div>
 
       {!mobile && rightPanel != null && rightPanelOpen !== undefined && onRightPanelOpenChange && (
-        <>
-          <div hidden={rightPanelOpen}>
-            <RightPanelToggle buttonRef={rightPanelToggleRef} open={false} controls={rightPanelId} onToggle={() => onRightPanelOpenChange(true)} />
-          </div>
-          <RightPanel id={rightPanelId} title={t('workspace:rightPanel.title')} open={rightPanelOpen} onOpenChange={onRightPanelOpenChange} toggleRef={rightPanelToggleRef} actions={rightPanelActions}>
-            {rightPanel}
-          </RightPanel>
-        </>
+        <RightPanel id={rightPanelId ?? generatedRightPanelId} title={t('workspace:rightPanel.title')} open={rightPanelOpen} onOpenChange={onRightPanelOpenChange} toggleRef={rightPanelToggleRef} actions={rightPanelActions}>
+          {rightPanel}
+        </RightPanel>
       )}
 
       {modals}
