@@ -35,7 +35,7 @@ jobs:
         run: npx -w packages/server tsc -p tsconfig.scripts.json
 
       - name: Type check (server Vitest config)
-        run: npx -w packages/server tsc -p tsconfig.vitest.json --noEmit
+        run: npx -w packages/server tsc -p tsconfig.vitest.json
 
       - name: Type check (frontend)
         run: npx -w packages/frontend tsc --noEmit
