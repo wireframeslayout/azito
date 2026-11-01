@@ -1,5 +1,8 @@
 import { parseEnv } from 'util';
 import { describe, expect, it } from 'vitest';
+import { buildEndProcessesScript } from '../../../shared/os/windowsProcessSweep';
+import { compressPowerShellScript } from '../../../shared/os/compressPowerShellScript';
+import { powershellDialect } from '../../../shared/os/shellDialect';
 import { DEFAULT_WINDOWS_AGENT_OPTIONS } from './windowsAgentConfig';
 import { FakeWindowsHost } from './testing/fakeWindowsHost';
 import { WindowsAgentDeployer, buildAgentEnvFile, powershellErrorText, quoteDotenvValue, windowsAgentLayout } from './WindowsAgentDeployer';
@@ -91,10 +94,7 @@ describe('the process sweep script', () => {
     expect(script).not.toMatch(/Get-CimInstance|Invoke-CimMethod/);
   });
 
-  it('fits the SSH command limit with a long agent path', async () => {
-    const { buildEndProcessesScript } = await import('../../../shared/os/windowsProcessSweep');
-    const { compressPowerShellScript } = await import('../../../shared/os/compressPowerShellScript');
-    const { powershellDialect } = await import('../../../shared/os/shellDialect');
+  it('fits the SSH command limit with a long agent path', () => {
     const body = buildEndProcessesScript({ image: 'node.exe', argument: `--env-file=C:\\${'a'.repeat(240)}\\agent.env`, label: 'agent', endParentConhost: true });
     expect(powershellDialect.wrapScript(compressPowerShellScript(body)).length).toBeLessThanOrEqual(8191);
   });
