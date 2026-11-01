@@ -1,3 +1,6 @@
+import { parseStrictBody } from '../tmux/routes/createBodies';
+import { nameBody, keysBody, paneBody } from '../tmux/routes/actionBodies';
+import { projectWindowBody, projectSessionBody, taskWindowBody, updateWindowBody, launchAgentBody, forceBody } from './windowBodies';
 import type { FastifyPluginCallback } from 'fastify';
 import { resourceCheckBody, type ResourceGuard, type ResourceUnavailable } from '../servers/resources/ResourceGuard';
 import { workerStartsAsProgram } from '../../shared/os/hostFeature';
@@ -144,7 +147,9 @@ const windowsRoutes: FastifyPluginCallback<WindowsRouteOptions> = (fastify, opts
       const id = parseInt(request.params.id, 10);
       if (!projectRepo.findById(id))
         return reply.status(404).send({ error: 'Project not found' });
-      const body = request.body as Record<string, unknown>;
+      const parsedBody = parseStrictBody(projectWindowBody, request.body);
+      if (!parsedBody.ok) return reply.status(400).send(parsedBody.body);
+      const body = parsedBody.data;
       const serverName = body['server_name'] as string | undefined;
       let tmuxTarget = body['tmux_target'] as string | undefined;
       const refJson = body['ref'] as string | undefined;
@@ -228,7 +233,9 @@ const windowsRoutes: FastifyPluginCallback<WindowsRouteOptions> = (fastify, opts
       const id = parseInt(request.params.id, 10);
       if (!projectRepo.findById(id))
         return reply.status(404).send({ error: 'Project not found' });
-      const body = request.body as Record<string, unknown>;
+      const parsedBody = parseStrictBody(projectSessionBody, request.body);
+      if (!parsedBody.ok) return reply.status(400).send(parsedBody.body);
+      const body = parsedBody.data;
       const serverName = body['server_name'] as string | undefined;
       const session = body['session'] as string | undefined;
       if (!serverName || !session)
@@ -300,7 +307,9 @@ const windowsRoutes: FastifyPluginCallback<WindowsRouteOptions> = (fastify, opts
       const id = parseInt(request.params.id, 10);
       if (!taskRepo.findById(id))
         return reply.status(404).send({ error: 'Task not found' });
-      const body = request.body as Record<string, unknown>;
+      const parsedBody = parseStrictBody(taskWindowBody, request.body);
+      if (!parsedBody.ok) return reply.status(400).send(parsedBody.body);
+      const body = parsedBody.data;
       const serverName = body['server_name'] as string | undefined;
       let tmuxTarget = body['tmux_target'] as string | undefined;
       const refJson = body['ref'] as string | undefined;
@@ -390,7 +399,9 @@ const windowsRoutes: FastifyPluginCallback<WindowsRouteOptions> = (fastify, opts
       const win = windowRepo.findById(id);
       if (!win) return reply.status(404).send({ error: 'Window not found' });
 
-      const body = request.body as Record<string, unknown>;
+      const parsedBody = parseStrictBody(updateWindowBody, request.body);
+      if (!parsedBody.ok) return reply.status(400).send(parsedBody.body);
+      const body = parsedBody.data;
       const data: Record<string, unknown> = {};
       if ('label' in body) {
         // The label edit is the user's own; clearing it hands the title back to the automatic sources.
@@ -456,7 +467,9 @@ const windowsRoutes: FastifyPluginCallback<WindowsRouteOptions> = (fastify, opts
         throw new HostProfileError('unsupported_os', 'Launching an agent in an existing window is not available on Windows hosts: an agent is started in a new window (the window is created with the agent as its first pane).');
       }
 
-      const body = request.body as Record<string, unknown>;
+      const parsedBody = parseStrictBody(launchAgentBody, request.body);
+      if (!parsedBody.ok) return reply.status(400).send(parsedBody.body);
+      const body = parsedBody.data;
       const command = (body['command'] as string | undefined)?.trim();
       if (!command)
         return reply.status(400).send({ error: 'command required' });
@@ -535,7 +548,9 @@ const windowsRoutes: FastifyPluginCallback<WindowsRouteOptions> = (fastify, opts
       const srv = serverRepo.findByName(win.serverName);
       if (!srv) return reply.status(404).send({ error: 'Server not found' });
 
-      const force = (request.body as Record<string, unknown> | null)?.['force'] === true;
+      const parsedBody = parseStrictBody(forceBody, request.body);
+      if (!parsedBody.ok) return reply.status(400).send(parsedBody.body);
+      const force = parsedBody.data.force === true;
       let resourceSkipped: ResourceUnavailable | null = null;
       if (opts.resourceGuard && !force) {
         const status = await opts.resourceGuard.check(srv);
@@ -693,7 +708,9 @@ const windowsRoutes: FastifyPluginCallback<WindowsRouteOptions> = (fastify, opts
       const { window: win, ref } = resolveWindowById(windowRepo, id);
       const srv = serverRepo.findByName(win.serverName);
       if (!srv) return reply.status(404).send({ error: 'Server not found' });
-      const { name } = request.body as { name?: string };
+      const parsedBody = parseStrictBody(nameBody, request.body);
+      if (!parsedBody.ok) return reply.status(400).send(parsedBody.body);
+      const { name } = parsedBody.data;
       if (!name) return reply.status(400).send({ error: 'New name required' });
       const result = await driverFor(srv).renameWindowByRef(srv, ref, name);
       const err = execResultError(result);
@@ -735,7 +752,9 @@ const windowsRoutes: FastifyPluginCallback<WindowsRouteOptions> = (fastify, opts
         const paneEnv = resolvePaneAddEnv(win, srv, { uiToken: opts.uiToken, buildSecondaryWindowEnv: opts.buildSecondaryWindowEnv });
         if (!paneEnv.ok) return reply.status(paneEnv.status).send(paneEnv.body);
 
-        const body = request.body as { ordinal?: number; direction?: string };
+        const parsedBody = parseStrictBody(paneBody, request.body);
+      if (!parsedBody.ok) return reply.status(400).send(parsedBody.body);
+      const body = parsedBody.data;
         const direction = (body.direction || 'v') as 'h' | 'v';
         const ordinal = (body.ordinal ?? 1) as PaneOrdinal;
         const handle = await resolvePaneHandle(driverFor(srv), srv, ref, ordinal);
@@ -780,7 +799,9 @@ const windowsRoutes: FastifyPluginCallback<WindowsRouteOptions> = (fastify, opts
       const srv = serverRepo.findByName(win.serverName);
       if (!srv) return reply.status(404).send({ error: 'Server not found' });
       const handle = await resolvePaneHandle(driverFor(srv), srv, ref, ordinal);
-      const { keys } = request.body as { keys?: string[] };
+      const parsedBody = parseStrictBody(keysBody, request.body);
+      if (!parsedBody.ok) return reply.status(400).send(parsedBody.body);
+      const { keys } = parsedBody.data;
       if (!keys || !Array.isArray(keys))
         return reply.status(400).send({ error: 'keys array required' });
       await driverFor(srv).sendKeysToHandle(srv, handle, keys);
@@ -832,7 +853,9 @@ const windowsRoutes: FastifyPluginCallback<WindowsRouteOptions> = (fastify, opts
       const srv = serverRepo.findByName(win.serverName);
       if (!srv) return reply.status(404).send({ error: 'Server not found' });
       const handle = await resolvePaneHandle(driverFor(srv), srv, ref, ordinal);
-      const { name } = request.body as { name?: string };
+      const parsedBody = parseStrictBody(nameBody, request.body);
+      if (!parsedBody.ok) return reply.status(400).send(parsedBody.body);
+      const { name } = parsedBody.data;
       if (!name) return reply.status(400).send({ error: 'New name required' });
       const result = await driverFor(srv).setPaneTitle(srv, handle, name);
       const err = execResultError(result);

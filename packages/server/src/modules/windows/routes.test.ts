@@ -135,6 +135,14 @@ describe('POST /api/windows/:id/launch-agent', () => {
     await app.ready();
   });
 
+  it('rejects unknown and invalid launch fields before sending keys', async () => {
+    const unknown = await app.inject({ method: 'POST', url: `/api/windows/${window.id}/launch-agent`, payload: { command: 1, extra: true } });
+    expect(unknown.json()).toEqual({ error: 'unknown_fields', unknown: ['extra'], accepted: ['command', 'force'] });
+    const invalid = await app.inject({ method: 'POST', url: `/api/windows/${window.id}/launch-agent`, payload: { command: 1 } });
+    expect(invalid.json()).toMatchObject({ error: 'invalid_body', issues: [{ path: 'command' }] });
+    expect(sendKeys).not.toHaveBeenCalled();
+  });
+
   it('wraps the command with tui-supervisor for an agent window on a local server', async () => {
     const res = await app.inject({
       method: 'POST',

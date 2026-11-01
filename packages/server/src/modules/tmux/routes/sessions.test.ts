@@ -989,6 +989,15 @@ describe('POST /api/servers/:name/mux/windows/:ref/panes/open', () => {
     await app.close();
   });
 
+  it('rejects unknown and invalid open-pane bodies', async () => {
+    await build();
+    const unknown = await app.inject({ method: 'POST', url, payload: { command: 1, extra: true } });
+    expect(unknown.json()).toEqual({ error: 'unknown_fields', unknown: ['extra'], accepted: ['command'] });
+    const invalid = await app.inject({ method: 'POST', url, payload: [] });
+    expect(invalid.json()).toMatchObject({ error: 'invalid_body' });
+    expect(openPaneInWindow).not.toHaveBeenCalled();
+  });
+
   it('opens a pane with the command and notifies sessions changed', async () => {
     const emit = await build();
     const res = await app.inject({ method: 'POST', url, payload: { command: 'claude' } });
