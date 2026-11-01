@@ -2,12 +2,13 @@ import { useEffect, useRef, useState } from 'react';
 import { apiWithStatus } from '../api/client';
 
 export type WindowSnapshot = { status: 'ok'; id: number; content: string; activity: number | null; changed: true } | { status: 'unchanged'; id: number; activity: number } | { status: 'error'; id: number; code: string; message: string };
-export interface WindowSnapshotState { id: number; content: string; activity: number | null; error?: { code: string; message: string } }
+export interface WindowSnapshotState { id: number; content: string; activity: number | null; activityConfirmed?: boolean; error?: { code: string; message: string } }
 export interface WindowSnapshotOptions { lines?: number; intervalMs?: number; enabled: boolean }
 export function useWindowSnapshots(ids: number[], { lines = 12, intervalMs = 3000, enabled }: WindowSnapshotOptions): { snapshots: Map<number, WindowSnapshotState>; refresh: () => void } {
   const key = ids.join(',');
   const [snapshots, setSnapshots] = useState<Map<number, WindowSnapshotState>>(() => new Map());
   const latest = useRef<Map<number, WindowSnapshotState>>(new Map());
+  const previousQuery = useRef({ key, lines });
   const refreshRef = useRef<() => void>(() => {});
   useEffect(() => {
     let disposed = false;
@@ -16,15 +17,18 @@ export function useWindowSnapshots(ids: number[], { lines = 12, intervalMs = 300
     let refreshPending = false;
     let timer: ReturnType<typeof setTimeout> | undefined;
     const selected = key ? key.split(',').map(Number) : [];
-    latest.current = new Map();
-    setSnapshots(new Map());
+    if (previousQuery.current.key !== key || previousQuery.current.lines !== lines) {
+      previousQuery.current = { key, lines };
+      latest.current = new Map();
+      setSnapshots(new Map());
+    }
     const poll = async (): Promise<void> => {
       if (disposed || !enabled || document.hidden || selected.length === 0) return;
       if (running) { refreshPending = true; return; }
       if (timer) clearTimeout(timer);
       running = true;
       const requestGeneration = generation;
-      const since = [...latest.current.values()].filter((s) => s.activity !== null && !s.error).map((s) => `${s.id}:${s.activity}`).join(',');
+      const since = snapshotSince(latest.current);
       const params = new URLSearchParams({ ids: key, lines: String(lines) });
       if (since) params.set('since', since);
       try {
@@ -65,9 +69,13 @@ export function mergeWindowSnapshots(previousSnapshots: Map<number, WindowSnapsh
   const next = new Map<number, WindowSnapshotState>();
   for (const item of results) {
     const previous = previousSnapshots.get(item.id);
-    if (item.status === 'ok') next.set(item.id, { id: item.id, content: item.content, activity: item.activity });
-    else if (item.status === 'unchanged' && previous) next.set(item.id, { id: item.id, content: previous.content, activity: item.activity });
+    if (item.status === 'ok') next.set(item.id, { id: item.id, content: item.content, activity: item.activity, activityConfirmed: item.activity !== null && previous?.activity === item.activity && !previous.error });
+    else if (item.status === 'unchanged' && previous) next.set(item.id, { id: item.id, content: previous.content, activity: item.activity, activityConfirmed: true });
     else next.set(item.id, { id: item.id, content: previous?.content ?? '', activity: null, error: item.status === 'error' ? { code: item.code, message: item.message } : { code: 'capture_failed', message: 'Snapshot unavailable' } });
   }
   return next;
+}
+
+export function snapshotSince(snapshots: Map<number, WindowSnapshotState>): string {
+  return [...snapshots.values()].filter((s) => s.activity !== null && s.activityConfirmed && !s.error).map((s) => `${s.id}:${s.activity}`).join(',');
 }

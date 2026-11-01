@@ -8,7 +8,9 @@ import { snapshotScreenText } from './snapshotScreenText';
 import { windowKindOf, windowRefOf } from '../tmux/windowIdentity';
 
 export type SnapshotErrorCode = 'window_not_found' | 'server_not_found' | 'mux_unavailable' | 'pane_not_found' | 'capture_failed';
+// Activity is measured in seconds; polling clients recapture once before confirming a new value.
 export type WindowSnapshot = { status: 'ok'; id: number; content: string; activity: number | null; changed: true } | { status: 'unchanged'; id: number; activity: number } | { status: 'error'; id: number; code: SnapshotErrorCode; message: string };
+const SNAPSHOT_CONCURRENCY_PER_SERVER = 4;
 const messages: Record<SnapshotErrorCode, string> = { window_not_found: 'Window not found', server_not_found: 'Server not found', mux_unavailable: 'Window service unavailable', pane_not_found: 'Pane not found', capture_failed: 'Could not capture window' };
 function failure(id: number, code: SnapshotErrorCode): WindowSnapshot { return { status: 'error', id, code, message: messages[code] }; }
 
@@ -27,7 +29,7 @@ export class WindowSnapshotService {
       tasks.push(async () => { results[index] = await this.captureOne(id, win, server, lines, since); });
       groups.set(server.name, tasks);
     });
-    await Promise.all([...groups.values()].map((tasks) => runWithConcurrency(tasks, 4)));
+    await Promise.all([...groups.values()].map((tasks) => runWithConcurrency(tasks, SNAPSHOT_CONCURRENCY_PER_SERVER)));
     return results;
   }
 
@@ -50,7 +52,7 @@ export class WindowSnapshotService {
         return { status: 'error', id, code: 'capture_failed', message: `Could not reach server ${server.name.replace(/[\x00-\x1f\x7f]/g, '').slice(0, 100)}` };
       }
       if (error instanceof MuxDriverUnavailableError) return failure(id, 'mux_unavailable');
-      if (error instanceof Error && (/^Pane ordinal \d+ out of range/.test(error.message) || error.message === 'WINDOW_EMPTY' || error.message === 'PANE_CLOSED')) return failure(id, 'pane_not_found');
+      if (error instanceof Error && (/^Pane ordinal \d+ out of range/.test(error.message) || /^misao window .+ not found$/.test(error.message))) return failure(id, 'pane_not_found');
       console.warn(`[WindowSnapshot] Capture failed for window ${id} on server ${JSON.stringify(server.name.slice(0, 100))}`);
       return failure(id, 'capture_failed');
     }

@@ -51,7 +51,7 @@ describe('WindowSnapshotService', () => {
   it('maps an unavailable driver and a closed pane to their codes, and misao captures the whole screen', async () => {
     const { service, driver, drivers } = setup();
     drivers.resolveKind.mockImplementationOnce(() => { throw new MuxDriverUnavailableError('misao', 'daemon_unreachable'); });
-    driver.resolvePane.mockRejectedValueOnce(new Error('PANE_CLOSED'));
+    driver.resolvePane.mockRejectedValueOnce(new Error('Pane ordinal 1 out of range'));
     expect(await service.capture([1, 2], 12)).toEqual([
       expect.objectContaining({ id: 1, code: 'mux_unavailable' }),
       expect.objectContaining({ id: 2, code: 'pane_not_found' }),
@@ -59,5 +59,10 @@ describe('WindowSnapshotService', () => {
     await service.capture([97], 12);
     expect(drivers.resolveKind).toHaveBeenLastCalledWith('misao', expect.anything());
     expect(driver.captureScreen).toHaveBeenLastCalledWith(expect.anything(), '%1', undefined);
+  });
+  it('reports a missing misao window as pane_not_found', async () => {
+    const { service, driver } = setup();
+    driver.resolvePane.mockRejectedValueOnce(new Error('misao window w_1 not found'));
+    expect(await service.capture([97], 12)).toEqual([expect.objectContaining({ id: 97, code: 'pane_not_found' })]);
   });
 });

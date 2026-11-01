@@ -48,7 +48,7 @@ function buildProjectMenuItems(
     : projectItems;
 }
 
-interface WorkspaceLayoutProps {
+interface WorkspaceLayoutBaseProps {
   mobile: boolean;
   sidebarMode: SidebarMode;
   switchSidebarMode: (mode: SidebarMode) => void;
@@ -74,13 +74,15 @@ interface WorkspaceLayoutProps {
   taskWindows?: Array<{ serverName: string; tmuxTarget: string; taskId: number }>;
   /** SP の M1 メニュー「オブジェクト」行に表示する総件数（Issue #69 T1）。 */
   objectsCount?: number;
-  rightPanel?: React.ReactNode;
-  rightPanelOpen?: boolean;
-  onRightPanelOpenChange?: (open: boolean) => void;
   rightPanelActions?: React.ReactNode;
   rightPanelId?: string;
   rightPanelToggleRef?: React.RefObject<HTMLButtonElement | null>;
 }
+
+type WorkspaceLayoutProps = WorkspaceLayoutBaseProps & (
+  | { rightPanel: NonNullable<React.ReactNode>; rightPanelOpen: boolean; onRightPanelOpenChange: (open: boolean) => void }
+  | { rightPanel?: null | undefined; rightPanelOpen?: never; onRightPanelOpenChange?: never }
+);
 
 export default function WorkspaceLayout({
   mobile,
