@@ -1,3 +1,4 @@
+import type { ActivityTitleData } from '../../lib/windowDisplay';
 import { type CSSProperties, type ReactNode, useEffect, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { useNavigate } from 'react-router-dom';
@@ -29,6 +30,7 @@ const MODE_TITLE_KEY: Record<SidebarMode, string> = {
 };
 
 interface MobileNavSheetProps {
+  titleData: ActivityTitleData;
   open: boolean;
   onClose: () => void;
   project: { id: number; name: string } | null;
@@ -62,6 +64,7 @@ const headerStyle: CSSProperties = {
  * サイドバー・レール表示には一切関与しない（WorkspaceLayout 側で mobile 分岐時のみ描画）。
  */
 export function MobileNavSheet({
+  titleData,
   open,
   onClose,
   project,
@@ -80,7 +83,7 @@ export function MobileNavSheet({
   const [stack, setStack] = useState<StackEntry[]>(['menu']);
   const [activeWindowsOpen, setActiveWindowsOpen] = useState(false);
 
-  const { totalCount: awCount, blockedCount: awBlockedCount } = useActiveWindowRows();
+  const { totalCount: awCount, blockedCount: awBlockedCount } = useActiveWindowRows(titleData);
   const currentProjectItem = allProjects.find((p) => p.id === project?.id) ?? null;
 
   // シートを開き直すたびにメニュー階層をリセットする（前回どこまで潜っていたかを持ち越さない）。
@@ -198,6 +201,7 @@ export function MobileNavSheet({
 
       {activeWindowsOpen && connectPane && openTask && (
         <MobileActiveWindowsPanel
+                titleData={titleData}
           onClose={() => setActiveWindowsOpen(false)}
           connectPane={connectPane}
           openTask={openTask}

@@ -1,4 +1,4 @@
-import { activeWindowTitleInput } from '../../lib/windowDisplay';
+import type { ActivityTitleData } from '../../lib/windowDisplay';
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { useActiveWindowRows, type ActiveWindowRow } from '../../hooks/useActiveWindowRows';
@@ -6,12 +6,12 @@ import { useAgentActivity } from '../../hooks/useAgentActivity';
 import { BrailleSpinner } from '../ui/WindowActivityIndicator';
 import { ActiveWindowDot } from '../ui/ActiveWindowDot';
 import { buildWindowTaskMap, lookupWindowTask } from '../../lib/windowTask';
-import { resolveWindowTitle, formatWindowTitleLine } from '@azito/shared';
 import { selectTaskTerminal } from './TaskPanel';
 import { useOpenTerminalTarget } from '../../hooks/useTerminalTargetOpener';
 import type { TerminalRef } from '../../lib/terminalRef';
 
 interface ActiveWindowIconsProps {
+  titleData: ActivityTitleData;
   connectPane: (refOrServerName: TerminalRef | string, targetOrProjectId?: string | number, projectId?: number) => void;
   openTask: (taskId: number, title: string, projectId?: number) => void;
   taskWindows: Array<{ serverName: string; tmuxTarget: string; taskId: number }>;
@@ -36,10 +36,10 @@ function useMaxVisible(containerRef: React.RefObject<HTMLDivElement | null>): nu
   return max;
 }
 
-export default function ActiveWindowIcons({ connectPane, openTask, taskWindows }: ActiveWindowIconsProps) {
+export default function ActiveWindowIcons({ titleData, connectPane, openTask, taskWindows }: ActiveWindowIconsProps) {
   const openTerminal = useOpenTerminalTarget(connectPane);
   const { t } = useTranslation(['workspace', 'tasks']);
-  const { rows } = useActiveWindowRows();
+  const { rows } = useActiveWindowRows(titleData);
   const { dismissFinished } = useAgentActivity();
   const windowTaskMap = useMemo(() => buildWindowTaskMap(taskWindows), [taskWindows]);
   const containerRef = useRef<HTMLDivElement>(null);
@@ -152,7 +152,7 @@ export default function ActiveWindowIcons({ connectPane, openTask, taskWindows }
           </div>
           {rows.slice(maxVisible).map((row) => {
             const taskId = row.taskId ?? lookupWindowTask(windowTaskMap, row.serverName, row.target);
-            const displayName = formatWindowTitleLine(resolveWindowTitle(activeWindowTitleInput(row)));
+            const displayName = row.title;
             const isWorking = row.status === 'running' && row.activityStatus !== 'blocked';
             return (
               <button
@@ -219,7 +219,7 @@ interface ActiveWindowIconItemProps {
 
 function ActiveWindowIconItem({ row, onOpen, taskWindows }: ActiveWindowIconItemProps) {
   const taskId = row.taskId ?? lookupWindowTask(taskWindows, row.serverName, row.target);
-  const displayName = formatWindowTitleLine(resolveWindowTitle(activeWindowTitleInput(row)));
+  const displayName = row.title;
   const isWorking = row.status === 'running' && row.activityStatus !== 'blocked';
 
   return (

@@ -22,6 +22,7 @@ function makeTask(overrides: Partial<Task> & { id: number }): Task {
 
 function makeActivity(taskId: number, status: 'running' | 'finished', extra?: Partial<ActiveWindowRow>): ActiveWindowRow {
   return {
+    title: 'Window',
     key: `srv/${taskId}`,
     serverName: 'srv',
     target: `task-${taskId}:0`,
@@ -204,6 +205,12 @@ it('uses the task title when a pane name is only its command', () => {
   const window = { id: 12, tmuxTarget: 's:w', label: 'win--abcd', labelSource: 'auto', windowType: 'agent' } as NonNullable<Task['windows']>[number];
   const activity = makeActivity(1, 'running', { paneName: 'codex', paneCommand: 'codex' });
   expect(taskChildWindowTitle(window, 'Fix issue', activity)).toBe('Fix issue · W-12');
+});
+
+it('uses the pane name when the pane title is empty', () => {
+  const window = { id: 12, tmuxTarget: 's:w', label: 'win--abcd', labelSource: 'auto' } as NonNullable<Task['windows']>[number];
+  const activity = makeActivity(1, 'running', { paneTitle: '', paneName: 'Agent title' });
+  expect(taskChildWindowTitle(window, 'Fix issue', activity)).toBe('Agent title · W-12');
 });
 
 it('adapts activity pane and target fields for shared title resolution', () => {

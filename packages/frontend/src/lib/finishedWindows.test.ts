@@ -1,3 +1,4 @@
+import { mergeFinishedEntry } from "./finishedWindows";
 import { describe, it, expect } from 'vitest';
 import {
   activityKey,
@@ -99,5 +100,14 @@ describe('upsertFinished with windowId', () => {
     const withoutId = entry({ target: 'azito:win--a', finishedAt: 2_000 });
     const result = upsertFinished([withId], withoutId);
     expect(result).toHaveLength(2);
+  });
+});
+
+describe('mergeFinishedEntry', () => {
+  it('retains prior display metadata when completion omits it', () => {
+    const previous = { serverName: 'local', target: 's:w', paneName: 'Latest', taskTitle: 'Task', paneTitle: 'Pane' };
+    const result = mergeFinishedEntry({ serverName: 'local', target: 's:w', paneName: '', finishedAt: 1 }, previous);
+    expect(result).toMatchObject({ paneName: 'Latest', taskTitle: 'Task', paneTitle: 'Pane' });
+    expect(JSON.parse(JSON.stringify(result))).toEqual(result);
   });
 });
