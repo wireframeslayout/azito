@@ -19,6 +19,7 @@ class Harness {
   misaoDown = false;
   misaoStatusFails = false;
   recoverFails = false;
+  firewall: { ruleFound: boolean | null; blockedBy: string[]; problem: string | null } = { ruleFound: true, blockedBy: [], problem: null };
   reviveResult = 'started';
   /** The agent is up again once recoverAgent was called this many times. */
   recoversToStart = 1;
@@ -34,6 +35,7 @@ class Harness {
   readonly watchdog = new AgentRecoveryWatchdog({
     listServers: () => this.servers,
     checkAgent: async () => { if (!this.agentUp) throw new Error('unreachable'); },
+    inspectFirewall: async () => this.firewall,
     recoverAgent: async (s, force) => {
       this.recovered.push(s.name);
       this.recoverForces.push(force);
@@ -61,6 +63,31 @@ class Harness {
 }
 
 describe('AgentRecoveryWatchdog: the agent', () => {
+  it('pauses on confirmed firewall blocks and resumes when the policy changes', async () => {
+    const h = new Harness();
+    h.agentUp = false;
+    h.firewall = { ruleFound: false, blockedBy: ['deny'], problem: null };
+    await h.watchdog.tick();
+    await h.advance(MIN);
+    expect(h.recovered).toEqual([]);
+    expect(h.watchdog.firewallStatus(h.servers[0]!)?.state).toBe('blocked');
+    h.firewall = { ruleFound: true, blockedBy: [], problem: null };
+    await h.advance(TIMING.maxMs);
+    expect(h.recoverForces).toEqual([false]);
+    await h.watchdog.tick();
+    expect(h.watchdog.firewallStatus(h.servers[0]!)).toBeUndefined();
+  });
+
+  it('continues recovery when effective policy cannot be read', async () => {
+    const h = new Harness();
+    h.agentUp = false;
+    h.firewall = { ruleFound: null, blockedBy: ['unverified'], problem: 'not elevated' };
+    await h.watchdog.tick();
+    await h.advance(MIN);
+    expect(h.recovered).toEqual(['win']);
+    expect(h.watchdog.firewallStatus(h.servers[0]!)?.state).toBe('unknown');
+  });
+
   it('only forces a persistent failure and does not log a waiting launcher as restarted', async () => {
     const h = new Harness();
     h.agentUp = false;

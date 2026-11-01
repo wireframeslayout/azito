@@ -27,7 +27,7 @@ const PENDING_OPEN_TASK_TTL_MS = 5000;
 const FAILED_STATUSES = new Set(['error', 'send_error', 'worker_not_ready', 'codex_error', 'stopped_by_user']);
 
 const NOTIFICATION_KINDS: readonly AppNotificationKind[] = [
-  'qa', 'plan_approval', 'execution_approval', 'task_done', 'task_failed', 'agent_finished',
+  'qa', 'plan_approval', 'execution_approval', 'task_done', 'task_failed', 'agent_finished', 'server_firewall',
 ];
 
 interface EphemeralToast {
@@ -249,6 +249,9 @@ export function NotificationCenterProvider({ children }: { children: React.React
   }, [updateNotifications, dismissToast]);
 
   useNotificationChannel({
+    onServerFirewall: useCallback((payload: { serverName: string; detail: string }) => {
+      pushNotification({ id: crypto.randomUUID(), kind: 'server_firewall', title: `Windows Firewall: ${payload.serverName}`, body: payload.detail, serverName: payload.serverName, read: false, createdAt: Date.now() });
+    }, [pushNotification]),
     onTaskStatus: useCallback((payload: { taskId: number; status: string; title?: string; projectId?: number }) => {
       const taskTitle = taskTitleOf(payload.title, payload.taskId, t('fallbackTaskTitle', { taskId: payload.taskId }));
       switch (payload.status) {
@@ -425,6 +428,7 @@ const KIND_ICON: Record<AppNotificationKind, React.ReactNode> = {
   task_done: <Icon name="check" size={16} />,
   task_failed: <Icon name="warning" size={16} />,
   agent_finished: <Icon name="stop" size={16} />,
+  server_firewall: <Icon name="warning" size={16} />,
 };
 
 export function notificationIcon(kind: AppNotificationKind): React.ReactNode {

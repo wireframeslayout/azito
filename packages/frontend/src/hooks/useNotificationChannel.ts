@@ -3,6 +3,7 @@ import type { AgentActivityPayload, BrowserOpenedPayload, NotificationEvent } fr
 import { buildWsUrl } from '../api/wsUrl';
 
 export interface NotificationHandlers {
+  onServerFirewall?: (payload: { serverName: string; detail: string }) => void;
   onSessionsUpdated?: (serverName: string) => void;
   onTaskStatus?: (payload: { taskId: number; status: string; title?: string; projectId?: number }) => void;
   onPaneExited?: (serverName: string) => void;
@@ -88,6 +89,9 @@ export function useNotificationChannel(handlers: NotificationHandlers): void {
     const listener: Listener = (event) => {
       const h = handlersRef.current;
       switch (event.type) {
+        case 'server:firewall':
+          h.onServerFirewall?.(event.payload);
+          break;
         case 'sessions:updated':
           h.onSessionsUpdated?.(event.payload.serverName);
           break;

@@ -9,7 +9,7 @@ import { SchtasksClient, type TaskScheduleState } from '../../../shared/os/taskS
 import { buildTaskXml, encodeTaskXml, isTaskDefinitionDisabled } from '../../../shared/os/taskScheduler/taskDefinition';
 import { redactSecretText } from '../../../shared/redactSecretText';
 import { createSshCommandSpecRunner } from './windowsSshRunner';
-import { checkFirewall, describeFirewallProblem } from './windowsFirewall';
+import { checkFirewall, inspectFirewall, describeFirewallProblem, firewallRuleCommand, type FirewallResult } from './windowsFirewall';
 import { MISAO_WINDOWS_DIR, type WindowsAgentOptions } from './windowsAgentConfig';
 import type { WindowsPreflightInfo } from './windowsPreflight';
 import { agentTaskAction, agentTaskIdentity } from './windowsAgentTask';
@@ -261,6 +261,17 @@ export class WindowsAgentDeployer {
 
   async start(sshHost: string, host: WindowsPreflightInfo): Promise<void> {
     await this.schtasks(sshHost, host).start(this.options.taskName);
+  }
+
+  /** Inspect the policy for the executable named by the recognised task without changing it. */
+  async inspectFirewall(sshHost: string, host: WindowsPreflightInfo, address: string, port: number): Promise<FirewallResult & { allowCommand: string }> {
+    const xml = await this.schtasks(sshHost, host).exportXml(this.options.taskName);
+    const action = soleExecAction(xml);
+    const root = windowsAgentRoot(host.home, this.options);
+    const identity = action && agentTaskIdentity(action, host.systemRoot, root, windowsAgentEnvFile(host.home, this.options), this.options.taskName);
+    if (!identity || !await this.taskOwnedByHost(sshHost, xml, host.userId)) throw new Error(`The task "${this.options.taskName}" is not a recognised agent task for ${root}`);
+    const result = await inspectFirewall((command) => this.sshExec(sshHost, command, FIREWALL_MS), port, identity.nodePath, address);
+    return { ...result, allowCommand: firewallRuleCommand(port, identity.nodePath, address) };
   }
 
   /** Stops the task if it is running and waits until it is not (`/End` returns before the process is gone). */

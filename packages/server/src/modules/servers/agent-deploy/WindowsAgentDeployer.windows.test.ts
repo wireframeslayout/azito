@@ -12,7 +12,7 @@ import { readSha256FromSumsFile } from './integrityVerifier';
 import { AgentBundler } from './AgentBundler';
 import { updateWindowsAgent } from './windowsAgentUpdate';
 import { WindowsAgentDeployer, buildAgentEnvFile, windowsAgentLayout, type WindowsDeployInput, type WindowsFileTransfer, type WindowsSshExec } from './WindowsAgentDeployer';
-import { checkFirewall, firewallRuleName } from './windowsFirewall';
+import { checkFirewall, inspectFirewall, firewallRuleName } from './windowsFirewall';
 import { buildWindowsPreflightCommand, parseWindowsPreflight, type WindowsPreflightInfo } from './windowsPreflight';
 import type { WindowsAgentOptions } from './windowsAgentConfig';
 
@@ -223,8 +223,10 @@ describe.skipIf(process.platform !== 'win32')('the Windows agent install on a re
     it('adds a rule when the elevated ActiveStore has no matching rule', async (ctx) => {
       const port = await freePort();
       track(port);
+      const inspection = await inspectFirewall((command) => cmdExec('ci', command, 120_000), port, fwNode, BIND);
+      if (!inspection.elevated) ctx.skip('this session is not elevated');
+      expect(inspection).toMatchObject({ ruleFound: false, created: false, blockedBy: [] });
       const result = await run(port);
-      if (!result.elevated) ctx.skip('this session is not elevated');
       expect(result).toMatchObject({ ruleFound: false, created: true, blockedBy: [] });
     }, 300_000);
 

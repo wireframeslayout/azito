@@ -714,6 +714,12 @@ export class AgentInstaller {
    * (e.g. SSH connection failure) — the caller is expected to catch and re-check health
    * afterward regardless of outcome.
    */
+  async inspectAgentFirewall(sshHost: string, address: string, port: number): Promise<import('./windowsFirewall').FirewallResult & { allowCommand: string }> {
+    const probe = await this.sshClient.execIsolated(sshHost, buildWindowsPreflightCommand());
+    const host = parseWindowsPreflight(probe.stdout, probe.stderr, probe.code);
+    return this.windowsDeployer().inspectFirewall(sshHost, host, address, port);
+  }
+
   recoverAgent(sshHost: string, tailscaleIp: string, token: string, hostProfile: HostProfile | null, muxRuntime?: string, force = false): Promise<'systemd' | 'nohup' | 'taskscheduler' | 'disabled' | 'starting'> {
     return this.hostLocks.withLock(this.lockKey(sshHost), () => this.recoverAgentLocked(sshHost, tailscaleIp, token, hostProfile, muxRuntime, force));
   }

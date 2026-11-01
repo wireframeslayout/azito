@@ -3,7 +3,7 @@ import { spawnSync } from 'node:child_process';
 import { powershellEncodedArgs } from '../../../shared/os/shellDialect';
 import { decodeEncodedCommand } from './testing/fakeWindowsHost';
 import {
-  buildFirewallAddCommand, buildFirewallDumpCommand, checkFirewall, describeFirewallProblem, evaluateFirewallRules, firewallRuleCommand,
+  buildFirewallAddCommand, buildFirewallDumpCommand, checkFirewall, inspectFirewall, describeFirewallProblem, evaluateFirewallRules, firewallRuleCommand,
   parseAddressSpec, parseFirewallAdd, parseFirewallDump, type FirewallResult, type FirewallRuleRecord,
 } from './windowsFirewall';
 
@@ -199,6 +199,12 @@ describe('checkFirewall', () => {
     const exec = vi.fn(async (_command: string) => ({ stdout: answers.shift() ?? '', stderr: '', code: 0 }));
     return { exec, result: () => checkFirewall(exec, 3002, NODE, IP) };
   };
+
+  it('inspects missing Allow without writing even when elevated', async () => {
+    const exec = vi.fn(async () => ({ stdout: dumped(), stderr: '', code: 0 }));
+    expect(await inspectFirewall(exec, 3002, NODE, IP)).toMatchObject({ ruleFound: false, created: false });
+    expect(exec).toHaveBeenCalledTimes(1);
+  });
 
   it('finds an Allow rule and adds nothing', async () => {
     const { exec, result } = run([dumped({ rules: [rule({ displayName: 'ours' })] })]);

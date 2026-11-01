@@ -166,6 +166,7 @@ function describeMux(registry: MuxDriverRegistry, srv: ServerConfig): Record<str
 }
 
 export interface ServersRouteOptions {
+  firewallStatus?: (server: ServerConfig) => { state: string; detail: string } | undefined;
   serverAliasRepo: IServerAliasRepository;
   serverRepo: IServerRepository;
   tmux: TmuxClient;
@@ -1170,7 +1171,8 @@ const serversRoutes: FastifyPluginCallback<ServersRouteOptions> = (fastify, opts
             };
           } catch (err: unknown) {
             if (!(err instanceof AgentUnreachableError)) return { status: 'offline' as const, mux: {}, message: `Agent returned an error: ${(err as Error).message}` };
-            return { status: 'offline' as const, mux: {}, message: `Agent unreachable: ${err.reason}` };
+            const firewall = opts.firewallStatus?.(srv);
+            return { status: 'offline' as const, mux: {}, message: firewall?.detail ?? `Agent unreachable: ${err.reason}`, ...(firewall ? { firewall } : {}) };
           }
         }
         const mux = await checkMuxes();

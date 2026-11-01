@@ -8,6 +8,8 @@ export interface AgentRecoveryDeps {
   listServers(): ServerConfig[];
   /** Resolves when the agent answers `/health`; rejects when it cannot be reached (the circuit breaker being open is such a case). */
   checkAgent(server: ServerConfig): Promise<void>;
+  onFirewallProblem?(server: ServerConfig, detail: string): void;
+  inspectFirewall?(server: ServerConfig): Promise<{ ruleFound: boolean | null; blockedBy: string[]; problem: string | null; allowCommand?: string }>;
   /** Starts the agent again (`recoverAgent`: `/Query`, `/End`, `/Run` of its task). Resolves with what it did; `disabled` is a task disabled by hand, which is left alone. */
   recoverAgent(server: ServerConfig, force: boolean): Promise<string>;
   /** Asks the (reachable) agent whether the managed misao it hosts is installed by AZITO and does not answer. Rejects when the agent cannot say (an older one). */
@@ -46,6 +48,12 @@ const MAX_CONCURRENT_LOOKS = 4;
  */
 export class AgentRecoveryWatchdog {
   private readonly agents = new Map<string, Backoff>();
+  private readonly firewall = new Map<string, { identity: string; state: 'blocked' | 'missing_allow' | 'unknown'; detail: string }>();
+
+  firewallStatus(server: ServerConfig): { state: 'blocked' | 'missing_allow' | 'unknown'; detail: string } | undefined {
+    const value = this.firewall.get(server.name);
+    return value?.identity === identityOf(server) ? { state: value.state, detail: value.detail } : undefined;
+  }
   private readonly misaos = new Map<string, Backoff>();
   /** The looks going on, by server. */
   private readonly looking = new Map<string, Promise<void>>();
@@ -95,6 +103,7 @@ export class AgentRecoveryWatchdog {
     if (this.stopped) return;
     const servers = this.deps.listServers().filter(isWindowsAgent);
     const names = new Set(servers.map((s) => s.name));
+    for (const name of this.firewall.keys()) if (!names.has(name)) this.firewall.delete(name);
     for (const map of [this.agents, this.misaos]) for (const name of map.keys()) if (!names.has(name)) map.delete(name);
     for (const key of this.warned) if (!names.has(key.split('\0')[0]!)) this.warned.delete(key);
     for (const name of this.foreignReason.keys()) if (!names.has(name)) this.foreignReason.delete(name);
@@ -121,6 +130,7 @@ export class AgentRecoveryWatchdog {
 
   private reset(name: string): void {
     this.agents.delete(name);
+    this.firewall.delete(name);
     this.misaos.delete(name);
     for (const key of this.warned) if (key.startsWith(`${name}\0`)) this.warned.delete(key);
     this.foreignReason.delete(name);
@@ -138,6 +148,7 @@ export class AgentRecoveryWatchdog {
       return;
     }
     this.agents.delete(server.name);
+    this.firewall.delete(server.name);
     let down: boolean;
     try {
       down = await this.deps.isMisaoDown(server);
@@ -180,12 +191,34 @@ export class AgentRecoveryWatchdog {
           return;
         }
         if (!(await stillDown(current)) || this.stopped) return; // after the stop: not begun, so not begun
+        if (what === 'agent' && this.deps.inspectFirewall) {
+          try {
+            const result = await this.deps.inspectFirewall(current);
+            const state = result.ruleFound === null ? 'unknown' : result.blockedBy.length ? 'blocked' : result.ruleFound ? undefined : 'missing_allow';
+            if (state) {
+              const detail = state === 'blocked' ? `Windows Firewall blocks the agent: ${result.blockedBy.join(', ')}. Ask an administrator to inspect the active rule before disabling it.` : state === 'missing_allow' ? `Windows Firewall has no effective Allow rule for the agent. Ask an administrator to inspect the active policy before adding a rule in an Administrator PowerShell: ${result.allowCommand}` : `Windows Firewall policy could not be verified: ${result.problem ?? 'unknown reason'}.`;
+              const previous = this.firewall.get(current.name);
+              this.firewall.set(current.name, { identity, state, detail });
+              if (previous?.state !== state || previous.detail !== detail) this.deps.onFirewallProblem?.(current, detail);
+              if (state !== 'unknown') { outcome = 'firewall_blocked'; return; }
+            } else this.firewall.delete(current.name);
+          } catch (err) {
+            const detail = `Windows Firewall policy could not be verified: ${describe(err)}`;
+            const previous = this.firewall.get(current.name);
+            this.firewall.set(current.name, { identity, state: 'unknown', detail });
+            if (previous?.state !== 'unknown' || previous.detail !== detail) this.deps.onFirewallProblem?.(current, detail);
+          }
+        }
         outcome = await act(current);
       });
     } catch (err) {
       this.deps.logger.warn(`${server.name}: could not bring the ${what} back: ${describe(err)}`);
     }
     if (waits.get(server.name) !== wait) return; // reset while waiting for the lock
+    if (outcome === 'firewall_blocked') {
+      waits.set(server.name, { ...wait, nextAt: this.deps.now() + this.timing.maxMs });
+      return;
+    }
     if (outcome === 'busy') return; // another operation holds the misao folder: not an attempt, looked at again next tick
     if (outcome !== undefined && isForeignLock(outcome)) {
       // The lock of a folder shared with the hub is held by someone who is not this user: not an attempt, said once per state.

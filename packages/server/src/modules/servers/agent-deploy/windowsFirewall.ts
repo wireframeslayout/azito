@@ -384,7 +384,7 @@ export type FirewallExec = (command: string) => Promise<{ stdout: string; stderr
  * Reads the host's rules, decides, and adds the rule when nothing covers the agent, nothing blocks it and the session is elevated.
  * A host that cannot be read reports `ruleFound: null`, not a guess.
  */
-export async function checkFirewall(exec: FirewallExec, port: number, nodePath: string, localAddress: string): Promise<FirewallResult> {
+export async function inspectFirewall(exec: FirewallExec, port: number, nodePath: string, localAddress: string): Promise<FirewallResult> {
   const dumped = await exec(buildFirewallDumpCommand(localAddress));
   const dump = parseFirewallDump(dumped.stdout, dumped.stderr, dumped.code);
   if (dump.problem !== null) {
@@ -402,7 +402,12 @@ export async function checkFirewall(exec: FirewallExec, port: number, nodePath: 
     return { ruleFound: null, elevated: dump.elevated, created: false, problem: 'the network profile could not be read', blockedBy: [], allowedBy: [], store: dump.store };
   }
   const base = { ruleFound: found, elevated: dump.elevated, created: false, problem: null, blockedBy: verdict.blockedBy, allowedBy: verdict.allowedBy, store: dump.store };
-  if (found || verdict.blockedBy.length > 0 || !dump.elevated) return base;
+  return base;
+}
+
+export async function checkFirewall(exec: FirewallExec, port: number, nodePath: string, localAddress: string): Promise<FirewallResult> {
+  const base = await inspectFirewall(exec, port, nodePath, localAddress);
+  if (base.ruleFound !== false || base.blockedBy.length > 0 || !base.elevated) return base;
   const added = await exec(buildFirewallAddCommand(port, nodePath, localAddress));
   const result = parseFirewallAdd(added.stdout, added.stderr, added.code);
   return { ...base, created: result.created, problem: result.problem };
