@@ -144,7 +144,7 @@
     "selfReviewMax": "セルフレビュー最大回数",
     "selfReviewSkip": "0（レビュー省略）",
     "requirePlanApproval": "実装前に計画の承認を必須にする",
-    "tmuxWindow": "Tmux ウィンドウ",
+    "tmuxWindow": "ウィンドウ",
     "tmuxWindowPlaceholder": "空の場合は自動作成",
     "skipPr": "PR作成をスキップ",
     "skipPrHintSkip": "コミットとプッシュのみ行います。既存PRがあれば更新します。",

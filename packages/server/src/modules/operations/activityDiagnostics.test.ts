@@ -44,6 +44,13 @@ const TIER0_ENTRY: ActivityDiagnosticEntry = {
 };
 
 describe('buildActivityDiagnostics', () => {
+  it('includes display data for a matched misao window', () => {
+    const window = { id: 8, serverName: 'local', tmuxTarget: 'azito:agent-1', taskId: 3, projectId: 1, windowType: 'agent', workerType: 'claude', label: 'My window', labelSource: 'user', muxRef: { kind: 'misao', workspace: 'azito', window: 'w_01234567890123456789012345' } };
+    const repo = { findAll: () => [window] } as unknown as IWindowRepository;
+    const rows = buildActivityDiagnostics(makeMonitor([TIER0_ENTRY]), makeRegistry([]), repo);
+    expect(rows[0].windowDisplay).toMatchObject({ label: 'My window', muxRef: { kind: 'misao' } });
+  });
+
   it('keeps a Tier 0 attribution whose evidence belongs to the current connection', () => {
     const rows = buildActivityDiagnostics(
       makeMonitor([{ ...TIER0_ENTRY, evidenceAt: 1_500 }]),
