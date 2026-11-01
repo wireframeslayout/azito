@@ -23,6 +23,15 @@ describe('groupToolBlocks', () => {
     expect(groups).toHaveLength(1);
     expect(groups[0].map(({ block }) => block.kind)).toEqual(['text', 'tool_use', 'text']);
   });
+  it('keeps result-only sequences as individual chips', () => {
+    const entries: TranscriptEntry[] = [
+      { uuid: 'a', type: 'tool', timestamp: null, blocks: [result, result] },
+      { uuid: 'b', type: 'tool', timestamp: null, blocks: [result] },
+    ];
+    const segments = buildBlockSegments(entries, null);
+    expect(segments.every(({ isToolRun }) => !isToolRun)).toBe(true);
+    expect(segments.flatMap(({ blocks }) => blocks)).toHaveLength(3);
+  });
   it('builds segments marking tool runs, entry types and per-entry thinking gaps', () => {
     const entries: TranscriptEntry[] = [
       { uuid: 'a', type: 'assistant', timestamp: '2026-08-10T09:00:00Z', blocks: [text, use] },

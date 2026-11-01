@@ -15,7 +15,14 @@ export function buildMarkdownHtml(content: string): { html: string; mermaidBlock
     return originalCode.call(this, token);
   };
   renderer.table = function (token) {
-    return `<div class="md-table-wrap">${originalTable.call(this, token)}</div>`;
+    const numericColumns = token.header.map((_, index) =>
+      !token.align[index] && token.rows.length > 0 && token.rows.every((row) => isNumericCell(row[index].text)),
+    );
+    let column = 0;
+    const table = originalTable.call(this, token).replace(/<th(?=[ >])/g, (tag) =>
+      numericColumns[column++] ? `${tag} class="md-numeric"` : tag,
+    );
+    return `<div class="md-table-wrap">${table}</div>`;
   };
   renderer.tablecell = function (token) {
     const html = originalCell.call(this, token);

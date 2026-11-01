@@ -35,9 +35,9 @@ export function groupToolBlocks(blocks: ContextBlock[]): ContextBlock[][] {
   const merged: ContextBlock[][] = [];
   for (const group of groups) {
     const first = group[0];
-    const isRun = group.length > 1 && isToolBlock(first.block);
+    const isRun = group.length > 1 && group.some(({ block }) => block.kind === 'tool_use') && group.every(({ block }) => isToolBlock(block));
     const previous = merged[merged.length - 1];
-    const previousIsRun = previous !== undefined && previous.length > 1 && previous.every(({ block }) => isToolBlock(block));
+    const previousIsRun = previous !== undefined && previous.length > 1 && previous.some(({ block }) => block.kind === 'tool_use') && previous.every(({ block }) => isToolBlock(block));
     if (!isRun && previous && !previousIsRun && previous[0].entryKey === first.entryKey) previous.push(...group);
     else merged.push([...group]);
   }
@@ -62,7 +62,7 @@ export function buildBlockSegments(entries: TranscriptEntry[], prevTimestamp: st
   return groupToolBlocks(blocks).map((group) => ({
     key: group[0].key,
     entryType: group[0].entryType,
-    isToolRun: group.length > 1 && group.every(({ block }) => isToolBlock(block)),
+    isToolRun: group.length > 1 && group.some(({ block }) => block.kind === 'tool_use') && group.every(({ block }) => isToolBlock(block)),
     blocks: group,
   }));
 }

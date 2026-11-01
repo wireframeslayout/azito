@@ -90,3 +90,27 @@ for (const style of ['flow', 'bubble'] as const) {
     await harness.deleteWindow(windowId);
   });
 }
+
+
+test('rail: Markdown 本文を等幅で表示する', async ({ app, harness }) => {
+  const label = 'e2e-style-rail';
+  const projectId = await harness.createProject(label);
+  const agent = await harness.startFakeAgent(label, 'scroll', { supervised: false });
+  const fixture = createTranscriptFixture(harness.claudeConfigDir, `-${label}`);
+  fs.writeFileSync(fixture.filePath, JSON.stringify({ uuid: 'a1', type: 'assistant', timestamp: new Date().toISOString(), message: { role: 'assistant', content: [{ type: 'text', text: 'ログ本文の確認' }] } }) + '\n');
+  const windowId = await harness.registerAgentWindow(projectId, agent.target, { label, agentSessionId: fixture.sessionId });
+  await app.addInitScript((id) => {
+    localStorage.setItem(`azito.windowView.${id}`, 'chat');
+    localStorage.setItem('azito.transcript.style', 'rail');
+  }, windowId);
+  await app.goto(`${harness.baseUrl}/workspace/${projectId}`);
+  await app.getByPlaceholder('タイトル・ID・ブランチで検索…').fill(label);
+  await app.locator('.row-hover').first().click();
+  const markdown = app.locator('.transcript-rail .md-content');
+  await expect(markdown).toBeVisible();
+  const fonts = await markdown.evaluate((el) => ({ actual: getComputedStyle(el).fontFamily, body: getComputedStyle(document.body).fontFamily, width: getComputedStyle(el).maxWidth }));
+  expect(fonts.actual).toBe(fonts.body);
+  expect(fonts.actual).toMatch(/mono/i);
+  expect(fonts.width).toBe('none');
+  await harness.deleteWindow(windowId);
+});

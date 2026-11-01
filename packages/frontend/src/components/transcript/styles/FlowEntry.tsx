@@ -24,7 +24,7 @@ function GroupEntries({ entries, prevTimestamp, isUser }: {
   const renderSegment = (segment: BlockSegment) => {
     const content = segment.blocks.map((item) => <BlockList key={item.key} blocks={[item.block]} markdownText={item.markdownText} thinkingSeconds={item.thinkingSeconds} />);
     if (segment.isToolRun) return <ToolRunGroup blocks={segment.blocks}>{content}</ToolRunGroup>;
-    if (isUser && segment.entryType === 'user') return <div style={{ background: 'var(--bg-card)', borderRadius: 'var(--radius-lg)', padding: 'var(--space-2) var(--space-3)' }}>{content}</div>;
+    if (isUser && segment.entryType === 'user') return <div style={{ background: 'var(--bg-card)', borderRadius: 'var(--radius-lg)', padding: 'var(--space-3) var(--space-4)' }}>{content}</div>;
     return content;
   };
   return <>{buildBlockSegments(entries, prevTimestamp).map((segment, i) => (

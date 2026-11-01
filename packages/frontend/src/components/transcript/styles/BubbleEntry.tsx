@@ -24,7 +24,7 @@ function GroupEntries({ entries, prevTimestamp, isUser }: {
   const renderSegment = (segment: BlockSegment) => {
     const content = segment.blocks.map((item) => <BlockList key={item.key} blocks={[item.block]} markdownText={item.markdownText} thinkingSeconds={item.thinkingSeconds} />);
     if (segment.isToolRun) return <ToolRunGroup blocks={segment.blocks}>{content}</ToolRunGroup>;
-    if (segment.entryType !== 'tool') return <div style={{ padding: 'var(--space-2) var(--space-3)', borderRadius: isUser ? 'var(--radius-lg) var(--radius-lg) var(--space-1) var(--radius-lg)' : 'var(--radius-lg) var(--radius-lg) var(--radius-lg) var(--space-1)', background: isUser ? 'var(--accent-a15)' : 'var(--bg-card)', minWidth: 0, maxWidth: '100%' }}>{content}</div>;
+    if (segment.entryType !== 'tool') return <div style={{ padding: 'var(--space-3) var(--space-4)', borderRadius: isUser ? 'var(--radius-lg) var(--radius-lg) var(--space-1) var(--radius-lg)' : 'var(--radius-lg) var(--radius-lg) var(--radius-lg) var(--space-1)', background: isUser ? 'var(--accent-a15)' : 'var(--bg-card)', minWidth: 0, maxWidth: '100%' }}>{content}</div>;
     return content;
   };
   return <>{buildBlockSegments(entries, prevTimestamp).map((segment, i) => (
