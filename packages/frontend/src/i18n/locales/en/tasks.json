@@ -144,7 +144,7 @@
     "selfReviewMax": "Self-Review Max Attempts",
     "selfReviewSkip": "0 (skip review)",
     "requirePlanApproval": "Require plan approval before implementation",
-    "tmuxWindow": "Tmux Window",
+    "tmuxWindow": "Window",
     "tmuxWindowPlaceholder": "Auto-created if empty",
     "skipPr": "Skip PR creation",
     "skipPrHintSkip": "Commits and pushes only. Updates existing PRs if any.",

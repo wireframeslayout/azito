@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef, useCallback } from 'react';
-import { stripPaneSuffix, type HostPathApi } from '@azito/shared';
+import { stripPaneSuffix, parseMuxRef, type HostPathApi } from '@azito/shared';
 import { api } from '../api/client';
 import { applyRetargetTabs } from '../lib/retargetTab';
 import { dirtyTabsReplacedByOpen, tabsKeptByOpen } from '../lib/dirtyTabsReplacedByOpen';
@@ -479,7 +479,7 @@ export function useTabPersistence(storageKey?: string, options?: TabPersistenceO
         return;
       }
     }
-    const label = terminalRefDisplayLabel(ref);
+    const label = ref.kind === 'ref' && parseMuxRef(ref.ref).kind === 'misao' ? '' : terminalRefDisplayLabel(ref);
     openTab({
       id: tabId,
       type: 'terminal',

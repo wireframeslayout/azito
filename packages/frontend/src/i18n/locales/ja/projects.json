@@ -142,7 +142,7 @@
       "distributionOnNoRepo": "ハブ経由で配信します（配信元リポジトリが未設定です）",
       "distributionOff": "配信しません",
       "advancedToggle": "詳細設定",
-      "tmuxSessionLabel": "tmux セッション",
+      "tmuxSessionLabel": "セッション名",
       "tmuxSessionHint": "空欄のままにすると、AZITO が既定のセッション名を使います。",
       "tmuxSessionPlaceholder": "既定のセッション名を使う",
       "inputPolicyLabel": "入力ポリシー",
@@ -168,7 +168,7 @@
     "projectName": "プロジェクト名",
     "projectNamePlaceholder": "プロジェクト名",
     "slug": "スラッグ",
-    "slugHint": "tmuxセッション名として使用されます。小文字英字・数字・ハイフンのみ。",
+    "slugHint": "小文字英字・数字・ハイフンのみ使用できます。",
     "slugPlaceholder": "project-slug",
     "description": "説明",
     "descriptionPlaceholder": "プロジェクトの説明...",
@@ -238,7 +238,7 @@
       "title": "ウィンドウ",
       "noWindows": "ウィンドウなし",
       "count": "{{count}} 件のウィンドウ",
-      "noWindowsHint": "tmux のウィンドウをこのプロジェクトに登録すると、ワークスペースのタブから開けます。"
+      "noWindowsHint": "ウィンドウをこのプロジェクトに登録すると、タブから開けます。"
     },
     "servers": {
       "count": "{{count}} 件のサーバー環境",
@@ -254,7 +254,7 @@
       "distributionRepositoryRequired": "配信対象リポジトリを選択してください（配信が有効な間は必須です）。",
       "branch": "ブランチ（任意）",
       "branchPlaceholder": "例: feat/my-feature",
-      "tmuxSession": "Tmuxセッション（任意）",
+      "tmuxSession": "セッション名（任意）",
       "tmuxSessionHint": "空の場合は 'azito' がデフォルト。",
       "tmuxSessionPlaceholder": "azito",
       "noServers": "サーバー環境が設定されていません",

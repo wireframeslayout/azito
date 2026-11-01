@@ -22,6 +22,26 @@ interface ProjectItem {
   color?: string | null;
 }
 
+const railActionStyle: React.CSSProperties = {
+  width: 36,
+  height: 36,
+  borderRadius: 'var(--radius-md)',
+  display: 'flex',
+  alignItems: 'center',
+  justifyContent: 'center',
+  background: 'transparent',
+  color: 'var(--text-dim)',
+  border: '1px dashed var(--border)',
+  cursor: 'pointer',
+  flexShrink: 0,
+  transition: 'border-color 0.15s ease, color 0.15s ease',
+};
+
+function setRailActionHover(e: React.MouseEvent<HTMLButtonElement>, hovered: boolean) {
+  e.currentTarget.style.borderColor = hovered ? 'var(--accent)' : 'var(--border)';
+  e.currentTarget.style.color = hovered ? 'var(--accent)' : 'var(--text-dim)';
+}
+
 export default function ProjectSidebar() {
   const { t } = useTranslation(['projects', 'common']);
   const navigate = useNavigate();
@@ -402,30 +422,27 @@ export default function ProjectSidebar() {
           );
         })}
         <button
+          type="button"
+          className="icon-btn"
+          onClick={() => navigate(paths.projectNew())}
+          aria-label={t('search.newProject')}
+          title={t('search.newProject')}
+          style={railActionStyle}
+          onMouseEnter={(e) => setRailActionHover(e, true)}
+          onMouseLeave={(e) => setRailActionHover(e, false)}
+        >
+          <Icon name="plus" size={16} />
+        </button>
+        <button
           ref={moreButtonRef}
           onClick={() => setSearchOpen((v) => !v)}
           aria-haspopup="dialog"
           aria-expanded={searchOpen}
           aria-label={t('sidebar.projectMenu')}
           title={t('sidebar.projectMenu')}
-          style={{
-            width: 36,
-            height: 36,
-            borderRadius: 'var(--radius-md)',
-            display: 'flex',
-            alignItems: 'center',
-            justifyContent: 'center',
-            background: 'transparent',
-            color: 'var(--text-dim)',
-            border: '1px dashed var(--border)',
-            fontSize: 'var(--font-xl)',
-            cursor: 'pointer',
-            flexShrink: 0,
-            marginBottom: 8,
-            transition: 'border-color 0.15s ease, color 0.15s ease',
-          }}
-          onMouseEnter={(e) => { e.currentTarget.style.borderColor = 'var(--accent)'; e.currentTarget.style.color = 'var(--accent)'; }}
-          onMouseLeave={(e) => { e.currentTarget.style.borderColor = 'var(--border)'; e.currentTarget.style.color = 'var(--text-dim)'; }}
+          style={{ ...railActionStyle, fontSize: 'var(--font-xl)', marginBottom: 8 }}
+          onMouseEnter={(e) => setRailActionHover(e, true)}
+          onMouseLeave={(e) => setRailActionHover(e, false)}
         >
           <Icon name="more" size={16} />
         </button>

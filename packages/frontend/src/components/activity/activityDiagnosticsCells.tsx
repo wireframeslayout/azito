@@ -1,4 +1,5 @@
 import { useTranslation } from 'react-i18next';
+import { diagnosticWindowTitle, isMisaoDiagnosticWindow } from '../../lib/activityDiagnostics';
 import { Chip } from '../ui/Chip';
 import { BrailleSpinner, BlockedDot } from '../ui/WindowActivityIndicator';
 import { formatRelativeTime } from '../../utils/time';
@@ -122,16 +123,18 @@ export function MatchCell({ row }: { row: ActivityDiagnosticRow }) {
   if (!match) return <span style={{ ...DIM, fontSize: 'var(--font-sm)' }}>—</span>;
   return (
     <Chip tone={match === 'muxPaneRef' ? 'green' : 'default'}>
-      {match === 'muxPaneRef' ? '%N' : match === 'windowSpec' ? 'spec' : 'key'}
+      {match === 'muxPaneRef' ? (isMisaoDiagnosticWindow(row) ? 'pane' : '%N') : match === 'windowSpec' ? 'spec' : 'key'}
     </Chip>
   );
 }
 
 /** ウィンドウ列（tmux ターゲット＋ サーバー名・タスク番号）。 */
 export function WindowCell({ row }: { row: ActivityDiagnosticRow }) {
+  const { t } = useTranslation('units');
+  const title = diagnosticWindowTitle(row, t('common:labels.window'));
   return (
     <span style={{ display: 'inline-flex', flexDirection: 'column', gap: 2 }}>
-      <span style={MONO}>{row.target}</span>
+      <span style={MONO}>{title}</span>
       <span style={{ ...DIM, fontSize: 'var(--font-2xs)' }}>
         {row.serverName}
         {row.taskId != null && ` · #${row.taskId}`}
