@@ -53,7 +53,7 @@ export function TextFileEditor({ backend, path, name, initialLine, serverName, o
   ];
   const selectMode = (value: Mode) => { setMode(value); localStorage.setItem('azito-md-view-mode', value); };
   const showDiff = () => setDiff(doc.conflict?.kind === 'text' ? lineDiff(doc.conflict.content, doc.content) : null);
-  const unavailableText = (value: TextUnavailable): string => value.code === 'other' ? value.message : t(`editor.unavailable.${value.code}`);
+  const unavailableText = (value: TextUnavailable): string => t(`editor.unavailable.${value.code}`);
   const canSave = doc.dirty && !doc.saving && doc.conflict === undefined;
   const save = () => { if (canSave) void doc.save(); };
   const download = async () => {

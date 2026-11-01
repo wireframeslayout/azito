@@ -68,14 +68,14 @@ describe('StorageFilesBackend', () => {
 });
 
 describe('unreadable text', () => {
-  it('keeps the server code and treats an unexplained code as other', async () => {
+  it('keeps the server code and treats an unexplained answer as a load error', async () => {
     vi.stubGlobal('fetch', vi.fn()
       .mockResolvedValueOnce(response({ error: 'File is not valid UTF-8', code: 'invalid_utf8' }, 400))
       .mockResolvedValueOnce(response({ error: 'Invalid path' }, 400))
       .mockResolvedValueOnce(response({ error: 'EACCES' }, 403)));
     const backend = new ServerFilesBackend('host', 1);
     expect(await backend.read('/a')).toEqual({ kind: 'unavailable', code: 'invalid_utf8', message: 'File is not valid UTF-8' });
-    expect(await backend.read('/b')).toEqual({ kind: 'unavailable', code: 'other', message: 'Invalid path' });
+    await expect(backend.read('/b')).rejects.toThrow('Invalid path');
     expect(await backend.read('/c')).toEqual({ kind: 'unavailable', code: 'forbidden', message: 'EACCES' });
   });
 });

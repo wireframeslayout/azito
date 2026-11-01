@@ -41,20 +41,25 @@ export class StorageFilesBackend implements FilesBackend {
     return entries;
   }
   private toRead(body: StorageResponse): FileReadResult {
-    if (body.error) return unavailableFrom(body.code, body.error);
     if (typeof body.content !== 'string' || typeof body.language !== 'string' || typeof body.version !== 'string') throw new Error('Invalid file response');
     return { kind: 'text', content: body.content, language: body.language, version: body.version };
   }
   async read(path: string): Promise<FileReadResult> {
     const { status, body } = await apiWithStatus<StorageResponse>(`${this.root}/content?key=${encodeURIComponent(path)}`);
-    if (status === 400 || status === 403 || status === 413) return unavailableFrom(status === 403 ? 'forbidden' : body.code, body.error || 'Cannot edit file');
-    if (status >= 400) throw new Error(body.error || 'Failed to load file');
+    if (status >= 400) {
+      const unavailable = unavailableFrom(status === 403 ? 'forbidden' : body.code, body.error || 'Cannot edit file');
+      if (unavailable) return unavailable;
+      throw new Error(body.error || 'Failed to load file');
+    }
     return this.toRead(body);
   }
   async save(path: string, content: string, version: string, force: boolean): Promise<FileSaveResult> {
     const { status, body } = await apiWithStatus<StorageResponse>(`${this.root}/content`, { method: 'PUT', body: JSON.stringify({ key: path, content, version, force }) });
     if (status === 409 && body.code === 'conflict') {
-      return { kind: 'conflict', latest: body.latest ? this.toRead(body.latest) : null };
+      const latest = body.latest ?? null;
+      // A latest version the host could not offer as text carries its reason; an unexplained one is reported as unreadable.
+      if (latest?.error !== undefined) return { kind: 'conflict', latest: unavailableFrom(latest.code, latest.error) };
+      return { kind: 'conflict', latest: latest ? this.toRead(latest) : null };
     }
     if (status >= 400 || body.error) throw new Error(body.error || 'Failed to save file');
     if (typeof body.version !== 'string') throw new Error('Invalid save response');

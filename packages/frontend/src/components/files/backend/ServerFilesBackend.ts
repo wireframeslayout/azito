@@ -19,7 +19,8 @@ export class ServerFilesBackend implements FilesBackend {
   async read(path: string): Promise<FileReadResult> {
     const { status, body } = await apiWithStatus<ResponseBody>(`${this.root}/content?path=${encodeURIComponent(path)}`);
     if (status >= 400) {
-      if (status === 400 || status === 413 || status === 403) return unavailableFrom(status === 403 ? 'forbidden' : body.code, body.error || 'Cannot edit file');
+      const unavailable = unavailableFrom(status === 403 ? 'forbidden' : body.code, body.error || 'Cannot edit file');
+      if (unavailable) return unavailable;
       throw new Error(body.error || 'Failed to load file');
     }
     if (body.type) return { kind: 'unavailable', code: 'not_text', message: 'File is not text' };

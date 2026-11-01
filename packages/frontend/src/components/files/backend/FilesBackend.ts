@@ -5,16 +5,16 @@ export interface FileEntry {
   size?: number;
 }
 
-/** Why a file cannot be edited as text; `other` carries only the host's message. */
-export type TextUnavailableCode = 'too_large' | 'binary' | 'invalid_utf8' | 'not_text' | 'forbidden' | 'other';
+/** Why a file cannot be edited as text. */
+export type TextUnavailableCode = 'too_large' | 'binary' | 'invalid_utf8' | 'not_text' | 'forbidden';
 
 export interface TextUnavailable { kind: 'unavailable'; code: TextUnavailableCode; message: string }
 
 const ANSWERED_CODES: ReadonlySet<string> = new Set(['too_large', 'binary', 'invalid_utf8', 'forbidden']);
 
-/** Reads the code a host answered with; a code this UI does not explain is `other`. */
-export function unavailableFrom(code: string | undefined, message: string): TextUnavailable {
-  return { kind: 'unavailable', code: code !== undefined && ANSWERED_CODES.has(code) ? code as TextUnavailableCode : 'other', message };
+/** Reads the reason a host answered with; `null` when the answer is not one of them (an error, not an uneditable file). */
+export function unavailableFrom(code: string | undefined, message: string): TextUnavailable | null {
+  return code !== undefined && ANSWERED_CODES.has(code) ? { kind: 'unavailable', code: code as TextUnavailableCode, message } : null;
 }
 
 export type FileReadResult =
