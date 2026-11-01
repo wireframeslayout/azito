@@ -36,19 +36,13 @@ export function Overlay({ open, onClose, labelledBy, children, variant = 'dialog
     return () => { queueMicrotask(() => { if (previous?.isConnected) previous.focus(); }); };
   }, [open, initialFocusRef]);
 
-  useEffect(() => {
-    if (!open || !isTop) return;
-    const handleKey = (event: KeyboardEvent) => { if (ref.current) cycleFocus(event, ref.current); };
-    document.addEventListener('keydown', handleKey);
-    return () => document.removeEventListener('keydown', handleKey);
-  }, [open, isTop]);
 
   if (!open) return null;
   return createPortal(
     <div className="overlay-backdrop" onClick={(event) => {
       if (event.target === event.currentTarget && isTop && dismissOnBackdrop && !closeDisabled && !busy) onClose();
     }}>
-      <div ref={ref} role={variant === 'alert' ? 'alertdialog' : 'dialog'} aria-modal="true" aria-labelledby={labelledBy} aria-busy={busy || undefined} tabIndex={-1} className="overlay-panel" style={{ maxWidth, maxHeight, background: surface === 'solid' ? 'var(--bg-solid)' : 'var(--bg-elevated)', ...style }}>
+      <div ref={ref} onKeyDown={event => { if (isTop && ref.current) cycleFocus(event.nativeEvent, ref.current); }} role={variant === 'alert' ? 'alertdialog' : 'dialog'} aria-modal="true" aria-labelledby={labelledBy} aria-busy={busy || undefined} tabIndex={-1} className="overlay-panel" style={{ maxWidth, maxHeight, background: surface === 'solid' ? 'var(--bg-solid)' : 'var(--bg-elevated)', ...style }}>
         {children}
       </div>
     </div>, document.body,

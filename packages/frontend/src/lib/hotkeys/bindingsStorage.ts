@@ -3,8 +3,8 @@ import { formatKeySpec, parseKeySpec, type KeySpec } from './keySpec';
 
 export type HotkeyAction = 'search.open' | 'maximize.open';
 export type Bindings = Record<HotkeyAction, KeySpec | null>;
-const BINDINGS_KEY = 'azito.hotkeyBindings';
-const CHORD_KEY = 'azito.hotkeyChordMs';
+const BINDINGS_KEY = 'azito-hotkeys';
+const CHORD_KEY = 'azito-hotkeys-chord-ms';
 const defaults = (): Bindings => ({ 'search.open': parseKeySpec('Space Space'), 'maximize.open': parseKeySpec('Ctrl+Shift+M') });
 const storedSpec = z.object({ text: z.string(), windowMs: z.number().positive().optional() }).strict().nullable();
 const schema = z.object({ 'search.open': storedSpec, 'maximize.open': storedSpec }).strict();

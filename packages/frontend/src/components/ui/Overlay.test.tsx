@@ -13,7 +13,7 @@ describe('Overlay', () => {
     expect(screen.getByRole('dialog', { name: 'Example' })).toHaveAttribute('aria-modal', 'true');
     expect(screen.getByText('First')).toHaveFocus();
     screen.getByText('Last').focus();
-    fireEvent.keyDown(document, { key: 'Tab' });
+    fireEvent.keyDown(screen.getByText('Last'), { key: 'Tab' });
     expect(screen.getByText('First')).toHaveFocus();
     fireEvent.keyDown(document, { key: 'Escape' });
     await waitFor(() => expect(onClose).toHaveBeenCalledOnce());

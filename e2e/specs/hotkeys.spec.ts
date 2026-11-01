@@ -8,6 +8,8 @@ test('キーボード設定が再読込後も維持される', async ({ app, har
   await search.getByRole('tab', { name: 'Ctrl+K' }).click();
   await interval.getByRole('tab', { name: '0.5 秒' }).click();
   await maximize.getByRole('tab', { name: '使わない' }).click();
+  expect(await app.evaluate(() => localStorage.getItem('azito-hotkeys'))).not.toBeNull();
+  expect(await app.evaluate(() => localStorage.getItem('azito-hotkeys-chord-ms'))).toBe('500');
   await app.reload();
   await expect(search.getByRole('tab', { name: 'Ctrl+K' })).toHaveAttribute('aria-selected', 'true');
   await expect(interval.getByRole('tab', { name: '0.5 秒' })).toHaveAttribute('aria-selected', 'true');
