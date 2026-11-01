@@ -17,6 +17,9 @@
        行間ヘアライン（fg 由来の透過色）だけを残す。
    ============================================================ */
 :root {
+  --font-prose: -apple-system, BlinkMacSystemFont, 'Hiragino Sans', 'Noto Sans JP', 'Yu Gothic UI', 'Segoe UI', system-ui, sans-serif;
+  --font-ui: 'JetBrainsMono Nerd Font', 'JetBrains Mono', -apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif;
+  --font-mono: 'JetBrainsMono Nerd Font', 'JetBrains Mono', ui-monospace, SFMono-Regular, Menlo, monospace;
   /* [1] ソース */
   --surface-base: #0d1117;
   --surface-fg: #e6edf3;
@@ -274,8 +277,7 @@ input, select, textarea {
 }
 
 body {
-  font-family: 'JetBrainsMono Nerd Font', 'JetBrains Mono', -apple-system,
-    BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif;
+  font-family: var(--font-ui);
   /* 半透明化される --bg ではなく常時不透明の土台色（透過面の最終的な下地になる） */
   background: var(--bg-solid);
   color: var(--text);
@@ -570,7 +572,7 @@ button:focus-within .diff-open-btn {
 
 .log-entry pre {
   margin-top: 4px;
-  font-family: 'JetBrainsMono Nerd Font', 'JetBrains Mono', monospace;
+  font-family: var(--font-mono);
   font-size: 11px;
   white-space: pre-wrap;
   word-break: break-all;
@@ -1066,6 +1068,43 @@ input[aria-invalid="true"]:focus-visible { outline-color: var(--danger) !importa
   box-shadow: none !important;
 }
 
+.md-content { max-width: 760px; min-width: 0; font-family: var(--font-prose); font-size: var(--font-base); line-height: 1.8; color: var(--text); overflow-wrap: anywhere; }
+.md-content h1, .md-content h2, .md-content h3, .md-content h4 { margin: 1.3em 0 .8em; font-weight: 700; line-height: 1.5; }
+.md-content h1, .md-content h2 { font-size: 15.5px; border-bottom: 1px solid var(--hairline); padding-bottom: .3em; }
+.md-content h3 { font-size: var(--font-base); }
+.md-content h4 { font-size: var(--font-base); margin-top: 1.1em; }
+.md-content p { margin: .8em 0; }
+.md-content > :first-child { margin-top: 0; }
+.md-content > :last-child { margin-bottom: 0; }
+.md-content ul, .md-content ol { padding-left: 1.4em; margin: .8em 0; }
+.md-content li + li { margin-top: .35em; }
+.md-content li::marker { color: var(--text-dim); }
+.md-content code { background: var(--bg-card); padding: 2px 6px; border-radius: var(--radius-sm); font-family: var(--font-mono); font-size: 12.5px; }
+.md-content pre { min-width: 0; max-width: 100%; background: var(--bg-card); padding: var(--space-3) var(--space-4); border-radius: var(--radius-md); overflow-x: auto; margin: .8em 0; border: 1px solid var(--hairline); }
+.md-content pre code { background: none; padding: 0; }
+.md-content blockquote { margin: .8em 0; padding: var(--space-2) var(--space-4); background: var(--bg-card); border-radius: var(--radius-sm); color: var(--text-dim); }
+.md-content a { color: var(--accent); text-decoration: none; }
+.md-content a:hover { text-decoration: underline; }
+.md-content img { max-width: 100%; border-radius: var(--radius-sm); margin: .5em 0; }
+.md-content .md-table-wrap { max-width: 100%; overflow-x: auto; margin: .8em 0; border-radius: var(--radius-md); box-shadow: inset 0 0 0 1px var(--hairline); }
+.md-content table { border-collapse: separate; border-spacing: 0; width: 100%; font-size: var(--font-md); line-height: 1.55; font-variant-numeric: tabular-nums; }
+.md-content th, .md-content td { border-bottom: 1px solid var(--hairline); padding: var(--space-2) var(--space-3); text-align: left; }
+.md-content th + th, .md-content td + td { border-left: 1px solid var(--hairline); }
+.md-content tr:last-child td { border-bottom: 0; }
+.md-content th { background: var(--bg-card); color: var(--text-dim); font-size: var(--font-sm); font-weight: 600; }
+.md-content tbody tr:nth-child(even) td { background: color-mix(in srgb, var(--surface-fg) 2.5%, transparent); }
+.md-content th[align="right"], .md-content td[align="right"] { text-align: right; }
+.md-content th[align="center"], .md-content td[align="center"] { text-align: center; }
+.md-content th.md-numeric:not([align]), .md-content td.md-numeric:not([align]) { text-align: right; }
+.md-content td.md-numeric { font-family: var(--font-mono); font-variant-numeric: tabular-nums; }
+.md-content hr { border: none; border-top: 1px solid var(--hairline); margin: 1.5em 0; }
+.md-content input[type="checkbox"] { margin-right: var(--space-2); }
+
+.tool-run > summary { display: flex; align-items: center; gap: var(--space-2); min-height: 44px; padding: var(--space-2) var(--space-3); cursor: pointer; border-radius: var(--radius-md); background: var(--bg-card); color: var(--text); font: var(--font-sm) var(--font-mono); }
+.tool-run > summary:hover, .tool-run[open] > summary { background: var(--bg-hover); }
+.tool-run > summary:focus-visible { outline: 2px solid var(--text); outline-offset: 2px; }
+.tool-run-errors { color: var(--danger); }
+
 .overlay-backdrop {
   position: fixed;
   inset: 0;
@@ -1089,3 +1128,11 @@ input[aria-invalid="true"]:focus-visible { outline-color: var(--danger) !importa
 .overlay-panel:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 @keyframes overlay-enter { from { opacity: 0; transform: translateY(var(--space-1)); } to { opacity: 1; transform: translateY(0); } }
 @media (prefers-reduced-motion: reduce) { .overlay-panel { animation: none; } }
+
+.transcript-rail .md-content { font-family: inherit; line-height: 1.7; max-width: none; }
+.transcript-bubble .md-content :not(pre) > code,
+.transcript-bubble .md-content pre,
+.transcript-bubble .md-content th { background: var(--bg-hover); color: var(--text); }
+.tool-run-chevron { margin-left: auto; display: flex; transition: transform 130ms ease; }
+.tool-run[open] .tool-run-chevron { transform: rotate(90deg); }
+@media (prefers-reduced-motion: reduce) { .tool-run-chevron { transition: none; } }
