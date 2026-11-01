@@ -734,9 +734,12 @@ export class WindowRespawnService {
     const woken = this.windowRepo.findById(windowId);
     if (!woken) throw new Error('Window not found');
     const actualMux = windowKindOf(woken);
-    const suggestion = source !== 'tmux' || actualMux !== 'tmux'
+    // The reason is read after the wake: a window kept in tmux while misao answers (it was still alive) can be switched by hand,
+    // so it gets the "can switch" notice, not "misao is unavailable".
+    const misaoAvailableNow = supported && this.muxDriverRegistry.availabilityFor('misao', server).available;
+    const suggestion = source !== 'tmux' || actualMux !== 'tmux' || policy === 'tmux'
       ? null
-      : policy === 'ask' && availability.available ? 'ask' as const
+      : misaoAvailableNow ? 'ask' as const
         : policy === 'misao' ? 'misao_unavailable' as const
           : null;
     if (suggestion) {

@@ -2930,6 +2930,20 @@ describe('automatic wake policy', () => {
     expect(emit).toHaveBeenCalledWith(expect.objectContaining({ type: 'window:mux_switch_suggested', payload: expect.objectContaining({ reason: 'ask' }) }));
   });
 
+  it('offers switching, not "misao unavailable", when a misao-policy wake kept a still-alive window in tmux', async () => {
+    const win = makeWindow({ id: 7, taskId: null, sleeping: true });
+    const { service } = buildService({ window: win, task: null });
+    const emit = vi.fn();
+    const record = vi.fn();
+    (service as unknown as { muxSwitch: unknown }).muxSwitch = { settings: { get: () => 'misao' }, notifications: { emit }, audit: { record } };
+    const respawn = vi.spyOn(service, 'respawn').mockResolvedValue({ tmuxTarget: win.tmuxTarget });
+    await service.wakeWindow(7, win.serverName);
+    expect(respawn).toHaveBeenCalledWith(7, expect.anything(), expect.objectContaining({ mux: 'misao', autoSwitch: true }));
+    expect(emit).toHaveBeenCalledTimes(1);
+    expect(emit).toHaveBeenCalledWith(expect.objectContaining({ type: 'window:mux_switch_suggested', payload: expect.objectContaining({ reason: 'ask' }) }));
+    expect(record).not.toHaveBeenCalled();
+  });
+
   it('does not suggest misao under the ask policy when the server cannot use it', async () => {
     const win = makeWindow({ id: 7, taskId: null, sleeping: true });
     const { service, muxDriverRegistry } = buildService({ window: win, task: null });
