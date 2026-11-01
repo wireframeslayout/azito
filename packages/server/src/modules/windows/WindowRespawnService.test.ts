@@ -2678,7 +2678,7 @@ describe('WindowRespawnService.respawn — a conversation that was never written
   it('passes the recorded directory through the pane environment without putting it in the shell command', async () => {
     const directory = "/tmp/Claude $HOME 'quoted'";
     const probe = { exists: vi.fn(async () => true) };
-    const { tmux, sentCommands, outcome } = await respawnWith(makeWindow({ agentSessionId: SESSION, claudeConfigDir: directory }), probe);
+    const { tmux, sentCommands, outcome } = await respawnWith(makeWindow({ agentSessionId: SESSION, claudeConfigDir: directory, claudeConfigDirExplicit: true }), probe);
     expect(outcome).toBeNull();
     expect(probe.exists).toHaveBeenCalledWith(expect.anything(), 'claude', SESSION, directory);
     const options = tmux.openWindow.mock.calls[0][3] as unknown as { extraEnv: Record<string, string> };
@@ -2691,10 +2691,23 @@ describe('WindowRespawnService.respawn — a conversation that was never written
     expect(actual).toBe(directory);
   });
 
+  it('unsets CLAUDE_CONFIG_DIR when the recorded pane used the default', async () => {
+    const directory = '/home/user/.claude';
+    const probe = { exists: vi.fn(async () => true) };
+    const { tmux, sentCommands, outcome } = await respawnWith(makeWindow({ agentSessionId: SESSION, claudeConfigDir: directory, claudeConfigDirExplicit: false }), probe);
+    expect(outcome).toBeNull();
+    expect(probe.exists).toHaveBeenCalledWith(expect.anything(), 'claude', SESSION, directory);
+    const options = tmux.openWindow.mock.calls[0][3] as unknown as { extraEnv: Record<string, string> };
+    expect(options.extraEnv.AZITO_RESUME_CLAUDE_CONFIG_DIR).toBeUndefined();
+    expect(sentCommands.join('\n')).toContain('env -u CLAUDE_CONFIG_DIR ');
+    const actual = execFileSync('bash', ['-c', `export CLAUDE_CONFIG_DIR=/shell-override; env -u CLAUDE_CONFIG_DIR bash -c 'printf %s "\${CLAUDE_CONFIG_DIR-unset}"'`], { encoding: 'utf8' });
+    expect(actual).toBe('unset');
+  });
+
   it('restores separate pane directories through their pane environments', async () => {
     const paneLayout = { layout: '', panes: [
-      { index: 0, command: null, workingDirectory: null, title: null, workerType: 'claude', agentSessionId: SESSION, claudeConfigDir: '/config one' },
-      { index: 1, command: null, workingDirectory: null, title: null, workerType: 'claude', agentSessionId: 'second', claudeConfigDir: '/config two' },
+      { index: 0, command: null, workingDirectory: null, title: null, workerType: 'claude', agentSessionId: SESSION, claudeConfigDir: '/config one', claudeConfigDirExplicit: true },
+      { index: 1, command: null, workingDirectory: null, title: null, workerType: 'claude', agentSessionId: 'second', claudeConfigDir: '/config two', claudeConfigDirExplicit: true },
     ] };
     const probe = { exists: vi.fn(async () => true) };
     const built = buildService({ window: makeWindow({ paneLayout, agentSessionId: SESSION }), strategyFactory: claudeFactory, conversationProbe: probe });

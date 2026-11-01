@@ -520,7 +520,7 @@ including isolated ones. The decision, and why it does not weaken isolation:
 
 On POSIX local servers, the Claude SessionStart hook records the pane's effective configuration directory
 with the conversation ID. The window's chat log and the conversation existence check during respawn use
-that recorded directory. If it was not recorded (including windows asleep before the update or windows
+that recorded directory. Respawn also preserves whether `CLAUDE_CONFIG_DIR` was set, so Claude continues to use its original global configuration. If it was not recorded (including windows asleep before the update or windows
 whose hook did not arrive), they use the hub process configuration as before; respawn logs the reason and
 includes it in any check failure. A mismatch with the pane can still cause an incorrect result. Check that
 the hook is installed and delivered, and align `CLAUDE_CONFIG_DIR` in the hub and pane before retrying.

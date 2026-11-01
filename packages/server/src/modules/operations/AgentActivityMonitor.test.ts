@@ -2986,13 +2986,13 @@ describe('SessionStart pane delivery', () => {
         { emit: vi.fn() } as unknown as NotificationBus,
         undefined, undefined, resolver as never,
       );
-      monitor.recordClaudeSessionHook('local', '%1', 'older', '/old', '100');
+      monitor.recordClaudeSessionHook('local', '%1', 'older', '/old', '100', true);
       await vi.advanceTimersByTimeAsync(0);
-      monitor.recordClaudeSessionHook('local', '%1', 'newer', '/new', '200');
-      await vi.advanceTimersByTimeAsync(300);
-      monitor.recordClaudeSessionHook('local', '%1', 'older', '/old', '100');
+      monitor.recordClaudeSessionHook('local', '%1', 'newer', '/new', '200', false);
+      await vi.advanceTimersByTimeAsync(2100);
+      monitor.recordClaudeSessionHook('local', '%1', 'older', '/old', '100', true);
       expect(updateClaudeSessionByPane).toHaveBeenCalledTimes(1);
-      expect(updateClaudeSessionByPane).toHaveBeenCalledWith('local', 'azito:agent-1', 1, 'newer', '/new');
+      expect(updateClaudeSessionByPane).toHaveBeenCalledWith('local', 'azito:agent-1', 1, 'newer', '/new', false);
     } finally { vi.useRealTimers(); }
   });
 
@@ -3009,9 +3009,9 @@ describe('SessionStart pane delivery', () => {
         { emit: vi.fn() } as unknown as NotificationBus,
         undefined, undefined, resolver as never,
       );
-      monitor.recordClaudeSessionHook('local', '%2', 'session', '/config', '100');
-      await vi.advanceTimersByTimeAsync(300);
-      expect(updateClaudeSessionByPane).toHaveBeenCalledWith('local', 'azito:agent-1', 2, 'session', '/config');
+      monitor.recordClaudeSessionHook('local', '%2', 'session', '/config', '100', true);
+      await vi.advanceTimersByTimeAsync(2100);
+      expect(updateClaudeSessionByPane).toHaveBeenCalledWith('local', 'azito:agent-1', 2, 'session', '/config', true);
     } finally { vi.useRealTimers(); }
   });
 });

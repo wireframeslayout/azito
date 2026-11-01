@@ -108,6 +108,7 @@ interface AgentLaunchPlan {
   sessionId: string | null;
   conversation: RespawnConversation;
   configDir?: string | null;
+  configDirExplicit?: boolean | null;
 }
 
 export class WindowRespawnService {
@@ -314,9 +315,9 @@ export class WindowRespawnService {
 
     const resumeEnv: Record<string, string> = {};
     if (server.type === 'local' && !this.startsWorkerAsProgram(server) && launchPlan) {
-      if (launchPlan.single?.configDir) resumeEnv.AZITO_RESUME_CLAUDE_CONFIG_DIR = launchPlan.single.configDir;
+      if (launchPlan.single?.configDir && launchPlan.single.configDirExplicit === true) resumeEnv.AZITO_RESUME_CLAUDE_CONFIG_DIR = launchPlan.single.configDir;
       for (const [index, plan] of launchPlan.panes) {
-        if (plan.configDir) resumeEnv[`AZITO_RESUME_CLAUDE_CONFIG_DIR_${index}`] = plan.configDir;
+        if (plan.configDir && plan.configDirExplicit === true) resumeEnv[`AZITO_RESUME_CLAUDE_CONFIG_DIR_${index}`] = plan.configDir;
       }
     }
 
@@ -1226,15 +1227,15 @@ export class WindowRespawnService {
     win: Window,
     windowId: number,
   ): Promise<{ single: AgentLaunchPlan | null; panes: Map<number, AgentLaunchPlan> }> {
-    const decide = async (workerType: string, recorded: string | null, configDir?: string | null): Promise<AgentLaunchPlan> => {
+    const decide = async (workerType: string, recorded: string | null, configDir?: string | null, configDirExplicit?: boolean | null): Promise<AgentLaunchPlan> => {
       const sessionId = recorded ?? (this.sessionCaptureService ? await this.sessionCaptureService.tryScanForWindow(windowId) : null);
       if (!sessionId) return { sessionId: null, conversation: 'resume' };
       const agentType = this.sessionStrategyFactory.create(workerType).conversationLogAgentType;
       if (agentType === null) return { sessionId, conversation: 'resume' };
-      return { sessionId, configDir: server.type === 'local' && !this.startsWorkerAsProgram(server) && agentType === 'claude' && recorded === sessionId ? configDir : null, conversation: (await this.conversationProbe.exists(server, agentType, sessionId, recorded === sessionId ? configDir : null)) ? 'resume' : 'new' };
+      return { sessionId, configDirExplicit: server.type === 'local' && !this.startsWorkerAsProgram(server) && agentType === 'claude' && recorded === sessionId && configDir ? configDirExplicit : null, configDir: server.type === 'local' && !this.startsWorkerAsProgram(server) && agentType === 'claude' && recorded === sessionId ? configDir : null, conversation: (await this.conversationProbe.exists(server, agentType, sessionId, recorded === sessionId ? configDir : null)) ? 'resume' : 'new' };
     };
     if (!win.paneLayout) {
-      return { single: win.workerType ? await decide(win.workerType, win.agentSessionId, win.claudeConfigDir) : null, panes: new Map() };
+      return { single: win.workerType ? await decide(win.workerType, win.agentSessionId, win.claudeConfigDir, win.claudeConfigDirExplicit) : null, panes: new Map() };
     }
     const panes = new Map<number, AgentLaunchPlan>();
     const firstIndex = win.paneLayout.panes[0]?.index;
@@ -1243,7 +1244,7 @@ export class WindowRespawnService {
       if (!workerType) continue;
       const recorded = pane.agentSessionId || (pane.index === firstIndex ? win.agentSessionId : null);
       // Only the id the pane recorded is looked for; a scan finds the window's one conversation, which the first pane alone may take.
-      panes.set(pane.index, recorded === null && pane.index !== firstIndex ? { sessionId: null, conversation: 'resume' } : await decide(workerType, recorded, pane.agentSessionId ? pane.claudeConfigDir : pane.index === firstIndex ? win.claudeConfigDir : null));
+      panes.set(pane.index, recorded === null && pane.index !== firstIndex ? { sessionId: null, conversation: 'resume' } : await decide(workerType, recorded, pane.agentSessionId ? pane.claudeConfigDir : pane.index === firstIndex ? win.claudeConfigDir : null, pane.agentSessionId ? pane.claudeConfigDirExplicit : pane.index === firstIndex ? win.claudeConfigDirExplicit : null));
     }
     return { single: null, panes };
   }
@@ -1308,7 +1309,7 @@ export class WindowRespawnService {
           const launch = strategy.buildRespawnLaunch(plan?.sessionId ?? null, win.workerModel, null, blockMcp, plan?.conversation);
           if (launch) {
             const wrapped = this.wrapIfSupervised(renderLaunchLine(launch, this.dialectOf(server)), server, baseTarget, supervision);
-            const sendCmd = plan?.configDir ? `CLAUDE_CONFIG_DIR="$AZITO_RESUME_CLAUDE_CONFIG_DIR_${pane.index}" ${wrapped}` : wrapped;
+            const sendCmd = plan?.configDirExplicit === true ? `CLAUDE_CONFIG_DIR="$AZITO_RESUME_CLAUDE_CONFIG_DIR_${pane.index}" ${wrapped}` : plan?.configDirExplicit === false ? `env -u CLAUDE_CONFIG_DIR ${wrapped}` : wrapped;
             await driver.sendKeysToHandle(server, paneId, [sendCmd, 'Enter']);
           }
         }
@@ -1338,7 +1339,7 @@ export class WindowRespawnService {
       const launch = strategy.buildRespawnLaunch(plan?.sessionId ?? null, win.workerModel, null, blockMcp, plan?.conversation);
       if (launch) {
         const wrapped = this.wrapIfSupervised(renderLaunchLine(launch, this.dialectOf(server)), server, supervisorTarget, supervision);
-        const sendCmd = plan?.configDir ? `CLAUDE_CONFIG_DIR="$AZITO_RESUME_CLAUDE_CONFIG_DIR" ${wrapped}` : wrapped;
+        const sendCmd = plan?.configDirExplicit === true ? `CLAUDE_CONFIG_DIR="$AZITO_RESUME_CLAUDE_CONFIG_DIR" ${wrapped}` : plan?.configDirExplicit === false ? `env -u CLAUDE_CONFIG_DIR ${wrapped}` : wrapped;
         await driver.sendKeysToHandle(server, handle, [sendCmd, 'Enter']);
       }
     }

@@ -15,8 +15,8 @@ const SESSION_ID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]
 export interface MisaoWebhookOptions {
   /** The window a misao pane belongs to, or null when no registered window owns it or the daemon cannot be reached. */
   resolvePane: (serverName: string, paneId: string) => Promise<ResolvedWindow | null>;
-  recordClaudeSessionHook?: (serverName: string, paneId: string, sessionId: string, configDir: string, timestamp: string) => boolean;
-  recordAgentActivity: (serverName: string, tmuxTarget: string, event: AgentHookSignal['event'], sessionId?: string, claudeConfigDir?: string, paneOrdinal?: number) => void;
+  recordClaudeSessionHook?: (serverName: string, paneId: string, sessionId: string, configDir: string, timestamp: string, explicit: boolean) => boolean;
+  recordAgentActivity: (serverName: string, tmuxTarget: string, event: AgentHookSignal['event'], sessionId?: string, claudeConfigDir?: string, paneOrdinal?: number, claudeConfigDirExplicit?: boolean) => void;
 }
 
 export interface WebhookRouteOptions {
@@ -180,12 +180,17 @@ const webhookRoutes: FastifyPluginCallback<WebhookRouteOptions> = (fastify, opts
       misaoPaneId?: unknown;
       sessionId?: unknown;
       claudeConfigDir?: unknown;
+      claudeConfigDirExplicit?: unknown;
       hookTimestamp?: unknown;
     };
 
     if (body.claudeConfigDir !== undefined && (typeof body.claudeConfigDir !== 'string' || body.claudeConfigDir.length === 0 || body.claudeConfigDir.length > 4096 || body.claudeConfigDir.includes('\0') || !path.posix.isAbsolute(body.claudeConfigDir))) {
       return reply.status(400).send({ error: 'claudeConfigDir must be an absolute POSIX path of at most 4096 characters' });
     }
+    if (body.claudeConfigDirExplicit !== undefined && typeof body.claudeConfigDirExplicit !== 'boolean') {
+      return reply.status(400).send({ error: 'claudeConfigDirExplicit must be a boolean' });
+    }
+    const claudeConfigDirExplicit = typeof body.claudeConfigDirExplicit === 'boolean' ? body.claudeConfigDirExplicit : undefined;
     if (body.hookTimestamp !== undefined && (typeof body.hookTimestamp !== 'string' || !/^[0-9]{1,20}$/.test(body.hookTimestamp))) {
       return reply.status(400).send({ error: 'hookTimestamp must be a nanosecond timestamp' });
     }
@@ -204,12 +209,12 @@ const webhookRoutes: FastifyPluginCallback<WebhookRouteOptions> = (fastify, opts
       if (body.event !== 'start' && body.event !== 'stop' && body.event !== 'session') {
         return reply.status(400).send({ error: 'event must be "start", "stop" or "session"' });
       }
-      if (body.event === 'session' && sessionId && claudeConfigDir && hookTimestamp && misao.recordClaudeSessionHook) {
-        if (misao.recordClaudeSessionHook(resolveServerName(body.serverName), misaoPaneId, sessionId, claudeConfigDir, hookTimestamp)) return { ok: true };
+      if (body.event === 'session' && sessionId && claudeConfigDir && hookTimestamp && claudeConfigDirExplicit !== undefined && misao.recordClaudeSessionHook) {
+        if (misao.recordClaudeSessionHook(resolveServerName(body.serverName), misaoPaneId, sessionId, claudeConfigDir, hookTimestamp, claudeConfigDirExplicit)) return { ok: true };
       }
       const resolved = await misao.resolvePane(resolveServerName(body.serverName), misaoPaneId);
       // Only the first pane carries the window's agent state; a split pane's hook must not stand in for it.
-      if (resolved && (resolved.ordinal === 1 || body.event === 'session')) misao.recordAgentActivity(resolveServerName(body.serverName), resolved.tmuxTarget, body.event, sessionId, claudeConfigDir, resolved.ordinal);
+      if (resolved && (resolved.ordinal === 1 || body.event === 'session')) misao.recordAgentActivity(resolveServerName(body.serverName), resolved.tmuxTarget, body.event, sessionId, claudeConfigDir, resolved.ordinal, claudeConfigDirExplicit);
       return { ok: true };
     }
 
@@ -245,6 +250,7 @@ const webhookRoutes: FastifyPluginCallback<WebhookRouteOptions> = (fastify, opts
       muxPaneRef,
       sessionId,
       claudeConfigDir,
+      ...(claudeConfigDirExplicit !== undefined ? { claudeConfigDirExplicit } : {}),
       hookTimestamp,
     });
 

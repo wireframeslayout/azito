@@ -157,7 +157,7 @@ export async function resolveIdentity({ env, serverName, tmux }) {
 }
 
 /** The request body for an identified pane. Key order is the one of the bash `printf` templates (the parity test compares the text). */
-export function buildBody({ serverName, identity, event, sessionId, content, claudeConfigDir, hookTimestamp }) {
+export function buildBody({ serverName, identity, event, sessionId, content, claudeConfigDir, claudeConfigDirExplicit, hookTimestamp }) {
   const head = 'misaoPaneId' in identity
     ? { serverName, misaoPaneId: identity.misaoPaneId, event }
     : {
@@ -169,7 +169,7 @@ export function buildBody({ serverName, identity, event, sessionId, content, cla
         event,
         muxPaneRef: identity.muxPaneRef,
       };
-  return JSON.stringify({ ...head, ...(sessionId ? { sessionId } : {}), ...(claudeConfigDir !== undefined ? { claudeConfigDir } : {}), ...(hookTimestamp !== undefined ? { hookTimestamp } : {}), ...(content !== undefined ? { content } : {}) });
+  return JSON.stringify({ ...head, ...(sessionId ? { sessionId } : {}), ...(claudeConfigDir !== undefined ? { claudeConfigDir } : {}), ...(claudeConfigDirExplicit !== undefined ? { claudeConfigDirExplicit } : {}), ...(hookTimestamp !== undefined ? { hookTimestamp } : {}), ...(content !== undefined ? { content } : {}) });
 }
 
 /** The question card of an AskUserQuestion permission request, or undefined for a body that has none (azito-question.sh). */
@@ -197,7 +197,7 @@ export function buildQuestionContent(stdinText) {
  * Decides what one hook invocation sends. Returns `{ url, token, body, timeoutMs }`, or null when nothing is to be sent.
  * Everything the invocation depends on is a parameter so the rules can be tested without a process.
  */
-export async function planHook({ args, env, homeDir, stdinText, readFile = (p) => fs.readFileSync(p, 'utf8'), tmux = askTmux, hostname = os.hostname }) {
+export async function planHook({ args, env, homeDir, stdinText, readFile = (p) => fs.readFileSync(p, 'utf8'), tmux = askTmux, hostname = os.hostname, platform = process.platform, now = Date.now }) {
   const { kind, event, prefix } = args;
 
   if (kind === 'notify') {
@@ -225,7 +225,7 @@ export async function planHook({ args, env, homeDir, stdinText, readFile = (p) =
   if (!identity) return null;
 
   const hookEvent = kind === 'activity' ? event : kind === 'session' ? 'session' : kind === 'subagent' ? 'subagent' : 'open';
-  let body = buildBody({ serverName, identity, event: hookEvent, sessionId, claudeConfigDir: kind === 'session' && process.platform !== 'win32' ? (env.CLAUDE_CONFIG_DIR || `${env.HOME || homeDir}/.claude`) : undefined, hookTimestamp: kind === 'session' && process.platform !== 'win32' ? `${Date.now()}000000` : undefined });
+  let body = buildBody({ serverName, identity, event: hookEvent, sessionId, claudeConfigDir: kind === 'session' && platform !== 'win32' ? (env.CLAUDE_CONFIG_DIR || `${env.HOME || homeDir}/.claude`) : undefined, claudeConfigDirExplicit: kind === 'session' && platform !== 'win32' ? Boolean(env.CLAUDE_CONFIG_DIR) : undefined, hookTimestamp: kind === 'session' && platform !== 'win32' ? `${now()}000000` : undefined });
   if (kind === 'question') {
     const content = buildQuestionContent(stdinText);
     if (content !== undefined) {

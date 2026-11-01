@@ -52,6 +52,7 @@ json_string() {
 }
 CONFIG_DIR="${CLAUDE_CONFIG_DIR:-$HOME/.claude}"
 CONFIG_FIELD=",\"claudeConfigDir\":$(json_string "$CONFIG_DIR")"
+if [[ -n "${CLAUDE_CONFIG_DIR:-}" ]]; then CONFIG_FIELD+=',"claudeConfigDirExplicit":true'; else CONFIG_FIELD+=',"claudeConfigDirExplicit":false'; fi
 SESSION_FIELD+="$CONFIG_FIELD"
 # GNU date provides nanoseconds; BSD date emits a literal N and falls back to seconds.
 HOOK_TIME="$(date +%s%N)"

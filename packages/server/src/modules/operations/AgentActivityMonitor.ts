@@ -216,6 +216,7 @@ export interface AgentHookSignal {
   /** Claude Code session id from the hook's stdin; updates the agent window's agent_session_id when it changed. */
   sessionId?: string;
   claudeConfigDir?: string;
+  claudeConfigDirExplicit?: boolean;
   hookTimestamp?: string;
 }
 
@@ -812,12 +813,12 @@ export class AgentActivityMonitor {
     const at = Date.now();
 
     if (signal.muxPaneRef && this.paneHandleResolver) {
-      if (signal.event === 'session' && signal.claudeConfigDir && signal.sessionId && signal.hookTimestamp) {
-        if (this.recordClaudeSessionHook(signal.serverName, signal.muxPaneRef, signal.sessionId, signal.claudeConfigDir, signal.hookTimestamp)) return;
+      if (signal.event === 'session' && signal.claudeConfigDir && signal.sessionId && signal.hookTimestamp && signal.claudeConfigDirExplicit !== undefined) {
+        if (this.recordClaudeSessionHook(signal.serverName, signal.muxPaneRef, signal.sessionId, signal.claudeConfigDir, signal.hookTimestamp, signal.claudeConfigDirExplicit)) return;
       }
       const resolved = this.paneHandleResolver.getCached(signal.serverName, asPaneHandle(signal.muxPaneRef));
       if (resolved) {
-        this.recordResolvedHookSignal(signal.serverName, resolved.tmuxTarget, signal.event, signal.sessionId, signal.claudeConfigDir, resolved.ordinal);
+        this.recordResolvedHookSignal(signal.serverName, resolved.tmuxTarget, signal.event, signal.sessionId, signal.claudeConfigDir, resolved.ordinal, signal.claudeConfigDirExplicit);
         return;
       }
       if (resolved === undefined) this.paneHandleResolver.warm(signal.serverName, signal.muxPaneRef);
@@ -847,7 +848,7 @@ export class AgentActivityMonitor {
   }
 
   /** Hold early SessionStart events until the window is registered; ignore older deliveries. */
-  recordClaudeSessionHook(serverName: string, paneHandle: string, sessionId: string, configDir: string, timestamp: string): boolean {
+  recordClaudeSessionHook(serverName: string, paneHandle: string, sessionId: string, configDir: string, timestamp: string, explicit: boolean): boolean {
     if (!this.paneHandleResolver || this.serverRepo.findByName(serverName)?.type !== 'local' || process.platform === 'win32') return false;
     const key = `${serverName}::${paneHandle}`;
     const previous = this.pendingClaudeHooks.get(key);
@@ -864,13 +865,13 @@ export class AgentActivityMonitor {
         const result = await this.paneHandleResolver!.resolveWindowByPaneHandle(serverName, asPaneHandle(paneHandle));
         if (this.pendingClaudeHooks.get(key) !== pending) return;
         if (result) {
-          this.recordResolvedHookSignal(serverName, result.tmuxTarget, 'session', sessionId, configDir, result.ordinal);
+          this.recordResolvedHookSignal(serverName, result.tmuxTarget, 'session', sessionId, configDir, result.ordinal, explicit);
           return;
         }
       } catch (err) {
         console.warn('[agent-activity] pane resolution failed:', err);
       }
-      if (Date.now() < pending.expiresAt) setTimeout(() => { void resolve(); }, 250).unref();
+      if (Date.now() < pending.expiresAt) setTimeout(() => { void resolve(); }, 2_000).unref();
       else if (this.pendingClaudeHooks.get(key) === pending) this.pendingClaudeHooks.delete(key);
     };
     void resolve();
@@ -881,14 +882,14 @@ export class AgentActivityMonitor {
    * Record a Tier 1 hook signal for a window the caller already resolved
    * (by mux pane handle), then tick immediately.
    */
-  recordResolvedHookSignal(serverName: string, tmuxTarget: string, event: AgentHookSignal['event'], sessionId?: string, claudeConfigDir?: string, paneOrdinal?: number): void {
+  recordResolvedHookSignal(serverName: string, tmuxTarget: string, event: AgentHookSignal['event'], sessionId?: string, claudeConfigDir?: string, paneOrdinal?: number, claudeConfigDirExplicit?: boolean): void {
     if (sessionId) {
       const target = this.windowRepo.findAll().find(
         (w): w is AgentWindow => w.serverName === serverName && isSameWindowTarget(w.tmuxTarget, tmuxTarget) && isAgentWindow(w),
       );
       if (target && !target.sleeping) {
-        if (event === 'session' && claudeConfigDir && this.serverRepo.findByName(serverName)?.type === 'local' && process.platform !== 'win32') {
-          this.windowRepo.updateClaudeSessionByPane(serverName, target.tmuxTarget, paneOrdinal ?? null, sessionId, claudeConfigDir);
+        if (event === 'session' && claudeConfigDir && claudeConfigDirExplicit !== undefined && this.serverRepo.findByName(serverName)?.type === 'local' && process.platform !== 'win32') {
+          this.windowRepo.updateClaudeSessionByPane(serverName, target.tmuxTarget, paneOrdinal ?? null, sessionId, claudeConfigDir, claudeConfigDirExplicit);
           if ((paneOrdinal === undefined || paneOrdinal === 1) && target.agentSessionId !== sessionId) {
             this.sessionUpdates.set(windowKey(serverName, target.tmuxTarget), { from: target.agentSessionId, to: sessionId, at: Date.now(), event });
             this.onSessionIdUpdated?.(serverName, target.tmuxTarget, target.id, target.agentSessionId, sessionId, event);

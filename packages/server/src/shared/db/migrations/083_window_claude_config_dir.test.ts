@@ -14,7 +14,7 @@ describe('window Claude configuration migration', () => {
     const secretFileGuard = createSecretFileGuard(process.platform, process.env);
     try {
       const db = openDatabase(dbPath, { secretFileGuard });
-      db.exec('ALTER TABLE windows DROP COLUMN claude_config_dir; ALTER TABLE windows DROP COLUMN claude_pane_sessions; DELETE FROM _migrations WHERE version = 83');
+      db.exec('ALTER TABLE windows DROP COLUMN claude_config_dir; ALTER TABLE windows DROP COLUMN claude_pane_sessions; ALTER TABLE windows DROP COLUMN claude_config_dir_explicit; DELETE FROM _migrations WHERE version = 83');
       if (has082) db.prepare("INSERT INTO _migrations (version, description) VALUES (82, 'other series')").run();
       db.close();
       const migrated = openDatabase(dbPath, { secretFileGuard });
