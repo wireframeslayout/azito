@@ -15,6 +15,7 @@ import { checkFirewall, firewallRuleName } from './windowsFirewall';
 import { windowsMisaoPipe } from '../transport/agentMisaoSocket';
 import { buildWindowsPreflightCommand, parseWindowsPreflight, type WindowsPreflightInfo } from './windowsPreflight';
 import type { UninstallStepId, WindowsUninstallResult } from './windowsAgentUninstall';
+import { harnessMcpScript, parseHarnessMcpOutput } from './windowsHarnessMcpUninstall';
 import { misaoHubScript, parseMisaoGuardOutput } from './windowsAgentOwnership';
 import type { WindowsAgentOptions } from './windowsAgentConfig';
 
@@ -444,4 +445,51 @@ describe.skipIf(process.platform !== 'win32')('removing the Windows agent from a
     }
     expect(fs.existsSync(root)).toBe(false);
   }, 120_000);
+});
+
+
+describe.skipIf(process.platform !== 'win32')('harness MCP removal on Windows', () => {
+  it('edits Claude settings and invokes a Codex npm shim with the host CODEX_HOME', async () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'azito mcp & '));
+    try {
+      const home = path.join(root, 'home');
+      const harness = path.join(root, 'harness');
+      const target = path.join(harness, 'index.js');
+      const linked = path.join(root, 'linked');
+      const settings = path.join(home, '.claude', 'settings.json');
+      const codexHome = path.join(root, 'codex home');
+      const bin = path.join(root, 'bin');
+      fs.mkdirSync(path.dirname(settings), { recursive: true });
+      fs.mkdirSync(harness, { recursive: true });
+      fs.mkdirSync(path.join(bin, 'node_modules'), { recursive: true });
+      fs.mkdirSync(codexHome, { recursive: true });
+      fs.writeFileSync(target, '');
+      fs.symlinkSync(harness, linked, 'junction');
+      const registration = { command: 'node', args: [path.join(linked, 'index.js')], env: { TOKEN: 'do-not-print' } };
+      fs.writeFileSync(settings, JSON.stringify({ mcpServers: { 'azt-mcp': registration, other: { command: 'keep' } }, other: true }));
+      const claude = await ps(harnessMcpScript('claude', process.execPath, home, target));
+      expect(parseHarnessMcpOutput(claude).outcome).toBe('done');
+      expect(claude).not.toContain('do-not-print');
+      expect(JSON.parse(fs.readFileSync(settings, 'utf8'))).toEqual({ mcpServers: { other: { command: 'keep' } }, other: true });
+      expect(parseHarnessMcpOutput(await ps(harnessMcpScript('claude', process.execPath, home, target))).outcome).toBe('absent');
+      fs.writeFileSync(path.join(codexHome, 'registration.json'), JSON.stringify({ transport: registration }));
+      fs.writeFileSync(path.join(bin, 'codex.cmd'), '@echo off\r\nnode "%dp0%\\node_modules\\codex.js" %*\r\n');
+      fs.writeFileSync(path.join(bin, 'node_modules', 'codex.js'), `const fs = require('fs'); const path = require('path'); const f = path.join(process.env.CODEX_HOME, 'registration.json'); if (process.argv[3] === 'get') process.stdout.write(fs.readFileSync(f)); else fs.unlinkSync(f);`);
+      const env = `$env:PATH = ${powershellDialect.quote(bin)}; $env:PATHEXT = '.CMD'; $env:CODEX_HOME = ${powershellDialect.quote(codexHome)};\n`;
+      const codex = await ps(env + harnessMcpScript('codex', process.execPath, home, target));
+      expect(parseHarnessMcpOutput(codex).outcome).toBe('done');
+      expect(codex).not.toContain('do-not-print');
+      expect(fs.existsSync(path.join(codexHome, 'registration.json'))).toBe(false);
+      const nativeBin = path.join(root, 'native');
+      fs.mkdirSync(nativeBin);
+      const nativeSource = `using System; using System.IO; class Program { static void Main(string[] args) { string f = Path.Combine(Environment.GetEnvironmentVariable("CODEX_HOME"), "registration.json"); if (args[1] == "get") Console.Write(File.ReadAllText(f)); else File.Delete(f); } }`;
+      await ps(`Add-Type -TypeDefinition ${powershellDialect.quote(nativeSource)} -OutputAssembly ${powershellDialect.quote(path.join(nativeBin, 'codex.exe'))} -OutputType ConsoleApplication`);
+      fs.writeFileSync(path.join(codexHome, 'registration.json'), JSON.stringify({ transport: registration }));
+      const nativeEnv = `$env:PATH = ${powershellDialect.quote(nativeBin)}; $env:PATHEXT = '.EXE'; $env:CODEX_HOME = ${powershellDialect.quote(codexHome)};\n`;
+      const native = await ps(nativeEnv + harnessMcpScript('codex', process.execPath, home, target));
+      expect(parseHarnessMcpOutput(native).outcome).toBe('done');
+      expect(fs.existsSync(path.join(codexHome, 'registration.json'))).toBe(false);
+
+    } finally { fs.rmSync(root, { recursive: true, force: true }); }
+  });
 });

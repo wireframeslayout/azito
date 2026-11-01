@@ -27,7 +27,7 @@ describe('Claude harness MCP removal', () => {
       expect(run().outcome).toBe('skipped');
     } finally { rmSync(home, { recursive: true, force: true }); }
   });
-  it('removes a matching Codex registration through the CLI and leaves a different registration alone', () => {
+  it.skipIf(process.platform === 'win32')('removes a matching Codex registration through the CLI and leaves a different registration alone', () => {
     const home = mkdtempSync(join(tmpdir(), 'azito-codex-'));
     try {
       const target = join(home, 'index.js');
