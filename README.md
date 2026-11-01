@@ -116,7 +116,7 @@ curl --proto '=https' --tlsv1.2 -fsSL https://github.com/wireframeslayout/azito/
 
 It installs to `~/.azito`, registers a systemd (Linux) or launchd (macOS) service, and prints a UI token. Open `http://localhost:3001`. To review the script before running, pass options, or verify checksums, see [Installation and Updates](./docs/en/install-and-update.md).
 
-Supported: Linux x64 / arm64, macOS Apple Silicon.
+Supported hub platforms for `install.sh`: Linux x64 / arm64, macOS Apple Silicon. Agent servers support x86_64 only; see [Supported Platforms](./docs/en/install-and-update.md#supported-platforms).
 
 On Windows (x64), install Git for Windows first (`winget install --id Git.Git -e --source winget`, then open a new PowerShell window) and run, in Windows PowerShell 5.1:
 
