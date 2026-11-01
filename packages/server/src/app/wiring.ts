@@ -1,3 +1,4 @@
+import { WindowSnapshotService } from '../modules/windows/WindowSnapshotService';
 // ─── Dependency wiring ───
 //
 // Constructs all infrastructure/repository/domain/application instances via
@@ -210,6 +211,7 @@ export interface ApplicationServices {
   transcriptSourceProvider: TranscriptSourceProvider;
   windowSessionResolver: WindowSessionResolver;
   windowActivityStatusService: WindowActivityStatusService;
+  windowSnapshotService: WindowSnapshotService;
   windowRespawnService: WindowRespawnService;
   windowSleepService: WindowSleepService;
   taskRestoreService: TaskRestoreService;
@@ -526,10 +528,11 @@ function buildApplicationServices(infra: SharedInfra, repos: Repositories, uiTok
   // lookups (and their cache) to one per process.
   const windowSessionResolver = new WindowSessionResolver(repos.taskRepo, infra.muxDriverRegistry, repos.serverRepo, transcriptSourceProvider, sessionCaptureService, infra.transportFactory);
   const windowActivityStatusService = new WindowActivityStatusService(repos.windowRepo, repos.serverRepo, windowSessionResolver);
+  const windowSnapshotService = new WindowSnapshotService(repos.windowRepo, repos.serverRepo, infra.muxDriverRegistry);
   const usageService = new UsageService(infra.agentRegistry);
   const agentSignalService = new AgentSignalService(repos.agentTurnRepo, infra.turnSignalHub, repos.logRepo, repos.auditLogService);
   return {
-    sessionStrategyFactory, sessionCaptureService, transcriptSourceProvider, windowSessionResolver, windowActivityStatusService,
+    sessionStrategyFactory, sessionCaptureService, transcriptSourceProvider, windowSessionResolver, windowActivityStatusService, windowSnapshotService,
     windowRespawnService, windowSleepService, taskRestoreService, usageService, agentSignalService, taskEvents,
     originationService, taskPaneEnvironmentService,
   };

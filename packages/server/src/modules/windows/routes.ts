@@ -1,3 +1,5 @@
+import { windowSnapshotSchema } from './windowSnapshotSchema';
+import type { WindowSnapshotService } from './WindowSnapshotService';
 import type { FastifyPluginCallback } from 'fastify';
 import { resourceCheckBody, type ResourceGuard, type ResourceUnavailable } from '../servers/resources/ResourceGuard';
 import { workerStartsAsProgram } from '../../shared/os/hostFeature';
@@ -50,6 +52,7 @@ export interface WindowsRouteOptions {
   sessionCaptureService: SessionCaptureService;
   supervisorRegistry: SupervisorRegistry;
   windowActivityStatusService: WindowActivityStatusService;
+  windowSnapshotService: WindowSnapshotService;
   notificationBus?: NotificationBus;
   resourceGuard?: ResourceGuard;
   harnessPrefix: string;
@@ -72,6 +75,12 @@ const windowsRoutes: FastifyPluginCallback<WindowsRouteOptions> = (fastify, opts
     const availability = opts.muxDriverRegistry.availabilityFor(kind, srv);
     return availability.available ? null : { error: 'mux_driver_unavailable', kind, reason: availability.reason };
   };
+
+  fastify.get('/api/windows/snapshots', async (request, reply) => {
+    const query = windowSnapshotSchema.safeParse(request.query);
+    if (!query.success) return reply.status(400).send({ error: 'Invalid snapshot query' });
+    return { snapshots: await opts.windowSnapshotService.capture(query.data.ids, query.data.lines, query.data.since) };
+  });
 
   // Issue #471: resolve a task's execution-allowed status for the MCP
   // blocking decision. Delegates to respawnService.isTaskExecutionAllowed()

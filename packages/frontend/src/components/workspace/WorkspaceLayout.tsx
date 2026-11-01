@@ -73,6 +73,7 @@ interface WorkspaceLayoutProps {
   taskWindows?: Array<{ serverName: string; tmuxTarget: string; taskId: number }>;
   /** SP の M1 メニュー「オブジェクト」行に表示する総件数（Issue #69 T1）。 */
   objectsCount?: number;
+  rightPanel?: React.ReactNode;
 }
 
 export default function WorkspaceLayout({
@@ -100,6 +101,7 @@ export default function WorkspaceLayout({
   openTask,
   taskWindows,
   objectsCount,
+  rightPanel,
 }: WorkspaceLayoutProps) {
   const { t } = useTranslation(['workspace', 'common', 'projects']);
   const navigate = useNavigate();
@@ -320,6 +322,8 @@ export default function WorkspaceLayout({
       >
         {children}
       </div>
+
+      {!mobile && rightPanel}
 
       {modals}
 

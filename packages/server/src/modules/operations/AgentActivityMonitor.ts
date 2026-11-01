@@ -1,3 +1,4 @@
+import { runWithConcurrency } from '../../shared/concurrency';
 import type { ExecuteTaskUseCase } from '../tasks/execution/ExecuteTaskUseCase';
 import { ACTIVITY_THRESHOLD_SEC } from '../tasks/execution/WorkerWaiter';
 import type { AgentWindow, IWindowRepository } from '../windows/Window';
@@ -359,17 +360,6 @@ const MUX_UNAVAILABLE_HOLD_MS = 120_000;
  * cannot open a burst of simultaneous tmux calls against one transport.
  */
 const SCREEN_CHECK_CONCURRENCY = 4;
-
-/** Run `tasks` with at most `limit` in flight. Order of completion is irrelevant to callers. */
-async function runWithConcurrency(tasks: Array<() => Promise<void>>, limit: number): Promise<void> {
-  let next = 0;
-  const workers = Array.from({ length: Math.min(limit, tasks.length) }, async () => {
-    while (next < tasks.length) {
-      await tasks[next++]();
-    }
-  });
-  await Promise.all(workers);
-}
 
 /** Whether the window lives in the misao mux: told by the window's own ref, not by the server's default mux. */
 function isMisaoWindow(w: Pick<AgentWindow, 'muxRef'>): boolean {

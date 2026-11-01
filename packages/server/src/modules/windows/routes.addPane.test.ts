@@ -54,7 +54,7 @@ describe('POST /api/windows/:id/panes', () => {
       sessionStrategyFactory: {} as ISessionStrategyFactory,
       sessionCaptureService: {} as SessionCaptureService,
       supervisorRegistry: {} as SupervisorRegistry,
-      windowActivityStatusService: {} as WindowActivityStatusService,
+      windowSnapshotService: {} as never, windowActivityStatusService: {} as WindowActivityStatusService,
       uiToken: 'test-token',
       serverIsolationMutex: mutex,
       buildSecondaryWindowEnv,
@@ -140,7 +140,7 @@ describe('DELETE /api/windows/:id/panes/:ordinal', () => {
       transportFactory: { hostProfileFor: () => null },
       respawnService: {} as WindowRespawnService, sleepService: {} as WindowSleepService,
       sessionStrategyFactory: {} as ISessionStrategyFactory, sessionCaptureService: {} as SessionCaptureService,
-      supervisorRegistry: {} as SupervisorRegistry, windowActivityStatusService: {} as WindowActivityStatusService,
+      supervisorRegistry: {} as SupervisorRegistry, windowSnapshotService: {} as never, windowActivityStatusService: {} as WindowActivityStatusService,
       uiToken: 'test-token', serverIsolationMutex: new KeyedMutex(), buildSecondaryWindowEnv: () => ({}),
     });
     await app.ready();
@@ -195,7 +195,7 @@ describe('windows change notification', () => {
       serverRepo: { findByName: () => server } as unknown as IServerRepository,
       respawnService: {} as WindowRespawnService, sleepService: {} as WindowSleepService,
       sessionStrategyFactory: {} as ISessionStrategyFactory, sessionCaptureService: {} as SessionCaptureService,
-      supervisorRegistry: {} as SupervisorRegistry, windowActivityStatusService: {} as WindowActivityStatusService,
+      supervisorRegistry: {} as SupervisorRegistry, windowSnapshotService: {} as never, windowActivityStatusService: {} as WindowActivityStatusService,
       uiToken: 'test-token', serverIsolationMutex: new KeyedMutex(), buildSecondaryWindowEnv: () => ({}),
       invalidateSessionCache: (name: string) => { calls.push(`invalidate:${name}`); },
       notificationBus: { emit: (e: { type: string }) => { calls.push(e.type); } } as never,
