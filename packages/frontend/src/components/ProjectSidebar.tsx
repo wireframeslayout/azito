@@ -402,6 +402,31 @@ export default function ProjectSidebar() {
           );
         })}
         <button
+          type="button"
+          className="icon-btn"
+          onClick={() => navigate(paths.projectNew())}
+          aria-label={t('search.newProject')}
+          title={t('search.newProject')}
+          style={{
+            width: 36,
+            height: 36,
+            borderRadius: 'var(--radius-md)',
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            background: 'transparent',
+            color: 'var(--text-dim)',
+            border: '1px dashed var(--border)',
+            cursor: 'pointer',
+            flexShrink: 0,
+            transition: 'border-color 0.15s ease, color 0.15s ease',
+          }}
+          onMouseEnter={(e) => { e.currentTarget.style.borderColor = 'var(--accent)'; e.currentTarget.style.color = 'var(--accent)'; }}
+          onMouseLeave={(e) => { e.currentTarget.style.borderColor = 'var(--border)'; e.currentTarget.style.color = 'var(--text-dim)'; }}
+        >
+          <Icon name="plus" size={16} />
+        </button>
+        <button
           ref={moreButtonRef}
           onClick={() => setSearchOpen((v) => !v)}
           aria-haspopup="dialog"
