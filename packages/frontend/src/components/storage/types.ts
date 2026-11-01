@@ -1,15 +1,18 @@
 export interface StorageOption {
-  type: 'settings' | 'minio' | 'link' | 'managed';
+  id: string;
+  kind: 'connect-s3' | 'local-minio' | 'link' | 'managed';
   title: string;
   description: string;
-  url?: string;
-  endpoint?: string;
-  bucket?: string;
+  href?: string;
+  defaults?: { endpoint: string; bucket: string };
 }
 
 export interface StorageOnboardingInfo {
   source: 'oss' | 'distribution';
+  heading: string;
+  body: string;
   options: StorageOption[];
+  dismissible: boolean;
 }
 
 export type StorageStatus =
