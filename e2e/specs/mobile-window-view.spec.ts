@@ -23,10 +23,10 @@ test('mobile agent defaults to chat and an explicit terminal choice survives res
   await app.setViewportSize({ width: 1280, height: 800 });
   await app.setViewportSize({ width: 390, height: 800 });
   await app.reload();
+  await expect(app.locator('.xterm').first()).toBeVisible();
   await expect(app.getByRole('button', { name: '端末で開く' })).toHaveCount(0);
   await harness.deleteWindow(windowId);
 });
-
 
 test('desktop defaults to terminal and mobile agent opens a conversation', async ({ app, harness }) => {
   const label = 'e2e-view-default-agent';
@@ -52,7 +52,7 @@ test('mobile shell defaults to terminal', async ({ app, harness }) => {
   const projectId = await harness.createProject(label);
   const agent = await harness.startFakeAgent(label, 'scroll', { supervised: false });
   const { id } = await harness.api<{ id: number }>(`/projects/${projectId}/windows`, {
-    method: 'POST', body: JSON.stringify({ server_name: 'local', tmux_target: agent.target, label, window_type: 'shell' }),
+    method: 'POST', body: JSON.stringify({ server_name: 'local', tmux_target: agent.target, label, window_type: 'terminal' }),
   });
   await app.setViewportSize({ width: 1280, height: 800 });
   await app.goto(`${harness.baseUrl}/workspace/${projectId}`);

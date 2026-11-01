@@ -158,8 +158,8 @@ export default function WindowChatPanel({ windowId, viewMode, onChangeViewMode, 
         <EmptyState
           title={t(`windowChat.notFound.${reason}`)}
           action={<div style={{ display: 'flex', flexWrap: 'wrap', justifyContent: 'center', gap: 'var(--space-2)' }}>
-            <Button style={{ minHeight: 'calc(var(--space-6) + var(--space-5))' }} onClick={() => setRetryTick((n) => n + 1)}>{t('windowChat.retry')}</Button>
-            <Button style={{ minHeight: 'calc(var(--space-6) + var(--space-5))' }} onClick={onOpenTerminal}>{t('windowChat.openTerminal')}</Button>
+            <Button style={{ minHeight: 44 }} onClick={() => setRetryTick((n) => n + 1)}>{t('windowChat.retry')}</Button>
+            <Button style={{ minHeight: 44 }} onClick={onOpenTerminal}>{t('windowChat.openTerminal')}</Button>
           </div>}
         />
       </div>
