@@ -1,5 +1,7 @@
-import { describe, expect, it, vi } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { isAgentWindow, readWindowViewMode, resolveWindowViewMode, writeWindowViewMode } from './windowViewMode';
+
+afterEach(() => { vi.unstubAllGlobals(); });
 
 describe('window view mode', () => {
   it('prioritizes selection and defaults only mobile agent windows to chat', () => {
@@ -24,6 +26,5 @@ describe('window view mode', () => {
     expect(readWindowViewMode(1)).toBeNull();
     expect(readWindowViewMode(1)).toBeNull();
     expect(() => writeWindowViewMode(1, 'terminal')).not.toThrow();
-    vi.unstubAllGlobals();
   });
 });
