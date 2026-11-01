@@ -35,7 +35,10 @@
     "overflowFull": "アクティブウィンドウ (+{{count}})",
     "done": "完了",
     "planReview": "承認待ち",
-    "noActive": "稼働中のウィンドウはありません"
+    "noActive": "稼働中のウィンドウはありません",
+    "history": "確認済み {{count}} / {{max}}",
+    "clearHistory": "履歴を消去",
+    "deleteHistory": "履歴から削除"
   },
   "activityPill": {
     "ariaLabel": "稼働ステータス",

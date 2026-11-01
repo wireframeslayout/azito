@@ -2,7 +2,7 @@ import { useMemo } from 'react';
 import { resolveActivityTitle, type ActivityTitleData } from '../lib/windowDisplay';
 import { useAgentActivity } from './useAgentActivity';
 import { activityKey, activityKeyForEntry } from '../lib/finishedWindows';
-import type { FinishedEntry } from '../lib/finishedWindows';
+import { isAttentionRow, sortActiveWindowRows } from '../lib/sortActiveWindowRows';
 
 export interface ActiveWindowRow {
   title: string;
@@ -22,6 +22,7 @@ export interface ActiveWindowRow {
   status: 'running' | 'finished';
   activityStatus?: 'working' | 'blocked';
   finishedAt?: number;
+  seenAt?: number;
   paneName?: string;
 }
 
@@ -70,12 +71,14 @@ export function useActiveWindowRows(data: ActivityTitleData) {
         projectId: e.projectId,
         status: 'finished',
         finishedAt: e.finishedAt,
+        seenAt: e.seenAt,
         paneName: e.paneName,
       }));
-    return [...running, ...finishedRows];
+    return sortActiveWindowRows([...running, ...finishedRows]);
   }, [entries, finishedEntries, data]);
 
   const blockedCount = rows.filter((r) => r.status === 'running' && r.activityStatus === 'blocked').length;
 
-  return { rows, blockedCount, totalCount: rows.length };
+  const totalCount = rows.filter(isAttentionRow).length;
+  return { rows, blockedCount, totalCount, historyCount: rows.length - totalCount };
 }

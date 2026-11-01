@@ -45,7 +45,8 @@ import { useIsMobile } from '../../hooks/useIsMobile';
 import { useClickOutside } from '../../hooks/useClickOutside';
 import { isSameWindowTarget } from '@azito/shared';
 import { resolveWindowTitle, formatWindowTitleLine } from '@azito/shared';
-import { activityKey, useWorkspaceTargets } from '../../hooks/useWorkspaceTargets';
+import { useWorkspaceTargets } from '../../hooks/useWorkspaceTargets';
+import { activityKey } from '../../lib/finishedWindows';
 import { useGlobalFocus } from '../../hooks/useGlobalFocus';
 import { useToast } from '../../hooks/useToast';
 import type { TerminalRef as LibTerminalRef } from '../../lib/terminalRef';
@@ -690,7 +691,7 @@ export default function TaskPanel({
     if (!isVisible || !isPaneFocused) return;
     const target = focusedWindowTarget ?? resolveDisplayedTaskTerminal(taskId, windows);
     if (target) {
-      setFocusedTarget(activityKey(target.serverName, target.target));
+      setFocusedTarget(activityKey(target.serverName, target.target, target.windowId ?? undefined), { serverName: target.serverName, label: target.target });
     }
     return () => setFocusedTarget(null);
   }, [isVisible, isPaneFocused, focusedWindowTarget, windows, taskId, setFocusedTarget]);

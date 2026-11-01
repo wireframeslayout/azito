@@ -1,3 +1,4 @@
+import { isAttentionRow } from '../../lib/sortActiveWindowRows';
 import type { ActivityTitleData } from '../../lib/windowDisplay';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
@@ -64,7 +65,8 @@ export default function TasksSidebar({
   const searchRef = useRef<HTMLInputElement>(null);
   const treeRef = useRef<HTMLDivElement>(null);
 
-  const { rows: activityRows } = useActiveWindowRows(titleData);
+  const { rows: allActivityRows } = useActiveWindowRows(titleData);
+  const activityRows = allActivityRows.filter(isAttentionRow);
   const { openedAt } = useRecentTasks();
 
   const groups = useMemo(
