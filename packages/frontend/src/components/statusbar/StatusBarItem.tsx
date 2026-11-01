@@ -28,6 +28,7 @@ export const StatusBarItem = forwardRef<StatusBarItemRef, StatusBarItemProps>(
       <button
         ref={btnRef}
         onClick={onClick}
+        aria-label={badge != null && badge > 0 && badgeLabel ? `${label} (${badgeLabel})` : undefined}
         aria-haspopup={popup}
         aria-expanded={active}
         className={active ? undefined : 'row-hover'}
@@ -48,7 +49,7 @@ export const StatusBarItem = forwardRef<StatusBarItemRef, StatusBarItemProps>(
       >
         {dot && <HealthDot level={dot} />}
         {label}
-        {badge != null && badge > 0 && <span aria-label={badgeLabel} style={{ borderRadius: 'var(--radius-sm)', padding: '0 var(--space-1)', color: 'var(--bg-solid)', background: 'var(--warning)' }}>{badge}</span>}
+        {badge != null && badge > 0 && <span aria-hidden="true" style={{ borderRadius: 'var(--radius-sm)', padding: '0 var(--space-1)', color: 'var(--bg-solid)', background: 'var(--warning)' }}>{badge}</span>}
       </button>
     );
   }

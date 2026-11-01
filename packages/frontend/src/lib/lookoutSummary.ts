@@ -72,7 +72,11 @@ export function buildLookoutSections({ rows, allTasks, lastSeenMs, scope }: Look
     if (!groups.has(key)) groups.set(key, { task, rows: [] });
   }
   const items = Array.from(groups, ([key, group]) => makeItem(key, group.task, group.rows));
-  const attention = items.filter((item) => item.status !== 'working');
+  const attention = items.filter((item) => item.status !== 'working').sort((a, b) => {
+    const aTime = a.task ? Date.parse(a.task.updatedAt) : NaN;
+    const bTime = b.task ? Date.parse(b.task.updatedAt) : NaN;
+    return (Number.isFinite(bTime) ? bTime : 0) - (Number.isFinite(aTime) ? aTime : 0);
+  });
   const active = items.filter((item) => item.status === 'working');
   const latestFinished = new Map<string, ActiveWindowRow>();
   for (const row of scopedRows) {

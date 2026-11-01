@@ -32,5 +32,7 @@
     "ready": "要約"
   },
   "attentionCount": "要対応 {{count}} 件",
-  "updated": "更新 {{time}}"
+  "updated": "更新 {{time}}",
+  "emptyAttention": "いま対応が要るものはありません",
+  "emptyActive": "現在稼働中のものはありません。"
 }

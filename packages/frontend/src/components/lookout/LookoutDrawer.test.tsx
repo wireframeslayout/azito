@@ -38,3 +38,14 @@ it('opens a task referenced by an activity row even when the catalog has not loa
   fireEvent.click(screen.getByText('Unloaded task'));
   expect(mocks.openTask).toHaveBeenCalledWith(42);
 });
+
+it('shows empty states and renders supplied summaries independently of counts', () => {
+  const sections = { attention: [row], active: [], finished: [], counts: { attention: 1, active: 0, finished: 0, failed: 0 } };
+  const { rerender } = render(<HotkeyProvider><LookoutDrawer open onClose={() => {}} sections={sections} summaries={new Map([['a', { status: 'pending' as const }]])} snapshotStatus="ready" onRetry={() => {}} onOpenItem={() => {}} /></HotkeyProvider>);
+  expect(screen.getByRole('status', { name: /summary/i })).toBeInTheDocument();
+  rerender(<HotkeyProvider><LookoutDrawer open onClose={() => {}} sections={sections} summaries={new Map([['a', { status: 'ready' as const, text: 'Ready summary' }]])} snapshotStatus="ready" onRetry={() => {}} onOpenItem={() => {}} /></HotkeyProvider>);
+  expect(screen.getByText('Ready summary')).toBeInTheDocument();
+  expect(screen.getByText(/nothing is currently running/i)).toBeInTheDocument();
+  rerender(<HotkeyProvider><LookoutDrawer open onClose={() => {}} sections={{ ...sections, attention: [] }} snapshotStatus="ready" onRetry={() => {}} onOpenItem={() => {}} /></HotkeyProvider>);
+  expect(screen.getByText(/nothing needs your attention/i)).toBeInTheDocument();
+});

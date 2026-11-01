@@ -22,6 +22,13 @@ describe('buildLookoutSections', () => {
     expect(result.counts).toEqual({ attention: 2, active: 1, finished: 0, failed: 1 });
   });
 
+  it('orders attention tasks by most recent update', () => {
+    const older = { ...task(1, 'waiting_input'), updatedAt: '2026-01-01T00:00:00Z' };
+    const newer = { ...task(2, 'phase_review'), updatedAt: '2026-02-01T00:00:00Z' };
+    const result = buildLookoutSections({ rows: [], allTasks: [older, newer], lastSeenMs: 0 });
+    expect(result.attention.map(item => item.task?.id)).toEqual([2, 1]);
+  });
+
   it('uses the latest completion per window strictly after last seen', () => {
     const result = buildLookoutSections({ rows: [
       row('a', { status: 'finished', finishedAt: 11 }), row('a', { status: 'finished', finishedAt: 15 }),

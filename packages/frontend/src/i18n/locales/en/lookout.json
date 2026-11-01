@@ -32,5 +32,7 @@
     "ready": "Summary"
   },
   "attentionCount": "{{count}} need attention",
-  "updated": "Updated {{time}}"
+  "updated": "Updated {{time}}",
+  "emptyAttention": "Nothing needs your attention right now.",
+  "emptyActive": "Nothing is currently running."
 }
