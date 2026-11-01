@@ -43,7 +43,7 @@ describe('storage text content', () => {
   });
   it('treats a failed conditional PUT as a conflict', async () => {
     const { text, send } = setup(Buffer.from('hello'));
-    send.mockImplementationOnce(async () => ({ ContentLength: 5, ETag: '"v1"' })).mockRejectedValueOnce({ $metadata: { httpStatusCode: 412 } });
+    send.mockImplementationOnce(async () => ({ ContentLength: 5, ETag: '"v1"', ContentType: 'text/plain', Metadata: { name: 'test' } })).mockRejectedValueOnce({ $metadata: { httpStatusCode: 412 } });
     await expect(text.write('a', 'edit', 'v1')).rejects.toMatchObject({ code: 'conflict' });
   });
 
