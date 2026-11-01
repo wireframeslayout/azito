@@ -1,3 +1,4 @@
+import { AgentLocalNetworkPermissionError } from './transport/AgentUnreachableError';
 import { describe, it, expect, vi } from 'vitest';
 import Fastify from 'fastify';
 import serversRoutes from './routes';
@@ -102,6 +103,15 @@ describe('GET /api/servers/:name/install-status probes', () => {
     const { app, specs } = await build(server(), null, (spec) => (spec.file === 'uname' ? ok('Linux\n') : ok()));
     await app.inject({ method: 'GET', url: '/api/servers/srv/install-status' });
     expect(specs.filter((s) => s.file === 'uname').map((s) => s.args)).toEqual([['-s']]);
+  });
+
+  it('preserves the local network diagnosis in the install status response', async () => {
+    const { app, fetchHealth, specs } = await build(server(), { platform: 'linux', arch: 'x64' });
+    fetchHealth.mockRejectedValue(new AgentLocalNetworkPermissionError('srv', 'unreachable', 'connect EHOSTUNREACH 192.168.1.2:3002'));
+    const res = await app.inject({ method: 'GET', url: '/api/servers/srv/install-status' });
+    expect(res.statusCode).toBe(503);
+    expect(res.json()).toMatchObject({ error: 'agent_unreachable', server: 'srv', reason: 'unreachable', status: 'offline', code: 'macos_local_network_permission', detail: 'connect EHOSTUNREACH 192.168.1.2:3002' });
+    expect(specs).toHaveLength(0);
   });
 
   it('answers 503 for an unreachable agent, before building any row', async () => {

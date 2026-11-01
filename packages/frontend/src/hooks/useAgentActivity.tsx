@@ -10,8 +10,9 @@ import {
   activityKeyForEntry,
   FINISHED_TTL_MS,
   pruneFinished,
-  removeFinished,
+  removeDeletedFinished,
   upsertFinished,
+  mergeFinishedEntry,
   type FinishedEntry,
 } from '../lib/finishedWindows';
 
@@ -97,33 +98,13 @@ const AgentActivityContext = createContext<AgentActivityContextValue>({
   dismissFinished: () => {},
 });
 
-function snapshotToMap(snapshot: AgentActivitySnapshotEntry[]): Map<string, AgentActivityInfo> {
+export function snapshotToMap(snapshot: AgentActivitySnapshotEntry[]): Map<string, AgentActivityInfo> {
   const map = new Map<string, AgentActivityInfo>();
-  for (const e of snapshot) {
-    if (!e.running) continue;
-    map.set(activityKey(e.serverName, e.target, e.windowId), {
-      serverName: e.serverName,
-      target: e.target,
-      running: true,
-      source: e.source,
-      taskId: e.taskId,
-      windowId: e.windowId,
-      projectId: e.projectId,
-      label: e.label,
-      labelSource: e.labelSource,
-      taskTitle: e.taskTitle,
-      workerType: e.workerType,
-      windowType: e.windowType,
-      paneTitle: e.paneTitle,
-      paneCommand: e.paneCommand,
-      status: e.status ?? 'working',
-      paneName: e.paneName,
-    });
-  }
+  for (const entry of snapshot) applyActivity(map, entry);
   return map;
 }
 
-function applyActivity(map: Map<string, AgentActivityInfo>, payload: AgentActivityPayload): void {
+function applyActivity(map: Map<string, AgentActivityInfo>, payload: AgentActivitySnapshotEntry): void {
   const key = activityKey(payload.serverName, payload.target, payload.windowId);
   if (!payload.running) {
     map.delete(key);
@@ -147,6 +128,16 @@ function applyActivity(map: Map<string, AgentActivityInfo>, payload: AgentActivi
     status: payload.status ?? 'working',
     paneName: payload.paneName,
   });
+}
+
+/** One event applied to a copy of `entries`, with the entry it replaced (used to keep a finished row's title). */
+export function transitionActivityEntries(
+  entries: Map<string, AgentActivityInfo>, payload: AgentActivityPayload,
+): { entries: Map<string, AgentActivityInfo>; previous?: AgentActivityInfo } {
+  const previous = entries.get(activityKey(payload.serverName, payload.target, payload.windowId));
+  const next = new Map(entries);
+  applyActivity(next, payload);
+  return { entries: next, previous };
 }
 
 function useBrowserFocused(): boolean {
@@ -204,8 +195,9 @@ function saveFinishedEntries(entries: FinishedEntry[]): void {
 export function AgentActivityProvider({ children }: { children: React.ReactNode }) {
   // 稼働状態の単一ソース: GET /api/agent-activity のスナップショット＋`agent:activity` WS イベント。
   // 優先順位の調停（supervisor > hook > ペイン分類 > process/transcript）はすべてサーバー側の
-  // AgentActivityMonitor が行うため、ここには合成・補完ロジックを一切置かない。
+  // AgentActivityMonitor が行う。完了表示には最後の表示メタデータを保持する。
   const [entries, setEntries] = useState<Map<string, AgentActivityInfo>>(new Map());
+  const entriesRef = useRef(entries);
   const { activeTabId, focusedTarget } = useWorkspaceTargets();
   const browserFocused = useBrowserFocused();
   const [finished, setFinished] = useState<FinishedEntry[]>(loadFinishedEntries);
@@ -225,6 +217,7 @@ export function AgentActivityProvider({ children }: { children: React.ReactNode 
         const next = snapshotToMap(snapshot);
         for (const event of pendingEvents.current ?? []) applyActivity(next, event);
         pendingEvents.current = null;
+        entriesRef.current = next;
         setEntries(next);
       })
       .catch(() => {
@@ -243,22 +236,19 @@ export function AgentActivityProvider({ children }: { children: React.ReactNode 
 
   useNotificationChannel({
     onAgentActivity: (payload: AgentActivityPayload) => {
-      const key = activityKey(payload.serverName, payload.target, payload.windowId);
       pendingEvents.current?.push(payload);
-      setEntries((prev) => {
-        const next = new Map(prev);
-        applyActivity(next, payload);
-        return next;
-      });
+      const { entries: next, previous } = transitionActivityEntries(entriesRef.current, payload);
+      entriesRef.current = next;
+      setEntries(next);
       if (payload.running) return;
 
       if (payload.reason === 'deleted') {
-        setFinished((cur) => removeFinished(cur, key));
+        setFinished((cur) => removeDeletedFinished(cur, payload));
         return;
       }
       if (payload.reason !== 'completed') return;
       if (isWatchedRef.current(payload.serverName, payload.target, payload.taskId)) return;
-      setFinished((cur) => upsertFinished(cur, {
+      setFinished((cur) => upsertFinished(cur, mergeFinishedEntry({
         serverName: payload.serverName,
         target: payload.target,
         windowId: payload.windowId,
@@ -273,7 +263,7 @@ export function AgentActivityProvider({ children }: { children: React.ReactNode 
         projectId: payload.projectId,
         finishedAt: Date.now(),
         paneName: payload.paneName,
-      }));
+      }, previous)));
     },
     onConnected: fetchSnapshot,
   });

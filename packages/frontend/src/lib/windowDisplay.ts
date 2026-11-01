@@ -6,7 +6,7 @@ export interface WindowIndexEntry {
   id: number;
   serverName: string;
   tmuxTarget: string;
-  label?: string;
+  label?: string | null;
   labelSource?: 'auto' | 'user';
   workerType?: string;
   windowType?: string;
@@ -41,7 +41,26 @@ export function sessionWindowLabel(sessionName: string, win: { name: string; ref
 
 /** Adapt activity rows to the shared window title input. */
 export function activeWindowTitleInput(row: { windowId?: number; target: string; paneTitle?: string; paneName?: string; paneCommand?: string; label?: string | null; labelSource?: 'auto' | 'user'; taskTitle?: string; workerType?: string; windowType?: string }): WindowTitleInput {
-  return { id: row.windowId, label: row.label, labelSource: row.labelSource, paneTitle: row.paneTitle ?? row.paneName, paneCommand: row.paneCommand, taskTitle: row.taskTitle, workerType: row.workerType, windowType: row.windowType, tmuxTarget: row.target };
+  return { id: row.windowId, label: row.label, labelSource: row.labelSource, paneTitle: row.paneTitle || row.paneName, paneCommand: row.paneCommand, taskTitle: row.taskTitle, workerType: row.workerType, windowType: row.windowType, tmuxTarget: row.target };
+}
+
+export interface ActivityTitleData {
+  windowById: Map<number, WindowIndexEntry>;
+  taskById: Map<number, { title: string }>;
+}
+
+export function resolveActivityTitle(row: Parameters<typeof activeWindowTitleInput>[0] & { taskId?: number }, data: ActivityTitleData): string {
+  const win = row.windowId == null ? undefined : data.windowById.get(row.windowId);
+  const taskId = win?.taskId ?? row.taskId;
+  const task = taskId == null ? undefined : data.taskById.get(taskId);
+  return formatWindowTitleLine(resolveWindowTitle(activeWindowTitleInput({
+    ...row,
+    label: win?.label === null ? undefined : win?.label ?? row.label,
+    labelSource: win?.label === null ? win.labelSource : win?.labelSource ?? row.labelSource,
+    workerType: win?.workerType ?? row.workerType,
+    windowType: win?.windowType ?? row.windowType,
+    taskTitle: task?.title ?? row.taskTitle,
+  })));
 }
 
 /** Resolve an unregistered misao ref within one server's sessions. */

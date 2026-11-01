@@ -436,6 +436,7 @@ packages/
 - Exposed via `GET /api/usage`; rendered in the header `UsageDropdown`
 
 ### Webhooks
+- `POST /api/webhooks/agent-subagent` receives authenticated subagent refresh signals for the current parent session.
 - `POST /api/webhooks/agent-done` receives agent completion notifications (validated request body); shared `AZITO_WEBHOOK_TOKEN` required
 - `POST /api/webhooks/agent-activity` receives event-driven agent activity signals (`{serverName, sessionName, windowIndex, windowName, paneIndex, event: 'start'|'stop'}`)
   from the Claude Code `UserPromptSubmit`/`Stop` hooks (`harness/hooks/azito-activity.sh`, wired by `setup.sh --server-name`); same

@@ -112,5 +112,17 @@
       "agent_outdated": "Update the agent on this server (use Reinstall in the server details) to show the conversation here. You can still type below.",
       "agent_bad_response": "The conversation cannot be shown. Check the agent version on this server, then press Retry. You can still type below."
     }
+  },
+  "subagents": {
+    "title": "Subagents",
+    "parent": "Parent conversation",
+    "loading": "Loading subagents…",
+    "empty": "No subagents found.",
+    "error": "Could not load subagents.",
+    "readOnly": "This conversation is read-only. Return to the parent conversation to send a message.",
+    "status": {
+      "finished": "Finished",
+      "unknown": "Unknown"
+    }
   }
 }

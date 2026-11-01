@@ -1,3 +1,4 @@
+import type { ActivityTitleData } from '../../lib/windowDisplay';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { Icon } from '../ui/Icon';
@@ -31,6 +32,7 @@ function saveExpandedIds(ids: Set<number>): void {
 }
 
 interface TasksSidebarProps {
+  titleData: ActivityTitleData;
   tasks: Task[];
   loading?: boolean;
   onOpenTask: (taskId: number, title: string) => void;
@@ -47,6 +49,7 @@ const GROUP_LABEL_KEYS: Record<TaskGroupKey, string> = {
 };
 
 export default function TasksSidebar({
+  titleData,
   tasks,
   loading,
   onOpenTask,
@@ -61,7 +64,7 @@ export default function TasksSidebar({
   const searchRef = useRef<HTMLInputElement>(null);
   const treeRef = useRef<HTMLDivElement>(null);
 
-  const { rows: activityRows } = useActiveWindowRows();
+  const { rows: activityRows } = useActiveWindowRows(titleData);
   const { openedAt } = useRecentTasks();
 
   const groups = useMemo(

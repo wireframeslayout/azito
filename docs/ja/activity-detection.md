@@ -178,7 +178,7 @@ env ファイルの**別ハブのトークン**を注入された URL へ送っ�
 
 解決後、`AZITO_WEBHOOK_TOKEN` または `AZITO_SERVER_NAME` が空なら hook は何もせず exit 0 します。
 
-対象スクリプト: `harness/hooks/azito-activity.sh`、`azito-interaction.sh`、`azito-question.sh`、`azito-session.sh`。
+対象スクリプト: `harness/hooks/azito-activity.sh`、`azito-interaction.sh`、`azito-question.sh`、`azito-session.sh`、`azito-subagent.sh`。
 
 ### セッション ID の追従（SessionStart フック / `sessionId`）
 
@@ -550,6 +550,11 @@ tmux のサーバーでは以下は何も生成されず、これまでの tmux 
   シェルペインがエージェントの状態を上書きしない）。窓の行が後から登録されるペインは
   `sessions:updated` で再解決する（最大60秒）。gap と再接続のたびに `pane.list`（`agentState` /
   `decidedBy`）で全ペインを再同期し、接続が切れている間は misao 由来のキーを `unknown` にする。
+  `decidedBy: bytes` 由来の working は、第1ペインの前面コマンドが既知のシェルなら Tier 0 から除外する
+  （コマンドが不明な場合や title / profile 由来の判定は従来どおり）。codex の空タイトルは `unknown` として後段へ進む
+  （tmux では通常ホスト名が非空タイトルとして入り、idle と判定される）。
+  窓が一覧にない tick（一覧の取得失敗を含む）では bytes 由来の working を除外しない。
+  空タイトルから後段に進む場合、misao 窓の診断の `decidedBy`（稼働検知診断）は `tier3_heuristic` などになり、停止 reason は `unknown` になることがある（tmux では `completed`）。
 - **blocked 補正。** misao 0.3.0 以降（Rust 版）のコアは、同梱の claude / codex プロファイルによる判定で `pane.state` に
   `blocked` も出す（上の写像のとおり、そのまま blocked になる）。ただし working / idle の行が応答待ちを隠していることがあり、
   更新前の 0.2.0（Node 版）のデーモンは `blocked` を出さないため、misao 窓では Tier 0 idle の精緻化（§1）と同じ画面確認を、
@@ -579,3 +584,14 @@ tmux のサーバーでは以下は何も生成されず、これまでの tmux 
   無視され、tmux のフィールドが必須のまま。
 - **診断。** `GET /api/debug/activity` の行に `mux: { status, decidedBy?, at }` が載り、パネルでは
   `tier0 misao` と表示される。
+
+## 14. サブエージェントの会話
+
+Claude Code のチャットでは、窓の現在の親セッションに属するサブエージェントの一覧から会話を選べます。
+子の会話は読み取り専用です。指示を送るには「親の会話」に戻ってください。選択は画面内だけで保持され、
+画面を離れた後には復元されません。メタデータから状態を判定できない場合は「不明」と表示します。
+
+ハーネスの `SubagentStart` / `SubagentStop` フックは、認証付き通知で一覧の再取得を促します。
+状態は通知ではなく会話ファイルとメタデータに基づきます。フックが未導入でも定期的に再取得されますが、
+ファイルへの反映が遅れる場合があります。エージェントサーバーでは、この機能に未対応の旧 agent は
+`agent_outdated` と表示されるため、agent を更新してください。

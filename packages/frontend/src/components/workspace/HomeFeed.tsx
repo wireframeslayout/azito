@@ -1,4 +1,4 @@
-import { activeWindowTitleInput } from '../../lib/windowDisplay';
+import type { ActivityTitleData } from '../../lib/windowDisplay';
 import { useMemo } from 'react';
 import { useTranslation } from 'react-i18next';
 import { Icon } from '../ui/Icon';
@@ -8,7 +8,6 @@ import type { ActiveWindowRow } from '../../hooks/useActiveWindowRows';
 import { formatRelativeTime } from '../../utils/time';
 import { openActivityTarget } from '../../lib/activityOpen';
 import { useOpenTerminalTarget } from '../../hooks/useTerminalTargetOpener';
-import { resolveWindowTitle, formatWindowTitleLine } from '@azito/shared';
 import type { Task } from '../../pages/workspace/types';
 import { getProjectColorFallback } from '../../pages/workspace/types';
 
@@ -45,6 +44,7 @@ interface ActiveGroupEntry {
 }
 
 interface HomeFeedProps {
+  titleData: ActivityTitleData;
   allTasks: Task[];
   allProjects: ProjectSummary[];
   openTask: (taskId: number, title: string, projectId?: number) => void;
@@ -58,10 +58,10 @@ function statusLabelKey(status: string): string {
   return status === 'pending_approval' ? 'pendingApproval' : 'waitingInput';
 }
 
-export default function HomeFeed({ allTasks, allProjects, openTask, connectPane, onAddWindow }: HomeFeedProps) {
+export default function HomeFeed({ titleData, allTasks, allProjects, openTask, connectPane, onAddWindow }: HomeFeedProps) {
   const openTerminal = useOpenTerminalTarget(connectPane);
   const { t } = useTranslation(['workspace', 'common']);
-  const { rows } = useActiveWindowRows();
+  const { rows } = useActiveWindowRows(titleData);
 
   const projectById = useMemo(() => new Map(allProjects.map((p) => [p.id, p])), [allProjects]);
   const taskById = useMemo(() => new Map(allTasks.map((tk) => [tk.id, tk])), [allTasks]);
@@ -79,7 +79,7 @@ export default function HomeFeed({ allTasks, allProjects, openTask, connectPane,
       if (row.status !== 'running') continue;
       const task = row.taskId != null ? taskById.get(row.taskId) : undefined;
       const groupKey = row.taskId != null ? `task:${row.taskId}` : `window:${row.key}`;
-      const windowName = formatWindowTitleLine(resolveWindowTitle(activeWindowTitleInput(row)));
+      const windowName = row.title;
       let group = map.get(groupKey);
       if (!group) {
         group = {

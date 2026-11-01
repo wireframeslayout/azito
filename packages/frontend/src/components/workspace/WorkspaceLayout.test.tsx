@@ -15,6 +15,7 @@ const base = {
   handleResizeMouseDown: vi.fn(), handleResizeDoubleClick: vi.fn(),
   project: null, allProjects: [], sidebarContent: null, children: <div>Main content</div>,
   dragHandlers: {}, contextMenu: null, confirmDialog: null, modals: null,
+  titleData: { windowById: new Map(), taskById: new Map() },
 };
 
 describe('WorkspaceLayout right panel', () => {

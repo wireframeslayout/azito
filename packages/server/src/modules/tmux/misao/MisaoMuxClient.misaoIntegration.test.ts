@@ -68,6 +68,14 @@ describe.skipIf(!fs.existsSync(MISAO_CLI))('MisaoMuxClient against a real misao 
     if (dir) fs.rmSync(dir, { recursive: true, force: true });
   });
 
+  it('retains a prepared empty workspace and permits a later window', async () => {
+    await client.prepareWorkspace(server, 'prepared');
+    expect((await client.listWorkspaces(server)).find((ws) => ws.name === 'prepared')).toMatchObject({ windowCount: 0, windows: [] });
+    const { ref } = await client.openWindow(server, 'prepared', 'main', { exactName: true });
+    expect(await client.windowExists(server, ref)).toBe(true);
+    await client.closeWorkspace(server, 'prepared');
+  });
+
   it('opens a workspace with a first window and a shell pane', async () => {
     const opened = await client.openWorkspace(server, 'azm-ws', { windowName: 'main', exactName: true });
     ref1 = opened.ref;

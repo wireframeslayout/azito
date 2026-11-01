@@ -13,6 +13,8 @@ const HOOKS = [
   ['Notification', 'interaction', '', 'Notification hook (未回答検出)'],
   ['PermissionRequest', 'question', '', 'PermissionRequest hook (質問内容取得)'],
   ['SessionStart', 'session', '', 'SessionStart hook (セッション更新)'],
+  ['SubagentStart', 'subagent', '', 'SubagentStart hook'],
+  ['SubagentStop', 'subagent', '', 'SubagentStop hook'],
 ];
 
 export const PREFIX_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._-]*$/;

@@ -5,6 +5,7 @@ import {
   AGENT_SESSION_NOT_FOUND,
   AGENT_TRANSCRIPT_API_PREFIX,
   sessionIdSchema,
+  subagentIdSchema,
   type AgentSessionMeta,
   type AgentSessionsResponse,
 } from '../modules/transcripts/sources/agentTranscriptProtocol';
@@ -121,6 +122,32 @@ const transcriptRoutes: FastifyPluginCallback<AgentTranscriptRoutesOptions> = (f
     if (!reader.getSessionCwd(request.params.id)) return reply.status(404).send({ error: AGENT_SESSION_NOT_FOUND });
     return reader.getSessionTailState(request.params.id);
   });
+
+  fastify.get<{ Params: { agent: string; id: string } }>(`${prefix}/:id/subagents`, async (request, reply) => {
+    const reader = findReader(request.params.agent);
+    if (!reader?.listSubagents) return reply.status(404).send({ error: 'unknown_agent' });
+    if (!sessionIdSchema.safeParse(request.params.id).success) return reply.status(400).send({ error: 'invalid_session_id' });
+    const subagents = reader.listSubagents(request.params.id);
+    if (!subagents) return reply.status(404).send({ error: AGENT_SESSION_NOT_FOUND });
+    return { subagents };
+  });
+
+  fastify.get<{ Params: { agent: string; id: string; subagentId: string }; Querystring: { offset?: string; before?: string } }>(
+    `${prefix}/:id/subagents/:subagentId/entries`, async (request, reply) => {
+      const reader = findReader(request.params.agent);
+      if (!reader?.readSubagent) return reply.status(404).send({ error: 'unknown_agent' });
+      if (!sessionIdSchema.safeParse(request.params.id).success || !subagentIdSchema.safeParse(request.params.subagentId).success)
+        return reply.status(400).send({ error: 'invalid_id' });
+      const { offset: rawOffset, before: rawBefore } = request.query;
+      const offset = parseNonNegativeInt(rawOffset);
+      const before = parseNonNegativeInt(rawBefore);
+      if (offset === 'invalid' || before === 'invalid' || (offset !== undefined && before !== undefined))
+        return reply.status(400).send({ error: 'invalid_paging' });
+      const result = reader.readSubagent(request.params.id, request.params.subagentId, offset, before, BEFORE_READ_BUDGET);
+      if (!result) return reply.status(404).send({ error: AGENT_SESSION_NOT_FOUND });
+      return result;
+    },
+  );
 
   done();
 };

@@ -1,10 +1,11 @@
+import { mergeFinishedEntry } from "./finishedWindows";
 import { describe, it, expect } from 'vitest';
 import {
   activityKey,
   activityKeyForEntry,
   FINISHED_TTL_MS,
   pruneFinished,
-  removeFinished,
+  removeDeletedFinished,
   upsertFinished,
   type FinishedEntry,
 } from './finishedWindows';
@@ -52,19 +53,6 @@ describe('upsertFinished', () => {
   });
 });
 
-describe('removeFinished', () => {
-  it('removes the row for a key and leaves the others', () => {
-    const a = entry({ target: 'azito:win--a' });
-    const b = entry({ target: 'azito:win--b' });
-    expect(removeFinished([a, b], activityKey('local', 'azito:win--a'))).toEqual([b]);
-  });
-
-  it('returns the same reference when the key is absent', () => {
-    const list = [entry()];
-    expect(removeFinished(list, activityKey('local', 'azito:nope'))).toBe(list);
-  });
-});
-
 describe('activityKey with windowId', () => {
   it('uses wid: prefix when windowId is provided', () => {
     expect(activityKey('local', 'azito:win--a', 42)).toBe('wid:42');
@@ -99,5 +87,34 @@ describe('upsertFinished with windowId', () => {
     const withoutId = entry({ target: 'azito:win--a', finishedAt: 2_000 });
     const result = upsertFinished([withId], withoutId);
     expect(result).toHaveLength(2);
+  });
+});
+
+describe('removeDeletedFinished', () => {
+  it('uses IDs when both exist and server and target otherwise', () => {
+    const rows = [entry({ windowId: 1 }), entry({ windowId: 2 }), entry(),
+      entry({ serverName: 'remote' }), entry({ target: 'other' })];
+    expect(removeDeletedFinished(rows, { serverName: 'local', target: 'azito:win--a', windowId: 1 }))
+      .toEqual([rows[1], rows[3], rows[4]]);
+    expect(removeDeletedFinished(rows, { serverName: 'local', target: 'azito:win--a' }))
+      .toEqual([rows[3], rows[4]]);
+    expect(removeDeletedFinished(rows, { serverName: 'remote', target: 'other', windowId: 1 }))
+      .toEqual([rows[1], rows[2], rows[3], rows[4]]);
+  });
+});
+
+describe('removeDeletedFinished pane targets', () => {
+  it.each([['azito:win--a.1', 'azito:win--a'], ['azito:win--a', 'azito:win--a.2']])('matches %s with %s when an ID is missing', (rowTarget, deletedTarget) => {
+    expect(removeDeletedFinished([entry({ target: rowTarget, windowId: 1 })], { serverName: 'local', target: deletedTarget })).toEqual([]);
+    expect(removeDeletedFinished([entry({ target: rowTarget })], { serverName: 'local', target: deletedTarget, windowId: 1 })).toEqual([]);
+  });
+});
+
+describe('mergeFinishedEntry', () => {
+  it('retains prior display metadata when completion omits it', () => {
+    const previous = { serverName: 'local', target: 's:w', paneName: 'Latest', taskTitle: 'Task', paneTitle: 'Pane' };
+    const result = mergeFinishedEntry({ serverName: 'local', target: 's:w', paneName: '', finishedAt: 1 }, previous);
+    expect(result).toMatchObject({ paneName: 'Latest', taskTitle: 'Task', paneTitle: 'Pane' });
+    expect(JSON.parse(JSON.stringify(result))).toEqual(result);
   });
 });

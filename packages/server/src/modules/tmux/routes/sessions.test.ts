@@ -12,7 +12,7 @@ import type { IMuxClient } from '../IMuxClient';
 import { MuxDriverUnavailableError, MuxOperationUnsupportedError } from '../MuxCapabilityError';
 import { TmuxClient as TmuxClientImpl } from '../TmuxClient';
 import { mapAppError } from '../../../app/mapAppError';
-import { AgentUnreachableError } from '../../servers/transport/AgentUnreachableError';
+import { AgentLocalNetworkPermissionError, AgentUnreachableError } from '../../servers/transport/AgentUnreachableError';
 
 function makeServerRepo(srv: ServerConfig): IServerRepository {
   return {
@@ -1310,10 +1310,13 @@ describe('mux creation routes hand the new pane its env inside the per-server lo
 });
 
 describe('unreachable agent server', () => {
-  it('rethrows AgentUnreachableError from GET /sessions so the app error handler can answer 503', async () => {
+  it.each([
+    [new AgentUnreachableError('srv1', 'refused'), { error: 'agent_unreachable', server: 'srv1', reason: 'refused' }],
+    [new AgentLocalNetworkPermissionError('srv1', 'unreachable', 'connect EHOSTUNREACH 10.0.0.1:22'), { error: 'agent_unreachable', server: 'srv1', reason: 'unreachable', code: 'macos_local_network_permission', detail: 'connect EHOSTUNREACH 10.0.0.1:22' }],
+  ])('rethrows an unreachable agent from GET /sessions so the app error handler can answer 503', async (failure, expected) => {
     const srv: ServerConfig = { name: 'srv1', type: 'agent', defaultMux: 'tmux' } as ServerConfig;
     const tmux: Partial<TmuxClient> = {
-      listSessions: vi.fn(async () => { throw new AgentUnreachableError('srv1', 'refused'); }),
+      listSessions: vi.fn(async () => { throw failure; }),
     };
     const app = Fastify();
     app.setErrorHandler((err, _req, reply) => {
@@ -1333,7 +1336,7 @@ describe('unreachable agent server', () => {
       invalidateSessionCache('srv1');
       const res = await app.inject({ method: 'GET', url: '/api/servers/srv1/sessions' });
       expect(res.statusCode).toBe(503);
-      expect(res.json()).toEqual({ error: 'agent_unreachable', server: 'srv1', reason: 'refused' });
+      expect(res.json()).toEqual(expected);
     } finally {
       await app.close();
     }
@@ -1746,4 +1749,57 @@ describe('mux create routes answer failures of the mux call (#312 review)', () =
     const res = await post('', { name: 'dev', kind: '' });
     expect(res.statusCode).toBe(400);
   });
+});
+
+
+describe('action bodies reject unknown fields', () => {
+  const ref = encodeURIComponent(JSON.stringify({ kind: 'tmux', workspace: 's', window: 'w' }));
+  it.each([
+    ['POST', '/api/servers/srv1/sessions/s/windows/w/panes', ['direction']],
+    ['PUT', '/api/servers/srv1/sessions/s/rename', ['name']],
+    ['PUT', '/api/servers/srv1/windows/s%3Aw/rename', ['name']],
+    ['PUT', '/api/servers/srv1/panes/%25250/rename', ['title']],
+    ['POST', '/api/servers/srv1/panes/%25250/send-keys', ['keys']],
+    ['PUT', `/api/servers/srv1/mux/windows/${ref}/rename`, ['name']],
+    ['POST', `/api/servers/srv1/mux/windows/${ref}/panes`, ['ordinal', 'direction']],
+    ['POST', `/api/servers/srv1/mux/windows/${ref}/panes/1/send-keys`, ['keys']],
+    ['PUT', `/api/servers/srv1/mux/windows/${ref}/panes/1/rename`, ['name']],
+    ['POST', '/api/servers/srv1/mux/focus', ['ref']],
+    ['PUT', '/api/servers/srv1/mux/workspaces/s/rename', ['name', 'kind']],
+  ] as const)('%s %s', async (method, url, accepted) => {
+    const app = await buildApp({ tmux: { resolvePane: vi.fn(async () => '%0') } as unknown as Partial<TmuxClient>, windowRepo: makeWindowRepo() });
+    try {
+      const res = await app.inject({ method, url, payload: { extra: true } });
+      expect(res.statusCode).toBe(400);
+      expect(res.json()).toEqual({ error: 'unknown_fields', unknown: ['extra'], accepted });
+    } finally { await app.close(); }
+  });
+  it.each([
+    ['POST', '/api/servers/srv1/sessions/s/windows/w/panes', { direction: 'v' }],
+    ['PUT', '/api/servers/srv1/sessions/s/rename', { name: 'new' }],
+    ['PUT', '/api/servers/srv1/windows/s%3Aw/rename', { name: 'new' }],
+    ['PUT', '/api/servers/srv1/panes/%25250/rename', { title: 'new' }],
+    ['POST', '/api/servers/srv1/panes/%25250/send-keys', { keys: ['Enter'] }],
+    ['PUT', `/api/servers/srv1/mux/windows/${ref}/rename`, { name: 'new' }],
+    ['POST', `/api/servers/srv1/mux/windows/${ref}/panes`, { ordinal: 1, direction: 'v' }],
+    ['POST', `/api/servers/srv1/mux/windows/${ref}/panes/1/send-keys`, { keys: ['Enter'] }],
+    ['PUT', `/api/servers/srv1/mux/windows/${ref}/panes/1/rename`, { name: 'new' }],
+    ['POST', '/api/servers/srv1/mux/focus', { ref: JSON.stringify({ kind: 'tmux', workspace: 's', window: 'w' }) }],
+    ['PUT', '/api/servers/srv1/mux/workspaces/s/rename', { name: 'new', kind: 'tmux' }],
+  ] as const)('%s %s accepts its body', async (method, url, payload) => {
+    const success = { code: 0, stdout: '', stderr: '' };
+    const tmux = {
+      resolvePane: vi.fn(async () => '%0'), getWindowIdentity: vi.fn(async () => null), resolveRef: vi.fn(async () => null),
+      splitPane: vi.fn(async () => success), renameSession: vi.fn(async () => success), renameWindow: vi.fn(async () => success),
+      renamePane: vi.fn(async () => success), sendKeysToHandle: vi.fn(async () => undefined), renameWindowByRef: vi.fn(async () => success),
+      splitPaneByHandle: vi.fn(async () => ({ result: success })), setPaneTitle: vi.fn(async () => success),
+      focusWindow: vi.fn(async () => undefined), renameWorkspace: vi.fn(async () => undefined),
+    };
+    const app = await buildApp({ tmux: tmux as unknown as Partial<TmuxClient>, windowRepo: makeWindowRepo() });
+    try {
+      const res = await app.inject({ method, url, payload });
+      expect(res.statusCode, res.body).toBe(200);
+    } finally { await app.close(); }
+  });
+
 });

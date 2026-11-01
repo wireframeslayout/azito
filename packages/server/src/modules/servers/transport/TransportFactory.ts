@@ -14,7 +14,7 @@ export class TransportFactory {
   private cache = new Map<string, IServerTransport & IMuxTransport & IHostBoundTransport>();
 
   /** `hubHost`: the hub's own host, resolved once at the entry point (see `resolveHubHostProfile`). */
-  constructor(private publicUrl: string, private host: LocalHost, private taskTempFiles: TaskTempFiles, private hubHost: HubHostProfile) {}
+  constructor(private publicUrl: string, private host: LocalHost, private taskTempFiles: TaskTempFiles, private hubHost: HubHostProfile, private isLaunchd = false) {}
 
   /**
    * The OS / architecture of a server's host. A local server is the hub itself: it comes from the hub's HostEnv and is
@@ -46,7 +46,7 @@ export class TransportFactory {
     if (server.type === 'local') {
       transport = new LocalTransport(resolveTmuxRuntime(server.muxRuntime, this.host.homeDir), this.publicUrl, this.host, this.taskTempFiles, this.hostProfileFor(server));
     } else if (server.type === 'agent') {
-      transport = new AgentTransport(server.host!, server.agentPort!, server.agentToken!, server.muxRuntime, server.name, server.hostProfile);
+      transport = new AgentTransport(server.host!, server.agentPort!, server.agentToken!, server.muxRuntime, server.name, server.hostProfile, { platform: this.host.platform, isLaunchd: this.isLaunchd });
     } else {
       throw new Error(`Unsupported server type: ${server.type}`);
     }

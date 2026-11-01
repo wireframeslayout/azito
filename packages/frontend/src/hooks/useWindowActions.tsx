@@ -170,7 +170,7 @@ export function useWindowActions(
     const newTitle = prompt(t('windows.renamePanePrompt'), currentTitle);
     if (!newTitle || newTitle === currentTitle) return;
     if (windowId != null && paneOrdinal != null) {
-      await api(`/windows/${windowId}/panes/${paneOrdinal}/rename`, { method: 'PUT', body: JSON.stringify({ title: newTitle }) });
+      await api(`/windows/${windowId}/panes/${paneOrdinal}/rename`, { method: 'PUT', body: JSON.stringify({ name: newTitle }) });
     } else if (ref && paneOrdinal != null) {
       await api(`/servers/${encodeURIComponent(serverName)}/mux/windows/${encodeURIComponent(ref)}/panes/${paneOrdinal}/rename`, { method: 'PUT', body: JSON.stringify({ name: newTitle }) });
     } else {

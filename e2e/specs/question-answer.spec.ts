@@ -55,7 +55,7 @@ test('チャットの選択肢タップで AskUserQuestion に回答できる', 
 
   await app.goto(`${harness.baseUrl}/workspace/${projectId}`);
   await app.getByPlaceholder('タイトル・ID・ブランチで検索…').fill(label);
-  await app.locator('.row-hover').filter({ hasText: label }).first().click();
+  await app.locator('.row-hover').filter({ hasText: new RegExp(`W-${windowId}(?!\\d)`) }).first().click();
 
   // 回答可能な質問カード（バナーではない）が出る。
   await expect(app.getByText(QUESTION)).toBeVisible();

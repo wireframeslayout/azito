@@ -1,3 +1,4 @@
+import type { ActivityTitleData } from '../../lib/windowDisplay';
 import { storageRelativeKey } from '../files/storageKey';
 import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
@@ -20,6 +21,7 @@ import ObjectsSidebar from './ObjectsSidebar';
 import TasksSidebar from './TasksSidebar';
 
 interface WorkspaceSidebarContentProps {
+  titleData: ActivityTitleData;
   sidebarMode: SidebarMode;
   project: Project | null;
   sessionData: Record<string, Session[]>;
@@ -78,6 +80,7 @@ interface WorkspaceSidebarContentProps {
 
 
 export default function WorkspaceSidebarContent({
+  titleData,
   sidebarMode,
   project,
   sessionData,
@@ -184,6 +187,7 @@ export default function WorkspaceSidebarContent({
       )}
       {sidebarMode === 'tasks' && project && (
         <TasksSidebar
+          titleData={titleData}
           tasks={tasks}
           onOpenTask={(taskId, title) => {
             openTask(taskId, title);

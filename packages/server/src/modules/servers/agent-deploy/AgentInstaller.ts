@@ -1,3 +1,4 @@
+import { LocalNetworkPermissionError } from '../localNetworkDiagnosis';
 import * as crypto from 'crypto';
 import * as fs from 'fs';
 import { Readable } from 'stream';
@@ -22,6 +23,8 @@ export interface InstallProgress {
   step: InstallStep;
   status: 'running' | 'ok' | 'error';
   message: string;
+  code?: string;
+  detail?: string;
 }
 
 /**
@@ -54,6 +57,8 @@ export interface InstallResult {
   startMethod: 'systemd' | 'nohup' | 'taskscheduler';
   steps: InstallProgress[];
   error?: string;
+  code?: string;
+  detail?: string;
   /** The host has tmux (the preflight found one). A host without it can only use misao, so the server must default to it. */
   tmuxFound?: boolean;
   /** The host's OS / architecture as the preflight read it; set when the install succeeded, for the caller to store with the server. */
@@ -137,8 +142,8 @@ export class AgentInstaller {
     muxRuntime?: string,
   ): Promise<InstallResult> {
     const steps: InstallProgress[] = [];
-    const report = (step: InstallStep, status: InstallProgress['status'], message: string) => {
-      const p: InstallProgress = { step, status, message };
+    const report = (step: InstallStep, status: InstallProgress['status'], message: string, diagnosis?: LocalNetworkPermissionError) => {
+      const p: InstallProgress = { step, status, message, ...(diagnosis ? { code: diagnosis.code, detail: diagnosis.detail } : {}) };
       steps.push(p);
       onProgress?.(p);
     };
@@ -155,8 +160,9 @@ export class AgentInstaller {
       report('preflight', 'ok', `Node ${preflight.nodeVersion}, ${preflight.hostProfile.platform} ${preflight.hostProfile.arch}, ${preflight.tmuxVersion ? `tmux ${preflight.tmuxVersion}` : 'no tmux (optional)'}`);
     } catch (err) {
       const msg = err instanceof HostProfileError ? `${err.code}: ${err.message}` : (err as Error).message;
-      report('preflight', 'error', msg);
-      return { success: false, host: '', port: AGENT_PORT, token, version, startMethod: 'nohup', steps, error: msg };
+      const diagnosis = err instanceof LocalNetworkPermissionError ? err : undefined;
+      report('preflight', 'error', msg, diagnosis);
+      return { success: false, host: '', port: AGENT_PORT, token, version, startMethod: 'nohup', steps, error: msg, ...(diagnosis ? { code: diagnosis.code, detail: diagnosis.detail } : {}) };
     }
 
     if (preflight.windows) return this.installOnWindows(sshHost, version, token, preflight, preflight.windows, steps, report);
