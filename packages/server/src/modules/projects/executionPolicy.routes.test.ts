@@ -69,9 +69,9 @@ function makeOpts(overrides: Partial<ProjectsRouteOptions> = {}): ProjectsRouteO
       listSessions: vi.fn(async () => []),
       createSession: vi.fn(async () => {}),
       listWorkspaces: vi.fn(async () => []),
-      openWorkspace: vi.fn(async () => ({ ref: { kind: 'tmux', workspace: 'p', window: 'default' }, result: { stdout: '', stderr: '', code: 0 } })),
+      prepareWorkspace: vi.fn(async () => ({ ref: { kind: 'tmux', workspace: 'p', window: 'default' }, result: { stdout: '', stderr: '', code: 0 } })),
     } as unknown as ProjectsRouteOptions['tmux'],
-    muxDriverRegistry: { resolve: vi.fn(() => ({ listWorkspaces: vi.fn(async () => []), openWorkspace: vi.fn(async () => {}) })) } as unknown as ProjectsRouteOptions['muxDriverRegistry'],
+    muxDriverRegistry: { resolve: vi.fn(() => ({ listWorkspaces: vi.fn(async () => []), prepareWorkspace: vi.fn(async () => {}) })) } as unknown as ProjectsRouteOptions['muxDriverRegistry'],
     transportFactory: { hostProfileFor: () => null } as unknown as ProjectsRouteOptions['transportFactory'],
     serverRepo: {
       findAll: vi.fn(() => []),
@@ -298,7 +298,7 @@ describe('PUT /api/projects/:id/servers/:serverName — input_policy (Issue #328
   // the assertion can tell the two apart.
   it('creates the project tmux session using the server row re-read inside the isolation lock, not the one resolved before the lock', async () => {
     let generation = 0;
-    const muxOpenWorkspace = vi.fn(async () => ({ ref: { kind: 'tmux', workspace: 'p', window: 'default' }, result: { stdout: '', stderr: '', code: 0 } }));
+    const muxPrepareWorkspace = vi.fn(async () => ({ ref: { kind: 'tmux', workspace: 'p', window: 'default' }, result: { stdout: '', stderr: '', code: 0 } }));
     const opts = makeOpts({
       serverRepo: {
         findAll: vi.fn(() => []),
@@ -324,10 +324,10 @@ describe('PUT /api/projects/:id/servers/:serverName — input_policy (Issue #328
         listSessions: vi.fn(async () => []),
         createSession: vi.fn(async () => {}),
         listWorkspaces: vi.fn(async () => []),
-        openWorkspace: vi.fn(async () => ({ ref: { kind: 'tmux', workspace: 'p', window: 'default' }, result: { stdout: '', stderr: '', code: 0 } })),
+        prepareWorkspace: vi.fn(async () => ({ ref: { kind: 'tmux', workspace: 'p', window: 'default' }, result: { stdout: '', stderr: '', code: 0 } })),
         uiTokenEnvForServer: vi.fn(() => ({})),
       } as unknown as ProjectsRouteOptions['tmux'],
-      muxDriverRegistry: { resolve: vi.fn(() => ({ listWorkspaces: vi.fn(async () => []), openWorkspace: muxOpenWorkspace })) } as unknown as ProjectsRouteOptions['muxDriverRegistry'],
+      muxDriverRegistry: { resolve: vi.fn(() => ({ listWorkspaces: vi.fn(async () => []), prepareWorkspace: muxPrepareWorkspace })) } as unknown as ProjectsRouteOptions['muxDriverRegistry'],
     });
     const app = Fastify();
     await app.register(projectsRoutes, opts);
@@ -340,7 +340,7 @@ describe('PUT /api/projects/:id/servers/:serverName — input_policy (Issue #328
     });
 
     expect(res.statusCode).toBe(200);
-    expect(muxOpenWorkspace).toHaveBeenCalledWith(
+    expect(muxPrepareWorkspace).toHaveBeenCalledWith(
       expect.not.objectContaining({ agentVersion: 'gen-1' }),
       'p',
       expect.anything(),
