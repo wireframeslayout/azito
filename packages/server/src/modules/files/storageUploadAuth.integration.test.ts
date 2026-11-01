@@ -84,8 +84,8 @@ describe('POST /api/projects/:id/storage/upload — task-principal scoping (Issu
     const { token } = taskTokenRepo.issue(1, 1);
 
     const fd = new FormData();
-    fd.set('prefix', 'folder/');
     fd.set('file', new Blob([Buffer.from('hello')]), 'a.txt');
+    fd.set('prefix', 'folder/');
     const res = await app.inject({
       method: 'POST',
       url: '/api/projects/10/storage/upload',

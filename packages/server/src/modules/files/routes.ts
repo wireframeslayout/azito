@@ -64,7 +64,7 @@ const storageRoutes: FastifyPluginCallback<StorageRouteOptions> = (fastify, opts
         const files = await storageClient.list(settings, projectId);
         return { files };
       } catch (err: unknown) {
-        return reply.status(502).send(classifyStorageError(err));
+        return reply.status(502).send({ error: (err as Error).message, code: classifyStorageError(err).code });
       }
     },
   );
@@ -80,34 +80,41 @@ const storageRoutes: FastifyPluginCallback<StorageRouteOptions> = (fastify, opts
 
       const settings = storageSettingsRepo.get();
 
-      const data = await request.file();
-      if (!data) return reply.status(400).send({ error: 'No file uploaded' });
-
-      const buffer = await data.toBuffer();
+      let file: { filename: string; mimetype: string; buffer: Buffer } | undefined;
+      let rawPrefix: unknown = (request.query as { prefix?: unknown }).prefix;
+      let hasPrefixField = false;
+      for await (const part of request.parts()) {
+        if (part.type === 'file') {
+          if (file) return reply.status(400).send({ error: 'Only one file is supported' });
+          file = { filename: part.filename, mimetype: part.mimetype, buffer: await part.toBuffer() };
+        } else if (part.fieldname === 'prefix') {
+          if (hasPrefixField) return reply.status(400).send({ error: 'Invalid prefix', code: 'invalid_path' });
+          hasPrefixField = true;
+          rawPrefix = part.value;
+        }
+      }
+      if (!file) return reply.status(400).send({ error: 'No file uploaded' });
+      const buffer = file.buffer;
       if (buffer.length > settings.maxFileSize) {
         return reply.status(413).send({
           error: `File too large. Max ${Math.round(settings.maxFileSize / 1024 / 1024)}MB`,
         });
       }
-
-      const prefixField = data.fields.prefix;
-      if (Array.isArray(prefixField) || (prefixField && prefixField.type !== 'field')) return reply.status(400).send({ error: 'Invalid prefix', code: 'invalid_path' });
-      const rawPrefix = prefixField?.value ?? (request.query as { prefix?: unknown }).prefix;
       if (rawPrefix !== undefined && typeof rawPrefix !== 'string') return reply.status(400).send({ error: 'Invalid prefix', code: 'invalid_path' });
       const prefix = rawPrefix ?? '';
       try { validateStoragePath(prefix, true, true); } catch { return reply.status(400).send({ error: 'Invalid prefix', code: 'invalid_path' }); }
       const timestamp = Date.now();
-      const safeName = sanitizeFileName(data.filename);
+      const safeName = sanitizeFileName(file.filename);
       const storedName = `${timestamp}_${safeName}`;
 
       try {
         await storageClient.ensureBucket(settings);
-        const file = await storageClient.upload(
-          settings, projectId, storedName, buffer, data.mimetype, prefix,
+        const storedFile = await storageClient.upload(
+          settings, projectId, storedName, buffer, file.mimetype, prefix,
         );
-        return { ok: true, file };
+        return { ok: true, file: storedFile };
       } catch (err: unknown) {
-        return reply.status(502).send(classifyStorageError(err));
+        return reply.status(502).send({ error: (err as Error).message, code: classifyStorageError(err).code });
       }
     },
   );
@@ -127,7 +134,7 @@ const storageRoutes: FastifyPluginCallback<StorageRouteOptions> = (fastify, opts
         await storageClient.delete(settings, projectId, filename);
         return { ok: true };
       } catch (err: unknown) {
-        return reply.status(502).send(classifyStorageError(err));
+        return reply.status(502).send({ error: (err as Error).message, code: classifyStorageError(err).code });
       }
     },
   );
@@ -147,7 +154,7 @@ const storageRoutes: FastifyPluginCallback<StorageRouteOptions> = (fastify, opts
         const url = await storageClient.getPresignedUrl(settings, projectId, filename);
         return { url };
       } catch (err: unknown) {
-        return reply.status(502).send(classifyStorageError(err));
+        return reply.status(502).send({ error: (err as Error).message, code: classifyStorageError(err).code });
       }
     },
   );
@@ -168,7 +175,7 @@ const storageRoutes: FastifyPluginCallback<StorageRouteOptions> = (fastify, opts
         const res = await fetch(url);
         if (!res.ok) {
           if (res.status === 404) return reply.status(404).send({ error: 'File not found' });
-          return reply.status(502).send(classifyStorageError({ $metadata: { httpStatusCode: res.status } }));
+          return reply.status(502).send({ error: 'Storage access denied', code: classifyStorageError({ $metadata: { httpStatusCode: res.status } }).code });
         }
         const contentType = res.headers.get('content-type') || 'application/octet-stream';
         reply.header('Content-Type', contentType);
@@ -182,7 +189,7 @@ const storageRoutes: FastifyPluginCallback<StorageRouteOptions> = (fastify, opts
         const buffer = Buffer.from(await res.arrayBuffer());
         return reply.send(buffer);
       } catch (err: unknown) {
-        return reply.status(502).send(classifyStorageError(err));
+        return reply.status(502).send({ error: (err as Error).message, code: classifyStorageError(err).code });
       }
     },
   );
