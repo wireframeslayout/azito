@@ -7,7 +7,6 @@ import { EXT_LANG } from './fileLanguage';
 
 // ─── File type lookup tables ───
 
-
 export const IMAGE_EXTS = new Set(['.png', '.jpg', '.jpeg', '.gif', '.svg', '.webp', '.ico', '.bmp']);
 
 export const IMAGE_MIME: Record<string, string> = {
@@ -50,10 +49,10 @@ export const MIME_TYPES: Record<string, string> = {
 
 // ─── Errors ───
 
-/** Service-level error carrying the HTTP status the route should respond with. */
 /** Why a file cannot be opened as editable text; lets the UI explain it in the user's language. */
 export type FileBrowseErrorCode = 'too_large' | 'binary' | 'invalid_utf8' | 'forbidden';
 
+/** Service-level error carrying the HTTP status the route should respond with. */
 export class FileBrowseError extends Error {
   constructor(message: string, public readonly status: number, public readonly code?: FileBrowseErrorCode) {
     super(message);

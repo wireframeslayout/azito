@@ -57,6 +57,14 @@ describe('StorageFilesBackend', () => {
     expect(await backend.save('projects/1/a', 'mine', 'v1', false)).toEqual({ kind: 'conflict', latest: { kind: 'text', content: 'new', language: 'text', version: 'v2' } });
     expect(await backend.read('projects/1/a')).toEqual({ kind: 'unavailable', code: 'too_large', message: 'File exceeds 500 KiB' });
   });
+  it('explains a conflict whose latest version is no longer editable text', async () => {
+    vi.stubGlobal('fetch', vi.fn()
+      .mockResolvedValueOnce(response({ code: 'conflict', latest: { error: 'File contains NUL bytes', code: 'binary' } }, 409))
+      .mockResolvedValueOnce(response({ code: 'conflict', latest: null }, 409)));
+    const backend = new StorageFilesBackend(1);
+    expect(await backend.save('projects/1/a', 'mine', 'v1', false)).toEqual({ kind: 'conflict', latest: { kind: 'unavailable', code: 'binary', message: 'File contains NUL bytes' } });
+    expect(await backend.save('projects/1/a', 'mine', 'v1', false)).toEqual({ kind: 'conflict', latest: null });
+  });
 });
 
 describe('unreadable text', () => {

@@ -15,6 +15,8 @@ const renameSchema = z.union([z.object({ key: path, displayName: z.string().min(
 const moveSchema = z.object({ ...selection, destPrefix: z.string() });
 const deleteSchema = z.object(selection);
 const statSchema = z.object({ prefix: z.string() });
+/** Reasons a latest version is no longer editable text; sent with a conflict so the editor can say why. */
+const UNEDITABLE_CODES: ReadonlySet<string> = new Set(['too_large', 'binary', 'invalid_utf8']);
 const contentQuery = z.object({ key: path });
 const contentBody = z.object({ key: path, content: z.string(), version: z.string().min(1).optional(), force: z.boolean().optional() }).refine((value) => value.force === true || value.version !== undefined);
 
@@ -57,8 +59,13 @@ export function registerStorageOperationRoutes(fastify: FastifyInstance, opts: S
     try { return await text.write(relative, b.content, b.force ? undefined : b.version); }
     catch (error) {
       if (!(error instanceof StorageOperationError) || error.code !== 'conflict') throw error;
-      let latest = null;
-      try { latest = await text.read(relative); } catch { /* the latest content is unreadable: the client reports it */ }
+      let latest: Awaited<ReturnType<typeof text.read>> | { error: string; code: string } | null = null;
+      try { latest = await text.read(relative); }
+      catch (readError) {
+        // A latest version that is no longer editable text carries its reason; one that cannot be read at all is `null`.
+        if (readError instanceof StorageOperationError && UNEDITABLE_CODES.has(readError.code)) latest = { error: readError.message, code: readError.code };
+        else reply.log.warn({ err: readError }, 'storage conflict: latest content unreadable');
+      }
       return reply.status(409).send({ code: 'conflict', latest });
     }
   });

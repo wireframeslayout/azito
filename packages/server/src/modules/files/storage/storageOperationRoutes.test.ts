@@ -37,6 +37,14 @@ describe('storage operation routes', () => {
       expect(response.statusCode).toBe(409);
       expect(response.json()).toEqual({ code: 'conflict', latest: { content: 'latest', version: 'v2', language: 'text' } });
       expect(text.write).toHaveBeenCalledWith('file', 'edit', 'v1');
+
+      text.read.mockRejectedValueOnce(new StorageOperationError(400, 'binary', 'File contains NUL bytes'));
+      const binary = await app.inject({ method: 'PUT', url: root, payload: { key: 'projects/1/file', content: 'edit', version: 'v1' } });
+      expect(binary.json()).toEqual({ code: 'conflict', latest: { error: 'File contains NUL bytes', code: 'binary' } });
+
+      text.read.mockRejectedValueOnce(new StorageOperationError(404, 'not_found', 'File not found'));
+      const deleted = await app.inject({ method: 'PUT', url: root, payload: { key: 'projects/1/file', content: 'edit', version: 'v1' } });
+      expect(deleted.json()).toEqual({ code: 'conflict', latest: null });
     } finally { await app.close(); }
   });
   it('uses the documented contracts and enforces project boundaries', async () => {
