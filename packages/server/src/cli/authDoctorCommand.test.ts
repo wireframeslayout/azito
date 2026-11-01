@@ -75,6 +75,7 @@ describe('authDoctorCommand', () => {
   let originalEnv: string | undefined;
   let originalHome: string | undefined;
   let originalScopedAuth: string | undefined;
+  let originalMisaoSocket: string | undefined;
   let logSpy: ReturnType<typeof vi.spyOn>;
 
   beforeEach(() => {
@@ -93,6 +94,11 @@ describe('authDoctorCommand', () => {
     originalHome = process.env.HOME;
     fakeHome = fs.mkdtempSync(path.join(os.tmpdir(), 'auth-doctor-home-'));
     process.env.HOME = fakeHome;
+
+    // The doctor prefers process.env.MISAO_SOCKET; a shell that points it at the
+    // resident daemon would make "daemon unreachable" cases reach a real one.
+    originalMisaoSocket = process.env.MISAO_SOCKET;
+    process.env.MISAO_SOCKET = path.join(tmpDir, 'no-misao.sock');
 
     logSpy = vi.spyOn(console, 'log').mockImplementation(() => {});
     process.exitCode = undefined;
@@ -125,6 +131,11 @@ describe('authDoctorCommand', () => {
       process.env.HOME = originalHome;
     } else {
       delete process.env.HOME;
+    }
+    if (originalMisaoSocket !== undefined) {
+      process.env.MISAO_SOCKET = originalMisaoSocket;
+    } else {
+      delete process.env.MISAO_SOCKET;
     }
     process.exitCode = undefined;
     fs.rmSync(tmpDir, { recursive: true, force: true });
