@@ -94,7 +94,7 @@ export function MobileActiveWindowsPanel({ titleData, onClose, connectPane, open
                 padding: '8px 10px',
                 minHeight: 44,
                 borderRadius: 'var(--radius-md)',
-                background: isBlocked ? 'rgba(210, 153, 34, 0.06)' : 'transparent',
+                background: isBlocked ? 'var(--warning-a08)' : 'transparent',
                 border: 'none',
                 color: 'var(--text)',
                 textAlign: 'left',
@@ -117,7 +117,7 @@ export function MobileActiveWindowsPanel({ titleData, onClose, connectPane, open
                 </div>
               </div>
               {isBlocked && (
-                <span style={{ fontSize: 'var(--font-2xs)', color: 'var(--warning)', background: 'rgba(210, 153, 34, 0.15)', borderRadius: 'var(--radius-sm)', padding: '1px 5px', flexShrink: 0 }}>
+                <span style={{ fontSize: 'var(--font-2xs)', color: 'var(--warning)', background: 'var(--warning-a15)', borderRadius: 'var(--radius-sm)', padding: '1px 5px', flexShrink: 0 }}>
                   {t('activeWindows.planReview')}
                 </span>
               )}

@@ -141,14 +141,14 @@ export default function ActiveWindowsSection({ titleData, connectPane, openTask,
               <div key={row.key}>
               {historyStart && <div style={{ display: 'flex', alignItems: 'center', padding: 'var(--space-2)', color: 'var(--text-dim)', fontSize: 'var(--font-xs)' }}><span style={{ flex: 1 }}>{t('activeWindows.history', { count: rows.filter((r) => r.seenAt != null).length, max: retention.maxCount })}</span><IconButton type="button" title={t('activeWindows.clearHistory')} aria-label={t('activeWindows.clearHistory')} onClick={clearSeenFinished}><Icon name="trash" size={14} /></IconButton></div>}
               <div
-                className={`row-hover${!isFinished && !isBlocked ? ' aw-row-working' : ''}`}
+                className={`row-hover aw-history-row${!isFinished && !isBlocked ? ' aw-row-working' : ''}`}
                 style={{
                   display: 'flex',
                   alignItems: 'center',
                   gap: 6,
                   padding: '6px 8px',
                   borderRadius: 'var(--radius-sm)',
-                  background: isBlocked ? 'rgba(210, 153, 34, 0.06)' : undefined,
+                  background: isBlocked ? 'var(--warning-a08)' : undefined,
                 }}
               >
                 {isFinished ? <FinishedIndicator seen={row.seenAt != null} /> : isBlocked ? <BlockedDot /> : <BrailleSpinner />}
@@ -176,7 +176,7 @@ export default function ActiveWindowsSection({ titleData, connectPane, openTask,
                       </span>
                       {isFinished && row.finishedAt != null && (
                         <span style={{ fontSize: 'var(--font-2xs)', color: row.seenAt != null ? 'var(--text-dim)' : 'var(--success)', flexShrink: 0, whiteSpace: 'nowrap' }}>
-                          {row.seenAt == null && <>{t('activeWindows.done')} · </>}{formatRelativeTime(row.finishedAt)}
+                          {t('activeWindows.done')} · {formatRelativeTime(row.finishedAt)}
                         </span>
                       )}
                       {isBlocked && (
@@ -190,7 +190,7 @@ export default function ActiveWindowsSection({ titleData, connectPane, openTask,
                 {isBlocked && (
                   <span
                     style={{
-                      fontSize: 'var(--font-2xs)', color: 'var(--warning)', background: 'rgba(210, 153, 34, 0.15)',
+                      fontSize: 'var(--font-2xs)', color: 'var(--warning)', background: 'var(--warning-a15)',
                       borderRadius: 'var(--radius-sm)', padding: '1px 5px', flexShrink: 0,
                     }}
                   >
@@ -207,7 +207,7 @@ export default function ActiveWindowsSection({ titleData, connectPane, openTask,
                     #{taskId}
                   </span>
                 )}
-                {row.seenAt != null && <IconButton type="button" aria-label={t('activeWindows.deleteHistory')} onClick={() => dismissFinished(row.serverName, row.target, row.windowId)}><Icon name="close" size={14} /></IconButton>}
+                {row.seenAt != null && <IconButton className="icon-btn aw-history-delete" type="button" aria-label={t('activeWindows.deleteHistory')} onClick={() => dismissFinished(row.serverName, row.target, row.windowId)}><Icon name="close" size={14} /></IconButton>}
               </div>
               </div>
             );

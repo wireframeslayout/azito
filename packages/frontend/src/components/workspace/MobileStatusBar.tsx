@@ -87,7 +87,7 @@ export function MobileStatusBar({ titleData, allTasks, openTask, connectPane }: 
   const { t } = useTranslation(['workspace', 'common']);
   const { rows } = useActiveWindowRows(titleData);
   const [open, setOpen] = useState(false);
-  const { markAllFinishedSeen, dismissFinished, clearSeenFinished, retention } = useAgentActivity();
+  const { markFinishedSeen, markAllFinishedSeen, dismissFinished, clearSeenFinished, retention } = useAgentActivity();
   const [historyOpen, setHistoryOpen] = useState(false);
   const [healthOpen, setHealthOpen] = useState(false);
   const containerRef = useClickOutside<HTMLDivElement>(() => setOpen(false));
@@ -119,10 +119,9 @@ export function MobileStatusBar({ titleData, allTasks, openTask, connectPane }: 
 
   const finishedRows = useMemo(() => rows.filter((r) => r.status === 'finished'), [rows]);
 
-  const unreadFinishedCount = useMemo(
-    () => finishedRows.filter((r) => r.seenAt == null).length,
-    [finishedRows],
-  );
+  const unreadRows = finishedRows.filter((r) => r.seenAt == null);
+  const historyRows = finishedRows.filter((r) => r.seenAt != null);
+  const unreadFinishedCount = unreadRows.length;
 
   const workingCount = workingGroups.length;
 
@@ -148,6 +147,7 @@ export function MobileStatusBar({ titleData, allTasks, openTask, connectPane }: 
       openTask,
       openTerminal,
     );
+    markFinishedSeen(row.serverName, row.target, row.windowId);
     setOpen(false);
   };
 
@@ -193,18 +193,27 @@ export function MobileStatusBar({ titleData, allTasks, openTask, connectPane }: 
               ))}
             </section>
           )}
-          {finishedRows.length > 0 && (
+          {unreadRows.length > 0 && (
+            <section>
+              <div style={sectionHeaderStyle}>{t('workspace:activityPill.finishedSection', { count: unreadRows.length })}</div>
+              {unreadRows.map((row) => <button key={row.key} type="button" className="row-hover" onClick={() => handleFinishedRowOpen(row)} style={rowButtonStyle}>
+                <FinishedIndicator /><span style={rowTitleStyle}>{row.title}</span>
+                {row.finishedAt != null && <span style={{ color: 'var(--success)', fontSize: 'var(--font-2xs)' }}>{t('workspace:activeWindows.done')} · {formatRelativeTime(row.finishedAt)}</span>}
+              </button>)}
+            </section>
+          )}
+          {historyRows.length > 0 && (
             <section>
               <div style={{ display: 'flex', alignItems: 'center' }}>
-                <button type="button" aria-expanded={historyOpen} onClick={() => setHistoryOpen((v) => !v)} style={{ ...rowButtonStyle, flex: 1 }}>{t('workspace:activeWindows.history', { count: finishedRows.length, max: retention.maxCount })}</button>
+                <button type="button" aria-expanded={historyOpen} onClick={() => setHistoryOpen((v) => !v)} style={{ ...rowButtonStyle, flex: 1 }}>{t('workspace:activeWindows.history', { count: historyRows.length, max: retention.maxCount })}</button>
                 <IconButton type="button" title={t('workspace:activeWindows.clearHistory')} aria-label={t('workspace:activeWindows.clearHistory')} onClick={clearSeenFinished} style={{ minWidth: 44, minHeight: 44 }}><Icon name="trash" size={14} /></IconButton>
               </div>
-              {historyOpen && finishedRows.map((row) => (
+              {historyOpen && historyRows.map((row) => (
                 <div key={row.key} style={{ display: 'flex', alignItems: 'center' }}>
                   <button type="button" className="row-hover" onClick={() => handleFinishedRowOpen(row)} style={rowButtonStyle}>
                     <FinishedIndicator seen={row.seenAt != null} />
                     <span style={{ ...rowTitleStyle, color: 'var(--text-dim)' }}>{row.title}</span>
-                    {row.finishedAt != null && <span style={{ color: 'var(--text-dim)', fontSize: 'var(--font-2xs)' }}>{formatRelativeTime(row.finishedAt)}</span>}
+                    {row.finishedAt != null && <span style={{ color: 'var(--text-dim)', fontSize: 'var(--font-2xs)' }}>{t('workspace:activeWindows.done')} · {formatRelativeTime(row.finishedAt)}</span>}
                   </button>
                   <IconButton type="button" aria-label={t('workspace:activeWindows.deleteHistory')} onClick={() => dismissFinished(row.serverName, row.target, row.windowId)} style={{ minWidth: 44, minHeight: 44 }}><Icon name="close" size={14} /></IconButton>
                 </div>
