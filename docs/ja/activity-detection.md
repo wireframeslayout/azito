@@ -554,7 +554,7 @@ tmux のサーバーでは以下は何も生成されず、これまでの tmux 
   （コマンドが不明な場合や title / profile 由来の判定は従来どおり）。codex の空タイトルは `unknown` として後段へ進む
   （tmux では通常ホスト名が非空タイトルとして入り、idle と判定される）。
   窓が一覧にない tick（一覧の取得失敗を含む）では bytes 由来の working を除外しない。
-  空タイトルから後段に進む場合、misao の `decidedBy` は `tier3_heuristic` などになり、停止 reason は `unknown` になることがある（tmux では `completed`）。
+  空タイトルから後段に進む場合、misao 窓の診断の `decidedBy`（稼働検知診断）は `tier3_heuristic` などになり、停止 reason は `unknown` になることがある（tmux では `completed`）。
 - **blocked 補正。** misao 0.3.0 以降（Rust 版）のコアは、同梱の claude / codex プロファイルによる判定で `pane.state` に
   `blocked` も出す（上の写像のとおり、そのまま blocked になる）。ただし working / idle の行が応答待ちを隠していることがあり、
   更新前の 0.2.0（Node 版）のデーモンは `blocked` を出さないため、misao 窓では Tier 0 idle の精緻化（§1）と同じ画面確認を、
