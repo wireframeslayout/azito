@@ -13,6 +13,7 @@ function makeWindow(overrides: Partial<Window>): Window {
   return {
     id: 1, ownerType: 'project', projectId: 1, taskId: null, serverName: 'local', tmuxTarget: 'azito:agent-1',
     label: 'agent-1', isPrimary: false, windowType: 'agent', workerType: 'claude', workerModel: null,
+    labelSource: 'auto',
     agentSessionId: null, launchCommand: null, workingDirectory: null, paneLayout: null, sleeping: false,
     createdAt: '2026-01-01T00:00:00Z', ...overrides,
   };

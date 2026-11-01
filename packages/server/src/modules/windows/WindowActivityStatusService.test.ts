@@ -31,6 +31,7 @@ function buildWindow(overrides: Partial<Window> = {}): Window {
     serverName: 'local',
     tmuxTarget: 'main:0',
     label: null,
+    labelSource: 'auto',
     isPrimary: true,
     windowType: 'agent',
     workerType: 'claude',

@@ -175,6 +175,15 @@ describe('GET /api/transcripts/:agent/:id', () => {
     await app.close();
   });
 
+  it('returns the rejection reason for session input', async () => {
+    const rejection = { code: 'not_ready', error: 'Agent input is not ready.' };
+    const app = buildApp([buildClaudeSource()], { sendInput: async () => rejection });
+    const res = await app.inject({ method: 'POST', url: `/api/transcripts/claude/${SID}/input`, payload: { paneId: PANE_ID, text: 'hello' } });
+    expect(res.statusCode).toBe(409);
+    expect(res.json()).toEqual(rejection);
+    await app.close();
+  });
+
   it('returns 404 when the session is not found', async () => {
     const app = buildApp([buildClaudeSource({ readSession: () => null })]);
     const res = await app.inject({ method: 'GET', url: `/api/transcripts/claude/${SID}` });
@@ -324,6 +333,7 @@ describe('GET /api/transcripts/:agent/:id', () => {
       serverName: 'local',
       tmuxTarget: 'azito:agent-1',
       label: null,
+      labelSource: 'auto',
       isPrimary: true,
       windowType: 'agent',
       workerType: 'codex',
@@ -826,6 +836,7 @@ describe('GET /api/transcripts/resolve-window', () => {
     serverName: 'local',
     tmuxTarget: 'main:0',
     label: null,
+    labelSource: 'auto',
     isPrimary: true,
     windowType: 'agent',
     workerType: 'claude',
@@ -914,6 +925,15 @@ describe('GET /api/transcripts/resolve-window', () => {
 
 describe('POST /api/transcripts/window-input', () => {
   const PANE_ID_WINDOW = '%5';
+
+  it('returns the rejection reason for window input', async () => {
+    const rejection = { code: 'not_ready', error: 'Agent input is not ready.' };
+    const app = buildApp([buildClaudeSource()], {}, { windowInputService: { sendInput: async () => rejection } });
+    const res = await app.inject({ method: 'POST', url: '/api/transcripts/window-input', payload: { windowId: 42, paneId: PANE_ID_WINDOW, text: 'hello' } });
+    expect(res.statusCode).toBe(409);
+    expect(res.json()).toEqual(rejection);
+    await app.close();
+  });
 
   it('rejects a non-numeric windowId with 400', async () => {
     const app = buildApp();

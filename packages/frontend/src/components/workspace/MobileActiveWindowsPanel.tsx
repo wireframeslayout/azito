@@ -1,7 +1,8 @@
+import { activeWindowTitleInput } from '../../lib/windowDisplay';
 import { useActiveWindowRows } from '../../hooks/useActiveWindowRows';
 import { useAgentActivity } from '../../hooks/useAgentActivity';
 import { buildWindowTaskMap, lookupWindowTask } from '../../lib/windowTask';
-import { formatActiveWindowLabel } from '../../lib/windowDisplay';
+import { resolveWindowTitle, formatWindowTitleLine } from '@azito/shared';
 import { BrailleSpinner, BlockedDot, FinishedIndicator } from '../ui/WindowActivityIndicator';
 import { formatRelativeTime } from '../../utils/time';
 import { selectTaskTerminal } from './TaskPanel';
@@ -58,8 +59,7 @@ export function MobileActiveWindowsPanel({ onClose, connectPane, openTask, taskW
       ) : (
         rows.map((row) => {
           const taskId = row.taskId ?? lookupWindowTask(windowTaskMap, row.serverName, row.target);
-          const displayName = formatActiveWindowLabel(row);
-          const windowLabel = formatActiveWindowLabel(row);
+          const displayName = formatWindowTitleLine(resolveWindowTitle(activeWindowTitleInput(row)));
           const isFinished = row.status === 'finished';
           const isBlocked = !isFinished && row.activityStatus === 'blocked';
 
@@ -107,11 +107,6 @@ export function MobileActiveWindowsPanel({ onClose, connectPane, openTask, taskW
                     </span>
                   )}
                 </div>
-                {windowLabel !== displayName && (
-                  <div style={{ fontSize: 'var(--font-xs)', color: 'var(--text-dim)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', marginTop: 1 }}>
-                    {windowLabel}
-                  </div>
-                )}
               </div>
               {isBlocked && (
                 <span style={{ fontSize: 'var(--font-2xs)', color: 'var(--warning)', background: 'rgba(210, 153, 34, 0.15)', borderRadius: 'var(--radius-sm)', padding: '1px 5px', flexShrink: 0 }}>

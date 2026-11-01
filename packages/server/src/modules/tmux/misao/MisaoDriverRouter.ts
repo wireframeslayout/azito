@@ -49,6 +49,7 @@ export class MisaoDriverRouter implements IMuxClient {
   async captureScreen(server: ServerConfig, handle: PaneHandle, start?: number, end?: number): Promise<ExecResult> { return this.to(server).captureScreen(server, handle, start, end); }
   async sendKeysToHandle(server: ServerConfig, handle: PaneHandle, keys: string[]): Promise<void> { return this.to(server).sendKeysToHandle(server, handle, keys); }
   async sendTextToHandle(server: ServerConfig, handle: PaneHandle, text: string): Promise<void> { return this.to(server).sendTextToHandle(server, handle, text); }
+  async pasteTextToHandle(server: ServerConfig, handle: PaneHandle, text: string): Promise<void> { return this.to(server).pasteTextToHandle(server, handle, text); }
   async panePidByHandle(server: ServerConfig, handle: PaneHandle): Promise<number | null> { return this.to(server).panePidByHandle(server, handle); }
   async paneCommandByHandle(server: ServerConfig, handle: PaneHandle): Promise<string | null> { return this.to(server).paneCommandByHandle(server, handle); }
 

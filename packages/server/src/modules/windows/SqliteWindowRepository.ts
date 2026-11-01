@@ -39,6 +39,7 @@ interface WindowRow {
   tmux_target: string;
   mux_ref: string | null;
   label: string | null;
+  label_source: Window['labelSource'];
   is_primary: number;
   window_type: string;
   worker_type: string | null;
@@ -67,8 +68,8 @@ export class SqliteWindowRepository implements IWindowRepository {
 
   constructor(private db: SqliteDatabase) {
     this.addStmt = db.prepare(`
-      INSERT INTO windows (owner_type, project_id, task_id, server_name, tmux_target, mux_ref, label, is_primary, window_type, worker_type, worker_model, agent_session_id, launch_command, working_directory, pane_layout)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      INSERT INTO windows (owner_type, project_id, task_id, server_name, tmux_target, mux_ref, label, label_source, is_primary, window_type, worker_type, worker_model, agent_session_id, launch_command, working_directory, pane_layout)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `);
     this.findAllStmt = db.prepare('SELECT * FROM windows');
     this.findByIdStmt = db.prepare('SELECT * FROM windows WHERE id = ?');
@@ -91,7 +92,7 @@ export class SqliteWindowRepository implements IWindowRepository {
     return (this.nowStmt.get() as { ts: string }).ts;
   }
 
-  add(input: Omit<Window, 'id' | 'createdAt'>): number {
+  add(input: Omit<Window, 'id' | 'createdAt' | 'labelSource'>): number {
     const window = { ...input, tmuxTarget: storedTarget(input.tmuxTarget, input.muxRef) };
     if (window.tmuxTarget && /\.\d+$/.test(window.tmuxTarget)) {
       throw new Error(`tmuxTarget must not contain pane suffix: ${window.tmuxTarget}`);
@@ -100,7 +101,8 @@ export class SqliteWindowRepository implements IWindowRepository {
       const existing = this.findProjectWindowStmt.get(window.projectId, window.serverName, window.tmuxTarget) as { id: number } | undefined;
       if (existing) {
         if (window.label !== undefined) {
-          this.db.prepare('UPDATE windows SET label = ? WHERE id = ?').run(window.label, existing.id);
+          this.db.prepare("UPDATE windows SET label = ? WHERE id = ? AND label_source = 'auto'")
+            .run(window.label, existing.id);
         }
         return existing.id;
       }
@@ -113,6 +115,7 @@ export class SqliteWindowRepository implements IWindowRepository {
       window.tmuxTarget,
       window.muxRef ? formatMuxRef(window.muxRef) : formatMuxRef(muxRefFromTmuxTarget(window.tmuxTarget)),
       window.label,
+      'auto',
       window.isPrimary ? 1 : 0,
       window.windowType,
       window.workerType,
@@ -204,7 +207,7 @@ export class SqliteWindowRepository implements IWindowRepository {
   }
 
   update(id: number, data: Partial<Pick<Window,
-    'tmuxTarget' | 'muxRef' | 'label' | 'agentSessionId' | 'launchCommand' | 'paneLayout' | 'workerModel' | 'workingDirectory' | 'windowType' | 'workerType' | 'sleeping' | 'projectId'
+    'tmuxTarget' | 'muxRef' | 'label' | 'labelSource' | 'agentSessionId' | 'launchCommand' | 'paneLayout' | 'workerModel' | 'workingDirectory' | 'windowType' | 'workerType' | 'sleeping' | 'projectId'
   >>): void {
     const fields: string[] = [];
     const values: unknown[] = [];
@@ -222,6 +225,7 @@ export class SqliteWindowRepository implements IWindowRepository {
       fields.push('tmux_target = ?'); values.push(target);
     }
     if (data.label !== undefined) { fields.push('label = ?'); values.push(data.label); }
+    if (data.labelSource !== undefined) { fields.push('label_source = ?'); values.push(data.labelSource); }
     if (data.agentSessionId !== undefined) { fields.push('agent_session_id = ?'); values.push(data.agentSessionId); }
     if (data.launchCommand !== undefined) { fields.push('launch_command = ?'); values.push(data.launchCommand); }
     if (data.paneLayout !== undefined) { fields.push('pane_layout = ?'); values.push(data.paneLayout ? JSON.stringify(data.paneLayout) : null); }
@@ -287,6 +291,7 @@ export class SqliteWindowRepository implements IWindowRepository {
       tmuxTarget: row.tmux_target,
       muxRef: row.mux_ref ? parseMuxRef(row.mux_ref) : muxRefFromTmuxTarget(row.tmux_target),
       label: row.label,
+      labelSource: row.label_source,
       isPrimary: row.is_primary === 1,
       windowType: row.window_type as Window['windowType'],
       workerType: row.worker_type,

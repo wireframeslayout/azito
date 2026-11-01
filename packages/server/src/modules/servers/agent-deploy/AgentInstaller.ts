@@ -118,6 +118,7 @@ export class AgentInstaller {
     private windowsAgent: WindowsAgentOptions,
     /** Absent for a hub that cannot install misao (no bundled copy): the agent is installed without it. */
     private misaoInstaller?: AgentMisaoInstaller,
+    private harnessPrefix = '',
   ) {
     // The overrides exist to try a second agent beside the real one; they are not saved per server, so a hub started without them
     // looks for the default task: say so once when they are in use.
@@ -381,7 +382,7 @@ export class AgentInstaller {
     return this.hostLocks.withLock(this.lockKey(sshHost), async () => {
       const probe = await this.sshClient.execIsolated(sshHost, buildWindowsPreflightCommand());
       const host = parseWindowsPreflight(probe.stdout, probe.stderr, probe.code);
-      return this.windowsDeployer().uninstall(sshHost, host, choice);
+      return this.windowsDeployer().uninstall(sshHost, host, choice, this.harnessPrefix);
     });
   }
 

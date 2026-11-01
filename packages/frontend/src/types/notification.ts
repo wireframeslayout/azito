@@ -12,6 +12,12 @@ export interface AgentActivityPayload {
   taskId?: number;
   windowId?: number;
   label?: string;
+  labelSource?: 'auto' | 'user';
+  taskTitle?: string;
+  workerType?: string;
+  windowType?: string;
+  paneTitle?: string;
+  paneCommand?: string;
   projectId?: number;
   /** エージェントが承認待ち等でブロックされているか。省略時は 'working' 扱い（後方互換） */
   status?: 'working' | 'blocked';

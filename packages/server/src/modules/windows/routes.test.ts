@@ -45,6 +45,7 @@ function makeWindow(overrides: Partial<Window> = {}): Window {
     tmuxTarget,
     muxRef: { kind: 'tmux' as const, workspace: tmuxTarget.slice(0, colonIdx), window: tmuxTarget.slice(colonIdx + 1) },
     label: 'manual-agent',
+    labelSource: 'auto',
     isPrimary: false,
     windowType: 'agent',
     workerType: 'claude',
@@ -310,7 +311,7 @@ describe('GET /api/windows/pane-loading-state', () => {
       projectRepo: {} as IProjectRepository,
       taskRepo: {} as ITaskRepository,
       tmux: {} as TmuxClient,
-      muxDriverRegistry: { resolve: () => ({}) } as any,
+      muxDriverRegistry: { resolve: () => ({}), availabilityFor: () => ({ available: true }) } as any,
       serverRepo: { findByName: () => makeServer() } as unknown as IServerRepository,
       transportFactory: { hostProfileFor: () => null },
       respawnService: {} as WindowRespawnService,
@@ -435,7 +436,7 @@ describe('POST /api/windows/:id/respawn — execution gate (Issue #328 second-ro
       projectRepo: {} as IProjectRepository,
       taskRepo: {} as ITaskRepository,
       tmux: {} as TmuxClient,
-      muxDriverRegistry: { resolve: () => ({}) } as any,
+      muxDriverRegistry: { resolve: () => ({}), availabilityFor: () => ({ available: true }) } as any,
       serverRepo: serverRepo as IServerRepository,
       transportFactory: { hostProfileFor: () => null },
       respawnService: { respawn } as unknown as WindowRespawnService,
@@ -600,7 +601,7 @@ describe('GET /api/windows/activity-status (Issue #338 フォロー: process-bas
       projectRepo: {} as IProjectRepository,
       taskRepo: {} as ITaskRepository,
       tmux: {} as TmuxClient,
-      muxDriverRegistry: { resolve: () => ({}) } as any,
+      muxDriverRegistry: { resolve: () => ({}), availabilityFor: () => ({ available: true }) } as any,
       serverRepo: {} as IServerRepository,
       transportFactory: { hostProfileFor: () => null },
       respawnService: {} as WindowRespawnService,
@@ -634,7 +635,7 @@ describe('POST /api/windows/:id/sleep', () => {
       projectRepo: {} as IProjectRepository,
       taskRepo: {} as ITaskRepository,
       tmux: {} as TmuxClient,
-      muxDriverRegistry: { resolve: () => ({}) } as any,
+      muxDriverRegistry: { resolve: () => ({}), availabilityFor: () => ({ available: true }) } as any,
       serverRepo: {
         findByName: () => ({ name: 'local-server', type: 'local' }),
       } as unknown as IServerRepository,
@@ -679,5 +680,101 @@ describe('POST /api/windows/:id/sleep', () => {
     const res = await app.inject({ method: 'POST', url: '/api/windows/999/sleep' });
     expect(res.statusCode).toBe(404);
     expect(sleepFn).not.toHaveBeenCalled();
+  });
+});
+
+describe('PUT /api/windows/:id/rename', () => {
+  it.each([0, 1])('updates the label only when mux returns %i', async (code) => {
+    const win = makeWindow();
+    const update = vi.fn();
+    const app = Fastify();
+    await app.register(windowsRoutes, {
+      harnessPrefix: '',
+      windowRepo: { findById: () => win, update } as unknown as IWindowRepository,
+      projectRepo: {} as IProjectRepository,
+      taskRepo: {} as ITaskRepository,
+      tmux: {} as TmuxClient,
+      muxDriverRegistry: { resolve: () => ({ renameWindowByRef: async () => ({ code, stdout: '', stderr: 'failure' }) }) } as any,
+      serverRepo: { findByName: () => makeServer() } as unknown as IServerRepository,
+      transportFactory: { hostProfileFor: () => null },
+      respawnService: {} as WindowRespawnService,
+      sleepService: {} as WindowSleepService,
+      sessionStrategyFactory: {} as ISessionStrategyFactory,
+      sessionCaptureService: {} as SessionCaptureService,
+      supervisorRegistry: makeSupervisorRegistry(),
+      windowSnapshotService: {} as never, windowActivityStatusService: makeWindowActivityStatusService(),
+      uiToken: 'test-token', serverIsolationMutex: new KeyedMutex(), buildSecondaryWindowEnv: () => ({}),
+    });
+    const res = await app.inject({ method: 'PUT', url: '/api/windows/1/rename', payload: { name: 'chosen' } });
+    expect(res.statusCode).toBe(code === 0 ? 200 : 500);
+    if (code === 0) expect(update).toHaveBeenCalledWith(1, { label: 'chosen', labelSource: 'user' });
+    else expect(update).not.toHaveBeenCalled();
+    await app.close();
+  });
+});
+
+describe('window label source', () => {
+  async function buildApp(win: Window, update: ReturnType<typeof vi.fn>, adoptForTask = vi.fn()) {
+    const app = Fastify();
+    await app.register(windowsRoutes, {
+      harnessPrefix: '',
+      windowRepo: {
+        findById: () => win, update, adoptForTask,
+        findByServerAndRef: () => win, findByServerAndTarget: () => win,
+      } as unknown as IWindowRepository,
+      projectRepo: {} as IProjectRepository,
+      taskRepo: { findById: () => ({ id: 7 }) } as unknown as ITaskRepository,
+      tmux: {} as TmuxClient,
+      muxDriverRegistry: { resolve: () => ({}), availabilityFor: () => ({ available: true }) } as any,
+      serverRepo: { findByName: () => makeServer() } as unknown as IServerRepository,
+      transportFactory: { hostProfileFor: () => null },
+      respawnService: {} as WindowRespawnService,
+      sleepService: {} as WindowSleepService,
+      sessionStrategyFactory: {} as ISessionStrategyFactory,
+      sessionCaptureService: {} as SessionCaptureService,
+      supervisorRegistry: makeSupervisorRegistry(),
+      windowSnapshotService: {} as never, windowActivityStatusService: makeWindowActivityStatusService(),
+      uiToken: 'test-token', serverIsolationMutex: new KeyedMutex(), buildSecondaryWindowEnv: () => ({}),
+    });
+    return app;
+  }
+
+  function adoptPayload(win: Window) {
+    return { server_name: win.serverName, ref: JSON.stringify(win.muxRef), label: 'task-label' };
+  }
+
+  it('keeps a user label when a task adopts the window', async () => {
+    const win = makeWindow({ ownerType: 'project', taskId: null, label: 'mine', labelSource: 'user' });
+    const update = vi.fn();
+    const adoptForTask = vi.fn();
+    const app = await buildApp(win, update, adoptForTask);
+    const res = await app.inject({ method: 'POST', url: '/api/tasks/7/windows', payload: adoptPayload(win) });
+    expect(res.statusCode).toBe(200);
+    expect(adoptForTask).toHaveBeenCalledWith(win.id, 7);
+    expect(update).not.toHaveBeenCalledWith(win.id, expect.objectContaining({ label: expect.anything() }));
+    await app.close();
+  });
+
+  it('replaces an automatic label when a task adopts the window', async () => {
+    const win = makeWindow({ ownerType: 'project', taskId: null, label: 'auto-name', labelSource: 'auto' });
+    const update = vi.fn();
+    const app = await buildApp(win, update);
+    const res = await app.inject({ method: 'POST', url: '/api/tasks/7/windows', payload: adoptPayload(win) });
+    expect(res.statusCode).toBe(200);
+    expect(update).toHaveBeenCalledWith(win.id, { label: 'task-label' });
+    await app.close();
+  });
+
+  it.each([
+    ['chosen', { label: 'chosen', labelSource: 'user' }],
+    ['  ', { label: null, labelSource: 'auto' }],
+  ])('PUT /api/windows/:id with label %j records its source', async (label, expected) => {
+    const win = makeWindow();
+    const update = vi.fn();
+    const app = await buildApp(win, update);
+    const res = await app.inject({ method: 'PUT', url: `/api/windows/${win.id}`, payload: { label } });
+    expect(res.statusCode).toBe(200);
+    expect(update).toHaveBeenCalledWith(win.id, expected);
+    await app.close();
   });
 });
