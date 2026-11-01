@@ -116,7 +116,7 @@ curl --proto '=https' --tlsv1.2 -fsSL https://github.com/wireframeslayout/azito/
 
 `~/.azito` に導入し、systemd（Linux）または launchd（macOS）のサービスを登録して UI トークンを表示します。ブラウザで `http://localhost:3001` を開いてください。中身を確認してからの実行・オプション指定・チェックサム検証は [インストールとアップデート](./docs/ja/install-and-update.md) を参照してください。
 
-対応環境: Linux x64 / arm64、macOS Apple Silicon。
+`install.sh` で導入できるハブの対応環境: Linux x64 / arm64、macOS Apple Silicon。エージェントサーバーは x86_64 のみ対応です。詳しくは[サポートプラットフォーム](./docs/ja/install-and-update.md#サポートプラットフォーム)を参照してください。
 
 Windows（x64）では、先に Git for Windows を入れ（`winget install --id Git.Git -e --source winget`、そのあと新しい PowerShell を開く）、Windows PowerShell 5.1 で次を実行します:
 

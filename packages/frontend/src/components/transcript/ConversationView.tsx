@@ -58,9 +58,15 @@ interface ConversationViewProps {
    * トグル自体を出さない（デスクトップ等、WindowChatPanel 経由で渡されない場合）。 */
   viewMode?: WindowViewMode;
   onChangeViewMode?: (mode: WindowViewMode) => void;
+  subagentId?: string;
+  onParentChanged?: () => void;
 }
 
-export default function ConversationView({ windowId, sessionId, agentType, paneId, agentDetected, slashCommandsVisibleInLog, viewMode, onChangeViewMode }: ConversationViewProps) {
+export default function ConversationView({ windowId, sessionId, agentType, paneId, agentDetected, slashCommandsVisibleInLog, viewMode, onChangeViewMode, subagentId, onParentChanged }: ConversationViewProps) {
+  const entriesPath = subagentId
+    ? `/transcripts/windows/${windowId}/subagents/${encodeURIComponent(subagentId)}/entries`
+    : `/transcripts/${encodeURIComponent(agentType)}/${encodeURIComponent(sessionId)}`;
+  const queryPrefix = subagentId ? `?sessionId=${encodeURIComponent(sessionId)}&` : `?windowId=${windowId}&`;
   const { t, i18n } = useTranslation('transcript');
   const [entries, setEntries] = useState<TranscriptEntry[]>([]);
   const [loading, setLoading] = useState(true);
@@ -157,7 +163,7 @@ export default function ConversationView({ windowId, sessionId, agentType, paneI
     setLoadingOlder(true);
     try {
       const { status, body } = await apiWithStatus<ReadSessionBeforeResult | TranscriptErrorResponse>(
-        `/transcripts/${encodeURIComponent(agentType)}/${encodeURIComponent(sessionId)}?before=${startOffsetRef.current}&windowId=${windowId}`,
+        `${entriesPath}${queryPrefix}before=${startOffsetRef.current}`,
       );
       if (generationRef.current !== myGeneration) return; // 別セッションへ切替済み: 破棄
       if (status !== 200 || isErrorResponse(body)) return; // 一時的なエラー: 次回のスクロール到達で再試行
@@ -188,7 +194,7 @@ export default function ConversationView({ windowId, sessionId, agentType, paneI
         setLoadingOlder(false);
       }
     }
-  }, [sessionId, agentType, windowId]);
+  }, [entriesPath, queryPrefix]);
 
   // 初回読み込み: セッション切り替え毎に全状態をリセットして末尾から取得する。
   useEffect(() => {
@@ -215,10 +221,11 @@ export default function ConversationView({ windowId, sessionId, agentType, paneI
     lastScrollTopRef.current = 0;
 
     apiWithStatus<ReadSessionResult | TranscriptErrorResponse>(
-      `/transcripts/${encodeURIComponent(agentType)}/${encodeURIComponent(sessionId)}?windowId=${windowId}`,
+      `${entriesPath}${queryPrefix}`,
     )
       .then(({ status, body }) => {
         if (generationRef.current !== myGeneration) return;
+        if (status === 409 && subagentId) { onParentChanged?.(); return; }
         if (status === 404) {
           setNotFound(true);
           setLoading(false);
@@ -248,7 +255,7 @@ export default function ConversationView({ windowId, sessionId, agentType, paneI
       // アンマウント/次セッションへの切替直前にも世代を進め、直後にまだ飛行中の応答を確実に破棄する。
       generationRef.current += 1;
     };
-  }, [sessionId, agentType, windowId, retryTick]);
+  }, [entriesPath, queryPrefix, retryTick, subagentId, onParentChanged]);
 
   // ライブ追従: 2秒間隔でoffset以降を取得し追記する。タブが非表示の間は取得しない。
   useEffect(() => {
@@ -264,9 +271,10 @@ export default function ConversationView({ windowId, sessionId, agentType, paneI
       inFlight = true;
       try {
         const { status, body } = await apiWithStatus<ReadSessionResult | TranscriptErrorResponse>(
-          `/transcripts/${encodeURIComponent(agentType)}/${encodeURIComponent(sessionId)}?offset=${nextOffsetRef.current}&windowId=${windowId}`,
+          `${entriesPath}${queryPrefix}offset=${nextOffsetRef.current}`,
         );
         if (generationRef.current !== myGeneration) return;
+        if (status === 409 && subagentId) { onParentChanged?.(); return; }
         if (status === 404) {
           setNotFound(true);
           return;
@@ -303,7 +311,7 @@ export default function ConversationView({ windowId, sessionId, agentType, paneI
       clearInterval(intervalId);
       document.removeEventListener('visibilitychange', onVisibilityChange);
     };
-  }, [sessionId, agentType, windowId, loading, notFound, error, scrollToBottom]);
+  }, [entriesPath, queryPrefix, loading, notFound, error, scrollToBottom, subagentId, onParentChanged]);
 
   // 上方向ページングのトリガー: センチネル（先頭に置いたダミー要素）がスクロールコンテナ内で
   // 可視になったら loadOlder を呼ぶ。hasOlder/inFlight の判定は loadOlder 内部で行う。
@@ -472,7 +480,7 @@ export default function ConversationView({ windowId, sessionId, agentType, paneI
                   </div>
                 ));
               })()}
-              {liveStatus && lastEntryTimestamp && (
+              {!subagentId && liveStatus && lastEntryTimestamp && (
                 <LiveStatusRow
                   status={liveStatus}
                   lastTimestamp={lastEntryTimestamp}
@@ -484,7 +492,7 @@ export default function ConversationView({ windowId, sessionId, agentType, paneI
                   それ以外（内容なし・複数質問・複数選択・選択肢が多すぎる・送信失敗済み）は
                   従来のバナー。key に openedAt を入れて、質問が差し替わったら送信済み表示を
                   持ち越さずカードを作り直す（同じ質問の間は据え置き、内部の送信状態を保つ）。 */}
-              {cardQuestion !== null ? (
+              {!subagentId && cardQuestion !== null ? (
                 <InteractionAnswerCard
                   key={cardQuestion.openedAt}
                   windowId={windowId}
@@ -494,7 +502,7 @@ export default function ConversationView({ windowId, sessionId, agentType, paneI
                   onAnswered={() => setAnsweredQuestion({ ...cardQuestion, entryCount: entries.length })}
                   onAnswerFailed={() => setFailedQuestionOpenedAt(cardQuestion.openedAt)}
                 />
-              ) : pendingInteraction ? (
+              ) : !subagentId && pendingInteraction ? (
                 <InteractionPendingBanner onChangeViewMode={onChangeViewMode} />
               ) : null}
             </div>
@@ -530,8 +538,9 @@ export default function ConversationView({ windowId, sessionId, agentType, paneI
         )}
       </div>
 
-      {!loading && !notFound && (
+      {(subagentId || (!loading && !notFound)) && (
         <PromptInputBar
+          readOnlyReason={subagentId ? t('subagents.readOnly') : undefined}
           windowId={windowId}
           paneId={paneId}
           draftKey={sessionId}

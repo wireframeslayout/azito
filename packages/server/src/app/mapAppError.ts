@@ -1,6 +1,7 @@
+import { LocalNetworkPermissionError } from '../modules/servers/localNetworkDiagnosis';
 import { MuxDriverUnavailableError, MuxOperationUnsupportedError } from '../modules/tmux/MuxCapabilityError';
 import { HostProfileError } from '../shared/os/hostProfile';
-import { AgentUnreachableError } from '../modules/servers/transport/AgentUnreachableError';
+import { AgentLocalNetworkPermissionError, AgentUnreachableError } from '../modules/servers/transport/AgentUnreachableError';
 import { ConversationCheckError } from '../modules/agents/ConversationCheckError';
 import { GitNotFoundError } from '../shared/exec/commandSpec';
 
@@ -11,11 +12,12 @@ export interface AppErrorResponse {
 
 /** Maps domain errors that have a dedicated HTTP answer; null means "use the default error handler". */
 export function mapAppError(err: unknown): AppErrorResponse | null {
+  if (err instanceof LocalNetworkPermissionError) return { status: 503, body: { error: err.message, code: err.code, detail: err.detail } };
   if (err instanceof MuxDriverUnavailableError) {
     return { status: 503, body: { error: 'mux_driver_unavailable', kind: err.kind, reason: err.reason } };
   }
   if (err instanceof AgentUnreachableError) {
-    return { status: 503, body: { error: 'agent_unreachable', server: err.serverName, reason: err.reason } };
+    return { status: 503, body: { error: 'agent_unreachable', server: err.serverName, reason: err.reason, ...(err instanceof AgentLocalNetworkPermissionError ? { code: err.code, detail: err.detail } : {}) } };
   }
   if (err instanceof MuxOperationUnsupportedError) {
     return { status: 501, body: { error: 'mux_operation_unsupported', kind: err.kind, operation: err.operation } };

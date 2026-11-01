@@ -37,6 +37,25 @@ describe('AgentTransport circuit breaker', () => {
     expect(err).toMatchObject({ serverName: 'srv7', reason });
   });
 
+  it('keeps the diagnosis and unreachable contract through the breaker until recovery', async () => {
+    const cause = Object.assign(new Error('connect EHOSTUNREACH 10.0.0.1:4021'), { code: 'EHOSTUNREACH', address: '10.0.0.1' });
+    fetchMock.mockRejectedValueOnce(new TypeError('fetch failed', { cause }));
+    const transport = new AgentTransport('10.0.0.1', 4021, 'tok', 'system', 'srv7', null, { platform: 'darwin', isLaunchd: true });
+    const error = await transport.fetchHealth().catch((e: unknown) => e);
+    expect(error).toBeInstanceOf(AgentUnreachableError);
+    expect(error).toMatchObject({ reason: 'unreachable', code: 'macos_local_network_permission', detail: cause.message });
+    expect(transport.isCircuitOpen()).toBe(true);
+    await expect(transport.fetchHealth()).rejects.toMatchObject({ reason: 'circuit_open', code: 'macos_local_network_permission', detail: cause.message });
+    await expect(transport.exec('a')).rejects.toBeInstanceOf(AgentUnreachableError);
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    vi.advanceTimersByTime(15_001);
+    fetchMock.mockResolvedValueOnce(jsonResponse({ version: 'v' }));
+    await expect(transport.fetchHealth()).resolves.toEqual({ version: 'v' });
+    fetchMock.mockRejectedValueOnce(fetchFailure('ECONNREFUSED'));
+    await expect(transport.fetchHealth()).rejects.toMatchObject({ reason: 'refused' });
+    await expect(transport.fetchHealth()).rejects.not.toHaveProperty('code');
+  });
+
   it('maps a TimeoutError abort to reason timeout', async () => {
     fetchMock.mockRejectedValueOnce(new DOMException('timed out', 'TimeoutError'));
     await expect(make().exec('echo')).rejects.toMatchObject({ reason: 'timeout' });
