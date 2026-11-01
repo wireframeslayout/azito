@@ -2922,6 +2922,12 @@ describe('AgentActivityMonitor session id updates (hook sessionId)', () => {
     expect((monitor as unknown as { hookStates: Map<string, unknown> }).hookStates.size).toBe(0);
   });
 
+  it('does not replace a recorded SessionStart with a delayed activity session id', () => {
+    findAll.mockReturnValue([makeWindow({ id: 9, tmuxTarget: 'azito:agent-1', agentSessionId: OLD_ID, claudeConfigDir: '/config' })]);
+    monitor.recordHookSignal(signal({ event: 'stop' }));
+    expect(updateAgentSessionIdByWindow).not.toHaveBeenCalled();
+  });
+
   it('also updates the session id on a start event that carries one', () => {
     monitor.recordHookSignal(signal({ event: 'start' }));
 
@@ -2961,5 +2967,95 @@ describe('AgentActivityMonitor session id updates (hook sessionId)', () => {
 
     expect(updateAgentSessionIdByWindow).toHaveBeenCalledWith('local', 'azito:agent-1', NEW_ID);
     expect(onSessionIdUpdated).toHaveBeenCalledWith('local', 'azito:agent-1', 9, OLD_ID, NEW_ID, 'session');
+  });
+});
+
+
+describe('SessionStart pane delivery', () => {
+  const originalPlatform = Object.getOwnPropertyDescriptor(process, 'platform')!;
+  beforeEach(() => Object.defineProperty(process, 'platform', { value: 'linux', configurable: true }));
+  afterEach(() => Object.defineProperty(process, 'platform', originalPlatform));
+
+  it('keeps Windows session tracking without recording a configuration directory', () => {
+    Object.defineProperty(process, 'platform', { value: 'win32', configurable: true });
+    const updateAgentSessionIdByWindow = vi.fn();
+    const updateClaudeSessionByPane = vi.fn();
+    const resolver = { getCached: vi.fn().mockReturnValue(null), warm: vi.fn(), invalidatePane: vi.fn(), resolveWindowByPaneHandle: vi.fn() };
+    const monitor = new AgentActivityMonitor(
+      { getRunning: vi.fn().mockReturnValue({}) } as unknown as ExecuteTaskUseCase,
+      { findAll: () => [makeWindow({ id: 9, tmuxTarget: 'azito:agent-1', agentSessionId: 'old' })], updateAgentSessionIdByWindow, updateClaudeSessionByPane } as unknown as IWindowRepository,
+      mockRegistry(vi.fn(), vi.fn()),
+      { findByName: () => ({ name: 'local', type: 'local' }) } as unknown as IServerRepository,
+      { emit: vi.fn() } as unknown as NotificationBus,
+      undefined, undefined, resolver as never,
+    );
+    monitor.recordHookSignal({ serverName: 'local', sessionName: 'azito', windowIndex: 3, windowName: 'agent-1', paneIndex: 1, event: 'session', muxPaneRef: '%1', sessionId: 'new', claudeConfigDir: '/config', claudeConfigDirExplicit: true, hookTimestamp: '100' });
+    expect(updateAgentSessionIdByWindow).toHaveBeenCalledWith('local', 'azito:agent-1', 'new');
+    expect(updateClaudeSessionByPane).not.toHaveBeenCalled();
+    expect(resolver.resolveWindowByPaneHandle).not.toHaveBeenCalled();
+  });
+
+  it('falls back to window matching when pane resolution times out', async () => {
+    vi.useFakeTimers();
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    try {
+      const updateAgentSessionIdByWindow = vi.fn();
+      const resolver = { getCached: vi.fn().mockReturnValue(null), warm: vi.fn(), invalidatePane: vi.fn(), resolveWindowByPaneHandle: vi.fn().mockResolvedValue(null) };
+      const monitor = new AgentActivityMonitor(
+        { getRunning: vi.fn().mockReturnValue({}) } as unknown as ExecuteTaskUseCase,
+        { findAll: () => [makeWindow({ id: 9, tmuxTarget: 'azito:agent-1', agentSessionId: 'old' })], updateAgentSessionIdByWindow } as unknown as IWindowRepository,
+        mockRegistry(vi.fn(), vi.fn()),
+        { findByName: () => ({ name: 'local', type: 'local' }) } as unknown as IServerRepository,
+        { emit: vi.fn() } as unknown as NotificationBus,
+        undefined, undefined, resolver as never,
+      );
+      monitor.recordHookSignal({ serverName: 'local', sessionName: 'azito', windowIndex: 3, windowName: 'agent-1', paneIndex: 1, event: 'session', muxPaneRef: '%1', sessionId: 'new', claudeConfigDir: '/config', claudeConfigDirExplicit: true, hookTimestamp: '100' });
+      await vi.advanceTimersByTimeAsync(16_100);
+      expect(updateAgentSessionIdByWindow).toHaveBeenCalledWith('local', 'azito:agent-1', 'new');
+      expect(warn).toHaveBeenCalledWith(expect.stringContaining('could not resolve pane'));
+    } finally { warn.mockRestore(); vi.useRealTimers(); }
+  });
+
+  it('retries before registration and ignores an older delivery after a newer one', async () => {
+    vi.useFakeTimers();
+    try {
+      const updateClaudeSessionByPane = vi.fn();
+      const resolved = { tmuxTarget: 'azito:agent-1', ordinal: 1 };
+      const resolver = { invalidatePane: vi.fn(), resolveWindowByPaneHandle: vi.fn().mockResolvedValueOnce(null).mockResolvedValue(resolved) };
+      const monitor = new AgentActivityMonitor(
+        { getRunning: vi.fn().mockReturnValue({}) } as unknown as ExecuteTaskUseCase,
+        { findAll: () => [makeWindow({ id: 9, tmuxTarget: 'azito:agent-1' })], updateClaudeSessionByPane } as unknown as IWindowRepository,
+        mockRegistry(vi.fn(), vi.fn()),
+        { findByName: () => ({ name: 'local', type: 'local' }) } as unknown as IServerRepository,
+        { emit: vi.fn() } as unknown as NotificationBus,
+        undefined, undefined, resolver as never,
+      );
+      monitor.recordClaudeSessionHook('local', '%1', 'older', '/old', '100', true);
+      await vi.advanceTimersByTimeAsync(0);
+      monitor.recordClaudeSessionHook('local', '%1', 'newer', '/new', '200', false);
+      await vi.advanceTimersByTimeAsync(2100);
+      monitor.recordClaudeSessionHook('local', '%1', 'older', '/old', '100', true);
+      expect(updateClaudeSessionByPane).toHaveBeenCalledTimes(1);
+      expect(updateClaudeSessionByPane).toHaveBeenCalledWith('local', 'azito:agent-1', 1, 'newer', '/new', false);
+    } finally { vi.useRealTimers(); }
+  });
+
+  it('retries an event until its window becomes registered', async () => {
+    vi.useFakeTimers();
+    try {
+      const updateClaudeSessionByPane = vi.fn();
+      const resolver = { invalidatePane: vi.fn(), resolveWindowByPaneHandle: vi.fn().mockResolvedValueOnce(null).mockResolvedValue({ tmuxTarget: 'azito:agent-1', ordinal: 2 }) };
+      const monitor = new AgentActivityMonitor(
+        { getRunning: vi.fn().mockReturnValue({}) } as unknown as ExecuteTaskUseCase,
+        { findAll: () => [makeWindow({ id: 9, tmuxTarget: 'azito:agent-1' })], updateClaudeSessionByPane } as unknown as IWindowRepository,
+        mockRegistry(vi.fn(), vi.fn()),
+        { findByName: () => ({ name: 'local', type: 'local' }) } as unknown as IServerRepository,
+        { emit: vi.fn() } as unknown as NotificationBus,
+        undefined, undefined, resolver as never,
+      );
+      monitor.recordClaudeSessionHook('local', '%2', 'session', '/config', '100', true);
+      await vi.advanceTimersByTimeAsync(2100);
+      expect(updateClaudeSessionByPane).toHaveBeenCalledWith('local', 'azito:agent-1', 2, 'session', '/config', true);
+    } finally { vi.useRealTimers(); }
   });
 });

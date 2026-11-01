@@ -44,9 +44,10 @@ export function daemonCheckScript(pipe: string, expectedExe: string): string {
     `$name = ${q(pipe.slice(PIPE_PREFIX.length))}`,
     `$expected = ${q(expectedExe)}`,
     '$serverPid = [AzitoPipe]::ServerProcessId($name)',
-    '$process = Get-CimInstance Win32_Process -Filter "ProcessId = $serverPid"',
-    "if (-not $process -or -not $process.ExecutablePath) { throw \"The process $serverPid that serves the pipe has no readable executable path\" }",
-    '$actual = [AzitoPipe]::LongPath($process.ExecutablePath)',
+    '$process = Get-Process -Id $serverPid -ErrorAction Stop',
+    '$executablePath = $process.Path',
+    "if (-not $executablePath) { throw \"The process $serverPid that serves the pipe has no readable executable path\" }",
+    '$actual = [AzitoPipe]::LongPath($executablePath)',
     '$wanted = [AzitoPipe]::LongPath($expected)',
     "foreach ($path in @($actual, $wanted)) { [Convert]::ToBase64String([System.Text.Encoding]::UTF8.GetBytes($path)) }",
   ].join('\n');

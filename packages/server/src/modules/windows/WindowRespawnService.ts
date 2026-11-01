@@ -107,6 +107,8 @@ interface SupervisionContext {
 interface AgentLaunchPlan {
   sessionId: string | null;
   conversation: RespawnConversation;
+  configDir?: string | null;
+  configDirExplicit?: boolean | null;
 }
 
 export class WindowRespawnService {
@@ -311,6 +313,14 @@ export class WindowRespawnService {
     // stops the respawn with its reason, and one that was never written is started fresh under the same id (#542).
     const launchPlan = opts?.skipAgentLaunch ? null : await this.planAgentLaunches(server, win, windowId);
 
+    const resumeEnv: Record<string, string> = {};
+    if (server.type === 'local' && !this.startsWorkerAsProgram(server) && launchPlan) {
+      if (launchPlan.single?.configDir && launchPlan.single.configDirExplicit === true) resumeEnv.AZITO_RESUME_CLAUDE_CONFIG_DIR = launchPlan.single.configDir;
+      for (const [index, plan] of launchPlan.panes) {
+        if (plan.configDir && plan.configDirExplicit === true) resumeEnv[`AZITO_RESUME_CLAUDE_CONFIG_DIR_${index}`] = plan.configDir;
+      }
+    }
+
     const supervise = shouldSupervise(server.type, win.windowType, windowKindOf(win));
     // task/unitId already resolved above for the execution gate — reused
     // here instead of re-querying the repositories a second time.
@@ -422,7 +432,7 @@ export class WindowRespawnService {
       let createdViaNewSession = false;
       const {
         newName,
-        windowEnv,
+        windowEnv: createdWindowEnv,
         tokenId,
         server: respawnServer,
         ref,
@@ -512,10 +522,10 @@ export class WindowRespawnService {
           createdViaNewSession = !freshWorkspaceExists;
           try {
             if (!freshWorkspaceExists) {
-              const opened = await createDriver.openWorkspace(fs, sessionName, { windowName: openName, exactName: true, extraEnv: env, kind: windowKind, ...(respawnProgram ? { program: respawnProgram } : {}) });
+              const opened = await createDriver.openWorkspace(fs, sessionName, { windowName: openName, exactName: true, extraEnv: { ...env, ...resumeEnv }, kind: windowKind, ...(respawnProgram ? { program: respawnProgram } : {}) });
               return { result: opened.result, windowName: opened.ref.window, ref: opened.ref };
             }
-            const opened = await createDriver.openWindow(fs, sessionName, openName, { exactName: true, extraEnv: env, kind: windowKind, ...(respawnProgram ? { program: respawnProgram } : {}) });
+            const opened = await createDriver.openWindow(fs, sessionName, openName, { exactName: true, extraEnv: { ...env, ...resumeEnv }, kind: windowKind, ...(respawnProgram ? { program: respawnProgram } : {}) });
             return { result: opened.result, windowName: opened.ref.window, ref: opened.ref };
           } catch (err) {
             // The old window is already gone when the program cannot be started (on a POSIX host a failed line leaves the shell, so the window stays).
@@ -546,6 +556,7 @@ export class WindowRespawnService {
           return { newName: created.windowName, windowEnv: created.env, tokenId: null as number | null, server: created.server, ref: created.ref };
         }
       });
+      const windowEnv = Object.keys(resumeEnv).length ? { ...createdWindowEnv, ...resumeEnv } : createdWindowEnv;
       await sleep(createdViaNewSession ? 500 : 300);
 
       const restoreDriver = this.resolveDriver(respawnServer);
@@ -1197,6 +1208,7 @@ export class WindowRespawnService {
     const captured = await driver.captureLayout(server, ref);
     const panes = captured.panes.map(p => ({
       index: p.index,
+      ordinal: p.ordinal,
       command: p.command,
       workingDirectory: p.path,
       title: p.title,
@@ -1215,15 +1227,15 @@ export class WindowRespawnService {
     win: Window,
     windowId: number,
   ): Promise<{ single: AgentLaunchPlan | null; panes: Map<number, AgentLaunchPlan> }> {
-    const decide = async (workerType: string, recorded: string | null): Promise<AgentLaunchPlan> => {
+    const decide = async (workerType: string, recorded: string | null, configDir?: string | null, configDirExplicit?: boolean | null): Promise<AgentLaunchPlan> => {
       const sessionId = recorded ?? (this.sessionCaptureService ? await this.sessionCaptureService.tryScanForWindow(windowId) : null);
       if (!sessionId) return { sessionId: null, conversation: 'resume' };
       const agentType = this.sessionStrategyFactory.create(workerType).conversationLogAgentType;
       if (agentType === null) return { sessionId, conversation: 'resume' };
-      return { sessionId, conversation: (await this.conversationProbe.exists(server, agentType, sessionId)) ? 'resume' : 'new' };
+      return { sessionId, configDirExplicit: server.type === 'local' && !this.startsWorkerAsProgram(server) && agentType === 'claude' && recorded === sessionId && configDir ? configDirExplicit : null, configDir: server.type === 'local' && !this.startsWorkerAsProgram(server) && agentType === 'claude' && recorded === sessionId ? configDir : null, conversation: (await this.conversationProbe.exists(server, agentType, sessionId, recorded === sessionId ? configDir : null)) ? 'resume' : 'new' };
     };
     if (!win.paneLayout) {
-      return { single: win.workerType ? await decide(win.workerType, win.agentSessionId) : null, panes: new Map() };
+      return { single: win.workerType ? await decide(win.workerType, win.agentSessionId, win.claudeConfigDir, win.claudeConfigDirExplicit) : null, panes: new Map() };
     }
     const panes = new Map<number, AgentLaunchPlan>();
     const firstIndex = win.paneLayout.panes[0]?.index;
@@ -1232,7 +1244,7 @@ export class WindowRespawnService {
       if (!workerType) continue;
       const recorded = pane.agentSessionId || (pane.index === firstIndex ? win.agentSessionId : null);
       // Only the id the pane recorded is looked for; a scan finds the window's one conversation, which the first pane alone may take.
-      panes.set(pane.index, recorded === null && pane.index !== firstIndex ? { sessionId: null, conversation: 'resume' } : await decide(workerType, recorded));
+      panes.set(pane.index, recorded === null && pane.index !== firstIndex ? { sessionId: null, conversation: 'resume' } : await decide(workerType, recorded, pane.agentSessionId ? pane.claudeConfigDir : pane.index === firstIndex ? win.claudeConfigDir : null, pane.agentSessionId ? pane.claudeConfigDirExplicit : pane.index === firstIndex ? win.claudeConfigDirExplicit : null));
     }
     return { single: null, panes };
   }
@@ -1296,7 +1308,8 @@ export class WindowRespawnService {
           const plan = panePlans?.get(pane.index);
           const launch = strategy.buildRespawnLaunch(plan?.sessionId ?? null, win.workerModel, null, blockMcp, plan?.conversation);
           if (launch) {
-            const sendCmd = this.wrapIfSupervised(renderLaunchLine(launch, this.dialectOf(server)), server, baseTarget, supervision);
+            const wrapped = this.wrapIfSupervised(renderLaunchLine(launch, this.dialectOf(server)), server, baseTarget, supervision);
+            const sendCmd = plan?.configDirExplicit === true ? `CLAUDE_CONFIG_DIR="$AZITO_RESUME_CLAUDE_CONFIG_DIR_${pane.index}" ${wrapped}` : plan?.configDirExplicit === false ? this.dialectOf(server).withoutEnv('CLAUDE_CONFIG_DIR', wrapped, await driver.paneCommandByHandle(server, paneId).catch(() => null)) : wrapped;
             await driver.sendKeysToHandle(server, paneId, [sendCmd, 'Enter']);
           }
         }
@@ -1325,7 +1338,8 @@ export class WindowRespawnService {
       const strategy = this.sessionStrategyFactory.create(win.workerType);
       const launch = strategy.buildRespawnLaunch(plan?.sessionId ?? null, win.workerModel, null, blockMcp, plan?.conversation);
       if (launch) {
-        const sendCmd = this.wrapIfSupervised(renderLaunchLine(launch, this.dialectOf(server)), server, supervisorTarget, supervision);
+        const wrapped = this.wrapIfSupervised(renderLaunchLine(launch, this.dialectOf(server)), server, supervisorTarget, supervision);
+        const sendCmd = plan?.configDirExplicit === true ? `CLAUDE_CONFIG_DIR="$AZITO_RESUME_CLAUDE_CONFIG_DIR" ${wrapped}` : plan?.configDirExplicit === false ? this.dialectOf(server).withoutEnv('CLAUDE_CONFIG_DIR', wrapped, await driver.paneCommandByHandle(server, handle).catch(() => null)) : wrapped;
         await driver.sendKeysToHandle(server, handle, [sendCmd, 'Enter']);
       }
     }

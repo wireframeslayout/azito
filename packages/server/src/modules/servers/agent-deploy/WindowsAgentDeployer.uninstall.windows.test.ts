@@ -94,7 +94,7 @@ describe.skipIf(process.platform !== 'win32')('removing the Windows agent from a
   const misaoRoot = (): string => path.win32.join(host.home, OPTIONS.misaoDir);
   const schtasksPath = (): string => path.win32.join(host.systemRoot, 'System32', 'schtasks.exe');
   const taskRegistered = async (name: string): Promise<boolean> => (await cmdExec('ci', `"${schtasksPath()}" /Query /TN ${name}`, 60_000)).code === 0;
-  const ruleCount = async (): Promise<number> => Number((await ps(`@(Get-NetFirewallRule -DisplayName ${powershellDialect.quote(firewallRuleName(OPTIONS.port))} -ErrorAction SilentlyContinue).Count`)).trim());
+  const ruleCount = async (): Promise<number> => Number((await ps(`@(Get-NetFirewallRule -DisplayName ${powershellDialect.quote(`${firewallRuleName(OPTIONS.port)}*`)} -ErrorAction SilentlyContinue).Count`)).trim());
 
   /**
    * The agent installed as the install does it (real bundle, real task), and the real agent running from it with the very command line
@@ -154,7 +154,7 @@ describe.skipIf(process.platform !== 'win32')('removing the Windows agent from a
         await cmdExec('ci', `"${schtasksPath()}" /Delete /TN ${name} /F`, 60_000);
         if (await taskRegistered(name)) problems.push(`the task ${name} is still registered`);
       }
-      await ps(`Remove-NetFirewallRule -DisplayName ${powershellDialect.quote(firewallRuleName(OPTIONS.port))} -ErrorAction SilentlyContinue`).catch(() => undefined);
+      await ps(`Remove-NetFirewallRule -DisplayName ${powershellDialect.quote(`${firewallRuleName(OPTIONS.port)}*`)} -ErrorAction SilentlyContinue`).catch(() => undefined);
       if (await ruleCount().catch(() => 0) !== 0) problems.push('the firewall rule is still there');
     }
     for (const dir of [fwDir, scratch, path.join(os.homedir(), OPTIONS.dir), path.join(os.homedir(), OPTIONS.misaoDir)]) {
@@ -197,9 +197,9 @@ describe.skipIf(process.platform !== 'win32')('removing the Windows agent from a
 
     // Clean up before assertions: a failure must not leave the rule for the next test.
     const rulesBeforeCleanup = elevated ? await ruleCount() : 0;
-    if (elevated) await ps(`Remove-NetFirewallRule -DisplayName ${powershellDialect.quote(firewallRuleName(OPTIONS.port))} -ErrorAction Stop`);
+    if (elevated) await ps(`Remove-NetFirewallRule -DisplayName ${powershellDialect.quote(`${firewallRuleName(OPTIONS.port)}*`)} -ErrorAction Stop`);
     expect(result.ok, JSON.stringify(result.steps)).toBe(true);
-    expect(stepsOf(result)).toEqual({ task: 'absent', processes: 'absent', firewall: elevated ? 'skipped' : 'absent', folder: 'done', claudeHarnessMcp: 'skipped', codexHarnessMcp: 'skipped' });
+    expect(stepsOf(result)).toEqual({ task: 'absent', processes: 'absent', firewall: 'skipped', folder: 'done', claudeHarnessMcp: 'skipped', codexHarnessMcp: 'skipped' });
     expect(fs.existsSync(agentRoot())).toBe(false);
     if (elevated) {
       // Reported with its Name and the command to remove it, and still there.
@@ -217,7 +217,7 @@ describe.skipIf(process.platform !== 'win32')('removing the Windows agent from a
     const again = await deployer.uninstall('ci', host, { removeMisao: false }, 'ci-isolated');
     expect(again.ok, JSON.stringify(again.steps)).toBe(true);
     expect(await ruleCount()).toBe(0);
-    expect(stepsOf(again)).toEqual({ task: 'absent', processes: 'absent', firewall: 'absent', folder: 'absent', claudeHarnessMcp: 'skipped', codexHarnessMcp: 'skipped' });
+    expect(stepsOf(again)).toEqual({ task: 'absent', processes: 'absent', firewall: elevated ? 'absent' : 'skipped', folder: 'absent', claudeHarnessMcp: 'skipped', codexHarnessMcp: 'skipped' });
 
     const result = await deployer.uninstall('ci', host, { removeMisao: true }, 'ci-isolated');
     expect(result.ok, JSON.stringify(result.steps)).toBe(true);

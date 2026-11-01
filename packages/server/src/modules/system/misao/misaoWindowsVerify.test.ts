@@ -8,6 +8,9 @@ describe('the check of the program behind a pipe', () => {
     const script = daemonCheckScript(PIPE, 'C:\\Users\\dev\\.azito\\misao\\0.3.0\\misao.exe');
     expect(script).toContain('GetNamedPipeServerProcessId');
     expect(script).toContain('GetLongPathNameW');
+    expect(script).toContain('Get-Process -Id $serverPid -ErrorAction Stop');
+    expect(script).toContain('if (-not $executablePath)');
+    expect(script).not.toMatch(/Get-CimInstance|Get-WmiObject/);
     expect(script).toContain("$name = 'misao-dev-0123456789abcdef'");
     expect(script).not.toContain('CommandLine');
     // $pid is read-only in PowerShell.

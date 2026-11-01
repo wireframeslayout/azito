@@ -31,7 +31,9 @@ describe('pipeHolderScript', () => {
   it('asks Windows for the server of the pipe and the owner of that process, never the pipe itself', () => {
     const script = pipeHolderScript('\\\\.\\pipe\\azito-lock-abc');
     expect(script).toContain('GetNamedPipeServerProcessId');
-    expect(script).toContain('GetOwnerSid');
+    expect(script).toContain('OpenProcessToken');
+    expect(script).toContain('[AzitoPipeHolder]::OwnerSid($serverPid)');
+    expect(script).not.toMatch(/Get-CimInstance|Invoke-CimMethod/);
     expect(script).toContain("$name = 'azito-lock-abc'");
   });
 

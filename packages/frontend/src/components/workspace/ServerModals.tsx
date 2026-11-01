@@ -1,7 +1,8 @@
 import { useId, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import Modal from '../Modal';
-import { FormInput, FormSelect, InstallSteps, Button } from '../ui';
+import { ServerInstallSteps } from '../servers/ServerInstallSteps';
+import { FormInput, FormSelect, Button } from '../ui';
 import FormField from '../FormField';
 import type { InstallStep } from '../ui';
 import type { Server } from '../../hooks/useServerManagement';
@@ -209,7 +210,7 @@ function ServerFormFields({ mode, autoInstall, type, serverType, hostProfile, ho
           {t('serverModals.autoInstallDesc')}<br />
           {t('serverModals.autoInstallReq')}
         </div>
-        {installSteps && installSteps.length > 0 && <InstallSteps steps={installSteps} />}
+        {installSteps && installSteps.length > 0 && <ServerInstallSteps steps={installSteps} />}
       </>
     );
   }

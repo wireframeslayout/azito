@@ -389,7 +389,7 @@ describe('MisaoAgentInstaller on a Windows agent', () => {
       expect(agent.daemonUp).toBe(true);
       const sweep = agent.scripts.find((t) => t.includes('function Get-AgentNodes'))!;
       expect(sweep).toContain(`$envArgument = '${PIPE}'`);
-      expect(sweep).toContain(`Name = 'misao.exe'`);
+      expect(sweep).toContain(`Get-Process -Name 'misao'`);
     });
 
     it('changes nothing when the daemon cannot be stopped', async () => {
@@ -736,7 +736,7 @@ describe('MisaoAgentInstaller on a Windows agent', () => {
       agent.processPresent = true;
       expect(await installer().reviveWindowsDaemon(agent.asTarget(), true)).toBe('started');
       expect(agent.schtasks()).toContain('/End');
-      expect(agent.scripts.some((script) => script.includes("Name = 'powershell.exe'"))).toBe(true);
+      expect(agent.scripts.some((script) => script.includes("Get-Process -Name 'powershell'"))).toBe(true);
     });
 
     it('leaves a daemon alone when the agent relays to another pipe (MISAO_SOCKET): it is not the managed one, whatever its state', async () => {

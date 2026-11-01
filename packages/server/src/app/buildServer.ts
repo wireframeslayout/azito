@@ -652,6 +652,7 @@ export async function buildServer(app: FastifyInstance, wiring: Wiring, port: nu
       }
     },
     misao: {
+      recordClaudeSessionHook: (serverName, paneId, sessionId, configDir, timestamp, explicit) => agentActivityMonitor.recordClaudeSessionHook(serverName, paneId, sessionId, configDir, timestamp, explicit),
       // A hook is fire-and-forget: an unreachable daemon is answered like an unknown pane (200, nothing recorded).
       resolvePane: async (serverName, paneId) => {
         const srv = serverRepo.findByName(serverName);
@@ -663,7 +664,7 @@ export async function buildServer(app: FastifyInstance, wiring: Wiring, port: nu
           return null;
         }
       },
-      recordAgentActivity: (serverName, tmuxTarget, event, sessionId) => agentActivityMonitor.recordResolvedHookSignal(serverName, tmuxTarget, event, sessionId),
+      recordAgentActivity: (serverName, tmuxTarget, event, sessionId, claudeConfigDir, paneOrdinal, explicit) => agentActivityMonitor.recordResolvedHookSignal(serverName, tmuxTarget, event, sessionId, claudeConfigDir, paneOrdinal, explicit),
     },
   });
   await app.register(agentSignalRoutes, { agentSignalService, verifyToken: verifyWebhookToken, auditLogService });

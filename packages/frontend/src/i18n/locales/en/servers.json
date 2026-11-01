@@ -351,5 +351,9 @@
     "updateConfirmTitle": "Update misao?",
     "updateConfirmMessage": "misao on this server is stopped to update it. Every running pane on this server ends and agent work in them is interrupted. Finish what you need before continuing.",
     "updateConfirmLabel": "Stop and update"
+  },
+  "localNetwork": {
+    "guidance": "Local Network permission on macOS may be blocking this connection. Try the agent’s Tailscale address, or check System Settings › Privacy & Security › Local Network for this hub and retry. The permission and its effect have not yet been verified.",
+    "detail": "Original error"
   }
 }

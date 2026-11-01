@@ -31,6 +31,43 @@ if [[ ! "$SESSION_ID" =~ ^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-
 fi
 SESSION_FIELD="$(printf ',"sessionId":"%s"' "$SESSION_ID")"
 
+# Encode the directory as JSON without placing it in executable shell text.
+json_string() {
+  local input="$1" char code i
+  printf '"'
+  for ((i=0; i<${#input}; i++)); do
+    char="${input:i:1}"
+    case "$char" in
+      '"') printf '\\"' ;;
+      '\') printf '\\\\' ;;
+      $'\n') printf '\\n' ;;
+      $'\r') printf '\\r' ;;
+      $'\t') printf '\\t' ;;
+      $'\b') printf '\\b' ;;
+      $'\f') printf '\\f' ;;
+      *) printf -v code '%d' "'$char"; if ((code < 32)); then printf '\\u%04x' "$code"; else printf '%s' "$char"; fi ;;
+    esac
+  done
+  printf '"'
+}
+CONFIG_DIR="${CLAUDE_CONFIG_DIR:-$HOME/.claude}"
+case "$CONFIG_DIR" in
+  '~') CONFIG_DIR="$HOME" ;;
+  '~/'*) CONFIG_DIR="$HOME/${CONFIG_DIR:2}" ;;
+  /*) ;;
+  *) CONFIG_DIR="$PWD/$CONFIG_DIR" ;;
+esac
+CONFIG_FIELD=",\"claudeConfigDir\":$(json_string "$CONFIG_DIR")"
+if [[ -n "${CLAUDE_CONFIG_DIR:-}" ]]; then CONFIG_FIELD+=',"claudeConfigDirExplicit":true'; else CONFIG_FIELD+=',"claudeConfigDirExplicit":false'; fi
+SESSION_FIELD+="$CONFIG_FIELD"
+# GNU date provides nanoseconds; BSD date emits a literal N and falls back to seconds.
+HOOK_TIME="$(date +%s%N)"
+if [[ ! "$HOOK_TIME" =~ ^[0-9]+$ ]]; then
+  HOOK_TIME="$(perl -MTime::HiRes -e 'printf "%.0f000", Time::HiRes::time() * 1000000' 2>/dev/null || date +%s000000000)"
+fi
+SESSION_FIELD+=",\"hookTimestamp\":\"$HOOK_TIME\""
+
+
 AZITO_URL="${AZITO_URL:-http://localhost:3001}"
 AZITO_WEBHOOK_TOKEN="${AZITO_WEBHOOK_TOKEN:-}"
 AZITO_SERVER_NAME="${AZITO_SERVER_NAME:-}"

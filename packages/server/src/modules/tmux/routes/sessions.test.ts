@@ -12,7 +12,7 @@ import type { IMuxClient } from '../IMuxClient';
 import { MuxDriverUnavailableError, MuxOperationUnsupportedError } from '../MuxCapabilityError';
 import { TmuxClient as TmuxClientImpl } from '../TmuxClient';
 import { mapAppError } from '../../../app/mapAppError';
-import { AgentUnreachableError } from '../../servers/transport/AgentUnreachableError';
+import { AgentLocalNetworkPermissionError, AgentUnreachableError } from '../../servers/transport/AgentUnreachableError';
 
 function makeServerRepo(srv: ServerConfig): IServerRepository {
   return {
@@ -1310,10 +1310,13 @@ describe('mux creation routes hand the new pane its env inside the per-server lo
 });
 
 describe('unreachable agent server', () => {
-  it('rethrows AgentUnreachableError from GET /sessions so the app error handler can answer 503', async () => {
+  it.each([
+    [new AgentUnreachableError('srv1', 'refused'), { error: 'agent_unreachable', server: 'srv1', reason: 'refused' }],
+    [new AgentLocalNetworkPermissionError('srv1', 'unreachable', 'connect EHOSTUNREACH 10.0.0.1:22'), { error: 'agent_unreachable', server: 'srv1', reason: 'unreachable', code: 'macos_local_network_permission', detail: 'connect EHOSTUNREACH 10.0.0.1:22' }],
+  ])('rethrows an unreachable agent from GET /sessions so the app error handler can answer 503', async (failure, expected) => {
     const srv: ServerConfig = { name: 'srv1', type: 'agent', defaultMux: 'tmux' } as ServerConfig;
     const tmux: Partial<TmuxClient> = {
-      listSessions: vi.fn(async () => { throw new AgentUnreachableError('srv1', 'refused'); }),
+      listSessions: vi.fn(async () => { throw failure; }),
     };
     const app = Fastify();
     app.setErrorHandler((err, _req, reply) => {
@@ -1333,7 +1336,7 @@ describe('unreachable agent server', () => {
       invalidateSessionCache('srv1');
       const res = await app.inject({ method: 'GET', url: '/api/servers/srv1/sessions' });
       expect(res.statusCode).toBe(503);
-      expect(res.json()).toEqual({ error: 'agent_unreachable', server: 'srv1', reason: 'refused' });
+      expect(res.json()).toEqual(expected);
     } finally {
       await app.close();
     }

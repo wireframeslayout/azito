@@ -1,7 +1,9 @@
 import * as path from 'path';
+import { createHash, randomUUID } from 'node:crypto';
 import type { ExecResult } from '../transport/ServerTransport';
 import { CREATE_SCRIPT, INSPECT_SCRIPT, PROTECT_SCRIPT, evaluateAcl, parseAclSnapshot } from '../../../shared/os/windowsSecretFileGuard';
-import { powershellDialect } from '../../../shared/os/shellDialect';
+import { MAX_WINDOWS_COMMAND_LINE, powershellDialect, powershellEncodedArgs } from '../../../shared/os/shellDialect';
+import { compressPowerShellScript } from '../../../shared/os/compressPowerShellScript';
 import { buildEndProcessesScript, buildProcessPresentScript, parseProcessPresent } from '../../../shared/os/windowsProcessSweep';
 import { SchtasksClient, type TaskScheduleState } from '../../../shared/os/taskScheduler/schtasks';
 import { buildTaskXml, encodeTaskXml, isTaskDefinitionDisabled } from '../../../shared/os/taskScheduler/taskDefinition';
@@ -16,6 +18,11 @@ import { uninstallWindowsAgent, type WindowsUninstallChoice, type WindowsUninsta
 
 /** Runs one command line on the Windows host through its SSH login shell. */
 export type WindowsSshExec = (sshHost: string, command: string, timeoutMs: number) => Promise<ExecResult>;
+
+export function needsTransferredScript(body: string): boolean {
+  const script = `$ProgressPreference = 'SilentlyContinue'\n${body}`;
+  return ['powershell.exe', ...powershellEncodedArgs(script)].join(' ').length > MAX_WINDOWS_COMMAND_LINE;
+}
 
 /** Puts bytes on the host over SFTP. The remote path is relative to the user's home, with `/` separators (what Windows OpenSSH's sftp-server takes). */
 export interface WindowsFileTransfer {
@@ -275,7 +282,7 @@ export class WindowsAgentDeployer {
     if (!identity || !await this.taskOwnedByHost(sshHost, xml, host.userId)) throw new Error(`The task "${this.options.taskName}" is not a recognised agent task for ${root}`);
     if (identity.launcher && state.running) {
       if (!force) return 'starting';
-      const output = await this.script(sshHost, 'Checking the agent process', buildProcessPresentScript('node.exe', `--env-file=${windowsAgentEnvFile(host.home, this.options)}`));
+      const output = await this.script(sshHost, 'Checking the agent process', compressPowerShellScript(buildProcessPresentScript('node.exe', `--env-file=${windowsAgentEnvFile(host.home, this.options)}`)));
       if (!parseProcessPresent(output)) return 'starting';
     }
     await this.stopTask(sshHost, client, windowsAgentEnvFile(host.home, this.options), host);
@@ -332,7 +339,9 @@ export class WindowsAgentDeployer {
       {
         tasks: client,
         endTask: (taskName) => this.endTask(client, taskName),
-        script: (what, body, timeoutMs) => this.script(sshHost, what, body, timeoutMs),
+        script: (what, body, timeoutMs) => needsTransferredScript(body)
+          ? this.transferredScript(sshHost, host.home, what, body, timeoutMs)
+          : this.script(sshHost, what, body, timeoutMs),
       },
       { home: host.home, systemRoot: host.systemRoot, nodePath: host.nodePath, userId: host.userId },
       this.options,
@@ -407,7 +416,7 @@ export class WindowsAgentDeployer {
     }
     await this.endTask(client, this.options.taskName);
     if (launcherCommand) {
-      await this.script(sshHost, 'Ending the agent launcher', buildEndProcessesScript({ image: 'powershell.exe', argument: launcherCommand, label: 'agent launcher', endParentConhost: false, hashEncodedCommand: true }), QUICK_MS);
+      await this.script(sshHost, 'Ending the agent launcher', compressPowerShellScript(buildEndProcessesScript({ image: 'powershell.exe', argument: launcherCommand, label: 'agent launcher', endParentConhost: false, hashEncodedCommand: true })), QUICK_MS);
     }
     await this.endStrayProcesses(sshHost, envFile);
   }
@@ -438,7 +447,7 @@ export class WindowsAgentDeployer {
    * creation time: the time is checked again just before it is ended, and "has it ended?" asks the same question.
    */
   private async endStrayProcesses(sshHost: string, envFile: string): Promise<void> {
-    await this.script(sshHost, 'Ending the agent processes', buildEndProcessesScript({ image: 'node.exe', argument: `--env-file=${envFile}`, label: 'agent', endParentConhost: true }), QUICK_MS);
+    await this.script(sshHost, 'Ending the agent processes', compressPowerShellScript(buildEndProcessesScript({ image: 'node.exe', argument: `--env-file=${envFile}`, label: 'agent', endParentConhost: true })), QUICK_MS);
   }
 
   /** Runs a PowerShell script on the host; a non-zero exit is an error carrying the script's own message. */
@@ -449,6 +458,28 @@ export class WindowsAgentDeployer {
       throw new Error(`${what} failed on the Windows host (exit ${result.code})${reason ? `: ${redactSecretText(reason).slice(0, 600)}` : ''}`);
     }
     return result.stdout;
+  }
+
+  private async transferredScript(sshHost: string, home: string, what: string, body: string, timeoutMs = QUICK_MS): Promise<string> {
+    const name = `.azito-script-${randomUUID()}.tmp`;
+    const remote = path.win32.join(home, name);
+    const bytes = Buffer.from(body, 'utf8');
+    const hash = createHash('sha256').update(bytes).digest('hex');
+    const q = powershellDialect.quote;
+    try {
+      await this.transfer.putBuffer(sshHost, bytes, name);
+      return await this.script(sshHost, what, [
+        `$file = ${q(remote)}`,
+        '$bytes = [IO.File]::ReadAllBytes($file)',
+        `$hash = ([BitConverter]::ToString([Security.Cryptography.SHA256]::Create().ComputeHash($bytes))).Replace('-', '').ToLowerInvariant()`,
+        `if ($hash -ne ${q(hash)}) { throw 'The uploaded script failed its SHA256 check' }`,
+        'Remove-Item -LiteralPath $file -Force -ErrorAction Stop',
+        'Invoke-Expression ([Text.Encoding]::UTF8.GetString($bytes))',
+      ].join('\n'), timeoutMs);
+    } finally {
+      await this.script(sshHost, 'Removing the temporary script', `Remove-Item -LiteralPath ${q(remote)} -Force -ErrorAction SilentlyContinue`, QUICK_MS)
+        .catch((error: unknown) => console.warn(`Could not remove the temporary Windows script: ${redactSecretText(String(error))}`));
+    }
   }
 
   /**

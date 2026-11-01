@@ -1,3 +1,4 @@
+import { compressPowerShellScript } from '../../../shared/os/compressPowerShellScript';
 import fs from 'fs';
 import * as path from 'path';
 import { buildCommandSpec } from '../../../shared/exec/commandSpec';
@@ -211,7 +212,7 @@ export class MisaoWindowsInstaller {
     if (state.running) {
       if (!force) return 'starting';
       if (!legacy) {
-        const found = await this.runScript(target, buildProcessPresentScript('misao.exe', managedEndpointOf(host)), SCRIPT_TIMEOUT_MS);
+        const found = await this.runScript(target, compressPowerShellScript(buildProcessPresentScript('misao.exe', managedEndpointOf(host))), SCRIPT_TIMEOUT_MS);
         if (found.code !== 0) throw new MisaoServiceError('update_failed', `Cannot check the misao process: ${redactSecretText(powershellErrorText(found.stderr) || found.stdout.trim()).slice(0, 600)}`);
         if (!parseProcessPresent(found.stdout)) return 'starting';
       }
@@ -219,7 +220,7 @@ export class MisaoWindowsInstaller {
       if (!legacy) {
         const encoded = /-EncodedCommand ([A-Za-z0-9+/=]+)$/.exec(action.argumentsLine)?.[1];
         if (!encoded) throw new MisaoServiceError('update_failed', 'Cannot identify the misao launcher');
-        const launcher = await this.runScript(target, buildEndProcessesScript({ image: 'powershell.exe', argument: encoded, label: 'misao launcher', endParentConhost: false, hashEncodedCommand: true }), SCRIPT_TIMEOUT_MS);
+        const launcher = await this.runScript(target, compressPowerShellScript(buildEndProcessesScript({ image: 'powershell.exe', argument: encoded, label: 'misao launcher', endParentConhost: false, hashEncodedCommand: true })), SCRIPT_TIMEOUT_MS);
         if (launcher.code !== 0) throw new MisaoServiceError('update_failed', `Ending the misao launcher failed: ${redactSecretText(powershellErrorText(launcher.stderr) || launcher.stdout.trim()).slice(0, 600)}`);
       }
       const sweep = await this.runScript(target, buildEndProcessesScript({ image: 'misao.exe', argument: managedEndpointOf(host), label: 'misao', endParentConhost: false }), SCRIPT_TIMEOUT_MS);
