@@ -168,15 +168,20 @@ export async function uninstallWindowsAgent(host: WindowsUninstallHost, facts: H
   steps.push(folder);
 
   if (choice.removeMisao) steps.push(...await removeMisao(host, facts, options));
-  const expected = path.win32.join(harnessLocation('win32', home, harnessPrefix).harnessDir, 'skills', 'azt-mcp', 'mcp-server', 'index.js');
-  for (const [id, kind] of [['claudeHarnessMcp', 'claude'], ['codexHarnessMcp', 'codex']] as const) {
-    steps.push(harnessPrefix
-      ? skipped(id, 'this hub uses a harness prefix and never registers azt-mcp, so the registration was left')
-      : folder.outcome !== 'done' && folder.outcome !== 'absent'
-      ? skipped(id, 'the agent was not removed, so its MCP registration was kept')
-      : facts.nodePath === null
-      ? skipped(id, 'Node is unavailable, so the registration could not be inspected')
-      : await step(id, async () => parseHarnessMcpOutput(await host.script(`Checking ${kind} MCP registration`, harnessMcpScript(kind, facts.nodePath!, home, expected), 200_000))));
+  // A prefixed harness never registers azt-mcp.
+  if (harnessPrefix) {
+    for (const id of ['claudeHarnessMcp', 'codexHarnessMcp'] as const) {
+      steps.push(skipped(id, 'this hub uses a harness prefix and never registers azt-mcp, so the registration was left'));
+    }
+  } else {
+    const expected = path.win32.join(harnessLocation('win32', home).harnessDir, 'skills', 'azt-mcp', 'mcp-server', 'index.js');
+    for (const [id, kind] of [['claudeHarnessMcp', 'claude'], ['codexHarnessMcp', 'codex']] as const) {
+      steps.push(folder.outcome !== 'done' && folder.outcome !== 'absent'
+        ? skipped(id, 'the agent was not removed, so its MCP registration was kept')
+        : facts.nodePath === null
+        ? skipped(id, 'Node is unavailable, so the registration could not be inspected')
+        : await step(id, async () => parseHarnessMcpOutput(await host.script(`Checking ${kind} MCP registration`, harnessMcpScript(kind, facts.nodePath!, home, expected), 200_000))));
+    }
   }
   return { ok: steps.every((s) => s.outcome !== 'failed'), steps };
 }
