@@ -42,7 +42,7 @@ export default function ActiveWindowsSection({ titleData, connectPane, openTask,
   const openTerminal = useOpenTerminalTarget(connectPane);
   const { t } = useTranslation(['workspace', 'tasks']);
   const { dismissFinished, markFinishedSeen, clearSeenFinished, retention } = useAgentActivity();
-  const { rows, totalCount: count } = useActiveWindowRows(titleData);
+  const { rows, totalCount: count, historyCount } = useActiveWindowRows(titleData);
   const windowTaskMap = useMemo(() => buildWindowTaskMap(taskWindows), [taskWindows]);
 
   const [userCollapsed, setUserCollapsed] = useState<boolean>(loadUserCollapsed);
@@ -139,7 +139,7 @@ export default function ActiveWindowsSection({ titleData, connectPane, openTask,
             const historyStart = row.seenAt != null && (index === 0 || rows[index - 1].seenAt == null);
             return (
               <div key={row.key}>
-              {historyStart && <div style={{ display: 'flex', alignItems: 'center', padding: 'var(--space-2)', color: 'var(--text-dim)', fontSize: 'var(--font-xs)' }}><span style={{ flex: 1 }}>{t('activeWindows.history', { count: rows.filter((r) => r.seenAt != null).length, max: retention.maxCount })}</span><IconButton type="button" title={t('activeWindows.clearHistory')} aria-label={t('activeWindows.clearHistory')} onClick={clearSeenFinished}><Icon name="trash" size={14} /></IconButton></div>}
+              {historyStart && <div style={{ display: 'flex', alignItems: 'center', padding: 'var(--space-2)', color: 'var(--text-dim)', fontSize: 'var(--font-xs)' }}><span style={{ flex: 1 }}>{t('activeWindows.history', { count: historyCount, max: retention.maxCount })}</span><IconButton type="button" title={t('activeWindows.clearHistory')} aria-label={t('activeWindows.clearHistory')} onClick={clearSeenFinished}><Icon name="trash" size={14} /></IconButton></div>}
               <div
                 className={`row-hover aw-history-row${!isFinished && !isBlocked ? ' aw-row-working' : ''}`}
                 style={{

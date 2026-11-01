@@ -96,13 +96,14 @@ export default function NotificationsSection() {
   return (
     <div>
       <section style={{ background: 'var(--bg-card)', border: '1px solid var(--border)', borderRadius: 'var(--radius-md)', padding: 'var(--space-4)', marginBottom: 'var(--space-4)' }}>
-        <h3>{t('history.title')}</h3>
+        <h3 style={{ fontSize: 'var(--font-base)', fontWeight: 600, margin: '0 0 var(--space-1)' }}>{t('history.title')}</h3>
+        <p style={{ fontSize: 'var(--font-sm)', color: 'var(--text-dim)', margin: '0 0 var(--space-4)' }}>{t('history.description')}</p>
         <Slider label={t('history.maxCount')} min={0} max={50} value={retention.maxCount} onChange={(maxCount) => setRetention({ ...retention, maxCount })} />
-        <label>{t('history.period')} <select value={retention.retentionMs} onChange={(e) => setRetention({ ...retention, retentionMs: Number(e.target.value) })}>
+        <label style={{ display: 'flex', flexDirection: 'column', gap: 'var(--space-2)', marginTop: 'var(--space-4)', color: 'var(--text-dim)', fontSize: 'var(--font-sm)' }}>{t('history.period')} <select value={retention.retentionMs} onChange={(e) => setRetention({ ...retention, retentionMs: Number(e.target.value) })}>
           {RETENTION_PERIODS.map((period, i) => <option key={period} value={period}>{t(`history.periods.${i}`)}</option>)}
         </select></label>
       </section>
-      {loading ? <LoadingState /> : !supported ? <p>{t('notifications.notSupported')}</p> : <>
+      {loading ? <LoadingState /> : !supported ? <p style={{ fontSize: 'var(--font-md)', color: 'var(--text-dim)', lineHeight: 1.5 }}>{t('notifications.notSupported')}</p> : <>
       <p style={{ fontSize: 'var(--font-md)', color: 'var(--text-dim)', marginBottom: 20, lineHeight: 1.5 }}>
         {t('notifications.description')}
       </p>

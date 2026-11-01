@@ -1,12 +1,6 @@
 {
-  "rightPanel": {
-    "title": "Linked windows",
-    "open": "Open linked windows panel",
-    "close": "Close linked windows panel"
-  },
-  "navigation": {
-    "taskOpenFailed": "Could not open the task."
-  },
+  "rightPanel": {"title": "Linked windows", "open": "Open linked windows panel", "close": "Close linked windows panel"},
+  "navigation": { "taskOpenFailed": "Could not open the task." },
   "tab": {
     "closeDirtyTitle": "Close tab with unsaved changes?",
     "closeDirtyMessage": "\"{{name}}\" has unsaved changes. Closing this tab will discard them.",
@@ -42,7 +36,7 @@
     "done": "Done",
     "planReview": "Plan Review",
     "noActive": "No active windows",
-    "history": "History {{count}} / {{max}}",
+    "history": "Confirmed {{count}} / {{max}}",
     "clearHistory": "Clear history",
     "deleteHistory": "Remove from history"
   },

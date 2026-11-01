@@ -24,7 +24,7 @@ export interface MobileActiveWindowsPanelProps {
 export function MobileActiveWindowsPanel({ titleData, onClose, connectPane, openTask, taskWindows }: MobileActiveWindowsPanelProps) {
   const openTerminal = useOpenTerminalTarget(connectPane);
   const { t } = useTranslation(['workspace', 'tasks']);
-  const { rows } = useActiveWindowRows(titleData);
+  const { rows, historyCount } = useActiveWindowRows(titleData);
   const { markFinishedSeen, clearSeenFinished, dismissFinished, retention } = useAgentActivity();
   const [historyOpen, setHistoryOpen] = useState(false);
   const windowTaskMap = useMemo(() => buildWindowTaskMap(taskWindows), [taskWindows]);
@@ -57,13 +57,13 @@ export function MobileActiveWindowsPanel({ titleData, onClose, connectPane, open
       </div>
 
       <div style={{ display: 'flex', flexDirection: 'column' }}>
-      {rows.some((r) => r.seenAt != null) && <div style={{ display: 'flex', alignItems: 'center', order: 1 }}><button type="button" aria-expanded={historyOpen} onClick={() => setHistoryOpen((v) => !v)} style={{ flex: 1, minHeight: 44, color: 'var(--text)', background: 'none', border: 0, textAlign: 'left' }}>{t('activeWindows.history', { count: rows.filter((r) => r.seenAt != null).length, max: retention.maxCount })}</button><IconButton type="button" aria-label={t('activeWindows.clearHistory')} onClick={clearSeenFinished} style={{ minHeight: 44, minWidth: 44 }}><Icon name="trash" size={14} /></IconButton></div>}
       {rows.length === 0 ? (
         <div style={{ padding: '14px 10px', fontSize: 'var(--font-md)', color: 'var(--text-dim)', textAlign: 'center' }}>
           {t('activeWindows.noActive')}
         </div>
       ) : (
-        rows.filter((row) => row.seenAt == null || historyOpen).map((row) => {
+        rows.map((row, index) => {
+          const historyStart = row.seenAt != null && (index === 0 || rows[index - 1].seenAt == null);
           const taskId = row.taskId ?? lookupWindowTask(windowTaskMap, row.serverName, row.target);
           const displayName = row.title;
           const isFinished = row.status === 'finished';
@@ -81,7 +81,9 @@ export function MobileActiveWindowsPanel({ titleData, onClose, connectPane, open
           };
 
           return (
-            <div key={row.key} style={{ display: 'flex', alignItems: 'center', order: row.seenAt == null ? 0 : 2 }}>
+            <div key={row.key}>
+            {historyStart && <div style={{ display: 'flex', alignItems: 'center' }}><button type="button" aria-expanded={historyOpen} onClick={() => setHistoryOpen((v) => !v)} style={{ flex: 1, minHeight: 44, color: 'var(--text)', background: 'none', border: 0, textAlign: 'left' }}>{t('activeWindows.history', { count: historyCount, max: retention.maxCount })}</button><IconButton type="button" aria-label={t('activeWindows.clearHistory')} onClick={clearSeenFinished} style={{ minHeight: 44, minWidth: 44 }}><Icon name="trash" size={14} /></IconButton></div>}
+            {(row.seenAt == null || historyOpen) && <div style={{ display: 'flex', alignItems: 'center' }}>
             <button
               type="button"
               onClick={handleRowOpen}
@@ -95,7 +97,7 @@ export function MobileActiveWindowsPanel({ titleData, onClose, connectPane, open
                 borderRadius: 'var(--radius-md)',
                 background: isBlocked ? 'var(--warning-a08)' : 'transparent',
                 border: 'none',
-                color: 'var(--text)',
+                color: row.seenAt != null ? 'var(--text-dim)' : 'var(--text)',
                 textAlign: 'left',
                 cursor: 'pointer',
                 fontSize: 'var(--font-md)',
@@ -109,7 +111,7 @@ export function MobileActiveWindowsPanel({ titleData, onClose, connectPane, open
                     {displayName}
                   </span>
                   {isFinished && row.finishedAt != null && (
-                    <span style={{ fontSize: 'var(--font-2xs)', color: 'var(--success)', flexShrink: 0, whiteSpace: 'nowrap' }}>
+                    <span style={{ fontSize: 'var(--font-2xs)', color: row.seenAt != null ? 'var(--text-dim)' : 'var(--success)', flexShrink: 0, whiteSpace: 'nowrap' }}>
                       {t('activeWindows.done')} · {formatRelativeTime(row.finishedAt)}
                     </span>
                   )}
@@ -127,6 +129,7 @@ export function MobileActiveWindowsPanel({ titleData, onClose, connectPane, open
               )}
             </button>
             {row.seenAt != null && <IconButton type="button" aria-label={t('activeWindows.deleteHistory')} onClick={() => dismissFinished(row.serverName, row.target, row.windowId)} style={{ minWidth: 44, minHeight: 44 }}><Icon name="close" size={14} /></IconButton>}
+            </div>}
             </div>
           );
         })

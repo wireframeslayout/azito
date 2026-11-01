@@ -1,5 +1,5 @@
 import type { ActivityTitleData } from '../../lib/windowDisplay';
-import { useMemo, useState, type CSSProperties } from 'react';
+import { useMemo, useRef, useState, type CSSProperties } from 'react';
 import { useTranslation } from 'react-i18next';
 import { useActiveWindowRows } from '../../hooks/useActiveWindowRows';
 import type { ActiveWindowRow } from '../../hooks/useActiveWindowRows';
@@ -85,12 +85,21 @@ const rowTitleStyle: CSSProperties = {
 export function MobileStatusBar({ titleData, allTasks, openTask, connectPane }: MobileStatusBarProps) {
   const openTerminal = useOpenTerminalTarget(connectPane);
   const { t } = useTranslation(['workspace', 'common']);
-  const { rows } = useActiveWindowRows(titleData);
+  const { rows, historyCount } = useActiveWindowRows(titleData);
   const [open, setOpen] = useState(false);
-  const { markFinishedSeen, markAllFinishedSeen, dismissFinished, clearSeenFinished, retention } = useAgentActivity();
+  const { markFinishedSeen, dismissFinished, clearSeenFinished, retention } = useAgentActivity();
   const [historyOpen, setHistoryOpen] = useState(false);
   const [healthOpen, setHealthOpen] = useState(false);
-  const containerRef = useClickOutside<HTMLDivElement>(() => setOpen(false));
+  const openedUnread = useRef<ActiveWindowRow[]>([]);
+  const closePanel = () => {
+    for (const captured of openedUnread.current) {
+      const current = rows.find((row) => row.key === captured.key && row.finishedAt === captured.finishedAt && row.seenAt == null);
+      if (current) markFinishedSeen(current.serverName, current.target, current.windowId);
+    }
+    openedUnread.current = [];
+    setOpen(false);
+  };
+  const containerRef = useClickOutside<HTMLDivElement>(() => { if (open) closePanel(); });
 
   // サーバーヘルス。複数サーバーは最悪値を代表として使う。
   const servers = useServerResourcesContext();
@@ -126,11 +135,12 @@ export function MobileStatusBar({ titleData, allTasks, openTask, connectPane }: 
   const workingCount = workingGroups.length;
 
   const handleToggle = () => {
-    if (!open) {
-      if (unreadRows.length > 0) setHistoryOpen(true);
-      markAllFinishedSeen();
+    if (open) {
+      closePanel();
+    } else {
+      openedUnread.current = unreadRows;
+      setOpen(true);
     }
-    setOpen(!open);
   };
 
   const handleWorkingRowOpen = (group: WorkingGroup) => {
@@ -140,7 +150,7 @@ export function MobileStatusBar({ titleData, allTasks, openTask, connectPane }: 
       openTask,
       openTerminal,
     );
-    setOpen(false);
+    closePanel();
   };
 
   const handleFinishedRowOpen = (row: ActiveWindowRow) => {
@@ -150,8 +160,10 @@ export function MobileStatusBar({ titleData, allTasks, openTask, connectPane }: 
       openTask,
       openTerminal,
     );
-    markFinishedSeen(row.serverName, row.target, row.windowId);
-    setOpen(false);
+    if (!openedUnread.current.some((captured) => captured.key === row.key && captured.finishedAt === row.finishedAt)) {
+      markFinishedSeen(row.serverName, row.target, row.windowId);
+    }
+    closePanel();
   };
 
   return (
@@ -208,7 +220,7 @@ export function MobileStatusBar({ titleData, allTasks, openTask, connectPane }: 
           {historyRows.length > 0 && (
             <section>
               <div style={{ display: 'flex', alignItems: 'center' }}>
-                <button type="button" aria-expanded={historyOpen} onClick={() => setHistoryOpen((v) => !v)} style={{ ...rowButtonStyle, flex: 1 }}>{t('workspace:activeWindows.history', { count: historyRows.length, max: retention.maxCount })}</button>
+                <button type="button" aria-expanded={historyOpen} onClick={() => setHistoryOpen((v) => !v)} style={{ ...rowButtonStyle, flex: 1 }}>{t('workspace:activeWindows.history', { count: historyCount, max: retention.maxCount })}</button>
                 <IconButton type="button" title={t('workspace:activeWindows.clearHistory')} aria-label={t('workspace:activeWindows.clearHistory')} onClick={clearSeenFinished} style={{ minWidth: 44, minHeight: 44 }}><Icon name="trash" size={14} /></IconButton>
               </div>
               {historyOpen && historyRows.map((row) => (
@@ -252,7 +264,7 @@ export function MobileStatusBar({ titleData, allTasks, openTask, connectPane }: 
             <button
               type="button"
               className="row-hover"
-              onClick={() => { setOpen(false); setHealthOpen(true); }}
+              onClick={() => { closePanel(); setHealthOpen(true); }}
               style={{ ...rowButtonStyle, justifyContent: 'space-between', color: 'var(--text-dim)' }}
             >
               <span>{t('workspace:activityPill.viewHealthDetails')}</span>

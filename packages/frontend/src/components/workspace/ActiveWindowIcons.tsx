@@ -1,3 +1,4 @@
+import { isAttentionRow } from '../../lib/sortActiveWindowRows';
 import type { ActivityTitleData } from '../../lib/windowDisplay';
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
@@ -40,7 +41,7 @@ export default function ActiveWindowIcons({ titleData, connectPane, openTask, ta
   const openTerminal = useOpenTerminalTarget(connectPane);
   const { t } = useTranslation(['workspace', 'tasks']);
   const { rows: allRows } = useActiveWindowRows(titleData);
-  const rows = allRows.filter((row) => row.status === 'running' || row.seenAt == null);
+  const rows = allRows.filter(isAttentionRow);
   const { markFinishedSeen } = useAgentActivity();
   const windowTaskMap = useMemo(() => buildWindowTaskMap(taskWindows), [taskWindows]);
   const containerRef = useRef<HTMLDivElement>(null);

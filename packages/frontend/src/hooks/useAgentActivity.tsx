@@ -86,7 +86,6 @@ interface AgentActivityContextValue {
   retention: FinishedRetentionSettings;
   setRetention: (settings: FinishedRetentionSettings) => void;
   markFinishedSeen: (serverName: string, target: string, windowId?: number) => void;
-  markAllFinishedSeen: () => void;
   clearSeenFinished: () => void;
   dismissFinished: (serverName: string, target: string, windowId?: number) => void;
 }
@@ -104,7 +103,6 @@ const AgentActivityContext = createContext<AgentActivityContextValue>({
   retention: DEFAULT_FINISHED_RETENTION,
   setRetention: () => {},
   markFinishedSeen: () => {},
-  markAllFinishedSeen: () => {},
   clearSeenFinished: () => {},
   dismissFinished: () => {},
 });
@@ -322,10 +320,6 @@ export function AgentActivityProvider({ children }: { children: React.ReactNode 
     const key = activityKey(serverName, target, windowId);
     setFinished((cur) => pruneFinished(markSeen(cur, Date.now(), (e) => activityKeyForEntry(e) === key), Date.now(), retention));
   }, [retention]);
-  const markAllFinishedSeen = useCallback(() => {
-    const now = Date.now();
-    setFinished((cur) => pruneFinished(markSeen(cur, now, () => true), now, retention));
-  }, [retention]);
   const clearSeenFinished = useCallback(() => setFinished((cur) => cur.filter((e) => e.seenAt == null)), []);
   const dismissFinished = useCallback((serverName: string, target: string, windowId?: number) => {
     const key = activityKey(serverName, target, windowId);
@@ -400,7 +394,7 @@ export function AgentActivityProvider({ children }: { children: React.ReactNode 
         finishedEntries: finished,
         findFinished,
         dismissFinished,
-        retention, setRetention, markFinishedSeen, markAllFinishedSeen, clearSeenFinished,
+        retention, setRetention, markFinishedSeen, clearSeenFinished,
       }}
     >
       {children}

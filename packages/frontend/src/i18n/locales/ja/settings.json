@@ -257,6 +257,7 @@
     "intervalOnlySpace": "Space 2 回を選んだときに設定できます。"
   },
   "history": {
+    "description": "この端末だけの設定です。",
     "title": "ウィンドウ履歴",
     "maxCount": "確認済みの保存件数",
     "period": "保持期間",

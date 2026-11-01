@@ -17,10 +17,10 @@ test('confirmed completion stays in history after opening and reload', async ({ 
   agent.setState('idle');
   await expect(row.getByText(/完了 ·/)).toBeVisible();
   await row.getByRole('button').first().click();
-  await expect(panel.getByText(/履歴 1 \/ 10/)).toBeVisible();
+  await expect(panel.getByText(/確認済み 1 \/ 10/)).toBeVisible();
   await expect.poll(async () => app.evaluate(() => JSON.parse(localStorage.getItem('active-windows-finished') || '[]')[0]?.seenAt)).toBeTruthy();
   await app.reload();
-  await expect(panel.getByText(/履歴 1 \/ 10/)).toBeVisible();
+  await expect(panel.getByText(/確認済み 1 \/ 10/)).toBeVisible();
 });
 
 
@@ -38,13 +38,13 @@ test('retention limits confirmed rows and mobile layout fits at 320px', async ({
   await page.goto(harness.baseUrl);
   await expect.poll(async () => page.evaluate(() => JSON.parse(localStorage.getItem('active-windows-finished') || '[]').length)).toBe(10);
   await page.getByRole('button', { name: '稼働ステータス' }).click();
-  await expect(page.getByText(/履歴 10 \/ 10/)).toBeVisible();
+  await expect(page.getByText(/確認済み 10 \/ 10/)).toBeVisible();
   agent.setState('working');
   await expect(page.getByRole('dialog', { name: '稼働ステータス' }).getByText('稼働中 1')).toBeVisible();
   agent.setState('idle');
   await expect(page.getByText(/完了 ·/).first()).toBeVisible();
   await page.getByRole('button', { name: '履歴を消去' }).click();
-  await expect(page.getByText(/履歴 10 \/ 10/)).toHaveCount(0);
+  await expect(page.getByText(/確認済み 10 \/ 10/)).toHaveCount(0);
   await expect(page.getByText(/完了 ·/).first()).toBeVisible();
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
   await page.evaluate(() => { document.body.style.zoom = '2'; });
@@ -63,4 +63,22 @@ test('zero limit retains unread completions but removes confirmed history', asyn
   }, harness.uiToken);
   await page.goto(harness.baseUrl);
   await expect.poll(async () => page.evaluate(() => JSON.parse(localStorage.getItem('active-windows-finished') || '[]').map((row: { target: string }) => row.target))).toEqual(['test:unread']);
+});
+
+test('zero history limit keeps unread completion visible until the mobile panel closes', async ({ page, harness }) => {
+  await page.setViewportSize({ width: 320, height: 700 });
+  await page.addInitScript((token) => {
+    sessionStorage.setItem('azito_ui_token', token);
+    localStorage.setItem('azito-language', 'ja');
+    localStorage.setItem('active-windows-retention', JSON.stringify({ maxCount: 0, retentionMs: 3600000 }));
+    localStorage.setItem('active-windows-finished', JSON.stringify([{ serverName: 'local', target: 'test:unread', finishedAt: Date.now() }]));
+  }, harness.uiToken);
+  await page.goto(harness.baseUrl);
+  const toggle = page.getByRole('button', { name: '稼働ステータス' });
+  await toggle.click();
+  const panel = page.getByRole('dialog', { name: '稼働ステータス' });
+  await expect(panel.getByText(/完了 ·/)).toBeVisible();
+  await expect.poll(async () => page.evaluate(() => JSON.parse(localStorage.getItem('active-windows-finished') || '[]').length)).toBe(1);
+  await toggle.click();
+  await expect.poll(async () => page.evaluate(() => JSON.parse(localStorage.getItem('active-windows-finished') || '[]').length)).toBe(0);
 });

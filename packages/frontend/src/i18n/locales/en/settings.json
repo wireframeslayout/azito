@@ -257,6 +257,7 @@
     "intervalOnlySpace": "Available when Space twice is selected."
   },
   "history": {
+    "description": "These settings apply only to this device.",
     "title": "Window history",
     "maxCount": "Maximum confirmed entries",
     "period": "Retention period",
