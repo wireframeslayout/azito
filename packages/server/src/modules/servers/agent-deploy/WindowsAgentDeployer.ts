@@ -10,7 +10,8 @@ import { createSshCommandSpecRunner } from './windowsSshRunner';
 import { checkFirewall, describeFirewallProblem } from './windowsFirewall';
 import { MISAO_WINDOWS_DIR, type WindowsAgentOptions } from './windowsAgentConfig';
 import type { WindowsPreflightInfo } from './windowsPreflight';
-import { agentTaskAction } from './windowsAgentTask';
+import { agentTaskAction, agentTaskIdentity } from './windowsAgentTask';
+import { soleExecAction } from '../../../shared/os/taskScheduler/taskXmlRead';
 import { uninstallWindowsAgent, type WindowsUninstallChoice, type WindowsUninstallResult } from './windowsAgentUninstall';
 
 /** Runs one command line on the Windows host through its SSH login shell. */
@@ -242,7 +243,7 @@ export class WindowsAgentDeployer {
       await this.prepareRoot(input.sshHost, layout);
       await this.transfer.putFile(input.sshHost, input.tarballPath, `${layout.rootRelative}/azito-agent-${input.version}.tar.gz`);
       await this.verifySha256(input.sshHost, layout.tarball, input.expectedSha256);
-      previous = await this.capturePrevious(client);
+      previous = await this.capturePrevious(client, input.host.systemRoot, layout);
       await this.stopTask(input.sshHost, client, layout.envFile);
       await this.extract(input, layout);
       progress.versionCreated = true;
@@ -371,11 +372,14 @@ export class WindowsAgentDeployer {
   }
 
   /** Reads what is registered now. A definition that cannot be read stops the deploy, before anything is changed. */
-  private async capturePrevious(client: SchtasksClient): Promise<Previous> {
+  private async capturePrevious(client: SchtasksClient, systemRoot: string, layout: WindowsAgentLayout): Promise<Previous> {
     const state = await client.query(this.options.taskName);
     if (!state.exists) return { taskXml: undefined, version: undefined, wasRunning: false };
     const taskXml = await client.exportXml(this.options.taskName);
-    return { taskXml, version: versionOfTaskXml(taskXml), wasRunning: state.running };
+    const action = soleExecAction(taskXml);
+    const identity = action && agentTaskIdentity(action, systemRoot, layout.root, layout.envFile);
+    if (!identity) throw new Error(`The task "${this.options.taskName}" is not a recognised agent task for ${layout.root}; it was left unchanged`);
+    return { taskXml, version: identity.version, wasRunning: state.running };
   }
 
   /**
