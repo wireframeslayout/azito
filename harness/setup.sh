@@ -709,9 +709,13 @@ elif command -v node >/dev/null 2>&1; then
         messages.push('  質問内容取得フック: スキップ (hook スクリプトが見つかりません)');
       }
 
+      // SubagentStart / SubagentStop hook: チャットのサブエージェント一覧に再取得を促す
+      // （agent-subagent webhook）。状態は会話ファイルから読むため、通知は合図のみ。
       if (subagentHookExists) {
         upsertHook('SubagentStart', subagentHookPath, subagentCmd, 'SubagentStart hook');
         upsertHook('SubagentStop', subagentHookPath, subagentCmd, 'SubagentStop hook');
+      } else {
+        messages.push('  サブエージェント更新フック: スキップ (hook スクリプトが見つかりません)');
       }
 
       // SessionStart hook: /resume や /subtask 等でセッション ID が変わったとき、
@@ -831,6 +835,14 @@ else
       echo '    "SessionStart": ['
       echo "      { \"hooks\": [{ \"type\": \"command\", \"command\": \"$SESSION_CMD\" }] }"
       echo '    ]'
+    fi
+    if [[ -f "$SUBAGENT_HOOK_SCRIPT" ]]; then
+      for SUBAGENT_EVENT in SubagentStart SubagentStop; do
+        echo '    ,'
+        echo "    \"$SUBAGENT_EVENT\": ["
+        echo "      { \"hooks\": [{ \"type\": \"command\", \"command\": \"$SUBAGENT_CMD\" }] }"
+        echo '    ]'
+      done
     fi
     echo '  }'
     echo ""

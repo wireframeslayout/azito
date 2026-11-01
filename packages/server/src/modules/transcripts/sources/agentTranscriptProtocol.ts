@@ -34,13 +34,14 @@ export const AGENT_SESSION_NOT_FOUND = 'session_not_found';
 
 const SESSION_ID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 /** DB（agent_session_id）や `--resume` に入る値なので、UUID 以外は受け付けない。 */
+export const sessionIdSchema = z.string().regex(SESSION_ID_PATTERN);
+
+/** サブエージェントの id。`<session>/subagents/agent-<id>.jsonl` のファイル名になるので、パス区切りやドットは受け付けない。 */
 export const subagentIdSchema = z.string().regex(/^[a-zA-Z0-9_-]+$/);
 export const subagentsResponseSchema = z.object({ subagents: z.array(z.object({
   id: subagentIdSchema, name: z.string(), description: z.string(), agentType: z.string(),
   model: z.string().nullable(), status: z.enum(['finished', 'unknown']),
 })) });
-
-export const sessionIdSchema = z.string().regex(SESSION_ID_PATTERN);
 
 const offsetSchema = z.number().int().nonnegative();
 const epochMsSchema = z.number().finite();

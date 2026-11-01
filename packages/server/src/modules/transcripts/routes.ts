@@ -8,11 +8,12 @@ import { TranscriptAgentBadResponseError, TranscriptAgentOutdatedError } from '.
 import type { TranscriptPaneService } from './TranscriptPaneService';
 import type { WindowSessionResolver } from './WindowSessionResolver';
 import type { AnswerKey, WindowInputService } from './WindowInputService';
-import type { IWindowRepository } from '../windows/Window';
+import type { IWindowRepository, Window } from '../windows/Window';
 import type { InteractionMonitor, InteractionQuestion } from '../notifications/InteractionMonitor';
 import type { ReadSessionBeforeResult, ReadSessionResult, TranscriptEntry } from './sources/TranscriptSource';
 import { getAgentTranscriptProfile, type InterruptKey } from './sources/profiles';
 import { sessionIdSchema, subagentIdSchema } from './sources/agentTranscriptProtocol';
+import { ParentSessionCache } from './ParentSessionCache';
 
 export interface TranscriptsRouteOptions {
   /** ハブ自身のマシン（local）の会話ログ。windowId の無い読み取り・一覧・旧ルートの対象。 */
@@ -42,6 +43,12 @@ const INPUT_TEXT_MIN_LENGTH = 1;
 const INPUT_TEXT_MAX_LENGTH = 32768;
 /** pane 候補提示・入力送信は tmux ペインとの cwd 突合が前提のため、現状 Claude のみ対応。 */
 const PANE_CAPABLE_AGENT_TYPE = 'claude';
+/** サブエージェントの会話ファイル（`<session>/subagents/`）を持つのは Claude Code のみ。 */
+const SUBAGENT_CAPABLE_AGENT_TYPE = 'claude';
+/** 子の会話の取得（2 秒間隔）が親セッションの解決結果を使い回す時間。一覧の再取得間隔（5 秒）と揃える。 */
+const PARENT_SESSION_TTL_MS = 5000;
+
+type SubagentTranscriptSource = TranscriptSource & Required<Pick<TranscriptSource, 'listSubagents' | 'readSubagent'>>;
 
 function findSource(sources: TranscriptSource[], agentType: string): TranscriptSource | undefined {
   return sources.find((s) => s.agentType === agentType);
@@ -194,6 +201,7 @@ function paneHandleMatchesWindow(windowRepo: IWindowRepository, windowId: number
 
 const transcriptsRoutes: FastifyPluginCallback<TranscriptsRouteOptions> = (fastify, opts, done) => {
   const { sources, sourceProvider, serverRepo, transcriptPaneService, windowSessionResolver, windowInputService, windowRepo, interactionMonitor } = opts;
+  const parentSessions = new ParentSessionCache(PARENT_SESSION_TTL_MS);
 
   /**
    * 読み取りの対象にする会話ログ。windowId が指すウィンドウのサーバーのもの（リモートはエージェント上）。
@@ -231,11 +239,17 @@ const transcriptsRoutes: FastifyPluginCallback<TranscriptsRouteOptions> = (fasti
     return { ...result, slashCommandsVisibleInLog };
   });
 
-  async function resolveSubagentSource(windowIdRaw: string, reply: FastifyReply): Promise<{ source: TranscriptSource; sessionId: string } | null> {
+  function findSubagentWindow(windowIdRaw: string, reply: FastifyReply): Window | null {
     const windowId = parsePositiveInt(windowIdRaw);
     if (windowId === undefined || windowId === 'invalid') { reply.status(400).send({ error: 'Invalid windowId' }); return null; }
     const window = windowRepo.findById(windowId);
     if (!window) { reply.status(404).send({ error: 'Window not found' }); return null; }
+    return window;
+  }
+
+  /** 窓の現在の親セッションを解決し直す（重い）。結果は parentSessions に残し、子の読み取りの照合に使う。 */
+  async function resolveParentSession(window: Window, reply: FastifyReply): Promise<string | null> {
+    parentSessions.delete(window.id);
     const resolved = await windowSessionResolver.resolve(window);
     if (!resolved.resolved) {
       const status = resolved.reason === 'agent_unreachable' ? 503 : resolved.reason === 'agent_bad_response' ? 502
@@ -243,38 +257,56 @@ const transcriptsRoutes: FastifyPluginCallback<TranscriptsRouteOptions> = (fasti
       reply.status(status).send({ error: resolved.reason });
       return null;
     }
-    if (resolved.agentType !== 'claude') { reply.status(501).send({ error: 'unsupported_agent' }); return null; }
-    const scoped = sourcesForRead(windowIdRaw);
+    if (resolved.agentType !== SUBAGENT_CAPABLE_AGENT_TYPE) { reply.status(501).send({ error: 'unsupported_agent' }); return null; }
+    parentSessions.set(window, resolved.sessionId);
+    return resolved.sessionId;
+  }
+
+  function findSubagentSource(window: Window, reply: FastifyReply): SubagentTranscriptSource | null {
+    const scoped = sourcesForRead(String(window.id));
     if (typeof scoped === 'string') { reply.status(501).send({ error: 'unsupported_server' }); return null; }
-    const source = findSource(scoped, resolved.agentType);
+    const source = findSource(scoped, SUBAGENT_CAPABLE_AGENT_TYPE);
     if (!source?.listSubagents || !source.readSubagent) { reply.status(501).send({ error: 'unsupported_agent' }); return null; }
-    return { source, sessionId: resolved.sessionId };
+    return source as SubagentTranscriptSource;
   }
 
   fastify.get<{ Params: { windowId: string } }>('/api/transcripts/windows/:windowId/subagents', async (request, reply) => {
+    const window = findSubagentWindow(request.params.windowId, reply);
+    if (!window) return;
     try {
-      const resolved = await resolveSubagentSource(request.params.windowId, reply);
-      if (!resolved) return;
-      const subagents = await resolved.source.listSubagents!(resolved.sessionId);
+      const sessionId = await resolveParentSession(window, reply);
+      if (!sessionId) return;
+      const source = findSubagentSource(window, reply);
+      if (!source) return;
+      const subagents = await source.listSubagents(sessionId);
       if (!subagents) return reply.status(404).send({ error: 'session_not_found' });
-      return { sessionId: resolved.sessionId, subagents };
+      return { sessionId, subagents };
     } catch (err) { return replyHostReadError(err, reply); }
   });
 
   fastify.get<{ Params: { windowId: string; agentId: string }; Querystring: { sessionId?: string; offset?: string; before?: string } }>(
     '/api/transcripts/windows/:windowId/subagents/:agentId/entries', async (request, reply) => {
-      const { sessionId, offset: rawOffset, before: rawBefore } = request.query;
-      if (!sessionIdSchema.safeParse(sessionId).success || !subagentIdSchema.safeParse(request.params.agentId).success)
+      const { offset: rawOffset, before: rawBefore } = request.query;
+      const parsedSessionId = sessionIdSchema.safeParse(request.query.sessionId);
+      if (!parsedSessionId.success || !subagentIdSchema.safeParse(request.params.agentId).success)
         return reply.status(400).send({ error: 'invalid_id' });
+      const sessionId = parsedSessionId.data;
       const offset = parseNonNegativeInt(rawOffset);
       const before = parseNonNegativeInt(rawBefore);
       if (offset === 'invalid' || before === 'invalid' || (offset !== undefined && before !== undefined))
         return reply.status(400).send({ error: 'invalid_paging' });
+      const window = findSubagentWindow(request.params.windowId, reply);
+      if (!window) return;
       try {
-        const resolved = await resolveSubagentSource(request.params.windowId, reply);
-        if (!resolved) return;
-        if (sessionId !== resolved.sessionId) return reply.status(409).send({ error: 'parent_session_changed' });
-        const result = await resolved.source.readSubagent!(resolved.sessionId, request.params.agentId, offset, before);
+        // 親セッション照合: 直近の解決結果と一致すればそれを使い、無い・一致しないときは解決し直して照合する。
+        if (parentSessions.get(window) !== sessionId) {
+          const parent = await resolveParentSession(window, reply);
+          if (!parent) return;
+          if (sessionId !== parent) return reply.status(409).send({ error: 'parent_session_changed' });
+        }
+        const source = findSubagentSource(window, reply);
+        if (!source) return;
+        const result = await source.readSubagent(sessionId, request.params.agentId, offset, before);
         if (!result) return reply.status(404).send({ error: 'session_not_found' });
         return 'prevOffset' in result ? toReadBeforeResponse(result) : toReadResponse(result);
       } catch (err) { return replyHostReadError(err, reply); }

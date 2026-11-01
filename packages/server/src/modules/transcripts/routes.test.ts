@@ -1443,4 +1443,30 @@ describe('window subagent API', () => {
     expect(readSubagent).toHaveBeenCalledWith(SID, 'a123', undefined, 12);
     await app.close();
   });
+
+  it('reuses the recent parent resolution while polling and re-checks when the window link changes', async () => {
+    const OTHER = '22222222-2222-2222-2222-222222222222';
+    const readSubagent = vi.fn(() => ({ entries: [], nextOffset: 0, truncated: false, startOffset: 0, hasOlder: false }));
+    const source = buildClaudeSource({ listSubagents: () => [], readSubagent });
+    let parent = SID;
+    const resolve = vi.fn(async () => ({ resolved: true as const, agentType: 'claude', sessionId: parent, paneId: PANE_ID, agentDetected: true }));
+    const window = { id: 10, serverName: LOCAL_SERVER.name, agentSessionId: SID, taskId: null } as unknown as Window;
+    const app = buildApp([source], {}, { windowSessionResolver: { resolve }, windowRepo: { findById: () => window } });
+    const poll = () => app.inject({ method: 'GET', url: `/api/transcripts/windows/10/subagents/a123/entries?sessionId=${SID}&offset=0` });
+
+    expect((await app.inject({ method: 'GET', url: '/api/transcripts/windows/10/subagents' })).statusCode).toBe(200);
+    expect((await poll()).statusCode).toBe(200);
+    expect((await poll()).statusCode).toBe(200);
+    expect(resolve).toHaveBeenCalledOnce();
+    expect(readSubagent).toHaveBeenCalledTimes(2);
+
+    // The window's own link moved to another session (SessionStart hook): the cached parent is not used.
+    parent = OTHER;
+    window.agentSessionId = OTHER;
+    const changed = await poll();
+    expect(changed.statusCode).toBe(409);
+    expect(resolve).toHaveBeenCalledTimes(2);
+    expect(readSubagent).toHaveBeenCalledTimes(2);
+    await app.close();
+  });
 });
