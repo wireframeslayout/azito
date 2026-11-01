@@ -405,25 +405,25 @@ const windowsRoutes: FastifyPluginCallback<WindowsRouteOptions> = (fastify, opts
       const data: Record<string, unknown> = {};
       if ('label' in body) {
         // The label edit is the user's own; clearing it hands the title back to the automatic sources.
-        const label = (body['label'] as string)?.trim() || null;
+        const label = body.label?.trim() || null;
         data['label'] = label;
         data['labelSource'] = label ? 'user' : 'auto';
       }
-      if ('agent_session_id' in body) data['agentSessionId'] = body['agent_session_id'];
-      if ('launch_command' in body) data['launchCommand'] = body['launch_command'];
+      if ('agent_session_id' in body) data['agentSessionId'] = body.agent_session_id;
+      if ('launch_command' in body) data['launchCommand'] = body.launch_command;
       if ('worker_model' in body) {
-        if (body['worker_model'] && !isValidModelId(body['worker_model'] as string)) {
+        if (body.worker_model && !isValidModelId(body.worker_model)) {
           return reply.code(400).send({ error: 'Invalid worker_model format' });
         }
-        data['workerModel'] = body['worker_model'];
+        data['workerModel'] = body.worker_model;
       }
-      if ('working_directory' in body) data['workingDirectory'] = body['working_directory'];
+      if ('working_directory' in body) data['workingDirectory'] = body.working_directory;
 
       if ('window_type' in body || 'worker_type' in body) {
-        const windowType = ('window_type' in body ? body['window_type'] : win.windowType) as string;
+        const windowType = 'window_type' in body ? body.window_type : win.windowType;
         if (windowType !== 'terminal' && windowType !== 'agent')
           return reply.status(400).send({ error: `invalid window_type: ${windowType}` });
-        const workerType = ('worker_type' in body ? body['worker_type'] : win.workerType) as string | null;
+        const workerType = 'worker_type' in body ? body.worker_type : win.workerType;
         if (windowType === 'agent' && !workerType)
           return reply.status(400).send({ error: 'worker_type is required when window_type is agent' });
         data['windowType'] = windowType;
@@ -470,12 +470,12 @@ const windowsRoutes: FastifyPluginCallback<WindowsRouteOptions> = (fastify, opts
       const parsedBody = parseStrictBody(launchAgentBody, request.body);
       if (!parsedBody.ok) return reply.status(400).send(parsedBody.body);
       const body = parsedBody.data;
-      const command = (body['command'] as string | undefined)?.trim();
+      const command = body.command?.trim();
       if (!command)
         return reply.status(400).send({ error: 'command required' });
 
       let resourceSkipped: ResourceUnavailable | null = null;
-      if (opts.resourceGuard && body['force'] !== true) {
+      if (opts.resourceGuard && body.force !== true) {
         const status = await opts.resourceGuard.check(srv);
         if (!status.ok)
           return reply.status(409).send({ error: 'insufficient_resources', resources: status });
