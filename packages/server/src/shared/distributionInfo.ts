@@ -10,11 +10,12 @@ const optionSchema = z.object({
   description: z.string(),
   kind: z.enum(['connect-s3', 'local-minio', 'link', 'managed']),
   href: httpUrl.optional(),
-  defaults: z.object({ endpoint: httpUrl, bucket: z.string() }).optional(),
-});
+  defaults: z.object({ endpoint: httpUrl, bucket: z.string().min(1) }).optional(),
+}).refine((option) => option.kind !== 'link' || option.href !== undefined, 'A link option requires href')
+  .refine((option) => option.kind !== 'managed' || option.defaults !== undefined, 'A managed option requires defaults');
 export const distributionInfoSchema = z.object({
   storage: z.object({ onboarding: z.object({
-    heading: z.string(), body: z.string(), options: z.array(optionSchema).min(1), dismissible: z.boolean().default(true),
+    heading: z.string(), body: z.string(), options: z.array(optionSchema).min(1).refine((options) => new Set(options.map((option) => option.id)).size === options.length, 'Option ids must be unique'), dismissible: z.boolean().default(true),
   }).optional() }).optional(),
 });
 export type DistributionInfo = z.infer<typeof distributionInfoSchema>;

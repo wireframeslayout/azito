@@ -65,7 +65,7 @@ export class MinioStorageClient {
   }
 
   operations(settings: StorageSettings, projectId: number): StorageOperations {
-    return new StorageOperations(this.getClient(settings), settings, projectId);
+    return new StorageOperations(this.getClient(settings), settings.bucket, projectId);
   }
 
   async upload(
@@ -101,6 +101,7 @@ export class MinioStorageClient {
     const result = await s3.send(new ListObjectsV2Command({
       Bucket: settings.bucket,
       Prefix: prefix,
+      Delimiter: '/',
     }));
 
     return (result.Contents || []).map((obj) => ({

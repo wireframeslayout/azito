@@ -1,9 +1,8 @@
 import { describe, expect, it, vi } from 'vitest';
 import { CopyObjectCommand, DeleteObjectsCommand, HeadObjectCommand, ListObjectsV2Command, type S3Client } from '@aws-sdk/client-s3';
 import { StorageOperations, validateStoragePath } from './storageOperations';
-import type { StorageSettings } from './MinioStorageClient';
 
-const settings: StorageSettings = { endpoint: 'http://localhost', accessKey: 'key', secretKey: 'secret', bucket: 'bucket', region: 'us-east-1', maxFileSize: 100, useSsl: false };
+const bucket = 'bucket';
 
 describe('storage operations', () => {
   it('rejects paths that escape the project and malformed folders', () => {
@@ -21,13 +20,31 @@ describe('storage operations', () => {
       if (command instanceof ListObjectsV2Command && !command.input.ContinuationToken) return { Contents: [{ Key: 'projects/1/a/x', Size: 5 }], IsTruncated: true, NextContinuationToken: 'next' };
       return { Contents: [{ Key: 'projects/1/a/y', Size: 7 }] };
     });
-    const ops = new StorageOperations({ send } as unknown as S3Client, settings, 1);
+    const ops = new StorageOperations({ send } as unknown as S3Client, bucket, 1);
     expect(await ops.listPage('a/', 200)).toEqual({ prefix: 'a/', folders: [{ name: 'folder', prefix: 'a/folder/' }], files: [{ key: 'projects/1/a/123_file', displayName: '日本語.txt', size: 5, lastModified: '2024-01-01T00:00:00.000Z', etag: 'etag' }], nextCursor: 'next' });
     expect(await ops.statPrefix('a/')).toEqual({ count: 2, totalSize: 12 });
     await ops.renameFile('a/123_file', '変更.txt');
     const copy = send.mock.calls.map(([command]) => command).find((command) => command instanceof CopyObjectCommand) as CopyObjectCommand;
     expect(copy.input.Metadata?.['display-name']).toBe(encodeURIComponent('変更.txt'));
     expect(copy.input.ContentType).toBe('text/plain');
+  });
+  it('skips objects deleted while a page is listed', async () => {
+    const send = vi.fn(async (command: unknown) => {
+      if (command instanceof HeadObjectCommand) throw Object.assign(new Error('missing'), { name: 'NotFound' });
+      return { Contents: [{ Key: 'projects/1/gone', Size: 1 }] };
+    });
+    const ops = new StorageOperations({ send } as unknown as S3Client, bucket, 1);
+    expect((await ops.listPage('', 200)).files).toEqual([]);
+  });
+  it('reports sources left behind after a completed copy as a partial failure', async () => {
+    const send = vi.fn(async (command: unknown) => {
+      if (command instanceof ListObjectsV2Command) return command.input.Prefix === 'projects/1/source/' ? { Contents: [{ Key: 'projects/1/source/a' }] } : {};
+      if (command instanceof HeadObjectCommand) throw Object.assign(new Error('missing'), { name: 'NotFound' });
+      if (command instanceof DeleteObjectsCommand) return { Errors: [{ Key: 'projects/1/source/a' }] };
+      return {};
+    });
+    const ops = new StorageOperations({ send } as unknown as S3Client, bucket, 1);
+    await expect(ops.moveObjects(['source/'], 'target/')).rejects.toMatchObject({ status: 502, code: 'partial_failure' });
   });
   it('copies every object before deleting sources', async () => {
     const commands: unknown[] = [];
@@ -37,7 +54,7 @@ describe('storage operations', () => {
       if (command instanceof HeadObjectCommand) throw Object.assign(new Error('missing'), { name: 'NotFound' });
       return {};
     });
-    const ops = new StorageOperations({ send } as unknown as S3Client, settings, 1);
+    const ops = new StorageOperations({ send } as unknown as S3Client, bucket, 1);
     await ops.moveObjects(['source/'], 'target/');
     expect(commands.filter((c) => c instanceof CopyObjectCommand)).toHaveLength(2);
     expect(commands.at(-1)).toBeInstanceOf(DeleteObjectsCommand);
@@ -50,7 +67,7 @@ describe('storage operations', () => {
       if (command instanceof CopyObjectCommand && ++copies === 2) throw new Error('copy failed');
       return {};
     });
-    const ops = new StorageOperations({ send } as unknown as S3Client, settings, 1);
+    const ops = new StorageOperations({ send } as unknown as S3Client, bucket, 1);
     await expect(ops.moveObjects(['source/'], 'target/')).rejects.toThrow('copy failed');
     const deletion = send.mock.calls.map(([command]) => command).find((command) => command instanceof DeleteObjectsCommand) as DeleteObjectsCommand;
     expect(deletion.input.Delete?.Objects).toEqual([{ Key: 'projects/1/target/source/a' }]);

@@ -1,6 +1,8 @@
 import type { FastifyInstance } from 'fastify';
 import { z } from 'zod';
-import type { StorageRouteOptions } from '../routes';
+import type { IProjectRepository } from '../../projects/Project';
+import type { IStorageSettingsRepository } from '../SqliteStorageSettingsRepository';
+import type { MinioStorageClient } from './MinioStorageClient';
 import { StorageOperationError, validateStoragePath } from './storageOperations';
 import { classifyStorageError } from './storageErrors';
 
@@ -14,9 +16,15 @@ const moveSchema = z.object({ ...selection, destPrefix: z.string() });
 const deleteSchema = z.object(selection);
 const statSchema = z.object({ prefix: z.string() });
 
-export function registerStorageOperationRoutes(fastify: FastifyInstance, opts: StorageRouteOptions): void {
+export interface StorageOperationRouteOptions {
+  projectRepo: IProjectRepository;
+  storageSettingsRepo: IStorageSettingsRepository;
+  storageClient: MinioStorageClient;
+}
+
+export function registerStorageOperationRoutes(fastify: FastifyInstance, opts: StorageOperationRouteOptions): void {
   const root = '/api/projects/:id/storage';
-  function register(method: 'GET' | 'POST' | 'PATCH', suffix: string, schema: z.ZodType, action: (ops: ReturnType<StorageRouteOptions['storageClient']['operations']>, input: never, id: number) => Promise<unknown>): void {
+  function register(method: 'GET' | 'POST' | 'PATCH', suffix: string, schema: z.ZodType, action: (ops: ReturnType<MinioStorageClient['operations']>, input: never, id: number) => Promise<unknown>): void {
     fastify.route({ method, url: root + suffix, handler: async (request, reply) => {
       const id = Number((request.params as { id: string }).id);
       if (!Number.isSafeInteger(id) || !opts.projectRepo.findById(id)) return reply.status(404).send({ error: 'Project not found' });

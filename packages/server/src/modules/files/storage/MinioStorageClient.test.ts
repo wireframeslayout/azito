@@ -50,3 +50,14 @@ describe('MinioStorageClient.getPresignedUrl', () => {
     await expect(client.getPresignedUrl(settings, 1, 'img.png')).rejects.toThrow('signing failed');
   });
 });
+
+describe('MinioStorageClient.list', () => {
+  it('lists only root-level files so folder markers stay out of the flat list', async () => {
+    const client = new MinioStorageClient();
+    const send = vi.fn(async () => ({ Contents: [{ Key: 'projects/1/123_a.txt', Size: 1 }], CommonPrefixes: [{ Prefix: 'projects/1/folder/' }] }));
+    vi.spyOn(client as unknown as { getClient: () => unknown }, 'getClient').mockReturnValue({ send });
+    const files = await client.list(settings, 1);
+    expect((send.mock.calls[0] as unknown[])[0]).toMatchObject({ input: { Prefix: 'projects/1/', Delimiter: '/' } });
+    expect(files.map((f) => f.originalName)).toEqual(['a.txt']);
+  });
+});

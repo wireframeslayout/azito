@@ -29,6 +29,13 @@ describe('distribution information', () => {
       expect(() => getDistributionInfo(dir)).toThrow();
       fs.writeFileSync(file, JSON.stringify({ storage: { onboarding: { heading: 'Heading', body: 'Body', options: [{ id: 'x', kind: 'link', title: 'x', description: 'x', href: 'javascript:alert(1)' }] } } }));
       expect(() => getDistributionInfo(dir)).toThrow();
+      const onboarding = (options: unknown[]) => JSON.stringify({ storage: { onboarding: { heading: 'Heading', body: 'Body', options } } });
+      fs.writeFileSync(file, onboarding([{ id: 'x', kind: 'link', title: 'x', description: 'x' }]));
+      expect(() => getDistributionInfo(dir)).toThrow();
+      fs.writeFileSync(file, onboarding([{ id: 'x', kind: 'managed', title: 'x', description: 'x' }]));
+      expect(() => getDistributionInfo(dir)).toThrow();
+      fs.writeFileSync(file, onboarding([{ id: 'x', kind: 'connect-s3', title: 'x', description: 'x' }, { id: 'x', kind: 'local-minio', title: 'y', description: 'y' }]));
+      expect(() => getDistributionInfo(dir)).toThrow();
     } finally { fs.rmSync(dir, { recursive: true, force: true }); }
   });
 });

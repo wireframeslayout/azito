@@ -5,7 +5,7 @@ import { up } from './081_storage_settings_configured';
 import { seal } from '../../crypto/SecretBox';
 
 describe('storage configured migration', () => {
-  it('leaves default settings unconfigured and backfills changed encrypted credentials', () => {
+  it('treats an encrypted default access key with other changed fields as unconfigured', () => {
     const previous = process.env.AZITO_MASTER_KEY;
     process.env.AZITO_MASTER_KEY = '1'.repeat(64);
     const db = new Database(':memory:');

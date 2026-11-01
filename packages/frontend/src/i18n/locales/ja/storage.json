@@ -19,7 +19,7 @@
     "title": "ストレージを連携しましょう",
     "description": "プロジェクトの資料や画像を置き、エージェントの窓にパスで渡せるようになります。",
     "empty": "利用できる選択肢がありません。設定画面からストレージを設定してください。",
-    "later": "あとで設定 › ストレージからも連携できます。",
+    "later": "あとから「設定 › ストレージ」でも連携できます。",
     "settings": {
       "title": "S3 互換のストレージをつなぐ",
       "description": "MinIO、Amazon S3、Cloudflare R2 など"
@@ -27,7 +27,7 @@
     "minio": {
       "title": "このマシンで MinIO を動かす",
       "description": "Docker Compose の手順を表示",
-      "instructions": "AZITO のリポジトリで Docker Compose を使って MinIO を起動し、ストレージ設定で接続先を設定してください。 先にリポジトリの .env で MINIO_ROOT_USER と MINIO_ROOT_PASSWORD を設定してください。"
+      "instructions": "AZITO のリポジトリで Docker Compose を使って MinIO を起動し、ストレージ設定で接続先を設定してください。先にリポジトリの .env で MINIO_ROOT_USER と MINIO_ROOT_PASSWORD を設定してください。"
     },
     "configureLater": "あとで設定"
   },
