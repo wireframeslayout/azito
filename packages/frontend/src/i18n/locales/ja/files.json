@@ -40,10 +40,8 @@
   },
   "storage": {
     "uploadFile": "ファイルをアップロード",
-    "emptyMessage": "ファイルはまだありません。ドラッグ＆ドロップまたは + をクリックしてアップロードしてください。",
     "download": "ダウンロード",
     "copyUrl": "API URL をコピー",
-    "deleteFile": "削除",
     "copiedUrl": "API URL をコピーしました（エージェント用。ブラウザでは開けません）",
     "dropToUpload": "ドロップしてアップロード"
   },

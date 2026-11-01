@@ -33,8 +33,46 @@
     },
     "configureLater": "あとで設定"
   },
-  "delete": {
-    "title": "ファイルを削除しますか？",
-    "message": "{{name}} を削除します。この操作は取り消せません。"
+  "list": {
+    "moveDestination": "移動先",
+    "parent": "親フォルダ",
+    "loading": "読み込み中…",
+    "loadMore": "さらに読み込む",
+    "moveHere": "ここに移動",
+    "cancel": "キャンセル",
+    "operationError": "操作に失敗しました",
+    "deleteTitle": "選択した項目を削除しますか？",
+    "deleteMessage": "{{names}} を削除しますか？ フォルダ内のファイルは {{count}} 件（{{size}}）です。元に戻せません。",
+    "newFolder": "フォルダを作成",
+    "filter": "絞り込み",
+    "sort": "並べ替え",
+    "nameAsc": "名前順",
+    "nameDesc": "名前の逆順",
+    "path": "パス",
+    "count": "表示 {{count}} 件、選択 {{selected}} 件",
+    "moreAvailable": "まだ読み込んでいない項目があります",
+    "rename": "名前を変更",
+    "move": "移動",
+    "delete": "削除",
+    "clearSelection": "選択解除",
+    "invalidDestination": "フォルダを自分自身の中に移動できません",
+    "uploadProgress": "アップロード {{completed}} / {{total}}",
+    "empty": "項目がありません",
+    "select": "{{name}} を選択",
+    "uploadFailures": "アップロードできなかった項目",
+    "actions": "操作（{{count}} 件選択）",
+    "sizeAsc": "サイズの小さい順",
+    "sizeDesc": "サイズの大きい順",
+    "dateAsc": "更新日時の古い順",
+    "dateDesc": "更新日時の新しい順",
+    "root": "ストレージ",
+    "deleteMessageFiles": "{{names}} を削除しますか？ 元に戻せません。",
+    "busy": "処理中です。完了してから再度お試しください。",
+    "errors": {
+      "exists": "同名の項目が既に存在します。",
+      "folder_too_large": "一度に処理できるのは最大 1000 件です。",
+      "partial_failure": "処理の一部が失敗しました。一覧を確認してから再試行してください。",
+      "invalid_path": "名前またはパスが無効です。"
+    }
   }
 }

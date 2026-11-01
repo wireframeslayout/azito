@@ -3,6 +3,7 @@ export interface FileEntry {
   type: 'file' | 'directory';
   path: string;
   size?: number;
+  lastModified?: string;
 }
 
 /** Why a file cannot be edited as text. */
