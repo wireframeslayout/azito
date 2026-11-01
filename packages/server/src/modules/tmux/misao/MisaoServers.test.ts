@@ -176,6 +176,20 @@ describe('MisaoDriverRouter', () => {
     servers.closeAgentNodes();
   });
 
+  it('prepares a workspace only on the agent server node', async () => {
+    const { servers, localDriver } = setup();
+    const agentServer = agent('a1');
+    const node = servers.ensureAgentNode(agentServer);
+    const localPrepare = vi.spyOn(localDriver, 'prepareWorkspace').mockResolvedValue();
+    const agentPrepare = vi.spyOn(node.driver, 'prepareWorkspace').mockResolvedValue();
+    const env = { EXAMPLE: 'value' };
+
+    await new MisaoDriverRouter(servers).prepareWorkspace(agentServer, 'workspace', env);
+    expect(agentPrepare).toHaveBeenCalledExactlyOnceWith(agentServer, 'workspace', env);
+    expect(localPrepare).not.toHaveBeenCalled();
+    servers.closeAgentNodes();
+  });
+
   it('fails with not_installed for an agent server without misao, and has nothing to undo for its change hooks', async () => {
     const { servers } = setup();
     const router = new MisaoDriverRouter(servers);

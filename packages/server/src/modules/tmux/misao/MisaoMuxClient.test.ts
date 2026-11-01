@@ -332,6 +332,20 @@ describe('MisaoMuxClient pane shell (per node)', () => {
 });
 
 describe('MisaoMuxClient writes', () => {
+  it('propagates a workspace creation failure', async () => {
+    const { daemon, client } = setup();
+    const failure = new Error('workspace creation failed');
+    daemon.failures.set('workspace.create', failure);
+    await expect(client.prepareWorkspace(server, 'proj')).rejects.toBe(failure);
+  });
+
+  it('prepares a workspace without opening a window or pane', async () => {
+    const { daemon, client } = setup();
+    await client.prepareWorkspace(server, 'proj');
+    expect(daemon.calls.map((c) => c.method)).toEqual(['workspace.create']);
+    expect(daemon.callsTo('workspace.create')[0]).toEqual({ name: 'proj' });
+  });
+
   it('openWorkspace creates workspace, window and a hub-labelled shell pane in order', async () => {
     const { daemon, client } = setup();
     const { ref, result } = await client.openWorkspace(server, 'proj', { windowName: 'main', exactName: true, extraEnv: { FOO: 'bar' } });

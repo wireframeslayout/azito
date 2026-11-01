@@ -47,6 +47,15 @@ function setup(opts: { tmux?: FakeDriver; misao?: FakeDriver; misaoAvailable?: b
 }
 
 describe('RoutingMuxClient delegation', () => {
+  it('prepares workspaces using the current server default', async () => {
+    const { routing, srv, tmux, misao } = setup();
+    await routing.prepareWorkspace(srv, 'a', {});
+    const fresh = { ...srv, defaultMux: 'misao' as const };
+    await routing.prepareWorkspace(fresh, 'b', {});
+    expect(tmux.prepareWorkspace).toHaveBeenCalledWith(srv, 'a', {});
+    expect(misao.prepareWorkspace).toHaveBeenCalledWith(fresh, 'b', {});
+  });
+
   it('sends a ref-based call to the driver of ref.kind', async () => {
     const { tmux, misao, routing, srv } = setup();
     await routing.closeWindow(srv, misaoRef);

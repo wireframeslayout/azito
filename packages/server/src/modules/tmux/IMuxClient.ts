@@ -38,6 +38,8 @@ export interface IMuxClient {
 
   listWorkspaces(server: ServerConfig): Promise<MuxWorkspace[]>;
   listWorkspacesStrict(server: ServerConfig): Promise<MuxWorkspace[]>;
+  /** Creates the workspace only (no window where the mux allows it: tmux needs one, misao does not), in the server's default mux. Throws on failure. */
+  prepareWorkspace(server: ServerConfig, name: string, extraEnv?: Record<string, string>): Promise<void>;
   /** `kind` (routing driver only) picks the mux to create in; omitted = the server's default mux. A single driver ignores it. */
   openWorkspace(server: ServerConfig, name: string, opts?: { command?: string; windowName?: string; exactName?: boolean; extraEnv?: Record<string, string>; kind?: MuxDriverKind; program?: PaneProgram }): Promise<{ ref: MuxRef; result: ExecResult; windowName?: string }>;
   openWindow(server: ServerConfig, workspace: string, baseName?: string, opts?: { exactName?: boolean; extraEnv?: Record<string, string>; kind?: MuxDriverKind; program?: PaneProgram }): Promise<{ ref: MuxRef; result: ExecResult; windowName?: string }>;

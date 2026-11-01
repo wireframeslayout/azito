@@ -625,6 +625,11 @@ export class TmuxClient implements IMuxClient {
   async listWorkspaces(server: ServerConfig) { return this.listSessions(server); }
   async listWorkspacesStrict(server: ServerConfig) { return this.listSessionsForSecurityGate(server); }
 
+  async prepareWorkspace(server: ServerConfig, name: string, extraEnv?: Record<string, string>): Promise<void> {
+    const { result } = await this.createSession(server, name, { extraEnv });
+    if (result.code !== 0) throw new Error(`Failed to create session: ${result.stderr}`);
+  }
+
   async openWorkspace(server: ServerConfig, name: string, opts?: { command?: string; windowName?: string; exactName?: boolean; extraEnv?: Record<string, string>; program?: PaneProgram }) {
     if (opts?.program) throw new MuxOperationUnsupportedError('tmux', 'a window started as a program');
     const { result, windowName } = await this.createSession(server, name, opts);
