@@ -65,7 +65,7 @@ for (const style of ['flow', 'bubble'] as const) {
       await app.evaluate((value) => document.documentElement.setAttribute('data-design', value), design);
       const border = await table.locator('th').first().evaluate((el) => getComputedStyle(el).borderBottomColor);
       expect(border).not.toBe('rgba(0, 0, 0, 0)');
-      const ratios = await paragraph.evaluate((el) => {
+      const measureContrast = (el: Element) => {
         const canvas = document.createElement('canvas');
         canvas.width = canvas.height = 1;
         const ctx = canvas.getContext('2d')!;
@@ -84,15 +84,21 @@ for (const style of ['flow', 'bubble'] as const) {
         const luminance = (rgb: number[]) => rgb.map((v) => v / 255).map((v) => v <= 0.04045 ? v / 12.92 : ((v + 0.055) / 1.055) ** 2.4).reduce((sum, value, i) => sum + value * [0.2126, 0.7152, 0.0722][i], 0);
         const a = luminance(foreground), b = luminance(background);
         return (Math.max(a, b) + 0.05) / (Math.min(a, b) + 0.05);
-      });
-      expect(ratios).toBeGreaterThanOrEqual(4.5);
+      };
+      const ratio = await paragraph.evaluate(measureContrast);
+      expect(ratio).toBeGreaterThanOrEqual(4.5);
+      if (style === 'bubble') {
+        const headerRatio = await table.locator('th').first().evaluate(measureContrast);
+        console.log(`bubble header contrast ${design}: ${headerRatio.toFixed(2)}:1`);
+        expect(headerRatio).toBeGreaterThanOrEqual(4.5);
+      }
     }
     await harness.deleteWindow(windowId);
   });
 }
 
 
-test('rail: Markdown 本文を等幅で表示する', async ({ app, harness }) => {
+test('rail: Markdown 本文が UI フォントを継承する', async ({ app, harness }) => {
   const label = 'e2e-style-rail';
   const projectId = await harness.createProject(label);
   const agent = await harness.startFakeAgent(label, 'scroll', { supervised: false });
@@ -110,7 +116,8 @@ test('rail: Markdown 本文を等幅で表示する', async ({ app, harness }) =
   await expect(markdown).toBeVisible();
   const fonts = await markdown.evaluate((el) => ({ actual: getComputedStyle(el).fontFamily, body: getComputedStyle(document.body).fontFamily, width: getComputedStyle(el).maxWidth }));
   expect(fonts.actual).toBe(fonts.body);
-  expect(fonts.actual).toMatch(/mono/i);
+  expect(fonts.actual).toContain('Arial');
+  expect(fonts.actual).toMatch(/sans-serif/i);
   expect(fonts.width).toBe('none');
   await harness.deleteWindow(windowId);
 });
