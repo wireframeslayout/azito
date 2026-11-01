@@ -40,7 +40,6 @@ export default defineConfig({
           fileParallelism: false,
           testTimeout: 30000,
           pool: 'forks',
-          poolOptions: { forks: { singleFork: true } },
         },
       },
       {
@@ -52,7 +51,6 @@ export default defineConfig({
           fileParallelism: false,
           testTimeout: 30000,
           pool: 'forks',
-          poolOptions: { forks: { singleFork: true } },
         },
       },
     ],
