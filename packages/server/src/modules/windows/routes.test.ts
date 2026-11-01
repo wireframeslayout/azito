@@ -85,9 +85,11 @@ describe('POST /api/windows/:id/launch-agent', () => {
   let server: ServerConfig;
   let sendKeys: ReturnType<typeof vi.fn>;
   let updateByWindowFn: ReturnType<typeof vi.fn<IWindowRepository['updateAgentSessionIdByWindow']>>;
+  let windowUpdate: ReturnType<typeof vi.fn<IWindowRepository['update']>>;
 
   beforeEach(async () => {
     window = makeWindow();
+    windowUpdate = vi.fn<IWindowRepository['update']>();
     server = makeServer();
     sendKeys = vi.fn().mockResolvedValue(undefined);
     updateByWindowFn = vi.fn<IWindowRepository['updateAgentSessionIdByWindow']>();
@@ -96,7 +98,7 @@ describe('POST /api/windows/:id/launch-agent', () => {
       findById: (id: number) => (id === window.id ? window : undefined),
       updateAgentSessionIdByWindow: updateByWindowFn,
       findByServerAndTarget: vi.fn(() => undefined), findByServerAndRef: vi.fn(() => undefined),
-      add: vi.fn(() => 2), update: vi.fn(),
+      add: vi.fn(() => 2), update: windowUpdate,
     };
     const serverRepo: Partial<IServerRepository> = {
       findByName: (name: string) => (name === server.name ? server : null),
@@ -180,6 +182,38 @@ describe('POST /api/windows/:id/launch-agent', () => {
   ] as const)('%s %s accepts its body', async (method, url, payload) => {
     const res = await app.inject({ method, url, payload });
     expect(res.statusCode, res.body).toBe(200);
+  });
+
+  it.each([
+    [{}, {}],
+    [{ label: null }, { label: null, labelSource: 'auto' }],
+    [{ label: ' new ' }, { label: 'new', labelSource: 'user' }],
+    [{ worker_model: null }, { workerModel: null }],
+  ])('PUT /api/windows/:id keeps an omitted field apart from a null one (%j)', async (payload, expected) => {
+    const res = await app.inject({ method: 'PUT', url: '/api/windows/1', payload });
+    expect(res.statusCode, res.body).toBe(200);
+    expect(windowUpdate).toHaveBeenCalledWith(1, expected);
+  });
+
+  it('reads an omitted or null body as an empty one and rejects an array', async () => {
+    const omitted = await app.inject({ method: 'POST', url: '/api/windows/1/respawn' });
+    expect(omitted.statusCode, omitted.body).toBe(200);
+    const nullBody = await app.inject({ method: 'POST', url: '/api/windows/1/launch-agent', headers: { 'content-type': 'application/json' }, payload: 'null' });
+    expect(nullBody.statusCode).toBe(400);
+    expect(nullBody.json()).toEqual({ error: 'command required' });
+    const array = await app.inject({ method: 'PUT', url: '/api/windows/1/rename', payload: ['new'] });
+    expect(array.statusCode).toBe(400);
+    expect(array.json()).toMatchObject({ error: 'invalid_body' });
+    expect(windowUpdate).not.toHaveBeenCalled();
+  });
+
+  it('keeps the existing value errors behind the strict parse', async () => {
+    const windowType = await app.inject({ method: 'PUT', url: '/api/windows/1', payload: { window_type: 'other' } });
+    expect(windowType.json()).toEqual({ error: 'invalid window_type: other' });
+    const kind = await app.inject({ method: 'POST', url: '/api/projects/1/windows/session', payload: { server_name: 'local-server', session: 's', kind: 'herdr' } });
+    expect(kind.json()).toEqual({ error: 'Invalid kind' });
+    const unknownAndInvalid = await app.inject({ method: 'PUT', url: '/api/windows/1/rename', payload: { name: 1, title: 'x' } });
+    expect(unknownAndInvalid.json()).toEqual({ error: 'unknown_fields', unknown: ['title'], accepted: ['name'] });
   });
 
   it('rejects unknown and invalid launch fields before sending keys', async () => {
