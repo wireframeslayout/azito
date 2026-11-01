@@ -103,8 +103,7 @@ const windowsRoutes: FastifyPluginCallback<WindowsRouteOptions> = (fastify, opts
     let id: number | null = null;
     if (windowId !== undefined && !server && !paneHandle) id = parseWindowId(windowId);
     else if (windowId === undefined && server && paneHandle) {
-      opts.paneHandleResolver.invalidate(server);
-      id = (await opts.paneHandleResolver.resolveWindowByPaneHandle(server, asPaneHandle(paneHandle)))?.windowId ?? null;
+      id = (await opts.paneHandleResolver.resolveWindowByPaneHandle(server, asPaneHandle(paneHandle), { fresh: true }))?.windowId ?? null;
     } else return reply.status(400).send({ error: 'Invalid identity query' });
     const win = id === null ? undefined : windowRepo.findById(id);
     if (!win) return reply.status(404).send({ error: 'Window not found' });
@@ -584,7 +583,9 @@ const windowsRoutes: FastifyPluginCallback<WindowsRouteOptions> = (fastify, opts
       if (supervised) {
         supervisorRegistry.clearExitMarker(srv.name, win.tmuxTarget);
       }
-      await driverFor(srv).sendKeysToHandle(srv, paneHandle, [`AZITO_WINDOW_ID=${win.id} ${cmd}`, 'Enter']);
+      // Exported into the pane's shell (a POSIX one: Windows hosts are refused above) rather than prefixed onto the command, so every
+      // part of a compound command (`cd x && claude`) sees it; the pane belongs to this window, so the value stays right afterwards too.
+      await driverFor(srv).sendKeysToHandle(srv, paneHandle, [`export AZITO_WINDOW_ID=${win.id}; ${cmd}`, 'Enter']);
       return { ok: true, supervised, ...resourceCheckBody(resourceSkipped) };
     },
   );

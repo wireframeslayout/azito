@@ -261,7 +261,22 @@ describe('POST /api/windows/:id/launch-agent', () => {
     expect(res.statusCode).toBe(200);
     expect(res.json()).toMatchObject({ ok: true, supervised: false });
     const [, , keys] = sendKeys.mock.calls[0];
-    expect(keys[0]).toMatch(/^AZITO_WINDOW_ID=\d+ claude --model opus --session-id [0-9a-f-]{36}$/);
+    expect(keys[0]).toMatch(/^export AZITO_WINDOW_ID=\d+; claude --model opus --session-id [0-9a-f-]{36}$/);
+  });
+
+  it('gives AZITO_WINDOW_ID to every part of a compound command', async () => {
+    window = makeWindow({ windowType: 'terminal' });
+    const res = await app.inject({
+      method: 'POST',
+      url: `/api/windows/${window.id}/launch-agent`,
+      payload: { command: `true && sh -c 'printf %s "$AZITO_WINDOW_ID"'` },
+    });
+    expect(res.statusCode).toBe(200);
+    const [, , keys] = sendKeys.mock.calls[0];
+    // Run the typed line in a real POSIX shell (env cleared of any inherited value): the command after `&&` must see the id.
+    const { execFileSync } = await import('node:child_process');
+    const out = execFileSync('sh', ['-c', keys[0]], { env: { PATH: process.env.PATH ?? '' }, encoding: 'utf8' });
+    expect(out).toBe(String(window.id));
   });
 
   it('returns 400 when command is missing', async () => {

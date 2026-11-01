@@ -29,22 +29,26 @@ function buildApp(scoped: boolean) {
     request.principal = principal;
     if (scoped && !evaluateRouteAuth(principal, request).allowed) return reply.status(403).send({ error: 'operator_required' });
   });
-  app.register(windowsRoutes, {
+  const opts = {
     windowRepo: { findById: (id: number) => windows.get(id) },
     taskRepo: { findById: (id: number) => id === 7 ? { projectId: 5 } : undefined },
     serverRepo: { findByName: () => ({ name: 'local' }) },
     muxDriverRegistry: { resolveKind: () => driver },
     auditLogService: { record },
     paneHandleResolver: { invalidate: vi.fn(), resolveWindowByPaneHandle: vi.fn().mockResolvedValue({ windowId: 1 }) },
-  } as unknown as WindowsRouteOptions);
-  return { app, driver, record };
+  };
+  app.register(windowsRoutes, opts as unknown as WindowsRouteOptions);
+  return { app, driver, record, paneHandleResolver: opts.paneHandleResolver };
 }
 
 describe.each([false, true])('window messaging (scoped auth %s)', (scoped) => {
   it('authenticates identity and enforces ownership and project boundaries', async () => {
-    const { app, driver, record } = buildApp(scoped);
+    const { app, driver, record, paneHandleResolver } = buildApp(scoped);
     const who = await app.inject({ method: 'GET', url: '/api/windows/whoami?server=local&paneHandle=%2525', headers: taskHeaders });
     expect(who.statusCode).toBe(200);
+    // Only the asking pane is looked up again; the server's other cached panes are left alone.
+    expect(paneHandleResolver.resolveWindowByPaneHandle).toHaveBeenCalledWith('local', '%25', { fresh: true });
+    expect(paneHandleResolver.invalidate).not.toHaveBeenCalled();
     expect(who.json()).toMatchObject({ windowId: 1, idLabel: 'W-1', taskId: 7, serverName: 'local' });
     expect((await app.inject({ method: 'GET', url: '/api/windows/whoami?windowId=3', headers: taskHeaders })).statusCode).toBe(403);
     const send = (id: string, from: number, text = 'private') => app.inject({ method: 'POST', url: `/api/windows/${id}/messages`, headers: taskHeaders, payload: { from: { windowId: from }, text } });
