@@ -15,7 +15,7 @@ import { deriveLiveStatus } from './liveStatus';
 import { answerableQuestion } from './pendingQuestion';
 import { isNearBottom, nextNearBottom } from './scrollFollow';
 import PromptInputBar from './PromptInputBar';
-import type { WindowViewMode } from '../ui/TerminalChatToggle';
+import type { WindowViewMode } from '../../lib/windowViewMode';
 import BubbleEntry from './styles/BubbleEntry';
 import FlowEntry from './styles/FlowEntry';
 import RailEntry from './styles/RailEntry';
