@@ -448,7 +448,7 @@ export function useServerManagement({ tabs, closeTab }: UseServerManagementParam
     const newTitle = prompt('Rename pane:', currentTitle);
     if (!newTitle || newTitle === currentTitle) return;
     if (windowId != null && paneOrdinal != null) {
-      await api(`/windows/${windowId}/panes/${paneOrdinal}/rename`, { method: 'PUT', body: JSON.stringify({ title: newTitle }) });
+      await api(`/windows/${windowId}/panes/${paneOrdinal}/rename`, { method: 'PUT', body: JSON.stringify({ name: newTitle }) });
     } else if (refUsesMuxRoutes(ref) && paneOrdinal != null) {
       await api(`/servers/${encodeURIComponent(serverName)}/mux/windows/${encodeURIComponent(ref)}/panes/${paneOrdinal}/rename`, { method: 'PUT', body: JSON.stringify({ name: newTitle }) });
     } else {
