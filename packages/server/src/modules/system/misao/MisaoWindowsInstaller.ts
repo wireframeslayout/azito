@@ -4,7 +4,7 @@ import { buildCommandSpec } from '../../../shared/exec/commandSpec';
 import { powershellDialect, powershellEncodedArgs } from '../../../shared/os/shellDialect';
 import { createScriptCommandSpecRunner } from '../../servers/agent-deploy/windowsSshRunner';
 import { powershellErrorText } from '../../servers/agent-deploy/WindowsAgentDeployer';
-import { soleExecAction, taskHasUserId } from '../../../shared/os/taskScheduler/taskXmlRead';
+import { soleExecAction, taskHasUserId, taskPrincipalId } from '../../../shared/os/taskScheduler/taskXmlRead';
 import { legacyMisaoTaskArgumentsOf } from '../../../shared/os/taskScheduler/misaoTaskArguments';
 import { misaoTaskVersion } from '../../../shared/os/taskScheduler/misaoTaskIdentity';
 import { SchtasksClient } from '../../../shared/os/taskScheduler/schtasks';
@@ -248,7 +248,11 @@ export class MisaoWindowsInstaller {
     if (out.code !== 0) throw new MisaoServiceError('unsupported_host', 'Could not determine the task owner on the Windows host.');
     const account = Buffer.from(out.stdout.trim(), 'base64').toString('utf8');
     if (!account) throw new MisaoServiceError('unsupported_host', 'The Windows host did not report its account.');
-    return taskHasUserId(xml, account);
+    if (taskHasUserId(xml, account)) return true;
+    if (!/^S-1-\d+(?:-\d+)+$/i.test(taskPrincipalId(xml) ?? '')) return false;
+    const sid = await this.runScript(target, "[System.Security.Principal.WindowsIdentity]::GetCurrent().User.Value", SCRIPT_TIMEOUT_MS);
+    if (sid.code !== 0) throw new MisaoServiceError('unsupported_host', 'Could not determine the account SID on the Windows host.');
+    return taskHasUserId(xml, account, sid.stdout.trim());
   }
 
   private async inspect(target: WindowsTarget, bundle: MisaoBundle): Promise<{ session: Session; status: MisaoSocketStatus }> {

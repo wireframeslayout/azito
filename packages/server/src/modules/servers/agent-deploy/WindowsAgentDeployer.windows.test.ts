@@ -308,8 +308,11 @@ describe.skipIf(process.platform !== 'win32')('the Windows agent install on a re
       expect(registered.stdout).toContain('<LogonTrigger>');
       expect(registered.stdout).toContain(path.win32.join(host.systemRoot, 'System32', 'conhost.exe'));
       expect(registered.stdout).toContain('--headless');
-      expect(registered.stdout).toContain(layout.entry);
-      expect(registered.stdout).toContain(`--env-file=${layout.envFile}`);
+      const encoded = /-EncodedCommand ([A-Za-z0-9+/=]+)/.exec(registered.stdout)?.[1];
+      expect(encoded).toBeDefined();
+      const launcher = Buffer.from(encoded!, 'base64').toString('utf16le');
+      expect(launcher).toContain(layout.entry);
+      expect(launcher).toContain(layout.envFile);
 
       await deployment.commit();
       expect(fs.existsSync(layout.envFilePrev)).toBe(false);
@@ -550,7 +553,11 @@ describe.skipIf(process.platform !== 'win32')('the Windows agent install on a re
     const deps = () => ({ deployer, checkHealth, logger: { warn: (m: string) => console.warn(m) } });
     const currentToken = (): string => /AZITO_AGENT_TOKEN="([^"]+)"/.exec(fs.readFileSync(layoutOf().envFile, 'utf8'))![1]!;
     const releaseDirs = (): string[] => fs.readdirSync(layoutOf().root, { withFileTypes: true }).filter((e) => e.isDirectory() && /^[0-9a-f]{12}$/.test(e.name)).map((e) => e.name).sort();
-    const registeredEntry = async (): Promise<string> => (await cmdExec('ci', `"${schtasksPath()}" /Query /TN ${OPTIONS.taskName} /XML`, 60_000)).stdout;
+    const registeredEntry = async (): Promise<string> => {
+      const xml = (await cmdExec('ci', `"${schtasksPath()}" /Query /TN ${OPTIONS.taskName} /XML`, 60_000)).stdout;
+      const encoded = /-EncodedCommand ([A-Za-z0-9+/=]+)/.exec(xml)?.[1];
+      return `${xml}\n${encoded ? Buffer.from(encoded, 'base64').toString('utf16le') : ''}`;
+    };
 
     afterAll(() => {
       fs.rmSync(bundleDir, { recursive: true, force: true });

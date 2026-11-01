@@ -11,7 +11,7 @@ import { checkFirewall, describeFirewallProblem } from './windowsFirewall';
 import { MISAO_WINDOWS_DIR, type WindowsAgentOptions } from './windowsAgentConfig';
 import type { WindowsPreflightInfo } from './windowsPreflight';
 import { agentTaskAction, agentTaskIdentity } from './windowsAgentTask';
-import { soleExecAction, taskHasUserId } from '../../../shared/os/taskScheduler/taskXmlRead';
+import { soleExecAction, taskHasUserId, taskPrincipalId } from '../../../shared/os/taskScheduler/taskXmlRead';
 import { uninstallWindowsAgent, type WindowsUninstallChoice, type WindowsUninstallResult } from './windowsAgentUninstall';
 
 /** Runs one command line on the Windows host through its SSH login shell. */
@@ -233,7 +233,7 @@ export class WindowsAgentDeployer {
       await this.prepareRoot(input.sshHost, layout);
       await this.transfer.putFile(input.sshHost, input.tarballPath, `${layout.rootRelative}/azito-agent-${input.version}.tar.gz`);
       await this.verifySha256(input.sshHost, layout.tarball, input.expectedSha256);
-      previous = await this.capturePrevious(client, input.host, layout);
+      previous = await this.capturePrevious(input.sshHost, client, input.host, layout);
       await this.stopTask(input.sshHost, client, layout.envFile);
       await this.extract(input, layout);
       progress.versionCreated = true;
@@ -272,7 +272,7 @@ export class WindowsAgentDeployer {
     const action = soleExecAction(xml);
     const root = windowsAgentRoot(host.home, this.options);
     const identity = action && agentTaskIdentity(action, host.systemRoot, root, windowsAgentEnvFile(host.home, this.options), this.options.taskName);
-    if (!identity || !taskHasUserId(xml, host.userId)) throw new Error(`The task "${this.options.taskName}" is not a recognised agent task for ${root}`);
+    if (!identity || !await this.taskOwnedByHost(sshHost, xml, host.userId)) throw new Error(`The task "${this.options.taskName}" is not a recognised agent task for ${root}`);
     if (identity.launcher && state.running) return 'starting';
     await this.stopTask(sshHost, client, windowsAgentEnvFile(host.home, this.options));
     await client.start(this.options.taskName);
@@ -367,14 +367,21 @@ export class WindowsAgentDeployer {
     });
   }
 
+  private async taskOwnedByHost(sshHost: string, xml: string, userId: string): Promise<boolean> {
+    if (taskHasUserId(xml, userId)) return true;
+    if (!/^S-1-\d+(?:-\d+)+$/i.test(taskPrincipalId(xml) ?? '')) return false;
+    const sid = await this.script(sshHost, 'Reading the Windows account SID', '[System.Security.Principal.WindowsIdentity]::GetCurrent().User.Value');
+    return taskHasUserId(xml, userId, sid.trim());
+  }
+
   /** Reads what is registered now. A definition that cannot be read stops the deploy, before anything is changed. */
-  private async capturePrevious(client: SchtasksClient, host: WindowsPreflightInfo, layout: WindowsAgentLayout): Promise<Previous> {
+  private async capturePrevious(sshHost: string, client: SchtasksClient, host: WindowsPreflightInfo, layout: WindowsAgentLayout): Promise<Previous> {
     const state = await client.query(this.options.taskName);
     if (!state.exists) return { taskXml: undefined, version: undefined, wasRunning: false };
     const taskXml = await client.exportXml(this.options.taskName);
     const action = soleExecAction(taskXml);
     const identity = action && agentTaskIdentity(action, host.systemRoot, layout.root, layout.envFile, this.options.taskName);
-    if (!identity || !taskHasUserId(taskXml, host.userId)) throw new Error(`The task "${this.options.taskName}" is not a recognised agent task for ${layout.root}; it was left unchanged`);
+    if (!identity || !await this.taskOwnedByHost(sshHost, taskXml, host.userId)) throw new Error(`The task "${this.options.taskName}" is not a recognised agent task for ${layout.root}; it was left unchanged`);
     return { taskXml, version: identity.version, wasRunning: state.running };
   }
 

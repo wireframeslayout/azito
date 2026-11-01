@@ -43,14 +43,20 @@ export function hubRootOfScript(script: string): string | undefined {
   return hubRoot?.replace(new RegExp(`([${QUOTE_CHARS}])\\1`, 'g'), '$1');
 }
 
-/** Match the registered principal against the account performing the operation. */
-export function taskHasUserId(xml: string, userId: string): boolean {
+/** Read the sole registered principal, accepting an account name or a SID. */
+export function taskPrincipalId(xml: string): string | undefined {
   const principals = /<Principals\b[^>]*>([\s\S]*?)<\/Principals>/.exec(xml)?.[1];
-  if (!principals) return false;
+  if (!principals) return undefined;
   const matches = [...principals.matchAll(/<Principal\b[^>]*>([\s\S]*?)<\/Principal>/g)];
-  if (matches.length !== 1) return false;
+  if (matches.length !== 1) return undefined;
   const users = [...matches[0]![1]!.matchAll(/<UserId>([^<]+)<\/UserId>/g)];
-  return users.length === 1 && unescapeTaskXml(users[0]![1]!).toLowerCase() === userId.toLowerCase();
+  return users.length === 1 ? unescapeTaskXml(users[0]![1]!) : undefined;
+}
+
+/** Match a name or an independently resolved SID against the registered principal. */
+export function taskHasUserId(xml: string, userId: string, sid?: string): boolean {
+  const actual = taskPrincipalId(xml)?.toLowerCase();
+  return actual !== undefined && (actual === userId.toLowerCase() || (sid !== undefined && actual === sid.toLowerCase()));
 }
 
 /**

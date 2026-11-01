@@ -453,7 +453,13 @@ describe.skipIf(process.platform !== 'win32' || !fs.existsSync(MISAO_CLI))('misa
       expect((await transport.fetchMisaoStatus()).socketPresent).toBe(true);
     }, { timeout: 60_000, interval: 500 });
     await tasks().stop(TASK_NAME);
-    await vi.waitFor(async () => expect(await daemonProcesses()).toEqual([]), { timeout: 30_000, interval: 500 });
+    try {
+      await vi.waitFor(async () => expect(await daemonProcesses()).toEqual([]), { timeout: 30_000, interval: 500 });
+    } catch (error) {
+      const log = fs.readFileSync(path.win32.join(ROOT, 'misao.log'), 'utf8').slice(-12000);
+      const processes = await powershell(`Get-CimInstance Win32_Process | Where-Object { $_.Name -in @('conhost.exe','powershell.exe','cmd.exe','misao.exe') } | Select-Object ProcessId,ParentProcessId,Name | ConvertTo-Json -Compress`);
+      throw new Error(`misao remains after task End: ${String(error)}\nlauncher log: ${log}\nprocesses: ${processes}`);
+    }
     await new Promise((resolve) => setTimeout(resolve, 7000));
     expect(await daemonProcesses()).toEqual([]);
     await tasks().start(TASK_NAME);
