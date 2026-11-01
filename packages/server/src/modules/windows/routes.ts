@@ -1,3 +1,7 @@
+import { z } from 'zod';
+import { parseWindowId, formatWindowId, asPaneHandle } from '@azito/shared';
+import { WindowMessageService } from './WindowMessageService';
+import type { PaneHandleResolver } from '../operations/PaneHandleResolver';
 import { recordAuditBestEffort } from '../../shared/audit/recordAuditBestEffort';
 import { shouldAskMuxSwitch, misaoStatusFor, WindowBusyError, UnsupportedMuxSwitchError } from './muxSwitchPolicy';
 import type { SqliteMuxSwitchSettingsRepository } from './SqliteMuxSwitchSettingsRepository';
@@ -47,6 +51,7 @@ import type { SessionCaptureService } from './SessionCaptureService';
 import type { WindowActivityStatusService } from './WindowActivityStatusService';
 
 export interface WindowsRouteOptions {
+  paneHandleResolver: PaneHandleResolver;
   muxSwitchSettingsRepo: SqliteMuxSwitchSettingsRepository;
   misaoVersion?: (server: ServerConfig) => Promise<string | undefined>;
   auditLogService: AuditLogService;
@@ -88,6 +93,31 @@ const windowsRoutes: FastifyPluginCallback<WindowsRouteOptions> = (fastify, opts
     const availability = opts.muxDriverRegistry.availabilityFor(kind, srv);
     return availability.available ? null : { error: 'mux_driver_unavailable', kind, reason: availability.reason };
   };
+
+  const messageService = new WindowMessageService(windowRepo, taskRepo, serverRepo, opts.muxDriverRegistry, opts.auditLogService);
+  const taskAuth = { auth: { classes: ['task' as const] } };
+  fastify.get<{ Querystring: { windowId?: string; server?: string; paneHandle?: string } }>('/api/windows/whoami', { config: taskAuth }, async (request, reply) => {
+    const { windowId, server, paneHandle } = request.query;
+    let id: number | null = null;
+    if (windowId !== undefined && !server && !paneHandle) id = parseWindowId(windowId);
+    else if (windowId === undefined && server && paneHandle) {
+      opts.paneHandleResolver.invalidate(server);
+      id = (await opts.paneHandleResolver.resolveWindowByPaneHandle(server, asPaneHandle(paneHandle)))?.windowId ?? null;
+    } else return reply.status(400).send({ error: 'Invalid identity query' });
+    const win = id === null ? undefined : windowRepo.findById(id);
+    if (!win) return reply.status(404).send({ error: 'Window not found' });
+    const principal = request.principal ?? OPERATOR_PRINCIPAL;
+    if (principal.class === 'task' && (win.ownerType !== 'task' || win.taskId !== principal.id)) return reply.status(403).send({ error: 'Forbidden' });
+    if (principal.class !== 'task' && principal.class !== 'operator') return reply.status(403).send({ error: 'Forbidden' });
+    return { windowId: win.id, idLabel: formatWindowId(win.id), taskId: win.taskId, serverName: win.serverName };
+  });
+  fastify.post<{ Params: { id: string } }>('/api/windows/:id/messages', { config: taskAuth }, async (request, reply) => {
+    const id = parseWindowId(request.params.id);
+    const body = z.object({ from: z.object({ windowId: z.number().int().positive().safe() }).strict().optional(), text: z.string().min(1) }).strict().safeParse(request.body);
+    if (id === null || !body.success) return reply.status(400).send({ error: 'Invalid message' });
+    await messageService.send(request.principal ?? OPERATOR_PRINCIPAL, id, body.data.from?.windowId, body.data.text, (err) => request.log.error({ err }, 'Message audit failed'));
+    return { ok: true };
+  });
 
   fastify.get('/api/windows/snapshots', async (request, reply) => {
     const query = windowSnapshotSchema.safeParse(request.query);
@@ -551,7 +581,7 @@ const windowsRoutes: FastifyPluginCallback<WindowsRouteOptions> = (fastify, opts
       if (supervised) {
         supervisorRegistry.clearExitMarker(srv.name, win.tmuxTarget);
       }
-      await driverFor(srv).sendKeysToHandle(srv, paneHandle, [cmd, 'Enter']);
+      await driverFor(srv).sendKeysToHandle(srv, paneHandle, [`AZITO_WINDOW_ID=${win.id} ${cmd}`, 'Enter']);
       return { ok: true, supervised, ...resourceCheckBody(resourceSkipped) };
     },
   );

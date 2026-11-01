@@ -749,14 +749,16 @@ export class TmuxClient implements IMuxClient {
     for (let i = 0; i < keys.length; i++) {
       const key = keys[i];
       if (SPECIAL_KEYS.has(key)) {
-        await this.runTmuxCommand(server, ['send-keys', '-t', target, key]);
+        const result = await this.runTmuxCommand(server, ['send-keys', '-t', target, key]);
+        if (result.code !== 0) throw new Error('Unable to send key');
       } else if (Buffer.byteLength(key, 'utf8') > 500) {
         await this.sendLongText(server, target, key);
         if (keys[i + 1] === 'Enter') {
           await new Promise(resolve => setTimeout(resolve, 2000));
         }
       } else {
-        await this.runTmuxCommand(server, ['send-keys', '-t', target, '-l', tmuxLiteralArg(key)]);
+        const result = await this.runTmuxCommand(server, ['send-keys', '-t', target, '-l', tmuxLiteralArg(key)]);
+        if (result.code !== 0) throw new Error('Unable to send key');
       }
     }
   }
