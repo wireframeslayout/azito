@@ -171,7 +171,7 @@ export default function PromptInputBar({ windowId, paneId, draftKey, agentDetect
         { method: 'POST', body: JSON.stringify({ windowId, paneId, text: trimmed }) },
       );
       if (status !== 200 || isErrorResponse(body)) {
-        setSendError(isErrorResponse(body) ? body.error : t('promptBar.sendError'));
+        setSendError(isErrorResponse(body) ? (body.code ? t(`promptBar.reject.${body.code}`, { defaultValue: body.error }) : body.error) : t('promptBar.sendError'));
         return;
       }
       setText('');
@@ -488,7 +488,7 @@ export default function PromptInputBar({ windowId, paneId, draftKey, agentDetect
       </div>
 
       {sendError && (
-        <div style={{ marginTop: 6, fontSize: 'var(--font-xs)', color: 'var(--danger)' }}>{sendError}</div>
+        <div role="alert" style={{ marginTop: 6, fontSize: 'var(--font-xs)', color: 'var(--danger)' }}>{sendError}</div>
       )}
     </div>
   );

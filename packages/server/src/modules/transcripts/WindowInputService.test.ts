@@ -7,6 +7,10 @@ import { MuxDriverRegistry } from '../tmux/MuxDriverRegistry';
 import { MuxOperationUnsupportedError } from '../tmux/MuxCapabilityError';
 import type { IServerRepository, ServerConfig } from '../servers/Server';
 
+const transportStub = { getTransport: () => ({ listProcesses: async () => [] }) } as unknown as import('../servers/transport/TransportFactory').TransportFactory;
+
+const CLAUDE_SCREEN = '──────────────\n❯\n──────────────\nbypass permissions on';
+const CODEX_SCREEN = '› Ask Codex to do anything\n\n? for shortcuts';
 const LOCAL_SERVER: ServerConfig = {
   name: 'local',
   type: 'local',
@@ -66,6 +70,8 @@ function buildDeps(opts: {
   sendTextToHandle?: IMuxClient['sendTextToHandle'];
   sendKeysToHandle?: IMuxClient['sendKeysToHandle'];
   isPaneInModeByHandle?: IMuxClient['isPaneInModeByHandle'];
+  foreground?: string;
+  screen?: string;
   copyMode?: boolean;
   servers?: ServerConfig[];
 } = {}) {
@@ -77,6 +83,8 @@ function buildDeps(opts: {
     { sendTextToHandle: [], sendKeysToHandle: [], wait: [], cancelPaneModeByHandle: [] };
 
   const driver = {
+    paneCommandByHandle: async () => opts.foreground ?? 'node',
+    captureScreen: async () => ({ code: 0, stderr: '', stdout: opts.screen ?? CLAUDE_SCREEN }),
     caps: { copyMode: opts.copyMode ?? true },
     listAllPanes: opts.listAllPanes ?? (async () => [buildPane()]),
     sendTextToHandle: opts.sendTextToHandle ?? (async (...args: unknown[]) => { calls.sendTextToHandle.push(args); }),
@@ -98,23 +106,73 @@ function buildDeps(opts: {
 
 describe('WindowInputService', () => {
   describe('sendInput', () => {
+    it('uses paste before Enter for multiline input', async () => {
+      const { windowRepo, muxDriverRegistry, serverRepo } = buildDeps();
+      const driver = muxDriverRegistry.resolve(LOCAL_SERVER);
+      driver.pasteTextToHandle = vi.fn(async () => {});
+      driver.sendKeysToHandle = vi.fn(async () => {});
+      expect(await new WindowInputService(windowRepo, muxDriverRegistry, serverRepo, transportStub).sendInput(42, asPaneHandle('%1'), 'one\ntwo')).toBe('ok');
+      expect(driver.pasteTextToHandle).toHaveBeenCalledWith(LOCAL_SERVER, '%1', 'one\ntwo');
+      expect(driver.sendKeysToHandle).toHaveBeenCalledWith(LOCAL_SERVER, '%1', ['Enter']);
+    });
+
+    it('pastes a tab instead of typing it as a key', async () => {
+      const { windowRepo, muxDriverRegistry, serverRepo } = buildDeps();
+      const driver = muxDriverRegistry.resolve(LOCAL_SERVER);
+      driver.pasteTextToHandle = vi.fn(async () => {});
+      expect(await new WindowInputService(windowRepo, muxDriverRegistry, serverRepo, transportStub).sendInput(42, asPaneHandle('%1'), 'a\tb')).toBe('ok');
+      expect(driver.pasteTextToHandle).toHaveBeenCalledWith(LOCAL_SERVER, '%1', 'a\tb');
+    });
+
+    it.each([[{ foreground: 'bash' }, 'worker_exited_to_shell'], [{ screen: 'Do you trust this folder?' }, 'trust_dialog']])('does not send into a shell or dialog', async (opts, code) => {
+      const { windowRepo, muxDriverRegistry, serverRepo, calls } = buildDeps(opts);
+      const result = await new WindowInputService(windowRepo, muxDriverRegistry, serverRepo, transportStub).sendInput(42, asPaneHandle('%1'), 'hello');
+      expect(result).toEqual(expect.objectContaining({ code }));
+      expect(calls.sendTextToHandle).toEqual([]);
+      expect(calls.sendKeysToHandle).toEqual([]);
+    });
+
+    it.each([
+      ['claude', CLAUDE_SCREEN], ['codex', CODEX_SCREEN],
+    ])('detects a %s process for a window without workerType', async (kind, screen) => {
+      const { windowRepo, muxDriverRegistry, serverRepo, wait, calls } = buildDeps({ findById: () => buildWindow({ workerType: null }), screen });
+      const driver = muxDriverRegistry.resolve(LOCAL_SERVER);
+      driver.panePidByHandle = vi.fn().mockResolvedValue(100);
+      const root = { pid: 100, ppid: 1, startMs: 1, executable: null, commandLine: 'node', rssBytes: null };
+      const child = { ...root, pid: 101, ppid: 100, startMs: 2, commandLine: kind };
+      const transport = { getTransport: () => ({ listProcesses: async () => [root, child] }) } as unknown as import('../servers/transport/TransportFactory').TransportFactory;
+      expect(await new WindowInputService(windowRepo, muxDriverRegistry, serverRepo, transport, wait).sendInput(42, asPaneHandle('%1'), 'hello')).toBe('ok');
+      expect(calls.sendKeysToHandle).toEqual([[LOCAL_SERVER, '%1', ['Enter']]]);
+      if (kind === 'codex') expect(calls.wait).toContain(200);
+    });
+
+    it('refuses an unidentified process without sending', async () => {
+      const { windowRepo, muxDriverRegistry, serverRepo, calls, wait } = buildDeps({ findById: () => buildWindow({ workerType: null }) });
+      const driver = muxDriverRegistry.resolve(LOCAL_SERVER);
+      driver.panePidByHandle = vi.fn().mockResolvedValue(100);
+      const transport = { getTransport: () => ({ listProcesses: async () => [] }) } as unknown as import('../servers/transport/TransportFactory').TransportFactory;
+      expect(await new WindowInputService(windowRepo, muxDriverRegistry, serverRepo, transport, wait).sendInput(42, asPaneHandle('%1'), 'hello')).toMatchObject({ code: 'unsupported_worker' });
+      expect(calls.sendTextToHandle).toEqual([]);
+      expect(calls.sendKeysToHandle).toEqual([]);
+    });
+
     it('returns window_not_found when the window does not exist', async () => {
       const { windowRepo, muxDriverRegistry, serverRepo } = buildDeps({ findById: () => undefined });
-      const service = new WindowInputService(windowRepo, muxDriverRegistry, serverRepo);
+      const service = new WindowInputService(windowRepo, muxDriverRegistry, serverRepo, transportStub);
       const result = await service.sendInput(42, asPaneHandle('%1'), 'hello');
       expect(result).toBe('window_not_found');
     });
 
     it('returns window_not_found when the window\'s server no longer exists', async () => {
       const { windowRepo, muxDriverRegistry, serverRepo } = buildDeps({ servers: [] });
-      const service = new WindowInputService(windowRepo, muxDriverRegistry, serverRepo);
+      const service = new WindowInputService(windowRepo, muxDriverRegistry, serverRepo, transportStub);
       const result = await service.sendInput(42, asPaneHandle('%1'), 'hello');
       expect(result).toBe('window_not_found');
     });
 
     it('returns pane_not_found when the pane no longer exists', async () => {
       const { windowRepo, muxDriverRegistry, serverRepo } = buildDeps({ listAllPanes: async () => [] });
-      const service = new WindowInputService(windowRepo, muxDriverRegistry, serverRepo);
+      const service = new WindowInputService(windowRepo, muxDriverRegistry, serverRepo, transportStub);
       const result = await service.sendInput(42, asPaneHandle('%1'), 'hello');
       expect(result).toBe('pane_not_found');
     });
@@ -124,14 +182,14 @@ describe('WindowInputService', () => {
       const { windowRepo, muxDriverRegistry, serverRepo } = buildDeps({
         listAllPanes: async () => [buildPane({ paneId: '%1', sessionName: 'other', windowIndex: 0 })],
       });
-      const service = new WindowInputService(windowRepo, muxDriverRegistry, serverRepo);
+      const service = new WindowInputService(windowRepo, muxDriverRegistry, serverRepo, transportStub);
       const result = await service.sendInput(42, asPaneHandle('%1'), 'hello');
       expect(result).toBe('pane_not_found');
     });
 
     it('sends literal text followed by Enter and returns ok', async () => {
       const { windowRepo, muxDriverRegistry, serverRepo, calls, wait } = buildDeps();
-      const service = new WindowInputService(windowRepo, muxDriverRegistry, serverRepo, wait);
+      const service = new WindowInputService(windowRepo, muxDriverRegistry, serverRepo, transportStub, wait);
       const result = await service.sendInput(42, asPaneHandle('%1'), 'echo hello');
       expect(result).toBe('ok');
       expect(calls.sendTextToHandle).toEqual([[LOCAL_SERVER, '%1', 'echo hello']]);
@@ -140,7 +198,7 @@ describe('WindowInputService', () => {
 
     it('does not wait before Enter for workerType "claude" (no submitDelayMs)', async () => {
       const { windowRepo, muxDriverRegistry, serverRepo, calls, wait } = buildDeps({ findById: () => buildWindow({ workerType: 'claude' }) });
-      const service = new WindowInputService(windowRepo, muxDriverRegistry, serverRepo, wait);
+      const service = new WindowInputService(windowRepo, muxDriverRegistry, serverRepo, transportStub, wait);
       await service.sendInput(42, asPaneHandle('%1'), 'echo hello');
       expect(calls.wait).toEqual([]);
     });
@@ -149,6 +207,8 @@ describe('WindowInputService', () => {
       const order: string[] = [];
       const { windowRepo, serverRepo } = buildDeps({ findById: () => buildWindow({ workerType: 'codex' }) });
       const driver = {
+        paneCommandByHandle: async () => 'node',
+        captureScreen: async () => ({ code: 0, stderr: '', stdout: CODEX_SCREEN }),
         caps: { copyMode: true },
         listAllPanes: async () => [buildPane()],
         sendTextToHandle: async () => { order.push('sendTextToHandle'); },
@@ -158,7 +218,7 @@ describe('WindowInputService', () => {
       } as unknown as IMuxClient;
       const registry = { resolve: () => driver, resolveKind: () => driver } as unknown as MuxDriverRegistry;
       const wait = async (ms: number) => { order.push(`wait:${ms}`); };
-      const service = new WindowInputService(windowRepo, registry, serverRepo, wait);
+      const service = new WindowInputService(windowRepo, registry, serverRepo, transportStub, wait);
       const result = await service.sendInput(42, asPaneHandle('%1'), 'reply with OK only');
       expect(result).toBe('ok');
       expect(order).toEqual(['sendTextToHandle', 'wait:200', 'sendKeysToHandle']);
@@ -168,6 +228,8 @@ describe('WindowInputService', () => {
       const order: string[] = [];
       const { windowRepo, serverRepo } = buildDeps();
       const driver = {
+        paneCommandByHandle: async () => 'node',
+        captureScreen: async () => ({ code: 0, stderr: '', stdout: CLAUDE_SCREEN }),
         caps: { copyMode: true },
         listAllPanes: async () => [buildPane()],
         isPaneInModeByHandle: async () => true,
@@ -177,7 +239,7 @@ describe('WindowInputService', () => {
       } as unknown as IMuxClient;
       const registry = { resolve: () => driver, resolveKind: () => driver } as unknown as MuxDriverRegistry;
       const wait = async (ms: number) => { order.push(`wait:${ms}`); };
-      const service = new WindowInputService(windowRepo, registry, serverRepo, wait);
+      const service = new WindowInputService(windowRepo, registry, serverRepo, transportStub, wait);
       const result = await service.sendInput(42, asPaneHandle('%1'), 'echo hello');
       expect(result).toBe('ok');
       expect(order).toEqual(['cancelPaneModeByHandle', 'wait:100', 'sendTextToHandle', 'sendKeysToHandle']);
@@ -185,7 +247,7 @@ describe('WindowInputService', () => {
 
     it('does not cancel copy-mode when the pane is not in_mode', async () => {
       const { windowRepo, muxDriverRegistry, serverRepo, calls } = buildDeps({ isPaneInModeByHandle: async () => false });
-      const service = new WindowInputService(windowRepo, muxDriverRegistry, serverRepo);
+      const service = new WindowInputService(windowRepo, muxDriverRegistry, serverRepo, transportStub);
       const result = await service.sendInput(42, asPaneHandle('%1'), 'echo hello');
       expect(result).toBe('ok');
       expect(calls.cancelPaneModeByHandle).toEqual([]);
@@ -194,7 +256,7 @@ describe('WindowInputService', () => {
     it('skips copy-mode check entirely when caps.copyMode is false', async () => {
       const isPaneInModeByHandle = vi.fn(async () => true);
       const { windowRepo, muxDriverRegistry, serverRepo, calls } = buildDeps({ isPaneInModeByHandle, copyMode: false });
-      const service = new WindowInputService(windowRepo, muxDriverRegistry, serverRepo);
+      const service = new WindowInputService(windowRepo, muxDriverRegistry, serverRepo, transportStub);
       const result = await service.sendInput(42, asPaneHandle('%1'), 'echo hello');
       expect(result).toBe('ok');
       expect(isPaneInModeByHandle).not.toHaveBeenCalled();
@@ -205,14 +267,14 @@ describe('WindowInputService', () => {
   describe('sendSignal', () => {
     it('returns window_not_found when the window does not exist', async () => {
       const { windowRepo, muxDriverRegistry, serverRepo } = buildDeps({ findById: () => undefined });
-      const service = new WindowInputService(windowRepo, muxDriverRegistry, serverRepo);
+      const service = new WindowInputService(windowRepo, muxDriverRegistry, serverRepo, transportStub);
       const result = await service.sendSignal(42, asPaneHandle('%1'), 'interrupt');
       expect(result).toBe('window_not_found');
     });
 
     it('returns pane_not_found when the pane no longer exists', async () => {
       const { windowRepo, muxDriverRegistry, serverRepo } = buildDeps({ listAllPanes: async () => [] });
-      const service = new WindowInputService(windowRepo, muxDriverRegistry, serverRepo);
+      const service = new WindowInputService(windowRepo, muxDriverRegistry, serverRepo, transportStub);
       const result = await service.sendSignal(42, asPaneHandle('%1'), 'interrupt');
       expect(result).toBe('pane_not_found');
     });
@@ -221,14 +283,14 @@ describe('WindowInputService', () => {
       const { windowRepo, muxDriverRegistry, serverRepo } = buildDeps({
         listAllPanes: async () => [buildPane({ paneId: '%1', sessionName: 'other', windowIndex: 0 })],
       });
-      const service = new WindowInputService(windowRepo, muxDriverRegistry, serverRepo);
+      const service = new WindowInputService(windowRepo, muxDriverRegistry, serverRepo, transportStub);
       const result = await service.sendSignal(42, asPaneHandle('%1'), 'interrupt');
       expect(result).toBe('pane_not_found');
     });
 
     it('resolves the interrupt key from the workerType profile (claude -> Escape)', async () => {
       const { windowRepo, muxDriverRegistry, serverRepo, calls } = buildDeps({ findById: () => buildWindow({ workerType: 'claude' }) });
-      const service = new WindowInputService(windowRepo, muxDriverRegistry, serverRepo);
+      const service = new WindowInputService(windowRepo, muxDriverRegistry, serverRepo, transportStub);
       const result = await service.sendSignal(42, asPaneHandle('%1'), 'interrupt');
       expect(result).toBe('ok');
       expect(calls.sendKeysToHandle).toEqual([[LOCAL_SERVER, '%1', ['Escape']]]);
@@ -236,7 +298,7 @@ describe('WindowInputService', () => {
 
     it('defaults to C-c when workerType has no transcript profile (e.g. generic)', async () => {
       const { windowRepo, muxDriverRegistry, serverRepo, calls } = buildDeps({ findById: () => buildWindow({ workerType: 'generic' }) });
-      const service = new WindowInputService(windowRepo, muxDriverRegistry, serverRepo);
+      const service = new WindowInputService(windowRepo, muxDriverRegistry, serverRepo, transportStub);
       const result = await service.sendSignal(42, asPaneHandle('%1'), 'interrupt');
       expect(result).toBe('ok');
       expect(calls.sendKeysToHandle).toEqual([[LOCAL_SERVER, '%1', ['C-c']]]);
@@ -244,7 +306,7 @@ describe('WindowInputService', () => {
 
     it('defaults to C-c when workerType is null (plain terminal window)', async () => {
       const { windowRepo, muxDriverRegistry, serverRepo, calls } = buildDeps({ findById: () => buildWindow({ workerType: null }) });
-      const service = new WindowInputService(windowRepo, muxDriverRegistry, serverRepo);
+      const service = new WindowInputService(windowRepo, muxDriverRegistry, serverRepo, transportStub);
       const result = await service.sendSignal(42, asPaneHandle('%1'), 'interrupt');
       expect(result).toBe('ok');
       expect(calls.sendKeysToHandle).toEqual([[LOCAL_SERVER, '%1', ['C-c']]]);
@@ -252,7 +314,7 @@ describe('WindowInputService', () => {
 
     it('sends the explicitly given key for action:"key"', async () => {
       const { windowRepo, muxDriverRegistry, serverRepo, calls } = buildDeps();
-      const service = new WindowInputService(windowRepo, muxDriverRegistry, serverRepo);
+      const service = new WindowInputService(windowRepo, muxDriverRegistry, serverRepo, transportStub);
       const result = await service.sendSignal(42, asPaneHandle('%1'), 'key', 'C-c');
       expect(result).toBe('ok');
       expect(calls.sendKeysToHandle).toEqual([[LOCAL_SERVER, '%1', ['C-c']]]);
@@ -260,7 +322,7 @@ describe('WindowInputService', () => {
 
     it('cancels copy-mode before sending the signal when the pane is in_mode (Issue #69 T12)', async () => {
       const { windowRepo, muxDriverRegistry, serverRepo, calls } = buildDeps({ isPaneInModeByHandle: async () => true });
-      const service = new WindowInputService(windowRepo, muxDriverRegistry, serverRepo);
+      const service = new WindowInputService(windowRepo, muxDriverRegistry, serverRepo, transportStub);
       const result = await service.sendSignal(42, asPaneHandle('%1'), 'interrupt');
       expect(result).toBe('ok');
       expect(calls.cancelPaneModeByHandle).toEqual([[LOCAL_SERVER, '%1']]);
@@ -268,7 +330,7 @@ describe('WindowInputService', () => {
 
     it('does not cancel copy-mode when the pane is not in_mode', async () => {
       const { windowRepo, muxDriverRegistry, serverRepo, calls } = buildDeps({ isPaneInModeByHandle: async () => false });
-      const service = new WindowInputService(windowRepo, muxDriverRegistry, serverRepo);
+      const service = new WindowInputService(windowRepo, muxDriverRegistry, serverRepo, transportStub);
       const result = await service.sendSignal(42, asPaneHandle('%1'), 'interrupt');
       expect(result).toBe('ok');
       expect(calls.cancelPaneModeByHandle).toEqual([]);
@@ -279,13 +341,13 @@ describe('WindowInputService', () => {
       const { windowRepo, muxDriverRegistry, serverRepo } = buildDeps({
         listAllPanes: async () => [buildPane({ paneId: '%1', paneIndex: 0 }), buildPane({ paneId: '%2', paneIndex: 3 })],
       });
-      const service = new WindowInputService(windowRepo, muxDriverRegistry, serverRepo);
+      const service = new WindowInputService(windowRepo, muxDriverRegistry, serverRepo, transportStub);
       expect(await service.resolvePaneIndex(42, asPaneHandle('%2'))).toBe(3);
     });
 
     it('ウィンドウが無ければ window_not_found', async () => {
       const { windowRepo, muxDriverRegistry, serverRepo } = buildDeps({ findById: () => undefined });
-      const service = new WindowInputService(windowRepo, muxDriverRegistry, serverRepo);
+      const service = new WindowInputService(windowRepo, muxDriverRegistry, serverRepo, transportStub);
       expect(await service.resolvePaneIndex(42, asPaneHandle('%1'))).toBe('window_not_found');
     });
 
@@ -293,7 +355,7 @@ describe('WindowInputService', () => {
       const { windowRepo, muxDriverRegistry, serverRepo } = buildDeps({
         listAllPanes: async () => [buildPane({ paneId: '%9', sessionName: 'other', windowIndex: 7 })],
       });
-      const service = new WindowInputService(windowRepo, muxDriverRegistry, serverRepo);
+      const service = new WindowInputService(windowRepo, muxDriverRegistry, serverRepo, transportStub);
       expect(await service.resolvePaneIndex(42, asPaneHandle('%9'))).toBe('pane_not_found');
     });
   });
@@ -306,6 +368,8 @@ describe('WindowInputService on a server holding tmux and misao windows (#311)',
   function mixedRegistry(misaoInMode?: boolean) {
     const sent: Array<[string, unknown]> = [];
     const tmux = {
+      paneCommandByHandle: async () => 'node',
+      captureScreen: async () => ({ code: 0, stderr: '', stdout: CLAUDE_SCREEN }),
       kind: 'tmux', caps: { copyMode: true }, supportsPaneLabels: false,
       listAllPanes: async () => [buildPane({ paneId: '%1' })],
       isPaneInModeByHandle: vi.fn(async () => true),
@@ -315,6 +379,8 @@ describe('WindowInputService on a server holding tmux and misao windows (#311)',
     };
     // Same workspace name, window index and name as the tmux window: only its kind tells it apart.
     const misao = {
+      paneCommandByHandle: async () => 'node',
+      captureScreen: async () => ({ code: 0, stderr: '', stdout: CLAUDE_SCREEN }),
       kind: 'misao', caps: { copyMode: false }, supportsPaneLabels: true,
       listAllPanes: async () => [buildPane({ paneId: MISAO_PANE, ref: { kind: 'misao', workspace: 'main', window: MISAO_WINDOW } })],
       isPaneInModeByHandle: vi.fn(async () => { if (misaoInMode === undefined) throw new MuxOperationUnsupportedError('misao', 'isPaneInModeByHandle'); return misaoInMode; }),
@@ -328,13 +394,13 @@ describe('WindowInputService on a server holding tmux and misao windows (#311)',
   }
 
   const serversOf = (defaultMux: 'tmux' | 'misao') => ({ findByName: () => ({ ...LOCAL_SERVER, defaultMux }) }) as unknown as IServerRepository;
-  const tmuxWindowRepo = { findById: () => buildWindow({ tmuxTarget: 'main:0', muxRef: { kind: 'tmux', workspace: 'main', window: '0' }, workerType: null }) } as unknown as IWindowRepository;
-  const misaoWindowRepo = { findById: () => buildWindow({ tmuxTarget: `main:${MISAO_WINDOW}`, muxRef: { kind: 'misao', workspace: 'main', window: MISAO_WINDOW }, workerType: null }) } as unknown as IWindowRepository;
+  const tmuxWindowRepo = { findById: () => buildWindow({ tmuxTarget: 'main:0', muxRef: { kind: 'tmux', workspace: 'main', window: '0' }, workerType: 'claude' }) } as unknown as IWindowRepository;
+  const misaoWindowRepo = { findById: () => buildWindow({ tmuxTarget: `main:${MISAO_WINDOW}`, muxRef: { kind: 'misao', workspace: 'main', window: MISAO_WINDOW }, workerType: 'claude' }) } as unknown as IWindowRepository;
   const noWait = async () => {};
 
   it('sends to a misao pane on a tmux-default server without asking misao about copy-mode', async () => {
     const { registry, misao, sent } = mixedRegistry();
-    const service = new WindowInputService(misaoWindowRepo, registry, serversOf('tmux'), noWait);
+    const service = new WindowInputService(misaoWindowRepo, registry, serversOf('tmux'), transportStub, noWait);
     expect(await service.sendInput(42, MISAO_PANE, 'hi')).toBe('ok');
     expect(misao.isPaneInModeByHandle).not.toHaveBeenCalled();
     expect(sent).toEqual([[`misao:${MISAO_PANE}`, 'hi'], [`misao:${MISAO_PANE}`, ['Enter']]]);
@@ -342,7 +408,7 @@ describe('WindowInputService on a server holding tmux and misao windows (#311)',
 
   it('leaves copy-mode of a tmux pane on a misao-default server before sending', async () => {
     const { registry, tmux, sent } = mixedRegistry();
-    const service = new WindowInputService(tmuxWindowRepo, registry, serversOf('misao'), noWait);
+    const service = new WindowInputService(tmuxWindowRepo, registry, serversOf('misao'), transportStub, noWait);
     expect(await service.sendInput(42, asPaneHandle('%1'), 'hi')).toBe('ok');
     expect(tmux.cancelPaneModeByHandle).toHaveBeenCalledTimes(1);
     expect(sent[0]).toEqual(['tmux:cancel', null]);
@@ -350,7 +416,7 @@ describe('WindowInputService on a server holding tmux and misao windows (#311)',
 
   it('refuses a misao pane of a same-named workspace for a tmux window (no input into another window)', async () => {
     const { registry, sent } = mixedRegistry();
-    const service = new WindowInputService(tmuxWindowRepo, registry, serversOf('tmux'), noWait);
+    const service = new WindowInputService(tmuxWindowRepo, registry, serversOf('tmux'), transportStub, noWait);
     expect(await service.sendInput(42, MISAO_PANE, 'rm -rf')).toBe('pane_not_found');
     expect(await service.sendSignal(42, MISAO_PANE, 'interrupt')).toBe('pane_not_found');
     expect(sent).toEqual([]);

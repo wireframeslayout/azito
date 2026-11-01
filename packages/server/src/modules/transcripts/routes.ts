@@ -250,6 +250,7 @@ const transcriptsRoutes: FastifyPluginCallback<TranscriptsRouteOptions> = (fasti
     const result = await windowInputService.sendInput(windowId, asPaneHandle(paneId), text);
     if (result === 'window_not_found') return reply.status(404).send({ error: 'Window not found' });
     if (result === 'pane_not_found') return reply.status(404).send({ error: 'Pane not found' });
+    if (typeof result === 'object') return reply.status(409).send(result);
     return { ok: true };
   });
 
@@ -421,6 +422,7 @@ async function handleSendInput(
   const result = await transcriptPaneService.sendInput(sessionId, asPaneHandle(paneId), text);
   if (result === 'session_not_found') return reply.status(404).send({ error: 'Session not found' });
   if (result === 'pane_not_found') return reply.status(404).send({ error: 'Pane not found' });
+  if (typeof result === 'object') return reply.status(409).send(result);
   return { ok: true };
 }
 

@@ -32,6 +32,7 @@ export function findOnPath(name, env, platform) {
  * `%`, `&`...). So the shim is read for the script it runs (`"%dp0%\\node_modules\\...\\codex.js"`) and that script is started
  * with node, every argument going through argv. A native `codex.exe` is started as it is. Anything else is an error.
  */
+// Keep Windows resolution in sync with windowsHarnessMcpUninstall.ts.
 export function resolveCodexCommand(env, platform) {
   if (platform !== 'win32') return { file: 'codex', prefix: [] };
   const found = findOnPath('codex', env, platform);
