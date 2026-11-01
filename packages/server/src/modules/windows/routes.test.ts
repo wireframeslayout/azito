@@ -260,7 +260,7 @@ describe('POST /api/windows/:id/launch-agent', () => {
     expect(res.statusCode).toBe(200);
     expect(res.json()).toMatchObject({ ok: true, supervised: false });
     const [, , keys] = sendKeys.mock.calls[0];
-    expect(keys[0]).toMatch(/^claude --model opus --session-id [0-9a-f-]{36}$/);
+    expect(keys[0]).toMatch(/^AZITO_WINDOW_ID=\d+ claude --model opus --session-id [0-9a-f-]{36}$/);
   });
 
   it('returns 400 when command is missing', async () => {

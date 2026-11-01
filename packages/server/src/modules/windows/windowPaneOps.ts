@@ -135,9 +135,9 @@ export function resolvePaneAddEnv(window: Window | undefined, server: ServerConf
         },
       };
     }
-    return { ok: true, extraEnv: deps.buildSecondaryWindowEnv(window.taskId, server) };
+    return { ok: true, extraEnv: { ...deps.buildSecondaryWindowEnv(window.taskId, server), AZITO_WINDOW_ID: String(window.id) } };
   }
-  return { ok: true, extraEnv: uiTokenEnvForServer(deps.uiToken, server) };
+  return { ok: true, extraEnv: { ...uiTokenEnvForServer(deps.uiToken, server), ...(window ? { AZITO_WINDOW_ID: String(window.id) } : {}) } };
 }
 
 // ─── Kill window (shared across windowId / ref / legacy target routes) ───

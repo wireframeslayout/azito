@@ -75,14 +75,14 @@ describe('POST /api/windows/:id/panes', () => {
     await build(normal, makeWindow());
     const res = await app.inject({ method: 'POST', url: '/api/windows/5/panes', payload: { direction: 'h' } });
     expect(res.statusCode).toBe(200);
-    expect(splitPaneByHandle).toHaveBeenCalledWith(normal, 'p_1', 'h', { AZITO_UI_TOKEN: 'test-token' });
+    expect(splitPaneByHandle).toHaveBeenCalledWith(normal, 'p_1', 'h', { AZITO_UI_TOKEN: 'test-token', AZITO_WINDOW_ID: '5' });
     expect(heldAt).toEqual([true]);
   });
 
   it('gives an isolated server the credential mask, never the UI token', async () => {
     await build(isolated, makeWindow());
     await app.inject({ method: 'POST', url: '/api/windows/5/panes', payload: {} });
-    expect(splitPaneByHandle).toHaveBeenCalledWith(isolated, 'p_1', 'v', MASKED);
+    expect(splitPaneByHandle).toHaveBeenCalledWith(isolated, 'p_1', 'v', { ...MASKED, AZITO_WINDOW_ID: '5' });
   });
 
   it('gives a secondary task window its own masked env', async () => {
@@ -92,7 +92,7 @@ describe('POST /api/windows/:id/panes', () => {
     const res = await app.inject({ method: 'POST', url: '/api/windows/5/panes', payload: {} });
     expect(res.statusCode).toBe(200);
     expect(buildSecondaryWindowEnv).toHaveBeenCalledWith(42, normal);
-    expect(splitPaneByHandle).toHaveBeenCalledWith(normal, 'p_1', 'v', taskEnv);
+    expect(splitPaneByHandle).toHaveBeenCalledWith(normal, 'p_1', 'v', { ...taskEnv, AZITO_WINDOW_ID: '5' });
   });
 
   it('splits the pane the request names by ordinal', async () => {

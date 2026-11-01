@@ -544,7 +544,7 @@ describe('WindowRespawnService.respawn — supervisor wrap', () => {
     const rotatedEnv = paneEnvService.buildEnvForNewWindow.mock.results[0].value.env;
     expect(tmux.splitPaneByHandle).toHaveBeenCalledTimes(2);
     for (const call of tmux.splitPaneByHandle.mock.calls) {
-      expect(call[3]).toBe(rotatedEnv);
+      expect(call[3]).toEqual({ ...rotatedEnv, AZITO_WINDOW_ID: '1' });
     }
   });
 
@@ -567,7 +567,7 @@ describe('WindowRespawnService.respawn — supervisor wrap', () => {
     await service.respawn(1, makeServer());
 
     expect(tmux.splitPaneByHandle).toHaveBeenCalledTimes(1);
-    expect(tmux.splitPaneByHandle.mock.calls[0][3]).toEqual({ AZITO_UI_TOKEN: 'ui-token-fixture' });
+    expect(tmux.splitPaneByHandle.mock.calls[0][3]).toEqual({ AZITO_UI_TOKEN: 'ui-token-fixture', AZITO_WINDOW_ID: '1' });
   });
 
   // Issue #29 review (9th pass), Important finding 2: createPlainWindow only
@@ -646,7 +646,7 @@ describe('WindowRespawnService.respawn — primary vs. secondary task window tok
     expect(paneEnvService.buildEnvForNewWindow).not.toHaveBeenCalled();
     expect(paneEnvService.buildEnvForSecondaryWindow).toHaveBeenCalledWith(task, expect.anything());
     expect(tmux.openWindow).toHaveBeenCalledWith(
-      expect.anything(), 'azito', 'task-5-side', { exactName: true, extraEnv: { AZITO_TASK_ID: '1' }, kind: 'tmux' },
+      expect.anything(), 'azito', 'task-5-side', { exactName: true, extraEnv: { AZITO_TASK_ID: '1', AZITO_WINDOW_ID: '2' }, kind: 'tmux' },
     );
   });
 
@@ -806,7 +806,7 @@ describe('WindowRespawnService.respawn — window name preservation', () => {
 
     expect(tmux.closeWindow).toHaveBeenCalledWith(expect.anything(), { kind: 'tmux', workspace: 'azito', window: 'task-1--ab12' });
     expect(tmux.openWindow).toHaveBeenCalledWith(
-      expect.anything(), 'azito', 'task-1--ab12', { exactName: true, extraEnv: { AZITO_UI_TOKEN: 'ui-token-fixture' }, kind: 'tmux' },
+      expect.anything(), 'azito', 'task-1--ab12', { exactName: true, extraEnv: { AZITO_UI_TOKEN: 'ui-token-fixture', AZITO_WINDOW_ID: '1' }, kind: 'tmux' },
     );
   });
 
@@ -1020,7 +1020,7 @@ describe('WindowRespawnService.respawn — window name preservation', () => {
     const result = await service.respawn(1, makeServer());
 
     expect(tmux.openWorkspace).toHaveBeenCalledWith(
-      expect.anything(), 'azito', { windowName: 'task-1--ab12', exactName: true, extraEnv: { AZITO_UI_TOKEN: 'ui-token-fixture' }, kind: 'tmux' },
+      expect.anything(), 'azito', { windowName: 'task-1--ab12', exactName: true, extraEnv: { AZITO_UI_TOKEN: 'ui-token-fixture', AZITO_WINDOW_ID: '1' }, kind: 'tmux' },
     );
     expect(tmux.openWindow).not.toHaveBeenCalled();
     expect(result.tmuxTarget).toBe('azito:task-1--ab12');
@@ -2553,7 +2553,7 @@ describe('WindowRespawnService.respawn — a host that starts a worker as a prog
 
     const created = tmux.openWindow.mock.calls[0] as unknown as [unknown, string, string, { program: { argv: string[]; cwd: string; cols: number; rows: number }; extraEnv: Record<string, string> }];
     expect(created[3].program).toEqual({ argv: ['claude', '--resume', 'abc', '--dangerously-skip-permissions'], cwd: 'C:\\work\\app', cols: 120, rows: 40 });
-    expect(created[3].extraEnv).toEqual({ AZITO_UI_TOKEN: 'ui-token-fixture' });
+    expect(created[3].extraEnv).toEqual({ AZITO_UI_TOKEN: 'ui-token-fixture', AZITO_WINDOW_ID: '7' });
     expect(sentCommands).toEqual([]);
     expect(tmux.resolvePane).not.toHaveBeenCalled();
   });

@@ -522,6 +522,7 @@ export class WindowRespawnService {
 
         createdViaNewSession = !workspaceExists;
         const doCreate = async (fs: ServerConfig, env: Record<string, string>) => {
+          env = { ...env, AZITO_WINDOW_ID: String(windowId) };
           const createDriver = this.resolveDriver(fs);
           // The gate was verified for `fs` just before this: a Claude worker is about to be started in the new window (as its program, or
           // typed into its shell below), so the host's Claude Code settings are prepared before the window exists. Only for a task's window:
@@ -549,10 +550,10 @@ export class WindowRespawnService {
           // confirmOldWindowGone, against this same `freshServer` snapshot
           // (see the comment at the top of this lock callback).
           const created = await createRotatedWindowInLock(this.paneEnvService, freshServer, task!, 'respawn_create_failed', doCreate);
-          return { newName: created.windowName, windowEnv: created.env, tokenId: created.tokenId as number | null, server: created.server, ref: created.ref };
+          return { newName: created.windowName, windowEnv: { ...created.env, AZITO_WINDOW_ID: String(windowId) }, tokenId: created.tokenId as number | null, server: created.server, ref: created.ref };
         } else if (task) {
           const created = await createSecondaryWindowInLock(this.paneEnvService, freshServer, task, doCreate);
-          return { newName: created.windowName, windowEnv: created.env, tokenId: null as number | null, server: created.server, ref: created.ref };
+          return { newName: created.windowName, windowEnv: { ...created.env, AZITO_WINDOW_ID: String(windowId) }, tokenId: null as number | null, server: created.server, ref: created.ref };
         } else {
           // Non-task window respawn — server-aware legacy default (Issue #29
           // review, Critical finding 1): withholds the token when the server
@@ -563,7 +564,7 @@ export class WindowRespawnService {
           // isolation lock as the primary/secondary branches, against the
           // freshly re-fetched `freshServer` row.
           const created = await createPlainWindowInLock(this.uiTokenEnvFn, freshServer, doCreate);
-          return { newName: created.windowName, windowEnv: created.env, tokenId: null as number | null, server: created.server, ref: created.ref };
+          return { newName: created.windowName, windowEnv: { ...created.env, AZITO_WINDOW_ID: String(windowId) }, tokenId: null as number | null, server: created.server, ref: created.ref };
         }
       });
       await sleep(createdViaNewSession ? 500 : 300);
