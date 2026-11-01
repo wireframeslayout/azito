@@ -1,3 +1,5 @@
+import { isMisaoWindowId, stripPaneSuffix, resolveWindowTitle, formatWindowTitleLine } from '@azito/shared';
+
 // 稼働検知診断（GET /api/debug/activity）のレスポンス型と、その検証（純ロジック）。
 // 検証をフックから切り離してあるのは、非2xx や想定外ボディの扱いが描画に依存せず単体で
 // テストできるようにするため。
@@ -22,6 +24,7 @@ export interface ActivityDiagnosticRow {
   serverName: string;
   target: string;
   windowId?: number;
+  windowDisplay?: { label: string | null; labelSource: 'auto' | 'user'; workerType: string | null; windowType: string; muxRef?: { kind: 'tmux' | 'misao' } };
   taskId?: number;
   /** 行から該当ウィンドウのタブへ遷移するためのプロジェクト（windows.project_id）。 */
   projectId?: number;
@@ -89,4 +92,13 @@ export function parseDiagnosticsResponse(status: number, body: unknown): Activit
     throw new Error('GET /api/debug/activity returned an unexpected body');
   }
   return body as ActivityDiagnosticRow[];
+}
+
+export function diagnosticWindowTitle(row: ActivityDiagnosticRow, fallback: string): string {
+  const isMisao = row.windowDisplay?.muxRef?.kind === 'misao' || isMisaoWindowId(stripPaneSuffix(row.target).split(':').pop() ?? '');
+  if (!isMisao) return row.target;
+  return formatWindowTitleLine(resolveWindowTitle({
+    id: row.windowId, label: row.windowDisplay?.label, labelSource: row.windowDisplay?.labelSource,
+    workerType: row.windowDisplay?.workerType ?? undefined, windowType: row.windowDisplay?.windowType, tmuxTarget: fallback,
+  }));
 }

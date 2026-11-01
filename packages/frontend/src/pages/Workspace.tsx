@@ -61,7 +61,8 @@ import { ACTIVE_PROJECT_KEY, getProjectColorFallback } from './workspace/types';
 import { buildObjectSections } from '../lib/workspaceObjects';
 import { GlobalFocusProvider, useGlobalFocus } from '../hooks/useGlobalFocus';
 import { parseTerminalTabId, terminalRefDisplayLabel, type TerminalRef } from '../lib/terminalRef';
-import { resolveWindowTitle, formatWindowTitleLine } from '@azito/shared';
+import { resolveWindowTitle, formatWindowTitleLine, parseMuxRef } from '@azito/shared';
+import { misaoRefWindowTitle } from '../lib/windowDisplay';
 import { buildWindowIndex } from '../lib/windowDisplay';
 import { findTaskByTarget as findTaskByTargetLib } from '../lib/findTaskByTarget';
 import { describeUnsupportedOs, isUnsupportedOsAnswer } from '../lib/hostFeature';
@@ -978,6 +979,9 @@ function WorkspaceInner() {
     // 旧形式 session:index.pane のタブ
     const m = target.match(/^(.+):(\d+)\.(\d+)$/);
     if (!m) {
+      if (ref?.kind === 'ref' && parseMuxRef(ref.ref).kind === 'misao') {
+        return { label: misaoRefWindowTitle(sessionData[serverName] ?? [], ref.ref, ref.pane, t('units:windowFallback')) };
+      }
       const fallbackName = ref ? terminalRefDisplayLabel(ref) : target;
       const fallbackDisplay = resolveWindowTitle({ tmuxTarget: fallbackName });
       return { label: formatWindowTitleLine(fallbackDisplay) };
@@ -1033,7 +1037,7 @@ function WorkspaceInner() {
     });
     const fallbackTitleWithPane = hasManyPanes ? `${fallbackDisplay.title}${paneSuffix}` : fallbackDisplay.title;
     return { label: fallbackTitleWithPane };
-  }, [sessionData, sessionWindowByWindowId, sessionWindowIdByRef, windowById, windowByLegacyKey, taskById]);
+  }, [sessionData, sessionWindowByWindowId, sessionWindowIdByRef, windowById, windowByLegacyKey, taskById, t]);
 
   const buildTabItem = useCallback((tab: PersistedTab): TabItem => {
     const iconName: IconName | null = tab.type === 'terminal' ? 'terminal'

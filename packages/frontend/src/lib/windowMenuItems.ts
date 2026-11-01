@@ -34,6 +34,7 @@ export interface WindowMenuParams {
   paneHandle?: string;
   /** misao cannot set a pane title. */
   canRenamePane: boolean;
+  muxKind?: 'tmux' | 'misao';
   windowType?: string;
   agentSessionId?: string;
   sleeping?: boolean;
@@ -52,7 +53,7 @@ export function buildWindowMenuItems(params: WindowMenuParams): WindowMenuItemDe
   if (online && params.paneTarget && params.canRenamePane) {
     items.push({ kind: 'rename-pane', labelKey: 'windows.renamePane', disabled, paneOrdinal });
   }
-  if (online) {
+  if (online && params.muxKind !== 'misao') {
     items.push({ kind: 'capture-panes', labelKey: 'windows.capturePanes', disabled });
   }
   if (online && params.windowType === 'agent' && params.agentSessionId && !params.sleeping) {

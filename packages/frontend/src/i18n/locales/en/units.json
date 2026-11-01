@@ -1,4 +1,5 @@
 {
+  "windowFallback": "Window",
   "title": "Units",
   "detail": {
     "notFound": "Unit not found",

@@ -36,6 +36,11 @@ describe('buildWindowMenuItems', () => {
     expect(kinds({ ...base, paneTarget: 's:main.1', canRenamePane: false })).not.toContain('rename-pane');
   });
 
+  it('hides pane capture for misao while retaining it for tmux', () => {
+    expect(kinds({ ...base, muxKind: 'misao' })).not.toContain('capture-panes');
+    expect(kinds({ ...base, muxKind: 'tmux' })).toContain('capture-panes');
+  });
+
   it('disables mux actions on a stale row', () => {
     const params = { ...base, stale: true, paneTarget: 's:main.2', paneOrdinal: 2 };
     expect(find(params, 'delete-pane')?.disabled).toBe(true);

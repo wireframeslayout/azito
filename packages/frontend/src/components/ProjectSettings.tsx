@@ -902,7 +902,7 @@ function WindowsSection({ settings: s, addWindowModal }: { settings: ReturnType<
                 key={w.id}
                 icon={<Icon name="terminal" size={14} />}
                 title={formatWindowTitleLine(display)}
-                description={<span style={{ fontFamily: 'monospace' }}>{w.serverName} · tmux {w.tmuxTarget}</span>}
+                description={<span style={{ fontFamily: 'monospace' }}>{w.serverName} · {w.muxRef?.kind === 'misao' ? 'misao' : `tmux ${w.tmuxTarget}`}</span>}
                 rightActions={<Button size="sm" onClick={() => s.handleRemoveWindow(w.id)}>{t('common:actions.remove')}</Button>}
               />
             );

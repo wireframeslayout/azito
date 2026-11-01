@@ -8,7 +8,9 @@ import { useToast } from '../hooks/useToast';
 import { useAgentDefinitions } from '../hooks/useAgentDefinitions';
 import { AgentIcon } from './ui/AgentIcons';
 import { Icon } from './ui/Icon';
-import { resolveWindowTitle, formatWindowTitleLine } from '@azito/shared';
+import { resolveWindowTitle, formatWindowTitleLine, parseMuxRef } from '@azito/shared';
+import { useTranslation } from 'react-i18next';
+import { sessionWindowLabel } from '../lib/windowDisplay';
 
 interface WindowStatusDropdownProps {
   serverName: string;
@@ -113,6 +115,7 @@ function ActionButton({ label, icon, onClick, loading, disabled, title }: { labe
 
 export function WindowStatusDropdown({ serverName, target, sessions, muxKind, terminalRef, project, allTasks, taskId, projectId, onOpenTask, onChanged }: WindowStatusDropdownProps) {
   const { showToast } = useToast();
+  const { t } = useTranslation('units');
   const [open, setOpen] = useState(false);
   const [actionLoading, setActionLoading] = useState(false);
   const [editingType, setEditingType] = useState(false);
@@ -131,6 +134,11 @@ export function WindowStatusDropdown({ serverName, target, sessions, muxKind, te
   // tmux keeps its target-derived ref; other mux kinds use the ref the server reported (never a synthesised tmux ref).
   const registerRef = resolveWindowRegistrationRef({ muxKind, target, terminalRef, sessions });
   const task = win ? findTaskForWindow(win, allTasks) : null;
+  const kind = win?.muxRef?.kind ?? (terminalRef?.kind === 'ref' ? parseMuxRef(terminalRef.ref).kind : muxKind);
+  const sessionWindow = sessions?.flatMap((session) => session.windows.map((window) => ({ session, window })))
+    .find(({ window }) => terminalRef?.kind === 'ref' ? window.ref === terminalRef.ref : win != null && window.windowId === win.id);
+  const windowName = sessionWindow ? sessionWindowLabel(sessionWindow.session.name, sessionWindow.window) : t('windowFallback');
+  const misaoName = formatWindowTitleLine(resolveWindowTitle({ label: win?.label || windowName, labelSource: win?.labelSource, tmuxTarget: t('windowFallback') }));
 
   useEffect(() => {
     if (!open) return;
@@ -283,8 +291,8 @@ export function WindowStatusDropdown({ serverName, target, sessions, muxKind, te
 
           {!win ? (
             <div style={{ padding: '12px' }}>
-              <InfoRow label="tmux">
-                <span style={{ fontFamily: 'monospace', fontSize: 'var(--font-xs)' }}>{target}</span>
+              <InfoRow label={kind === 'misao' ? "misao" : "tmux"}>
+                <span style={{ fontFamily: 'monospace', fontSize: 'var(--font-xs)' }}>{kind === 'misao' ? misaoName : target}</span>
               </InfoRow>
               <InfoRow label="Status">
                 <span style={{ color: 'var(--text-dim)' }}>not registered</span>
@@ -324,9 +332,9 @@ export function WindowStatusDropdown({ serverName, target, sessions, muxKind, te
                     <InfoRow label="Window">{formatWindowTitleLine(display)}</InfoRow>
                   );
                 })()}
-                <InfoRow label="tmux">
+                <InfoRow label={kind === 'misao' ? "misao" : "tmux"}>
                   <span style={{ fontFamily: 'monospace', fontSize: 'var(--font-xs)' }}>
-                    {win.tmuxTarget}
+                    {kind === 'misao' ? misaoName : win.tmuxTarget}
                   </span>
                 </InfoRow>
                 <InfoRow label="Type">

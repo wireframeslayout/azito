@@ -1,6 +1,6 @@
 import { useState, useCallback } from 'react';
 import { useTranslation } from 'react-i18next';
-import { formatWindowId, type MuxDriverKind, type MuxRef } from '@azito/shared';
+import { formatWindowId, resolveWindowTitle, formatWindowTitleLine, type MuxDriverKind, type MuxRef } from '@azito/shared';
 import { api } from '../api/client';
 import type { ContextMenuItem } from '../components/ContextMenu';
 import type { PersistedTab } from './useTabPersistence';
@@ -247,6 +247,7 @@ export function useWindowActions(
       paneOrdinal: extra?.paneOrdinal,
       paneHandle: extra?.paneHandle,
       canRenamePane: canRenamePane(w),
+      muxKind: w.muxRef?.kind,
       windowType: w.windowType,
       agentSessionId: w.agentSessionId,
       sleeping: w.sleeping,
@@ -273,16 +274,16 @@ export function useWindowActions(
     }));
     items.push(
       { label: '', separator: true, onClick: () => {} },
-      { label: `${formatWindowId(w.id)} · tmux ${w.tmuxTarget}`, disabled: true, onClick: () => {} },
+      { label: w.muxRef?.kind === 'misao' ? `misao · ${formatWindowTitleLine(resolveWindowTitle({ id: w.id, label: w.label || extra?.windowName }))}` : `${formatWindowId(w.id)} · tmux ${w.tmuxTarget}`, disabled: true, onClick: () => {} },
     );
     return items;
   }, [handleRenameLabel, handleRenameWindow, handleRenamePane, handleDetachWindow, handleDeleteWindow, handleDeletePane, handleRespawnWindow, handleSleepWindow, handleCapturePanes, findTaskByTarget, openTask]);
 
-  const showWindowContextMenu = useCallback((e: React.MouseEvent, w: { id: number; serverName: string; tmuxTarget: string; label?: string }, extra?: WindowMenuExtra) => {
+  const showWindowContextMenu = useCallback((e: React.MouseEvent, w: { id: number; serverName: string; tmuxTarget: string; label?: string; muxRef?: MuxRef }, extra?: WindowMenuExtra) => {
     showContextMenu(e, getWindowMenuItems(w, extra));
   }, [showContextMenu, getWindowMenuItems]);
 
-  const showWindowContextMenuAt = useCallback((x: number, y: number, w: { id: number; serverName: string; tmuxTarget: string; label?: string }, extra?: WindowMenuExtra) => {
+  const showWindowContextMenuAt = useCallback((x: number, y: number, w: { id: number; serverName: string; tmuxTarget: string; label?: string; muxRef?: MuxRef }, extra?: WindowMenuExtra) => {
     showContextMenuAt(x, y, getWindowMenuItems(w, extra));
   }, [showContextMenuAt, getWindowMenuItems]);
 

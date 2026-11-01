@@ -142,7 +142,7 @@
       "distributionOnNoRepo": "Delivered via the hub (no source repository set)",
       "distributionOff": "Not delivered",
       "advancedToggle": "Advanced settings",
-      "tmuxSessionLabel": "tmux session",
+      "tmuxSessionLabel": "Session name",
       "tmuxSessionHint": "Leave empty to let AZITO use its default session name.",
       "tmuxSessionPlaceholder": "Use the default session name",
       "inputPolicyLabel": "Input policy",
@@ -162,7 +162,8 @@
       "directoryFailed": "Failed to create the directory.",
       "cloneFailed": "Failed to clone the repository.",
       "serverTypeUnresolved": "Could not determine server \"{{server}}\"'s type yet — please wait a moment and try again."
-    }
+    },
+    "slugHint": "Lowercase letters, numbers, and hyphens only."
   },
   "general": {
     "projectName": "Project Name",
@@ -238,7 +239,7 @@
       "title": "Windows",
       "noWindows": "No windows",
       "count": "{{count}} windows",
-      "noWindowsHint": "Register a tmux window with this project to open it as a workspace tab."
+      "noWindowsHint": "Register a window with this project to open it in a tab."
     },
     "servers": {
       "count": "{{count}} server environments",
@@ -254,7 +255,7 @@
       "distributionRepositoryRequired": "Select a distribution repository — required while distribution is on.",
       "branch": "Branch (optional)",
       "branchPlaceholder": "e.g. feat/my-feature",
-      "tmuxSession": "Tmux Session (optional)",
+      "tmuxSession": "Session name (optional)",
       "tmuxSessionHint": "Defaults to 'azito' when left empty.",
       "tmuxSessionPlaceholder": "azito",
       "noServers": "No server environments configured",

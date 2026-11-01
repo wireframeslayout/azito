@@ -1,4 +1,5 @@
-import { parseMuxRef, type WindowTitleInput } from '@azito/shared';
+import { parseMuxRef, resolveWindowTitle, formatWindowTitleLine, type WindowTitleInput } from '@azito/shared';
+import type { Session } from '../pages/workspace/types';
 
 
 export interface WindowIndexEntry {
@@ -41,4 +42,14 @@ export function sessionWindowLabel(sessionName: string, win: { name: string; ref
 /** Adapt activity rows to the shared window title input. */
 export function activeWindowTitleInput(row: { windowId?: number; target: string; paneTitle?: string; paneName?: string; paneCommand?: string; label?: string; labelSource?: 'auto' | 'user'; taskTitle?: string; workerType?: string; windowType?: string }): WindowTitleInput {
   return { id: row.windowId, label: row.label, labelSource: row.labelSource, paneTitle: row.paneTitle ?? row.paneName, paneCommand: row.paneCommand, taskTitle: row.taskTitle, workerType: row.workerType, windowType: row.windowType, tmuxTarget: row.target };
+}
+
+/** Resolve an unregistered misao ref within one server's sessions. */
+export function misaoRefWindowTitle(sessions: Session[], ref: string, pane: number, fallback: string): string {
+  const match = sessions.flatMap((session) => session.windows.map((window) => ({ session, window })))
+    .find(({ window }) => window.ref === ref);
+  const name = match ? sessionWindowLabel(match.session.name, match.window) : fallback;
+  const display = resolveWindowTitle({ label: name, tmuxTarget: fallback });
+  const suffix = match && match.window.panes.length > 1 ? `.${pane}` : '';
+  return `${formatWindowTitleLine(display)}${suffix}`;
 }

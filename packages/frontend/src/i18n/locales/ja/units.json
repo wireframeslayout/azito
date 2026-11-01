@@ -1,4 +1,5 @@
 {
+  "windowFallback": "ウィンドウ",
   "title": "Units",
   "detail": {
     "notFound": "Unitが見つかりません",
