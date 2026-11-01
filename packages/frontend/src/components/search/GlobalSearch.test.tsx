@@ -41,6 +41,14 @@ describe('global search', () => {
     fireEvent.click(screen.getByText('globalSearch.retry'));
     await waitFor(() => expect(screen.queryByRole('alert')).toBeNull());
   });
+  it('keeps windows of a listed mux online when only another mux is unavailable', async () => {
+    mocks.withWindow = true;
+    mocks.fetch.mockResolvedValue({ sessions: [{ name: 's', kind: 'tmux', windows: [{ index: 1, name: 'one', panes: [], ref: '', windowId: null }] }], unavailable: [{ kind: 'misao', reason: 'daemon_unreachable' }] });
+    setup(); fireEvent.click(screen.getByText('Open'));
+    await waitFor(() => expect(screen.getByRole('alert')).toHaveTextContent('globalSearch.failed'));
+    fireEvent.change(screen.getByRole('combobox'), { target: { value: '806' } });
+    expect(screen.getByRole('option')).not.toHaveTextContent('globalSearch.offline');
+  });
   it('shows the orchestrator category only when present and includes the missing query', async () => {
     mocks.withWindow = true; mocks.role = 'orchestrator';
     mocks.fetch.mockResolvedValue({ sessions: [], unavailable: [] });

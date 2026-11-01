@@ -35,6 +35,17 @@ export function GlobalSearchProvider({ children }: { children: ReactNode }) {
   return <Context.Provider value={() => setOpen(true)}>{children}{open && <GlobalSearchPalette onClose={() => setOpen(false)} />}</Context.Provider>;
 }
 
+function resolveWindowStatus(item: SearchItem, unreachable: readonly string[], sessions: Record<string, Session[]>): 'sleeping' | 'offline' | undefined {
+  const window = item.window;
+  if (!window) return undefined;
+  if (window.sleeping) return 'sleeping';
+  if (unreachable.includes(window.serverName)) return 'offline';
+  const listed = sessions[window.serverName];
+  if (!listed) return undefined;
+  const match = findSessionWindow(window, listed);
+  return !match || match.session.stale ? 'offline' : undefined;
+}
+
 function GlobalSearchPalette({ onClose }: { onClose: () => void }) {
   const { t } = useTranslation('navigation');
   const { allProjects, allTasks, loading, error, refresh } = useWorkspaceCatalog();
@@ -61,6 +72,7 @@ function GlobalSearchPalette({ onClose }: { onClose: () => void }) {
   const [selected, setSelected] = useState(0);
   const [sessions, setSessions] = useState<Record<string, Session[]>>({});
   const [failed, setFailed] = useState<string[]>([]);
+  const [unreachable, setUnreachable] = useState<string[]>([]);
   const [loadingServers, setLoadingServers] = useState(true);
   const [refreshKey, setRefreshKey] = useState(0);
   useNotificationChannel({ onSessionsUpdated: () => setRefreshKey(value => value + 1) });
@@ -71,6 +83,7 @@ function GlobalSearchPalette({ onClose }: { onClose: () => void }) {
     setLoadingServers(true);
     const names: string[] = JSON.parse(serverKey);
     setFailed(previous => previous.filter(name => names.includes(name)));
+    setUnreachable(previous => previous.filter(name => names.includes(name)));
     if (names.length === 0) setLoadingServers(false);
     let remaining = names.length;
     for (const name of names) {
@@ -78,8 +91,11 @@ function GlobalSearchPalette({ onClose }: { onClose: () => void }) {
         if (cancelled) return;
         setSessions(previous => ({ ...previous, [name]: keepUnavailableKinds(previous[name], listing) }));
         setFailed(previous => listing.unavailable.length > 0 ? [...new Set([...previous, name])] : previous.filter(value => value !== name));
+        setUnreachable(previous => previous.filter(value => value !== name));
       }, () => {
-        if (!cancelled) setFailed(previous => [...new Set([...previous, name])]);
+        if (cancelled) return;
+        setFailed(previous => [...new Set([...previous, name])]);
+        setUnreachable(previous => [...new Set([...previous, name])]);
       }).finally(() => {
         if (!cancelled && --remaining === 0) setLoadingServers(false);
       });
@@ -127,7 +143,14 @@ function GlobalSearchPalette({ onClose }: { onClose: () => void }) {
       {error && <div role="alert" className="global-search-message">{t('globalSearch.error')} <button onClick={() => void refresh()}>{t('globalSearch.retry')}</button></div>}
       {failed.length > 0 && <div role="alert" className="global-search-message">{t('globalSearch.failed', { servers: failed.join(', ') })} <button onClick={() => setRefreshKey(value => value + 1)}>{t('globalSearch.retry')}</button></div>}
       <div id="global-search-results" role="listbox" aria-label={t('globalSearch.results')} className="global-search-results">
-        {loading ? <div className="global-search-message" role="status">{t('globalSearch.loading')}</div> : error && allProjects.length === 0 && allTasks.length === 0 ? null : shown.length === 0 ? <div className="global-search-message" role="status">{query.trim() ? t('globalSearch.noResults', { query }) : t('globalSearch.empty')}</div> : shownGroups.map(group => group.shown.length > 0 && <section key={group.kind} role="group" aria-label={t(`globalSearch.${group.kind}`)}><div className="global-search-group">{t(`globalSearch.${group.kind}`)} · {group.items.length}</div>{group.shown.map(item => { const position = shown.indexOf(item); return <SearchResultRow key={`${item.kind}-${item.id}`} item={item} selected={position === current} status={item.window?.sleeping ? 'sleeping' : item.window && (failed.includes(item.window.serverName) || (sessions[item.window.serverName] && !findSessionWindow(item.window, sessions[item.window.serverName]))) ? 'offline' : undefined} onSelect={() => setSelected(position)} onOpen={() => choose(item)} />; })}{group.items.length > group.shown.length && <div className="global-search-message">{t('globalSearch.more', { count: group.items.length - group.shown.length })}</div>}</section>)}
+        {loading ? <div className="global-search-message" role="status">{t('globalSearch.loading')}</div>
+          : error && allProjects.length === 0 && allTasks.length === 0 ? null
+          : shown.length === 0 ? <div className="global-search-message" role="status">{query.trim() ? t('globalSearch.noResults', { query }) : t('globalSearch.empty')}</div>
+          : shownGroups.map(group => group.shown.length > 0 && <section key={group.kind} role="group" aria-label={t(`globalSearch.${group.kind}`)}>
+            <div className="global-search-group">{t(`globalSearch.${group.kind}`)} · {group.items.length}</div>
+            {group.shown.map(item => { const position = shown.indexOf(item); return <SearchResultRow key={`${item.kind}-${item.id}`} item={item} selected={position === current} status={resolveWindowStatus(item, unreachable, sessions)} onSelect={() => setSelected(position)} onOpen={() => choose(item)} />; })}
+            {group.items.length > group.shown.length && <div className="global-search-message">{t('globalSearch.more', { count: group.items.length - group.shown.length })}</div>}
+          </section>)}
       </div><div className="global-search-footer" aria-live="polite">{loadingServers ? `${t('globalSearch.loading')} · ` : ''}{t('globalSearch.count', { count: matches.length })}{shown[current] ? ` · ${shown[current].title}` : ''} · {t('globalSearch.hint')}</div>
     </div>
     <style>{` .global-search { display:flex; flex-direction:column; min-height:0; color:var(--text); } .global-search-header { display:flex; align-items:center; justify-content:space-between; padding:var(--space-3) var(--space-4); } .global-search-header h2 { margin:0; font-size:var(--font-md); } .global-search button { color:inherit; background:transparent; border:0; cursor:pointer; font:inherit; } .global-search button:hover { background:var(--bg-hover); } .global-search button:active { background:var(--bg-elevated); } .global-search button:focus-visible { outline:2px solid var(--accent); } .global-search input { margin:0 var(--space-4); padding:var(--space-3); border:1px solid var(--border); border-radius:var(--radius-md); background:var(--input-bg); color:var(--text); font:inherit; min-width:0; } .global-search input:focus-visible { outline:2px solid var(--accent); } .global-search-tabs { display:flex; gap:var(--space-1); overflow-x:auto; padding:var(--space-3) var(--space-4); border-bottom:1px solid var(--border); } .global-search-tabs button { flex-shrink:0; padding:var(--space-2); border-radius:var(--radius-sm); } .global-search-tabs button[aria-selected=true] { background:var(--bg-hover); font-weight:600; } .global-search-results { overflow-y:auto; min-height:0; max-height:50vh; } .global-search-group, .global-search-message, .global-search-footer { padding:var(--space-2) var(--space-4); color:var(--text-dim); font-size:var(--font-xs); } .global-search-row { display:flex; align-items:center; min-height:44px; cursor:pointer; padding:var(--space-2) var(--space-4); } .global-search-row[aria-selected=true] { background:var(--bg-hover); } .global-search-marker { width:var(--space-4); color:var(--accent); } .global-search-label { flex:1; display:flex; flex-direction:column; min-width:0; } .global-search-label strong, .global-search-label small { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; } .global-search-label small { color:var(--text-dim); } .global-search-footer { border-top:1px solid var(--border); } @media (max-width:768px) { .overlay-panel:has(.global-search) { width:100%; max-width:none !important; height:100dvh; max-height:100dvh; border-radius:0; padding-bottom:env(safe-area-inset-bottom) !important; } .global-search { height:100%; } .global-search-results { flex:1; max-height:none; } } `}</style>

@@ -1,5 +1,6 @@
 import { formatWindowId, formatWindowTitleLine, resolveWindowTitle } from '@azito/shared';
 import { findSessionWindow } from '../windowMatch';
+import { RUNNING_STATUSES } from '../../components/task/StatusDropdown';
 import type { ProjectListItem, Session, Task, Window } from '../../pages/workspace/types';
 
 export type SearchKind = 'window' | 'orchestrator' | 'task' | 'project';
@@ -40,7 +41,7 @@ export function buildSearchIndex(projects: ProjectListItem[], tasks: Task[], tas
     if (!project) continue;
     items.push({ kind: 'task', id: task.id, title: task.title, projectId: project.id, projectName: project.name,
       fields: [task.title, `#${task.id}`, String(task.id), project.name, task.status, task.sourceRef ?? ''], task,
-      recent: taskOpenedAt[task.id] ?? 0, active: task.status === 'in_progress' });
+      recent: taskOpenedAt[task.id] ?? 0, active: RUNNING_STATUSES.has(task.status) });
     for (const window of task.windows ?? []) addWindow(window, project, task);
   }
   for (const project of projects) {

@@ -27,6 +27,10 @@ describe('search ordering', () => {
     expect(index.filter(item => item.kind === 'window')).toHaveLength(1);
     expect(searchIndex(index, 'alpha')[0].kind).toBe('window');
   });
+  it('treats a running task as active', () => {
+    const index = buildSearchIndex(projects, tasks, {}, new Set(), {});
+    expect(index.find(item => item.kind === 'task')?.active).toBe(true);
+  });
   it('uses the resolved name after a rename', () => {
     const renamed = [{ ...projects[0], windows: [{ ...projects[0].windows![0], label: 'Renamed' }] }];
     const index = buildSearchIndex(renamed, tasks, {}, new Set(), {});
