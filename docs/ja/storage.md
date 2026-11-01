@@ -119,4 +119,4 @@ https://<host>/api/projects/<projectId>/storage/<filename>/raw
 
 ## フォルダ・ファイル操作
 
-ストレージ API のパスはプロジェクト相対です。フォルダは末尾 `/` を付け、0 バイトの印で表します。`GET storage/entries` は `prefix`、`limit`（既定 200）、`cursor` を受け付けます。`POST storage/folders` は `path`、`PATCH storage/entries` は `path` と `newName`、`POST storage/move` は `paths` と `destination`、`POST storage/delete` は `paths`、`GET storage/stat` は `prefix` を受け付けます。アップロードには任意の `prefix` クエリを指定できます。フォルダ移動は 1,000 オブジェクトが上限で、コピー後に元を削除し、部分失敗を報告します。外部からの書き込みに対して存在確認とコピーを原子的には実行できません。ファイル名の変更はキーを維持し、表示名をメタデータに保存します。現在の画面は従来のフラット一覧を表示します。
+ストレージ API のパスはプロジェクト相対です。フォルダは末尾 `/` を付け、0 バイトの印で表します。`GET storage/entries` は `prefix`、`limit`（既定 200）、`cursor` を受け付けます。`POST storage/folders` は `prefix`、`PATCH storage/entries` はファイルの `key` と `displayName` またはフォルダの `prefix` と `newName`、`POST storage/move` は `keys`、`prefixes` と `destPrefix`、`POST storage/delete` は `keys` と `prefixes`、`GET storage/stat` は `prefix` を受け付けます。アップロードにはmultipart の任意フィールド `prefix` を指定できます。ファイルのキーはプロジェクトのルートを含み、フォルダの prefix はプロジェクト相対です。フォルダ移動は 1,000 オブジェクトが上限で、コピー後に元を削除し、部分失敗を報告します。外部からの書き込みに対して存在確認とコピーを原子的には実行できません。ファイル名の変更はキーを維持し、表示名をメタデータに保存します。現在の画面は従来のフラット一覧を表示します。
