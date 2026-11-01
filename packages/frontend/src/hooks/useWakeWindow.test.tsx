@@ -30,6 +30,13 @@ describe('wake selection', () => {
     await waitFor(() => expect(chosen).toHaveBeenCalledWith('misao'));
     expect(apiWithStatus).toHaveBeenCalledWith('/settings/mux-switch', expect.objectContaining({ method: 'PUT', body: JSON.stringify({ mode: 'misao' }) }));
   });
+  it('shows the server and version from the plan without a status request', async () => {
+    vi.mocked(apiWithStatus).mockResolvedValueOnce({ status: 200, body: { serverName: 'local', currentMux: 'tmux', mode: 'ask', misao: { hosted: true, available: true, version: '0.3.0' }, shouldAsk: true } });
+    render(<HotkeyProvider><Example onChoice={vi.fn()} /></HotkeyProvider>);
+    fireEvent.click(screen.getByText('Wake'));
+    expect(await screen.findByText('local · misao 0.3.0')).toBeInTheDocument();
+    expect(apiWithStatus).toHaveBeenCalledTimes(1);
+  });
   it('uses tmux without asking when misao is not installed even in misao mode', async () => {
     vi.mocked(apiWithStatus).mockResolvedValueOnce({ status: 200, body: { currentMux: 'tmux', mode: 'misao', misao: { hosted: false, available: false, reason: 'not_installed' }, shouldAsk: false } });
     const chosen = vi.fn();
@@ -65,7 +72,7 @@ describe('wake selection', () => {
     fireEvent.click(screen.getByText('Wake'));
     const sheet = await screen.findByRole('dialog', { name: 'Reopen with misao?' });
     await waitFor(() => expect(screen.getByText('Open with misao')).toHaveFocus());
-    expect(Array.from(sheet.querySelectorAll('button')).map((button) => button.textContent)).toEqual(['Open with misao', 'Open with tmux', 'Cancel']);
+    expect(Array.from(sheet.querySelectorAll('button')).map((button) => button.textContent)).toEqual(['Open with misao', 'Open with tmux']);
     fireEvent.keyDown(document, { key: 'Escape' });
     await waitFor(() => expect(chosen).toHaveBeenCalledWith(null));
   });

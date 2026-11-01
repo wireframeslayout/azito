@@ -259,7 +259,7 @@
   },
   "terminal": {
     "policy": "tmux の窓をスリープから起こすとき",
-    "policyDescription": "tmux の窓を起こす方法を選びます。",
+    "policyDescription": "スリープ中の tmux の窓を開く方法を選びます。",
     "ask": "毎回確認",
     "misao": "常に misao",
     "tmux": "tmux のまま",
@@ -275,7 +275,7 @@
     "saveFailed": "設定を保存できませんでした",
     "retry": "再試行",
     "confirmDefaults": "{{count}} 台のサーバーの既定を {{mux}} に変更しますか？",
-    "autoAskDescription": "自動復帰では tmux のまま開いて通知します。",
+    "autoAskDescription": "タスクの再開などで自動で起こすときもこの設定に従います（「毎回確認」のときは、自動では tmux のまま開き、通知で切り替えを案内します）。",
     "defaultsCount": "default_mux が tmux のサーバーが {{count}} 台あります。"
   }
 }

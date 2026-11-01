@@ -20,6 +20,7 @@ export interface WindowMenuItemDescriptor {
   /** i18n key (workspace namespace unless it names another with `ns:`). */
   labelKey: string;
   disabled?: boolean;
+  disabledReasonKey?: string;
   danger?: boolean;
   /** delete-pane / rename-pane: the pane's 1-based ordinal in its window. */
   paneOrdinal?: number;
@@ -65,7 +66,7 @@ export function buildWindowMenuItems(params: WindowMenuParams): WindowMenuItemDe
     items.push({ kind: 'sleep', labelKey: 'windows.sleep', disabled });
   }
   if (online && !params.sleeping && params.muxKind !== 'misao' && params.misaoSupported) {
-    items.push({ kind: 'switch-misao', labelKey: 'windows.switchMisao', disabled: disabled || params.busy });
+    items.push({ kind: 'switch-misao', labelKey: 'windows.switchMisao', disabled: disabled || params.busy, disabledReasonKey: disabled ? 'windows.switchMisaoStale' : params.busy ? 'windows.switchMisaoBusy' : undefined });
   }
   if (!online) {
     items.push({ kind: 'respawn', labelKey: params.sleeping ? 'common:terminal.wake' : 'windows.respawn' });

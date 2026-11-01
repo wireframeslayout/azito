@@ -894,11 +894,11 @@ describe('respawn mux API', () => {
       respawnService: { respawn } as any, sleepService: {} as any, sessionStrategyFactory: {} as any,
       sessionCaptureService: {} as any, supervisorRegistry: {} as any, windowActivityStatusService: {} as any,
       windowSnapshotService: {} as any, uiToken: '', buildSecondaryWindowEnv: () => ({}), serverIsolationMutex: new KeyedMutex(),
-      muxSwitchSettingsRepo: { get: () => 'ask' } as any, agentActivityMonitor: { snapshot: () => [] } as any,
+      muxSwitchSettingsRepo: { get: () => 'ask' } as any, misaoVersion: async () => '0.3.0', agentActivityMonitor: { snapshot: () => [] } as any,
       auditLogService: { record } as any,
     });
     const plan = await app.inject({ method: 'GET', url: '/api/windows/1/respawn-plan' });
-    expect(plan.json()).toMatchObject({ currentMux: 'tmux', misao: { hosted: true, available: true }, mode: 'ask', shouldAsk: true });
+    expect(plan.json()).toMatchObject({ currentMux: 'tmux', misao: { hosted: true, available: true, version: '0.3.0' }, mode: 'ask', shouldAsk: true });
     const bad = await app.inject({ method: 'POST', url: '/api/windows/1/respawn', payload: { mux: 'misao', extra: true } });
     expect(bad.statusCode).toBe(400);
     expect(respawn).not.toHaveBeenCalled();

@@ -48,6 +48,7 @@ import type { WindowActivityStatusService } from './WindowActivityStatusService'
 
 export interface WindowsRouteOptions {
   muxSwitchSettingsRepo: SqliteMuxSwitchSettingsRepository;
+  misaoVersion?: (server: ServerConfig) => Promise<string | undefined>;
   auditLogService: AuditLogService;
   agentActivityMonitor: AgentActivityMonitor;
   windowRepo: IWindowRepository;
@@ -561,7 +562,9 @@ const windowsRoutes: FastifyPluginCallback<WindowsRouteOptions> = (fastify, opts
     const server = serverRepo.findByName(win.serverName);
     if (!server) return reply.status(404).send({ error: 'Server not found' });
     const kind = windowKindOf(win);
-    const misao = misaoStatusFor(opts.muxDriverRegistry, server);
+    const status = misaoStatusFor(opts.muxDriverRegistry, server);
+    const version = status.available ? await opts.misaoVersion?.(server) : undefined;
+    const misao = { ...status, ...(version ? { version } : {}) };
     const mode = opts.muxSwitchSettingsRepo.get();
     return { serverName: server.name, currentMux: kind, misao, mode, shouldAsk: shouldAskMuxSwitch(kind, mode, misao.available) };
   });

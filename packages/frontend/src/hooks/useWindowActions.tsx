@@ -1,4 +1,4 @@
-import { muxSwitchErrorKey } from '../lib/muxSwitchError';
+import { describeWakeError } from '../lib/muxSwitchError';
 import { useAgentActivity } from './useAgentActivity';
 import { useWakeWindow } from './useWakeWindow';
 import { useState, useCallback, useEffect } from 'react';
@@ -207,7 +207,7 @@ export function useWindowActions(
         return;
       }
       if (!result.tmuxTarget) {
-        reportFailure(t(`common:${muxSwitchErrorKey(result.error, result.reason)}`) + ' ' + t('common:terminal.muxErrorGuide'));
+        reportFailure(describeWakeError(result, (key) => t(`common:${key}`)));
         return;
       }
       refreshWorkspace();
@@ -300,7 +300,7 @@ export function useWindowActions(
       icon: actions[d.kind].icon,
       danger: d.danger,
       disabled: d.disabled,
-      description: d.kind === 'switch-misao' && d.disabled ? t('windows.switchMisaoBusy') : undefined,
+      description: d.disabledReasonKey ? t(d.disabledReasonKey) : undefined,
       onClick: () => actions[d.kind].run(d),
     }));
     items.push(

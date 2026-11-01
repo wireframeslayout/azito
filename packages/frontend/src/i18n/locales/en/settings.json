@@ -259,7 +259,7 @@
   },
   "terminal": {
     "policy": "When waking a sleeping tmux window",
-    "policyDescription": "Choose how tmux windows are reopened.",
+    "policyDescription": "Choose how to open sleeping tmux windows.",
     "ask": "Ask every time",
     "misao": "Always use misao",
     "tmux": "Keep tmux",
@@ -275,7 +275,7 @@
     "saveFailed": "Could not save settings",
     "retry": "Retry",
     "confirmDefaults": "Change the default to {{mux}} on {{count}} servers?",
-    "autoAskDescription": "Automatic wake keeps tmux and sends a notification.",
+    "autoAskDescription": "Automatic wakes, such as task resumes, also follow this setting. With “Ask every time”, the window opens in tmux and a notification offers the switch.",
     "defaultsCount": "{{count}} servers have tmux as default_mux."
   }
 }

@@ -89,7 +89,7 @@ export default function TerminalSection() {
             </label>
           ))}
         </div>
-        {settings.mode === 'ask' && <p style={descriptionStyle}>{t('terminal.autoAskDescription')}</p>}
+        <p style={descriptionStyle}>{t('terminal.autoAskDescription')}</p>
         {saveFailed && <Notice tone="danger" style={{ marginTop: 12 }}>{t('terminal.saveFailed')}</Notice>}
       </fieldset>
 
