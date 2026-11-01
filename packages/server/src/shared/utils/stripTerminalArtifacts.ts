@@ -24,6 +24,6 @@ export const stripTerminalArtifacts = (s: string): string =>
     // Written as escapes on purpose: raw PUA chars are invisible in editors and were
     // once silently dropped from this file, turning the class into /[-]/ — which then
     // stripped every hyphen from remote output (file names, git diff "-" lines).
-    .replace(/[-]/g, '')
+    .replace(/[\uE000-\uF8FF]/g, '')
     // Common emoji ranges (folder/file icons etc.)
     .replace(/[\u{1F300}-\u{1F9FF}]/gu, '');
