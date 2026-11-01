@@ -182,11 +182,6 @@ export default function ActiveWindowsSection({ connectPane, openTask, taskWindow
                         </span>
                       )}
                     </div>
-                    {displayName !== displayName && (
-                      <div style={{ fontSize: 'var(--font-xs)', color: 'var(--text-dim)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', marginTop: 1 }}>
-                        {displayName}
-                      </div>
-                    )}
                   </div>
                 </button>
                 {isBlocked && (

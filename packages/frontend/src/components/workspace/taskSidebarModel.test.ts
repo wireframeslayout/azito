@@ -210,3 +210,11 @@ it('adapts activity pane and target fields for shared title resolution', () => {
   const row = makeActivity(1, 'running', { windowId: 12, paneName: 'codex', paneCommand: 'codex' });
   expect(formatWindowTitleLine(resolveWindowTitle({ ...activeWindowTitleInput(row), taskTitle: 'Fix issue' }))).toBe('Fix issue · W-12');
 });
+
+it('passes only title fields from an activity row', () => {
+  const row = makeActivity(1, 'running', { windowId: 12, paneName: 'codex', paneCommand: 'codex' });
+  const input = activeWindowTitleInput(row);
+  expect(input).toMatchObject({ id: 12, paneTitle: 'codex', paneCommand: 'codex', tmuxTarget: row.target });
+  expect(input).not.toHaveProperty('status');
+  expect(input).not.toHaveProperty('key');
+});

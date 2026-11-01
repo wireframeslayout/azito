@@ -107,11 +107,6 @@ export function MobileActiveWindowsPanel({ onClose, connectPane, openTask, taskW
                     </span>
                   )}
                 </div>
-                {displayName !== displayName && (
-                  <div style={{ fontSize: 'var(--font-xs)', color: 'var(--text-dim)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', marginTop: 1 }}>
-                    {displayName}
-                  </div>
-                )}
               </div>
               {isBlocked && (
                 <span style={{ fontSize: 'var(--font-2xs)', color: 'var(--warning)', background: 'rgba(210, 153, 34, 0.15)', borderRadius: 'var(--radius-sm)', padding: '1px 5px', flexShrink: 0 }}>

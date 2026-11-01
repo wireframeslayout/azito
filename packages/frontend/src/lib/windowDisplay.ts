@@ -1,4 +1,4 @@
-import { parseMuxRef } from '@azito/shared';
+import { parseMuxRef, type WindowTitleInput } from '@azito/shared';
 
 
 export interface WindowIndexEntry {
@@ -39,6 +39,6 @@ export function sessionWindowLabel(sessionName: string, win: { name: string; ref
 }
 
 /** Adapt activity rows to the shared window title input. */
-export function activeWindowTitleInput(row: { windowId?: number; target: string; paneTitle?: string; paneName?: string; paneCommand?: string; label?: string; labelSource?: 'auto' | 'user'; taskTitle?: string; workerType?: string; windowType?: string }) {
-  return { ...row, id: row.windowId, paneTitle: row.paneTitle ?? row.paneName, tmuxTarget: row.target };
+export function activeWindowTitleInput(row: { windowId?: number; target: string; paneTitle?: string; paneName?: string; paneCommand?: string; label?: string; labelSource?: 'auto' | 'user'; taskTitle?: string; workerType?: string; windowType?: string }): WindowTitleInput {
+  return { id: row.windowId, label: row.label, labelSource: row.labelSource, paneTitle: row.paneTitle ?? row.paneName, paneCommand: row.paneCommand, taskTitle: row.taskTitle, workerType: row.workerType, windowType: row.windowType, tmuxTarget: row.target };
 }
