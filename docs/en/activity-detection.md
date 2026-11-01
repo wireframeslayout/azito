@@ -584,6 +584,8 @@ tmux. For tmux servers nothing below is created and the tmux behavior above is u
   known shell (an unknown command and title / profile decisions are unchanged). An empty codex title is
   `unknown` and falls through to the lower tiers (tmux normally supplies the hostname as a non-empty
   title, which is classified as idle).
+  When the window is absent from the listing for a tick (including a listing failure), bytes-based working is not excluded.
+  After an empty title falls through, misao can report `decidedBy` as `tier3_heuristic` or another lower tier and the stop reason as `unknown` (tmux reports `completed`).
 - **Blocked refinement.** The Rust core (misao 0.3.0 and later) also reports `blocked` in `pane.state`, from its
   bundled claude / codex profiles (mapped to blocked as above). A working / idle row can still hide a prompt, and a
   not-yet-updated 0.2.0 (Node) daemon never reports `blocked`, so for a misao window the screen is read the same way as

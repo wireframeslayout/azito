@@ -42,6 +42,11 @@ describe('TmuxClient AZITO_URL injection', () => {
     expect(envValue(calls[0], 'AZITO_UI_TOKEN')).toBe('');
   });
 
+  it('rejects workspace preparation when an agent reports a failed new-session', async () => {
+    const client = makeClient(async () => ({ stdout: '', stderr: 'duplicate session', code: 1 }));
+    await expect(client.prepareWorkspace(remoteSrv, 'prepared')).rejects.toThrow('duplicate session');
+  });
+
   it('createSession on a local server uses the loopback URL', async () => {
     const calls: string[][] = [];
     const client = makeClient(async (args) => {
