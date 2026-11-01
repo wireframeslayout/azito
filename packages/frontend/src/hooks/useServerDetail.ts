@@ -123,10 +123,10 @@ export function hasIsolationCleanupReportField(body: unknown): body is { isolati
   return !!body && typeof body === 'object' && !Array.isArray(body) && Object.prototype.hasOwnProperty.call(body, 'isolationCleanupReport');
 }
 
-async function fetchInstallStatus(encodedName: string): Promise<{ status: InstallStatusResponse | null; error: 'offline' | 'failed' | null }> {
+async function fetchInstallStatus(encodedName: string): Promise<{ status: InstallStatusResponse | null; error: 'offline' | 'failed' | null; detail?: string }> {
   try {
-    const r = await api<InstallStatusResponse | { error: string }>(`/servers/${encodedName}/install-status`);
-    if ('error' in r) return { status: null, error: r.error === 'agent_unreachable' ? 'offline' : 'failed' };
+    const r = await api<InstallStatusResponse | { error: string; code?: string; detail?: string }>(`/servers/${encodedName}/install-status`);
+    if ('error' in r) return { status: null, error: r.error === 'agent_unreachable' ? 'offline' : 'failed', ...(r.code === 'macos_local_network_permission' ? { detail: r.detail } : {}) };
     return { status: r, error: null };
   } catch {
     return { status: null, error: 'failed' };
@@ -140,6 +140,7 @@ interface UseServerDetailResult {
   installStatus: InstallStatusResponse | null;
   /** install-status を取得できなかった理由。'offline' はハブが到達不能（503）と判定した場合。 */
   installStatusError: 'offline' | 'failed' | null;
+  localNetworkDetail: string | undefined;
   sessions: Session[];
   windowById: Map<number, WindowIndexEntry>;
   taskById: Map<number, { title?: string }>;
@@ -176,6 +177,7 @@ export function useServerDetail(serverName: string | null): UseServerDetailResul
   const { servers, statuses, refresh: refreshStatuses } = useServerStatuses();
   const [installStatus, setInstallStatus] = useState<InstallStatusResponse | null>(null);
   const [installStatusError, setInstallStatusError] = useState<'offline' | 'failed' | null>(null);
+  const [localNetworkDetail, setLocalNetworkDetail] = useState<string | undefined>();
   const [sessions, setSessions] = useState<Session[]>([]);
   const [allProjects, setAllProjects] = useState<Array<{ windows?: Window[] }>>([]);
   const [allTasks, setAllTasks] = useState<Array<{ id: number; title?: string; windows?: Window[] }>>([]);
@@ -213,6 +215,7 @@ export function useServerDetail(serverName: string | null): UseServerDetailResul
     // new server until the fetch resolves).
     setInstallStatus(null);
     setInstallStatusError(null);
+    setLocalNetworkDetail(undefined);
     setSessions([]);
     setIsolationReport(null);
     setIsolationReportUnavailable(false);
@@ -257,6 +260,7 @@ export function useServerDetail(serverName: string | null): UseServerDetailResul
       if (fetchGenRef.current !== gen) return;
       setInstallStatus(installRes.status);
       setInstallStatusError(installRes.error);
+      setLocalNetworkDetail(installRes.detail);
       // A mux that could not be listed keeps its previous sessions (its windows are unreadable, not gone).
       setSessions((prev) => (sessionsRes ? keepUnavailableKinds(prev, sessionsRes) : []));
       let metaFailed = false;
@@ -345,7 +349,7 @@ export function useServerDetail(serverName: string | null): UseServerDetailResul
   }, [allTasks]);
 
   return {
-    server, servers, status, installStatus, installStatusError, sessions,
+    server, servers, status, installStatus, installStatusError, localNetworkDetail, sessions,
     windowById, taskById,
     muxDriverStatus,
     isolationReport, isolationReportUnavailable,

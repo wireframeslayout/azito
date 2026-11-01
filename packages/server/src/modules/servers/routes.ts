@@ -17,7 +17,7 @@ import type { AgentInstaller, InstallProgress } from './agent-deploy/AgentInstal
 import type { AgentBundler } from './agent-deploy/AgentBundler';
 import type { AgentHostRecorder } from './agent-deploy/AgentHostRecorder';
 import type { TransportFactory } from './transport/TransportFactory';
-import { AgentUnreachableError } from './transport/AgentUnreachableError';
+import { AgentLocalNetworkPermissionError, AgentUnreachableError } from './transport/AgentUnreachableError';
 import type { HarnessInstaller, HarnessInstallProgress, HarnessInstallResult } from './agent-deploy/HarnessInstaller';
 import type { HarnessUpdater } from './agent-deploy/HarnessUpdater';
 import { buildHarnessInstallOptions } from './agent-deploy/harnessInstallOptions';
@@ -454,7 +454,7 @@ const serversRoutes: FastifyPluginCallback<ServersRouteOptions> = (fastify, opts
           return { ok: true, type: 'agent', steps, startMethod: result.startMethod, ...(result.misaoError ? { misaoError: result.misaoError } : {}) };
         }
 
-        return reply.status(500).send({ error: result.error, steps });
+        return reply.status(500).send({ error: result.error, steps, ...(result.code ? { code: result.code, detail: result.detail } : {}) });
       }
 
       if (!type || !['local', 'agent'].includes(type))
@@ -892,7 +892,7 @@ const serversRoutes: FastifyPluginCallback<ServersRouteOptions> = (fastify, opts
         return { ok: true, steps, startMethod: result.startMethod, ...(result.misaoError ? { misaoError: result.misaoError } : {}) };
       }
 
-      return reply.status(500).send({ error: result.error, steps });
+      return reply.status(500).send({ error: result.error, steps, ...(result.code ? { code: result.code, detail: result.detail } : {}) });
     }),
   );
 
@@ -1260,7 +1260,7 @@ const serversRoutes: FastifyPluginCallback<ServersRouteOptions> = (fastify, opts
         osName = await resolveOsName(transport, transportFactory.hostProfileFor(srv));
       } catch (err: unknown) {
         if (err instanceof AgentUnreachableError) {
-          return reply.status(503).send({ error: 'agent_unreachable', server: err.serverName, reason: err.reason, status: 'offline' });
+          return reply.status(503).send({ error: 'agent_unreachable', server: err.serverName, reason: err.reason, status: 'offline', ...(err instanceof AgentLocalNetworkPermissionError ? { code: err.code, detail: err.detail } : {}) });
         }
         throw err;
       }

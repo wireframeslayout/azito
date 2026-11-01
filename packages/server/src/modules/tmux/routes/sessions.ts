@@ -1,3 +1,4 @@
+import { directionBody, nameBody, titleBody, keysBody, paneBody, refBody, workspaceRenameBody } from './actionBodies';
 import { persistRenamedWindowLabel } from '../windowIdentity';
 import type { FastifyPluginCallback, FastifyReply } from 'fastify';
 import { resourceCheckBody, type ResourceGuard, type ResourceUnavailable } from '../../servers/resources/ResourceGuard';
@@ -478,7 +479,9 @@ const sessionsRoutes: FastifyPluginCallback<SessionsRouteOptions> = (fastify, op
     '/api/servers/:name/sessions/:session/windows/:window/panes',
     async (request, reply) => {
       reply.header('Deprecation', 'true');
-      const direction = ((request.body as Record<string, unknown>)?.direction as string) || 'v';
+      const parsedBody = parseStrictBody(directionBody, request.body);
+      if (!parsedBody.ok) return reply.status(400).send(parsedBody.body);
+      const direction = parsedBody.data.direction || 'v';
       const target = `${request.params.session}:${request.params.window}`;
       try {
         // Issue #29 review, Important finding 2: identity resolution, the
@@ -785,7 +788,9 @@ const sessionsRoutes: FastifyPluginCallback<SessionsRouteOptions> = (fastify, op
       const srv = serverRepo.findByName(request.params.name);
       if (!srv) return reply.status(404).send({ error: 'Server not found' });
       if (!requireTmuxDriver(srv, reply)) return;
-      const { name } = request.body as { name?: string };
+      const parsedBody = parseStrictBody(nameBody, request.body);
+      if (!parsedBody.ok) return reply.status(400).send(parsedBody.body);
+      const { name } = parsedBody.data;
       if (!name) return reply.status(400).send({ error: 'New name required' });
       try {
         await tmux.renameSession(srv, request.params.session, name);
@@ -805,7 +810,9 @@ const sessionsRoutes: FastifyPluginCallback<SessionsRouteOptions> = (fastify, op
       const srv = serverRepo.findByName(request.params.name);
       if (!srv) return reply.status(404).send({ error: 'Server not found' });
       if (!requireTmuxDriver(srv, reply)) return;
-      const { name } = request.body as { name?: string };
+      const parsedBody = parseStrictBody(nameBody, request.body);
+      if (!parsedBody.ok) return reply.status(400).send(parsedBody.body);
+      const { name } = parsedBody.data;
       if (!name) return reply.status(400).send({ error: 'New name required' });
       const target = decodeURIComponent(request.params.target);
       const windowRow = opts.windowRepo?.findByServerAndTarget(request.params.name, target);
@@ -832,7 +839,9 @@ const sessionsRoutes: FastifyPluginCallback<SessionsRouteOptions> = (fastify, op
       const srv = serverRepo.findByName(request.params.name);
       if (!srv) return reply.status(404).send({ error: 'Server not found' });
       if (!requireTmuxDriver(srv, reply)) return;
-      const { title } = request.body as { title?: string };
+      const parsedBody = parseStrictBody(titleBody, request.body);
+      if (!parsedBody.ok) return reply.status(400).send(parsedBody.body);
+      const { title } = parsedBody.data;
       if (!title) return reply.status(400).send({ error: 'New title required' });
       try {
         await tmux.renamePane(srv, decodeURIComponent(request.params.target), title);
@@ -888,7 +897,9 @@ const sessionsRoutes: FastifyPluginCallback<SessionsRouteOptions> = (fastify, op
       const srv = serverRepo.findByName(request.params.name);
       if (!srv) return reply.status(404).send({ error: 'Server not found' });
       if (!requireTmuxDriver(srv, reply)) return;
-      const { keys } = request.body as { keys?: string[] };
+      const parsedBody = parseStrictBody(keysBody, request.body);
+      if (!parsedBody.ok) return reply.status(400).send(parsedBody.body);
+      const { keys } = parsedBody.data;
       if (!keys || !Array.isArray(keys))
         return reply.status(400).send({ error: 'keys array required' });
       try {
@@ -968,7 +979,9 @@ const sessionsRoutes: FastifyPluginCallback<SessionsRouteOptions> = (fastify, op
       const srv = serverRepo.findByName(request.params.name);
       if (!srv) return reply.status(404).send({ error: 'Server not found' });
       const ref = resolveRefForServer(request.params.ref, srv);
-      const { name } = request.body as { name?: string };
+      const parsedBody = parseStrictBody(nameBody, request.body);
+      if (!parsedBody.ok) return reply.status(400).send(parsedBody.body);
+      const { name } = parsedBody.data;
       if (!name) return reply.status(400).send({ error: 'New name required' });
       const windowRow = opts.windowRepo?.findByServerAndRef(request.params.name, ref);
       const muxClient = opts.muxDriverRegistry?.resolve(srv) ?? tmux;
@@ -998,7 +1011,9 @@ const sessionsRoutes: FastifyPluginCallback<SessionsRouteOptions> = (fastify, op
         const paneEnv = resolvePaneAddEnv(windowRow, freshSrv, { uiToken: opts.uiToken, buildSecondaryWindowEnv: opts.buildSecondaryWindowEnv });
         if (!paneEnv.ok) return reply.status(paneEnv.status).send(paneEnv.body);
 
-        const body = request.body as { ordinal?: number; direction?: string };
+        const parsedBody = parseStrictBody(paneBody, request.body);
+        if (!parsedBody.ok) return reply.status(400).send(parsedBody.body);
+        const body = parsedBody.data;
         const direction = (body.direction || 'v') as 'h' | 'v';
         const ordinal = (body.ordinal ?? 1) as PaneOrdinal;
         const muxClient = opts.muxDriverRegistry?.resolve(freshSrv) ?? tmux;
@@ -1072,7 +1087,9 @@ const sessionsRoutes: FastifyPluginCallback<SessionsRouteOptions> = (fastify, op
       const muxClient = opts.muxDriverRegistry?.resolve(srv) ?? tmux;
       const ordinal = parseInt(request.params.ordinal, 10) as PaneOrdinal;
       const handle = await resolvePaneHandle(muxClient, srv, ref, ordinal);
-      const { keys } = request.body as { keys?: string[] };
+      const parsedBody = parseStrictBody(keysBody, request.body);
+      if (!parsedBody.ok) return reply.status(400).send(parsedBody.body);
+      const { keys } = parsedBody.data;
       if (!keys || !Array.isArray(keys))
         return reply.status(400).send({ error: 'keys array required' });
       await muxClient.sendKeysToHandle(srv, handle, keys);
@@ -1124,7 +1141,9 @@ const sessionsRoutes: FastifyPluginCallback<SessionsRouteOptions> = (fastify, op
       const muxClient = opts.muxDriverRegistry?.resolve(srv) ?? tmux;
       const ordinal = parseInt(request.params.ordinal, 10) as PaneOrdinal;
       const handle = await resolvePaneHandle(muxClient, srv, ref, ordinal);
-      const { name } = request.body as { name?: string };
+      const parsedBody = parseStrictBody(nameBody, request.body);
+      if (!parsedBody.ok) return reply.status(400).send(parsedBody.body);
+      const { name } = parsedBody.data;
       if (!name) return reply.status(400).send({ error: 'New name required' });
       const result = await muxClient.setPaneTitle(srv, handle, name);
       const err = execResultError(result);
@@ -1154,7 +1173,9 @@ const sessionsRoutes: FastifyPluginCallback<SessionsRouteOptions> = (fastify, op
     async (request, reply) => {
       const srv = serverRepo.findByName(request.params.name);
       if (!srv) return reply.status(404).send({ error: 'Server not found' });
-      const { ref: refParam } = request.body as { ref?: string } ?? {};
+      const parsedBody = parseStrictBody(refBody, request.body);
+      if (!parsedBody.ok) return reply.status(400).send(parsedBody.body);
+      const { ref: refParam } = parsedBody.data;
       if (!refParam) return reply.status(400).send({ error: 'ref is required' });
       const ref = resolveRefForServer(refParam, srv);
       const muxClient = opts.muxDriverRegistry?.resolve(srv) ?? tmux;
@@ -1259,7 +1280,9 @@ const sessionsRoutes: FastifyPluginCallback<SessionsRouteOptions> = (fastify, op
     async (request, reply) => {
       const srv = serverRepo.findByName(request.params.name);
       if (!srv) return reply.status(404).send({ error: 'Server not found' });
-      const { name, kind: kindParam } = request.body as { name?: string; kind?: unknown };
+      const parsedBody = parseStrictBody(workspaceRenameBody, request.body);
+      if (!parsedBody.ok) return reply.status(400).send(parsedBody.body);
+      const { name, kind: kindParam } = parsedBody.data;
       if (!name) return reply.status(400).send({ error: 'New name required' });
       const kind = requestedMuxKind(kindParam, srv);
       if (kind === null) return reply.status(400).send({ error: 'Invalid kind' });

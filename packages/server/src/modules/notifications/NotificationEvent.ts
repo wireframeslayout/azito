@@ -11,6 +11,7 @@
 export type AgentActivityStopReason = 'completed' | 'interrupted' | 'deleted' | 'offline' | 'api_error' | 'unknown';
 
 export type NotificationEvent =
+  | { type: 'subagents:updated'; payload: { windowId: number; sessionId: string } }
   | { type: 'sessions:updated'; payload: { serverName: string } }
   | { type: 'task:status'; payload: { taskId: number; status: string; title?: string; projectId?: number } }
   | { type: 'phase:completed'; payload: { taskId: number; unitId: number; phase: string; summary: Record<string, unknown> | null } }

@@ -29,6 +29,7 @@ export interface WebhookRouteOptions {
   recordAgentActivity: (signal: AgentHookSignal) => void;
   /** v1 only ever receives event: 'open' — see InteractionMonitor's doc comment. */
   recordInteractionSignal: (signal: InteractionSignal) => void;
+  recordSubagentSignal: (serverName: string, paneId: string, sessionId: string) => Promise<void>;
   misao: MisaoWebhookOptions;
 }
 
@@ -103,6 +104,22 @@ function parseInteractionContent(raw: unknown): InteractionContent | undefined {
 
 const webhookRoutes: FastifyPluginCallback<WebhookRouteOptions> = (fastify, opts, done) => {
   const { taskRepo, verifyToken, resolveServerName, recordAgentActivity, recordInteractionSignal, misao } = opts;
+
+  fastify.post('/api/webhooks/agent-subagent', async (request, reply) => {
+    if (!verifyToken(request.headers.authorization)) return reply.status(401).send({ error: 'Unauthorized' });
+    const body = request.body as (HookSignalBody & { sessionId?: unknown; muxPaneRef?: unknown; event?: unknown }) | null;
+    if (!body || typeof body !== 'object' || typeof body.serverName !== 'string' || !body.serverName ||
+        typeof body.sessionId !== 'string' || !SESSION_ID_RE.test(body.sessionId) || body.event !== 'subagent') {
+      return reply.status(400).send({ error: 'Invalid subagent signal' });
+    }
+    const misaoPaneId = readMisaoPaneId(body);
+    const paneId = misaoPaneId === undefined ? body.muxPaneRef : misaoPaneId;
+    if (typeof paneId !== 'string' || !isPaneHandleLike(paneId, misaoPaneId === undefined ? 'tmux' : 'misao')) {
+      return reply.status(400).send({ error: 'Invalid pane id' });
+    }
+    await opts.recordSubagentSignal(resolveServerName(body.serverName), paneId, body.sessionId);
+    return { ok: true };
+  });
 
   fastify.post('/api/webhooks/agent-done', async (request, reply) => {
     if (!verifyToken(request.headers.authorization)) {
