@@ -1,3 +1,6 @@
+import { createHash } from 'node:crypto';
+import { agentTaskAction } from './windowsAgentTask';
+import { buildTaskXml } from '../../../shared/os/taskScheduler/taskDefinition';
 import { parseEnv } from 'util';
 import { describe, expect, it } from 'vitest';
 import { DEFAULT_WINDOWS_AGENT_OPTIONS } from './windowsAgentConfig';
@@ -63,6 +66,25 @@ describe('powershellErrorText', () => {
   it('takes the message out of CLIXML', () => {
     const clixml = '#< CLIXML\r\n<Objs Version="1.1.0.1"><S S="Error">tar failed: a &lt;b&gt;_x000D__x000A_</S><S S="Error">at line 3_x000D__x000A_</S></Objs>';
     expect(powershellErrorText(clixml)).toBe('tar failed: a <b>\nat line 3');
+  });
+});
+
+describe('stopping a task launcher', () => {
+  it('ends the recognised launcher before sweeping its agent even when the scheduler reports stopped', async () => {
+    const fake = new FakeWindowsHost({ sha256: 'a'.repeat(64), existingTask: 'stopped' });
+    const info = { nodePath: 'C:\\node.exe', nodeVersion: '24', arch: 'x64' as const, windowsVersion: null, buildNumber: 22631, cim: 'ok' as const, tailscaleIp: '100.64.0.9', home: 'C:\\Users\\dev', systemRoot: 'C:\\Windows', userId: 'PC\\dev' };
+    const layout = windowsAgentLayout(info.home, DEFAULT_WINDOWS_AGENT_OPTIONS, 'abc123');
+    const action = agentTaskAction(info.systemRoot, info.nodePath, layout.envFile, layout.entry, DEFAULT_WINDOWS_AGENT_OPTIONS.taskName);
+    fake.registeredXml = buildTaskXml({ userId: info.userId, description: 'agent', executable: action.executable, args: action.args, workingDirectory: layout.versionDir, restartOnFailure: { intervalMinutes: 1, count: 999 } });
+    const deployer = new WindowsAgentDeployer(fake.exec, { putFile: async () => undefined, putBuffer: async () => undefined }, DEFAULT_WINDOWS_AGENT_OPTIONS);
+    await deployer.stop('h', info);
+    const sweeps = fake.calls.filter((call) => call.text.includes('function Get-AgentNodes')).map((call) => call.text);
+    expect(sweeps).toHaveLength(2);
+    expect(sweeps[0]).toContain("Name = 'powershell.exe'");
+    expect(sweeps[0]).toContain(createHash('sha256').update(action.args.at(-1)!, 'ascii').digest('hex'));
+    expect(sweeps[0]).not.toContain(action.args.at(-1)!);
+    expect(sweeps[1]).toContain("Name = 'node.exe'");
+    expect(sweeps[1]).toContain(`--env-file=${layout.envFile}`);
   });
 });
 

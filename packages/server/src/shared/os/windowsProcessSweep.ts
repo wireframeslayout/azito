@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto';
 import { powershellDialect } from './shellDialect';
 
 export interface ProcessSweepInput {
@@ -12,6 +13,8 @@ export interface ProcessSweepInput {
   label: string;
   /** Also end the `conhost.exe` that started such a process (the task runs the program under `conhost.exe --headless`). */
   endParentConhost: boolean;
+  /** The argument is an EncodedCommand; compare its digest to avoid exceeding the command-line limit. */
+  hashEncodedCommand?: boolean;
 }
 
 /**
@@ -27,11 +30,19 @@ export interface ProcessSweepInput {
 export function buildEndProcessesScript(input: ProcessSweepInput): string {
   const q = powershellDialect.quote;
   return [
-    `$envArgument = ${q(input.argument)}`,
-    "$pattern = '(^|[\\s\"])' + [regex]::Escape($envArgument) + '([\\s\"]|$)'",
+    ...(input.hashEncodedCommand ? [
+      `$expectedHash = '${createHash('sha256').update(input.argument, 'ascii').digest('hex')}'`,
+      "$pattern = '(?:^|\\s)-EncodedCommand\\s+([A-Za-z0-9+/=]+)(?:\\s|$)'",
+      '$sha = [Security.Cryptography.SHA256]::Create()',
+    ] : [
+      `$envArgument = ${q(input.argument)}`,
+      "$pattern = '(^|[\\s\"])' + [regex]::Escape($envArgument) + '([\\s\"]|$)'",
+    ]),
     '$me = [Security.Principal.WindowsIdentity]::GetCurrent().User.Value',
     'function Test-Mine($process) { try { (Invoke-CimMethod -InputObject $process -MethodName GetOwnerSid -ErrorAction Stop).Sid -eq $me } catch { $false } }',
-    'function Test-Argument($process) { $process.CommandLine -and ($process.CommandLine -match $pattern) }',
+    input.hashEncodedCommand
+      ? "function Test-Argument($process) { if (-not $process.CommandLine) { return $false }; if ($process.CommandLine -match $pattern) { $hash = [BitConverter]::ToString($sha.ComputeHash([Text.Encoding]::ASCII.GetBytes($Matches[1]))).Replace('-', ''); return $hash -eq $expectedHash }; return $false }"
+      : 'function Test-Argument($process) { $process.CommandLine -and ($process.CommandLine -match $pattern) }',
     `function Get-AgentNodes { @(Get-CimInstance Win32_Process -Filter "Name = ${q(input.image)}" | Where-Object { (Test-Argument $_) -and (Test-Mine $_) }) }`,
     'function Get-Same($target) { $current = Get-CimInstance Win32_Process -Filter "ProcessId = $($target.Id)"; if ($current -and $current.CreationDate -eq $target.Created) { $current } }',
     '$targets = @()',

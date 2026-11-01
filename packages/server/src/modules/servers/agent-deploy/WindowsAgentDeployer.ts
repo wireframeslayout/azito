@@ -234,7 +234,7 @@ export class WindowsAgentDeployer {
       await this.transfer.putFile(input.sshHost, input.tarballPath, `${layout.rootRelative}/azito-agent-${input.version}.tar.gz`);
       await this.verifySha256(input.sshHost, layout.tarball, input.expectedSha256);
       previous = await this.capturePrevious(input.sshHost, client, input.host, layout);
-      await this.stopTask(input.sshHost, client, layout.envFile);
+      await this.stopTask(input.sshHost, client, layout.envFile, input.host);
       await this.extract(input, layout);
       progress.versionCreated = true;
       await this.writeSettings(input, layout, envContent);
@@ -258,7 +258,7 @@ export class WindowsAgentDeployer {
 
   /** Stops the task if it is running and waits until it is not (`/End` returns before the process is gone). */
   async stop(sshHost: string, host: WindowsPreflightInfo): Promise<void> {
-    await this.stopTask(sshHost, this.schtasks(sshHost, host), windowsAgentEnvFile(host.home, this.options));
+    await this.stopTask(sshHost, this.schtasks(sshHost, host), windowsAgentEnvFile(host.home, this.options), host);
   }
 
   /** Stops and starts the registered task. A task that is not registered is an error (nothing is installed to restart); one disabled by hand is not touched. */
@@ -274,7 +274,7 @@ export class WindowsAgentDeployer {
     const identity = action && agentTaskIdentity(action, host.systemRoot, root, windowsAgentEnvFile(host.home, this.options), this.options.taskName);
     if (!identity || !await this.taskOwnedByHost(sshHost, xml, host.userId)) throw new Error(`The task "${this.options.taskName}" is not a recognised agent task for ${root}`);
     if (identity.launcher && state.running) return 'starting';
-    await this.stopTask(sshHost, client, windowsAgentEnvFile(host.home, this.options));
+    await this.stopTask(sshHost, client, windowsAgentEnvFile(host.home, this.options), host);
     await client.start(this.options.taskName);
     return 'restarted';
   }
@@ -390,8 +390,21 @@ export class WindowsAgentDeployer {
    * task runs is gone (its settings say so), which is what `/End` and the Task Scheduler's own "End" rely on; this is the
    * safety net for an agent that does not (an older one, or one whose parent watch has not fired yet).
    */
-  private async stopTask(sshHost: string, client: SchtasksClient, envFile: string): Promise<void> {
+  private async stopTask(sshHost: string, client: SchtasksClient, envFile: string, host: WindowsPreflightInfo): Promise<void> {
+    const state = await client.query(this.options.taskName);
+    let launcherCommand: string | undefined;
+    if (state.exists) {
+      const xml = await client.exportXml(this.options.taskName);
+      const action = soleExecAction(xml);
+      const identity = action && agentTaskIdentity(action, host.systemRoot, path.win32.dirname(envFile), envFile, this.options.taskName);
+      if (identity?.launcher && await this.taskOwnedByHost(sshHost, xml, host.userId)) {
+        launcherCommand = /-EncodedCommand ([A-Za-z0-9+/=]+)$/.exec(action!.argumentsLine)?.[1];
+      }
+    }
     await this.endTask(client, this.options.taskName);
+    if (launcherCommand) {
+      await this.script(sshHost, 'Ending the agent launcher', buildEndProcessesScript({ image: 'powershell.exe', argument: launcherCommand, label: 'agent launcher', endParentConhost: false, hashEncodedCommand: true }), QUICK_MS);
+    }
     await this.endStrayProcesses(sshHost, envFile);
   }
 
@@ -568,7 +581,7 @@ export class WindowsAgentDeployer {
     // Nothing was touched before the capture: only the temporary files are removed.
     let restored = false;
     if (previous !== undefined) {
-      await attempt('stopped the new agent', () => this.stopTask(input.sshHost, client, layout.envFile));
+      await attempt('stopped the new agent', () => this.stopTask(input.sshHost, client, layout.envFile, input.host));
       const folder = await putBackAttempt('restored the version folder', 'Restoring the previous version folder', layout.versionDirPrev, layout.versionDir, progress.versionCreated);
       const settings = await putBackAttempt('restored the settings', 'Restoring the previous settings', layout.envFilePrev, layout.envFile, progress.settingsSwapped);
       restored = folder && settings;
