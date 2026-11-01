@@ -13,12 +13,13 @@
     "retry": "Retry",
     "failed": "Could not load sessions: {{servers}}",
     "loading": "Loading…",
-    "noResults": "No matching results",
+    "noResults": "No results for “{{query}}”",
     "empty": "No recent items",
     "more": "{{count}} more",
     "count": "{{count}} results",
     "hint": "Tab: category · ↑↓: select · Enter: open · F6: controls",
     "sleeping": "Sleeping",
-    "offline": "Offline"
+    "offline": "Offline",
+    "orchestrator": "Orchestrators"
   }
 }

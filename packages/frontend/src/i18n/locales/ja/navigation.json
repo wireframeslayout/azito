@@ -13,12 +13,13 @@
     "retry": "再取得",
     "failed": "セッションを取得できませんでした: {{servers}}",
     "loading": "読み込み中…",
-    "noResults": "該当する結果がありません",
+    "noResults": "「{{query}}」に一致する結果はありません",
     "empty": "最近の項目はありません",
     "more": "ほか {{count}} 件",
     "count": "{{count}} 件",
     "hint": "Tab: 種類切替 · ↑↓: 選択 · Enter: 開く · F6: 操作ボタン",
     "sleeping": "スリープ中",
-    "offline": "オフライン"
+    "offline": "オフライン",
+    "orchestrator": "オーケストレーター"
   }
 }

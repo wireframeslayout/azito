@@ -2,7 +2,7 @@ import { formatWindowId, formatWindowTitleLine, resolveWindowTitle } from '@azit
 import { findSessionWindow } from '../windowMatch';
 import type { ProjectListItem, Session, Task, Window } from '../../pages/workspace/types';
 
-export type SearchKind = 'window' | 'task' | 'project';
+export type SearchKind = 'window' | 'orchestrator' | 'task' | 'project';
 export interface SearchItem {
   kind: SearchKind;
   id: number;
@@ -31,7 +31,7 @@ export function buildSearchIndex(projects: ProjectListItem[], tasks: Task[], tas
     const pane = matched?.window.panes.find(p => p.active) ?? matched?.window.panes[0];
     const display = resolveWindowTitle({ ...window, paneTitle: pane?.title, paneCommand: pane?.command, taskTitle: task?.title });
     const title = display.title;
-    items.push({ kind: 'window', id: window.id, title, projectId: project.id, projectName: project.name,
+    items.push({ kind: window.role === 'orchestrator' ? 'orchestrator' : 'window', id: window.id, title, projectId: project.id, projectName: project.name,
       fields: [title, formatWindowTitleLine(display), formatWindowId(window.id), `w${window.id}`, String(window.id), window.serverName, project.name, task?.title ?? '', task ? `#${task.id}` : ''],
       window, recent: task ? taskOpenedAt[task.id] ?? 0 : 0, active: activeWindowIds.has(window.id) });
   };

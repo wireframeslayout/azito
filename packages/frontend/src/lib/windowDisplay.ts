@@ -10,6 +10,7 @@ export interface WindowIndexEntry {
   workerType?: string;
   windowType?: string;
   taskId?: number;
+  role?: string;
 }
 
 export function buildWindowIndex<T extends WindowIndexEntry>(

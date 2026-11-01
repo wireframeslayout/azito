@@ -34,3 +34,12 @@ describe('search ordering', () => {
     expect(searchIndex(index, 'editor')).toHaveLength(0);
   });
 });
+
+describe('window roles', () => {
+  it('classifies orchestrators separately and defaults absent roles to windows', () => {
+    const window = projects[0].windows![0];
+    const index = buildSearchIndex([{ ...projects[0], windows: [window, { ...window, id: 807, role: 'orchestrator' }] }], tasks, {}, new Set(), {});
+    expect(index.find(item => item.id === 806 && item.window)?.kind).toBe('window');
+    expect(index.find(item => item.id === 807 && item.window)?.kind).toBe('orchestrator');
+  });
+});
