@@ -277,5 +277,18 @@
     "confirmDefaults": "Change the default to {{mux}} on {{count}} servers?",
     "autoAskDescription": "Automatic wakes, such as task resumes, also follow this setting. With “Ask every time”, the window opens in tmux and a notification offers the switch.",
     "defaultsCount": "{{count}} servers have tmux as default_mux."
+  },
+  "history": {
+    "description": "These settings apply only to this device.",
+    "title": "Window history",
+    "maxCount": "Maximum confirmed entries",
+    "period": "Retention period",
+    "periods": [
+      "30 minutes",
+      "1 hour",
+      "6 hours",
+      "24 hours",
+      "7 days"
+    ]
   }
 }

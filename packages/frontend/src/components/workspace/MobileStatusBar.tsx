@@ -1,5 +1,5 @@
 import type { ActivityTitleData } from '../../lib/windowDisplay';
-import { useMemo, useState, type CSSProperties } from 'react';
+import { useMemo, useRef, useState, type CSSProperties } from 'react';
 import { useTranslation } from 'react-i18next';
 import { useActiveWindowRows } from '../../hooks/useActiveWindowRows';
 import type { ActiveWindowRow } from '../../hooks/useActiveWindowRows';
@@ -9,8 +9,11 @@ import { formatRelativeTime } from '../../utils/time';
 import { openActivityTarget } from '../../lib/activityOpen';
 import { useOpenTerminalTarget } from '../../hooks/useTerminalTargetOpener';
 import type { ConnectPaneFn } from '../../lib/terminalRef';
-import { groupRunningRows, readKeyFor, pruneStaleReadKeys } from '../../lib/activityPillLogic';
-import { FINISHED_TTL_MS } from '../../hooks/useAgentActivity';
+import { groupRunningRows } from '../../lib/activityPillLogic';
+import { MOBILE_STATUS_BAR_HEIGHT } from '../../lib/mobileChrome';
+import { IconButton } from '../ui/IconButton';
+import { Icon } from '../ui/Icon';
+import { useAgentActivity } from '../../hooks/useAgentActivity';
 import type { Task } from '../../pages/workspace/types';
 import { HealthDot } from '../statusbar/HealthDot';
 import { ResourceMeter } from '../statusbar/ResourceMeter';
@@ -20,12 +23,12 @@ import { ServerHealthSheet } from './ServerHealthSheet';
 
 // SP常設ステータスバー（Issue #338 T13）。旧 FloatingActivityPill（右下フローティングピル）を
 // 廃止し、画面最下段の常駐バーへ置き換えたもの。データ・集計ロジック（グループ化・既読ID管理・
-// ヘルス判定）はそのまま移設している（コピー禁止 — groupRunningRows/readKeyFor/pruneStaleReadKeys
-// は lib/activityPillLogic.ts、getHealthLevel/getWorstHealth は hooks/useServerResources.tsx を
+// ヘルス判定）は共通ロジックを利用する（groupRunningRows は lib/activityPillLogic.ts、
+// getHealthLevel/getWorstHealth は hooks/useServerResources.tsx を
 // 引き続き共有する）。配置は Layout の mobile-shell-slot と対になる mobile-status-slot への
 // createPortal（Workspace.tsx）— グローバルページ表示中も常駐する。
 
-const BAR_HEIGHT = 26;
+
 
 interface MobileStatusBarProps {
   titleData: ActivityTitleData;
@@ -56,6 +59,7 @@ const rowButtonStyle: CSSProperties = {
   textAlign: 'left',
   cursor: 'pointer',
   padding: '6px 8px',
+  minHeight: 44,
   borderRadius: 'var(--radius-sm)',
   font: 'inherit',
   fontSize: 'var(--font-sm)',
@@ -81,13 +85,21 @@ const rowTitleStyle: CSSProperties = {
 export function MobileStatusBar({ titleData, allTasks, openTask, connectPane }: MobileStatusBarProps) {
   const openTerminal = useOpenTerminalTarget(connectPane);
   const { t } = useTranslation(['workspace', 'common']);
-  const { rows } = useActiveWindowRows(titleData);
+  const { rows, historyCount } = useActiveWindowRows(titleData);
   const [open, setOpen] = useState(false);
-  // セッション内既読管理（spec: localStorage不要）。ドロップアップを開いた時点の完了行キーを
-  // 既読にし、以後バッジの未読数から外す。
-  const [readKeys, setReadKeys] = useState<Set<string>>(() => new Set());
+  const { markFinishedSeen, dismissFinished, clearSeenFinished, retention } = useAgentActivity();
+  const [historyOpen, setHistoryOpen] = useState(false);
   const [healthOpen, setHealthOpen] = useState(false);
-  const containerRef = useClickOutside<HTMLDivElement>(() => setOpen(false));
+  const openedUnread = useRef<ActiveWindowRow[]>([]);
+  const closePanel = () => {
+    for (const captured of openedUnread.current) {
+      const current = rows.find((row) => row.key === captured.key && row.finishedAt === captured.finishedAt && row.seenAt == null);
+      if (current) markFinishedSeen(current.serverName, current.target, current.windowId);
+    }
+    openedUnread.current = [];
+    setOpen(false);
+  };
+  const containerRef = useClickOutside<HTMLDivElement>(() => { if (open) closePanel(); });
 
   // サーバーヘルス。複数サーバーは最悪値を代表として使う。
   const servers = useServerResourcesContext();
@@ -114,31 +126,21 @@ export function MobileStatusBar({ titleData, allTasks, openTask, connectPane }: 
     });
   }, [rows, taskById, t]);
 
-  // 完了行（既読状態に関わらず一覧には出続ける — 「既読」はバッジの未読数だけに作用し、
-  // 一覧そのものを消さない）。寿命の適用は AgentActivityProvider に一元化されているので、
-  // ここでは年齢フィルタを持たない。
   const finishedRows = useMemo(() => rows.filter((r) => r.status === 'finished'), [rows]);
 
-  const unreadFinishedCount = useMemo(
-    () => finishedRows.filter((r) => !readKeys.has(readKeyFor(r))).length,
-    [finishedRows, readKeys],
-  );
+  const unreadRows = finishedRows.filter((r) => r.seenAt == null);
+  const historyRows = finishedRows.filter((r) => r.seenAt != null);
+  const unreadFinishedCount = unreadRows.length;
 
   const workingCount = workingGroups.length;
 
   const handleToggle = () => {
-    setOpen((prev) => {
-      const next = !prev;
-      if (next && finishedRows.length > 0) {
-        setReadKeys((cur) => {
-          const cutoff = Date.now() - FINISHED_TTL_MS;
-          const merged = pruneStaleReadKeys(cur, cutoff);
-          for (const r of finishedRows) merged.add(readKeyFor(r));
-          return merged;
-        });
-      }
-      return next;
-    });
+    if (open) {
+      closePanel();
+    } else {
+      openedUnread.current = unreadRows;
+      setOpen(true);
+    }
   };
 
   const handleWorkingRowOpen = (group: WorkingGroup) => {
@@ -148,7 +150,7 @@ export function MobileStatusBar({ titleData, allTasks, openTask, connectPane }: 
       openTask,
       openTerminal,
     );
-    setOpen(false);
+    closePanel();
   };
 
   const handleFinishedRowOpen = (row: ActiveWindowRow) => {
@@ -158,7 +160,10 @@ export function MobileStatusBar({ titleData, allTasks, openTask, connectPane }: 
       openTask,
       openTerminal,
     );
-    setOpen(false);
+    if (!openedUnread.current.some((captured) => captured.key === row.key && captured.finishedAt === row.finishedAt)) {
+      markFinishedSeen(row.serverName, row.target, row.windowId);
+    }
+    closePanel();
   };
 
   return (
@@ -171,7 +176,7 @@ export function MobileStatusBar({ titleData, allTasks, openTask, connectPane }: 
             position: 'fixed',
             left: 0,
             right: 0,
-            bottom: `calc(${BAR_HEIGHT}px + env(safe-area-inset-bottom))`,
+            bottom: `calc(${MOBILE_STATUS_BAR_HEIGHT}px + env(safe-area-inset-bottom))`,
             zIndex: 100,
             maxHeight: '60vh',
             overflowY: 'auto',
@@ -203,19 +208,30 @@ export function MobileStatusBar({ titleData, allTasks, openTask, connectPane }: 
               ))}
             </section>
           )}
-          {finishedRows.length > 0 && (
+          {unreadRows.length > 0 && (
             <section>
-              <div style={sectionHeaderStyle}>{t('workspace:activityPill.finishedSection', { count: finishedRows.length })}</div>
-              {finishedRows.map((row) => (
-                <button key={row.key} type="button" className="row-hover" onClick={() => handleFinishedRowOpen(row)} style={rowButtonStyle}>
-                  <FinishedIndicator />
-                  <span style={rowTitleStyle}>{row.title}</span>
-                  {row.finishedAt != null && (
-                    <span style={{ flexShrink: 0, fontSize: 'var(--font-2xs)', color: 'var(--success)' }}>
-                      {formatRelativeTime(row.finishedAt)}
-                    </span>
-                  )}
-                </button>
+              <div style={sectionHeaderStyle}>{t('workspace:activityPill.finishedSection', { count: unreadRows.length })}</div>
+              {unreadRows.map((row) => <button key={row.key} type="button" className="row-hover" onClick={() => handleFinishedRowOpen(row)} style={rowButtonStyle}>
+                <FinishedIndicator /><span style={rowTitleStyle}>{row.title}</span>
+                {row.finishedAt != null && <span style={{ color: 'var(--success)', fontSize: 'var(--font-2xs)' }}>{t('workspace:activeWindows.done')} · {formatRelativeTime(row.finishedAt)}</span>}
+              </button>)}
+            </section>
+          )}
+          {historyRows.length > 0 && (
+            <section>
+              <div style={{ display: 'flex', alignItems: 'center' }}>
+                <button type="button" aria-expanded={historyOpen} onClick={() => setHistoryOpen((v) => !v)} style={{ ...rowButtonStyle, flex: 1 }}>{t('workspace:activeWindows.history', { count: historyCount, max: retention.maxCount })}</button>
+                <IconButton type="button" title={t('workspace:activeWindows.clearHistory')} aria-label={t('workspace:activeWindows.clearHistory')} onClick={clearSeenFinished} style={{ minWidth: 44, minHeight: 44 }}><Icon name="trash" size={14} /></IconButton>
+              </div>
+              {historyOpen && historyRows.map((row) => (
+                <div key={row.key} style={{ display: 'flex', alignItems: 'center' }}>
+                  <button type="button" className="row-hover" onClick={() => handleFinishedRowOpen(row)} style={rowButtonStyle}>
+                    <FinishedIndicator seen={row.seenAt != null} />
+                    <span style={{ ...rowTitleStyle, color: 'var(--text-dim)' }}>{row.title}</span>
+                    {row.finishedAt != null && <span style={{ color: 'var(--text-dim)', fontSize: 'var(--font-2xs)' }}>{t('workspace:activeWindows.done')} · {formatRelativeTime(row.finishedAt)}</span>}
+                  </button>
+                  <IconButton type="button" aria-label={t('workspace:activeWindows.deleteHistory')} onClick={() => dismissFinished(row.serverName, row.target, row.windowId)} style={{ minWidth: 44, minHeight: 44 }}><Icon name="close" size={14} /></IconButton>
+                </div>
               ))}
             </section>
           )}
@@ -248,7 +264,7 @@ export function MobileStatusBar({ titleData, allTasks, openTask, connectPane }: 
             <button
               type="button"
               className="row-hover"
-              onClick={() => { setOpen(false); setHealthOpen(true); }}
+              onClick={() => { closePanel(); setHealthOpen(true); }}
               style={{ ...rowButtonStyle, justifyContent: 'space-between', color: 'var(--text-dim)' }}
             >
               <span>{t('workspace:activityPill.viewHealthDetails')}</span>
@@ -276,7 +292,7 @@ export function MobileStatusBar({ titleData, allTasks, openTask, connectPane }: 
             display: 'flex',
             alignItems: 'center',
             width: '100%',
-            height: BAR_HEIGHT,
+            height: MOBILE_STATUS_BAR_HEIGHT,
             padding: '0 var(--space-3)',
             border: 'none',
             background: 'transparent',

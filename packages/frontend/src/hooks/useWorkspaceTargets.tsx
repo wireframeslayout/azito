@@ -1,5 +1,4 @@
 import { createContext, useCallback, useContext, useState } from 'react';
-import { windowKey } from '@azito/shared';
 import type { TerminalOpenTarget } from '../lib/terminalTargetOpen';
 
 interface WorkspaceTargetsContextValue {
@@ -10,7 +9,8 @@ interface WorkspaceTargetsContextValue {
   activeTabId: string | null;
   setActiveTabId: (id: string | null) => void;
   focusedTarget: string | null;
-  setFocusedTarget: (key: string | null) => void;
+  focusedTargetDisplay: { serverName: string; label: string } | null;
+  setFocusedTarget: (key: string | null, display?: { serverName: string; label: string }) => void;
   /** SP端末クイックキーフッター（Issue #69 T3）の右端▦から、TabContentRenderer 配下の
    *  TerminalContainer までタブスイッチャー開閉を prop drilling せずに届けるための登録口。 */
   onOpenTabSwitcher: (() => void) | null;
@@ -25,6 +25,7 @@ const defaultValue: WorkspaceTargetsContextValue = {
   activeTabId: null,
   setActiveTabId: () => {},
   focusedTarget: null,
+  focusedTargetDisplay: null,
   setFocusedTarget: () => {},
   onOpenTabSwitcher: null,
   setOnOpenTabSwitcher: () => {},
@@ -32,13 +33,17 @@ const defaultValue: WorkspaceTargetsContextValue = {
 
 const WorkspaceTargetsContext = createContext<WorkspaceTargetsContextValue>(defaultValue);
 
-export { windowKey as activityKey };
 
 export function WorkspaceTargetsProvider({ children }: { children: React.ReactNode }) {
   const [onOpenInTerminal, setOnOpenInTerminal] = useState<((req: TerminalOpenTarget) => void) | null>(null);
   const [onOpenTask, setOnOpenTask] = useState<((taskId: number) => void) | null>(null);
   const [activeTabId, setActiveTabId] = useState<string | null>(null);
-  const [focusedTarget, setFocusedTarget] = useState<string | null>(null);
+  const [focusedTarget, setFocusedTargetKey] = useState<string | null>(null);
+  const [focusedTargetDisplay, setFocusedTargetDisplay] = useState<{ serverName: string; label: string } | null>(null);
+  const setFocusedTarget = useCallback((key: string | null, display?: { serverName: string; label: string }) => {
+    setFocusedTargetKey(key);
+    setFocusedTargetDisplay(key ? display ?? null : null);
+  }, []);
   const [onOpenTabSwitcher, setOnOpenTabSwitcher] = useState<(() => void) | null>(null);
 
   const setOnOpenInTerminalCb = useCallback((cb: ((req: TerminalOpenTarget) => void) | null) => {
@@ -54,7 +59,7 @@ export function WorkspaceTargetsProvider({ children }: { children: React.ReactNo
   }, []);
 
   return (
-    <WorkspaceTargetsContext.Provider value={{ onOpenInTerminal, setOnOpenInTerminal: setOnOpenInTerminalCb, onOpenTask, setOnOpenTask: setOnOpenTaskCb, activeTabId, setActiveTabId, focusedTarget, setFocusedTarget, onOpenTabSwitcher, setOnOpenTabSwitcher: setOnOpenTabSwitcherCb }}>
+    <WorkspaceTargetsContext.Provider value={{ onOpenInTerminal, setOnOpenInTerminal: setOnOpenInTerminalCb, onOpenTask, setOnOpenTask: setOnOpenTaskCb, activeTabId, setActiveTabId, focusedTarget, focusedTargetDisplay, setFocusedTarget, onOpenTabSwitcher, setOnOpenTabSwitcher: setOnOpenTabSwitcherCb }}>
       {children}
     </WorkspaceTargetsContext.Provider>
   );

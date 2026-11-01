@@ -1276,3 +1276,7 @@ input[aria-invalid="true"]:focus-visible { outline-color: var(--danger) !importa
 @media (max-width: 768px) { .overlay-backdrop:has(.global-search) { padding: 0; } .overlay-panel:has(.global-search) { padding-top: env(safe-area-inset-top) !important; padding-bottom: env(safe-area-inset-bottom) !important; } }
 .global-search-row { gap: var(--space-2); }
 .global-search-enter { color: var(--text-dim); border: 1px solid var(--border); border-radius: var(--radius-sm); padding: var(--space-1); }
+
+.aw-history-delete { opacity: 0; }
+.aw-history-row:hover .aw-history-delete,
+.aw-history-row:focus-within .aw-history-delete { opacity: 1; }

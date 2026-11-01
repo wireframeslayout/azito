@@ -45,6 +45,7 @@ export function Slider({ value, min, max, step = 1, onChange, label, formatValue
         step={step}
         onChange={handleChange}
         aria-label={label}
+        aria-valuetext={display}
       />
     </div>
   );

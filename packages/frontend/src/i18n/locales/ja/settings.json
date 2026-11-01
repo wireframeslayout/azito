@@ -277,5 +277,18 @@
     "confirmDefaults": "{{count}} 台のサーバーの既定を {{mux}} に変更しますか？",
     "autoAskDescription": "タスクの再開などで自動で起こすときもこの設定に従います（「毎回確認」のときは、自動では tmux のまま開き、通知で切り替えを案内します）。",
     "defaultsCount": "default_mux が tmux のサーバーが {{count}} 台あります。"
+  },
+  "history": {
+    "description": "この端末だけの設定です。",
+    "title": "ウィンドウ履歴",
+    "maxCount": "確認済みの保存件数",
+    "period": "保持期間",
+    "periods": [
+      "30分",
+      "1時間",
+      "6時間",
+      "24時間",
+      "7日"
+    ]
   }
 }

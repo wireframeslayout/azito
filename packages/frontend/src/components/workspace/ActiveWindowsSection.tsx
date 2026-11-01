@@ -2,6 +2,7 @@ import type { ActivityTitleData } from '../../lib/windowDisplay';
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { Icon } from '../ui/Icon';
+import { IconButton } from '../ui/IconButton';
 import { useAgentActivity } from '../../hooks/useAgentActivity';
 import { useActiveWindowRows } from '../../hooks/useActiveWindowRows';
 import { BrailleSpinner, BlockedDot, FinishedIndicator } from '../ui/WindowActivityIndicator';
@@ -40,8 +41,8 @@ export interface ActiveWindowsSectionProps {
 export default function ActiveWindowsSection({ titleData, connectPane, openTask, taskWindows }: ActiveWindowsSectionProps) {
   const openTerminal = useOpenTerminalTarget(connectPane);
   const { t } = useTranslation(['workspace', 'tasks']);
-  const { dismissFinished } = useAgentActivity();
-  const { rows, totalCount: count } = useActiveWindowRows(titleData);
+  const { dismissFinished, markFinishedSeen, clearSeenFinished, retention } = useAgentActivity();
+  const { rows, totalCount: count, historyCount } = useActiveWindowRows(titleData);
   const windowTaskMap = useMemo(() => buildWindowTaskMap(taskWindows), [taskWindows]);
 
   const [userCollapsed, setUserCollapsed] = useState<boolean>(loadUserCollapsed);
@@ -55,10 +56,10 @@ export default function ActiveWindowsSection({ titleData, connectPane, openTask,
     prevCountRef.current = count;
   }, [count, userCollapsed]);
 
-  const collapsed = count === 0 ? true : userCollapsed;
+  const collapsed = rows.length === 0 ? true : userCollapsed;
 
   const handleToggle = () => {
-    if (count === 0) return;
+    if (rows.length === 0) return;
     setUserCollapsed((prev) => {
       const next = !prev;
       saveUserCollapsed(next);
@@ -81,8 +82,8 @@ export default function ActiveWindowsSection({ titleData, connectPane, openTask,
         type="button"
         onClick={handleToggle}
         aria-expanded={!collapsed}
-        disabled={count === 0}
-        title={count === 0 ? undefined : (collapsed ? t('activeWindows.expand') : t('activeWindows.minimize'))}
+        disabled={rows.length === 0}
+        title={rows.length === 0 ? undefined : (collapsed ? t('activeWindows.expand') : t('activeWindows.minimize'))}
         style={{
           display: 'flex',
           alignItems: 'center',
@@ -118,13 +119,13 @@ export default function ActiveWindowsSection({ titleData, connectPane, openTask,
 
       {!collapsed && (
         <div style={{ flex: 1, overflowY: 'auto', padding: '0 4px 8px' }}>
-          {rows.map((row) => {
+          {rows.map((row, index) => {
             const taskId = row.taskId ?? lookupWindowTask(windowTaskMap, row.serverName, row.target);
             const displayName = row.title;
             const isFinished = row.status === 'finished';
             const isBlocked = !isFinished && row.activityStatus === 'blocked';
             const dismissIfFinished = () => {
-              if (isFinished) dismissFinished(row.serverName, row.target, row.windowId);
+              if (isFinished) markFinishedSeen(row.serverName, row.target, row.windowId);
             };
             const handleRowOpen = () => {
               if (taskId != null) {
@@ -135,20 +136,22 @@ export default function ActiveWindowsSection({ titleData, connectPane, openTask,
               }
               dismissIfFinished();
             };
+            const historyStart = row.seenAt != null && (index === 0 || rows[index - 1].seenAt == null);
             return (
+              <div key={row.key}>
+              {historyStart && <div style={{ display: 'flex', alignItems: 'center', padding: 'var(--space-2)', color: 'var(--text-dim)', fontSize: 'var(--font-xs)' }}><span style={{ flex: 1 }}>{t('activeWindows.history', { count: historyCount, max: retention.maxCount })}</span><IconButton type="button" title={t('activeWindows.clearHistory')} aria-label={t('activeWindows.clearHistory')} onClick={clearSeenFinished}><Icon name="trash" size={14} /></IconButton></div>}
               <div
-                key={row.key}
-                className={`row-hover${!isFinished && !isBlocked ? ' aw-row-working' : ''}`}
+                className={`row-hover aw-history-row${!isFinished && !isBlocked ? ' aw-row-working' : ''}`}
                 style={{
                   display: 'flex',
                   alignItems: 'center',
                   gap: 6,
                   padding: '6px 8px',
                   borderRadius: 'var(--radius-sm)',
-                  background: isBlocked ? 'rgba(210, 153, 34, 0.06)' : undefined,
+                  background: isBlocked ? 'var(--warning-a08)' : undefined,
                 }}
               >
-                {isFinished ? <FinishedIndicator /> : isBlocked ? <BlockedDot /> : <BrailleSpinner />}
+                {isFinished ? <FinishedIndicator seen={row.seenAt != null} /> : isBlocked ? <BlockedDot /> : <BrailleSpinner />}
                 <button
                   type="button"
                   onClick={handleRowOpen}
@@ -158,7 +161,7 @@ export default function ActiveWindowsSection({ titleData, connectPane, openTask,
                     minWidth: 0,
                     background: 'none',
                     border: 'none',
-                    color: 'var(--text)',
+                    color: row.seenAt != null ? 'var(--text-dim)' : 'var(--text)',
                     textAlign: 'left',
                     cursor: 'pointer',
                     fontSize: 'var(--font-md)',
@@ -172,7 +175,7 @@ export default function ActiveWindowsSection({ titleData, connectPane, openTask,
                         {displayName}
                       </span>
                       {isFinished && row.finishedAt != null && (
-                        <span style={{ fontSize: 'var(--font-2xs)', color: 'var(--success)', flexShrink: 0, whiteSpace: 'nowrap' }}>
+                        <span style={{ fontSize: 'var(--font-2xs)', color: row.seenAt != null ? 'var(--text-dim)' : 'var(--success)', flexShrink: 0, whiteSpace: 'nowrap' }}>
                           {t('activeWindows.done')} · {formatRelativeTime(row.finishedAt)}
                         </span>
                       )}
@@ -187,7 +190,7 @@ export default function ActiveWindowsSection({ titleData, connectPane, openTask,
                 {isBlocked && (
                   <span
                     style={{
-                      fontSize: 'var(--font-2xs)', color: 'var(--warning)', background: 'rgba(210, 153, 34, 0.15)',
+                      fontSize: 'var(--font-2xs)', color: 'var(--warning)', background: 'var(--warning-a15)',
                       borderRadius: 'var(--radius-sm)', padding: '1px 5px', flexShrink: 0,
                     }}
                   >
@@ -204,6 +207,8 @@ export default function ActiveWindowsSection({ titleData, connectPane, openTask,
                     #{taskId}
                   </span>
                 )}
+                {row.seenAt != null && <IconButton className="icon-btn aw-history-delete" type="button" aria-label={t('activeWindows.deleteHistory')} onClick={() => dismissFinished(row.serverName, row.target, row.windowId)}><Icon name="close" size={14} /></IconButton>}
+              </div>
               </div>
             );
           })}
