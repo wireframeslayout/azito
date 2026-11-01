@@ -67,7 +67,7 @@ export function TextFileEditor({ backend, path, name, initialLine, serverName, o
       </div>
       <div role="status" aria-live="polite">{doc.saving ? t('editor.saving') : doc.dirty ? t('editor.unsaved') : doc.saved ? t('editor.saved') : ''}</div>
       {doc.conflict !== undefined && <div role="status" aria-live="polite" style={{ padding: 'var(--space-2)', background: 'var(--orange-a08)', color: 'var(--text)', display: 'flex', flexWrap: 'wrap', gap: 'var(--space-2)' }}>
-        <span>{t('editor.conflict')} {doc.conflict === null ? t('editor.latestUnavailable') : doc.conflict.kind === 'unavailable' ? doc.conflict.reason : ''}</span><button onClick={showDiff}>{t('editor.diff')}</button><button onClick={async () => { if (await confirm({ title: t('editor.discardConfirm') })) void doc.reload(); }}>{t('editor.reload')}</button><button disabled={doc.saving} onClick={() => void doc.save(true)}>{t('editor.overwrite')}</button>
+        <span>{t('editor.conflict')} {doc.conflict === null ? t('editor.latestUnavailable') : doc.conflict.kind === 'unavailable' ? doc.conflict.reason : ''}</span><button onClick={showDiff}>{t('editor.diff')}</button><button disabled={doc.saving} onClick={async () => { if (await confirm({ title: t('editor.discardConfirm') })) void doc.reload(); }}>{t('editor.reload')}</button><button disabled={doc.saving} onClick={() => void doc.save(true)}>{t('editor.overwrite')}</button>
       </div>}
       {doc.error && <div role="alert" style={{ color: 'var(--danger)', padding: 'var(--space-2)' }}>{doc.error} {(!doc.document && !doc.loading) && <button onClick={() => void doc.reload()}>{t('editor.retry')}</button>}</div>}
       {doc.loading && <LoadingState />}
