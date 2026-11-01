@@ -1,6 +1,6 @@
 export type WindowViewMode = 'terminal' | 'chat';
 
-export function viewModeStorageKey(windowId: number): string {
+function viewModeStorageKey(windowId: number): string {
   return `azito.windowView.${windowId}`;
 }
 

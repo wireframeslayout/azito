@@ -656,16 +656,25 @@ export default function TaskPanel({
     return parsed ? resolveWindowTabTarget(parsed) : null;
   }, [layout.state.root, layout.state.focusedPaneId, resolveWindowTabTarget]);
 
-  // The focused pane's window record — used by the SP terminal/chat view-mode persistence
-  // below (keyed by the actual `windows` row id, Issue #69 T5).
-  const focusedWindow = useMemo(() => {
-    if (!focusedWindowTarget) return undefined;
-    return windows.find((w) => w.serverName === focusedWindowTarget.serverName && isSameWindowTarget(w.tmuxTarget, focusedWindowTarget.target));
-  }, [focusedWindowTarget, windows]);
-  const focusedWindowId = focusedWindow?.id ?? null;
-
+  const mobileTabIds = listPanes(layout.state.root).flatMap((p) => p.tabIds);
+  const mobileFocusedPane = layout.state.focusedPaneId ? findPane(layout.state.root, layout.state.focusedPaneId) : null;
+  const mobileActiveTabId = mobileFocusedPane?.activeTabId ?? mobileTabIds[0] ?? viewTabId('description');
+  const lastMobileWindowTabIdRef = useRef<string | null>(null);
+  useEffect(() => {
+    if (parseWindowTabId(mobileActiveTabId)) lastMobileWindowTabIdRef.current = mobileActiveTabId;
+  }, [mobileActiveTabId]);
+  const mobileDisplayedWindowTabId = parseWindowTabId(mobileActiveTabId)
+    ? mobileActiveTabId
+    : (lastMobileWindowTabIdRef.current && windowTabIdsList.includes(lastMobileWindowTabIdRef.current)
+      ? lastMobileWindowTabIdRef.current : windowTabIdsList[0]);
+  const parsedMobileDisplayedWindow = mobileDisplayedWindowTabId ? parseWindowTabId(mobileDisplayedWindowTabId) : null;
+  const mobileDisplayedWindowTarget = parsedMobileDisplayedWindow ? resolveWindowTabTarget(parsedMobileDisplayedWindow) : null;
+  const mobileDisplayedWindow = mobileDisplayedWindowTarget
+    ? windows.find((w) => w.serverName === mobileDisplayedWindowTarget.serverName && isSameWindowTarget(w.tmuxTarget, mobileDisplayedWindowTarget.target))
+    : undefined;
+  const mobileWindowId = mobileDisplayedWindow?.id ?? null;
   const [mobileViewMode, setMobileViewMode] = useWindowViewMode(
-    focusedWindowId, isMobile, isAgentWindow(focusedWindowId, focusedWindow?.windowType, entries.values()),
+    mobileWindowId, isMobile, isAgentWindow(mobileWindowId, mobileDisplayedWindow?.windowType, entries.values()),
   );
 
   const { setFocus } = useGlobalFocus();
@@ -1427,6 +1436,7 @@ export default function TaskPanel({
     const win = parseWindowTabId(tabId);
     if (win) {
       const { serverName, target, windowId } = resolveWindowTabTarget(win);
+      const record = windows.find((w) => w.serverName === serverName && isSameWindowTarget(w.tmuxTarget, target));
       return (
         <TerminalContainer
           key={`terminal-${serverName}-${target}`}
@@ -1446,8 +1456,9 @@ export default function TaskPanel({
           // 選択する第一級モードのため、TerminalContainer 内蔵の端末⇄チャットトグル（上部
           // ツールバー）は使わず TaskPanel が単一の真実源として制御する（Issue #69 S8）。
           // デスクトップはこの prop を渡さず、従来どおり自律的に管理する（不変）。
+          isAgent={isAgentWindow(record?.id ?? null, record?.windowType, entries.values())}
           viewMode={isMobile ? mobileViewMode : undefined}
-          onViewModeChange={isMobile ? (mode) => setMobileViewMode(mode, focusedWindowId) : undefined}
+          onViewModeChange={isMobile ? (mode) => setMobileViewMode(mode, mobileWindowId) : undefined}
         />
       );
     }
@@ -1474,9 +1485,6 @@ export default function TaskPanel({
   // Mobile: single segmented row + single view, reading off the same task-scoped layout
   // tree (the focused pane's active tab) rather than a parallel state/persistence
   // mechanism — smaller diff, and keeps one source of truth for both layouts.
-  const mobileTabIds = useMemo(() => listPanes(layout.state.root).flatMap((p) => p.tabIds), [layout.state.root]);
-  const mobileFocusedPane = layout.state.focusedPaneId ? findPane(layout.state.root, layout.state.focusedPaneId) : null;
-  const mobileActiveTabId = mobileFocusedPane?.activeTabId ?? mobileTabIds[0] ?? viewTabId('description');
   // layout.open()（既存の openTab）を使う — findPaneByTab + setActive では、まだどの
   // ペインの tabIds にも入っていないタブ（Issue #69 修正3で常時セグメント表示になった
   // unit/git/summary/commits/diff や、初回選択されるウィンドウタブ）を選択しても
@@ -1494,11 +1502,6 @@ export default function TaskPanel({
   // フォールバック、旧実装から維持）。
   const MOBILE_TERMINAL_SEGMENT = '__terminal__';
   const MOBILE_CHAT_SEGMENT = '__chat__';
-  const lastMobileWindowTabIdRef = useRef<string | null>(null);
-  useEffect(() => {
-    if (parseWindowTabId(mobileActiveTabId)) lastMobileWindowTabIdRef.current = mobileActiveTabId;
-  }, [mobileActiveTabId]);
-
   // S8 の ⋯ メニューには 'git'/'summary' 単独の行はなく、両者は 'unit'（Unit・実行情報）
   // フルスクリーンビューへ併合されている（下の renderTabBody 'unit' 分岐参照）。既存の
   // 永続レイアウトからこれらが旧アクティブタブとして復元された場合、'unit' へフォールバック
@@ -1514,8 +1517,7 @@ export default function TaskPanel({
   const handleMobileSegmentSelect = useCallback((key: string) => {
     if (key === MOBILE_TERMINAL_SEGMENT || key === MOBILE_CHAT_SEGMENT) {
       const mode: WindowViewMode = key === MOBILE_CHAT_SEGMENT ? 'chat' : 'terminal';
-      const remembered = lastMobileWindowTabIdRef.current;
-      const target = remembered && windowTabIdsList.includes(remembered) ? remembered : windowTabIdsList[0];
+      const target = mobileDisplayedWindowTabId;
       if (!target) return;
       handleMobileSelect(target);
       const win = parseWindowTabId(target);
@@ -1524,24 +1526,7 @@ export default function TaskPanel({
       return;
     }
     handleMobileSelect(key);
-  }, [handleMobileSelect, windowTabIdsList, windows, setMobileViewMode]);
-
-  // 端末/チャットセグメント選択中に表示するウィンドウタブ id — mobileActiveTabId がまだ
-  // ウィンドウタブへ切り替わっていない最初のレンダーでも取りこぼさないよう、直近記憶値/
-  // 先頭ウィンドウへフォールバックする（承認済みモックの「ウィンドウバー」は常に何らかの
-  // ウィンドウを表示している状態を前提とするため）。
-  const mobileDisplayedWindowTabId = parseWindowTabId(mobileActiveTabId)
-    ? mobileActiveTabId
-    : (lastMobileWindowTabIdRef.current && windowTabIdsList.includes(lastMobileWindowTabIdRef.current)
-      ? lastMobileWindowTabIdRef.current
-      : windowTabIdsList[0]);
-
-  // ⋯ メニューの「現在のウィンドウ」✓ 行判定用フォールバック（Issue #338 レビュー指摘）:
-  // focusedWindowTarget は説明/Unit/コミット等の情報ビュー表示中は null になる（フォーカス
-  // ペインのアクティブタブがウィンドウタブでないため）。その間も直前まで表示していたウィンドウ
-  // （mobileDisplayedWindowTabId）を解決して渡し、✓ が消えないようにする。
-  const parsedMobileDisplayedWindow = mobileDisplayedWindowTabId ? parseWindowTabId(mobileDisplayedWindowTabId) : null;
-  const mobileDisplayedWindowTarget = parsedMobileDisplayedWindow ? resolveWindowTabTarget(parsedMobileDisplayedWindow) : null;
+  }, [handleMobileSelect, mobileDisplayedWindowTabId, windows, setMobileViewMode]);
 
   // ⋯ メニュー「ウィンドウ」節の行長押し（Issue #338 T10・最低限=削除だが、デスクトップと同じ
   // getWindowMenuItems を流用して重複実装を避ける）。行のオンライン状態は sessionData から

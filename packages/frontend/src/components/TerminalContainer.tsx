@@ -18,9 +18,8 @@ import { api } from '../api/client';
 import { formatWindowId } from '@azito/shared';
 import { useServerStatuses } from '../hooks/useServerStatuses';
 import { isInsufficientResources } from '../hooks/useAddWindowModal';
-import { useAgentActivity } from '../hooks/useAgentActivity';
 import { useWindowViewMode } from '../hooks/useWindowViewMode';
-import { isAgentWindow, type WindowViewMode } from '../lib/windowViewMode';
+import { resolveWindowViewMode, type WindowViewMode } from '../lib/windowViewMode';
 import { useIsMobile } from '../hooks/useIsMobile';
 import { useWorkspaceTargets } from '../hooks/useWorkspaceTargets';
 import type { Project, Task, Session } from '../pages/workspace/types';
@@ -92,12 +91,13 @@ interface TerminalContainerProps {
    * 省略時（デスクトップ・タスク外の単体ウィンドウタブ等）は従来どおり内部状態＋
    * localStorage（windowId 単位）で自律的に管理する。
    */
+  isAgent?: boolean;
   viewMode?: WindowViewMode;
   /** viewMode が外部制御（controlled）のときのみ使う変更コールバック。 */
   onViewModeChange?: (mode: WindowViewMode) => void;
 }
 
-export function TerminalContainer({ registeredWindow, serverName, target: rawTarget, terminalRef: terminalRefProp, resolveOnServer, projectId, taskId, project, allTasks, sessions, onSplitPane, onOpenTask, onDisconnect, onWindowChanged, onCloseTab, onTargetRemoved, onRetargetPane, onRetargetTab, reconnectKey, leading, trailing, viewMode: viewModeProp, onViewModeChange }: TerminalContainerProps) {
+export function TerminalContainer({ registeredWindow, serverName, target: rawTarget, terminalRef: terminalRefProp, resolveOnServer, projectId, taskId, project, allTasks, sessions, onSplitPane, onOpenTask, onDisconnect, onWindowChanged, onCloseTab, onTargetRemoved, onRetargetPane, onRetargetTab, reconnectKey, leading, trailing, isAgent, viewMode: viewModeProp, onViewModeChange }: TerminalContainerProps) {
   // Tabs opened through connectPane carry a TerminalRef and a `w<id>` placeholder target;
   // everything below that still keys off a tmux target (window-exists check, status dropdown,
   // pane-loading-state fallback) needs the real `<session>:<window>.<pane>`, resolved from
@@ -176,9 +176,9 @@ export function TerminalContainer({ registeredWindow, serverName, target: rawTar
   const [style, setStyle] = useTranscriptStyle();
 
   const isMobile = useIsMobile();
-  const { entries } = useAgentActivity();
-  const [internalViewMode, selectViewMode] = useWindowViewMode(windowId, isMobile, isAgentWindow(windowId, currentWindow?.windowType, entries.values()));
-  const viewMode = windowId === null ? 'terminal' : viewModeProp ?? internalViewMode;
+  const hasAgent = isAgent ?? currentWindow?.windowType === 'agent';
+  const [internalViewMode, selectViewMode] = useWindowViewMode(windowId, isMobile, hasAgent);
+  const viewMode = resolveWindowViewMode(windowId, viewModeProp ?? internalViewMode, isMobile, hasAgent);
   const changeViewMode = viewModeProp !== undefined
     ? (mode: WindowViewMode) => onViewModeChange?.(mode)
     : (mode: WindowViewMode) => selectViewMode(mode, windowId);
