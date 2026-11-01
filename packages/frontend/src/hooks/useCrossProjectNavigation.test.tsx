@@ -1,5 +1,5 @@
 import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
-import { MemoryRouter, Route, Routes } from 'react-router-dom';
+import { MemoryRouter, Route, Routes, useLocation, useNavigate } from 'react-router-dom';
 import { beforeEach, expect, it, vi } from 'vitest';
 import { CrossProjectNavigationProvider, useCrossProjectNavigation } from './useCrossProjectNavigation';
 import { apiWithStatus } from '../api/client';
@@ -12,7 +12,9 @@ vi.mock('./useToast', () => ({ useToast: () => ({ showToast: mocks.toast }) }));
 vi.mock('react-i18next', () => ({ useTranslation: () => ({ t: (key: string) => key }) }));
 function Controls() {
   const { openTask, openTaskInProject, openTerminal } = useCrossProjectNavigation();
-  return <><button onClick={() => openTask(1)}>Task</button><button onClick={() => openTaskInProject(1, 2)}>Explicit</button><button onClick={() => openTerminal({ serverName: 'local', target: 'a' }, 2)}>Terminal</button></>;
+  const navigate = useNavigate();
+  const location = useLocation();
+  return <><output aria-label="path">{location.pathname}</output><button onClick={() => openTask(1)}>Task</button><button onClick={() => openTaskInProject(1, 2)}>Explicit</button><button onClick={() => openTerminal({ serverName: 'local', target: 'a' }, 2)}>Terminal</button><button onClick={() => navigate('/workspace/2')}>Move</button><button onClick={() => openTaskInProject(3)}>Direct</button></>;
 }
 function App({ path }: { path: string }) {
   return <MemoryRouter initialEntries={[path]}><CrossProjectNavigationProvider><Controls /><Routes><Route path="*" element={<div>Route</div>} /></Routes></CrossProjectNavigationProvider></MemoryRouter>;
@@ -49,4 +51,17 @@ it('expires a pending open when the workspace target is not registered in time',
   rerender(<App path="/settings" />);
   expect(mocks.task).not.toHaveBeenCalled();
   vi.useRealTimers();
+});
+
+it('uses the latest route when an asynchronous task lookup completes', async () => {
+  let finish!: (result: { status: number; body: { projectId: number } }) => void;
+  vi.mocked(apiWithStatus).mockImplementationOnce(() => new Promise(resolve => { finish = resolve; }));
+  render(<App path="/workspace/1" />);
+  fireEvent.click(screen.getByRole('button', { name: 'Task' }));
+  fireEvent.click(screen.getByRole('button', { name: 'Move' }));
+  await act(async () => finish({ status: 200, body: { projectId: 1 } }));
+  await waitFor(() => expect(mocks.task).toHaveBeenCalledWith(1));
+  expect(screen.getByLabelText('path')).toHaveTextContent('/workspace/1');
+  fireEvent.click(screen.getByRole('button', { name: 'Direct' }));
+  expect(mocks.task).toHaveBeenCalledWith(3);
 });

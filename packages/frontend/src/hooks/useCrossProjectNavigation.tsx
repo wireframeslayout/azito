@@ -10,7 +10,7 @@ import { useToast } from './useToast';
 
 interface Navigation {
   openTask: (taskId: number) => void;
-  openTaskInProject: (taskId: number, projectId: number) => void;
+  openTaskInProject: (taskId: number, projectId?: number) => void;
   openTerminal: (req: TerminalOpenTarget, projectId?: number) => void;
 }
 type Pending = { type: 'task'; taskId: number; projectId: number } | { type: 'terminal'; req: TerminalOpenTarget; projectId: number };
@@ -23,6 +23,8 @@ export function CrossProjectNavigationProvider({ children }: { children: React.R
   const { allTasks } = useWorkspaceCatalog();
   const { showToast } = useToast();
   const { t } = useTranslation('notifications');
+  const current = useRef({ location, onOpenTask, onOpenInTerminal });
+  current.current = { location, onOpenTask, onOpenInTerminal };
   const pending = useRef<Pending | null>(null);
   const timer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const sequence = useRef(0);
@@ -30,19 +32,22 @@ export function CrossProjectNavigationProvider({ children }: { children: React.R
   useEffect(() => () => { sequence.current++; clear(); }, [clear]);
   const queue = useCallback((item: Pending) => {
     clear();
-    const match = matchWorkspacePath(location.pathname);
+    const target = current.current;
+    const match = matchWorkspacePath(target.location.pathname);
     if (match && Number(match.id) === item.projectId) {
-      if (item.type === 'task') onOpenTask?.(item.taskId); else onOpenInTerminal?.(item.req);
+      if (item.type === 'task') target.onOpenTask?.(item.taskId); else target.onOpenInTerminal?.(item.req);
       return;
     }
     pending.current = item;
     timer.current = setTimeout(clear, 5000);
     navigate(paths.workspace(item.projectId));
-  }, [clear, location.pathname, navigate, onOpenTask, onOpenInTerminal]);
-  const openTaskInProject = useCallback((taskId: number, projectId: number) => {
+  }, [clear, navigate]);
+  const openTaskInProject = useCallback((taskId: number, projectId?: number) => {
     sequence.current++;
+    clear();
+    if (projectId === undefined) { current.current.onOpenTask?.(taskId); return; }
     queue({ type: 'task', taskId, projectId });
-  }, [queue]);
+  }, [clear, queue]);
   const openTask = useCallback((taskId: number) => {
     const request = ++sequence.current;
     clear();
