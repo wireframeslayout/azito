@@ -219,8 +219,8 @@ packages/
         operations/               # [upper] running-execution-runs API only (GET /api/operations); no operations table
         projects/                 # [upper] Project, ProjectServer, SqliteProjectRepository/SqliteProjectServerRepository
         files/                    # [upper] FileBrowseService (browse/read/write/create/delete/rename), FileSearchService
-                                  # Storage onboarding is resolved once from an optional validated `distribution.json` at startup; `--distribution` includes it in a hub build. Storage status probes the bucket and distinguishes unconfigured, unreachable and ready. Project storage operations use validated relative paths and folder markers; folder moves copy before deletion and are limited to 1,000 objects. See `docs/en/storage.md` and `docs/ja/storage.md` for the API and configuration.
                                   #       (rg-preferred, grep fallback), SqliteStorageSettingsRepository
+                                  # Storage onboarding is resolved once from an optional validated `distribution.json` at startup; `--distribution` includes it in a hub build. Storage status probes the bucket and distinguishes unconfigured, unreachable and ready. Project storage operations use validated relative paths and folder markers; folder moves copy before deletion and are limited to 1,000 objects. See `docs/en/storage.md` and `docs/ja/storage.md` for the API and configuration.
           storage/, ws/            # MinioStorageClient + file-tail WS handler
         usage/                    # [upper] UsageService, Claude/CodexUsageCollector (token usage aggregation)
         notifications/            # [upper] NotificationBus, webhooks (agent-done), push subscriptions

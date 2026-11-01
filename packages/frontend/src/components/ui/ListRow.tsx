@@ -187,7 +187,7 @@ export function ListRow({ icon, title, description, chips, rightActions, selecte
           aria-hidden="true"
           style={{ color: 'var(--text-dim)', fontSize: 'var(--font-sm)', opacity: 0, transition: 'opacity 0.12s', flexShrink: 0 }}
         >
-          ›
+          &rarr;
         </span>
       )}
     </>
@@ -213,7 +213,7 @@ export function ListRow({ icon, title, description, chips, rightActions, selecte
             font: 'inherit',
             color: 'inherit',
             textAlign: 'left',
-            cursor: 'pointer',
+            cursor: disabled ? 'not-allowed' : 'pointer',
           }}
         >
           {content}
