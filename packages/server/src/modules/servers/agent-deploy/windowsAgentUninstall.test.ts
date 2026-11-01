@@ -7,7 +7,7 @@ import { HUB_SERVICE } from '../../system/serviceManager';
 import { MISAO_SERVICE } from '../../system/misao/misaoPaths';
 import { windowsMisaoPipe } from '../transport/agentMisaoSocket';
 import { DEFAULT_WINDOWS_AGENT_OPTIONS, MISAO_WINDOWS_TASK_NAME, type WindowsAgentOptions } from './windowsAgentConfig';
-import { WindowsAgentDeployer, windowsAgentEnvFile, type WindowsSshExec } from './WindowsAgentDeployer';
+import { needsTransferredScript, WindowsAgentDeployer, windowsAgentEnvFile, type WindowsSshExec } from './WindowsAgentDeployer';
 import { decodeEncodedCommand, FakeWindowsHost } from './testing/fakeWindowsHost';
 import { harnessMcpScript } from './windowsHarnessMcpUninstall';
 import { WINDOWS_HUB_TASK_NAME, uninstallWindowsAgent, type UninstallStepId, type WindowsUninstallHost, type WindowsUninstallResult } from './windowsAgentUninstall';
@@ -897,6 +897,11 @@ describe('the task names the uninstall relies on', () => {
 });
 
 describe('the scripts it sends', () => {
+  it('selects transfer based on the encoded command limit, including short oversized scripts', () => {
+    const body = 'x'.repeat(2990);
+    expect(needsTransferredScript(body)).toBe(true);
+    expect(needsTransferredScript('x'.repeat(100))).toBe(false);
+  });
   it('fits the MCP commands with a long non-ASCII home path', () => {
     const home = 'C:\\Users\\佐藤花子開発環境東京横浜大阪京都札幌名古屋神戸福岡仙台広島長崎熊本金沢岡山松山';
     const expected = `${home}\\.azito\\harness\\skills\\azt-mcp\\mcp-server\\index.js`;
@@ -915,7 +920,8 @@ describe('the scripts it sends', () => {
     await uninstallWindowsAgent(long.asHost(), factsOf(home, NODE), OPTIONS, { removeMisao: true });
     expect(long.bodies.length).toBeGreaterThanOrEqual(6);
     for (const { what, body } of long.bodies) {
-      if (body.length <= 3000) expect(() => powershellDialect.wrapScript(`$ProgressPreference = 'SilentlyContinue'\n${body}`), what).not.toThrow();
+      if (needsTransferredScript(body)) expect(() => powershellDialect.wrapScript(`$ProgressPreference = 'SilentlyContinue'\n${body}`), what).toThrow(/too long/);
+      else expect(() => powershellDialect.wrapScript(`$ProgressPreference = 'SilentlyContinue'\n${body}`), what).not.toThrow();
     }
   });
 
@@ -931,7 +937,10 @@ describe('the scripts it sends', () => {
       firewallInspectScript('AZITO Agent (TCP 3002)'),
       sameFileScript(`${long}\\a\\b\\node.exe`, `${long}\\c\\d\\node.exe`),
     ];
-    for (const body of scripts.filter((value) => value.length <= 3000)) expect(() => powershellDialect.wrapScript(`$ProgressPreference = 'SilentlyContinue'\n${body}`)).not.toThrow();
+    for (const body of scripts) {
+      if (needsTransferredScript(body)) expect(() => powershellDialect.wrapScript(`$ProgressPreference = 'SilentlyContinue'\n${body}`)).toThrow(/too long/);
+      else expect(() => powershellDialect.wrapScript(`$ProgressPreference = 'SilentlyContinue'\n${body}`)).not.toThrow();
+    }
   });
 
   it('a path with a junction or symbolic link on the way is not resolved, and a folder that is there but cannot be resolved may be the hub\'s', () => {

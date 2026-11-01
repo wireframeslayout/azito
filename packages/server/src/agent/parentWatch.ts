@@ -92,11 +92,11 @@ export function processExists(pid: number): boolean {
 
 /**
  * The creation time of a process on Windows, read with the PowerShell that ships with it (no dependency): `ToFileTimeUtc()` of its
- * `Get-Process` start time. Null when it cannot be read (no such process, PowerShell not runnable, no answer in time).
+ * CIM `CreationDate`. Null when it cannot be read (no such process, PowerShell not runnable, no answer in time).
  */
 export function readWindowsProcessCreation(systemRoot: string, pid: number): Promise<string | null> {
   const powershell = path.win32.join(systemRoot, 'System32', 'WindowsPowerShell', 'v1.0', 'powershell.exe');
-  const command = `(Get-Process -Id ${Math.trunc(pid)} -ErrorAction Stop).StartTime.ToUniversalTime().ToFileTimeUtc()`;
+  const command = `(Get-CimInstance -ClassName Win32_Process -Filter 'ProcessId=${Math.trunc(pid)}').CreationDate.ToFileTimeUtc()`;
   return new Promise((resolve) => {
     execFile(powershell, ['-NoProfile', '-NonInteractive', '-Command', command], { timeout: 20_000, windowsHide: true }, (err, stdout) => {
       const text = err ? '' : stdout.trim();

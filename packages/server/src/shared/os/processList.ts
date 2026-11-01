@@ -1,4 +1,3 @@
-import { WINDOWS_PROCESS_INFO } from './windowsProcessInfo';
 import { z } from 'zod';
 import { buildCommandSpec, type CommandResult, type CommandSpec } from '../exec/commandSpec';
 import { powershellEncodedArgs } from './shellDialect';
@@ -86,18 +85,24 @@ export function parsePosixPsOutput(output: string, nowMs: number): ProcessEntry[
   return entries;
 }
 
-/** Windows process data from the process APIs; inaccessible fields remain null. */
+/**
+ * The Windows script: Win32_Process through CIM (`wmic` is gone from current Windows). Only integers and strings are printed:
+ * the creation time as a FILETIME (`ToFileTimeUtc()`), not as a localized date text. The output is UTF-8 JSON, one array
+ * (`-InputObject` keeps a single process an array).
+ */
 const WINDOWS_PROCESS_SCRIPT = `
 [Console]::OutputEncoding = New-Object System.Text.UTF8Encoding($false)
-${WINDOWS_PROCESS_INFO}
-$list = @(Get-Process | ForEach-Object {
-  $p = $_
-  $info = [AzitoProcessList]::Read($p.Id)
-  $created = $null; $exe = $null; $rss = $null
-  try { $created = [string]$p.StartTime.ToUniversalTime().ToFileTimeUtc() } catch { }
-  try { $exe = $p.Path } catch { }
-  try { $rss = [string]$p.WorkingSet64 } catch { }
-  [ordered]@{ pid = [int64]$p.Id; ppid = [int64]$info[0]; fileTime = $created; executable = $exe; commandLine = $info[1]; rss = $rss }
+$list = @(Get-CimInstance -ClassName Win32_Process | ForEach-Object {
+  $created = $null
+  if ($_.CreationDate) { $created = [string]$_.CreationDate.ToUniversalTime().ToFileTimeUtc() }
+  [ordered]@{
+    pid = [int64]$_.ProcessId
+    ppid = [int64]$_.ParentProcessId
+    fileTime = $created
+    executable = $_.ExecutablePath
+    commandLine = $_.CommandLine
+    rss = [string]$_.WorkingSetSize
+  }
 })
 Write-Output (ConvertTo-Json -InputObject $list -Compress -Depth 3)
 `;

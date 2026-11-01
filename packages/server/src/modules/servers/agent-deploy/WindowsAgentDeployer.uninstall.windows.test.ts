@@ -144,7 +144,6 @@ describe.skipIf(process.platform !== 'win32')('removing the Windows agent from a
     // The firewall rule the install adds, when this session may add it (an elevated one): for a rule to remove.
     const firewall = await checkFirewall((command) => cmdExec('ci', command, 120_000), OPTIONS.port, fwNode, BIND);
     elevated = firewall.elevated;
-    if (elevated) await ps(`$null = New-NetFirewallRule -DisplayName ${powershellDialect.quote(firewallRuleName(OPTIONS.port))} -Direction Inbound -Action Allow -Protocol TCP -LocalPort ${OPTIONS.port} -Program ${powershellDialect.quote(fwNode)} -Profile Any`);
   }, 600_000);
 
   afterAll(async () => {
@@ -205,7 +204,7 @@ describe.skipIf(process.platform !== 'win32')('removing the Windows agent from a
     if (elevated) {
       // Reported with its Name and the command to remove it, and still there.
       const text = result.steps.find((step) => step.id === 'firewall')!.detail!;
-      expect(text).toContain('Windows Firewall with Advanced Security');
+      expect(text).toContain("Remove-NetFirewallRule -Name '");
       expect(rulesBeforeCleanup).toBe(1);
       expect(await ruleCount()).toBe(0);
     }
@@ -218,7 +217,7 @@ describe.skipIf(process.platform !== 'win32')('removing the Windows agent from a
     const again = await deployer.uninstall('ci', host, { removeMisao: false }, 'ci-isolated');
     expect(again.ok, JSON.stringify(again.steps)).toBe(true);
     expect(await ruleCount()).toBe(0);
-    expect(stepsOf(again)).toEqual({ task: 'absent', processes: 'absent', firewall: 'skipped', folder: 'absent', claudeHarnessMcp: 'skipped', codexHarnessMcp: 'skipped' });
+    expect(stepsOf(again)).toEqual({ task: 'absent', processes: 'absent', firewall: elevated ? 'absent' : 'skipped', folder: 'absent', claudeHarnessMcp: 'skipped', codexHarnessMcp: 'skipped' });
 
     const result = await deployer.uninstall('ci', host, { removeMisao: true }, 'ci-isolated');
     expect(result.ok, JSON.stringify(result.steps)).toBe(true);

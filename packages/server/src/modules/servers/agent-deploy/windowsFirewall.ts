@@ -81,23 +81,68 @@ export type FirewallDump = z.infer<typeof dumpSchema>;
  * Reads every enabled inbound rule with its filters. The matching is done by {@link evaluateFirewallRules} on this side, where it
  * can be tested and read. COM does not establish which rules are effective, so its results are never taken as a confirmed Allow.
  */
-function buildDumpScript(): string {
+function buildDumpScript(localAddress: string): string {
   return `
 $elevated = ([Security.Principal.WindowsPrincipal][Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)
-$problem = $null; $rules = @()
+if ($elevated) {
+$networkCategory = $null
+$store = 'ActiveStore'
+$problem = $null
+$rules = @()
 try {
-  $policy = New-Object -ComObject HNetCfg.FwPolicy2 -ErrorAction Stop
-  function Values($text) { if (-not $text -or $text -eq '*') { return ,@('Any') }; return ,@("$text".Split(',')) }
-  function Profiles($bits) { if ($bits -eq 2147483647) { return 'Any' }; $names = @(); if ($bits -band 1) { $names += 'Domain' }; if ($bits -band 2) { $names += 'Private' }; if ($bits -band 4) { $names += 'Public' }; return $names -join ', ' }
-  $rules = @(foreach ($r in $policy.Rules) {
-    if (-not $r.Enabled -or $r.Direction -ne 1) { continue }
-    $action = if ($r.Action -eq 0) { 'Block' } else { 'Allow' }
-    $protocol = if ($r.Protocol -eq 256) { 'Any' } else { "$($r.Protocol)" }
-    $program = if ($r.ApplicationName) { "$($r.ApplicationName)" } else { 'Any' }
-    [ordered]@{ name = "$($r.Name)"; displayName = "$($r.Name)"; action = $action; profile = Profiles $r.Profiles; package = "$($r.LocalAppPackageId)"; owner = "$($r.LocalUserOwner)"; service = "$($r.ServiceName)"; protocol = $protocol; localPort = Values $r.LocalPorts; program = $program; remoteAddress = Values $r.RemoteAddresses; localAddress = Values $r.LocalAddresses }
+  $interfaceIndex = (Get-NetIPAddress -IPAddress ${powershellDialect.quote(localAddress)} -ErrorAction Stop).InterfaceIndex
+  $networkCategory = "$((Get-NetConnectionProfile -InterfaceIndex $interfaceIndex -ErrorAction Stop).NetworkCategory)"
+} catch { $networkCategory = $null }
+function Read-Filters($command, $policyStore) {
+  $byRule = @{}
+  foreach ($filter in & $command -PolicyStore $policyStore) { $byRule[$filter.InstanceID] = $filter }
+  $byRule
+}
+function Join-Values($values) { , @($values | ForEach-Object { "$_" }) }
+try {
+
+  $ports = Read-Filters Get-NetFirewallPortFilter $store
+  $apps = Read-Filters Get-NetFirewallApplicationFilter $store
+  $addresses = Read-Filters Get-NetFirewallAddressFilter $store
+  $services = Read-Filters Get-NetFirewallServiceFilter $store
+  $rules = @(foreach ($rule in Get-NetFirewallRule -PolicyStore $store -Direction Inbound -Enabled True) {
+    $id = $rule.Name
+    if ($null -eq $ports[$id] -or $null -eq $apps[$id] -or $null -eq $addresses[$id] -or $null -eq $services[$id]) { throw 'a firewall rule has unreadable filters' }
+    [ordered]@{ name = "$id"; displayName = "$($rule.DisplayName)"; action = "$($rule.Action)"; profile = "$($rule.Profile)"; package = "$($apps[$id].Package)"; owner = "$($rule.Owner)"; service = "$($services[$id].Service)"; protocol = "$($ports[$id].Protocol)"; localPort = Join-Values $ports[$id].LocalPort; program = "$($apps[$id].Program)"; remoteAddress = Join-Values $addresses[$id].RemoteAddress; localAddress = Join-Values $addresses[$id].LocalAddress }
   })
 } catch { $problem = 'reading the rules failed: ' + $_.Exception.Message; $rules = @() }
-$info = [ordered]@{ elevated = $elevated; networkCategory = $null; store = 'COM'; problem = $problem; rules = @($rules) }
+$info = [ordered]@{ elevated = $elevated; networkCategory = $networkCategory; store = $store; problem = $problem; rules = @($rules) }
+$global:LASTEXITCODE = 0
+Write-Output '${DUMP_BEGIN}'
+$json = ConvertTo-Json -InputObject $info -Compress -Depth 5
+Write-Output ([regex]::Replace($json, '[^\\x00-\\x7F]', { param($match) '\\u{0:x4}' -f [int][char]$match.Value }))
+Write-Output '${DUMP_END}'
+exit 0
+}
+$problem = $null; $rules = @()
+try {
+  $paths = @('HKLM:\\SYSTEM\\CurrentControlSet\\Services\\SharedAccess\\Parameters\\FirewallPolicy\\FirewallRules', 'HKLM:\\SOFTWARE\\Policies\\Microsoft\\WindowsFirewall\\FirewallRules')
+  $rules = @(foreach ($path in $paths) {
+    $key = Get-Item -LiteralPath $path -ErrorAction Stop
+    foreach ($id in $key.GetValueNames()) {
+      $raw = $key.GetValue($id)
+      if ($raw -isnot [string] -or $raw -notmatch '^v2\\.[0-9]+\\|') { throw 'unrecognized firewall rule format' }
+      $fields = @{}
+      foreach ($part in $raw.Split('|')) {
+        if ($part -match '^([^=]+)=(.*)$') { $field = $Matches[1]; if (-not $fields.ContainsKey($field)) { $fields[$field] = @() }; $fields[$field] += $Matches[2] }
+      }
+      if (-not $fields.Active -or -not $fields.Dir -or -not $fields.Action) { throw 'incomplete firewall rule' }
+      if ($fields.Active[0] -ne 'TRUE' -or $fields.Dir[0] -ne 'In' -or $fields.Action[0] -ne 'Block') { continue }
+      $protocol = if ($fields.Protocol) { $fields.Protocol[0] } else { 'Any' }
+      $program = if ($fields.App) { [Environment]::ExpandEnvironmentVariables($fields.App[0]) } else { 'Any' }
+      $portValues = @($fields.LPort) + @($fields.LPort2); $ports = @($portValues | Where-Object { $_ }); if (-not $ports.Count) { $ports = @('Any') }
+      $local = @($fields.LA4 | Where-Object { $_ }); if (-not $local.Count) { $local = @('Any') }
+      $remote = @($fields.RA4 | Where-Object { $_ }); if (-not $remote.Count) { $remote = @('Any') }
+      [ordered]@{ name = "$id"; displayName = "$id"; action = 'Block'; profile = 'Any'; package = ''; owner = ''; service = 'Any'; protocol = "$protocol"; localPort = $ports; program = "$program"; remoteAddress = $remote; localAddress = $local }
+    }
+  })
+} catch { $problem = 'reading firewall registry rules failed: ' + $_.Exception.Message; $rules = @() }
+$info = [ordered]@{ elevated = $elevated; networkCategory = $null; store = 'Registry'; problem = $problem; rules = @($rules) }
 $global:LASTEXITCODE = 0
 Write-Output '${DUMP_BEGIN}'
 $json = ConvertTo-Json -InputObject $info -Compress -Depth 5
@@ -130,8 +175,8 @@ Write-Output '${ADD_END}'
 `.replace(/^[ \t]+/gm, '');
 }
 
-export function buildFirewallDumpCommand(_localAddress: string): string {
-  return powershellDialect.wrapScript(compressPowerShellScript(buildDumpScript()));
+export function buildFirewallDumpCommand(localAddress: string): string {
+  return powershellDialect.wrapScript(compressPowerShellScript(buildDumpScript(localAddress)));
 }
 
 export function buildFirewallAddCommand(port: number, nodePath: string, localAddress: string): string {
@@ -366,7 +411,7 @@ export async function checkFirewall(exec: FirewallExec, port: number, nodePath: 
  */
 export function describeFirewallProblem(result: FirewallResult, port: number, nodePath: string, localAddress: string): string | null {
   if (result.blockedBy.length > 0) {
-    if (result.store === 'COM') {
+    if (result.store !== 'ActiveStore') {
       return `Windows Firewall reports an inbound Block rule that may stop the agent (TCP ${port} / ${nodePath} / ${localAddress}): ${result.blockedBy.map((n) => `"${n}"`).join(', ')}. Its effective policy could not be verified. Inspect the rule and policy before installing.`;
     }
     return `Windows Firewall has an enabled inbound Block rule that stops the agent (TCP ${port} / ${nodePath} / ${localAddress}): ${result.blockedBy.map((n) => `"${n}"`).join(', ')}. A Block rule wins over any Allow rule. Remove or disable it (Windows creates one when the first-run firewall prompt is cancelled), then install again.`;

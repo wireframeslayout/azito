@@ -20,8 +20,7 @@ function makeBundler() {
 type SftpFake = { sftpUpload: (host: string, local: string, remote: string) => Promise<void>; sftpWrite: (host: string, data: Buffer, remote: string) => Promise<void> };
 
 function make(hostOptions: Partial<FakeWindowsHostOptions> = {}, windowsAgent: WindowsAgentOptions = DEFAULT_WINDOWS_AGENT_OPTIONS, misao?: AgentMisaoInstaller, harnessPrefix = '') {
-  // These tests exercise deployment after a hypothetical verified policy; production currently reports COM as unknown.
-  const host = new FakeWindowsHost({ sha256: SHA, taskName: windowsAgent.taskName, simulateActiveStore: true, ...hostOptions });
+  const host = new FakeWindowsHost({ sha256: SHA, taskName: windowsAgent.taskName, firewall: { ruleFound: true, elevated: true, created: false, problem: null }, ...hostOptions });
   const execIsolated = vi.fn(async (sshHost: string, command: string) => host.exec(sshHost, command));
   const installer = new AgentInstaller({ execIsolated, resolveHost: (h: string) => ({ username: 'user', host: h.replace(/^.*@/, '').replace(/:\d+$/, ''), port: 22 }) } as never, makeBundler() as never, windowsAgent, misao, harnessPrefix);
   const sftp = installer as unknown as SftpFake;
@@ -161,9 +160,7 @@ describe('AgentInstaller on a Windows host', () => {
       const steps: InstallProgress[] = [];
       const result = await installer.install('user@win', (p) => steps.push(p));
       expect(result.success).toBe(false);
-      expect(result.error).toContain('Windows Firewall has no enabled inbound rule that lets the hub reach the agent (TCP 3002 for C:\\Program Files\\nodejs\\node.exe on 100.64.0.9');
-      expect(result.error).toContain('not elevated');
-      expect(result.error).toContain('New-NetFirewallRule -DisplayName "AZITO Agent (TCP 3002)" -Direction Inbound -Action Allow -Protocol TCP -LocalPort 3002 -Program "C:\\Program Files\\nodejs\\node.exe" -LocalAddress 100.64.0.9 -RemoteAddress 100.64.0.0/10');
+      expect(result.error).toContain('effective firewall policy could not be read');
       expect(steps.map((s) => `${s.step}:${s.status}`)).toEqual(['preflight:running', 'preflight:error']);
       expect(uploads).toEqual([]);
       expect(host.calls.some((c) => c.kind === 'script')).toBe(false);
@@ -188,8 +185,8 @@ describe('AgentInstaller on a Windows host', () => {
       expect(host.uploaded.size).toBe(0);
     });
 
-    it('stops with the COM-only firewall response used by the real host', async () => {
-      const { installer, host } = make({ simulateActiveStore: false });
+    it('stops with the registry-only firewall response used by a non-elevated host', async () => {
+      const { installer, host } = make({ firewall: { ruleFound: true, elevated: false, created: false, problem: null } });
       const result = await installer.install('user@win');
       expect(result.success).toBe(false);
       expect(result.error).toContain('effective firewall policy could not be read');

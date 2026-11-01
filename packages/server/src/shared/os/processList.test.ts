@@ -62,13 +62,12 @@ describe('buildProcessListSpec', () => {
     expect(buildProcessListSpec('darwin')).toMatchObject({ file: 'ps' });
   });
 
-  it('runs a PowerShell EncodedCommand on Windows that asks process APIs for FILETIMEs', () => {
+  it('runs a PowerShell EncodedCommand on Windows that asks CIM for FILETIMEs', () => {
     const spec = buildProcessListSpec('win32');
     expect(spec.file).toBe('powershell.exe');
     const encoded = spec.args[spec.args.indexOf('-EncodedCommand') + 1];
     const script = Buffer.from(encoded, 'base64').toString('utf16le');
-    expect(script).toContain('NtQueryInformationProcess');
-    expect(script).not.toMatch(/Get-CimInstance|Get-WmiObject/);
+    expect(script).toContain('Get-CimInstance -ClassName Win32_Process');
     expect(script).toContain('ToFileTimeUtc()');
     expect(script).not.toMatch(/wmic/i);
   });

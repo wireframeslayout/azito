@@ -219,11 +219,12 @@ describe.skipIf(process.platform !== 'win32')('the Windows agent install on a re
     const create = (name: string, extra: string): Promise<string> =>
       ps(`$null = New-NetFirewallRule -DisplayName ${powershellDialect.quote(name)} -Direction Inbound -Protocol TCP -Profile Any ${extra}`);
 
-    it('reports unknown without creating a rule when effective policy cannot be verified', async () => {
+    it('adds a rule when the elevated ActiveStore has no matching rule', async (ctx) => {
       const port = await freePort();
       track(port);
       const result = await run(port);
-      expect(result).toMatchObject({ ruleFound: null, created: false, blockedBy: [] });
+      if (!result.elevated) ctx.skip('this session is not elevated');
+      expect(result).toMatchObject({ ruleFound: false, created: true, blockedBy: [] });
     }, 300_000);
 
     it('stops at an enabled inbound Block rule for the port, with its name, and adds nothing', async () => {
@@ -250,8 +251,8 @@ describe.skipIf(process.platform !== 'win32')('the Windows agent install on a re
       await create(narrowName, `-Action Allow -LocalPort ${narrowPort} -Program ${powershellDialect.quote(fwNode)} -RemoteAddress LocalSubnet`);
       const range = await run(rangePort);
       if (!range.elevated) ctx.skip('this session is not elevated');
-      expect(range).toMatchObject({ ruleFound: null, created: false });
-      expect(await run(narrowPort)).toMatchObject({ ruleFound: null, created: false });
+      expect(range).toMatchObject({ ruleFound: false, created: true });
+      expect(await run(narrowPort)).toMatchObject({ ruleFound: false, created: true });
     }, 300_000);
 
     it('counts a program rule for node.exe with any port (the rule Windows adds when its prompt is accepted)', async () => {
@@ -260,7 +261,9 @@ describe.skipIf(process.platform !== 'win32')('the Windows agent install on a re
       firewallRules.add(name);
       track(port);
       await create(name, `-Action Allow -Program ${powershellDialect.quote(fwNode)}`);
-      expect(await run(port)).toMatchObject({ ruleFound: null });
+      const result = await run(port);
+      if (result.elevated) expect(result).toMatchObject({ ruleFound: true, created: false });
+      else expect(result.ruleFound).toBeNull();
     }, 300_000);
   });
 

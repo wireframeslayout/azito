@@ -50,7 +50,7 @@ export const WINDOWS_PROCESS_RECORDS = [
   '  try { $exe = $p.Path } catch { }',
   '  $owner = [AzitoProcessList]::Owner($p.Id); $current = Get-Process -Id $p.Id -ErrorAction SilentlyContinue',
   '  if (-not $current) { return }; if ($started -and $current.StartTime.ToUniversalTime() -ne $started) { throw "Process changed while inspected" }',
-  '  if (-not $started) { $info = @(0, $null); $exe = $null; $owner = $null }',
+  '  if (-not $started) { $info = @(0, $null); $exe = $null; if ($owner -ne $me) { $owner = $null } }',
   "  [pscustomobject]@{ ProcessId = $p.Id; ParentProcessId = $info[0]; Name = $p.ProcessName + '.exe'; ExecutablePath = $exe; CommandLine = $info[1]; CreationDate = $started; OwnerSid = $owner }",
   '}',
   'function All { @(Get-Process -ErrorAction Stop | Where-Object { $_.Id -ne $PID } | ForEach-Object { Read-Process $_ }) }',

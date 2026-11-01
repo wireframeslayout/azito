@@ -6,17 +6,24 @@ import { RESOLVE_LONG, USES_FOLDER, lines, tailBelow, unreadable, type ScriptOut
 // ─── The firewall rule ───
 
 /**
- * Looks for the rule the install adds (`New-NetFirewallRule -DisplayName "AZITO Agent (TCP <port>)" -Direction Inbound ...`, see
- * `firewallRuleCommand`; it has no name of its own, so Windows gives it a GUID) and REPORTS it. Nothing is removed: a display name built
- * from the port says what the install called the rule, not that this rule is the install's, and there are more conditions on a rule than
- * a person or a script can be sure to have compared. Each rule found is printed as `RULE|name|action|profile|program|protocol|port|local|remote`
- * and the person is told how to remove the one that is the install's. A list that cannot be read is an error, never "no rule".
+ * Reports matching inbound rules without removing them. An elevated session reads the rule IDs through NetSecurity; otherwise COM
+ * only provides names, and an empty listing is unknown. A matching name does not prove ownership, so the operator must inspect each rule.
  */
 export function firewallInspectScript(displayName: string): string {
   const q = powershellDialect.quote;
   return [
     `$name = ${q(displayName)}`,
     'function Clean($text) { ("$text" -replace \'[\\r\\n|]+\', \' \') }',
+    '$admin = ([Security.Principal.WindowsPrincipal][Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)',
+    'if ($admin) {',
+    '  $rules = @(Get-NetFirewallRule -Direction Inbound -ErrorAction Stop | Where-Object { $_.DisplayName -eq $name -or $_.DisplayName.StartsWith($name + \' [\') })',
+    '  if ($rules.Count -eq 0) { Write-Output \'ABSENT\'; exit 0 }',
+    '  foreach ($rule in $rules) {',
+    '    $app = $rule | Get-NetFirewallApplicationFilter -ErrorAction Stop; $ports = $rule | Get-NetFirewallPortFilter -ErrorAction Stop; $address = $rule | Get-NetFirewallAddressFilter -ErrorAction Stop',
+    '    Write-Output (\'RULE|\' + (Clean $rule.Name) + \'|\' + (Clean $rule.Action) + \'|\' + (Clean $rule.Profile) + \'|\' + (Clean $app.Program) + \'|\' + (Clean $ports.Protocol) + \'|\' + (Clean ($ports.LocalPort -join \',\')) + \'|\' + (Clean ($address.LocalAddress -join \',\')) + \'|\' + (Clean ($address.RemoteAddress -join \',\')))',
+    '  }',
+    '  exit 0',
+    '}',
     '$policy = New-Object -ComObject HNetCfg.FwPolicy2 -ErrorAction Stop',
     '$foundRules = @($policy.Rules | Where-Object { $_.Direction -eq 1 -and ($_.Name -eq $name -or $_.Name.StartsWith($name + \' [\')) })',
     'if ($foundRules.Count -eq 0) { Write-Output \'UNKNOWN\'; exit 0 }',
@@ -103,6 +110,7 @@ export function misaoHubScript(input: MisaoHubInput): string {
     `$root = ${q(input.root)}`,
     ...(input.hubRoot !== undefined ? [`$hubRoot = ${q(input.hubRoot)}`] : []),
     '$me = [Security.Principal.WindowsIdentity]::GetCurrent().User.Value',
+    '$elevated = ([Security.Principal.WindowsPrincipal][Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)',
     ...RESOLVE_LONG,
     ...WINDOWS_PROCESS_RECORDS,
     ...(input.hubRoot !== undefined ? [
@@ -116,6 +124,7 @@ export function misaoHubScript(input: MisaoHubInput): string {
       'foreach ($candidate in @(All | Where-Object { $_.Name -eq \'node.exe\' })) {',
       '  $owner = if (-not $candidate.OwnerSid) { \'unknown\' } elseif ($candidate.OwnerSid -eq $me) { \'mine\' } else { \'other\' }',
       '  if ($owner -eq \'other\') { continue }',
+      '  if ($owner -eq \'unknown\' -and -not $elevated) { continue }',
       '  if (-not $candidate.CommandLine) { Write-Output ("UNKNOWN " + $candidate.ProcessId); exit 0 }',
       '  if ($candidate.CommandLine -notmatch $hubPattern) { continue }',
       '  if ($owner -eq \'unknown\') { Write-Output ("UNKNOWN " + $candidate.ProcessId); exit 0 }',
@@ -153,7 +162,7 @@ export function misaoDaemonScript(root: string, home: string): string {
     '  }',
     '  if (-not $byTask) { Write-Output ("FOREIGN " + $d.ProcessId); exit 0 }',
     '}',
-    'foreach ($b in @(All | Where-Object { (Blind $_) -and (Matters $_) -and (Owner $_) -ne \'other\' })) { Write-Output ("UNKNOWN " + $b.ProcessId); exit 0 }',
+    'foreach ($b in @(All | Where-Object { (Blind $_) -and (Matters $_) -and (Owner $_) -eq \'mine\' })) { Write-Output ("UNKNOWN " + $b.ProcessId); exit 0 }',
     'Write-Output \'CLEAR\'',
   ].join('\n');
 }

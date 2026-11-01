@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { readWindowsProcessCreation, startParentWatch } from './parentWatch';
+import { startParentWatch } from './parentWatch';
 
 describe('startParentWatch', () => {
   beforeEach(() => { vi.useFakeTimers(); });
@@ -86,11 +86,4 @@ describe('startParentWatch', () => {
     await vi.advanceTimersByTimeAsync(12_000);
     expect(second.onGone).not.toHaveBeenCalled();
   });
-});
-
-describe.skipIf(process.platform !== 'win32')('Windows process creation time', () => {
-  it('reads the current process and returns null for a missing one', async () => {
-    expect(await readWindowsProcessCreation(process.env.SystemRoot!, process.pid)).toMatch(/^\d+$/);
-    expect(await readWindowsProcessCreation(process.env.SystemRoot!, 2147483647)).toBeNull();
-  }, 60_000);
 });

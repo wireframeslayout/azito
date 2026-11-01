@@ -2,7 +2,7 @@ import * as path from 'path';
 import { createHash, randomUUID } from 'node:crypto';
 import type { ExecResult } from '../transport/ServerTransport';
 import { CREATE_SCRIPT, INSPECT_SCRIPT, PROTECT_SCRIPT, evaluateAcl, parseAclSnapshot } from '../../../shared/os/windowsSecretFileGuard';
-import { powershellDialect } from '../../../shared/os/shellDialect';
+import { MAX_WINDOWS_COMMAND_LINE, powershellDialect, powershellEncodedArgs } from '../../../shared/os/shellDialect';
 import { compressPowerShellScript } from '../../../shared/os/compressPowerShellScript';
 import { buildEndProcessesScript } from '../../../shared/os/windowsProcessSweep';
 import { SchtasksClient, type TaskScheduleState } from '../../../shared/os/taskScheduler/schtasks';
@@ -17,6 +17,11 @@ import { uninstallWindowsAgent, type WindowsUninstallChoice, type WindowsUninsta
 
 /** Runs one command line on the Windows host through its SSH login shell. */
 export type WindowsSshExec = (sshHost: string, command: string, timeoutMs: number) => Promise<ExecResult>;
+
+export function needsTransferredScript(body: string): boolean {
+  const script = `$ProgressPreference = 'SilentlyContinue'\n${body}`;
+  return ['powershell.exe', ...powershellEncodedArgs(script)].join(' ').length > MAX_WINDOWS_COMMAND_LINE;
+}
 
 /** Puts bytes on the host over SFTP. The remote path is relative to the user's home, with `/` separators (what Windows OpenSSH's sftp-server takes). */
 export interface WindowsFileTransfer {
@@ -333,7 +338,7 @@ export class WindowsAgentDeployer {
       {
         tasks: client,
         endTask: (taskName) => this.endTask(client, taskName),
-        script: (what, body, timeoutMs) => body.length > 3000
+        script: (what, body, timeoutMs) => needsTransferredScript(body)
           ? this.transferredScript(sshHost, host.home, what, body, timeoutMs)
           : this.script(sshHost, what, body, timeoutMs),
       },
@@ -448,7 +453,8 @@ export class WindowsAgentDeployer {
         'Invoke-Expression ([Text.Encoding]::UTF8.GetString($bytes))',
       ].join('\n'), timeoutMs);
     } finally {
-      await this.script(sshHost, 'Removing the temporary script', `Remove-Item -LiteralPath ${q(remote)} -Force -ErrorAction SilentlyContinue`, QUICK_MS);
+      await this.script(sshHost, 'Removing the temporary script', `Remove-Item -LiteralPath ${q(remote)} -Force -ErrorAction SilentlyContinue`, QUICK_MS)
+        .catch((error: unknown) => console.warn(`Could not remove the temporary Windows script: ${redactSecretText(String(error))}`));
     }
   }
 

@@ -127,6 +127,7 @@ export const USES_FOLDER = [
   ...RESOLVE_LONG,
   ...WINDOWS_PROCESS_RECORDS,
   '$me = [Security.Principal.WindowsIdentity]::GetCurrent().User.Value',
+  '$elevated = ([Security.Principal.WindowsPrincipal][Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)',
   'function Norm($t) { if ($t) { ($t -replace \'/\', \'\\\').ToLowerInvariant() } else { \'\' } }',
   '$needles = New-Object System.Collections.ArrayList',
   'function Add-Needle($path) { if ($path) { $n = (Norm $path).TrimEnd([char]92) + [char]92; if (-not $needles.Contains($n)) { [void]$needles.Add($n) } } }',
@@ -136,7 +137,7 @@ export const USES_FOLDER = [
   'function Blind($p) { (-not $p.ExecutablePath) -or (-not $p.CommandLine) }',
   'function Matters($p) { @(\'node.exe\', \'misao.exe\', \'conhost.exe\', \'cmd.exe\', \'powershell.exe\', \'pwsh.exe\') -contains "$($p.Name)".ToLowerInvariant() }',
   'function Owner($p) {',
-  '  if (-not $p.OwnerSid) { return \'unknown\' }',
+  '  if (-not $p.OwnerSid) { if ($elevated) { return \'unknown\' }; return \'other\' }',
   '  if ($p.OwnerSid -eq $me) { \'mine\' } else { \'other\' }',
   '}',
 ];
@@ -164,7 +165,7 @@ export function leftoverProcessesScript(root: string, home: string): string {
     'function Find-Left { @(All | Where-Object { Uses $_ }) }',
     '$left = Find-Left',
     'for ($i = 0; $i -lt 20 -and $left.Count -gt 0; $i++) { Start-Sleep -Milliseconds 500; $left = Find-Left }',
-    '$unclear = @(All | Where-Object { (Blind $_) -and -not (Uses $_) -and (Owner $_) -ne \'other\' })',
+    '$unclear = @(All | Where-Object { (Blind $_) -and -not (Uses $_) -and (Owner $_) -eq \'mine\' })',
     '$blind = @($unclear | Where-Object { Matters $_ }); $hidden = @($unclear | Where-Object { -not (Matters $_) -and (Owner $_) -eq \'mine\' })',
     'function Clean($t) { "$t" -replace \'[\\r\\n|]+\', \' \' }',
     'foreach ($p in $left) { Write-Output (\'LEFT|\' + $p.ProcessId + \'|\' + (Clean $p.Name) + \'|\' + (Clean $p.ExecutablePath)) }',
@@ -201,7 +202,7 @@ export function parseLeftoverOutput(output: string, root: string, advice = ''): 
   }
   if (blind.length > 0) {
     const listed = blind.map((p) => `${p.name} (process ${p.pid})`).join('; ');
-    parts.push(`The host did not give the program or the command line of ${blind.length === 1 ? 'a process' : `${blind.length} processes`} whose owner is yours or unknown, so it cannot be told whether ${blind.length === 1 ? 'it uses' : 'they use'} ${root}: ${listed}. Check ${blind.length === 1 ? 'it' : 'them'}.`);
+    parts.push(`The host did not give the program or the command line of ${blind.length === 1 ? 'a process of yours' : `${blind.length} processes of yours`}, so it cannot be told whether ${blind.length === 1 ? 'it uses' : 'they use'} ${root}: ${listed}. Check ${blind.length === 1 ? 'it' : 'them'}.`);
   }
   return { outcome: 'failed', detail: `${parts.join(' ')} The folder was left; delete it, or remove the server again, once that is settled. (Processes of other users cannot be seen from this session.)${note === undefined ? '' : ` ${note}`}` };
 }

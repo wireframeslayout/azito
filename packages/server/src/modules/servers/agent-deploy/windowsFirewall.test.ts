@@ -106,9 +106,12 @@ describe('parseAddressSpec', () => {
 describe('the scripts', () => {
   it('collects inbound rules and their filters (the in-force store first), and decides nothing itself', () => {
     const script = decodeEncodedCommand(buildFirewallDumpCommand(IP));
-    expect(script).toContain('HNetCfg.FwPolicy2');
-    expect(script).not.toMatch(/Get-NetFirewall|Get-NetIPAddress|Get-NetConnectionProfile/);
-    expect(script).toContain("store = 'COM'");
+    expect(script).toContain('SharedAccess\\Parameters\\FirewallPolicy\\FirewallRules');
+    expect(script).toContain('Policies\\Microsoft\\WindowsFirewall\\FirewallRules');
+    expect(script).toContain('if ($elevated)');
+    expect(script).toContain('Get-NetFirewallRule -PolicyStore $store');
+    expect(script).toContain('Get-NetConnectionProfile');
+    expect(script).toContain("store = 'Registry'");
     expect(script).not.toContain('New-NetFirewallRule');
   });
 
@@ -197,6 +200,15 @@ describe('checkFirewall', () => {
     expect(await allow.result()).toMatchObject({ ruleFound: null, allowedBy: [], created: false });
     const block = run([dumped({ store: 'COM', elevated: false, networkCategory: null, rules: [rule({ action: 'Block' })] })]);
     expect(await block.result()).toMatchObject({ ruleFound: null, blockedBy: ['a rule'], created: false });
+  });
+
+  it('retains registry block evidence without treating registry allows as effective policy', async () => {
+    const allow = run([dumped({ store: 'Registry', elevated: false, networkCategory: null, rules: [rule()] })]);
+    expect(await allow.result()).toMatchObject({ ruleFound: null, allowedBy: [], created: false });
+    const block = run([dumped({ store: 'Registry', elevated: false, networkCategory: null, rules: [rule({ action: 'Block' })] })]);
+    const result = await block.result();
+    expect(result).toMatchObject({ ruleFound: null, blockedBy: ['a rule'] });
+    expect(describeFirewallProblem(result, 3002, NODE, IP)).toContain('could not be verified');
   });
 
   it('does not add a rule when the effective policy is unknown, even if elevated', async () => {

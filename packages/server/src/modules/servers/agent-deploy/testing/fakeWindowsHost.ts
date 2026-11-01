@@ -21,8 +21,6 @@ export interface FakeWindowsHostOptions {
   /** The hash Get-FileHash answers (default: the one the test expects). */
   sha256: string;
   firewall?: { ruleFound: boolean | null; elevated: boolean; created: boolean; problem: string | null; blockedBy?: string[] };
-  /** Synthetic effective store, for testing deployment steps beyond the current COM-only firewall check. */
-  simulateActiveStore?: boolean;
   /** `null` = the build number could not be read. */
   buildNumber?: string | null;
   /** The task is already registered (and running) before the install. */
@@ -111,7 +109,7 @@ export class FakeWindowsHost {
       const fw = { blockedBy: [] as string[], ...(this.options.firewall ?? { ruleFound: true, elevated: false, created: false, problem: null }) };
       const rule = (action: string, displayName: string) => ({ name: displayName, displayName, action, profile: 'Any', package: '', owner: '', service: 'Any', protocol: 'TCP', localPort: ['Any'], program: 'Any', remoteAddress: ['Any'], localAddress: ['Any'] });
       const rules = [...(fw.ruleFound ? [rule('Allow', 'an allow rule')] : []), ...fw.blockedBy.map((n) => rule('Block', n))];
-      const dump = { elevated: fw.elevated, networkCategory: this.options.simulateActiveStore ? 'Private' : null, store: this.options.simulateActiveStore ? 'ActiveStore' : 'COM', problem: fw.ruleFound === null ? 'reading the rules failed' : null, rules: fw.ruleFound === null ? [] : rules };
+      const dump = { elevated: fw.elevated, networkCategory: fw.elevated ? 'Private' : null, store: fw.elevated ? 'ActiveStore' : 'Registry', problem: fw.ruleFound === null ? 'reading the rules failed' : null, rules: fw.ruleFound === null ? [] : rules };
       return { stdout: `<<AZITO_FIREWALL_DUMP_BEGIN>>\r\n${JSON.stringify(dump)}\r\n<<AZITO_FIREWALL_DUMP_END>>\r\n`, stderr: '', code: 0 };
     }
     if (script.includes('AZITO_FIREWALL_ADD_BEGIN')) {

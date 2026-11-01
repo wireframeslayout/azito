@@ -151,7 +151,7 @@ describe.skipIf(process.platform !== 'win32' || !fs.existsSync(MISAO_CLI))('remo
   beforeAll(async () => {
     const pre = await cmdExec('ci', buildWindowsPreflightCommand(), 120_000);
     host = parseWindowsPreflight(pre.stdout, pre.stderr, pre.code);
-    deployer = new WindowsAgentDeployer(cmdExec, { putFile: async () => undefined, putBuffer: async () => undefined }, OPTIONS);
+    deployer = new WindowsAgentDeployer(cmdExec, { putFile: async () => undefined, putBuffer: async (_host, data, remote) => { await fs.promises.writeFile(path.win32.join(host.home, remote), data); } }, OPTIONS);
 
     // A daemon of a different folder (its own task, which the uninstall does not know), which must survive; then the daemon to be removed.
     taskScheduler = new SchtasksClient(rawRunnerOf((spec) => runCommandSpec(spec, { ...runHostOf(hostEnv), rawOutput: true })), hostEnv);
