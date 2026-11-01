@@ -11,7 +11,7 @@ import { useMemo } from 'react';
 import { useTranslation } from 'react-i18next';
 
 export interface MobileActiveWindowsPanelProps {
-  titleData?: ActivityTitleData;
+  titleData: ActivityTitleData;
   onClose: () => void;
   connectPane: (refOrServerName: TerminalRef | string, targetOrProjectId?: string | number, projectId?: number) => void;
   openTask: (taskId: number, title: string, projectId?: number) => void;

@@ -49,7 +49,7 @@ function buildProjectMenuItems(
 }
 
 interface WorkspaceLayoutProps {
-  titleData?: ActivityTitleData;
+  titleData: ActivityTitleData;
   mobile: boolean;
   sidebarMode: SidebarMode;
   switchSidebarMode: (mode: SidebarMode) => void;

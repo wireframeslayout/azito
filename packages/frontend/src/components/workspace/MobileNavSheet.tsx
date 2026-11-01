@@ -30,7 +30,7 @@ const MODE_TITLE_KEY: Record<SidebarMode, string> = {
 };
 
 interface MobileNavSheetProps {
-  titleData?: ActivityTitleData;
+  titleData: ActivityTitleData;
   open: boolean;
   onClose: () => void;
   project: { id: number; name: string } | null;
@@ -83,7 +83,7 @@ export function MobileNavSheet({
   const [stack, setStack] = useState<StackEntry[]>(['menu']);
   const [activeWindowsOpen, setActiveWindowsOpen] = useState(false);
 
-  const { totalCount: awCount, blockedCount: awBlockedCount } = useActiveWindowRows();
+  const { totalCount: awCount, blockedCount: awBlockedCount } = useActiveWindowRows(titleData);
   const currentProjectItem = allProjects.find((p) => p.id === project?.id) ?? null;
 
   // シートを開き直すたびにメニュー階層をリセットする（前回どこまで潜っていたかを持ち越さない）。

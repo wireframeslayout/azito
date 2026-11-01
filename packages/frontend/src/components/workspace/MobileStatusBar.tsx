@@ -28,7 +28,7 @@ import { ServerHealthSheet } from './ServerHealthSheet';
 const BAR_HEIGHT = 26;
 
 interface MobileStatusBarProps {
-  titleData?: ActivityTitleData;
+  titleData: ActivityTitleData;
   allTasks: Task[];
   openTask: (taskId: number, title: string, projectId?: number) => void;
   connectPane: ConnectPaneFn;

@@ -1,3 +1,4 @@
+import { activeWindowTitleInput } from '../../lib/windowDisplay';
 import { resolveWindowTitle, formatWindowTitleLine } from '@azito/shared';
 import type { ActiveWindowRow } from '../../hooks/useActiveWindowRows';
 import type { Task, Window } from '../../pages/workspace/types';
@@ -59,8 +60,10 @@ export function listTaskChildren(
 
 export function taskChildWindowTitle(w: Window, taskTitle: string, activity?: ActiveWindowRow): string {
   return formatWindowTitleLine(resolveWindowTitle({
-    id: w.id, paneTitle: activity?.paneTitle ?? activity?.paneName, paneCommand: activity?.paneCommand,
-    label: w.label, labelSource: w.labelSource, taskTitle, workerType: w.workerType,
-    windowType: w.windowType, tmuxTarget: w.tmuxTarget,
+    ...activeWindowTitleInput({
+      windowId: w.id, target: w.tmuxTarget, paneTitle: activity?.paneTitle, paneName: activity?.paneName,
+      paneCommand: activity?.paneCommand, label: w.label, labelSource: w.labelSource, taskTitle,
+      workerType: w.workerType, windowType: w.windowType,
+    }),
   }));
 }

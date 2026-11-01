@@ -590,7 +590,13 @@ function WorkspaceInner() {
     buildWindowIndex(allProjects, allTasks, project),
   [allProjects, allTasks, project]);
 
-  const titleData = useMemo(() => ({ windowById, tasks: allTasks }), [windowById, allTasks]);
+  const taskById = useMemo(() => {
+    const map = new Map<number, Task>();
+    for (const t of allTasks) map.set(t.id, t);
+    return map;
+  }, [allTasks]);
+
+  const titleData = useMemo(() => ({ windowById, taskById }), [windowById, taskById]);
 
   const findTaskByTarget = useCallback(
     (target: string) => findTaskByTargetLib(target, [tasks, allTasks], windowById),
@@ -886,12 +892,6 @@ function WorkspaceInner() {
     return map;
   }, [windowById]);
 
-  const taskById = useMemo(() => {
-    const map = new Map<number, Task>();
-    for (const t of allTasks) map.set(t.id, t);
-    return map;
-  }, [allTasks]);
-
   const sessionWindowByWindowId = useMemo(() => {
     const map = new Map<number, { panes: Array<{ index: number; title: string; command: string; active?: boolean }> }>();
     for (const sessions of Object.values(sessionData)) {
@@ -1162,6 +1162,7 @@ function WorkspaceInner() {
 
   const sidebarContent = (
     <WorkspaceSidebarContent
+      titleData={titleData}
       sidebarMode={sidebarMode}
       project={project}
       sessionData={sessionData}

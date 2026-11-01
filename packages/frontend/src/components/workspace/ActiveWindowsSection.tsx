@@ -31,7 +31,7 @@ function saveUserCollapsed(value: boolean): void {
 }
 
 export interface ActiveWindowsSectionProps {
-  titleData?: ActivityTitleData;
+  titleData: ActivityTitleData;
   connectPane: (refOrServerName: TerminalRef | string, targetOrProjectId?: string | number, projectId?: number) => void;
   openTask: (taskId: number, title: string, projectId?: number) => void;
   taskWindows: Array<{ serverName: string; tmuxTarget: string; taskId: number }>;

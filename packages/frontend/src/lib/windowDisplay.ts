@@ -45,12 +45,13 @@ export function activeWindowTitleInput(row: { windowId?: number; target: string;
 
 export interface ActivityTitleData {
   windowById: Map<number, WindowIndexEntry>;
-  tasks: Array<{ id: number; title: string }>;
+  taskById: Map<number, { title: string }>;
 }
 
-export function resolveActivityTitle(row: Parameters<typeof activeWindowTitleInput>[0] & { taskId?: number }, data?: ActivityTitleData): string {
-  const win = row.windowId == null ? undefined : data?.windowById.get(row.windowId);
-  const task = data?.tasks.find((t) => t.id === (win?.taskId ?? row.taskId));
+export function resolveActivityTitle(row: Parameters<typeof activeWindowTitleInput>[0] & { taskId?: number }, data: ActivityTitleData): string {
+  const win = row.windowId == null ? undefined : data.windowById.get(row.windowId);
+  const taskId = win?.taskId ?? row.taskId;
+  const task = taskId == null ? undefined : data.taskById.get(taskId);
   return formatWindowTitleLine(resolveWindowTitle(activeWindowTitleInput({
     ...row,
     label: win?.label === null ? undefined : win?.label ?? row.label,

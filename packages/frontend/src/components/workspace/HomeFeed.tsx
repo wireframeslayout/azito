@@ -44,7 +44,7 @@ interface ActiveGroupEntry {
 }
 
 interface HomeFeedProps {
-  titleData?: ActivityTitleData;
+  titleData: ActivityTitleData;
   allTasks: Task[];
   allProjects: ProjectSummary[];
   openTask: (taskId: number, title: string, projectId?: number) => void;

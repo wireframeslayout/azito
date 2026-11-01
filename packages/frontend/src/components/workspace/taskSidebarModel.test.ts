@@ -207,6 +207,12 @@ it('uses the task title when a pane name is only its command', () => {
   expect(taskChildWindowTitle(window, 'Fix issue', activity)).toBe('Fix issue · W-12');
 });
 
+it('uses the pane name when the pane title is empty', () => {
+  const window = { id: 12, tmuxTarget: 's:w', label: 'win--abcd', labelSource: 'auto' } as NonNullable<Task['windows']>[number];
+  const activity = makeActivity(1, 'running', { paneTitle: '', paneName: 'Agent title' });
+  expect(taskChildWindowTitle(window, 'Fix issue', activity)).toBe('Agent title · W-12');
+});
+
 it('adapts activity pane and target fields for shared title resolution', () => {
   const row = makeActivity(1, 'running', { windowId: 12, paneName: 'codex', paneCommand: 'codex' });
   expect(formatWindowTitleLine(resolveWindowTitle({ ...activeWindowTitleInput(row), taskTitle: 'Fix issue' }))).toBe('Fix issue · W-12');

@@ -25,7 +25,7 @@ export interface ActiveWindowRow {
   paneName?: string;
 }
 
-export function useActiveWindowRows(data?: ActivityTitleData) {
+export function useActiveWindowRows(data: ActivityTitleData) {
   const { entries, finishedEntries } = useAgentActivity();
 
   const rows = useMemo<ActiveWindowRow[]>(() => {

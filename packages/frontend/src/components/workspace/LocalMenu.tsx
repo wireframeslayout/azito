@@ -23,7 +23,7 @@ const ACTIVITY_BUTTONS: { id: SidebarMode; labelKey: string }[] = [
 ];
 
 interface LocalMenuProps {
-  titleData?: ActivityTitleData;
+  titleData: ActivityTitleData;
   collapsed: boolean;
   sidebarMode: SidebarMode;
   onModeClick: (mode: SidebarMode, e?: React.MouseEvent) => void;
