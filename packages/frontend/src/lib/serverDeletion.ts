@@ -98,7 +98,7 @@ export function setRemoveMisao(choice: HostRemovalChoice, removeMisao: boolean):
 }
 
 export type DeletionResult =
-  /** `left`: what the host removal left in place on purpose (see {@link leftBehindOf}); empty when the host was not touched. */
+  /** `left`: MCP results and items left in place (see {@link leftBehindOf}); empty when the host was not touched. */
   | { kind: 'deleted'; left: UninstallStep[] }
   /** The host removal did not work: the row was NOT deleted. */
   | { kind: 'hostFailed'; failure: HostRemovalFailure }

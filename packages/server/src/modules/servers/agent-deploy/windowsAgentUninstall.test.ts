@@ -150,6 +150,15 @@ describe('uninstallWindowsAgent', () => {
     expect(result.steps.find((s) => s.id === 'folder')?.outcome).toBe('done');
   });
 
+  it('keeps both MCP registrations when the agent task cannot be removed', async () => {
+    const host = new FakeUninstallHost({ AzitoAgent: { xml: AGENT_XML, running: true } });
+    host.endTaskError = new Error('cannot end task');
+    const result = await run(host);
+    expect(result.steps.find((s) => s.id === 'folder')?.outcome).toBe('skipped');
+    expect(result.steps.filter((s) => s.id.endsWith('HarnessMcp')).map((s) => s.outcome)).toEqual(['skipped', 'skipped']);
+    expect(host.bodies.some((b) => b.what.includes('MCP registration'))).toBe(false);
+  });
+
   it('ends the task, unregisters it, looks for what still runs from the folder, reports the firewall rule and removes the folder, in that order', async () => {
     const host = new FakeUninstallHost({ AzitoAgent: { xml: AGENT_XML, running: true } });
     const result = await run(host);

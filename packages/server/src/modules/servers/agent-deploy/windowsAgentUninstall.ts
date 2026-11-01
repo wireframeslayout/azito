@@ -162,16 +162,19 @@ export async function uninstallWindowsAgent(host: WindowsUninstallHost, facts: H
   }
 
   const stopped = steps.every((s) => s.id === 'firewall' || s.outcome !== 'failed');
-  steps.push(stopped
+  const folder = stopped
     ? await step('folder', async () => parseFolderOutput(await host.script(`Removing ${agentRoot}`, folderScript(home, agentRoot), FOLDER_MS)))
-    : skipped('folder', 'the agent may still be running or registered: the folder is left so that nothing breaks underneath it'));
+    : skipped('folder', 'the agent may still be running or registered: the folder is left so that nothing breaks underneath it');
+  steps.push(folder);
 
   if (choice.removeMisao) steps.push(...await removeMisao(host, facts, options));
   const expected = path.win32.join(harnessLocation('win32', home).harnessDir, 'skills', 'azt-mcp', 'mcp-server', 'index.js');
   for (const [id, kind] of [['claudeHarnessMcp', 'claude'], ['codexHarnessMcp', 'codex']] as const) {
-    steps.push(facts.nodePath === null
+    steps.push(folder.outcome !== 'done' && folder.outcome !== 'absent'
+      ? skipped(id, 'the agent was not removed, so its MCP registration was kept')
+      : facts.nodePath === null
       ? skipped(id, 'Node is unavailable, so the registration could not be inspected')
-      : await step(id, async () => parseHarnessMcpOutput(await host.script(`Checking ${kind} MCP registration`, harnessMcpScript(kind, facts.nodePath!, home, expected), 150_000))));
+      : await step(id, async () => parseHarnessMcpOutput(await host.script(`Checking ${kind} MCP registration`, harnessMcpScript(kind, facts.nodePath!, home, expected), 200_000))));
   }
   return { ok: steps.every((s) => s.outcome !== 'failed'), steps };
 }
