@@ -16,6 +16,8 @@ describe('isWatchedWindow', () => {
     expect(isWatchedWindow(true, tab, null, 'alpha', 'session:window', 7)).toBe(true);
     expect(isWatchedWindow(true, tab, null, 'alpha', 'session:window', 8)).toBe(false);
     expect(isWatchedWindow(true, null, activityKey('alpha', 'session:window', 7), 'alpha', 'session:window', 7)).toBe(true);
+    expect(isWatchedWindow(true, null, activityKey('alpha', 'session:window'), 'alpha', 'session:window', 7)).toBe(false);
+    expect(isWatchedWindow(true, null, activityKey('alpha', 'session:window'), 'alpha', 'session:window')).toBe(true);
   });
   it('matches a ref tab only on its server', () => {
     const ref = formatMuxRef({ kind: 'tmux', workspace: 'session', window: 'window' });

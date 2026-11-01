@@ -1,9 +1,10 @@
 import { mergeFinishedEntry } from "./finishedWindows";
 import { describe, it, expect } from 'vitest';
+import { DEFAULT_FINISHED_RETENTION } from './finishedRetentionSettings';
 import {
   activityKey,
   activityKeyForEntry,
-  FINISHED_TTL_MS,
+  markSeen,
   pruneFinished,
   removeDeletedFinished,
   upsertFinished,
@@ -16,14 +17,14 @@ function entry(overrides: Partial<FinishedEntry> = {}): FinishedEntry {
 
 describe('pruneFinished', () => {
   it('drops entries older than the TTL and keeps the rest', () => {
-    const now = 10 * FINISHED_TTL_MS;
+    const now = 10 * DEFAULT_FINISHED_RETENTION.retentionMs;
     const fresh = entry({ target: 'azito:fresh', finishedAt: now - 60_000 });
-    const stale = entry({ target: 'azito:stale', finishedAt: now - FINISHED_TTL_MS - 1 });
+    const stale = entry({ target: 'azito:stale', finishedAt: now - DEFAULT_FINISHED_RETENTION.retentionMs - 1 });
     expect(pruneFinished([fresh, stale], now)).toEqual([fresh]);
   });
 
   it('returns the same reference when nothing expired (no needless re-render)', () => {
-    const now = 10 * FINISHED_TTL_MS;
+    const now = 10 * DEFAULT_FINISHED_RETENTION.retentionMs;
     const list = [entry({ finishedAt: now - 1 })];
     expect(pruneFinished(list, now)).toBe(list);
   });
@@ -129,5 +130,17 @@ describe('confirmed history retention', () => {
     expect(pruneFinished(rows, 400, { maxCount: 1, retentionMs: 1000 }).map((r) => r.target)).toEqual(['s:2', 's:3']);
     expect(pruneFinished(rows, 400, { maxCount: 0, retentionMs: 1000 }).map((r) => r.target)).toEqual(['s:3']);
     expect(pruneFinished(rows, 400, { maxCount: 10, retentionMs: 150 }).map((r) => r.target)).toEqual(['s:3']);
+  });
+});
+
+
+describe('markSeen', () => {
+  it('only marks matching unread entries and preserves the reference when unchanged', () => {
+    const rows = [entry({ seenAt: 20 }), entry({ target: 's:other' })];
+    expect(markSeen(rows, 30, () => false)).toBe(rows);
+    const seen = markSeen(rows, 30, () => true);
+    expect(seen[0]).toBe(rows[0]);
+    expect(seen[1].seenAt).toBe(30);
+    expect(markSeen(seen, 40, () => true)).toBe(seen);
   });
 });

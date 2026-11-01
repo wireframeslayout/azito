@@ -13,6 +13,5 @@ export function isWatchedWindow(
     if (parsed.kind === 'legacy' && isSameWindowTarget(parsed.target, target)) return true;
     if (parsed.kind === 'ref' && refTabMatchesTarget(parsed.ref, target)) return true;
   }
-  return focusedTarget === activityKey(serverName, target, windowId)
-    || focusedTarget === activityKey(serverName, target);
+  return focusedTarget === activityKey(serverName, target, windowId);
 }

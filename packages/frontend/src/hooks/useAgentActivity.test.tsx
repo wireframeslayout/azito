@@ -124,3 +124,16 @@ it('restores a confirmed row on remount', async () => {
   await resolve(1, []);
   expect(state().finished).toHaveLength(1);
 });
+
+it('marks an unread completion when focus and the event change together', async () => {
+  vi.spyOn(document, 'hasFocus').mockReturnValue(true);
+  const view = mount();
+  await resolve(0, []);
+  act(() => {
+    targets.activeTabId = 'terminal:local::w42.1';
+    events.handlers.onAgentActivity({ ...running, windowId: 42, running: false, reason: 'completed' });
+    view.rerender(<AgentActivityProvider><View /></AgentActivityProvider>);
+  });
+  expect(state().finished[0].seenAt).toEqual(expect.any(Number));
+  vi.restoreAllMocks();
+});

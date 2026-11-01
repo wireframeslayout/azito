@@ -9,8 +9,8 @@ import { useWorkspaceTargets } from './useWorkspaceTargets';
 import {
   activityKey,
   activityKeyForEntry,
-  FINISHED_TTL_MS,
   pruneFinished,
+  markSeen,
   removeDeletedFinished,
   upsertFinished,
   mergeFinishedEntry,
@@ -19,7 +19,7 @@ import {
 
 // 完了行のキー規約・寿命・リスト操作は lib/finishedWindows.ts に集約してある（純関数としてテスト
 // されている）。ここからの re-export は既存の import 経路（useActiveWindowRows 等）を保つため。
-export { activityKey, activityKeyForEntry, FINISHED_TTL_MS };
+export { activityKey, activityKeyForEntry };
 export type { FinishedEntry };
 
 export interface AgentActivityInfo {
@@ -308,10 +308,9 @@ export function AgentActivityProvider({ children }: { children: React.ReactNode 
   useEffect(() => {
     setFinished((cur) => {
       const now = Date.now();
-      const next = cur.map((e) => e.seenAt == null && isWatched(e.serverName, e.target, e.windowId) ? { ...e, seenAt: now } : e);
-      return pruneFinished(next, now, retention);
+      return pruneFinished(markSeen(cur, now, (e) => isWatched(e.serverName, e.target, e.windowId)), now, retention);
     });
-  }, [isWatched, retention]);
+  }, [finished, isWatched, retention]);
 
   useEffect(() => {
     const pruned = pruneFinished(finished, Date.now(), retention);
@@ -321,11 +320,11 @@ export function AgentActivityProvider({ children }: { children: React.ReactNode 
 
   const markFinishedSeen = useCallback((serverName: string, target: string, windowId?: number) => {
     const key = activityKey(serverName, target, windowId);
-    setFinished((cur) => pruneFinished(cur.map((e) => activityKeyForEntry(e) === key && e.seenAt == null ? { ...e, seenAt: Date.now() } : e), Date.now(), retention));
+    setFinished((cur) => pruneFinished(markSeen(cur, Date.now(), (e) => activityKeyForEntry(e) === key), Date.now(), retention));
   }, [retention]);
   const markAllFinishedSeen = useCallback(() => {
     const now = Date.now();
-    setFinished((cur) => pruneFinished(cur.map((e) => e.seenAt == null ? { ...e, seenAt: now } : e), now, retention));
+    setFinished((cur) => pruneFinished(markSeen(cur, now, () => true), now, retention));
   }, [retention]);
   const clearSeenFinished = useCallback(() => setFinished((cur) => cur.filter((e) => e.seenAt == null)), []);
   const dismissFinished = useCallback((serverName: string, target: string, windowId?: number) => {
