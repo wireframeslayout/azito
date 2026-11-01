@@ -135,6 +135,14 @@ const run = (host: FakeUninstallHost, removeMisao = false, options: WindowsAgent
 const LEFT_AGENT = `LEFT|4242|node.exe|C:\\Program Files\\nodejs\\node.exe`;
 
 describe('uninstallWindowsAgent', () => {
+  it('reports failure when the host returns no MCP result', async () => {
+    const host = new FakeUninstallHost({});
+    host.answers['Checking claude MCP registration'] = '';
+    const result = await run(host);
+    expect(result.ok).toBe(false);
+    expect(result.steps.find((s) => s.id === 'claudeHarnessMcp')).toMatchObject({ outcome: 'failed', detail: expect.stringContaining('expected one result marker, found 0') });
+    expect(result.steps.find((s) => s.id === 'codexHarnessMcp')?.outcome).toBe('absent');
+  });
   it('runs both MCP steps independently of each other and the agent folder', async () => {
     const host = new FakeUninstallHost({});
     host.answers['Checking claude MCP registration'] = 'AZITO_MCP_RESULT:{"outcome":"failed","detail":"settings failed"}';

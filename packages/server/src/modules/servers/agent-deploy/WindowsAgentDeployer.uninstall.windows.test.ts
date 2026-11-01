@@ -470,17 +470,18 @@ describe.skipIf(process.platform !== 'win32')('harness MCP removal on Windows', 
       fs.writeFileSync(target, '');
       fs.symlinkSync(harness, linked, 'junction');
       const registration = { command: 'node', args: [path.join(linked, 'index.js')], env: { TOKEN: 'do-not-print' } };
+      const runMcp = (kind: 'claude' | 'codex', env = '') => ps(`$ProgressPreference = 'SilentlyContinue'\n${env}${harnessMcpScript(kind, process.execPath, home, target)}`);
       fs.writeFileSync(settings, JSON.stringify({ mcpServers: { 'azt-mcp': registration, other: { command: 'keep' } }, other: true }));
-      const claude = await ps(harnessMcpScript('claude', process.execPath, home, target));
+      const claude = await runMcp('claude');
       expect(parseHarnessMcpOutput(claude).outcome).toBe('done');
       expect(claude).not.toContain('do-not-print');
       expect(JSON.parse(fs.readFileSync(settings, 'utf8'))).toEqual({ mcpServers: { other: { command: 'keep' } }, other: true });
-      expect(parseHarnessMcpOutput(await ps(harnessMcpScript('claude', process.execPath, home, target))).outcome).toBe('absent');
+      expect(parseHarnessMcpOutput(await runMcp('claude')).outcome).toBe('absent');
       fs.writeFileSync(path.join(codexHome, 'registration.json'), JSON.stringify({ transport: registration }));
       fs.writeFileSync(path.join(bin, 'codex.cmd'), '@echo off\r\nnode "%dp0%\\node_modules\\codex.js" %*\r\n');
       fs.writeFileSync(path.join(bin, 'node_modules', 'codex.js'), `const fs = require('fs'); const path = require('path'); const f = path.join(process.env.CODEX_HOME, 'registration.json'); if (process.argv[3] === 'get') process.stdout.write(fs.readFileSync(f)); else fs.unlinkSync(f);`);
-      const env = `$env:PATH = ${powershellDialect.quote(bin)}; $env:PATHEXT = '.CMD'; $env:CODEX_HOME = ${powershellDialect.quote(codexHome)};\n`;
-      const codex = await ps(env + harnessMcpScript('codex', process.execPath, home, target));
+      const env = `$env:PATH = ${powershellDialect.quote(bin)}; $env:PATHEXT = '.COM;.EXE;.BAT;.CMD'; $env:CODEX_HOME = ${powershellDialect.quote(codexHome)};\n`;
+      const codex = await runMcp('codex', env);
       expect(parseHarnessMcpOutput(codex).outcome).toBe('done');
       expect(codex).not.toContain('do-not-print');
       expect(fs.existsSync(path.join(codexHome, 'registration.json'))).toBe(false);
@@ -490,7 +491,7 @@ describe.skipIf(process.platform !== 'win32')('harness MCP removal on Windows', 
       await ps(`Add-Type -TypeDefinition ${powershellDialect.quote(nativeSource)} -OutputAssembly ${powershellDialect.quote(path.join(nativeBin, 'codex.exe'))} -OutputType ConsoleApplication`);
       fs.writeFileSync(path.join(codexHome, 'registration.json'), JSON.stringify({ transport: registration }));
       const nativeEnv = `$env:PATH = ${powershellDialect.quote(nativeBin)}; $env:PATHEXT = '.EXE'; $env:CODEX_HOME = ${powershellDialect.quote(codexHome)};\n`;
-      const native = await ps(nativeEnv + harnessMcpScript('codex', process.execPath, home, target));
+      const native = await runMcp('codex', nativeEnv);
       expect(parseHarnessMcpOutput(native).outcome).toBe('done');
       expect(fs.existsSync(path.join(codexHome, 'registration.json'))).toBe(false);
 
