@@ -217,10 +217,10 @@ describe.skipIf(!fs.existsSync(MISAO_CLI))('MisaoMuxClient against a real misao 
     await client.closeWindow(server, open.ref);
   });
 
-  it('delivers input to registered windows through WindowInputService, and only to their own panes', async () => {
+  it('refuses chat input to a shell pane of a registered window, and resolves only its own panes', async () => {
     const registry = new MuxDriverRegistry();
     registry.register('misao', client);
-    const window = { id: 7, serverName: 'local', tmuxTarget: '', muxRef: ref1, workerType: null } as unknown as Window;
+    const window = { id: 7, serverName: 'local', tmuxTarget: '', muxRef: ref1, workerType: 'claude' } as unknown as Window;
     const service = new WindowInputService(
       { findById: (id: number) => (id === 7 ? window : undefined) } as unknown as IWindowRepository,
       registry,
@@ -228,8 +228,8 @@ describe.skipIf(!fs.existsSync(MISAO_CLI))('MisaoMuxClient against a real misao 
     );
     const otherPane = await client.resolvePane(server, ref2, 1);
 
-    expect(await service.sendInput(7, firstPane, 'echo azito-input-ok')).toBe('ok');
-    await waitForScreen(firstPane, 'azito-input-ok');
+    expect(await service.sendInput(7, firstPane, 'echo azito-input-ok')).toEqual(expect.objectContaining({ code: 'worker_exited_to_shell' }));
+    expect((await client.captureScreen(server, firstPane)).stdout).not.toContain('azito-input-ok');
     expect(await service.resolvePaneIndex(7, firstPane)).toBe(1);
     expect(await service.sendInput(7, otherPane, 'echo must-not-arrive')).toBe('pane_not_found');
     expect(await service.resolvePaneIndex(7, otherPane)).toBe('pane_not_found');

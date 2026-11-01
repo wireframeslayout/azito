@@ -5,7 +5,7 @@ import { paneInfoMatchesRef } from '../tmux/types';
 import type { IMuxClient } from '../tmux/IMuxClient';
 import type { IServerRepository } from '../servers/Server';
 import type { IWindowRepository, Window } from '../windows/Window';
-import { guardChatInput, type ChatInputRejection } from './chatInputGuard';
+import { guardChatInput, typeChatText, type ChatInputRejection } from './chatInputGuard';
 import { getAgentTranscriptProfile, type InterruptKey } from './sources/profiles';
 
 // ─── Types ───
@@ -59,8 +59,7 @@ export class WindowInputService {
     await this.preparePaneForInput(server, handle);
     const rejection = await guardChatInput(driver, server, handle, window.workerType, text);
     if (rejection) return rejection;
-    if (text.includes('\n')) await driver.pasteTextToHandle(server, handle, text);
-    else await driver.sendTextToHandle(server, handle, text);
+    await typeChatText(driver, server, handle, text);
     const submitDelayMs = this.resolveSubmitDelay(window.workerType);
     if (submitDelayMs > 0) await this.wait(submitDelayMs);
     await driver.sendKeysToHandle(server, handle, ['Enter']);

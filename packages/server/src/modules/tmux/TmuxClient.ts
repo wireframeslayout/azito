@@ -761,10 +761,11 @@ export class TmuxClient implements IMuxClient {
       await this.loadChatPasteBuffer(server, buffer, text);
       const pasted = await this.runTmuxCommand(server, ['paste-buffer', '-p', '-r', '-d', '-b', buffer, '-t', handle]);
       if (pasted.code !== 0) throw new Error('Unable to paste chat input');
-      await new Promise(resolve => setTimeout(resolve, 3000));
-    } finally {
-      await this.runTmuxCommand(server, ['delete-buffer', '-b', buffer]);
+    } catch (err) {
+      await this.runTmuxCommand(server, ['delete-buffer', '-b', buffer]).catch(() => undefined);
+      throw err;
     }
+    await new Promise(resolve => setTimeout(resolve, 3000));
   }
   private async loadChatPasteBuffer(server: ServerConfig, buffer: string, text: string): Promise<void> {
     if (Buffer.byteLength(text, 'utf8') <= 500) {

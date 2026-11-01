@@ -7,7 +7,7 @@ import { blockingWorkerDialog, isWorkerScreenReady, readInputBox, tuiAgentKindOf
 export interface ChatInputRejection { code: string; error: string }
 
 export async function guardChatInput(driver: IMuxClient, server: ServerConfig, handle: PaneHandle, workerType: string | null, text: string): Promise<ChatInputRejection | null> {
-  if (/[\x00-\x09\x0b-\x1f\x7f-\x9f]/.test(text)) return { code: 'invalid_control_character', error: 'The message contains unsupported control characters.' };
+  if (/[\x00-\x08\x0b-\x1f\x7f-\x9f]/.test(text)) return { code: 'invalid_control_character', error: 'The message contains unsupported control characters.' };
   const kind = tuiAgentKindOfWorkerType(workerType);
   if (!kind) return { code: 'unsupported_worker', error: 'Cannot verify that this pane is ready for chat input.' };
   try {
@@ -24,4 +24,10 @@ export async function guardChatInput(driver: IMuxClient, server: ServerConfig, h
   } catch {
     return { code: 'screen_unavailable', error: 'Cannot verify the pane screen.' };
   }
+}
+
+/** Types `text` into the agent's input: a line with a newline or a tab goes as one paste, so neither reaches the agent as a key. */
+export async function typeChatText(driver: IMuxClient, server: ServerConfig, handle: PaneHandle, text: string): Promise<void> {
+  if (/[\n\t]/.test(text)) await driver.pasteTextToHandle(server, handle, text);
+  else await driver.sendTextToHandle(server, handle, text);
 }

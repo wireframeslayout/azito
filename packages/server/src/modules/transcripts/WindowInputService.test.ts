@@ -113,6 +113,14 @@ describe('WindowInputService', () => {
       expect(driver.sendKeysToHandle).toHaveBeenCalledWith(LOCAL_SERVER, '%1', ['Enter']);
     });
 
+    it('pastes a tab instead of typing it as a key', async () => {
+      const { windowRepo, muxDriverRegistry, serverRepo } = buildDeps();
+      const driver = muxDriverRegistry.resolve(LOCAL_SERVER);
+      driver.pasteTextToHandle = vi.fn(async () => {});
+      expect(await new WindowInputService(windowRepo, muxDriverRegistry, serverRepo).sendInput(42, asPaneHandle('%1'), 'a\tb')).toBe('ok');
+      expect(driver.pasteTextToHandle).toHaveBeenCalledWith(LOCAL_SERVER, '%1', 'a\tb');
+    });
+
     it.each([{ foreground: 'bash' }, { screen: 'Do you trust this folder?' }])('does not send into a shell or dialog', async (opts) => {
       const { windowRepo, muxDriverRegistry, serverRepo, calls } = buildDeps(opts);
       const result = await new WindowInputService(windowRepo, muxDriverRegistry, serverRepo).sendInput(42, asPaneHandle('%1'), 'hello');

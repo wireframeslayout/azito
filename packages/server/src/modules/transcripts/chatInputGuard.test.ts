@@ -18,6 +18,9 @@ describe('guardChatInput', () => {
     const screen = '› Ask Codex to do anything\n\n? for shortcuts';
     expect(await guardChatInput(driver('codex', screen), server, pane, 'codex', 'hello')).toBeNull();
   });
+  it('accepts a tab', async () => {
+    expect(await guardChatInput(driver('node', ready), server, pane, 'claude', 'a\tb')).toBeNull();
+  });
   it.each([
     ['shell', driver('bash', ready), 'claude', 'hello'],
     ['dialog', driver('node', 'Do you trust this folder?'), 'claude', 'hello'],

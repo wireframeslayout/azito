@@ -22,6 +22,7 @@ describe('TmuxClient.sendLiteralText', () => {
     await client.pasteTextToHandle(srv, asPaneHandle('%1'), 'one\ntwo');
     expect(calls[0]).toEqual(['set-buffer', '-b', expect.any(String), '--', 'one\ntwo']);
     expect(calls[1]).toEqual(['paste-buffer', '-p', '-r', '-d', '-b', calls[0][2], '-t', '%1']);
+    expect(calls).toHaveLength(2);
   });
 
   it('loads a long local paste from a private temporary file and removes it', async () => {
