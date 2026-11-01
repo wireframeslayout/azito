@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
-import { agentTaskAction, agentTaskIdentity, legacyAgentTaskAction } from './windowsAgentTask';
+import { agentLauncherScript, agentTaskAction, agentTaskIdentity, legacyAgentTaskAction } from './windowsAgentTask';
 import { joinWindowsArgs } from '../../../shared/os/taskScheduler/windowsCommandLine';
+import { decodedTaskScript, KILL_CHILDREN_JOB } from '../../../shared/os/taskScheduler/taskLauncher';
 
 const systemRoot = 'C:\\Windows';
 const root = 'C:\\Users\\Test User\\.azito\\agent';
@@ -19,6 +20,14 @@ function differentOs(line: string): string {
 }
 
 describe('agent task identity', () => {
+  it('places the job after logging is defined and before parent inspection', () => {
+    const action = agentTaskAction(systemRoot, node, env, entry, 'AzitoAgent');
+    const script = decodedTaskScript(action.args.at(-1)!);
+    const withoutJob = agentLauncherScript(node, env, entry, 'AzitoAgent');
+    const position = withoutJob.indexOf('\ntry { $parentId');
+    expect(position).toBeGreaterThan(0);
+    expect(script).toBe(`${withoutJob.slice(0, position)}\n${KILL_CHILDREN_JOB}\n${withoutJob.slice(position)}`);
+  });
   it.each([(s: string, n: string, e: string, p: string) => agentTaskAction(s, n, e, p, 'AzitoAgent'), legacyAgentTaskAction])('recognises the exact generated definition', (build) => {
     const action = build(systemRoot, node, env, entry);
     expect(agentTaskIdentity({ command: action.executable, argumentsLine: joinWindowsArgs(action.args) }, systemRoot, root, env, 'AzitoAgent')?.version).toBe('123abc');

@@ -21,12 +21,13 @@ export function legacyAgentTaskAction(systemRoot: string, nodePath: string, envF
   return { executable: conhostOf(systemRoot), args: ['--headless', nodePath, `--env-file=${envFile}`, entry] };
 }
 
-export function agentLauncherScript(nodePath: string, envFile: string, entry: string, taskName: string): string {
+export function agentLauncherScript(nodePath: string, envFile: string, entry: string, taskName: string, job = ''): string {
   const q = powershellDialect.quote;
   return [
     `$node = ${q(nodePath)}`, `$envFile = ${q(envFile)}`, `$entry = ${q(entry)}`, `$taskName = ${q(taskName)}`,
     '$log = Join-Path (Split-Path -Parent $envFile) \'agent.log\'',
     'function Log($m) { try { [IO.File]::AppendAllText($log, "[$([DateTime]::UtcNow.ToString(\'o\'))] launcher: $m`r`n") } catch {} }',
+    ...(job ? [`${job}\n`] : []),
     'try { $parentId = (Get-CimInstance Win32_Process -Filter "ProcessId = $PID").ParentProcessId; $parentStart = (Get-Process -Id $parentId).StartTime } catch { Log "cannot find parent: $_"; exit 1 }',
     'function ParentAlive { $p = Get-Process -Id $parentId -ErrorAction SilentlyContinue; return ($p -and $p.StartTime -eq $parentStart) }',
     '$delay = 5',
@@ -52,10 +53,8 @@ export function agentLauncherScript(nodePath: string, envFile: string, entry: st
 
 export function agentTaskAction(systemRoot: string, nodePath: string, envFile: string, entry: string, taskName: string): { executable: string; args: string[] } {
   const powershell = path.win32.join(systemRoot, 'System32', 'WindowsPowerShell', 'v1.0', 'powershell.exe');
-  const script = agentLauncherScript(nodePath, envFile, entry, taskName);
-  const logEnd = script.indexOf('\ntry { $parentId');
-  const withJob = `${script.slice(0, logEnd)}\n${KILL_CHILDREN_JOB}\n${script.slice(logEnd)}`;
-  const args = ['--headless', powershell, ...powershellEncodedArgs(compressedTaskScript(withJob))];
+  const script = agentLauncherScript(nodePath, envFile, entry, taskName, KILL_CHILDREN_JOB);
+  const args = ['--headless', powershell, ...powershellEncodedArgs(compressedTaskScript(script))];
   if (joinWindowsArgs(args).length + conhostOf(systemRoot).length + 3 > 8191) throw new Error('The agent task command line exceeds the Windows limit');
   return { executable: conhostOf(systemRoot), args };
 }
