@@ -372,6 +372,9 @@ export async function checkFirewall(exec: FirewallExec, port: number, nodePath: 
  */
 export function describeFirewallProblem(result: FirewallResult, port: number, nodePath: string, localAddress: string): string | null {
   if (result.blockedBy.length > 0) {
+    if (result.store === 'COM') {
+      return `Windows Firewall reports an inbound Block rule that may stop the agent (TCP ${port} / ${nodePath} / ${localAddress}): ${result.blockedBy.map((n) => `"${n}"`).join(', ')}. Its effective policy could not be verified. Inspect the rule and policy before installing.`;
+    }
     return `Windows Firewall has an enabled inbound Block rule that stops the agent (TCP ${port} / ${nodePath} / ${localAddress}): ${result.blockedBy.map((n) => `"${n}"`).join(', ')}. A Block rule wins over any Allow rule. Remove or disable it (Windows creates one when the first-run firewall prompt is cancelled), then install again.`;
   }
   if (result.ruleFound === null && result.problem?.startsWith('adding the rule failed:')) {

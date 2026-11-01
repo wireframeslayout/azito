@@ -239,6 +239,9 @@ describe('describeFirewallProblem', () => {
     const text = describeFirewallProblem({ ...base, ruleFound: true, blockedBy: ['node.js', 'Other'] }, 3002, NODE, IP)!;
     expect(text).toContain('"node.js", "Other"');
     expect(text).toContain('A Block rule wins');
+    const uncertain = describeFirewallProblem({ ...base, ruleFound: null, store: 'COM', blockedBy: ['node.js'] }, 3002, NODE, IP)!;
+    expect(uncertain).toContain('may stop');
+    expect(uncertain).toContain('could not be verified');
   });
 });
 
