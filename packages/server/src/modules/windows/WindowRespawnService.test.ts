@@ -233,6 +233,7 @@ function buildService(opts: {
     }),
     splitPaneByHandle: vi.fn(async (_server: unknown, _handle: unknown, _dir: 'h' | 'v', _env?: Record<string, string>) => ({ handle: '%1', result: { stdout: '', stderr: '', code: 0 } })),
     resolvePane: vi.fn(async () => '%0'),
+    paneCommandByHandle: vi.fn(async () => 'bash'),
     supportsPaneLabels: false,
     labelWindowPanes: vi.fn(async () => undefined),
     listPanesByRef: vi.fn(async () => [{ ordinal: 1, handle: '%0', title: '', command: 'bash', active: true }]),
@@ -2702,6 +2703,15 @@ describe('WindowRespawnService.respawn — a conversation that was never written
     expect(sentCommands.join('\n')).toContain('(unset CLAUDE_CONFIG_DIR; ');
     const actual = execFileSync('bash', ['-c', `export CLAUDE_CONFIG_DIR=/shell-override; claude() { printf %s "\${CLAUDE_CONFIG_DIR-unset}"; }; (unset CLAUDE_CONFIG_DIR; claude)`], { encoding: 'utf8' });
     expect(actual).toBe('unset');
+  });
+
+  it('uses fish-compatible syntax when resuming a fish pane', async () => {
+    const window = makeWindow({ agentSessionId: SESSION, claudeConfigDir: '/home/user/.claude', claudeConfigDirExplicit: false });
+    const built = buildService({ window, strategyFactory: claudeFactory, conversationProbe: { exists: vi.fn(async () => true) } });
+    built.tmux.paneCommandByHandle.mockResolvedValue('fish');
+    await built.service.respawn(window.id, makeServer());
+    expect(built.sentCommands.join('\n')).toContain('env -u CLAUDE_CONFIG_DIR ');
+    expect(built.sentCommands.join('\n')).not.toContain('(unset CLAUDE_CONFIG_DIR;');
   });
 
   it('restores separate pane directories through their pane environments', async () => {

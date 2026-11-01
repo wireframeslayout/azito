@@ -1,5 +1,6 @@
 import { ENV_NAME_PATTERN } from '../exec/commandSpec';
 import type { HostProfile } from './hostProfile';
+import { programFileName } from './shellCommands';
 
 /**
  * The text that goes through a shell on the target host. It is used for exactly two things: the fixed scripts an SSH
@@ -13,6 +14,8 @@ export interface ShellDialect {
   quote(value: string): string;
   /** `command` run with these environment variables set (under PowerShell they stay set in an interactive shell). */
   withEnv(env: Readonly<Record<string, string>>, command: string): string;
+  /** Run with one variable unset, using the pane's shell when known. */
+  withoutEnv(name: string, command: string, paneShell?: string | null): string;
   /** Moves the shell's working directory. */
   changeDirectory(dir: string): string;
   /**
@@ -51,6 +54,14 @@ class PosixDialect implements ShellDialect {
       return `${name}=${this.quote(value)}`;
     });
     return [...assignments, command].join(' ');
+  }
+
+  withoutEnv(name: string, command: string, paneShell?: string | null): string {
+    assertEnvName(name);
+    const shell = programFileName(paneShell ?? '').toLowerCase();
+    return ['sh', 'bash', 'zsh', 'dash'].includes(shell)
+      ? `(unset ${name}; ${command})`
+      : `env -u ${name} ${command}`;
   }
 
   changeDirectory(dir: string): string {
@@ -107,6 +118,11 @@ class PowerShellDialect implements ShellDialect {
       return `$env:${name} = ${this.quote(value)}`;
     });
     return [...assignments, command].join('; ');
+  }
+
+  withoutEnv(name: string, command: string): string {
+    assertEnvName(name);
+    return `& { $saved = $env:${name}; try { Remove-Item Env:${name} -ErrorAction SilentlyContinue; ${command} } finally { $env:${name} = $saved } }`;
   }
 
   changeDirectory(dir: string): string {
