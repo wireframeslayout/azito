@@ -18,10 +18,14 @@ describe('useWindowViewMode', () => {
   });
   it('keeps failed writes scoped to their target window', () => {
     vi.spyOn(Storage.prototype, 'setItem').mockImplementation(() => { throw Error(); });
-    const { result, rerender } = renderHook(({ id }) => useWindowViewMode(id, true, true), { initialProps: { id: 1 } });
-    act(() => result.current[1]('terminal', 2));
+    const { result, rerender } = renderHook(({ id }) => useWindowViewMode(id, true, true), { initialProps: { id: 101 } });
+    act(() => result.current[1]('terminal', 102));
     expect(result.current[0]).toBe('chat');
-    rerender({ id: 2 });
+    rerender({ id: 102 });
     expect(result.current[0]).toBe('terminal');
+    const other = renderHook(() => useWindowViewMode(102, false, true));
+    expect(other.result.current[0]).toBe('terminal');
+    act(() => result.current[1]('chat', 102));
+    expect(other.result.current[0]).toBe('chat');
   });
 });
