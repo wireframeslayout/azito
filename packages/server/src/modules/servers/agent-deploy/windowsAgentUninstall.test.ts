@@ -425,6 +425,9 @@ describe('uninstallWindowsAgent', () => {
       const script = host.bodyOf('Looking for the Windows Firewall rule');
       expect(script).toContain("$name = 'AZITO Agent (TCP 3002)'");
       expect(script).toContain('HNetCfg.FwPolicy2');
+      expect(script).toContain('$_.DisplayName -eq $name');
+      expect(script).toContain('$_.Name -eq $name');
+      expect(script).not.toContain('StartsWith($name');
       expect(script).not.toContain('SilentlyContinue');
     });
 
