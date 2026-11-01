@@ -25,8 +25,9 @@ export class StorageStatusService {
   constructor(private readonly settings: IStorageSettingsRepository, private readonly client: StorageProbe, private readonly onboarding: ResolvedStorageOnboarding) {}
 
   async getStatus(): Promise<StorageStatus> {
+    const settings = this.settings.get();
     try {
-      await this.client.probe(this.settings.get());
+      await this.client.probe(settings);
     } catch (error) {
       if (!this.settings.isConfigured()) return { status: 'unconfigured', onboarding: this.onboarding };
       return classifyError(error);
