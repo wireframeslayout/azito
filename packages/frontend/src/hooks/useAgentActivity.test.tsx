@@ -63,11 +63,21 @@ it('retains live state on failure and processes later events', async () => {
   expect(state().entries).toMatchObject([{ status: 'blocked' }]);
 });
 
-it('discards a response after unmount', async () => {
+it('discards a response after unmount and displays the new snapshot', async () => {
   const view = mount();
   view.unmount();
-  const snapshot = [running];
-  const iterate = vi.spyOn(snapshot, Symbol.iterator);
-  await resolve(0, snapshot);
-  expect(iterate).not.toHaveBeenCalled();
+  mount();
+  await resolve(0, [{ ...running, target: 'old:1' }]);
+  await resolve(1, [{ ...running, target: 'new:1' }]);
+  expect(state().entries).toMatchObject([{ target: 'new:1' }]);
+});
+
+it.each([undefined, 1])('removes a completed row on deletion with windowId %s and persists the rest', async (windowId) => {
+  mount();
+  await resolve(0, []);
+  send({ ...running, windowId: 1, running: false, reason: 'completed' });
+  send({ ...running, target: 's:2', windowId: 2, running: false, reason: 'completed' });
+  send({ ...running, windowId, running: false, reason: 'deleted' });
+  expect(state().finished).toMatchObject([{ target: 's:2', windowId: 2 }]);
+  expect(JSON.parse(localStorage.getItem('active-windows-finished')!)).toMatchObject([{ target: 's:2', windowId: 2 }]);
 });

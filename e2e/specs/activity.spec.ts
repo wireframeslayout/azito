@@ -182,7 +182,7 @@ test.describe('稼働検知', () => {
   });
 
   test('ウィンドウ削除で完了行が消える', async ({ app, harness }) => {
-    const label = 'e2e-delete';
+    const label = 'e2e fake agent';
     const agent = await harness.startFakeAgent(TMUX_SESSION, 'delete', { supervised: true });
     const windowId = await harness.registerAgentWindow(projectId, agent.target, { label });
     await openWorkspace(app, harness);

@@ -5,6 +5,7 @@ import {
   FINISHED_TTL_MS,
   pruneFinished,
   removeFinished,
+  removeDeletedFinished,
   upsertFinished,
   type FinishedEntry,
 } from './finishedWindows';
@@ -99,5 +100,18 @@ describe('upsertFinished with windowId', () => {
     const withoutId = entry({ target: 'azito:win--a', finishedAt: 2_000 });
     const result = upsertFinished([withId], withoutId);
     expect(result).toHaveLength(2);
+  });
+});
+
+describe('removeDeletedFinished', () => {
+  it('uses IDs when both exist and server and target otherwise', () => {
+    const rows = [entry({ windowId: 1 }), entry({ windowId: 2 }), entry(),
+      entry({ serverName: 'remote' }), entry({ target: 'other' })];
+    expect(removeDeletedFinished(rows, { serverName: 'local', target: 'azito:win--a', windowId: 1 }))
+      .toEqual([rows[1], rows[3], rows[4]]);
+    expect(removeDeletedFinished(rows, { serverName: 'local', target: 'azito:win--a' }))
+      .toEqual([rows[3], rows[4]]);
+    expect(removeDeletedFinished(rows, { serverName: 'remote', target: 'other', windowId: 1 }))
+      .toEqual([rows[1], rows[2], rows[3], rows[4]]);
   });
 });

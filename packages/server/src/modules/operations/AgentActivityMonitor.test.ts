@@ -1946,7 +1946,9 @@ describe('AgentActivityMonitor', () => {
         emit.mockClear();
         findAll.mockReturnValue([]);
         await monitor.tick();
-        expect(lastStopPayload('azito:agent-1')).toEqual(expect.objectContaining({ reason: 'deleted' }));
+        expect(lastStopPayload('azito:agent-1')).toEqual(expect.objectContaining({
+          serverName: 'local', target: 'azito:agent-1', running: false, reason: 'deleted',
+        }));
 
         emit.mockClear();
         await monitor.tick();
@@ -2059,7 +2061,9 @@ describe('AgentActivityMonitor', () => {
         const stops = emit.mock.calls
           .map((c: unknown[]) => (c[0] as { payload: { target: string; running: boolean; reason?: string } }).payload)
           .filter((pl) => pl.target === 'azito:agent-1' && pl.running === false);
-        expect(stops.map((pl) => pl.reason)).toEqual(['deleted']);
+        expect(stops).toEqual([expect.objectContaining({
+          serverName: 'local', target: 'azito:agent-1', running: false, reason: 'deleted',
+        })]);
 
         emit.mockClear();
         await monitor.tick();

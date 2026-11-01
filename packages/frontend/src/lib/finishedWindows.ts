@@ -63,3 +63,14 @@ export function removeFinished(entries: FinishedEntry[], key: string): FinishedE
   const kept = entries.filter((e) => activityKeyForEntry(e) !== key);
   return kept.length === entries.length ? entries : kept;
 }
+
+/** 削除通知では ID が片方にない場合、サーバーと target で照合する。 */
+export function removeDeletedFinished(
+  entries: FinishedEntry[], deleted: Pick<FinishedEntry, 'serverName' | 'target' | 'windowId'>,
+): FinishedEntry[] {
+  const kept = entries.filter((entry) => {
+    if (entry.windowId != null && deleted.windowId != null) return entry.windowId !== deleted.windowId;
+    return entry.serverName !== deleted.serverName || entry.target !== deleted.target;
+  });
+  return kept.length === entries.length ? entries : kept;
+}

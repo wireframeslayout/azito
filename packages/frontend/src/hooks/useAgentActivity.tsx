@@ -10,7 +10,7 @@ import {
   activityKeyForEntry,
   FINISHED_TTL_MS,
   pruneFinished,
-  removeFinished,
+  removeDeletedFinished,
   upsertFinished,
   type FinishedEntry,
 } from '../lib/finishedWindows';
@@ -99,31 +99,11 @@ const AgentActivityContext = createContext<AgentActivityContextValue>({
 
 function snapshotToMap(snapshot: AgentActivitySnapshotEntry[]): Map<string, AgentActivityInfo> {
   const map = new Map<string, AgentActivityInfo>();
-  for (const e of snapshot) {
-    if (!e.running) continue;
-    map.set(activityKey(e.serverName, e.target, e.windowId), {
-      serverName: e.serverName,
-      target: e.target,
-      running: true,
-      source: e.source,
-      taskId: e.taskId,
-      windowId: e.windowId,
-      projectId: e.projectId,
-      label: e.label,
-      labelSource: e.labelSource,
-      taskTitle: e.taskTitle,
-      workerType: e.workerType,
-      windowType: e.windowType,
-      paneTitle: e.paneTitle,
-      paneCommand: e.paneCommand,
-      status: e.status ?? 'working',
-      paneName: e.paneName,
-    });
-  }
+  for (const entry of snapshot) applyActivity(map, entry);
   return map;
 }
 
-function applyActivity(map: Map<string, AgentActivityInfo>, payload: AgentActivityPayload): void {
+function applyActivity(map: Map<string, AgentActivityInfo>, payload: AgentActivitySnapshotEntry): void {
   const key = activityKey(payload.serverName, payload.target, payload.windowId);
   if (!payload.running) {
     map.delete(key);
@@ -243,7 +223,6 @@ export function AgentActivityProvider({ children }: { children: React.ReactNode 
 
   useNotificationChannel({
     onAgentActivity: (payload: AgentActivityPayload) => {
-      const key = activityKey(payload.serverName, payload.target, payload.windowId);
       pendingEvents.current?.push(payload);
       setEntries((prev) => {
         const next = new Map(prev);
@@ -253,7 +232,7 @@ export function AgentActivityProvider({ children }: { children: React.ReactNode 
       if (payload.running) return;
 
       if (payload.reason === 'deleted') {
-        setFinished((cur) => removeFinished(cur, key));
+        setFinished((cur) => removeDeletedFinished(cur, payload));
         return;
       }
       if (payload.reason !== 'completed') return;
