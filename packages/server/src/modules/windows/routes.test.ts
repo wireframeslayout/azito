@@ -115,6 +115,7 @@ describe('POST /api/windows/:id/launch-agent', () => {
 
     app = Fastify();
     await app.register(windowsRoutes, {
+      paneHandleResolver: {} as never,
       muxSwitchSettingsRepo: {} as never, auditLogService: {} as never, agentActivityMonitor: {} as never,
       harnessPrefix: '',
       windowRepo: windowRepo as IWindowRepository,
@@ -332,6 +333,7 @@ describe('POST /api/windows/:id/launch-agent', () => {
     window = makeWindow({ workerType: 'codex' });
     const codexApp = Fastify();
     await codexApp.register(windowsRoutes, {
+      paneHandleResolver: {} as never,
       muxSwitchSettingsRepo: {} as never, auditLogService: {} as never, agentActivityMonitor: {} as never,
       harnessPrefix: '',
       windowRepo: {
@@ -398,6 +400,7 @@ describe('GET /api/windows/pane-loading-state', () => {
     };
     const instance = Fastify();
     await instance.register(windowsRoutes, {
+      paneHandleResolver: {} as never,
       muxSwitchSettingsRepo: {} as never, auditLogService: {} as never, agentActivityMonitor: {} as never,
       harnessPrefix: '',
       windowRepo: windowRepo as IWindowRepository,
@@ -524,6 +527,7 @@ describe('POST /api/windows/:id/respawn — execution gate (Issue #328 second-ro
     // The hub's own error mapping, so a host-OS refusal is answered as it is in the app.
     instance.setErrorHandler((err, _request, reply) => { const mapped = mapAppError(err); if (!mapped) throw err; return reply.status(mapped.status).send(mapped.body); });
     await instance.register(windowsRoutes, {
+      paneHandleResolver: {} as never,
       muxSwitchSettingsRepo: {} as never, auditLogService: {} as never, agentActivityMonitor: {} as never,
       harnessPrefix: '',
       windowRepo: windowRepo as IWindowRepository,
@@ -630,6 +634,7 @@ describe('resource check in the answers of launch-agent and respawn (#531)', () 
     };
     const instance = Fastify();
     await instance.register(windowsRoutes, {
+      paneHandleResolver: {} as never,
       muxSwitchSettingsRepo: {} as never, auditLogService: {} as never, agentActivityMonitor: {} as never,
       harnessPrefix: '',
       windowRepo: { findById: () => window, updateAgentSessionIdByWindow: vi.fn() } as unknown as IWindowRepository,
@@ -691,6 +696,7 @@ describe('GET /api/windows/activity-status (Issue #338 フォロー: process-bas
     ];
     const app = Fastify();
     await app.register(windowsRoutes, {
+      paneHandleResolver: {} as never,
       muxSwitchSettingsRepo: {} as never, auditLogService: {} as never, agentActivityMonitor: {} as never,
       harnessPrefix: '',
       windowRepo: {} as IWindowRepository,
@@ -724,6 +730,7 @@ describe('POST /api/windows/:id/sleep', () => {
     const sleepFn = opts.sleepFn ?? vi.fn(async () => {});
     const app = Fastify();
     app.register(windowsRoutes, {
+      paneHandleResolver: {} as never,
       muxSwitchSettingsRepo: {} as never, auditLogService: {} as never, agentActivityMonitor: {} as never,
       harnessPrefix: '',
       windowRepo: {
@@ -786,6 +793,7 @@ describe('PUT /api/windows/:id/rename', () => {
     const update = vi.fn();
     const app = Fastify();
     await app.register(windowsRoutes, {
+      paneHandleResolver: {} as never,
       muxSwitchSettingsRepo: {} as never, auditLogService: {} as never, agentActivityMonitor: {} as never,
       harnessPrefix: '',
       windowRepo: { findById: () => win, update } as unknown as IWindowRepository,
@@ -815,6 +823,7 @@ describe('window label source', () => {
   async function buildApp(win: Window, update: ReturnType<typeof vi.fn>, adoptForTask = vi.fn()) {
     const app = Fastify();
     await app.register(windowsRoutes, {
+      paneHandleResolver: {} as never,
       muxSwitchSettingsRepo: {} as never, auditLogService: {} as never, agentActivityMonitor: {} as never,
       harnessPrefix: '',
       windowRepo: {
@@ -887,6 +896,7 @@ describe('respawn mux API', () => {
     const record = vi.fn(() => { throw new Error('audit failed'); });
     const registry = { availabilityFor: vi.fn(() => ({ available: true } as { available: true } | { available: false; reason: 'daemon_unreachable' })), supportedKinds: () => ['tmux', 'misao'] };
     await app.register(windowsRoutes, {
+      paneHandleResolver: {} as never,
       harnessPrefix: '', windowRepo: { findById: () => win } as any,
       projectRepo: {} as any, taskRepo: {} as any, tmux: {} as any,
       muxDriverRegistry: registry as any,
