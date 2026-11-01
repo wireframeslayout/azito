@@ -1,12 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { api } from '../../api/client';
-
-export interface FileEntry {
-  name: string;
-  type: 'file' | 'directory';
-  path: string;
-  size?: number;
-}
+import type { FileEntry, FilesBackend } from './backend/FilesBackend';
+export type { FileEntry } from './backend/FilesBackend';
 
 export interface TreeNode extends FileEntry {
   children?: TreeNode[];
@@ -32,7 +26,7 @@ async function updateNodes(
   return result;
 }
 
-export function useFileTree(serverName: string, rootPath: string) {
+export function useFileTree(backend: FilesBackend, rootPath: string) {
   const [tree, setTree] = useState<TreeNode[]>([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -40,19 +34,16 @@ export function useFileTree(serverName: string, rootPath: string) {
   treeRef.current = tree;
 
   const loadDir = useCallback(async (dirPath: string): Promise<TreeNode[]> => {
-    try {
-      const entries = await api<FileEntry[]>(`/servers/${serverName}/files?path=${encodeURIComponent(dirPath)}`);
-      if (!Array.isArray(entries)) return [];
+    {
+      const entries = await backend.list(dirPath);
       return entries.map((e) => ({
         ...e,
         children: e.type === 'directory' ? [] : undefined,
         loaded: false,
         expanded: false,
       }));
-    } catch {
-      return [];
     }
-  }, [serverName]);
+  }, [backend]);
 
   const loadRoot = useCallback(async () => {
     setLoading(true);
@@ -60,8 +51,8 @@ export function useFileTree(serverName: string, rootPath: string) {
     try {
       const nodes = await loadDir(rootPath);
       setTree(nodes);
-    } catch {
-      setError('Failed to load directory');
+    } catch (error) {
+      setError(error instanceof Error ? error.message : 'Failed to load directory');
     }
     setLoading(false);
   }, [rootPath, loadDir]);
@@ -69,18 +60,23 @@ export function useFileTree(serverName: string, rootPath: string) {
   useEffect(() => { loadRoot(); }, [loadRoot]);
 
   const toggleDir = useCallback(async (dirPath: string) => {
-    const updated = await updateNodes(treeRef.current, dirPath, async (node) => {
+    try {
+      const updated = await updateNodes(treeRef.current, dirPath, async (node) => {
       if (!node.loaded) {
         const children = await loadDir(node.path);
         return { ...node, expanded: true, loaded: true, children };
       }
       return { ...node, expanded: !node.expanded };
     });
-    setTree(updated);
+      setTree(updated);
+    } catch (error) {
+      setError(error instanceof Error ? error.message : 'Failed to load directory');
+    }
   }, [loadDir]);
 
   const expandDir = useCallback(async (dirPath: string) => {
-    const updated = await updateNodes(treeRef.current, dirPath, async (node) => {
+    try {
+      const updated = await updateNodes(treeRef.current, dirPath, async (node) => {
       if (!node.loaded) {
         const children = await loadDir(node.path);
         return { ...node, expanded: true, loaded: true, children };
@@ -88,15 +84,22 @@ export function useFileTree(serverName: string, rootPath: string) {
       if (!node.expanded) return { ...node, expanded: true };
       return node;
     });
-    setTree(updated);
+      setTree(updated);
+    } catch (error) {
+      setError(error instanceof Error ? error.message : 'Failed to load directory');
+    }
   }, [loadDir]);
 
   const refreshDir = useCallback(async (dirPath: string) => {
-    const updated = await updateNodes(treeRef.current, dirPath, async (node) => {
+    try {
+      const updated = await updateNodes(treeRef.current, dirPath, async (node) => {
       const children = await loadDir(node.path);
       return { ...node, loaded: true, children };
     });
-    setTree(updated);
+      setTree(updated);
+    } catch (error) {
+      setError(error instanceof Error ? error.message : 'Failed to load directory');
+    }
   }, [loadDir]);
 
   const getSiblingNames = useCallback((parentPath: string): string[] => {
