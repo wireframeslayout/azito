@@ -61,3 +61,28 @@ describe('MinioStorageClient.list', () => {
     expect(files.map((f) => f.originalName)).toEqual(['a.txt']);
   });
 });
+
+describe('MinioStorageClient.probe / ensureBucket', () => {
+  function clientWith(send: ReturnType<typeof vi.fn>): MinioStorageClient {
+    const client = new MinioStorageClient();
+    vi.spyOn(client as unknown as { getClient: () => unknown }, 'getClient').mockReturnValue({ send });
+    return client;
+  }
+  const commandName = (call: unknown[]): string => (call[0] as object).constructor.name;
+
+  it('creates a missing bucket so a fresh MinIO becomes ready', async () => {
+    const send = vi.fn()
+      .mockRejectedValueOnce(Object.assign(new Error('missing'), { name: 'NotFound', $metadata: { httpStatusCode: 404 } }))
+      .mockResolvedValueOnce({});
+    await clientWith(send).probe(settings);
+    expect(send.mock.calls.map(commandName)).toEqual(['HeadBucketCommand', 'CreateBucketCommand']);
+    expect((send.mock.calls[1] as unknown[])[1]).toMatchObject({ abortSignal: expect.any(AbortSignal) });
+  });
+
+  it('does not create a bucket when HeadBucket fails for another reason', async () => {
+    const denied = Object.assign(new Error('denied'), { name: 'Forbidden', $metadata: { httpStatusCode: 403 } });
+    const send = vi.fn().mockRejectedValueOnce(denied);
+    await expect(clientWith(send).ensureBucket(settings)).rejects.toBe(denied);
+    expect(send.mock.calls.map(commandName)).toEqual(['HeadBucketCommand']);
+  });
+});

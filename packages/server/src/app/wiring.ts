@@ -1,6 +1,3 @@
-import { getDistributionInfo } from '../shared/distributionInfo';
-import { resolveStorageOnboarding } from '../modules/files/storageOnboarding';
-import { StorageStatusService } from '../modules/files/storage/StorageStatusService';
 // ─── Dependency wiring ───
 //
 // Constructs all infrastructure/repository/domain/application instances via
@@ -8,6 +5,9 @@ import { StorageStatusService } from '../modules/files/storage/StorageStatusServ
 // main.ts; grouped into per-module factory functions for readability.
 
 import { execFileSync } from 'child_process';
+import { getDistributionInfo } from '../shared/distributionInfo';
+import { resolveStorageOnboarding } from '../modules/files/storageOnboarding';
+import { StorageStatusService } from '../modules/files/storage/StorageStatusService';
 import { EventEmitter } from 'events';
 import type { HostEnv } from '../shared/os/hostEnv';
 import { TaskTempFiles } from '../shared/os/taskTempFiles';

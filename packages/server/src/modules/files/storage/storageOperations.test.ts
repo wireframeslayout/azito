@@ -72,4 +72,19 @@ describe('storage operations', () => {
     const deletion = send.mock.calls.map(([command]) => command).find((command) => command instanceof DeleteObjectsCommand) as DeleteObjectsCommand;
     expect(deletion.input.Delete?.Objects).toEqual([{ Key: 'projects/1/target/source/a' }]);
   });
+  it('stops scanning a move as soon as the selection exceeds 1000 objects', async () => {
+    const listed: string[] = [];
+    const send = vi.fn(async (command: unknown) => {
+      if (command instanceof ListObjectsV2Command) {
+        const prefix = command.input.Prefix!;
+        if (command.input.MaxKeys === 1) return { Contents: [] };
+        listed.push(prefix);
+        return { Contents: Array.from({ length: 600 }, (_, n) => ({ Key: `${prefix}${n}` })) };
+      }
+      throw new Error(`unexpected ${String(command)}`);
+    });
+    const ops = new StorageOperations({ send } as unknown as S3Client, bucket, 1);
+    await expect(ops.moveObjects(['a/', 'b/', 'c/'], 'dest/')).rejects.toMatchObject({ status: 413, code: 'folder_too_large' });
+    expect(listed).toEqual(['projects/1/a/', 'projects/1/b/']);
+  });
 });

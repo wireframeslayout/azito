@@ -110,6 +110,7 @@ export class StorageOperations {
   async moveObjects(paths: string[], destination: string, rename?: string): Promise<void> {
     validateStoragePath(destination, true, true);
     const mapping = new Map<string, string>();
+    const destinations = new Set<string>();
     for (const path of paths) {
       const folder = path.endsWith('/'); validateStoragePath(path, folder);
       if (folder && destination.startsWith(path)) throw new StorageOperationError(400, 'invalid_path', 'Cannot move a folder into itself');
@@ -120,11 +121,11 @@ export class StorageOperations {
       if (!keys.length || (!folder && !(await this.head(keys[0])))) throw new StorageOperationError(404, 'not_found', 'Source not found');
       for (const key of keys) {
         const dest = this.key(target + key.slice(this.key(path).length));
-        if (mapping.has(key) || [...mapping.values()].includes(dest)) throw new StorageOperationError(400, 'duplicate', 'Duplicate selection');
-        mapping.set(key, dest);
+        if (mapping.has(key) || destinations.has(dest)) throw new StorageOperationError(400, 'duplicate', 'Duplicate selection');
+        mapping.set(key, dest); destinations.add(dest);
       }
+      if (mapping.size > 1000) throw new StorageOperationError(413, 'folder_too_large', 'Move contains more than 1000 objects');
     }
-    if (mapping.size > 1000) throw new StorageOperationError(413, 'folder_too_large', 'Move contains more than 1000 objects');
     for (const dest of mapping.values()) if (await this.head(dest)) throw new StorageOperationError(409, 'exists', 'Destination already exists');
     const copied: string[] = [];
     try {
