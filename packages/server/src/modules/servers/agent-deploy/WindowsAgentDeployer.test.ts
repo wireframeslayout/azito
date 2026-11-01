@@ -206,6 +206,7 @@ describe('firewall recovery inspection', () => {
     const { host, info, deployer, scripts } = await setup('AZITO_AGENT_HEALTHY');
     await deployer.inspectFirewall('h', info, info.tailscaleIp, 3002);
     expect(host.calls.some((c) => c.kind === 'firewall')).toBe(true);
+    expect(powershellDialect.wrapScript(`$ProgressPreference = 'SilentlyContinue'\n${scripts[0]}`).length).toBeLessThanOrEqual(8191);
     const { gunzipSync } = await import('node:zlib');
     const encoded = /FromBase64String\('([^']+)'\)/.exec(scripts[0]!)![1]!;
     const body = gunzipSync(Buffer.from(encoded, 'base64')).toString('utf8');
