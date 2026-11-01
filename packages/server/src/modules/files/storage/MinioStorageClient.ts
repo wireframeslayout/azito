@@ -49,20 +49,20 @@ export class MinioStorageClient {
     return this.client;
   }
 
-  async ensureBucket(settings: StorageSettings, abortSignal?: AbortSignal): Promise<void> {
+  async ensureBucket(settings: StorageSettings): Promise<void> {
     const s3 = this.getClient(settings);
     try {
-      await s3.send(new HeadBucketCommand({ Bucket: settings.bucket }), { abortSignal });
+      await s3.send(new HeadBucketCommand({ Bucket: settings.bucket }));
     } catch (error) {
       const e = error as { name?: string; $metadata?: { httpStatusCode?: number } };
       if (e.name !== 'NotFound' && e.name !== 'NoSuchBucket' && e.$metadata?.httpStatusCode !== 404) throw error;
-      await s3.send(new CreateBucketCommand({ Bucket: settings.bucket }), { abortSignal });
+      await s3.send(new CreateBucketCommand({ Bucket: settings.bucket }));
     }
   }
 
-  /** Reachability check for the status API. A missing bucket is created, as the first upload always did. */
+  /** Reachability check for the status API: HeadBucket only, never creates the bucket. */
   async probe(settings: StorageSettings): Promise<void> {
-    await this.ensureBucket(settings, AbortSignal.timeout(2000));
+    await this.getClient(settings).send(new HeadBucketCommand({ Bucket: settings.bucket }), { abortSignal: AbortSignal.timeout(2000) });
   }
 
   operations(settings: StorageSettings, projectId: number): StorageOperations {

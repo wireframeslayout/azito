@@ -115,7 +115,7 @@ https://<host>/api/projects/<projectId>/storage/<filename>/raw
 
 ハブ実行ファイルの隣に任意の `distribution.json` を置き、`storage.onboarding.options` を指定できます。配布ビルドの `--distribution <file>` は設定を検証して同梱します。ファイルまたは onboarding がない場合は OSS の案内を使い、不正な設定では起動を停止します。onboarding には `heading`、`body`、`options` と任意の `dismissible`（既定 true）を指定します。各選択肢には `id`、`kind`、`title`、`description` を指定します。`connect-s3` と `local-minio` は各案内を開き、`link` は HTTP(S) の `href`、`managed` は HTTP(S) の `endpoint` と `bucket` を含む `defaults` を使います。managed の選択時は保存済みの認証情報を保持します。設定変更にはハブの再起動が必要です。
 
-`GET /api/projects/:id/storage/status` は `unconfigured`、`unreachable`、`ready` を区別します。既定設定でもバケットへの接続に成功すると設定済みになります。設定済みの接続失敗時は安全な分類を返し、画面で再試行や設定変更ができます。
+`GET /api/projects/:id/storage/status` は `unconfigured`、`unreachable`、`ready` を区別します。状態の確認は HeadBucket のみで行い、副作用はなく、バケットを作成しません。既定設定でもバケットへの接続に成功すると設定済みになります。確認に失敗した場合、設定済みなら安全な分類付きの `unreachable`（バケットがない場合は `bucket`）、未設定なら `unconfigured` を返します。画面では再試行や設定変更ができます。バケットは従来どおり最初のアップロード時に自動作成されます。
 
 ## フォルダ・ファイル操作
 
