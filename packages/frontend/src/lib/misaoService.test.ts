@@ -84,3 +84,11 @@ describe('misaoServiceChipState', () => {
     expect(misaoServiceChipState(status({ serviceInstalled: false, serviceState: undefined }))).toBeUndefined();
   });
 });
+
+
+describe('Windows task ownership', () => {
+  it('distinguishes another installation and an unknown owner', () => {
+    expect(misaoServiceMode(status({ windowsTaskOwner: 'other', serviceInstalled: false }))).toBe('other_task');
+    expect(misaoServiceMode(status({ windowsTaskOwner: 'unknown', serviceInstalled: false }))).toBe('unknown_task');
+  });
+});

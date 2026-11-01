@@ -88,6 +88,18 @@ describe('MisaoServiceService on Windows (the hub\'s own misao)', () => {
     windows,
   });
 
+  it('distinguishes task ownership and propagates definition errors', async () => {
+    expect(await service().status()).toMatchObject({ windowsTaskOwner: 'none', serviceInstalled: false });
+    taskExists = true;
+    expect(await service().status()).toMatchObject({ windowsTaskOwner: 'hub', serviceInstalled: true });
+    exportedXml = taskXml(path.join(dir, 'other'));
+    expect(await service().status()).toMatchObject({ windowsTaskOwner: 'other', serviceInstalled: false, updateAvailable: false, needsHubRestart: false });
+    exportedXml = '<Task/>';
+    expect(await service().status()).toMatchObject({ windowsTaskOwner: 'unknown', serviceInstalled: false });
+    windows.tasks.exportXml = vi.fn().mockRejectedValue(new Error('export failed'));
+    await expect(service().status()).rejects.toThrow('export failed');
+  });
+
   it('installs through the agent installer aimed at this machine, then points the hub at the pipe', async () => {
     taskExists = true;
     fs.writeFileSync(paths.current, '0.3.0\r\n');

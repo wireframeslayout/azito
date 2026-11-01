@@ -63,6 +63,11 @@ export function MisaoServicePanel({ onChanged }: MisaoServicePanelProps) {
   const blocked = misaoActionsBlocked(status);
 
   const handleInstall = async (): Promise<void> => {
+    if (mode === 'other_task') {
+      const ok = await confirm({ title: t('misaoService.takeoverTitle'), message: t('misaoService.takeoverMessage'), confirmLabel: t('misaoService.takeoverConfirm'), danger: true });
+      if (ok) await misao.install({ replaceSocketSetting: true });
+      return;
+    }
     if (status.socketSetting === 'custom') {
       const ok = await confirm({
         title: t('misaoService.replaceSocketTitle'),
@@ -99,12 +104,16 @@ export function MisaoServicePanel({ onChanged }: MisaoServicePanelProps) {
     <div style={{ display: 'flex', flexDirection: 'column', gap: 'var(--space-3)', minWidth: 0 }}>
       <div style={{ display: 'flex', alignItems: 'center', gap: 'var(--space-2)', flexWrap: 'wrap' }}>
         <span style={mutedStyle}>{t('misaoService.service')}</span>
-        {chipState
+        {mode === 'other_task' || mode === 'unknown_task'
+          ? <Chip tone="orange">{t(`misaoService.${mode === 'other_task' ? 'otherTask' : 'unknownTask'}`)}</Chip>
+          : chipState
           ? <Chip tone={STATE_CHIP[chipState].tone}>{t(`misaoService.${STATE_CHIP[chipState].key}`)}</Chip>
           : <Chip tone="orange">{t('misaoService.stateNotInstalled')}</Chip>}
         {versions.bundled && <span style={{ ...mutedStyle, fontFamily: 'var(--mono)' }}>{t('misaoService.bundledVersion', { version: versions.bundled })}</span>}
         {versions.running && <span style={{ ...mutedStyle, fontFamily: 'var(--mono)' }}>{t('misaoService.runningVersion', { version: versions.running })}</span>}
       </div>
+
+      {(mode === 'other_task' || mode === 'unknown_task') && <Notice tone="warning">{t(`misaoService.${mode === 'other_task' ? 'otherTaskDetail' : 'unknownTaskDetail'}`)}</Notice>}
 
       {notices.map((notice) => (
         <Notice key={notice} tone={NOTICE_TONE[notice]} sub={t(`misaoService.notice.${notice}Sub`)}>
@@ -113,9 +122,9 @@ export function MisaoServicePanel({ onChanged }: MisaoServicePanelProps) {
       ))}
 
       <div style={{ display: 'flex', alignItems: 'center', gap: 'var(--space-2)', flexWrap: 'wrap' }}>
-        {mode === 'not_installed' && (
+        {(mode === 'not_installed' || mode === 'other_task') && (
           <Button size="sm" variant="primary" loading={busy === 'install'} loadingLabel={t('misaoService.installing')} disabled={busy !== null || blocked} onClick={() => { void handleInstall(); }}>
-            {t('misaoService.install')}
+            {t(mode === 'other_task' ? 'misaoService.takeoverConfirm' : 'misaoService.install')}
           </Button>
         )}
         {mode === 'stopped' && (
@@ -123,7 +132,7 @@ export function MisaoServicePanel({ onChanged }: MisaoServicePanelProps) {
             {t('misaoService.start')}
           </Button>
         )}
-        {mode !== 'not_installed' && status.updateAvailable && (
+        {(mode === 'running' || mode === 'stopped') && status.updateAvailable && (
           <Button size="sm" variant="danger" loading={busy === 'update'} loadingLabel={t('misaoService.updating')} disabled={busy !== null || blocked} onClick={() => { void handleUpdate(); }}>
             {t('misaoService.update')}
           </Button>

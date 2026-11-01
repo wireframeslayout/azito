@@ -4,12 +4,16 @@ import type { MisaoServiceState, MisaoServiceStatus, MisaoUnmanagedReason } from
 export type MisaoServiceMode =
   /** This hub cannot install or update misao itself (source checkout, no bundled misao, unsupported host). */
   | 'unmanaged'
+  | 'other_task'
+  | 'unknown_task'
   | 'not_installed'
   | 'stopped'
   | 'running';
 
 export function misaoServiceMode(status: MisaoServiceStatus): MisaoServiceMode {
   if (!status.managed) return 'unmanaged';
+  if (status.windowsTaskOwner === 'other') return 'other_task';
+  if (status.windowsTaskOwner === 'unknown') return 'unknown_task';
   if (!status.serviceInstalled) return 'not_installed';
   return status.serviceState === 'active' ? 'running' : 'stopped';
 }
@@ -30,7 +34,7 @@ export type MisaoNotice = 'duplicateLoad' | 'incompatible' | 'updateAvailable' |
 export function misaoNotices(status: MisaoServiceStatus): MisaoNotice[] {
   const notices: MisaoNotice[] = [];
   const mode = misaoServiceMode(status);
-  if (mode === 'unmanaged') return notices;
+  if (mode === 'unmanaged' || mode === 'other_task' || mode === 'unknown_task') return notices;
   if (status.serviceDuplicateLoad) notices.push('duplicateLoad');
   if (status.daemon.detail === 'protocol_incompatible') notices.push('incompatible');
   else if (status.updateAvailable) notices.push('updateAvailable');

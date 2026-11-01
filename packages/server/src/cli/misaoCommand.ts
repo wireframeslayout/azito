@@ -78,6 +78,7 @@ function printStatus(status: MisaoServiceStatus): void {
     `socket:    ${status.socketPath ?? '-'}`,
   ];
   console.log(lines.join('\n'));
+  if (status.windowsTaskOwner === 'other' || status.windowsTaskOwner === 'unknown') console.log(`warning: AzitoMisao task ownership is ${status.windowsTaskOwner === 'other' ? 'another folder' : 'unknown'}. Check its task definition.`);
   if (!status.managed) console.log(`note: this hub cannot manage the service (${status.unmanagedReason}).`);
   if (status.updateAvailable) console.log('note: the running misao is not the bundled release. `azito misao update` switches it (closes every pane).');
   if (status.needsHubRestart) console.log(`note: restart the hub so it connects to the managed socket: ${status.serviceManager === 'taskscheduler' ? 'azito service restart' : 'systemctl --user restart azito'} (panes are not affected).`);
