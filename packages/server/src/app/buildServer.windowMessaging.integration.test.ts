@@ -55,8 +55,10 @@ describe.each([false, true])('window messaging (scoped auth %s)', (scoped) => {
     expect((await send('999', 1)).statusCode).toBe(404);
     expect((await send('win--abcd', 1)).statusCode).toBe(400);
     expect((await send('2', 1, 'hi\x1b[2Jthere')).statusCode).toBe(400);
+    expect((await send('2', 1, 'x'.repeat(32769))).statusCode).toBe(400);
+    expect((await send('2', 1, 'x'.repeat(32768))).statusCode).toBe(200);
     expect((await app.inject({ method: 'POST', url: '/api/windows/3/messages', headers: operatorHeaders, payload: { text: 'operator' } })).statusCode).toBe(200);
-    expect(driver.pasteTextToHandle).toHaveBeenCalledTimes(2);
+    expect(driver.pasteTextToHandle).toHaveBeenCalledTimes(3);
     expect(JSON.stringify(record.mock.calls)).not.toContain('private');
     await app.close();
   });

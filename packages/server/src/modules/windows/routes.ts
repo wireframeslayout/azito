@@ -94,6 +94,8 @@ const windowsRoutes: FastifyPluginCallback<WindowsRouteOptions> = (fastify, opts
     return availability.available ? null : { error: 'mux_driver_unavailable', kind, reason: availability.reason };
   };
 
+  // Same ceiling as the chat input (transcripts/routes.ts): a long text reaches a non-local tmux pane as one send-keys per 100 characters.
+  const MESSAGE_TEXT_MAX_LENGTH = 32768;
   const messageService = new WindowMessageService(windowRepo, taskRepo, serverRepo, opts.muxDriverRegistry, opts.auditLogService);
   const taskAuth = { auth: { classes: ['task' as const] } };
   fastify.get<{ Querystring: { windowId?: string; server?: string; paneHandle?: string } }>('/api/windows/whoami', { config: taskAuth }, async (request, reply) => {
@@ -113,7 +115,7 @@ const windowsRoutes: FastifyPluginCallback<WindowsRouteOptions> = (fastify, opts
   });
   fastify.post<{ Params: { id: string } }>('/api/windows/:id/messages', { config: taskAuth }, async (request, reply) => {
     const id = parseWindowId(request.params.id);
-    const body = z.object({ from: z.object({ windowId: z.number().int().positive().safe() }).strict().optional(), text: z.string().min(1) }).strict().safeParse(request.body);
+    const body = z.object({ from: z.object({ windowId: z.number().int().positive().safe() }).strict().optional(), text: z.string().min(1).max(MESSAGE_TEXT_MAX_LENGTH) }).strict().safeParse(request.body);
     if (id === null || !body.success) return reply.status(400).send({ error: 'Invalid message' });
     if (/[\x00-\x08\x0b-\x1f\x7f-\x9f]/.test(body.data.text)) return reply.status(400).send({ error: 'The message contains unsupported control characters' });
     await messageService.send(request.principal ?? OPERATOR_PRINCIPAL, id, body.data.from?.windowId, body.data.text, (err) => request.log.error({ err }, 'Message audit failed'));
