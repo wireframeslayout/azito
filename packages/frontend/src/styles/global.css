@@ -17,6 +17,8 @@
        行間ヘアライン（fg 由来の透過色）だけを残す。
    ============================================================ */
 :root {
+  --font-prose: system-ui, -apple-system, 'Noto Sans', sans-serif;
+  --font-mono: 'JetBrainsMono Nerd Font', 'JetBrains Mono', monospace;
   /* [1] ソース */
   --surface-base: #0d1117;
   --surface-fg: #e6edf3;
@@ -1063,3 +1065,33 @@ input[aria-invalid="true"]:focus-visible { outline-color: var(--danger) !importa
   border-color: var(--accent) !important;
   box-shadow: none !important;
 }
+
+.md-content { max-width: 760px; min-width: 0; font-family: var(--font-prose); font-size: 14px; line-height: 1.8; color: var(--text); overflow-wrap: anywhere; }
+.md-content h1, .md-content h2, .md-content h3, .md-content h4 { margin: 1.2em 0 .4em; font-weight: 600; line-height: 1.5; }
+.md-content h1, .md-content h2 { font-size: 15.5px; border-bottom: 1px solid var(--hairline); padding-bottom: .3em; }
+.md-content h3, .md-content h4 { font-size: 14px; }
+.md-content p { margin: .8em 0; }
+.md-content > :first-child { margin-top: 0; }
+.md-content > :last-child { margin-bottom: 0; }
+.md-content ul, .md-content ol { padding-left: 1.5em; margin: .8em 0; }
+.md-content li { margin: .25em 0; }
+.md-content code { background: var(--bg-card); padding: 2px 6px; border-radius: var(--radius-sm); font: 12.5px var(--font-mono); }
+.md-content pre { min-width: 0; max-width: 100%; background: var(--bg-card); padding: var(--space-3) var(--space-4); border-radius: var(--radius-md); overflow-x: auto; margin: .8em 0; border: 1px solid var(--hairline); }
+.md-content pre code { background: none; padding: 0; }
+.md-content blockquote { margin: .8em 0; padding: var(--space-2) var(--space-4); background: var(--bg-card); border-radius: var(--radius-sm); }
+.md-content a { color: var(--accent); text-decoration: none; }
+.md-content a:hover { text-decoration: underline; }
+.md-content img { max-width: 100%; border-radius: var(--radius-sm); margin: .5em 0; }
+.md-content .md-table-wrap { max-width: 100%; overflow-x: auto; margin: .8em 0; }
+.md-content table { border-collapse: collapse; width: 100%; }
+.md-content th, .md-content td { border: 1px solid var(--hairline); padding: var(--space-1) var(--space-3); text-align: left; }
+.md-content th { background: var(--bg-card); font-weight: 600; }
+.md-content tbody tr:nth-child(even) { background: var(--bg-card); }
+.md-content td.md-numeric { text-align: right; font-family: var(--font-mono); font-variant-numeric: tabular-nums; }
+.md-content hr { border: none; border-top: 1px solid var(--hairline); margin: 1.5em 0; }
+.md-content input[type="checkbox"] { margin-right: var(--space-2); }
+
+.tool-run > summary { display: flex; align-items: center; gap: var(--space-2); min-height: 44px; padding: var(--space-2) var(--space-3); cursor: pointer; border-radius: var(--radius-md); background: var(--bg-card); color: var(--text); font: var(--font-sm) var(--font-mono); }
+.tool-run > summary:hover, .tool-run[open] > summary { background: var(--bg-hover); }
+.tool-run > summary:focus-visible { outline: 2px solid var(--text); outline-offset: 2px; }
+.tool-run-errors { color: var(--danger); }
