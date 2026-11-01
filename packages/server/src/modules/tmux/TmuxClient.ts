@@ -1,3 +1,4 @@
+import { randomUUID } from 'node:crypto';
 import type { ExecResult, ITerminalStream } from '../servers/transport/ServerTransport';
 import type { TransportFactory } from '../servers/transport/TransportFactory';
 export { ServerConfig } from '../servers/Server';
@@ -108,6 +109,9 @@ function isTmuxNoServerRunning(output: string): boolean {
 // ─── TmuxClient ───
 
 const LINKED_SESSION_PREFIX = '_azito_';
+
+/** tmux reads an argument that ends with `;` as a command separator and drops the `;`; a `\;` ending keeps it. */
+const tmuxLiteralArg = (text: string): string => (text.endsWith(';') ? `${text.slice(0, -1)}\\;` : text);
 
 export class TmuxClient implements IMuxClient {
   readonly kind: MuxDriverKind = 'tmux';
@@ -754,6 +758,47 @@ export class TmuxClient implements IMuxClient {
     }
   }
   async sendTextToHandle(server: ServerConfig, handle: PaneHandle, text: string) { return this.sendLiteralText(server, handle as string, text); }
+  async pasteTextToHandle(server: ServerConfig, handle: PaneHandle, text: string): Promise<void> {
+    if (text.includes('\x1b')) throw new Error('Chat paste contains an escape character');
+    const buffer = `azito-chat-${randomUUID()}`;
+    try {
+      await this.loadChatPasteBuffer(server, buffer, text);
+      const pasted = await this.runTmuxCommand(server, ['paste-buffer', '-p', '-r', '-d', '-b', buffer, '-t', handle]);
+      if (pasted.code !== 0) throw new Error('Unable to paste chat input');
+    } catch (err) {
+      await this.runTmuxCommand(server, ['delete-buffer', '-b', buffer]).catch(() => undefined);
+      throw err;
+    }
+    await new Promise(resolve => setTimeout(resolve, 3000));
+  }
+  private async loadChatPasteBuffer(server: ServerConfig, buffer: string, text: string): Promise<void> {
+    if (Buffer.byteLength(text, 'utf8') <= 500) {
+      const result = await this.runTmuxCommand(server, ['set-buffer', '-b', buffer, '--', tmuxLiteralArg(text)]);
+      if (result.code !== 0) throw new Error('Unable to prepare chat paste');
+      return;
+    }
+    if (server.type === 'local') {
+      const fs = await import('fs');
+      const os = await import('os');
+      const path = await import('path');
+      const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'azito-tmux-'));
+      const file = path.join(dir, 'buf');
+      try {
+        fs.writeFileSync(file, text, { mode: 0o600 });
+        const result = await this.runTmuxCommand(server, ['load-buffer', '-b', buffer, file]);
+        if (result.code !== 0) throw new Error('Unable to prepare chat paste');
+      } finally {
+        fs.rmSync(dir, { recursive: true, force: true });
+      }
+      return;
+    }
+    const characters = Array.from(text);
+    for (let i = 0; i < characters.length; i += 100) {
+      const args = ['set-buffer', ...(i === 0 ? [] : ['-a']), '-b', buffer, '--', tmuxLiteralArg(characters.slice(i, i + 100).join(''))];
+      const result = await this.runTmuxCommand(server, args);
+      if (result.code !== 0) throw new Error('Unable to prepare chat paste');
+    }
+  }
   async panePidByHandle(server: ServerConfig, handle: PaneHandle) { return this.getPanePid(server, handle as string); }
   async paneCommandByHandle(server: ServerConfig, handle: PaneHandle) { return this.getPaneCurrentCommand(server, handle as string); }
   async startOutputStream(server: ServerConfig, handle: PaneHandle, outputPath: string) { return this.startPipePane(server, handle as string, outputPath); }

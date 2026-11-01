@@ -29,6 +29,12 @@ export interface AgentActivityInfo {
   windowId?: number;
   projectId?: number;
   label?: string;
+  labelSource?: 'auto' | 'user';
+  taskTitle?: string;
+  workerType?: string;
+  windowType?: string;
+  paneTitle?: string;
+  paneCommand?: string;
   status: 'working' | 'blocked';
   paneName?: string;
 }
@@ -42,6 +48,12 @@ interface AgentActivitySnapshotEntry {
   windowId?: number;
   projectId?: number;
   label?: string;
+  labelSource?: 'auto' | 'user';
+  taskTitle?: string;
+  workerType?: string;
+  windowType?: string;
+  paneTitle?: string;
+  paneCommand?: string;
   status?: 'working' | 'blocked';
   paneName?: string;
 }
@@ -98,6 +110,12 @@ function snapshotToMap(snapshot: AgentActivitySnapshotEntry[]): Map<string, Agen
       windowId: e.windowId,
       projectId: e.projectId,
       label: e.label,
+      labelSource: e.labelSource,
+      taskTitle: e.taskTitle,
+      workerType: e.workerType,
+      windowType: e.windowType,
+      paneTitle: e.paneTitle,
+      paneCommand: e.paneCommand,
       status: e.status ?? 'working',
       paneName: e.paneName,
     });
@@ -195,6 +213,12 @@ export function AgentActivityProvider({ children }: { children: React.ReactNode 
             windowId: payload.windowId,
             projectId: payload.projectId,
             label: payload.label,
+            labelSource: payload.labelSource,
+            taskTitle: payload.taskTitle,
+            workerType: payload.workerType,
+            windowType: payload.windowType,
+            paneTitle: payload.paneTitle,
+            paneCommand: payload.paneCommand,
             status: payload.status ?? 'working',
             paneName: payload.paneName,
           });
@@ -216,6 +240,12 @@ export function AgentActivityProvider({ children }: { children: React.ReactNode 
         target: payload.target,
         windowId: payload.windowId,
         label: payload.label,
+        labelSource: payload.labelSource,
+        taskTitle: payload.taskTitle,
+        workerType: payload.workerType,
+        windowType: payload.windowType,
+        paneTitle: payload.paneTitle,
+        paneCommand: payload.paneCommand,
         taskId: payload.taskId,
         projectId: payload.projectId,
         finishedAt: Date.now(),

@@ -449,8 +449,8 @@ export function resolveWindowContextExtra(
   const paneIdxPart = dotIdx >= 0 ? rest.slice(dotIdx + 1) : null;
 
   const pane = paneIdxPart != null
-    ? sw.panes.find((p) => String(p.index) === paneIdxPart) ?? sw.panes[0]
-    : sw.panes[0];
+    ? sw.panes.find((p) => String(p.index) === paneIdxPart) ?? sw.panes.find((p) => p.active) ?? sw.panes[0]
+    : sw.panes.find((p) => p.active) ?? sw.panes[0];
   if (!pane) return { online: true, stale, windowName: sw.name };
 
   const sessionName = matchedSession.name;

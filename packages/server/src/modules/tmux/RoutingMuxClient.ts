@@ -142,6 +142,7 @@ export class RoutingMuxClient implements IMuxClient {
   async captureScreen(server: ServerConfig, handle: PaneHandle, start?: number, end?: number): Promise<ExecResult> { return this.forHandle(server, handle).captureScreen(server, handle, start, end); }
   async sendKeysToHandle(server: ServerConfig, handle: PaneHandle, keys: string[]): Promise<void> { return this.forHandle(server, handle).sendKeysToHandle(server, handle, keys); }
   async sendTextToHandle(server: ServerConfig, handle: PaneHandle, text: string): Promise<void> { return this.forHandle(server, handle).sendTextToHandle(server, handle, text); }
+  async pasteTextToHandle(server: ServerConfig, handle: PaneHandle, text: string): Promise<void> { return this.forHandle(server, handle).pasteTextToHandle(server, handle, text); }
   async panePidByHandle(server: ServerConfig, handle: PaneHandle): Promise<number | null> { return this.forHandle(server, handle).panePidByHandle(server, handle); }
   async paneCommandByHandle(server: ServerConfig, handle: PaneHandle): Promise<string | null> { return this.forHandle(server, handle).paneCommandByHandle(server, handle); }
 

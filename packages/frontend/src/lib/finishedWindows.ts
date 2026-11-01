@@ -8,6 +8,12 @@ export interface FinishedEntry {
   target: string;
   windowId?: number;
   label?: string;
+  labelSource?: 'auto' | 'user';
+  taskTitle?: string;
+  workerType?: string;
+  windowType?: string;
+  paneTitle?: string;
+  paneCommand?: string;
   taskId?: number;
   projectId?: number;
   finishedAt: number;

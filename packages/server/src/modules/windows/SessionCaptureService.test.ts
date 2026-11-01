@@ -14,6 +14,7 @@ function makeWindow(overrides?: Partial<Window>): Window {
     serverName: 'local',
     tmuxTarget: 'sess:win.1',
     label: null,
+    labelSource: 'auto',
     isPrimary: false,
     windowType: 'agent',
     workerType: 'codex',

@@ -1,3 +1,4 @@
+import { activeWindowTitleInput } from '../../lib/windowDisplay';
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { useActiveWindowRows, type ActiveWindowRow } from '../../hooks/useActiveWindowRows';
@@ -5,7 +6,7 @@ import { useAgentActivity } from '../../hooks/useAgentActivity';
 import { BrailleSpinner } from '../ui/WindowActivityIndicator';
 import { ActiveWindowDot } from '../ui/ActiveWindowDot';
 import { buildWindowTaskMap, lookupWindowTask } from '../../lib/windowTask';
-import { formatActiveWindowLabel } from '../../lib/windowDisplay';
+import { resolveWindowTitle, formatWindowTitleLine } from '@azito/shared';
 import { selectTaskTerminal } from './TaskPanel';
 import { useOpenTerminalTarget } from '../../hooks/useTerminalTargetOpener';
 import type { TerminalRef } from '../../lib/terminalRef';
@@ -151,7 +152,7 @@ export default function ActiveWindowIcons({ connectPane, openTask, taskWindows }
           </div>
           {rows.slice(maxVisible).map((row) => {
             const taskId = row.taskId ?? lookupWindowTask(windowTaskMap, row.serverName, row.target);
-            const displayName = formatActiveWindowLabel(row);
+            const displayName = formatWindowTitleLine(resolveWindowTitle(activeWindowTitleInput(row)));
             const isWorking = row.status === 'running' && row.activityStatus !== 'blocked';
             return (
               <button
@@ -218,7 +219,7 @@ interface ActiveWindowIconItemProps {
 
 function ActiveWindowIconItem({ row, onOpen, taskWindows }: ActiveWindowIconItemProps) {
   const taskId = row.taskId ?? lookupWindowTask(taskWindows, row.serverName, row.target);
-  const displayName = formatActiveWindowLabel(row);
+  const displayName = formatWindowTitleLine(resolveWindowTitle(activeWindowTitleInput(row)));
   const isWorking = row.status === 'running' && row.activityStatus !== 'blocked';
 
   return (
