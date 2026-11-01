@@ -113,6 +113,13 @@
     "switchDiscard": "Discard and open",
     "latestUnavailable": "The latest content could not be loaded.",
     "latest": "Latest",
-    "yours": "Your edits"
+    "yours": "Your edits",
+    "unavailable": {
+      "too_large": "Files over 500 KiB cannot be edited. Download the file to view it.",
+      "binary": "Binary files cannot be edited.",
+      "invalid_utf8": "Files that are not UTF-8 cannot be edited.",
+      "not_text": "This file is not text and cannot be edited.",
+      "forbidden": "You do not have permission to read this file."
+    }
   }
 }

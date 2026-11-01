@@ -1,7 +1,7 @@
 import { apiWithStatus, fetchBlob } from '../../../api/client';
-import type { FileEntry, FileReadResult, FileSaveResult, FilesBackend } from './FilesBackend';
+import { unavailableFrom, type FileEntry, type FileReadResult, type FileSaveResult, type FilesBackend } from './FilesBackend';
 
-interface ResponseBody { error?: string; content?: string; language?: string; mtime?: number; hash?: string; type?: string }
+interface ResponseBody { error?: string; code?: string; content?: string; language?: string; mtime?: number; hash?: string; type?: string }
 
 export class ServerFilesBackend implements FilesBackend {
   constructor(private readonly serverName: string, private readonly projectId?: number) {}
@@ -19,10 +19,10 @@ export class ServerFilesBackend implements FilesBackend {
   async read(path: string): Promise<FileReadResult> {
     const { status, body } = await apiWithStatus<ResponseBody>(`${this.root}/content?path=${encodeURIComponent(path)}`);
     if (status >= 400) {
-      if (status === 400 || status === 413 || status === 403) return { kind: 'unavailable', reason: body.error || 'Cannot edit file' };
+      if (status === 400 || status === 413 || status === 403) return unavailableFrom(status === 403 ? 'forbidden' : body.code, body.error || 'Cannot edit file');
       throw new Error(body.error || 'Failed to load file');
     }
-    if (body.type) return { kind: 'unavailable', reason: 'File is not text' };
+    if (body.type) return { kind: 'unavailable', code: 'not_text', message: 'File is not text' };
     if (typeof body.content !== 'string' || typeof body.language !== 'string' || typeof body.mtime !== 'number' || typeof body.hash !== 'string') throw new Error('Invalid file response');
     return { kind: 'text', content: body.content, language: body.language, version: JSON.stringify({ mtime: body.mtime, hash: body.hash }) };
   }

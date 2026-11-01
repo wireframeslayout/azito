@@ -51,8 +51,11 @@ export const MIME_TYPES: Record<string, string> = {
 // ─── Errors ───
 
 /** Service-level error carrying the HTTP status the route should respond with. */
+/** Why a file cannot be opened as editable text; lets the UI explain it in the user's language. */
+export type FileBrowseErrorCode = 'too_large' | 'binary' | 'invalid_utf8' | 'forbidden';
+
 export class FileBrowseError extends Error {
-  constructor(message: string, public readonly status: number) {
+  constructor(message: string, public readonly status: number, public readonly code?: FileBrowseErrorCode) {
     super(message);
   }
 }
@@ -95,8 +98,8 @@ function toBrowseError(err: unknown, messages: BrowseMessages = {}): unknown {
     case 'NOT_FOUND': return new FileBrowseError('Not found', 404);
     case 'NOT_A_FILE': return new FileBrowseError('Not a regular file', 400);
     case 'NOT_A_DIRECTORY': return new FileBrowseError('Not a directory', 400);
-    case 'TOO_LARGE': return new FileBrowseError(messages.tooLarge?.(err.details.size ?? 0) ?? err.message, 400);
-    case 'PERMISSION_DENIED': return new FileBrowseError(err.message, 403);
+    case 'TOO_LARGE': return new FileBrowseError(messages.tooLarge?.(err.details.size ?? 0) ?? err.message, 400, 'too_large');
+    case 'PERMISSION_DENIED': return new FileBrowseError(err.message, 403, 'forbidden');
     case 'INVALID_PATH': return new FileBrowseError('Invalid path', 400);
     case 'SYMLINK_REFUSED': return new FileBrowseError('Refusing to write through a symlink', 400);
     case 'FAILED': return new FileBrowseError(err.message, 500);
@@ -211,7 +214,7 @@ export class FileBrowseService {
     }
 
     if (BINARY_EXTS.has(ext)) {
-      throw new FileBrowseError('Binary file cannot be displayed', 400);
+      throw new FileBrowseError('Binary file cannot be displayed', 400, 'binary');
     }
 
     const { data, stat } = await browsing(() => ops.read(filePath, { maxBytes: MAX_FILE_SIZE }), {
@@ -219,13 +222,13 @@ export class FileBrowseService {
     });
     // The bytes are checked, hashed and sized together, so the hash a later save sends back is the one the host computes.
     if (data.includes(0)) {
-      throw new FileBrowseError('Binary file cannot be displayed', 400);
+      throw new FileBrowseError('Binary file cannot be displayed', 400, 'binary');
     }
     let content: string;
     try {
       content = new TextDecoder('utf-8', { fatal: true, ignoreBOM: true }).decode(data);
     } catch {
-      throw new FileBrowseError('File is not valid UTF-8', 400);
+      throw new FileBrowseError('File is not valid UTF-8', 400, 'invalid_utf8');
     }
     return { content, path: filePath, size: stat.size, language: EXT_LANG[ext] || 'text', mtime: stat.mtimeMs, hash: sha256Hex(data) };
   }

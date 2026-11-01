@@ -1,5 +1,5 @@
 import { apiWithStatus, fetchBlob, uploadFile } from '../../../api/client';
-import type { FileEntry, FileReadResult, FileSaveResult, FilesBackend } from './FilesBackend';
+import { unavailableFrom, type FileEntry, type FileReadResult, type FileSaveResult, type FilesBackend } from './FilesBackend';
 
 interface StorageResponse {
   error?: string;
@@ -41,13 +41,13 @@ export class StorageFilesBackend implements FilesBackend {
     return entries;
   }
   private toRead(body: StorageResponse): FileReadResult {
-    if (body.error) return { kind: 'unavailable', reason: body.error };
+    if (body.error) return unavailableFrom(body.code, body.error);
     if (typeof body.content !== 'string' || typeof body.language !== 'string' || typeof body.version !== 'string') throw new Error('Invalid file response');
     return { kind: 'text', content: body.content, language: body.language, version: body.version };
   }
   async read(path: string): Promise<FileReadResult> {
     const { status, body } = await apiWithStatus<StorageResponse>(`${this.root}/content?key=${encodeURIComponent(path)}`);
-    if (status === 400 || status === 403 || status === 413) return { kind: 'unavailable', reason: body.error || 'Cannot edit file' };
+    if (status === 400 || status === 403 || status === 413) return unavailableFrom(status === 403 ? 'forbidden' : body.code, body.error || 'Cannot edit file');
     if (status >= 400) throw new Error(body.error || 'Failed to load file');
     return this.toRead(body);
   }

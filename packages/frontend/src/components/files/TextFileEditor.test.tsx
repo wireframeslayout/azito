@@ -48,4 +48,16 @@ describe('TextFileEditor', () => {
     fireEvent.keyDown(editor, { key: 's', ctrlKey: true });
     expect(backend.save).toHaveBeenCalledTimes(1);
   });
+  it('explains an oversized file in the UI language and offers its download', async () => {
+    const download = vi.fn(async () => new Blob(['x']));
+    const backend: FilesBackend = {
+      source: 'test',
+      read: vi.fn(async () => ({ kind: 'unavailable' as const, code: 'too_large' as const, message: 'File exceeds 500 KiB' })),
+      save: vi.fn(), list: vi.fn(), create: vi.fn(), rename: vi.fn(), delete: vi.fn(), download,
+    };
+    render(<TextFileEditor backend={backend} path="file" name="file" />);
+    expect(await screen.findByText('editor.unavailable.too_large')).toBeTruthy();
+    expect(screen.queryByText('File exceeds 500 KiB')).toBeNull();
+    expect(screen.queryByRole('textbox', { name: 'editor' })).toBeNull();
+  });
 });

@@ -12,7 +12,7 @@ import { MarkdownKeyRow } from './MarkdownKeyRow';
 import { SegmentedToggle } from '../ui/SegmentedToggle';
 import { Button, LoadingState, Notice } from '../ui';
 import { Icon } from '../ui/Icon';
-import type { FilesBackend } from './backend/FilesBackend';
+import type { FilesBackend, TextUnavailable } from './backend/FilesBackend';
 import { useTextFileDocument } from './useTextFileDocument';
 
 const CodeEditorView = lazy(() => import('../editor/CodeEditorView'));
@@ -53,6 +53,7 @@ export function TextFileEditor({ backend, path, name, initialLine, serverName, o
   ];
   const selectMode = (value: Mode) => { setMode(value); localStorage.setItem('azito-md-view-mode', value); };
   const showDiff = () => setDiff(doc.conflict?.kind === 'text' ? lineDiff(doc.conflict.content, doc.content) : null);
+  const unavailableText = (value: TextUnavailable): string => value.code === 'other' ? value.message : t(`editor.unavailable.${value.code}`);
   const canSave = doc.dirty && !doc.saving && doc.conflict === undefined;
   const save = () => { if (canSave) void doc.save(); };
   const download = async () => {
@@ -92,12 +93,17 @@ export function TextFileEditor({ backend, path, name, initialLine, serverName, o
         </>}
       </div>
       <div className="sr-only" role="status" aria-live="polite" aria-atomic="true">{doc.saving ? t('editor.saving') : doc.dirty ? t('editor.unsaved') : doc.saved ? t('editor.saved') : ''}</div>
-      {doc.conflict !== undefined && <Notice tone="warning" style={{ margin: 'var(--space-2)', flexShrink: 0 }} sub={doc.conflict === null ? t('editor.latestUnavailable') : doc.conflict.kind === 'unavailable' ? doc.conflict.reason : undefined}
+      {doc.conflict !== undefined && <Notice tone="warning" style={{ margin: 'var(--space-2)', flexShrink: 0 }} sub={doc.conflict === null ? t('editor.latestUnavailable') : doc.conflict.kind === 'unavailable' ? unavailableText(doc.conflict) : undefined}
         action={<div style={{ display: 'flex', flexWrap: 'wrap', gap: 'var(--space-2)' }}>
           <Button size="sm" onClick={showDiff}>{t('editor.diff')}</Button>
           <Button size="sm" disabled={doc.saving} onClick={async () => { if (await confirm({ title: t('editor.discardConfirm'), confirmLabel: t('editor.reload'), danger: true })) void doc.reload(); }}>{t('editor.reload')}</Button>
           <Button size="sm" variant="danger" disabled={doc.saving} onClick={() => void doc.save(true)}>{t('editor.overwrite')}</Button>
         </div>}>{t('editor.conflict')}</Notice>}
+      {doc.unavailable && <Notice tone="warning" style={{ margin: 'var(--space-2)', flexShrink: 0 }}
+        action={<div style={{ display: 'flex', flexWrap: 'wrap', gap: 'var(--space-2)' }}>
+          <Button size="sm" onClick={() => void download()}><Icon name="download" size={14} /> {t('explorer.download')}</Button>
+          <Button size="sm" variant="ghost" onClick={() => void doc.reload()}>{t('editor.retry')}</Button>
+        </div>}>{unavailableText(doc.unavailable)}</Notice>}
       {doc.error && <div role="alert" style={{ margin: 'var(--space-2)', flexShrink: 0 }}><Notice tone="danger" action={(!doc.document && !doc.loading) ? <Button size="sm" onClick={() => void doc.reload()}>{t('editor.retry')}</Button> : undefined}>{doc.error}</Notice></div>}
       {doc.loading && <LoadingState />}
       {!doc.loading && doc.document && <div style={{ flex: 1, minHeight: 0, display: 'flex', overflow: 'hidden' }}>

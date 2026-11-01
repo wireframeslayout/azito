@@ -55,6 +55,19 @@ describe('StorageFilesBackend', () => {
     vi.stubGlobal('fetch', fetchMock);
     const backend = new StorageFilesBackend(1);
     expect(await backend.save('projects/1/a', 'mine', 'v1', false)).toEqual({ kind: 'conflict', latest: { kind: 'text', content: 'new', language: 'text', version: 'v2' } });
-    expect(await backend.read('projects/1/a')).toEqual({ kind: 'unavailable', reason: 'File exceeds 500 KiB' });
+    expect(await backend.read('projects/1/a')).toEqual({ kind: 'unavailable', code: 'too_large', message: 'File exceeds 500 KiB' });
+  });
+});
+
+describe('unreadable text', () => {
+  it('keeps the server code and treats an unexplained code as other', async () => {
+    vi.stubGlobal('fetch', vi.fn()
+      .mockResolvedValueOnce(response({ error: 'File is not valid UTF-8', code: 'invalid_utf8' }, 400))
+      .mockResolvedValueOnce(response({ error: 'Invalid path' }, 400))
+      .mockResolvedValueOnce(response({ error: 'EACCES' }, 403)));
+    const backend = new ServerFilesBackend('host', 1);
+    expect(await backend.read('/a')).toEqual({ kind: 'unavailable', code: 'invalid_utf8', message: 'File is not valid UTF-8' });
+    expect(await backend.read('/b')).toEqual({ kind: 'unavailable', code: 'other', message: 'Invalid path' });
+    expect(await backend.read('/c')).toEqual({ kind: 'unavailable', code: 'forbidden', message: 'EACCES' });
   });
 });
