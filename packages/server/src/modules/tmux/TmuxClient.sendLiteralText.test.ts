@@ -51,6 +51,23 @@ describe('TmuxClient.sendLiteralText', () => {
     expect(calls.some((args) => args[0] === 'paste-buffer' && args.includes('-p') && args.includes('-r'))).toBe(true);
   });
 
+  it('escapes a trailing semicolon so tmux does not read it as a command separator', async () => {
+    const calls: string[][] = [];
+    const client = makeClient(async (args) => { calls.push(args); return { stdout: '', stderr: '', code: 0 }; });
+    await client.pasteTextToHandle(srv, asPaneHandle('%1'), 'one\ntwo;');
+    expect(calls[0].at(-1)).toBe('one\ntwo\\;');
+  });
+
+  it('escapes a trailing semicolon at every remote chunk boundary', async () => {
+    const calls: string[][] = [];
+    const client = makeClient(async (args) => { calls.push(args); return { stdout: '', stderr: '', code: 0 }; });
+    const text = `${'a'.repeat(99)};\n`.repeat(6);
+    await client.pasteTextToHandle({ ...srv, type: 'agent' }, asPaneHandle('%1'), text);
+    const chunks = calls.filter((args) => args[0] === 'set-buffer').map((args) => args.at(-1)!);
+    expect(chunks[0]).toBe(`${'a'.repeat(99)}\\;`);
+    expect(chunks.map((c) => (c.endsWith('\\;') ? `${c.slice(0, -2)};` : c)).join('')).toBe(text);
+  });
+
   it('cleans up a named buffer and never pastes after a failed load', async () => {
     const calls: string[][] = [];
     const client = makeClient(async (args) => {

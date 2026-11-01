@@ -110,6 +110,9 @@ function isTmuxNoServerRunning(output: string): boolean {
 
 const LINKED_SESSION_PREFIX = '_azito_';
 
+/** tmux reads an argument that ends with `;` as a command separator and drops the `;`; a `\;` ending keeps it. */
+const tmuxLiteralArg = (text: string): string => (text.endsWith(';') ? `${text.slice(0, -1)}\\;` : text);
+
 export class TmuxClient implements IMuxClient {
   readonly kind: MuxDriverKind = 'tmux';
   readonly caps: MuxCapabilities = {
@@ -769,7 +772,7 @@ export class TmuxClient implements IMuxClient {
   }
   private async loadChatPasteBuffer(server: ServerConfig, buffer: string, text: string): Promise<void> {
     if (Buffer.byteLength(text, 'utf8') <= 500) {
-      const result = await this.runTmuxCommand(server, ['set-buffer', '-b', buffer, '--', text]);
+      const result = await this.runTmuxCommand(server, ['set-buffer', '-b', buffer, '--', tmuxLiteralArg(text)]);
       if (result.code !== 0) throw new Error('Unable to prepare chat paste');
       return;
     }
@@ -790,7 +793,7 @@ export class TmuxClient implements IMuxClient {
     }
     const characters = Array.from(text);
     for (let i = 0; i < characters.length; i += 100) {
-      const args = ['set-buffer', ...(i === 0 ? [] : ['-a']), '-b', buffer, '--', characters.slice(i, i + 100).join('')];
+      const args = ['set-buffer', ...(i === 0 ? [] : ['-a']), '-b', buffer, '--', tmuxLiteralArg(characters.slice(i, i + 100).join(''))];
       const result = await this.runTmuxCommand(server, args);
       if (result.code !== 0) throw new Error('Unable to prepare chat paste');
     }
