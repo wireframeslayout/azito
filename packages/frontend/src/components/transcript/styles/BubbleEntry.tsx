@@ -1,79 +1,19 @@
 import { useTranslation } from 'react-i18next';
-import MarkdownRenderer from '../../MarkdownRenderer';
-import { CollapsibleBlock } from '../CollapsibleBlock';
 import { computeThinkingGapSeconds, formatEntryTimestamp, taskNotificationSummary } from '../transcriptFormat';
-import type { TranscriptBlock, TranscriptEntry } from '../transcriptTypes';
+import type { TranscriptEntry } from '../transcriptTypes';
 import { CommandRow } from './CommandRow';
 import { GroupHeading } from './GroupHeading';
 import { InteractionCard } from './InteractionCard';
 import { InterruptedRow } from './InterruptedRow';
 import { SystemEntryText } from './SystemEntryText';
 import { SystemOtherChip } from './SystemOtherChip';
-import { ThinkingChip } from './ThinkingChip';
+import { BlockList } from './BlockList';
+import { buildBlockSegments, type BlockSegment } from '../groupToolBlocks';
+import { ToolRunGroup } from '../ToolRunGroup';
 import type { StyleGroupProps } from './types';
 
 // モックアップ A1 指定値。既存トークンに 86% 幅に対応するものが無いため直接指定する。
 const BUBBLE_MAX_WIDTH = '86%';
-
-function TextBlock({ text, markdown }: { text: string; markdown: boolean }) {
-  if (markdown) {
-    return <MarkdownRenderer content={text} style={{ fontSize: 'var(--font-base)' }} />;
-  }
-  return (
-    <div style={{ whiteSpace: 'pre-wrap', wordBreak: 'break-word', fontSize: 'var(--font-base)', lineHeight: 1.6 }}>
-      {text}
-    </div>
-  );
-}
-
-function BlockList({ blocks, markdownText, thinkingSeconds }: {
-  blocks: TranscriptBlock[];
-  markdownText: boolean;
-  thinkingSeconds: number | null;
-}) {
-  const { t } = useTranslation('transcript');
-
-  return (
-    <>
-      {blocks.map((block, i) => {
-        switch (block.kind) {
-          case 'text':
-            return <TextBlock key={i} text={block.text} markdown={markdownText} />;
-          case 'thinking':
-            return <ThinkingChip key={i} text={block.text} seconds={thinkingSeconds} />;
-          case 'tool_use':
-            return (
-              <CollapsibleBlock
-                key={i}
-                icon="terminal"
-                label={t('conversation.toolChip', { name: block.name })}
-                expandedLabel={t('conversation.toolUse', { name: block.name })}
-                truncatedNote={block.truncated ? t('conversation.blockTruncated') : undefined}
-              >
-                {block.input}
-              </CollapsibleBlock>
-            );
-          case 'tool_result':
-            return (
-              <CollapsibleBlock
-                key={i}
-                icon="file"
-                tone={block.isError ? 'danger' : 'default'}
-                status={block.isError ? 'error' : 'success'}
-                label={block.isError ? t('conversation.toolResultChipError') : t('conversation.toolResultChip')}
-                expandedLabel={block.isError ? t('conversation.toolResultError') : t('conversation.toolResult')}
-                truncatedNote={block.truncated ? t('conversation.blockTruncated') : undefined}
-              >
-                {block.text}
-              </CollapsibleBlock>
-            );
-          default:
-            return null;
-        }
-      })}
-    </>
-  );
-}
 
 /** グループ内の各エントリを縦に連結して描画する（B1: ロールグルーピング）。gap は小さめ。 */
 function GroupEntries({ entries, prevTimestamp, isUser }: {
@@ -81,44 +21,17 @@ function GroupEntries({ entries, prevTimestamp, isUser }: {
   prevTimestamp: string | null;
   isUser: boolean;
 }) {
-  let prevTs = prevTimestamp;
-
-  return (
-    <>
-      {entries.map((entry, i) => {
-        const thinkingSeconds = computeThinkingGapSeconds(prevTs, entry.timestamp);
-        prevTs = entry.timestamp;
-        const marginTop = i > 0 ? 4 : 0;
-
-        if (entry.type === 'tool') {
-          return (
-            <div key={entry.uuid} style={{ marginTop, width: '100%' }}>
-              <BlockList blocks={entry.blocks} markdownText={false} thinkingSeconds={thinkingSeconds} />
-            </div>
-          );
-        }
-
-        return (
-          <div
-            key={entry.uuid}
-            style={{
-              marginTop,
-              padding: '10px 14px',
-              borderRadius: isUser
-                ? 'var(--radius-lg) var(--radius-lg) var(--space-1) var(--radius-lg)'
-                : 'var(--radius-lg) var(--radius-lg) var(--radius-lg) var(--space-1)',
-              // モックアップ指定「accent の14%面」に最も近い既存トークンとして accent-a15 を使う。
-              background: isUser ? 'var(--accent-a15)' : 'var(--bg-card)',
-              minWidth: 0,
-              maxWidth: '100%',
-            }}
-          >
-            <BlockList blocks={entry.blocks} markdownText={!isUser} thinkingSeconds={thinkingSeconds} />
-          </div>
-        );
-      })}
-    </>
-  );
+  const renderSegment = (segment: BlockSegment) => {
+    const content = segment.blocks.map((item) => <BlockList key={item.key} blocks={[item.block]} markdownText={item.markdownText} thinkingSeconds={item.thinkingSeconds} />);
+    if (segment.isToolRun) return <ToolRunGroup blocks={segment.blocks}>{content}</ToolRunGroup>;
+    if (segment.entryType !== 'tool') return <div style={{ padding: 'var(--space-3) var(--space-4)', borderRadius: isUser ? 'var(--radius-lg) var(--radius-lg) var(--space-1) var(--radius-lg)' : 'var(--radius-lg) var(--radius-lg) var(--radius-lg) var(--space-1)', background: isUser ? 'var(--accent-a15)' : 'var(--bg-card)', minWidth: 0, maxWidth: '100%' }}>{content}</div>;
+    return content;
+  };
+  return <>{buildBlockSegments(entries, prevTimestamp).map((segment, i) => (
+    <div key={segment.key} style={{ marginTop: i > 0 ? 'var(--space-1)' : 0, minWidth: 0, maxWidth: '100%' }}>
+      {renderSegment(segment)}
+    </div>
+  ))}</>;
 }
 
 /**
