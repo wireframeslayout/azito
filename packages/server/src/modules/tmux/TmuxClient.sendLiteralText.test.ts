@@ -109,11 +109,29 @@ describe('TmuxClient.sendLiteralText', () => {
   it('escapes semicolons at remote long-text chunk boundaries', async () => {
     const calls: string[][] = [];
     const client = makeClient(async (args) => { calls.push(args); return { stdout: '', stderr: '', code: 0 }; });
-    const text = `${'a'.repeat(198)}\\;${'b'.repeat(199)};${'c'.repeat(101)}`;
+    const text = `${'a'.repeat(98)}\\;${'b'.repeat(99)};${'c'.repeat(301)}`;
     await client.sendTextToHandle({ ...srv, type: 'agent' }, asPaneHandle('%1'), text);
     expect(calls.map((args) => args.at(-1))).toEqual([
-      `${'a'.repeat(198)}\\\\;`, `${'b'.repeat(199)}\\;`, 'c'.repeat(101),
+      `${'a'.repeat(98)}\\\\;`, `${'b'.repeat(99)}\\;`, 'c'.repeat(100), 'c'.repeat(100), 'c'.repeat(100), 'c',
     ]);
+  });
+
+  it('keeps surrogate pairs intact at remote chunk boundaries and bounds argument size', async () => {
+    const calls: string[][] = [];
+    const client = makeClient(async (args) => { calls.push(args); return { stdout: '', stderr: '', code: 0 }; });
+    const text = `${'a'.repeat(99)}${'😀'.repeat(120)};`;
+    await client.sendTextToHandle({ ...srv, type: 'agent' }, asPaneHandle('%1'), text);
+    const chunks = calls.map((args) => args.at(-1)!);
+    expect(chunks[0]).toBe(`${'a'.repeat(99)}😀`);
+    expect(chunks.map((chunk) => chunk.endsWith('\\;') ? `${chunk.slice(0, -2)};` : chunk).join('')).toBe(text);
+    expect(chunks.every((chunk) => Buffer.byteLength(chunk, 'utf8') <= 500)).toBe(true);
+  });
+
+  it('escapes a trailing semicolon in short literal keys', async () => {
+    const calls: string[][] = [];
+    const client = makeClient(async (args) => { calls.push(args); return { stdout: '', stderr: '', code: 0 }; });
+    await client.sendKeysToHandle(srv, asPaneHandle('%1'), ['foo;', 'Enter']);
+    expect(calls).toEqual([['send-keys', '-t', '%1', '-l', 'foo\\;'], ['send-keys', '-t', '%1', 'Enter']]);
   });
 
   it('sends other special-key-looking text (Enter, Escape) via the literal path too', async () => {

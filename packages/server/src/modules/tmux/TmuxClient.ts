@@ -552,11 +552,9 @@ export class TmuxClient implements IMuxClient {
         try { fs.rmdirSync(tmpDir); } catch {}
       }
     } else {
-      const chunks = [];
-      for (let i = 0; i < text.length; i += 200) {
-        chunks.push(text.slice(i, i + 200));
-      }
-      for (const chunk of chunks) {
+      const characters = Array.from(text);
+      for (let i = 0; i < characters.length; i += 100) {
+        const chunk = characters.slice(i, i + 100).join('');
         await this.runTmuxCommand(server, ['send-keys', '-t', target, '-l', tmuxLiteralArg(chunk)]);
       }
     }
@@ -758,7 +756,7 @@ export class TmuxClient implements IMuxClient {
           await new Promise(resolve => setTimeout(resolve, 2000));
         }
       } else {
-        await this.runTmuxCommand(server, ['send-keys', '-t', target, '-l', key]);
+        await this.runTmuxCommand(server, ['send-keys', '-t', target, '-l', tmuxLiteralArg(key)]);
       }
     }
   }
