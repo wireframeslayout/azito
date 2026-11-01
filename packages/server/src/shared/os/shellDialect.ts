@@ -58,7 +58,7 @@ class PosixDialect implements ShellDialect {
 
   withoutEnv(name: string, command: string, paneShell?: string | null): string {
     assertEnvName(name);
-    const shell = programFileName(paneShell ?? '').toLowerCase();
+    const shell = programFileName(paneShell ?? '').replace(/^-/, '').toLowerCase();
     return ['sh', 'bash', 'zsh', 'dash'].includes(shell)
       ? `(unset ${name}; ${command})`
       : `env -u ${name} ${command}`;
