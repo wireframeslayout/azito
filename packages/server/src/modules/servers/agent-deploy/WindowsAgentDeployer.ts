@@ -24,10 +24,10 @@ export function needsTransferredScript(body: string): boolean {
   return ['powershell.exe', ...powershellEncodedArgs(script)].join(' ').length > MAX_WINDOWS_COMMAND_LINE;
 }
 
-/** Puts bytes on the host over SFTP. The remote path is relative to the user's home, with `/` separators (what Windows OpenSSH's sftp-server takes). */
 /** The firewall verdict for the recognised agent task, with the commands an administrator would run to inspect or allow it. */
 export type FirewallInspection = FirewallResult & { allowCommand: string; blockCommands: string[] };
 
+/** Puts bytes on the host over SFTP. The remote path is relative to the user's home, with `/` separators (what Windows OpenSSH's sftp-server takes). */
 export interface WindowsFileTransfer {
   putFile(sshHost: string, localPath: string, remoteRelativePath: string): Promise<void>;
   putBuffer(sshHost: string, data: Buffer, remoteRelativePath: string): Promise<void>;
