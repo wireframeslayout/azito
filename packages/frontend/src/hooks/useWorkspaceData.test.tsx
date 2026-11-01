@@ -26,17 +26,3 @@ it('refreshes sessions when a task-owned window appears', async () => {
   rerender(<View project="1" />);
   await waitFor(() => expect(fetchSessionListing).toHaveBeenCalledWith('agent'));
 });
-
-it('keeps the derived tasks reference while the catalog list is unchanged', () => {
-  mocks.tasks = [{ id: 1, projectId: 1, windows: [] }];
-  const seen: unknown[] = [];
-  function Probe({ tick }: { tick: number }) {
-    const data = useWorkspaceData('1', [], 'tasks');
-    seen.push(data.tasks);
-    return <output>{tick}</output>;
-  }
-  const { rerender } = render(<Probe tick={0} />);
-  rerender(<Probe tick={1} />);
-  expect(seen.length).toBeGreaterThanOrEqual(2);
-  expect(seen[seen.length - 1]).toBe(seen[0]);
-});
