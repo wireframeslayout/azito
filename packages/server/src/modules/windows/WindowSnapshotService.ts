@@ -1,4 +1,3 @@
-import { muxRefFromTmuxTarget } from '@azito/shared';
 import type { IWindowRepository, Window } from './Window';
 import type { IServerRepository, ServerConfig } from '../servers/Server';
 import type { MuxDriverRegistry } from '../tmux/MuxDriverRegistry';
@@ -6,6 +5,7 @@ import { MuxDriverUnavailableError } from '../tmux/MuxCapabilityError';
 import { AgentUnreachableError } from '../servers/transport/AgentUnreachableError';
 import { runWithConcurrency } from '../../shared/concurrency';
 import { snapshotScreenText } from './snapshotScreenText';
+import { windowKindOf, windowRefOf } from '../tmux/windowIdentity';
 
 export type SnapshotErrorCode = 'window_not_found' | 'server_not_found' | 'mux_unavailable' | 'pane_not_found' | 'capture_failed';
 export type WindowSnapshot = { status: 'ok'; id: number; content: string; activity: number | null; changed: true } | { status: 'unchanged'; id: number; activity: number } | { status: 'error'; id: number; code: SnapshotErrorCode; message: string };
@@ -33,8 +33,7 @@ export class WindowSnapshotService {
 
   private async captureOne(id: number, win: Window, server: ServerConfig, lines: number, since: Map<number, number>): Promise<WindowSnapshot> {
     try {
-      const ref = win.muxRef ?? muxRefFromTmuxTarget(win.tmuxTarget);
-      if (!this.drivers.availabilityFor(ref.kind, server).available) return failure(id, 'mux_unavailable');
+      const ref = windowRefOf(win, windowKindOf(win));
       const driver = this.drivers.resolveKind(ref.kind, server);
       const activity = await driver.windowActivity(server, ref);
       if (activity !== null && since.get(id) === activity) return { status: 'unchanged', id, activity };

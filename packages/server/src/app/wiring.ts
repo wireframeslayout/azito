@@ -1,4 +1,3 @@
-import { WindowSnapshotService } from '../modules/windows/WindowSnapshotService';
 // ─── Dependency wiring ───
 //
 // Constructs all infrastructure/repository/domain/application instances via
@@ -115,6 +114,7 @@ import { WindowRespawnService } from '../modules/windows/WindowRespawnService';
 import { WindowSleepService } from '../modules/windows/WindowSleepService';
 import { SessionCaptureService } from '../modules/windows/SessionCaptureService';
 import { WindowActivityStatusService } from '../modules/windows/WindowActivityStatusService';
+import { WindowSnapshotService } from '../modules/windows/WindowSnapshotService';
 import { WindowSessionResolver } from '../modules/transcripts/WindowSessionResolver';
 import { TRANSCRIPT_SOURCES } from '../modules/transcripts/sources/registry';
 import { TranscriptConversationProbe } from '../modules/transcripts/TranscriptConversationProbe';

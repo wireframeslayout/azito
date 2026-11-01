@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { stripTerminalArtifacts } from './stripTerminalArtifacts';
+import { stripTerminalArtifacts, stripTerminalControlSequences } from './stripTerminalArtifacts';
 
 describe('stripTerminalArtifacts', () => {
   it('preserves hyphens in file names and diff lines', () => {
@@ -27,5 +27,25 @@ describe('stripTerminalArtifacts', () => {
 
   it('strips emoji icons', () => {
     expect(stripTerminalArtifacts('\u{1F4C1} docs')).toBe(' docs');
+  });
+});
+
+describe('stripTerminalControlSequences', () => {
+  it('strips CSI sequences with private parameters and intermediates', () => {
+    expect(stripTerminalControlSequences('\x1b[?25l\x1b[1;32mok\x1b[0m\x1b[2 q\x1b[>4;1m')).toBe('ok');
+  });
+
+  it('strips OSC, charset and C0 controls but keeps newlines, tabs and carriage returns', () => {
+    expect(stripTerminalControlSequences('\x1b]0;t\x07\x1b(Ba\x00\tb\r\nc')).toBe('a\tb\r\nc');
+  });
+
+  it('keeps emoji, Nerd Font icons and hyphens', () => {
+    expect(stripTerminalControlSequences('\u{1F4C1} \uE0A0 --- a-b')).toBe('\u{1F4C1} \uE0A0 --- a-b');
+  });
+});
+
+describe('stripTerminalArtifacts CSI handling', () => {
+  it('keeps the original CSI pattern (private-parameter sequences are not matched as a whole)', () => {
+    expect(stripTerminalArtifacts('\x1b[?25lok')).toBe('[?25lok');
   });
 });
