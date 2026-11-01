@@ -1,3 +1,4 @@
+import { decodedTaskScript } from '../../../shared/os/taskScheduler/taskLauncher';
 import { exec as execCallback, execFile, spawn, type ChildProcess } from 'child_process';
 import crypto from 'crypto';
 import fs from 'fs';
@@ -310,7 +311,7 @@ describe.skipIf(process.platform !== 'win32')('the Windows agent install on a re
       expect(registered.stdout).toContain('--headless');
       const encoded = /-EncodedCommand ([A-Za-z0-9+/=]+)/.exec(registered.stdout)?.[1];
       expect(encoded).toBeDefined();
-      const launcher = Buffer.from(encoded!, 'base64').toString('utf16le');
+      const launcher = decodedTaskScript(encoded!)!;
       expect(launcher).toContain(layout.entry);
       expect(launcher).toContain(layout.envFile);
 
@@ -556,7 +557,7 @@ describe.skipIf(process.platform !== 'win32')('the Windows agent install on a re
     const registeredEntry = async (): Promise<string> => {
       const xml = (await cmdExec('ci', `"${schtasksPath()}" /Query /TN ${OPTIONS.taskName} /XML`, 60_000)).stdout;
       const encoded = /-EncodedCommand ([A-Za-z0-9+/=]+)/.exec(xml)?.[1];
-      return `${xml}\n${encoded ? Buffer.from(encoded, 'base64').toString('utf16le') : ''}`;
+      return `${xml}\n${encoded ? decodedTaskScript(encoded) ?? '' : ''}`;
     };
 
     afterAll(() => {

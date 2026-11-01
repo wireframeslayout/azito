@@ -12,7 +12,7 @@ const xmlFor = (rootOfTask: string): string => {
 
 describe('taskStartsMisaoOf', () => {
   it('finds the folder in legacy and new launchers including apostrophes', () => {
-    const root = "C:\\Users\\O'Neil\\.azito\\misao";
+    const root = "C:\\Users\\O'Neil’s\\.azito\\misao";
     const pipe = windowsMisaoPipe(root, 'dev');
     const layout = misaoWindowsLayout({ misaoRoot: root }, '0.3.0', 'AzitoMisao');
     const legacy = buildTaskXml({ userId: 'PC\\dev', description: 'misao', executable: 'C:\\Windows\\System32\\conhost.exe', argumentsLine: legacyMisaoTaskArgumentsOf({ systemRoot: 'C:\\Windows', exe: layout.exe, root, logFile: layout.logFile, pipe }), workingDirectory: 'C:\\Users', restartOnFailure: { intervalMinutes: 1, count: 999 } });

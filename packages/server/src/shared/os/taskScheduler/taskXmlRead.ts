@@ -1,3 +1,4 @@
+import { decodedTaskScript } from './taskLauncher';
 const XML_ENTITY = /&(lt|gt|quot|apos|amp);/g;
 const XML_ENTITIES: Readonly<Record<string, string>> = { lt: '<', gt: '>', quot: '"', apos: "'", amp: '&' };
 
@@ -73,9 +74,10 @@ export function taskMisaoRoot(xml: string): string | undefined {
 export function misaoRootOfCommandLine(decoded: string): string | undefined {
   const encoded = /-EncodedCommand ([A-Za-z0-9+/=]+)/.exec(decoded)?.[1];
   if (encoded) {
-    const script = Buffer.from(encoded, 'base64').toString('utf16le');
-    const literal = /\$info\.EnvironmentVariables\['AZITO_MISAO_ROOT'\] = '((?:[^']|'')*)'/.exec(script)?.[1];
-    return literal?.replace(/''/g, "'");
+    const script = decodedTaskScript(encoded);
+    if (!script) return undefined;
+    const literal = /\$info\.EnvironmentVariables\['AZITO_MISAO_ROOT'\] = '((?:[^'‘’‚‛]|(['‘’‚‛])\2)*)'/.exec(script)?.[1];
+    return literal?.replace(/(['‘’‚‛])\1/g, '$1');
   }
   return /--data "([^"]*)"/.exec(decoded)?.[1];
 }

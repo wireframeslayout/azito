@@ -1,3 +1,4 @@
+import { decodedTaskScript } from '../../../shared/os/taskScheduler/taskLauncher';
 import { legacyMisaoTaskArgumentsOf } from '../../../shared/os/taskScheduler/misaoTaskArguments';
 import { describe, expect, it } from 'vitest';
 import { windowsMisaoPipe } from '../../servers/transport/agentMisaoSocket';
@@ -90,7 +91,7 @@ describe('the misao task', () => {
 
 it('the new launcher retries failures and tracks its parent', () => {
   const line = newMisaoTaskArguments({ systemRoot: 'C:\\Windows', layout, pipe: PIPE });
-  const script = Buffer.from(line.split(' ').pop()!, 'base64').toString('utf16le');
+  const script = decodedTaskScript(line.split(' ').pop()!)!;
   expect(script).toContain('$delay = 5');
   expect(script).toContain('[Math]::Min($delay * 2, 60)');
   expect(script).toContain('TotalSeconds -ge 300');

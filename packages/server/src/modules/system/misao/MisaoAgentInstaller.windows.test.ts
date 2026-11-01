@@ -1,3 +1,4 @@
+import { decodedTaskScript } from '../../../shared/os/taskScheduler/taskLauncher';
 import { buildMisaoTaskXml, misaoWindowsLayout } from './misaoWindowsTask';
 import { legacyMisaoTaskArgumentsOf } from '../../../shared/os/taskScheduler/misaoTaskArguments';
 import fs from 'fs';
@@ -165,7 +166,7 @@ class FakeWindowsAgent {
     if (last === '/Run') {
       const xml = this.host.registeredXml ?? '';
       const encoded = /-EncodedCommand ([A-Za-z0-9+/=]+)/.exec(xml)?.[1];
-      const body = `${xml} ${encoded ? Buffer.from(encoded, 'base64').toString('utf16le') : ''}`;
+      const body = `${xml} ${encoded ? decodedTaskScript(encoded) ?? '' : ''}`;
       const failing = this.options.failStartFor !== undefined && body.includes(`\\${this.options.failStartFor}\\misao.exe`);
       if (failing) this.host.markEnded(1);
       else if (!runningBefore) {
@@ -232,7 +233,7 @@ describe('MisaoAgentInstaller on a Windows agent', () => {
       expect(xml).toContain('<Command>C:\\Windows\\System32\\conhost.exe</Command>');
       // The release's own folder is in the command line, not a link; the daemon itself works in the home, so no pane starts in (and locks) a release folder.
       const args = /<Arguments>(.*)<\/Arguments>/.exec(xml)![1]!.replace(/&gt;/g, '>').replace(/&amp;/g, '&');
-      const script = Buffer.from(args.split(' ').pop()!, 'base64').toString('utf16le');
+      const script = decodedTaskScript(args.split(' ').pop()!)!;
       expect(script).toContain(`${ROOT}\\${VERSION}\\misao.exe`);
       expect(script).toContain(PIPE);
       expect(xml).toContain('<WorkingDirectory>C:\\Users\\dev</WorkingDirectory>');
@@ -368,7 +369,7 @@ describe('MisaoAgentInstaller on a Windows agent', () => {
       expect(stop).toMatchObject({ file: `${ROOT}\\${OLD_VERSION}\\misao.exe`, args: ['stop'], env: { MISAO_SOCKET: PIPE } });
       expect(agent.current).toBe(VERSION);
       expect(agent.daemonUp).toBe(true);
-      expect(Buffer.from(/-EncodedCommand ([A-Za-z0-9+/=]+)/.exec(agent.host.registeredXml!)![1]!, 'base64').toString('utf16le')).toContain(`${VERSION}\\misao.exe`);
+      expect(decodedTaskScript(/-EncodedCommand ([A-Za-z0-9+/=]+)/.exec(agent.host.registeredXml!)![1]!)).toContain(`${VERSION}\\misao.exe`);
       // The old daemon was gone before anything was switched.
       expect(agent.events).toEqual(['misao stop', `current:${VERSION}`, 'schtasks /Create', 'schtasks /Run']);
     });

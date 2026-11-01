@@ -1,3 +1,4 @@
+import { decodedTaskScript } from '../../../shared/os/taskScheduler/taskLauncher';
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 import { execFileSync, spawn, type ChildProcess } from 'node:child_process';
 import * as crypto from 'node:crypto';
@@ -116,7 +117,7 @@ describe.skipIf(process.platform !== 'win32' || !fs.existsSync(MISAO_CLI))('misa
   const registered = async (): Promise<string> => {
     const xml = await tasks().exportXml(TASK_NAME);
     const encoded = /-EncodedCommand ([A-Za-z0-9+/=]+)/.exec(xml)?.[1];
-    return `${xml}\n${encoded ? Buffer.from(encoded, 'base64').toString('utf16le') : ''}`;
+    return `${xml}\n${encoded ? decodedTaskScript(encoded) ?? '' : ''}`;
   };
 
   const driver = () => registry.resolveKind('misao', server);

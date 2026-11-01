@@ -1,3 +1,4 @@
+import { decodedTaskScript } from '../../../../shared/os/taskScheduler/taskLauncher';
 import type { ExecResult } from '../../transport/ServerTransport';
 import * as path from 'path';
 import { decodeTaskXml, escapeXml } from '../../../../shared/os/taskScheduler/taskDefinition';
@@ -8,7 +9,7 @@ import { legacyAgentTaskAction } from '../windowsAgentTask';
 export function decodeEncodedCommand(line: string): string {
   const match = /-EncodedCommand ([A-Za-z0-9+/=]+)$/.exec(line);
   if (!match) throw new Error(`not an EncodedCommand line: ${line}`);
-  return Buffer.from(match[1]!, 'base64').toString('utf16le');
+  return decodedTaskScript(match[1]!) ?? '';
 }
 
 /** The release the fake's pre-existing task runs, when a test does not register one of its own. */

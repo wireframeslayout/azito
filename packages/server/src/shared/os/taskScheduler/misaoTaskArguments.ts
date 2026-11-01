@@ -1,3 +1,4 @@
+import { KILL_CHILDREN_JOB, compressedTaskScript } from './taskLauncher';
 import * as path from 'path';
 import { powershellDialect, powershellEncodedArgs } from '../shellDialect';
 import { joinWindowsArgs, quoteWindowsArg } from './windowsCommandLine';
@@ -81,7 +82,15 @@ export function legacyMisaoTaskArgumentsOf(input: MisaoTaskArgumentsInput): stri
 
 
 /** A launcher keeps retrying a failed daemon while its Task Scheduler conhost is alive. */
+export function previousMisaoTaskArgumentsOf(input: MisaoTaskArgumentsInput & { taskName: string }): string {
+  return retryTaskArguments(input, false);
+}
+
 export function misaoTaskArgumentsOf(input: MisaoTaskArgumentsInput & { taskName: string }): string {
+  return retryTaskArguments(input, true);
+}
+
+function retryTaskArguments(input: MisaoTaskArgumentsInput & { taskName: string }, job: boolean): string {
   // Apply the same path validation as the old task before embedding the values in a script.
   legacyMisaoTaskArgumentsOf(input);
   const q = powershellDialect.quote;
@@ -117,7 +126,8 @@ export function misaoTaskArgumentsOf(input: MisaoTaskArgumentsInput & { taskName
     '}',
   ].join('\n');
   const powershell = win32.join(input.systemRoot, 'System32', 'WindowsPowerShell', 'v1.0', 'powershell.exe');
-  const argumentsLine = joinWindowsArgs(['--headless', powershell, ...powershellEncodedArgs(script)]);
+  const taskScript = job ? compressedTaskScript(`${KILL_CHILDREN_JOB}\n${script}`) : script;
+  const argumentsLine = joinWindowsArgs(['--headless', powershell, ...powershellEncodedArgs(taskScript)]);
   if (argumentsLine.length + win32.join(input.systemRoot, 'System32', 'conhost.exe').length + 3 > 8191) throw new Error('The misao task command line exceeds the Windows limit');
   return argumentsLine;
 }

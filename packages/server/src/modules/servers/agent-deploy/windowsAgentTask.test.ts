@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { agentTaskAction, agentTaskIdentity, legacyAgentTaskAction } from './windowsAgentTask';
+import { agentTaskAction, agentTaskIdentity, previousAgentTaskAction, legacyAgentTaskAction } from './windowsAgentTask';
 import { joinWindowsArgs } from '../../../shared/os/taskScheduler/windowsCommandLine';
 
 const systemRoot = 'C:\\Windows';
@@ -9,7 +9,7 @@ const env = `${root}\\agent.env`;
 const entry = `${root}\\123abc\\azito-agent.cjs`;
 
 describe('agent task identity', () => {
-  it.each([(s: string, n: string, e: string, p: string) => agentTaskAction(s, n, e, p, 'AzitoAgent'), legacyAgentTaskAction])('recognises the exact generated definition', (build) => {
+  it.each([(s: string, n: string, e: string, p: string) => agentTaskAction(s, n, e, p, 'AzitoAgent'), (s: string, n: string, e: string, p: string) => previousAgentTaskAction(s, n, e, p, 'AzitoAgent'), legacyAgentTaskAction])('recognises the exact generated definition', (build) => {
     const action = build(systemRoot, node, env, entry);
     expect(agentTaskIdentity({ command: action.executable, argumentsLine: joinWindowsArgs(action.args) }, systemRoot, root, env, 'AzitoAgent')?.version).toBe('123abc');
     expect(agentTaskIdentity({ command: action.executable, argumentsLine: `${joinWindowsArgs(action.args)} extra` }, systemRoot, root, env, 'AzitoAgent')).toBeUndefined();
