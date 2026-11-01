@@ -6,7 +6,7 @@
  */
 
 import { formatWindowId } from '@azito/shared';
-import { resolvePaneDisplayTitle } from '../../../lib/windowDisplay';
+import { resolvePaneDisplayTitle } from '@azito/shared';
 
 export interface WindowSearchTextInput {
   paneTitle?: string;

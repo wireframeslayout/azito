@@ -42,7 +42,7 @@ import type { PersistedTab } from '../../hooks/useTabPersistence';
 import { useIsMobile } from '../../hooks/useIsMobile';
 import { useClickOutside } from '../../hooks/useClickOutside';
 import { isSameWindowTarget } from '@azito/shared';
-import { resolveWindowTitle, formatWindowTitleLine } from '../../lib/windowDisplay';
+import { resolveWindowTitle, formatWindowTitleLine } from '@azito/shared';
 import { activityKey, useWorkspaceTargets } from '../../hooks/useWorkspaceTargets';
 import { useGlobalFocus } from '../../hooks/useGlobalFocus';
 import { useToast } from '../../hooks/useToast';

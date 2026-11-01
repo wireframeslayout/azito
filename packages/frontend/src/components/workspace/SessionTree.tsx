@@ -6,7 +6,7 @@ import { useLongPress, longPressStyle } from '../../hooks/useLongPress';
 import type { Session, TmuxWindow } from '../../hooks/useServerManagement';
 import { lookupWindowTask } from '../../lib/windowTask';
 import { terminalTabId, terminalRefFromWindow, type TerminalRef } from '../../lib/terminalRef';
-import { resolveWindowTitle, formatWindowTitleLine } from '../../lib/windowDisplay';
+import { resolveWindowTitle, formatWindowTitleLine } from '@azito/shared';
 import { Icon } from '../ui/Icon';
 import { paneRowBadge } from '../../lib/paneRowBadge';
 

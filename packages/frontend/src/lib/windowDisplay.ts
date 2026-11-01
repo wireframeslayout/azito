@@ -1,6 +1,4 @@
 import { parseMuxRef } from '@azito/shared';
-export { resolveWindowTitle, formatWindowTitleLine } from '@azito/shared';
-export { resolvePaneDisplayTitle } from '@azito/shared';
 
 
 export interface WindowIndexEntry {
@@ -38,4 +36,9 @@ export function buildWindowIndex<T extends WindowIndexEntry>(
  */
 export function sessionWindowLabel(sessionName: string, win: { name: string; ref: string }): string {
   return parseMuxRef(win.ref).kind === 'misao' ? win.name : `${sessionName}:${win.name}`;
+}
+
+/** Adapt activity rows to the shared window title input. */
+export function activeWindowTitleInput(row: { windowId?: number; target: string; paneTitle?: string; paneName?: string; paneCommand?: string; label?: string; labelSource?: 'auto' | 'user'; taskTitle?: string; workerType?: string; windowType?: string }) {
+  return { ...row, id: row.windowId, paneTitle: row.paneTitle ?? row.paneName, tmuxTarget: row.target };
 }

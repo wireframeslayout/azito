@@ -1,3 +1,4 @@
+import { activeWindowTitleInput } from '../../lib/windowDisplay';
 import { useMemo } from 'react';
 import { useTranslation } from 'react-i18next';
 import { Icon } from '../ui/Icon';
@@ -78,7 +79,7 @@ export default function HomeFeed({ allTasks, allProjects, openTask, connectPane,
       if (row.status !== 'running') continue;
       const task = row.taskId != null ? taskById.get(row.taskId) : undefined;
       const groupKey = row.taskId != null ? `task:${row.taskId}` : `window:${row.key}`;
-      const windowName = formatWindowTitleLine(resolveWindowTitle({ ...row, id: row.windowId, paneTitle: row.paneTitle ?? row.paneName, tmuxTarget: row.target }));
+      const windowName = formatWindowTitleLine(resolveWindowTitle(activeWindowTitleInput(row)));
       let group = map.get(groupKey);
       if (!group) {
         group = {

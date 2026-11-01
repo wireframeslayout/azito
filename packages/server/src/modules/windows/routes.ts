@@ -29,7 +29,7 @@ import { muxRefFromTmuxTarget, parseMuxRef, type MuxRef, type PaneOrdinal, type 
 import { MuxDriverUnavailableError, type MuxDriverUnavailableReason } from '../tmux/MuxCapabilityError';
 import { muxWindowTarget } from '../tmux/muxWindowTarget';
 import { labelAddedWindowOrRemove } from '../tmux/labelRegisteredWindow';
-import { kindOfStoredWindow, windowKindOf } from '../tmux/windowIdentity';
+import { kindOfStoredWindow, windowKindOf, persistRenamedWindowLabel } from '../tmux/windowIdentity';
 import { AmbiguousWindowKindError, rawTargetProbeOf, resolveRawTarget } from '../tmux/storedWindowKind';
 import { resolveWindowById, isRefKindCompatible, resolvePaneHandle, closePaneInWindow, resolvePaneAddEnv, killWindowCore, execResultError, type KillWindowDeps } from './windowPaneOps';
 import type { SessionCaptureService } from './SessionCaptureService';
@@ -698,11 +698,7 @@ const windowsRoutes: FastifyPluginCallback<WindowsRouteOptions> = (fastify, opts
       const result = await driverFor(srv).renameWindowByRef(srv, ref, name);
       const err = execResultError(result);
       if (err) return reply.status(err.status).send({ error: err.error });
-      try {
-        windowRepo.update(win.id, { label: name, labelSource: 'user' });
-      } catch (error) {
-        request.log.error({ err: error, windowId: win.id }, 'Window renamed in mux but label update failed');
-        notifyWindowsChanged(win.serverName);
+      if (!persistRenamedWindowLabel(() => windowRepo.update(win.id, { label: name, labelSource: 'user' }), () => notifyWindowsChanged(win.serverName), request.log, win.id)) {
         return reply.status(500).send({ error: 'Window renamed, but saving its label failed' });
       }
       notifyWindowsChanged(win.serverName);

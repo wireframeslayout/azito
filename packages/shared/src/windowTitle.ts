@@ -1,7 +1,11 @@
 import { formatWindowId, isInternalWindowName, stripGeneratedSuffix } from './windowId';
 import { isMisaoWindowId } from './mux';
 
-// Priority: user label, pane title, auto label, task title, type, window ID, target.
+// Title priority: user label, agent pane title, auto label, task title, type, window ID.
+// A pane title equal to its command is absent. Internal names and misao window IDs
+// are excluded from labels, and generated --abcd suffixes are removed. The subtitle
+// is the next distinct candidate. A single line is formatted as "title · W-123";
+// if no candidate or ID is available, the mux target is the final fallback.
 export interface WindowTitleInput {
   paneTitle?: string;
   paneCommand?: string;

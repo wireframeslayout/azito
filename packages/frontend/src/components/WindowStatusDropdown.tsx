@@ -8,7 +8,7 @@ import { useToast } from '../hooks/useToast';
 import { useAgentDefinitions } from '../hooks/useAgentDefinitions';
 import { AgentIcon } from './ui/AgentIcons';
 import { Icon } from './ui/Icon';
-import { resolveWindowTitle, formatWindowTitleLine } from '../lib/windowDisplay';
+import { resolveWindowTitle, formatWindowTitleLine } from '@azito/shared';
 
 interface WindowStatusDropdownProps {
   serverName: string;

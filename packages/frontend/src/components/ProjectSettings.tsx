@@ -13,7 +13,7 @@ import AddWindowModal from './workspace/AddWindowModal';
 import ResourceWarningDialog from './ResourceWarningDialog';
 import { Chip, EmptyState, FormSelect, ListRow, ListRowGroup, LoadingState, PanelHeader, baseInputStyle, Button } from './ui';
 import type { Window, Unit, Server } from '../pages/workspace/types';
-import { resolveWindowTitle, formatWindowTitleLine } from '../lib/windowDisplay';
+import { resolveWindowTitle, formatWindowTitleLine } from '@azito/shared';
 import { notifyProjectsChanged } from '../lib/projectsChanged';
 import { isDistributeCodeLocked, isDistributionRepositorySelected, resolveDistributeCodeForSave, resolveDistributeCodeToggleOnProjectServersChange, resolveDistributionRepositoryIdOnProjectServersChange } from '../lib/distributeCodePolicy';
 import { buildEnvironmentRowChips, needsDistributionSetup, type DistributionPrerequisite, type EnvironmentChip, type LastDistribution } from '../lib/environmentRow';

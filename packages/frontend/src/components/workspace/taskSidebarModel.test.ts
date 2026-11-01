@@ -1,3 +1,6 @@
+import { activeWindowTitleInput } from '../../lib/windowDisplay';
+import { formatWindowTitleLine, resolveWindowTitle } from '@azito/shared';
+import { taskChildWindowTitle } from './taskSidebarChildren';
 import { describe, expect, it } from 'vitest';
 import type { Task } from '../../pages/workspace/types';
 import type { ActiveWindowRow } from '../../hooks/useActiveWindowRows';
@@ -195,4 +198,15 @@ describe('buildTaskSidebarGroups', () => {
     const recentGroup = groups.find((g) => g.key === 'recent');
     expect(recentGroup!.rows.map((r) => r.task.id)).toEqual([2, 1]);
   });
+});
+
+it('uses the task title when a pane name is only its command', () => {
+  const window = { id: 12, tmuxTarget: 's:w', label: 'win--abcd', labelSource: 'auto', windowType: 'agent' } as NonNullable<Task['windows']>[number];
+  const activity = makeActivity(1, 'running', { paneName: 'codex', paneCommand: 'codex' });
+  expect(taskChildWindowTitle(window, 'Fix issue', activity)).toBe('Fix issue · W-12');
+});
+
+it('adapts activity pane and target fields for shared title resolution', () => {
+  const row = makeActivity(1, 'running', { windowId: 12, paneName: 'codex', paneCommand: 'codex' });
+  expect(formatWindowTitleLine(resolveWindowTitle({ ...activeWindowTitleInput(row), taskTitle: 'Fix issue' }))).toBe('Fix issue · W-12');
 });

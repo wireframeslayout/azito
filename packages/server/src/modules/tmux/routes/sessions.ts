@@ -1,3 +1,4 @@
+import { persistRenamedWindowLabel } from '../windowIdentity';
 import type { FastifyPluginCallback, FastifyReply } from 'fastify';
 import { resourceCheckBody, type ResourceGuard, type ResourceUnavailable } from '../../servers/resources/ResourceGuard';
 import type { IServerRepository, ServerConfig } from '../../servers/Server';
@@ -812,11 +813,7 @@ const sessionsRoutes: FastifyPluginCallback<SessionsRouteOptions> = (fastify, op
         const result = await tmux.renameWindow(srv, target, name);
         const err = execResultError(result);
         if (err) return reply.status(err.status).send({ error: err.error });
-        try {
-          if (windowRow) opts.windowRepo!.update(windowRow.id, { label: name, labelSource: 'user' });
-        } catch (error) {
-          request.log.error({ err: error, windowId: windowRow?.id }, 'Window renamed in mux but label update failed');
-          notifySessionsChanged(request.params.name);
+        if (!persistRenamedWindowLabel(() => { if (windowRow) opts.windowRepo!.update(windowRow.id, { label: name, labelSource: 'user' }); }, () => notifySessionsChanged(request.params.name), request.log, windowRow?.id)) {
           return reply.status(500).send({ error: 'Window renamed, but saving its label failed' });
         }
         notifySessionsChanged(request.params.name);
@@ -978,11 +975,7 @@ const sessionsRoutes: FastifyPluginCallback<SessionsRouteOptions> = (fastify, op
       const result = await muxClient.renameWindowByRef(srv, ref, name);
       const err = execResultError(result);
       if (err) return reply.status(err.status).send({ error: err.error });
-      try {
-        if (windowRow) opts.windowRepo!.update(windowRow.id, { label: name, labelSource: 'user' });
-      } catch (error) {
-        request.log.error({ err: error, windowId: windowRow?.id }, 'Window renamed in mux but label update failed');
-        notifySessionsChanged(request.params.name);
+      if (!persistRenamedWindowLabel(() => { if (windowRow) opts.windowRepo!.update(windowRow.id, { label: name, labelSource: 'user' }); }, () => notifySessionsChanged(request.params.name), request.log, windowRow?.id)) {
         return reply.status(500).send({ error: 'Window renamed, but saving its label failed' });
       }
       notifySessionsChanged(request.params.name);

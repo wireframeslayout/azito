@@ -1,3 +1,4 @@
+import { activeWindowTitleInput } from '../../lib/windowDisplay';
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { Icon } from '../ui/Icon';
@@ -119,8 +120,7 @@ export default function ActiveWindowsSection({ connectPane, openTask, taskWindow
         <div style={{ flex: 1, overflowY: 'auto', padding: '0 4px 8px' }}>
           {rows.map((row) => {
             const taskId = row.taskId ?? lookupWindowTask(windowTaskMap, row.serverName, row.target);
-            const displayName = formatWindowTitleLine(resolveWindowTitle({ ...row, id: row.windowId, paneTitle: row.paneTitle ?? row.paneName, tmuxTarget: row.target }));
-            const windowLabel = formatWindowTitleLine(resolveWindowTitle({ ...row, id: row.windowId, paneTitle: row.paneTitle ?? row.paneName, tmuxTarget: row.target }));
+            const displayName = formatWindowTitleLine(resolveWindowTitle(activeWindowTitleInput(row)));
             const isFinished = row.status === 'finished';
             const isBlocked = !isFinished && row.activityStatus === 'blocked';
             const dismissIfFinished = () => {
@@ -182,9 +182,9 @@ export default function ActiveWindowsSection({ connectPane, openTask, taskWindow
                         </span>
                       )}
                     </div>
-                    {windowLabel !== displayName && (
+                    {displayName !== displayName && (
                       <div style={{ fontSize: 'var(--font-xs)', color: 'var(--text-dim)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', marginTop: 1 }}>
-                        {windowLabel}
+                        {displayName}
                       </div>
                     )}
                   </div>

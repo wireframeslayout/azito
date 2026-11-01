@@ -20,7 +20,7 @@ import type { PersistedTab } from '../../hooks/useTabPersistence';
 import type { Project, Session, Window, Task } from '../../pages/workspace/types';
 import { useToast } from '../../hooks/useToast';
 import type { ContextMenuItem } from '../ContextMenu';
-import { resolveWindowTitle } from '../../lib/windowDisplay';
+import { resolveWindowTitle } from '@azito/shared';
 import { buildWindowSearchText } from './objects/windowRowTitle';
 import ObjectSection from './objects/ObjectSection';
 import BrowserSection from './objects/BrowserSection';
@@ -380,42 +380,22 @@ export default function ObjectsSidebar({
     </button>
   ), [handleOpenTask]);
 
-  // 主題: ペインタイトル（claude 等がペインに出す動的タイトル）。sessionData（既存のサーバー単位
-  // tmux スナップショット）から解決するので追加のポーリングは発生しない。取得できない場合
-  // （オフライン・タイトル未設定）は ウィンドウラベル → タスクタイトル → tmux ターゲット の順で代替。
-  const resolveOperationTitle = useCallback((w: WindowItem): string | undefined => {
-    const extra = resolveWindowContextExtra(w, sessionData);
-    const display = resolveWindowTitle({
-      paneTitle: extra.paneTitle,
-      paneCommand: extra.paneCommand,
-      label: w.label, labelSource: w.labelSource,
-      taskTitle: w.taskId != null ? taskById.get(w.taskId)?.title : undefined,
-      tmuxTarget: w.tmuxTarget,
-      id: w.id,
-      workerType: w.workerType,
-      windowType: w.windowType,
-    });
-    return display.hasDisplayName ? display.title : undefined;
-  }, [sessionData, taskById]);
-
-  // 副題: 「タスクタイトル · サーバー · フェーズ · ブランチ」。取得できない項目は省く（ダミー値で埋めない）。
-  // タスクタイトルは主題がペインタイトル等で埋まっている行にだけ載せる（主題と同じなら二重表示になる）
-  const renderOperationSubtitle = useCallback((w: WindowItem) => {
-    const task = w.taskId != null ? taskById.get(w.taskId) : undefined;
-    const parts: string[] = [];
-    const extra = resolveWindowContextExtra(w, sessionData);
-    const display = resolveWindowTitle({ label: w.label, labelSource: w.labelSource, paneTitle: extra.paneTitle, paneCommand: extra.paneCommand, taskTitle: task?.title, workerType: w.workerType, windowType: w.windowType, id: w.id });
-    if (display.subtitle) parts.push(display.subtitle);
-    parts.push(w.serverName);
-    const phaseKey = task?.currentPhase;
-    if (phaseKey) {
-      const label = t(`common:status.${phaseKey}`, { defaultValue: '' });
-      if (label) parts.push(label);
+  // 共通の優先順位で主題を決め、副題には次に強い候補と窓のコンテキストを表示する。
+  const operationDisplays = useMemo(() => {
+    const displays = new Map<number, { title?: string; subtitle: string }>();
+    for (const w of filteredOperationWindows) {
+      const task = w.taskId != null ? taskById.get(w.taskId) : undefined;
+      const extra = resolveWindowContextExtra(w, sessionData);
+      const display = resolveWindowTitle({ paneTitle: extra.paneTitle, paneCommand: extra.paneCommand, label: w.label, labelSource: w.labelSource, taskTitle: task?.title, tmuxTarget: w.tmuxTarget, id: w.id, workerType: w.workerType, windowType: w.windowType });
+      const parts = [display.subtitle, w.serverName];
+      if (task?.currentPhase) parts.push(t(`common:status.${task.currentPhase}`, { defaultValue: '' }));
+      parts.push(task?.branch || task?.worktreeBranch);
+      displays.set(w.id, { title: display.hasDisplayName ? display.title : undefined, subtitle: parts.filter(Boolean).join(' · ') });
     }
-    const branch = task?.branch || task?.worktreeBranch;
-    if (branch) parts.push(branch);
-    return parts.join(' · ');
-  }, [taskById, t, sessionData]);
+    return displays;
+  }, [filteredOperationWindows, taskById, sessionData, t]);
+  const resolveOperationTitle = useCallback((w: WindowItem) => operationDisplays.get(w.id)?.title, [operationDisplays]);
+  const renderOperationSubtitle = useCallback((w: WindowItem) => operationDisplays.get(w.id)?.subtitle, [operationDisplays]);
 
   const browserSectionAction = useMemo(() => {
     if (browserCapableServerNames.length === 0) return null;

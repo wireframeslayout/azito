@@ -8,7 +8,7 @@ import { PaneStateChip, DIMMED_PANE_OPACITY } from './PaneStateChip';
 import { Chip } from './Chip';
 import { isPaneLive } from '../../lib/paneState';
 import { paneRowBadge } from '../../lib/paneRowBadge';
-import { resolveWindowTitle } from '../../lib/windowDisplay';
+import { resolveWindowTitle } from '@azito/shared';
 import { canActOnMux, planWindowRow } from '../../lib/windowRowPlan';
 import { EmptyWindowActions } from '../terminal/EmptyWindowActions';
 import { useGlobalFocus } from '../../hooks/useGlobalFocus';

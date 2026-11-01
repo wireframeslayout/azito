@@ -92,7 +92,7 @@ export class SqliteWindowRepository implements IWindowRepository {
     return (this.nowStmt.get() as { ts: string }).ts;
   }
 
-  add(input: Omit<Window, 'id' | 'createdAt' | 'labelSource'> & { labelSource?: Window['labelSource'] }): number {
+  add(input: Omit<Window, 'id' | 'createdAt' | 'labelSource'>): number {
     const window = { ...input, tmuxTarget: storedTarget(input.tmuxTarget, input.muxRef) };
     if (window.tmuxTarget && /\.\d+$/.test(window.tmuxTarget)) {
       throw new Error(`tmuxTarget must not contain pane suffix: ${window.tmuxTarget}`);
@@ -101,8 +101,8 @@ export class SqliteWindowRepository implements IWindowRepository {
       const existing = this.findProjectWindowStmt.get(window.projectId, window.serverName, window.tmuxTarget) as { id: number } | undefined;
       if (existing) {
         if (window.label !== undefined) {
-          this.db.prepare("UPDATE windows SET label = ?, label_source = ? WHERE id = ? AND (label_source = 'auto' OR ? = 'user')")
-            .run(window.label, window.labelSource ?? 'auto', existing.id, window.labelSource ?? 'auto');
+          this.db.prepare("UPDATE windows SET label = ? WHERE id = ? AND label_source = 'auto'")
+            .run(window.label, existing.id);
         }
         return existing.id;
       }
@@ -115,7 +115,7 @@ export class SqliteWindowRepository implements IWindowRepository {
       window.tmuxTarget,
       window.muxRef ? formatMuxRef(window.muxRef) : formatMuxRef(muxRefFromTmuxTarget(window.tmuxTarget)),
       window.label,
-      window.labelSource ?? 'auto',
+      'auto',
       window.isPrimary ? 1 : 0,
       window.windowType,
       window.workerType,

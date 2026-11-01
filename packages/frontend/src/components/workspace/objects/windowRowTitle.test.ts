@@ -1,5 +1,6 @@
 import { describe, it, expect } from 'vitest';
-import { resolveWindowTitle, formatWindowTitleLine, buildWindowIndex, type WindowIndexEntry } from '../../../lib/windowDisplay';
+import { resolveWindowTitle, formatWindowTitleLine } from '@azito/shared';
+import { buildWindowIndex, type WindowIndexEntry } from '../../../lib/windowDisplay';
 import { buildWindowSearchText } from './windowRowTitle';
 
 describe('resolveWindowTitle', () => {
