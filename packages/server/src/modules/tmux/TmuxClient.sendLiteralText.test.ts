@@ -95,6 +95,27 @@ describe('TmuxClient.sendLiteralText', () => {
     expect(calls).toEqual([['send-keys', '-t', '%1', '-l', 'C-c']]);
   });
 
+  it.each([
+    ['foo;', 'foo\\;'],
+    ['a; b', 'a; b'],
+    ['\\;', '\\\\;'],
+  ])('preserves literal text %s in the tmux argument', async (text, expected) => {
+    const calls: string[][] = [];
+    const client = makeClient(async (args) => { calls.push(args); return { stdout: '', stderr: '', code: 0 }; });
+    await client.sendTextToHandle(srv, asPaneHandle('%1'), text);
+    expect(calls).toEqual([['send-keys', '-t', '%1', '-l', expected]]);
+  });
+
+  it('escapes semicolons at remote long-text chunk boundaries', async () => {
+    const calls: string[][] = [];
+    const client = makeClient(async (args) => { calls.push(args); return { stdout: '', stderr: '', code: 0 }; });
+    const text = `${'a'.repeat(198)}\\;${'b'.repeat(199)};${'c'.repeat(101)}`;
+    await client.sendTextToHandle({ ...srv, type: 'agent' }, asPaneHandle('%1'), text);
+    expect(calls.map((args) => args.at(-1))).toEqual([
+      `${'a'.repeat(198)}\\\\;`, `${'b'.repeat(199)}\\;`, 'c'.repeat(101),
+    ]);
+  });
+
   it('sends other special-key-looking text (Enter, Escape) via the literal path too', async () => {
     const calls: string[][] = [];
     const client = makeClient(async (args) => {

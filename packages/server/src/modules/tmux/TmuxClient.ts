@@ -502,7 +502,7 @@ export class TmuxClient implements IMuxClient {
     if (Buffer.byteLength(text, 'utf8') > 500) {
       await this.sendLongText(server, target, text);
     } else {
-      await this.runTmuxCommand(server, ['send-keys', '-t', target, '-l', text]);
+      await this.runTmuxCommand(server, ['send-keys', '-t', target, '-l', tmuxLiteralArg(text)]);
     }
   }
 
@@ -557,7 +557,7 @@ export class TmuxClient implements IMuxClient {
         chunks.push(text.slice(i, i + 200));
       }
       for (const chunk of chunks) {
-        await this.runTmuxCommand(server, ['send-keys', '-t', target, '-l', chunk]);
+        await this.runTmuxCommand(server, ['send-keys', '-t', target, '-l', tmuxLiteralArg(chunk)]);
       }
     }
   }
