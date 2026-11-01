@@ -1,3 +1,4 @@
+import { storageRelativeKey } from './files/storageKey';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { api, fetchBlob, uploadFile } from '../api/client';
@@ -152,11 +153,11 @@ function StorageFileList({ projectId, onFilePreview, activeTabId }: StoragePanel
   const handleDelete = useCallback(async (filename: string, name: string) => {
     if (!await confirm({ title: storageT('delete.title'), message: storageT('delete.message', { name }), danger: true })) return;
     await api(`/projects/${projectId}/storage/${encodeURIComponent(filename)}`, { method: 'DELETE' });
-    setFiles((prev) => prev.filter((f) => (f.key.split('/').pop() || '') !== filename));
+    setFiles((prev) => prev.filter((f) => storageRelativeKey(projectId, f.key) !== filename));
   }, [projectId, confirm, storageT]);
 
   const getApiPath = useCallback((file: StoredFile): string => {
-    const filename = file.key.split('/').pop() || '';
+    const filename = storageRelativeKey(projectId, file.key);
     return `/projects/${projectId}/storage/${encodeURIComponent(filename)}/raw`;
   }, [projectId]);
 
@@ -287,7 +288,7 @@ function StorageFileList({ projectId, onFilePreview, activeTabId }: StoragePanel
           <EmptyState title={t('storage.emptyMessage')} />
         )}
         {files.map((f) => {
-          const filename = f.key.split('/').pop() || '';
+          const filename = storageRelativeKey(projectId, f.key);
           const isImg = isImage(f.originalName);
           const canPreview = Boolean(onFilePreview);
           const tabId = `storage-file:${projectId}:${filename}`;

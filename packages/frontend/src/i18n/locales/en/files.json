@@ -110,6 +110,8 @@
     "saved": "Saved",
     "switchConfirm": "Open another file?",
     "switchMessage": "Your unsaved changes will remain in the current tab.",
-    "latestUnavailable": "The latest content could not be loaded."
+    "latestUnavailable": "The latest content could not be loaded.",
+    "latest": "Latest",
+    "yours": "Your edits"
   }
 }

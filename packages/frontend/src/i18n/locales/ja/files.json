@@ -110,6 +110,8 @@
     "saved": "保存しました",
     "switchConfirm": "別のファイルを開きますか？",
     "switchMessage": "未保存の変更は現在のタブに残ります。",
-    "latestUnavailable": "最新内容を読み込めませんでした。"
+    "latestUnavailable": "最新内容を読み込めませんでした。",
+    "latest": "最新内容",
+    "yours": "自分の編集"
   }
 }
