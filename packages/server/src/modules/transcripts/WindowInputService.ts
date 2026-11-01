@@ -44,8 +44,8 @@ export class WindowInputService {
     private readonly windowRepo: IWindowRepository,
     private readonly muxDriverRegistry: MuxDriverRegistry,
     private readonly serverRepo: IServerRepository,
+    private readonly transportFactory: TransportFactory,
     private readonly wait: (ms: number) => Promise<void> = (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
-    private readonly transportFactory?: TransportFactory,
   ) {}
 
   async sendInput(windowId: number, handle: PaneHandle, text: string): Promise<WindowInputResult> {
@@ -123,7 +123,6 @@ export class WindowInputService {
   }
 
   private async detectWorkerType(driver: IMuxClient, server: ServerConfig, window: Window): Promise<string | null> {
-    if (!this.transportFactory) return null;
     const panes = await this.listWindowPanes(driver, server, window);
     const entries = await this.transportFactory.getTransport(server).listProcesses();
     const types = new Set<string>();

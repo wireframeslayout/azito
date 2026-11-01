@@ -225,6 +225,7 @@ describe.skipIf(!fs.existsSync(MISAO_CLI))('MisaoMuxClient against a real misao 
       { findById: (id: number) => (id === 7 ? window : undefined) } as unknown as IWindowRepository,
       registry,
       { findByName: () => server } as unknown as IServerRepository,
+      { getTransport: () => ({ listProcesses: async () => [] }) } as unknown as import('../../servers/transport/TransportFactory').TransportFactory,
     );
     const otherPane = await client.resolvePane(server, ref2, 1);
 

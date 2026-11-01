@@ -806,6 +806,7 @@ describe('MisaoMuxClient behind WindowInputService', () => {
       { findById: () => window } as unknown as IWindowRepository,
       registry,
       { findByName: () => server } as unknown as IServerRepository,
+      { getTransport: () => ({ listProcesses: async () => [] }) } as unknown as import('../../servers/transport/TransportFactory').TransportFactory,
       async () => {},
     );
 
