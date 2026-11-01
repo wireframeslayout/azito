@@ -357,6 +357,18 @@ describe('the hook written by setup.mjs', () => {
     }
   }, 60_000);
 
+  it('uses the supplied platform and clock when planning SessionStart', async () => {
+    const mod = await import(pathToFileURL(HOOK).href);
+    const args = { kind: 'session', event: '', prefix: '' };
+    const env = { AZITO_URL: hubUrl, AZITO_WEBHOOK_TOKEN: 'token', AZITO_SERVER_NAME: 's', MISAO_PANE_ID: MISAO_PANE, HOME: '/home/pane', CLAUDE_CONFIG_DIR: '/custom' };
+    const options = { args, env, homeDir: home, stdinText: JSON.stringify({ session_id: '0f8fad5b-d9cb-469f-a165-70867728950e' }), now: () => 123 };
+    const posix = JSON.parse((await mod.planHook({ ...options, platform: 'linux' })).body);
+    expect(posix).toMatchObject({ claudeConfigDir: '/custom', claudeConfigDirExplicit: true, hookTimestamp: '123000000' });
+    const windows = JSON.parse((await mod.planHook({ ...options, platform: 'win32' })).body);
+    expect(windows).not.toHaveProperty('claudeConfigDir');
+    expect(windows).not.toHaveProperty('hookTimestamp');
+  });
+
   it('keeps the token out of the request body (it reaches the detached sender over its stdin, never its arguments)', async () => {
     const mod = await import(pathToFileURL(HOOK).href);
     const plan = await mod.planHook({
