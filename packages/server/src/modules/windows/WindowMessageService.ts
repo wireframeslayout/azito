@@ -6,6 +6,7 @@ import type { IServerRepository } from '../servers/Server';
 import type { MuxDriverRegistry } from '../tmux/MuxDriverRegistry';
 import type { AuditLogService } from '../../shared/audit/AuditLogService';
 import { recordAuditBestEffort } from '../../shared/audit/recordAuditBestEffort';
+import { isBareShellCommand } from '../../shared/os/shellCommands';
 
 function fail(statusCode: number, message: string): never {
   throw Object.assign(new Error(message), { statusCode });
@@ -41,6 +42,10 @@ export class WindowMessageService {
     const ref = destination.muxRef ?? muxRefFromTmuxTarget(destination.tmuxTarget);
     const driver = this.drivers.resolveKind(ref.kind, server);
     const pane = await driver.resolvePane(server, ref, 1 as PaneOrdinal);
+    // The text is followed by Enter: a pane back at a shell would run every line of it as a command.
+    const foreground = await driver.paneCommandByHandle(server, pane);
+    if (!foreground) fail(409, 'Cannot verify the destination pane process');
+    if (isBareShellCommand(foreground)) fail(409, 'Destination pane is at a shell prompt');
     await driver.pasteTextToHandle(server, pane, `[from ${sender ? `${formatWindowId(sender.id)} · task #${sender.taskId}` : 'operator'}]\n${message}`);
     await driver.sendKeysToHandle(server, pane, ['Enter']);
     recordAuditBestEffort(this.audit, { actorClass: principal.class, actorId: principal.id ?? null, event: 'window.message_sent', detail: { senderWindowId: sender?.id ?? null, destinationWindowId: destination.id, length: message.length } }, onAuditError);

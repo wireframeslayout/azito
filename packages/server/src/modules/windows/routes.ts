@@ -115,6 +115,7 @@ const windowsRoutes: FastifyPluginCallback<WindowsRouteOptions> = (fastify, opts
     const id = parseWindowId(request.params.id);
     const body = z.object({ from: z.object({ windowId: z.number().int().positive().safe() }).strict().optional(), text: z.string().min(1) }).strict().safeParse(request.body);
     if (id === null || !body.success) return reply.status(400).send({ error: 'Invalid message' });
+    if (/[\x00-\x08\x0b-\x1f\x7f-\x9f]/.test(body.data.text)) return reply.status(400).send({ error: 'The message contains unsupported control characters' });
     await messageService.send(request.principal ?? OPERATOR_PRINCIPAL, id, body.data.from?.windowId, body.data.text, (err) => request.log.error({ err }, 'Message audit failed'));
     return { ok: true };
   });

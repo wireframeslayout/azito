@@ -337,6 +337,14 @@ describe.skipIf(process.platform === 'win32')('azitoctl — window messaging', (
     expect(received).toHaveLength(0);
   });
 
+  it('sends with an operator token without resolving a sender window', async () => {
+    const result = await bash(['send', '--window', '5', 'hello'], { AZITO_TASK_TOKEN: '', AZITO_WINDOW_ID: '', AZITO_UI_TOKEN: 'ui-token' });
+    expect(result.code).toBe(0);
+    expect(received.map((r) => r.method)).toEqual(['POST']);
+    expect(received[0]).toMatchObject({ path: '/api/windows/5/messages', authorization: 'Bearer ui-token' });
+    expect(JSON.parse(received[0].body)).toEqual({ text: 'hello' });
+  });
+
   it('does not retry a failed message POST', async () => {
     postStatus = 409;
     errorBody = JSON.stringify({ error: 'Window asleep\ntry later' });

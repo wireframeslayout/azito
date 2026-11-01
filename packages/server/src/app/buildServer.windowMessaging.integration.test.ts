@@ -18,7 +18,7 @@ function buildApp(scoped: boolean) {
     [3, { id: 3, ownerType: 'task', taskId: 8, projectId: 6, serverName: 'local', tmuxTarget: 's:c', sleeping: false }],
     [4, { id: 4, ownerType: 'project', taskId: null, projectId: 5, serverName: 'local', tmuxTarget: 's:d', sleeping: true }],
   ]);
-  const driver = { resolvePane: vi.fn().mockResolvedValue('%2'), pasteTextToHandle: vi.fn(), sendKeysToHandle: vi.fn() };
+  const driver = { resolvePane: vi.fn().mockResolvedValue('%2'), pasteTextToHandle: vi.fn(), sendKeysToHandle: vi.fn(), paneCommandByHandle: vi.fn().mockResolvedValue('claude') };
   const record = vi.fn();
   app.addHook('onRequest', async (request, reply) => {
     const principal = resolvePrincipal(request.headers.authorization, {
@@ -54,6 +54,7 @@ describe.each([false, true])('window messaging (scoped auth %s)', (scoped) => {
     expect((await send('4', 1)).statusCode).toBe(409);
     expect((await send('999', 1)).statusCode).toBe(404);
     expect((await send('win--abcd', 1)).statusCode).toBe(400);
+    expect((await send('2', 1, 'hi\x1b[2Jthere')).statusCode).toBe(400);
     expect((await app.inject({ method: 'POST', url: '/api/windows/3/messages', headers: operatorHeaders, payload: { text: 'operator' } })).statusCode).toBe(200);
     expect(driver.pasteTextToHandle).toHaveBeenCalledTimes(2);
     expect(JSON.stringify(record.mock.calls)).not.toContain('private');

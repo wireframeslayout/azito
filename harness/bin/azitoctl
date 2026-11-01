@@ -113,8 +113,9 @@ async function main() {
   if (windowId === undefined || (stdin ? positional.length !== 0 : positional.length !== 1)) fail("usage: azitoctl send --window <ID> [--stdin | <text>]");
   const text = stdin ? fs.readFileSync(0, "utf8") : positional[0];
   if (!text) fail("message cannot be empty");
-  const identity = await whoami();
-  await request(`/api/windows/${windowId}/messages`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ text, from: { windowId: identity.windowId } }) });
+  // Only a task token needs a sender window; an operator token is shown as the operator and may send from outside a window.
+  const from = process.env.AZITO_TASK_TOKEN ? { from: { windowId: (await whoami()).windowId } } : {};
+  await request(`/api/windows/${windowId}/messages`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ text, ...from }) });
   console.log(`Sent to W-${windowId}`);
 }
 main().catch(error => fail(error.message));

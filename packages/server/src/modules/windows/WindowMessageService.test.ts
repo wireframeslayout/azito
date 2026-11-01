@@ -11,7 +11,7 @@ function setup() {
     [1, { id: 1, ownerType: 'task', taskId: 10, projectId: null, serverName: 'local', tmuxTarget: 's:a', sleeping: false } as Window],
     [2, { id: 2, ownerType: 'project', taskId: null, projectId: 5, serverName: 'local', tmuxTarget: 's:b', sleeping: false } as Window],
   ]);
-  const driver = { resolvePane: vi.fn().mockResolvedValue('%2'), pasteTextToHandle: vi.fn().mockResolvedValue(undefined), sendKeysToHandle: vi.fn().mockResolvedValue(undefined) };
+  const driver = { resolvePane: vi.fn().mockResolvedValue('%2'), pasteTextToHandle: vi.fn().mockResolvedValue(undefined), sendKeysToHandle: vi.fn().mockResolvedValue(undefined), paneCommandByHandle: vi.fn().mockResolvedValue('claude') };
   const record = vi.fn();
   const resolveKind = vi.fn(() => driver);
   const service = new WindowMessageService(
@@ -54,5 +54,14 @@ describe('WindowMessageService', () => {
     driver.sendKeysToHandle.mockRejectedValue(new Error('failure'));
     await expect(service.send({ class: 'operator' }, 2, undefined, 'hello', vi.fn())).rejects.toThrow('failure');
     expect(record).not.toHaveBeenCalled();
+  });
+  it('refuses a destination pane at a shell or with an unknown process before typing', async () => {
+    const { service, driver } = setup();
+    driver.paneCommandByHandle.mockResolvedValueOnce('bash');
+    await expect(service.send({ class: 'operator' }, 2, undefined, 'rm -rf ~', vi.fn())).rejects.toMatchObject({ statusCode: 409 });
+    driver.paneCommandByHandle.mockResolvedValueOnce(null);
+    await expect(service.send({ class: 'operator' }, 2, undefined, 'hello', vi.fn())).rejects.toMatchObject({ statusCode: 409 });
+    expect(driver.pasteTextToHandle).not.toHaveBeenCalled();
+    expect(driver.sendKeysToHandle).not.toHaveBeenCalled();
   });
 });
