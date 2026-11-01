@@ -1,3 +1,7 @@
+import { classifyStorageError } from './storage/storageErrors';
+import { registerStorageOperationRoutes } from './storage/storageOperationRoutes';
+import { validateStoragePath } from './storage/storageOperations';
+import type { StorageStatusService } from './storage/StorageStatusService';
 import type { FastifyPluginCallback } from 'fastify';
 import type { IProjectRepository } from '../projects/Project';
 import type { IStorageSettingsRepository } from './SqliteStorageSettingsRepository';
@@ -26,6 +30,7 @@ export interface StorageRouteOptions {
   projectRepo: IProjectRepository;
   storageSettingsRepo: IStorageSettingsRepository;
   storageClient: MinioStorageClient;
+  storageStatusService: StorageStatusService;
   /**
    * Issue #28 Phase E requirement 5: scopes `POST /api/projects/:id/storage/
    * upload` (the route `browser-ops` uses to save screenshots/assets) to a
@@ -40,6 +45,20 @@ export interface StorageRouteOptions {
 const storageRoutes: FastifyPluginCallback<StorageRouteOptions> = (fastify, opts, done) => {
   const { projectRepo, storageSettingsRepo, storageClient } = opts;
 
+  registerStorageOperationRoutes(fastify, opts);
+  fastify.get<{ Params: { id: string } }>('/api/projects/:id/storage/status', async (request, reply) => {
+    const id = Number(request.params.id);
+    if (!Number.isSafeInteger(id) || !projectRepo.findById(id)) return reply.status(404).send({ error: 'Project not found' });
+    return opts.storageStatusService.getStatus();
+  });
+
+  fastify.post<{ Params: { id: string } }>('/api/projects/:id/storage/bucket', async (request, reply) => {
+    const id = Number(request.params.id);
+    if (!Number.isSafeInteger(id) || !projectRepo.findById(id)) return reply.status(404).send({ error: 'Project not found' });
+    try { await opts.storageStatusService.createBucket(); return { ok: true }; }
+    catch (error) { return reply.status(502).send(classifyStorageError(error)); }
+  });
+
   // ── GET /api/projects/:id/storage ──
   fastify.get<{ Params: { id: string } }>(
     '/api/projects/:id/storage',
@@ -52,7 +71,7 @@ const storageRoutes: FastifyPluginCallback<StorageRouteOptions> = (fastify, opts
         const files = await storageClient.list(settings, projectId);
         return { files };
       } catch (err: unknown) {
-        return reply.status(502).send({ error: (err as Error).message });
+        return reply.status(502).send({ error: (err as Error).message, code: classifyStorageError(err).code });
       }
     },
   );
@@ -68,28 +87,41 @@ const storageRoutes: FastifyPluginCallback<StorageRouteOptions> = (fastify, opts
 
       const settings = storageSettingsRepo.get();
 
-      const data = await request.file();
-      if (!data) return reply.status(400).send({ error: 'No file uploaded' });
-
-      const buffer = await data.toBuffer();
+      let file: { filename: string; mimetype: string; buffer: Buffer } | undefined;
+      let rawPrefix: unknown = (request.query as { prefix?: unknown }).prefix;
+      let hasPrefixField = false;
+      for await (const part of request.parts()) {
+        if (part.type === 'file') {
+          if (file) return reply.status(400).send({ error: 'Only one file is supported' });
+          file = { filename: part.filename, mimetype: part.mimetype, buffer: await part.toBuffer() };
+        } else if (part.fieldname === 'prefix') {
+          if (hasPrefixField) return reply.status(400).send({ error: 'Invalid prefix', code: 'invalid_path' });
+          hasPrefixField = true;
+          rawPrefix = part.value;
+        }
+      }
+      if (!file) return reply.status(400).send({ error: 'No file uploaded' });
+      const buffer = file.buffer;
       if (buffer.length > settings.maxFileSize) {
         return reply.status(413).send({
           error: `File too large. Max ${Math.round(settings.maxFileSize / 1024 / 1024)}MB`,
         });
       }
-
+      if (rawPrefix !== undefined && typeof rawPrefix !== 'string') return reply.status(400).send({ error: 'Invalid prefix', code: 'invalid_path' });
+      const prefix = rawPrefix ?? '';
+      try { validateStoragePath(prefix, true, true); } catch { return reply.status(400).send({ error: 'Invalid prefix', code: 'invalid_path' }); }
       const timestamp = Date.now();
-      const safeName = sanitizeFileName(data.filename);
+      const safeName = sanitizeFileName(file.filename);
       const storedName = `${timestamp}_${safeName}`;
 
       try {
         await storageClient.ensureBucket(settings);
-        const file = await storageClient.upload(
-          settings, projectId, storedName, buffer, data.mimetype,
+        const storedFile = await storageClient.upload(
+          settings, projectId, storedName, buffer, file.mimetype, prefix,
         );
-        return { ok: true, file };
+        return { ok: true, file: storedFile };
       } catch (err: unknown) {
-        return reply.status(502).send({ error: (err as Error).message });
+        return reply.status(502).send({ error: (err as Error).message, code: classifyStorageError(err).code });
       }
     },
   );
@@ -103,11 +135,13 @@ const storageRoutes: FastifyPluginCallback<StorageRouteOptions> = (fastify, opts
         return reply.status(404).send({ error: 'Project not found' });
 
       const settings = storageSettingsRepo.get();
+      const filename = request.params.filename;
+      try { validateStoragePath(filename, false); } catch { return reply.status(400).send({ error: 'Invalid path', code: 'invalid_path' }); }
       try {
-        await storageClient.delete(settings, projectId, decodeURIComponent(request.params.filename));
+        await storageClient.delete(settings, projectId, filename);
         return { ok: true };
       } catch (err: unknown) {
-        return reply.status(502).send({ error: (err as Error).message });
+        return reply.status(502).send({ error: (err as Error).message, code: classifyStorageError(err).code });
       }
     },
   );
@@ -121,12 +155,13 @@ const storageRoutes: FastifyPluginCallback<StorageRouteOptions> = (fastify, opts
         return reply.status(404).send({ error: 'Project not found' });
 
       const settings = storageSettingsRepo.get();
-      const filename = decodeURIComponent(request.params.filename);
+      const filename = request.params.filename;
+      try { validateStoragePath(filename, false); } catch { return reply.status(400).send({ error: 'Invalid path', code: 'invalid_path' }); }
       try {
         const url = await storageClient.getPresignedUrl(settings, projectId, filename);
         return { url };
       } catch (err: unknown) {
-        return reply.status(502).send({ error: (err as Error).message });
+        return reply.status(502).send({ error: (err as Error).message, code: classifyStorageError(err).code });
       }
     },
   );
@@ -140,13 +175,14 @@ const storageRoutes: FastifyPluginCallback<StorageRouteOptions> = (fastify, opts
         return reply.status(404).send({ error: 'Project not found' });
 
       const settings = storageSettingsRepo.get();
-      const filename = decodeURIComponent(request.params.filename);
+      const filename = request.params.filename;
+      try { validateStoragePath(filename, false); } catch { return reply.status(400).send({ error: 'Invalid path', code: 'invalid_path' }); }
       try {
         const url = await storageClient.getPresignedUrl(settings, projectId, filename);
         const res = await fetch(url);
         if (!res.ok) {
           if (res.status === 404) return reply.status(404).send({ error: 'File not found' });
-          return reply.status(502).send({ error: 'Storage access denied' });
+          return reply.status(502).send({ error: 'Storage access denied', code: classifyStorageError({ $metadata: { httpStatusCode: res.status } }).code });
         }
         const contentType = res.headers.get('content-type') || 'application/octet-stream';
         reply.header('Content-Type', contentType);
@@ -160,7 +196,7 @@ const storageRoutes: FastifyPluginCallback<StorageRouteOptions> = (fastify, opts
         const buffer = Buffer.from(await res.arrayBuffer());
         return reply.send(buffer);
       } catch (err: unknown) {
-        return reply.status(502).send({ error: (err as Error).message });
+        return reply.status(502).send({ error: (err as Error).message, code: classifyStorageError(err).code });
       }
     },
   );

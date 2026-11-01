@@ -26,11 +26,12 @@ function buildApp(uploadAuth: RouteAuthRequirement, db: SqliteDatabase): {
   const taskTokenRepo = new SqliteTaskTokenRepository(db);
   const verifyUiToken = createTokenVerifier(UI_TOKEN);
 
-  const uploadSpy = vi.fn(async () => ({ name: 'stored.txt', size: 5, url: 'http://minio/stored.txt' }));
+  const uploadSpy = vi.fn(async (..._args: unknown[]) => ({ name: 'stored.txt', size: 5, url: 'http://minio/stored.txt' }));
   const opts: StorageRouteOptions = {
     projectRepo: { findById: vi.fn((id: number) => ({ id, name: 'P', slug: 'p' })) } as unknown as StorageRouteOptions['projectRepo'],
     storageSettingsRepo: { get: vi.fn(() => ({ endpoint: 'x', accessKey: 'a', secretKey: 'b', bucket: 'bkt', region: 'us-east-1', useSsl: false, maxFileSize: 10_000_000 })) } as unknown as StorageRouteOptions['storageSettingsRepo'],
     storageClient: { ensureBucket: vi.fn(async () => {}), upload: uploadSpy } as unknown as StorageRouteOptions['storageClient'],
+    storageStatusService: { getStatus: vi.fn(async () => ({ state: 'ready' })), createBucket: vi.fn(async () => {}) } as unknown as StorageRouteOptions['storageStatusService'],
     uploadAuth,
   };
 
@@ -77,6 +78,16 @@ describe('POST /api/projects/:id/storage/upload — task-principal scoping (Issu
     db.close();
   });
 
+  it('restricts bucket creation to operators', async () => {
+    const { app, taskTokenRepo } = buildApp(makeUploadAuth(() => 10), db);
+    const { token } = taskTokenRepo.issue(1, 1);
+    const response = await app.inject({ method: 'POST', url: '/api/projects/10/storage/bucket', headers: { authorization: `Bearer ${token}` } });
+    expect(response.statusCode).toBe(403);
+    const operator = await app.inject({ method: 'POST', url: '/api/projects/10/storage/bucket', headers: { authorization: `Bearer ${UI_TOKEN}` } });
+    expect(operator.statusCode).toBe(200);
+    await app.close();
+  });
+
   it("a task principal can upload into its OWN task's project", async () => {
     const uploadAuth = makeUploadAuth((taskId) => (taskId === 1 ? 10 : undefined));
     const { app, taskTokenRepo, uploadSpy } = buildApp(uploadAuth, db);
@@ -84,6 +95,7 @@ describe('POST /api/projects/:id/storage/upload — task-principal scoping (Issu
 
     const fd = new FormData();
     fd.set('file', new Blob([Buffer.from('hello')]), 'a.txt');
+    fd.set('prefix', 'folder/');
     const res = await app.inject({
       method: 'POST',
       url: '/api/projects/10/storage/upload',
@@ -93,6 +105,7 @@ describe('POST /api/projects/:id/storage/upload — task-principal scoping (Issu
 
     expect(res.statusCode).toBe(200);
     expect(uploadSpy).toHaveBeenCalled();
+    expect(uploadSpy.mock.calls[0][5]).toBe('folder/');
   });
 
   it("a task principal is rejected with 403 when uploading into ANOTHER project", async () => {

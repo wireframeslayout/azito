@@ -50,3 +50,38 @@ describe('MinioStorageClient.getPresignedUrl', () => {
     await expect(client.getPresignedUrl(settings, 1, 'img.png')).rejects.toThrow('signing failed');
   });
 });
+
+describe('MinioStorageClient.list', () => {
+  it('lists only root-level files so folder markers stay out of the flat list', async () => {
+    const client = new MinioStorageClient();
+    const send = vi.fn(async () => ({ Contents: [{ Key: 'projects/1/123_a.txt', Size: 1 }], CommonPrefixes: [{ Prefix: 'projects/1/folder/' }] }));
+    vi.spyOn(client as unknown as { getClient: () => unknown }, 'getClient').mockReturnValue({ send });
+    const files = await client.list(settings, 1);
+    expect((send.mock.calls[0] as unknown[])[0]).toMatchObject({ input: { Prefix: 'projects/1/', Delimiter: '/' } });
+    expect(files.map((f) => f.originalName)).toEqual(['a.txt']);
+  });
+});
+
+describe('MinioStorageClient.probe / ensureBucket', () => {
+  function clientWith(send: ReturnType<typeof vi.fn>): MinioStorageClient {
+    const client = new MinioStorageClient();
+    vi.spyOn(client as unknown as { getClient: () => unknown }, 'getClient').mockReturnValue({ send });
+    return client;
+  }
+  const commandName = (call: unknown[]): string => (call[0] as object).constructor.name;
+
+  it('probes with HeadBucket only and never creates a missing bucket', async () => {
+    const missing = Object.assign(new Error('missing'), { name: 'NotFound', $metadata: { httpStatusCode: 404 } });
+    const send = vi.fn().mockRejectedValueOnce(missing);
+    await expect(clientWith(send).probe(settings)).rejects.toBe(missing);
+    expect(send.mock.calls.map(commandName)).toEqual(['HeadBucketCommand']);
+    expect((send.mock.calls[0] as unknown[])[1]).toMatchObject({ abortSignal: expect.any(AbortSignal) });
+  });
+
+  it('does not create a bucket when HeadBucket fails for another reason', async () => {
+    const denied = Object.assign(new Error('denied'), { name: 'Forbidden', $metadata: { httpStatusCode: 403 } });
+    const send = vi.fn().mockRejectedValueOnce(denied);
+    await expect(clientWith(send).ensureBucket(settings)).rejects.toBe(denied);
+    expect(send.mock.calls.map(commandName)).toEqual(['HeadBucketCommand']);
+  });
+});

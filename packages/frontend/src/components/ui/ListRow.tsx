@@ -1,5 +1,6 @@
 import { Children, cloneElement, isValidElement, type CSSProperties, type ReactElement, type ReactNode } from 'react';
 import { useIsMobile } from '../../hooks/useIsMobile';
+import { Icon } from './Icon';
 
 interface ListRowGroupProps {
   children: ReactNode;
@@ -44,6 +45,9 @@ interface ListRowProps {
   accentColor?: string;
   size?: 'md' | 'sm';
   onClick?: () => void;
+  href?: string;
+  showChevron?: boolean;
+  disabled?: boolean;
   ariaLabel?: string;
   style?: CSSProperties;
 }
@@ -64,7 +68,7 @@ const rowInnerSmStyle: CSSProperties = {
   gap: 8,
 };
 
-export function ListRow({ icon, title, description, chips, rightActions, selected, accentColor, size = 'md', onClick, ariaLabel, style }: ListRowProps) {
+export function ListRow({ icon, title, description, chips, rightActions, selected, accentColor, size = 'md', onClick, href, showChevron, disabled, ariaLabel, style }: ListRowProps) {
   const isSm = size === 'sm';
   const isMobile = useIsMobile();
   const iconSize = isSm ? 24 : 30;
@@ -176,7 +180,8 @@ export function ListRow({ icon, title, description, chips, rightActions, selecte
           {rightActions}
         </div>
       )}
-      {onClick && (
+      {showChevron && <span aria-hidden="true" style={{ color: 'var(--text-dim)' }}><Icon name="chevron-right" size={14} /></span>}
+      {(onClick || href) && !showChevron && (
         <span
           className="list-row-arrow"
           aria-hidden="true"
@@ -190,19 +195,25 @@ export function ListRow({ icon, title, description, chips, rightActions, selecte
 
   return (
     <li style={style}>
-      {onClick ? (
+      {href ? (
+        <a href={href} target="_blank" rel="noopener noreferrer" className={className} aria-label={ariaLabel}
+          style={{ ...baseStyle, color: 'inherit', textDecoration: 'none' }}>
+          {content}
+        </a>
+      ) : onClick ? (
         <button
           type="button"
           className={className}
           aria-label={ariaLabel}
           onClick={onClick}
+          disabled={disabled}
           style={{
             ...baseStyle,
             border: 'none',
             font: 'inherit',
             color: 'inherit',
             textAlign: 'left',
-            cursor: 'pointer',
+            cursor: disabled ? 'not-allowed' : 'pointer',
           }}
         >
           {content}
