@@ -275,6 +275,14 @@
     "killPaneMessage": "ペイン \"{{name}}\" を終了しますか？"
   },
   "misaoService": {
+    "otherTask": "別の導入",
+    "unknownTask": "タスクの所有先が不明",
+    "otherTaskDetail": "AzitoMisao は別のフォルダーに属しています。引き継ぐと、そのフォルダーの misao はこのタスクから起動されなくなり、その導入のペインは使えなくなります。",
+    "otherTaskRunning": "別の導入の AzitoMisao は稼働中です。引き継ぐ前に停止してください。停止後、再確認してください。",
+    "unknownTaskDetail": "タスクの所有先を判定できません。操作する前に AzitoMisao のタスク定義を確認してください。",
+    "takeoverTitle": "AzitoMisao を引き継ぎますか？",
+    "takeoverMessage": "引き継ぐと、別の導入のフォルダーの misao はこのタスクから起動されなくなり、その導入のペインは使えなくなります。続けますか？",
+    "takeoverConfirm": "引き継いでインストール",
     "loading": "misao のサービスを確認中…",
     "loadFailed": "misao のサービス状態を取得できませんでした。",
     "service": "サービス",

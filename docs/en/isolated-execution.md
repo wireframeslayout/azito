@@ -518,6 +518,8 @@ including isolated ones. The decision, and why it does not weaken isolation:
   it as text; a prompt-injected agent can write misleading text into its own log, exactly as it can
   into its pane.
 
+The subagent endpoints also accept no paths: they identify conversations by parent session UUID and subagent ID.
+
 If you would rather not surface an isolated server's conversation in the hub UI, leave the window in
 Terminal mode; there is no per-server switch for this today.
 

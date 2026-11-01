@@ -3,6 +3,15 @@
 // 各 *TranscriptSource 実装（sources/ClaudeTranscriptSource.ts, sources/CodexTranscriptSource.ts）
 // に閉じ込め、routes/フロントはこのスキーマだけを見る。
 
+export interface SubagentSummary {
+  id: string;
+  name: string;
+  description: string;
+  agentType: string;
+  model: string | null;
+  status: 'finished' | 'unknown';
+}
+
 export interface SessionSummary {
   sessionId: string;
   /** このセッションを供給したソースの agentType（'claude' | 'codex' など）。 */
@@ -146,6 +155,8 @@ export interface ListSessionsOptions {
  */
 export interface TranscriptReader {
   readonly agentType: string;
+  listSubagents?(sessionId: string): SubagentSummary[] | null;
+  readSubagent?(sessionId: string, agentId: string, offset?: number, before?: number, budget?: ReadBudget): ReadSessionResult | ReadSessionBeforeResult | null;
   listSessions(limit?: number, options?: ListSessionsOptions): SessionSummary[];
   readSession(sessionId: string, offset?: number): ReadSessionResult | null;
   /**
@@ -233,6 +244,8 @@ export interface SessionTailState {
  */
 export interface TranscriptSource {
   readonly agentType: string;
+  listSubagents?(sessionId: string): Promise<SubagentSummary[] | null>;
+  readSubagent?(sessionId: string, agentId: string, offset?: number, before?: number): Promise<ReadSessionResult | ReadSessionBeforeResult | null>;
   listSessions(limit?: number, options?: ListSessionsOptions): Promise<SessionSummary[]>;
   readSession(sessionId: string, offset?: number): Promise<ReadSessionResult | null>;
   readSessionBefore(sessionId: string, before: number): Promise<ReadSessionBeforeResult | null>;

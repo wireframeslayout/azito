@@ -1,3 +1,6 @@
+import * as path from 'path';
+import { resolveRealPath } from '../../../shared/os/realPath';
+import { taskMisaoRoot } from '../../../shared/os/taskScheduler/taskXmlRead';
 import { misaoTaskVersion } from '../../../shared/os/taskScheduler/misaoTaskIdentity';
 import { soleExecAction } from '../../../shared/os/taskScheduler/taskXmlRead';
 import { createHash } from 'crypto';
@@ -64,7 +67,7 @@ export function createLocalMisaoWindows(hostEnv: LocalWindowsHostEnv, paths: Mis
     },
   };
   return {
-    installer: new MisaoWindowsInstaller({ taskName: MISAO_SERVICE.windowsTaskName, refuseTaskOfAnotherRoot: true }),
+    installer: new MisaoWindowsInstaller({ taskName: MISAO_SERVICE.windowsTaskName }),
     target,
     tasks: new SchtasksClient(rawRunnerOf((command) => runCommandSpec(command, { ...runHost, rawOutput: true })), hostEnv),
     taskName: MISAO_SERVICE.windowsTaskName,
@@ -78,8 +81,18 @@ export async function misaoWindowsTaskExists(hostEnv: Pick<HostEnv, 'platform' |
   return (await tasks.query(MISAO_SERVICE.windowsTaskName)).exists;
 }
 
-/** Recognise only a task whose complete action is generated for this installation. */
-export function taskStartsMisaoOf(xml: string, root: string, systemRoot: string, pipe: string, taskName: string): boolean {
+export { taskMisaoRoot };
+
+/** Compare the task's data directory using the host's real paths. */
+export function taskStartsMisaoOf(xml: string, root: string): boolean {
+  const taskRoot = taskMisaoRoot(xml);
+  if (taskRoot === undefined) return false;
+  const same = (a: string, b: string): boolean => path.win32.normalize(a).toLowerCase() === path.win32.normalize(b).toLowerCase();
+  return same(resolveRealPath(taskRoot), resolveRealPath(root));
+}
+
+/** Recognise an unmodified generated task before performing a recovery. */
+export function taskIsManagedMisao(xml: string, root: string, systemRoot: string, pipe: string, taskName: string): boolean {
   const action = soleExecAction(xml);
   return action !== undefined && misaoTaskVersion(action, systemRoot, root, pipe, taskName) !== undefined;
 }

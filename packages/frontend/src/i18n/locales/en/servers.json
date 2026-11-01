@@ -275,6 +275,14 @@
     "killPaneMessage": "Kill pane \"{{name}}\"?"
   },
   "misaoService": {
+    "otherTask": "Another installation",
+    "unknownTask": "Task owner unknown",
+    "otherTaskDetail": "AzitoMisao belongs to another folder. Taking it over prevents that task from starting the other installation's misao, and its panes will no longer be available.",
+    "otherTaskRunning": "The other installation's AzitoMisao task is running. Stop it before taking it over, then check again.",
+    "unknownTaskDetail": "The task owner could not be determined. Check the AzitoMisao task definition before proceeding.",
+    "takeoverTitle": "Take over AzitoMisao?",
+    "takeoverMessage": "Taking over prevents this task from starting the other installation's misao, and its panes will no longer be available. Continue?",
+    "takeoverConfirm": "Take over and install",
     "loading": "Checking the misao service…",
     "loadFailed": "Could not read the misao service state.",
     "service": "Service",

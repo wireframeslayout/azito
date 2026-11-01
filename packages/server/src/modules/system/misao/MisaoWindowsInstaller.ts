@@ -104,7 +104,7 @@ export class MisaoWindowsInstaller {
     const live = status.socketPresent;
     // The pipe probe can miss a daemon that is just starting (the logon task is on its way up): the task's own state says so.
     if (!live && (await this.taskIsRunning(session))) {
-      throw new MisaoServiceError('daemon_not_ready', `The task "${this.options.taskName}" is running but ${session.pipe} does not accept connections yet. Nothing was changed; try again in a moment.`);
+      throw new MisaoServiceError('daemon_not_ready', `The task "${this.options.taskName}" is running but ${session.pipe} does not accept connections. The task may belong to another installation or may still be starting. Nothing was changed. Check the task definition to confirm which folder it uses.`);
     }
     if (live && !status.installedVersion) {
       throw new MisaoServiceError('custom_socket', `A misao daemon is already listening on ${session.pipe} that AZITO did not install. It is used as it is; AZITO will not put a second one beside it.`);
@@ -154,7 +154,7 @@ export class MisaoWindowsInstaller {
     }
     // The pipe probe can miss a daemon that is just starting: stopping or restarting around it could not be undone, so nothing is touched.
     if (!live && (await this.taskIsRunning(session))) {
-      throw new MisaoServiceError('daemon_not_ready', `The task "${this.options.taskName}" is running but ${session.pipe} does not accept connections yet. Nothing was changed; try again in a moment.`);
+      throw new MisaoServiceError('daemon_not_ready', `The task "${this.options.taskName}" is running but ${session.pipe} does not accept connections. The task may belong to another installation or may still be starting. Nothing was changed. Check the task definition to confirm which folder it uses.`);
     }
 
     // The new release is complete on disk and its task definition is built before anything is stopped: a damaged transfer or a value the task cannot hold leaves the daemon running.

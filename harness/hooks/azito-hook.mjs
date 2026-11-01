@@ -49,7 +49,7 @@ export function parseArgs(argv) {
     }
   }
   const [kind, event] = positional;
-  if (!['activity', 'interaction', 'question', 'session', 'notify'].includes(kind)) return null;
+  if (!['activity', 'interaction', 'question', 'session', 'subagent', 'notify'].includes(kind)) return null;
   return { kind, event: event ?? '', prefix };
 }
 
@@ -214,17 +214,17 @@ export async function planHook({ args, env, homeDir, stdinText, readFile = (p) =
   if (!token || !serverName) return null;
 
   let sessionId = '';
-  if (kind === 'activity' || kind === 'session') {
+  if (kind === 'activity' || kind === 'session' || kind === 'subagent') {
     const found = extractStringField(stdinText, 'session_id');
     sessionId = SESSION_ID.test(found) ? found : '';
-    if (kind === 'session' && !sessionId) return null;
+    if ((kind === 'session' || kind === 'subagent') && !sessionId) return null;
   }
   if (kind === 'interaction' && IGNORED_NOTIFICATION_TYPES.has(extractStringField(stdinText, 'notification_type'))) return null;
 
   const identity = await resolveIdentity({ env, serverName, tmux });
   if (!identity) return null;
 
-  const hookEvent = kind === 'activity' ? event : kind === 'session' ? 'session' : 'open';
+  const hookEvent = kind === 'activity' ? event : kind === 'session' ? 'session' : kind === 'subagent' ? 'subagent' : 'open';
   let body = buildBody({ serverName, identity, event: hookEvent, sessionId });
   if (kind === 'question') {
     const content = buildQuestionContent(stdinText);
@@ -234,7 +234,7 @@ export async function planHook({ args, env, homeDir, stdinText, readFile = (p) =
       if (Array.from(candidate).length <= MAX_QUESTION_PAYLOAD_CHARS) body = candidate;
     }
   }
-  const route = kind === 'activity' || kind === 'session' ? 'agent-activity' : 'agent-interaction';
+  const route = kind === 'subagent' ? 'agent-subagent' : kind === 'activity' || kind === 'session' ? 'agent-activity' : 'agent-interaction';
   return { url: `${url}/api/webhooks/${route}`, token, body, timeoutMs: DELIVER_TIMEOUT_MS };
 }
 

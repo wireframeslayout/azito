@@ -89,6 +89,20 @@ describe('MisaoServiceService on Windows (the hub\'s own misao)', () => {
     windows,
   });
 
+  it('distinguishes task ownership and propagates definition errors', async () => {
+    expect(await service().status()).toMatchObject({ windowsTaskOwner: 'none', serviceInstalled: false });
+    taskExists = true;
+    expect(await service().status()).toMatchObject({ windowsTaskOwner: 'hub', serviceInstalled: true });
+    exportedXml = taskXml(path.join(dir, 'other'));
+    expect(await service().status()).toMatchObject({ windowsTaskOwner: 'other', windowsTaskRunning: false, serviceInstalled: false, updateAvailable: false, needsHubRestart: false });
+    windows.tasks.query = vi.fn().mockResolvedValue({ exists: true, running: true });
+    expect(await service().status()).toMatchObject({ windowsTaskOwner: 'other', windowsTaskRunning: true, serviceInstalled: false, updateAvailable: false });
+    exportedXml = '<Task/>';
+    expect(await service().status()).toMatchObject({ windowsTaskOwner: 'unknown', serviceInstalled: false });
+    windows.tasks.exportXml = vi.fn().mockRejectedValue(new Error('export failed'));
+    await expect(service().status()).rejects.toThrow('export failed');
+  });
+
   it('installs through the agent installer aimed at this machine, then points the hub at the pipe', async () => {
     taskExists = true;
     fs.writeFileSync(paths.current, '0.3.0\r\n');
@@ -117,20 +131,31 @@ describe('MisaoServiceService on Windows (the hub\'s own misao)', () => {
     expect(readEnvValue(paths.hubEnvFile, 'MISAO_SOCKET')).toBe(PIPE);
   });
 
-  it('refuses a task that starts a misao from another folder, even when replacing the socket setting', async () => {
+  it('allows explicit replacement of a task from another folder', async () => {
     taskExists = true;
     exportedXml = taskXml('D:\\other\\.azito\\misao');
-    await expect(service().install()).rejects.toMatchObject({ code: 'custom_socket' });
+    await expect(service().install()).rejects.toMatchObject({ code: 'custom_socket', message: `The task "AzitoMisao" is registered for a misao in another folder, not ${paths.root}. Installing here would take it over; run \`azito misao install --replace-socket\` to do that on purpose.` });
     expect(install).not.toHaveBeenCalled();
-    await expect(service().install({ replaceSocketSetting: true })).rejects.toMatchObject({ code: 'custom_socket' });
+    await service().install({ replaceSocketSetting: true });
+    expect(install).toHaveBeenCalledTimes(1);
+  });
+
+  it('reports an unrecognised task definition without claiming it is another folder', async () => {
+    taskExists = true;
+    exportedXml = '<Task/>';
+    await expect(service().install()).rejects.toMatchObject({
+      code: 'custom_socket',
+      message: 'The task "AzitoMisao" has a definition whose misao folder cannot be determined. Installing here would take it over; run `azito misao install --replace-socket` to do that on purpose.',
+    });
+
     expect(install).not.toHaveBeenCalled();
   });
 
-  it('refuses a task written for a different folder spelling', async () => {
+  it('recognises a task written with different case', async () => {
     taskExists = true;
     exportedXml = taskXml(paths.root.toUpperCase());
-    await expect(service().install()).rejects.toMatchObject({ code: 'custom_socket' });
-    expect(install).not.toHaveBeenCalled();
+    await service().install();
+    expect(install).toHaveBeenCalled();
   });
 
   it('refuses to start a task owned by another account or when ownership cannot be read', async () => {

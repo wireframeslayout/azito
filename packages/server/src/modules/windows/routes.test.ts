@@ -85,9 +85,11 @@ describe('POST /api/windows/:id/launch-agent', () => {
   let server: ServerConfig;
   let sendKeys: ReturnType<typeof vi.fn>;
   let updateByWindowFn: ReturnType<typeof vi.fn<IWindowRepository['updateAgentSessionIdByWindow']>>;
+  let windowUpdate: ReturnType<typeof vi.fn<IWindowRepository['update']>>;
 
   beforeEach(async () => {
     window = makeWindow();
+    windowUpdate = vi.fn<IWindowRepository['update']>();
     server = makeServer();
     sendKeys = vi.fn().mockResolvedValue(undefined);
     updateByWindowFn = vi.fn<IWindowRepository['updateAgentSessionIdByWindow']>();
@@ -95,26 +97,32 @@ describe('POST /api/windows/:id/launch-agent', () => {
     const windowRepo: Partial<IWindowRepository> = {
       findById: (id: number) => (id === window.id ? window : undefined),
       updateAgentSessionIdByWindow: updateByWindowFn,
+      findByServerAndTarget: vi.fn(() => undefined), findByServerAndRef: vi.fn(() => undefined),
+      add: vi.fn(() => 2), update: windowUpdate,
     };
     const serverRepo: Partial<IServerRepository> = {
       findByName: (name: string) => (name === server.name ? server : null),
     };
-    const tmux: Partial<TmuxClient> = {
+    const tmux = {
       sendKeysToHandle: sendKeys as unknown as TmuxClient['sendKeysToHandle'],
       resolvePane: vi.fn().mockResolvedValue('%0') as unknown as TmuxClient['resolvePane'],
-    };
+      listWorkspaces: vi.fn(async () => [{ name: 's', windows: [] }]),
+      renameWindowByRef: vi.fn(async () => ({ code: 0, stdout: '', stderr: '' })),
+      splitPaneByHandle: vi.fn(async () => ({ result: { code: 0, stdout: '', stderr: '' } })),
+      setPaneTitle: vi.fn(async () => ({ code: 0, stdout: '', stderr: '' })),
+    } as unknown as Partial<TmuxClient>;
 
     app = Fastify();
     await app.register(windowsRoutes, {
       harnessPrefix: '',
       windowRepo: windowRepo as IWindowRepository,
-      projectRepo: {} as IProjectRepository,
-      taskRepo: {} as ITaskRepository,
+      projectRepo: { findById: () => ({ id: 1 }) } as unknown as IProjectRepository,
+      taskRepo: { findById: () => ({ id: 1 }) } as unknown as ITaskRepository,
       tmux: tmux as TmuxClient,
       muxDriverRegistry: { resolve: () => tmux } as any,
       serverRepo: serverRepo as IServerRepository,
       transportFactory: { hostProfileFor: () => null },
-      respawnService: {} as WindowRespawnService,
+      respawnService: { respawn: vi.fn(async () => ({ tmuxTarget: 'proj:win1' })) } as unknown as WindowRespawnService,
       sleepService: { canSleep: vi.fn(() => false), sleep: vi.fn() } as unknown as WindowSleepService,
       sessionStrategyFactory: {
         create: () => ({
@@ -133,6 +141,87 @@ describe('POST /api/windows/:id/launch-agent', () => {
       uiToken: 'test-token', serverIsolationMutex: new KeyedMutex(), buildSecondaryWindowEnv: () => ({}),
     });
     await app.ready();
+  });
+
+  it.each([
+    ['POST', '/api/projects/1/windows', ['server_name', 'tmux_target', 'ref', 'worker_type', 'worker_model', 'working_directory', 'agent_session_id', 'label', 'window_type', 'launch_command']],
+    ['POST', '/api/projects/1/windows/session', ['server_name', 'session', 'kind']],
+    ['POST', '/api/tasks/1/windows', ['server_name', 'tmux_target', 'ref', 'label', 'window_type', 'worker_type', 'worker_model', 'working_directory']],
+    ['PUT', '/api/windows/1', ['label', 'agent_session_id', 'launch_command', 'worker_model', 'working_directory', 'window_type', 'worker_type']],
+    ['POST', '/api/windows/1/launch-agent', ['command', 'force']],
+    ['POST', '/api/windows/1/respawn', ['force']],
+    ['PUT', '/api/windows/1/rename', ['name']],
+    ['POST', '/api/windows/1/panes', ['ordinal', 'direction']],
+    ['POST', '/api/windows/1/panes/1/send-keys', ['keys']],
+    ['PUT', '/api/windows/1/panes/1/rename', ['name']],
+  ] as const)('%s %s rejects unknown fields', async (method, url, accepted) => {
+    const res = await app.inject({ method, url, payload: { extra: true } });
+    expect(res.statusCode).toBe(400);
+    expect(res.json()).toEqual({ error: 'unknown_fields', unknown: ['extra'], accepted });
+  });
+
+  it('keeps the missing keys error and rejects a wrong keys type', async () => {
+    const url = '/api/windows/1/panes/1/send-keys';
+    const missing = await app.inject({ method: 'POST', url, payload: {} });
+    expect(missing.json()).toEqual({ error: 'keys array required' });
+    const invalid = await app.inject({ method: 'POST', url, payload: { keys: 'Enter' } });
+    expect(invalid.json()).toMatchObject({ error: 'invalid_body' });
+  });
+
+  it.each([
+    ['POST', '/api/projects/1/windows', { server_name: 'other', tmux_target: 's:w' }],
+    ['POST', '/api/projects/1/windows/session', { server_name: 'local-server', session: 's' }],
+    ['POST', '/api/tasks/1/windows', { server_name: 'other', tmux_target: 's:w' }],
+    ['PUT', '/api/windows/1', { label: null }],
+    ['POST', '/api/windows/1/launch-agent', { command: 'claude' }],
+    ['POST', '/api/windows/1/respawn', { force: true }],
+    ['PUT', '/api/windows/1/rename', { name: 'new' }],
+    ['POST', '/api/windows/1/panes', { ordinal: 1, direction: 'v' }],
+    ['POST', '/api/windows/1/panes/1/send-keys', { keys: ['Enter'] }],
+    ['PUT', '/api/windows/1/panes/1/rename', { name: 'new' }],
+  ] as const)('%s %s accepts its body', async (method, url, payload) => {
+    const res = await app.inject({ method, url, payload });
+    expect(res.statusCode, res.body).toBe(200);
+  });
+
+  it.each([
+    [{}, {}],
+    [{ label: null }, { label: null, labelSource: 'auto' }],
+    [{ label: ' new ' }, { label: 'new', labelSource: 'user' }],
+    [{ worker_model: null }, { workerModel: null }],
+  ])('PUT /api/windows/:id keeps an omitted field apart from a null one (%j)', async (payload, expected) => {
+    const res = await app.inject({ method: 'PUT', url: '/api/windows/1', payload });
+    expect(res.statusCode, res.body).toBe(200);
+    expect(windowUpdate).toHaveBeenCalledWith(1, expected);
+  });
+
+  it('reads an omitted or null body as an empty one and rejects an array', async () => {
+    const omitted = await app.inject({ method: 'POST', url: '/api/windows/1/respawn' });
+    expect(omitted.statusCode, omitted.body).toBe(200);
+    const nullBody = await app.inject({ method: 'POST', url: '/api/windows/1/launch-agent', headers: { 'content-type': 'application/json' }, payload: 'null' });
+    expect(nullBody.statusCode).toBe(400);
+    expect(nullBody.json()).toEqual({ error: 'command required' });
+    const array = await app.inject({ method: 'PUT', url: '/api/windows/1/rename', payload: ['new'] });
+    expect(array.statusCode).toBe(400);
+    expect(array.json()).toMatchObject({ error: 'invalid_body' });
+    expect(windowUpdate).not.toHaveBeenCalled();
+  });
+
+  it('keeps the existing value errors behind the strict parse', async () => {
+    const windowType = await app.inject({ method: 'PUT', url: '/api/windows/1', payload: { window_type: 'other' } });
+    expect(windowType.json()).toEqual({ error: 'invalid window_type: other' });
+    const kind = await app.inject({ method: 'POST', url: '/api/projects/1/windows/session', payload: { server_name: 'local-server', session: 's', kind: 'herdr' } });
+    expect(kind.json()).toEqual({ error: 'Invalid kind' });
+    const unknownAndInvalid = await app.inject({ method: 'PUT', url: '/api/windows/1/rename', payload: { name: 1, title: 'x' } });
+    expect(unknownAndInvalid.json()).toEqual({ error: 'unknown_fields', unknown: ['title'], accepted: ['name'] });
+  });
+
+  it('rejects unknown and invalid launch fields before sending keys', async () => {
+    const unknown = await app.inject({ method: 'POST', url: `/api/windows/${window.id}/launch-agent`, payload: { command: 1, extra: true } });
+    expect(unknown.json()).toEqual({ error: 'unknown_fields', unknown: ['extra'], accepted: ['command', 'force'] });
+    const invalid = await app.inject({ method: 'POST', url: `/api/windows/${window.id}/launch-agent`, payload: { command: 1 } });
+    expect(invalid.json()).toMatchObject({ error: 'invalid_body', issues: [{ path: 'command' }] });
+    expect(sendKeys).not.toHaveBeenCalled();
   });
 
   it('wraps the command with tui-supervisor for an agent window on a local server', async () => {

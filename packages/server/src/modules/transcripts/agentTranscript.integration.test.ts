@@ -87,6 +87,10 @@ describe('chat API over a real agent process', () => {
     fs.mkdirSync(projectDir, { recursive: true });
     sessionFile = path.join(projectDir, `${SID_LIVE}.jsonl`);
     fs.writeFileSync(sessionFile, userLine('u1', 'first message on the agent host'));
+    const subagentsDir = path.join(projectDir, SID_LIVE, 'subagents');
+    fs.mkdirSync(subagentsDir, { recursive: true });
+    fs.writeFileSync(path.join(subagentsDir, 'agent-a123.meta.json'), JSON.stringify({ agentType: 'Explore', description: 'Remote child', finished: true }));
+    fs.writeFileSync(path.join(subagentsDir, 'agent-a123.jsonl'), JSON.stringify({ type: 'user', uuid: 'child', isSidechain: true, message: { role: 'user', content: 'remote child message' } }) + '\n');
     const stale = path.join(projectDir, `${SID_STALE}.jsonl`);
     fs.writeFileSync(stale, userLine('old1', 'an older conversation', '/work/elsewhere'));
     const hourAgo = (Date.now() - 60 * 60 * 1000) / 1000;
@@ -164,6 +168,15 @@ describe('chat API over a real agent process', () => {
       if (child && child.exitCode === null) child.kill('SIGTERM');
     }
     fs.rmSync(tmp, { recursive: true, force: true });
+  });
+
+  it('reads the current parent’s subagents through the agent', async () => {
+    const list = await app.inject({ method: 'GET', url: '/api/transcripts/windows/10/subagents' });
+    expect(list.statusCode).toBe(200);
+    expect(list.json()).toMatchObject({ sessionId: SID_LIVE, subagents: [{ id: 'a123', description: 'Remote child' }] });
+    const entries = await app.inject({ method: 'GET', url: `/api/transcripts/windows/10/subagents/a123/entries?sessionId=${SID_LIVE}` });
+    expect(entries.statusCode).toBe(200);
+    expect(entries.json().entries[0].blocks[0].text).toBe('remote child message');
   });
 
   it('rejects requests to the agent that carry no (or the wrong) token', async () => {

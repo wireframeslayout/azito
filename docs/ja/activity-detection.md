@@ -178,7 +178,7 @@ env ファイルの**別ハブのトークン**を注入された URL へ送っ�
 
 解決後、`AZITO_WEBHOOK_TOKEN` または `AZITO_SERVER_NAME` が空なら hook は何もせず exit 0 します。
 
-対象スクリプト: `harness/hooks/azito-activity.sh`、`azito-interaction.sh`、`azito-question.sh`、`azito-session.sh`。
+対象スクリプト: `harness/hooks/azito-activity.sh`、`azito-interaction.sh`、`azito-question.sh`、`azito-session.sh`、`azito-subagent.sh`。
 
 ### セッション ID の追従（SessionStart フック / `sessionId`）
 
@@ -584,3 +584,14 @@ tmux のサーバーでは以下は何も生成されず、これまでの tmux 
   無視され、tmux のフィールドが必須のまま。
 - **診断。** `GET /api/debug/activity` の行に `mux: { status, decidedBy?, at }` が載り、パネルでは
   `tier0 misao` と表示される。
+
+## 14. サブエージェントの会話
+
+Claude Code のチャットでは、窓の現在の親セッションに属するサブエージェントの一覧から会話を選べます。
+子の会話は読み取り専用です。指示を送るには「親の会話」に戻ってください。選択は画面内だけで保持され、
+画面を離れた後には復元されません。メタデータから状態を判定できない場合は「不明」と表示します。
+
+ハーネスの `SubagentStart` / `SubagentStop` フックは、認証付き通知で一覧の再取得を促します。
+状態は通知ではなく会話ファイルとメタデータに基づきます。フックが未導入でも定期的に再取得されますが、
+ファイルへの反映が遅れる場合があります。エージェントサーバーでは、この機能に未対応の旧 agent は
+`agent_outdated` と表示されるため、agent を更新してください。

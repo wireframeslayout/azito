@@ -166,7 +166,7 @@ npx -w packages/server tsx scripts/build-hub.ts --version v0.3.0 --platform linu
   On a **Windows hub** (#380 B3b) `MisaoServiceService` hands install / update to the agent's `MisaoWindowsInstaller` aimed at the local machine
   (`misao/misaoLocalWindows.ts`: in-process commands, `LocalFileOps`, pipe probe and `stageMisaoReleaseFile`), so there is one misao per user:
   `<prefix>\misao\<version>\misao.exe`, the `current` file, the task `AzitoMisao` and the pipe of that folder, shared with a Windows agent on the same
-  machine (a task that is not exactly the one this install writes for its folder and account is refused; `--replace-socket` does not override that). `resolveMisaoPaths(prefix, windowsUser)` takes the
+  machine (another folder or an unrecognised task is refused unless install explicitly uses `--replace-socket`; a running task is not switched). `resolveMisaoPaths(prefix, windowsUser)` takes the
   Windows branch (drive path; spaces, parentheses, `&`, `%`, `!` allowed: such a path reaches the task through a PowerShell launcher script with the paths in environment variables, `conhost.exe` re-reads a command line with them wrongly; `"` and line breaks refused). The pipe name is made from the folder's real spelling: the host that owns the folder resolves it once at its entry point with `shared/os/realPath.ts` `resolveRealPath` (nearest existing ancestor via `realpath.native` + the missing part unchanged; the hub for its prefix, the agent for its home, reported as `misaoRoot`), and `windowsMisaoPipe`, the task XML and the ownership check (`taskStartsMisaoOf` / `misaoTaskVersion`, which rebuild the whole action — the plain or launcher form of before, or the retrying launcher — and compare it, plus the task's principal) only take strings. update / start refuse a task of another folder like install; the pipe is written to `hub\.env` as
   `MISAO_SOCKET` after the daemon answers, and `run.ps1` loads it. `install.ps1` runs `azito misao install --prefix` after the hub's task (skipped with
   `-NoService`; a failure is a warning). `hasMisaoToRelyOn` takes `windowsTaskDefined` (the Task Scheduler is asked in `main.ts`). No unit template is
@@ -435,6 +435,7 @@ packages/
 - Exposed via `GET /api/usage`; rendered in the header `UsageDropdown`
 
 ### Webhooks
+- `POST /api/webhooks/agent-subagent` receives authenticated subagent refresh signals for the current parent session.
 - `POST /api/webhooks/agent-done` receives agent completion notifications (validated request body); shared `AZITO_WEBHOOK_TOKEN` required
 - `POST /api/webhooks/agent-activity` receives event-driven agent activity signals (`{serverName, sessionName, windowIndex, windowName, paneIndex, event: 'start'|'stop'}`)
   from the Claude Code `UserPromptSubmit`/`Stop` hooks (`harness/hooks/azito-activity.sh`, wired by `setup.sh --server-name`); same

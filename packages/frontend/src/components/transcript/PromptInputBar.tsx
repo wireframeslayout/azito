@@ -21,6 +21,7 @@ const DRAFT_SAVE_DEBOUNCE_MS = 300;
 const RESTORED_HINT_MS = 1500;
 
 interface PromptInputBarProps {
+  readOnlyReason?: string;
   windowId: number;
   /** 送信先ペイン。resolve-window が固定で解決した値（ユーザー選択なし、Issue #69 仕様調整3で
    * ペインセレクトを撤去した）。 */
@@ -65,7 +66,7 @@ interface PromptInputBarProps {
  * 送信内容自体は既存の JSONL ポーリングで会話に反映される（オプティミスティック表示はしない）。
  * textarea＋履歴🕘＋送信↑ の1行構成（SP実機の高さ節約のため）。
  */
-export default function PromptInputBar({ windowId, paneId, draftKey, agentDetected, slashCommandsVisibleInLog, agentType, contextHistory, onSent, viewMode, onChangeViewMode }: PromptInputBarProps) {
+export default function PromptInputBar({ readOnlyReason, windowId, paneId, draftKey, agentDetected, slashCommandsVisibleInLog, agentType, contextHistory, onSent, viewMode, onChangeViewMode }: PromptInputBarProps) {
   const { t } = useTranslation('transcript');
   const [style, setStyle] = useTranscriptStyle();
   const [historyOpen, setHistoryOpen] = useState(false);
@@ -161,7 +162,7 @@ export default function PromptInputBar({ windowId, paneId, draftKey, agentDetect
   // 展開済みの output テキストを直接送るため、text state 経由にしない）。
   const sendText = useCallback(async (value: string) => {
     const trimmed = value.trim();
-    if (!trimmed || sending) return;
+    if (!trimmed || sending || readOnlyReason) return;
 
     setSending(true);
     setSendError(null);
@@ -187,7 +188,7 @@ export default function PromptInputBar({ windowId, paneId, draftKey, agentDetect
     } finally {
       setSending(false);
     }
-  }, [sending, windowId, paneId, draftKey, onSent, t]);
+  }, [sending, readOnlyReason, windowId, paneId, draftKey, onSent, t]);
 
   const handleSend = useCallback(() => sendText(text), [sendText, text]);
 
@@ -277,7 +278,7 @@ export default function PromptInputBar({ windowId, paneId, draftKey, agentDetect
     }
   };
 
-  const canSend = text.trim().length > 0 && !sending;
+  const canSend = text.trim().length > 0 && !sending && !readOnlyReason;
   // 「/」誘導ヒント（実装C、Issue #338 followup）: 送信はブロックしない非ブロッキング注記。
   // slashCommandsVisibleInLog === false（例: codex）のときのみ、入力が「/」で始まる間だけ表示する。
   // 定義済みコマンドパレットが表示されている間はパレットを優先し、ヒントは出さない
@@ -297,7 +298,7 @@ export default function PromptInputBar({ windowId, paneId, draftKey, agentDetect
     >
       {/* 設定駆動コマンドパレット（Issue #338 フェーズC）。「/」入力かつ定義済みコマンドに前方一致
           するとき、入力欄上部にポップオーバー表示する（浮遊UIのため --bg-elevated 必須）。 */}
-      {paletteStage !== 'closed' && (
+      {!readOnlyReason && paletteStage !== 'closed' && (
         <CommandPalette
           stage={paletteStage}
           commands={paletteCommands}
@@ -314,7 +315,7 @@ export default function PromptInputBar({ windowId, paneId, draftKey, agentDetect
       )}
 
       {/* 復元注記はレイアウト幅に影響させないよう、バー上に絶対配置の1.5秒オーバーレイとして表示する（F2/SP狭幅対策）。 */}
-      {showRestoredHint && (
+      {!readOnlyReason && showRestoredHint && (
         <div
           role="status"
           style={{
@@ -351,7 +352,7 @@ export default function PromptInputBar({ windowId, paneId, draftKey, agentDetect
 
       {/* フェイルセーフ注記（Issue #69 仕様調整3）: pane は解決できているがエージェントらしき
           コマンドが動いていない場合の注意書き。送信自体はブロックしない。 */}
-      {!agentDetected && (
+      {!readOnlyReason && !agentDetected && (
         <div
           role="note"
           style={{
@@ -375,7 +376,7 @@ export default function PromptInputBar({ windowId, paneId, draftKey, agentDetect
 
       {/* 「/」誘導ヒント（実装C）: セッションログにローカルコマンドが反映されないエージェント
           （現状 codex）向け。既存トークンのみ使用、警告色・左ボーダーは使わない（AI slop 回避）。 */}
-      {showSlashCommandHint && (
+      {!readOnlyReason && showSlashCommandHint && (
         <div
           role="note"
           style={{
@@ -389,6 +390,7 @@ export default function PromptInputBar({ windowId, paneId, draftKey, agentDetect
         </div>
       )}
 
+      {readOnlyReason && <div role="note" style={{ color: 'var(--text-dim)', fontSize: 'var(--font-xs)', marginBottom: 'var(--space-1)' }}>{readOnlyReason}</div>}
       <div style={{ display: 'flex', gap: 8, alignItems: 'flex-end' }}>
         <textarea
           ref={textareaRef}
@@ -404,7 +406,7 @@ export default function PromptInputBar({ windowId, paneId, draftKey, agentDetect
           }}
           onKeyDown={handleKeyDown}
           rows={1}
-          disabled={sending}
+          disabled={sending || !!readOnlyReason}
           placeholder={t('promptBar.placeholder')}
           aria-label={t('promptBar.placeholder')}
           style={{
@@ -438,6 +440,7 @@ export default function PromptInputBar({ windowId, paneId, draftKey, agentDetect
           <button
             type="button"
             onClick={() => setHistoryOpen((o) => !o)}
+            disabled={!!readOnlyReason}
             aria-haspopup="menu"
             aria-expanded={historyOpen}
             aria-label={t('promptBar.history')}
@@ -457,7 +460,7 @@ export default function PromptInputBar({ windowId, paneId, draftKey, agentDetect
           >
             <Icon name="history" size={16} />
           </button>
-          {historyOpen && (
+          {historyOpen && !readOnlyReason && (
             <HistoryPopover entries={activeHistory()} onSelect={insertFromHistory} onClose={() => setHistoryOpen(false)} />
           )}
         </div>

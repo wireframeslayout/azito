@@ -52,3 +52,24 @@ export function taskHasUserId(xml: string, userId: string): boolean {
   const users = [...matches[0]![1]!.matchAll(/<UserId>([^<]+)<\/UserId>/g)];
   return users.length === 1 && unescapeTaskXml(users[0]![1]!).toLowerCase() === userId.toLowerCase();
 }
+
+/**
+ * The folder a misao task starts the daemon in (its `--data` folder), read from the task definition: from the launcher script
+ * (`AZITO_MISAO_ROOT`, a PowerShell literal where `'` is doubled) or from the plain command line (`--data "<root>"`). Undefined when
+ * the definition has neither (not a misao task this code wrote).
+ */
+export function taskMisaoRoot(xml: string): string | undefined {
+  const action = soleExecAction(xml);
+  return action ? misaoRootOfCommandLine(action.argumentsLine) : undefined;
+}
+
+/** {@link taskMisaoRoot} for text that is already unescaped (the `<Arguments>` lines of the task's actions, from {@link taskExecActions}). */
+export function misaoRootOfCommandLine(decoded: string): string | undefined {
+  const encoded = /-EncodedCommand ([A-Za-z0-9+/=]+)/.exec(decoded)?.[1];
+  if (encoded) {
+    const script = Buffer.from(encoded, 'base64').toString('utf16le');
+    const literal = /\$info\.EnvironmentVariables\['AZITO_MISAO_ROOT'\] = '((?:[^']|'')*)'/.exec(script)?.[1];
+    return literal?.replace(/''/g, "'");
+  }
+  return /--data "([^"]*)"/.exec(decoded)?.[1];
+}
