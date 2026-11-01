@@ -597,6 +597,14 @@ function WorkspaceInner() {
     buildWindowIndex(allProjects, allTasks, project),
   [allProjects, allTasks, project]);
 
+  const taskById = useMemo(() => {
+    const map = new Map<number, Task>();
+    for (const t of allTasks) map.set(t.id, t);
+    return map;
+  }, [allTasks]);
+
+  const titleData = useMemo(() => ({ windowById, taskById }), [windowById, taskById]);
+
   const findTaskByTarget = useCallback(
     (target: string) => findTaskByTargetLib(target, [tasks, allTasks], windowById),
     [tasks, allTasks, windowById],
@@ -891,12 +899,6 @@ function WorkspaceInner() {
     return map;
   }, [windowById]);
 
-  const taskById = useMemo(() => {
-    const map = new Map<number, Task>();
-    for (const t of allTasks) map.set(t.id, t);
-    return map;
-  }, [allTasks]);
-
   const sessionWindowByWindowId = useMemo(() => {
     const map = new Map<number, { panes: Array<{ index: number; title: string; command: string; active?: boolean }> }>();
     for (const sessions of Object.values(sessionData)) {
@@ -1157,9 +1159,9 @@ function WorkspaceInner() {
   // としての空状態（既存の dragHint）はそのまま維持する。
   const renderPaneEmpty = useCallback(() => (
     tabs.length === 0
-      ? <HomeFeed allTasks={allTasks} allProjects={allProjects} openTask={openTaskFromActiveWindow} connectPane={connectPaneFromActiveWindow} onAddWindow={handleOpenAddTabFromSwitcher} />
+      ? <HomeFeed titleData={titleData} allTasks={allTasks} allProjects={allProjects} openTask={openTaskFromActiveWindow} connectPane={connectPaneFromActiveWindow} onAddWindow={handleOpenAddTabFromSwitcher} />
       : <EmptyState title={t('workspace:pane.dragHint')} />
-  ), [tabs.length, allTasks, allProjects, openTaskFromActiveWindow, connectPaneFromActiveWindow, handleOpenAddTabFromSwitcher, t]);
+  ), [tabs.length, titleData, allTasks, allProjects, openTaskFromActiveWindow, connectPaneFromActiveWindow, handleOpenAddTabFromSwitcher, t]);
 
   if (!project) {
     if (projectsLoaded && allProjects.length === 0) {
@@ -1170,6 +1172,7 @@ function WorkspaceInner() {
 
   const sidebarContent = (
     <WorkspaceSidebarContent
+      titleData={titleData}
       sidebarMode={sidebarMode}
       project={project}
       sessionData={sessionData}
@@ -1230,6 +1233,7 @@ function WorkspaceInner() {
 
   const activeWindowsSection = (
     <ActiveWindowsSection
+      titleData={titleData}
       connectPane={connectPaneFromActiveWindow}
       openTask={openTaskFromActiveWindow}
       taskWindows={taskWindows}
@@ -1335,6 +1339,7 @@ function WorkspaceInner() {
 
   return (
     <WorkspaceLayout
+      titleData={titleData}
       mobile={mobile}
       sidebarMode={sidebarMode}
       switchSidebarMode={handleSwitchSidebarMode}
@@ -1395,14 +1400,14 @@ function WorkspaceInner() {
 
             <div style={{ flex: 1, position: 'relative', background: 'var(--ws-content)' }}>
               {tabs.length === 0 && (
-                <HomeFeed allTasks={allTasks} allProjects={allProjects} openTask={openTaskFromActiveWindow} connectPane={connectPaneFromActiveWindow} onAddWindow={handleOpenAddTabFromSwitcher} />
+                <HomeFeed titleData={titleData} allTasks={allTasks} allProjects={allProjects} openTask={openTaskFromActiveWindow} connectPane={connectPaneFromActiveWindow} onAddWindow={handleOpenAddTabFromSwitcher} />
               )}
 
               {tabs.map((tab) => renderTabContent(tab, { position: 'absolute', inset: 0 }, tab.id === activeTabId, closeTabAndRefreshBrowser))}
             </div>
 
             {(() => {
-              const bar = <MobileStatusBar allTasks={allTasks} openTask={openTaskFromActiveWindow} connectPane={connectPaneFromActiveWindow} />;
+              const bar = <MobileStatusBar titleData={titleData} allTasks={allTasks} openTask={openTaskFromActiveWindow} connectPane={connectPaneFromActiveWindow} />;
               // mobile-shell-slot と同じ理由（Layout がグローバルページ表示中にこのサブツリーを
               // display:none で隠しても、ポータル先はその外側にあるため常駐し続ける）で
               // mobile-status-slot（Layout.tsx）へ portal する。

@@ -162,11 +162,11 @@ function makeGate<T>(): { promise: Promise<T>; release: (value: T) => void; fail
 // every other window-(re)creation helper in this file uses, against a
 // server row re-read only once the lock is held.
 describe('ensureSessionWithLock', () => {
-  type MockMux = Pick<IMuxClient, 'listWorkspaces' | 'openWorkspace'>;
+  type MockMux = Pick<IMuxClient, 'listWorkspaces' | 'prepareWorkspace'>;
   function makeTmux(overrides: { listWorkspaces?: MockMux['listWorkspaces'] } = {}): MockMux {
     return {
       listWorkspaces: overrides.listWorkspaces ?? vi.fn(async (_server: ServerConfig) => []),
-      openWorkspace: vi.fn(async (_server: ServerConfig, name: string, _opts?: unknown) => ({ ref: { kind: 'tmux' as const, workspace: name, window: 'default' }, result: { stdout: '', stderr: '', code: 0 } })),
+      prepareWorkspace: vi.fn(async (_server: ServerConfig, _name: string, _extraEnv?: Record<string, string>) => undefined),
     } as unknown as MockMux;
   }
 
@@ -184,7 +184,7 @@ describe('ensureSessionWithLock', () => {
 
     expect(result.created).toBe(true);
     expect(result.server).toBe(server);
-    expect(tmux.openWorkspace).toHaveBeenCalledWith(server, 'azito', { extraEnv: {} });
+    expect(tmux.prepareWorkspace).toHaveBeenCalledWith(server, 'azito', {});
   });
 
   it('creates an isolated server session with the shared ISOLATION_MASKED_ENV mask', async () => {
@@ -195,7 +195,7 @@ describe('ensureSessionWithLock', () => {
     const result = await ensureSessionWithLock(tmux, lock, server, 'azito');
 
     expect(result.created).toBe(true);
-    expect(tmux.openWorkspace).toHaveBeenCalledWith(server, 'azito', { extraEnv: { AZITO_UI_TOKEN: '', AZITO_AGENT_TOKEN: '', AZITO_WEBHOOK_TOKEN: '' } });
+    expect(tmux.prepareWorkspace).toHaveBeenCalledWith(server, 'azito', { AZITO_UI_TOKEN: '', AZITO_AGENT_TOKEN: '', AZITO_WEBHOOK_TOKEN: '' });
   });
 
   it('does not create a session when one of that name already exists, and returns created: false', async () => {
@@ -206,7 +206,7 @@ describe('ensureSessionWithLock', () => {
     const result = await ensureSessionWithLock(tmux, lock, server, 'azito');
 
     expect(result.created).toBe(false);
-    expect(tmux.openWorkspace).not.toHaveBeenCalled();
+    expect(tmux.prepareWorkspace).not.toHaveBeenCalled();
   });
 
   it('re-reads the server from serverRepo INSIDE the lock and uses that row for both listSessions and createSession, never the caller-supplied argument', async () => {
@@ -219,9 +219,9 @@ describe('ensureSessionWithLock', () => {
 
     expect(result.server).toBe(freshServer);
     expect(tmux.listWorkspaces).toHaveBeenCalledWith(freshServer);
-    expect(tmux.openWorkspace).toHaveBeenCalledWith(freshServer, 'azito', expect.anything());
+    expect(tmux.prepareWorkspace).toHaveBeenCalledWith(freshServer, 'azito', expect.anything());
     expect(tmux.listWorkspaces).not.toHaveBeenCalledWith(staleServer);
-    expect(tmux.openWorkspace).not.toHaveBeenCalledWith(staleServer, expect.anything(), expect.anything());
+    expect(tmux.prepareWorkspace).not.toHaveBeenCalledWith(staleServer, expect.anything(), expect.anything());
   });
 
   it('throws (never falls back to the stale argument) when the server was deleted between resolution and lock acquisition', async () => {
@@ -230,7 +230,7 @@ describe('ensureSessionWithLock', () => {
     const lock: ServerIsolationLock = { serverIsolationMutex: new KeyedMutex(), serverRepo: { findByName: () => null } };
 
     await expect(ensureSessionWithLock(tmux, lock, server, 'azito')).rejects.toThrow(/was not found/);
-    expect(tmux.openWorkspace).not.toHaveBeenCalled();
+    expect(tmux.prepareWorkspace).not.toHaveBeenCalled();
   });
 
   // Issue #29 review (12th pass), Critical finding 1: a PUT /api/servers/:name
@@ -244,7 +244,7 @@ describe('ensureSessionWithLock', () => {
     const lock: ServerIsolationLock = { serverIsolationMutex: new KeyedMutex(), serverRepo: { findByName: () => fresh } };
 
     await expect(ensureSessionWithLock(tmux, lock, expected, 'azito')).rejects.toBeInstanceOf(ServerSnapshotMismatchError);
-    expect(tmux.openWorkspace).not.toHaveBeenCalled();
+    expect(tmux.prepareWorkspace).not.toHaveBeenCalled();
   });
 
   it('does NOT throw on a security-field mismatch when enforceSnapshot is explicitly false (projects/routes.ts bootstrap opt-out)', async () => {

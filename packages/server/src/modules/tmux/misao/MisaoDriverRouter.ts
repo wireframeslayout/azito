@@ -26,6 +26,7 @@ export class MisaoDriverRouter implements IMuxClient {
 
   async listWorkspaces(server: ServerConfig): Promise<MuxWorkspace[]> { return this.to(server).listWorkspaces(server); }
   async listWorkspacesStrict(server: ServerConfig): Promise<MuxWorkspace[]> { return this.to(server).listWorkspacesStrict(server); }
+  async prepareWorkspace(server: ServerConfig, name: string, extraEnv?: Record<string, string>): Promise<void> { return this.to(server).prepareWorkspace(server, name, extraEnv); }
   async openWorkspace(server: ServerConfig, name: string, opts?: Parameters<IMuxClient['openWorkspace']>[2]): ReturnType<IMuxClient['openWorkspace']> { return this.to(server).openWorkspace(server, name, opts); }
   async openWindow(server: ServerConfig, workspace: string, baseName?: string, opts?: Parameters<IMuxClient['openWindow']>[3]): ReturnType<IMuxClient['openWindow']> { return this.to(server).openWindow(server, workspace, baseName, opts); }
   async closeWindow(server: ServerConfig, ref: MuxRef): Promise<ExecResult> { return this.to(server).closeWindow(server, ref); }
