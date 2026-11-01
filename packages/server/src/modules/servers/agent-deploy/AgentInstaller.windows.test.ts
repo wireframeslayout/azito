@@ -180,10 +180,11 @@ describe('AgentInstaller on a Windows host', () => {
     });
 
     it('stops before transfer when the firewall policy is unknown', async () => {
-      const { installer } = make({ firewall: { ruleFound: null, elevated: false, created: false, problem: null } });
+      const { installer, host } = make({ firewall: { ruleFound: null, elevated: false, created: false, problem: null } });
       const result = await installer.install('user@win');
       expect(result.success).toBe(false);
       expect(result.error).toContain('effective policy could not be verified');
+      expect(host.uploaded.size).toBe(0);
     });
   });
 
