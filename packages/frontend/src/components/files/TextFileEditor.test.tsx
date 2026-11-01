@@ -8,7 +8,8 @@ vi.mock('react-i18next', async (importOriginal) => ({ ...(await importOriginal<t
 vi.mock('../ui/Overlay', () => ({ Overlay: ({ children }: { children: React.ReactNode }) => <div>{children}</div> }));
 vi.mock('../../hooks/useConfirm', () => ({ useConfirm: () => async () => true }));
 vi.mock('../../hooks/useToast', () => ({ useToast: () => ({ showToast: vi.fn() }) }));
-vi.mock('../../hooks/useIsMobile', () => ({ useIsMobile: () => false }));
+const mobile = vi.hoisted(() => ({ value: false }));
+vi.mock('../../hooks/useIsMobile', () => ({ useIsMobile: () => mobile.value }));
 vi.mock('../../hooks/useVirtualKeyboard', () => ({ useVirtualKeyboard: () => false }));
 vi.mock('../editor/CodeEditorView', () => ({ default: ({ value, onChange }: { value: string; onChange: (value: string) => void }) => <textarea aria-label="editor" value={value} onChange={(event) => onChange(event.target.value)} /> }));
 vi.mock('../editor/EditorStatusBar', () => ({ default: () => null }));
@@ -25,7 +26,7 @@ describe('TextFileEditor', () => {
     const editor = await screen.findByRole('textbox', { name: 'editor' });
     fireEvent.change(editor, { target: { value: 'local' } });
     fireEvent.click(screen.getByRole('button', { name: 'editor.save' }));
-    await waitFor(() => expect(screen.getByText(/editor.conflict/)).toBeTruthy());
+    await waitFor(() => expect(screen.getAllByRole('status').some((element) => element.getAttribute('aria-live') === 'polite' && element.textContent === 'editor.conflict')).toBe(true));
     fireEvent.click(screen.getByRole('button', { name: 'editor.diff' }));
     expect(screen.getByText('- remote')).toBeTruthy();
     expect(screen.getByText('+ local')).toBeTruthy();
@@ -60,4 +61,27 @@ describe('TextFileEditor', () => {
     expect(screen.queryByText('File exceeds 500 KiB')).toBeNull();
     expect(screen.queryByRole('textbox', { name: 'editor' })).toBeNull();
   });
+  it('hides split mode on mobile', async () => {
+    mobile.value = true;
+    localStorage.setItem('azito-md-view-mode', 'split');
+    const backend: FilesBackend = { source: 'mobile', read: vi.fn(async () => ({ kind: 'text' as const, content: 'md', version: 'v', language: 'markdown' })), save: vi.fn(), list: vi.fn(), create: vi.fn(), rename: vi.fn(), delete: vi.fn(), download: vi.fn() };
+    render(<TextFileEditor backend={backend} path="a.md" name="a.md" />);
+    await screen.findByRole('textbox', { name: 'editor' });
+    expect(screen.queryByText('explorer.splitView')).toBeNull();
+    mobile.value = false;
+  });
+
+  it('saves from the focused Markdown preview', async () => {
+    localStorage.setItem('azito-md-view-mode', 'source');
+    const backend: FilesBackend = { source: 'preview', read: vi.fn(async () => ({ kind: 'text' as const, content: 'base', version: 'v', language: 'markdown' })), save: vi.fn(async () => ({ kind: 'saved' as const, version: 'v2' })), list: vi.fn(), create: vi.fn(), rename: vi.fn(), delete: vi.fn(), download: vi.fn() };
+    render(<TextFileEditor backend={backend} path="a.md" name="a.md" />);
+    const editor = await screen.findByRole('textbox', { name: 'editor' });
+    fireEvent.change(editor, { target: { value: 'edited' } });
+    fireEvent.click(screen.getByRole('tab', { name: 'explorer.previewView' }));
+    const preview = screen.getByText('edited').closest('[tabindex="0"]');
+    expect(preview).not.toBeNull();
+    fireEvent.keyDown(preview!, { key: 's', metaKey: true });
+    await waitFor(() => expect(backend.save).toHaveBeenCalledTimes(1));
+  });
+
 });

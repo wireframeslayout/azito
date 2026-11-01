@@ -18,7 +18,7 @@ const statSchema = z.object({ prefix: z.string() });
 /** Reasons a latest version is no longer editable text; sent with a conflict so the editor can say why. */
 const UNEDITABLE_CODES: ReadonlySet<string> = new Set(['too_large', 'binary', 'invalid_utf8']);
 const contentQuery = z.object({ key: path });
-const contentBody = z.object({ key: path, content: z.string(), version: z.string().min(1).optional(), force: z.boolean().optional() }).refine((value) => value.force === true || value.version !== undefined);
+const contentBody = z.object({ key: path, content: z.string(), baseEtag: z.string().min(1).optional(), force: z.boolean().optional() }).refine((value) => value.force === true || value.baseEtag !== undefined);
 
 export interface StorageOperationRouteOptions {
   projectRepo: IProjectRepository;
@@ -56,7 +56,7 @@ export function registerStorageOperationRoutes(fastify: FastifyInstance, opts: S
   route('PUT', '/content', contentBody, async (b: z.infer<typeof contentBody>, id, reply) => {
     const text = textContent(id);
     const relative = relativeKey(b.key, id);
-    try { return await text.write(relative, b.content, b.force ? undefined : b.version); }
+    try { return await text.write(relative, b.content, b.force ? undefined : b.baseEtag); }
     catch (error) {
       if (!(error instanceof StorageOperationError) || error.code !== 'conflict') throw error;
       let latest: Awaited<ReturnType<typeof text.read>> | { error: string; code: string } | null = null;
@@ -66,7 +66,7 @@ export function registerStorageOperationRoutes(fastify: FastifyInstance, opts: S
         if (readError instanceof StorageOperationError && UNEDITABLE_CODES.has(readError.code)) latest = { error: readError.message, code: readError.code };
         else reply.log.warn({ err: readError }, 'storage conflict: latest content unreadable');
       }
-      return reply.status(409).send({ code: 'conflict', latest });
+      return reply.status(409).send(latest && 'etag' in latest ? { error: 'conflict', etag: latest.etag, content: latest.content } : { error: 'conflict', latest });
     }
   });
   register('GET', '/entries', querySchema, (ops, q: z.infer<typeof querySchema>) => ops.listPage(q.prefix, q.limit, q.cursor));

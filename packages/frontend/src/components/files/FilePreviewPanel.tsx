@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { api } from '../../api/client';
 import { useToast } from '../../hooks/useToast';
@@ -7,6 +7,8 @@ import { fileDisplayName } from '../../lib/serverPath';
 import { Icon } from '../ui/Icon';
 import { ServerFilesBackend } from './backend/ServerFilesBackend';
 import { TextFileEditor } from './TextFileEditor';
+import { useFileDownload } from './useFileDownload';
+import { Button } from '../ui';
 
 interface FilePreviewPanelProps {
   serverName: string;
@@ -32,13 +34,7 @@ function MediaPreview({ serverName, filePath, backend }: FilePreviewPanelProps &
     return () => { active = false; };
   }, [serverName, filePath]);
   const fileName = pathApi ? fileDisplayName(pathApi, filePath) : filePath;
-  const download = useCallback(async () => {
-    try {
-      const blob = await backend.download(filePath);
-      const url = URL.createObjectURL(blob);
-      const link = document.createElement('a'); link.href = url; link.download = fileName; document.body.appendChild(link); link.click(); link.remove(); URL.revokeObjectURL(url);
-    } catch { showToast(t('explorer.downloadFailed')); }
-  }, [backend, filePath, fileName, showToast, t]);
+  const download = useFileDownload(backend, filePath, fileName);
   const openInEditor = async (editor: 'vscode' | 'zed') => {
     try {
       const result = await api<{ uri?: string }>(`/servers/${encodeURIComponent(serverName)}/editor-uri?path=${encodeURIComponent(filePath)}&editor=${editor}`);
@@ -67,6 +63,15 @@ function MediaPreview({ serverName, filePath, backend }: FilePreviewPanelProps &
 
 export function FilePreviewPanel(props: FilePreviewPanelProps) {
   const backend = useMemo(() => new ServerFilesBackend(props.serverName, props.projectId), [props.serverName, props.projectId]);
+  const { t } = useTranslation('files');
+  const { showToast } = useToast();
+  const download = useFileDownload(backend, props.filePath, props.filePath.split(/[\\/]/).pop() || props.filePath);
+  const openInEditor = async (target: 'vscode' | 'zed') => {
+    try {
+      const result = await api<{ uri?: string }>(`/servers/${encodeURIComponent(props.serverName)}/editor-uri?path=${encodeURIComponent(props.filePath)}&editor=${target}`);
+      if (result.uri) window.location.href = result.uri;
+    } catch { showToast(t('preview.loadError')); }
+  };
   if (/\.(png|jpe?g|gif|svg|webp|ico|bmp|pdf)$/i.test(props.filePath)) return <MediaPreview {...props} backend={backend} />;
-  return <TextFileEditor backend={backend} path={props.filePath} name={props.filePath} initialLine={props.initialLine} serverName={props.serverName} onDirtyChange={props.onDirtyChange} />;
+  return <TextFileEditor backend={backend} path={props.filePath} name={props.filePath} initialLine={props.initialLine} headerActions={<><Button size="sm" variant="ghost" onClick={() => void download()}><Icon name="download" size={14} /> {t('explorer.download')}</Button><Button size="sm" variant="ghost" onClick={() => void openInEditor('vscode')}>VS Code</Button><Button size="sm" variant="ghost" onClick={() => void openInEditor('zed')}>Zed</Button></>} onDirtyChange={props.onDirtyChange} />;
 }

@@ -23,19 +23,29 @@ describe('ServerFilesBackend', () => {
     expect(await backend.save('/a', 'mine', read.version, false)).toEqual({ kind: 'conflict', latest: { kind: 'text', content: 'new', language: 'text', version: JSON.stringify({ mtime: 2, hash: 'b' }) } });
     expect(JSON.parse(fetchMock.mock.calls[1][1].body)).toMatchObject({ baseMtime: 1, baseHash: 'a' });
   });
+  it('saves forcibly without sending base fields', async () => {
+    const fetchMock = vi.fn().mockResolvedValue(response({ mtime: 2, hash: 'b' }));
+    vi.stubGlobal('fetch', fetchMock);
+    await new ServerFilesBackend('host', 1).save('/a', 'edited', JSON.stringify({ mtime: 1, hash: 'a' }), true);
+    const body = JSON.parse(fetchMock.mock.calls[0][1].body);
+    expect(body.force).toBe(true);
+    expect(body).not.toHaveProperty('baseMtime');
+    expect(body).not.toHaveProperty('baseHash');
+  });
+
 });
 
 describe('StorageFilesBackend', () => {
   it('lists every page and maps keys and prefixes', async () => {
     vi.stubGlobal('fetch', vi.fn().mockResolvedValueOnce(response({ folders: [{ name: 'dir', prefix: 'dir/' }], files: [], nextCursor: 'next' })).mockResolvedValueOnce(response({ folders: [], files: [{ key: 'projects/1/a', displayName: 'a', size: 3 }], nextCursor: null })));
-    expect(await new StorageFilesBackend(1).list('')).toEqual([{ name: 'dir', type: 'directory', path: 'dir/' }, { name: 'a', type: 'file', path: 'projects/1/a', size: 3 }]);
+    expect(await new StorageFilesBackend(1).list('')).toEqual([{ name: 'dir', type: 'directory', path: 'dir/' }, { name: 'a', type: 'file', path: 'a', size: 3 }]);
   });
   it('sends operations with the storage API selection format', async () => {
     const fetchMock = vi.fn().mockImplementation(async () => response({ ok: true }));
     vi.stubGlobal('fetch', fetchMock);
     const backend = new StorageFilesBackend(1);
-    await backend.rename('projects/1/a', 'b');
-    await backend.move('projects/1/a', 'file', 'dir/');
+    await backend.rename('a', 'b');
+    await backend.move('a', 'file', 'dir/');
     await backend.delete('dir/', 'directory');
     await backend.create('new/', 'directory');
     expect(JSON.parse(fetchMock.mock.calls[0][1].body)).toEqual({ key: 'projects/1/a', displayName: 'b' });
@@ -47,23 +57,32 @@ describe('StorageFilesBackend', () => {
     const fetchMock = vi.fn().mockImplementation(async () => response({ file: { key: 'projects/1/dir/123_a.txt' } }));
     vi.stubGlobal('fetch', fetchMock);
     const key = await new StorageFilesBackend(1).create('dir/a.txt', 'file');
-    expect(key).toBe('projects/1/dir/123_a.txt');
+    expect(key).toBe('dir/123_a.txt');
     expect(fetchMock.mock.calls[0][0]).toBe('/api/projects/1/storage/upload?prefix=dir%2F');
   });
   it('returns the latest text on conflict and surfaces unreadable content', async () => {
-    const fetchMock = vi.fn().mockResolvedValueOnce(response({ code: 'conflict', latest: { content: 'new', language: 'text', version: 'v2' } }, 409)).mockResolvedValueOnce(response({ error: 'File exceeds 500 KiB', code: 'too_large' }, 413));
+    const fetchMock = vi.fn().mockResolvedValueOnce(response({ error: 'conflict', content: 'new', etag: 'v2' }, 409)).mockResolvedValueOnce(response({ error: 'File exceeds 500 KiB', code: 'too_large' }, 413));
     vi.stubGlobal('fetch', fetchMock);
     const backend = new StorageFilesBackend(1);
-    expect(await backend.save('projects/1/a', 'mine', 'v1', false)).toEqual({ kind: 'conflict', latest: { kind: 'text', content: 'new', language: 'text', version: 'v2' } });
-    expect(await backend.read('projects/1/a')).toEqual({ kind: 'unavailable', code: 'too_large', message: 'File exceeds 500 KiB' });
+    expect(await backend.save('a', 'mine', 'v1', false)).toEqual({ kind: 'conflict', latest: { kind: 'text', content: 'new', language: 'text', version: 'v2' } });
+    expect(await backend.read('a')).toEqual({ kind: 'unavailable', code: 'too_large', message: 'File exceeds 500 KiB' });
+  });
+  it('maps relative file paths to API keys for reads and writes', async () => {
+    const fetchMock = vi.fn().mockResolvedValueOnce(response({ content: 'x', language: 'text', etag: 'v1', size: 1 })).mockResolvedValueOnce(response({ etag: 'v2' }));
+    vi.stubGlobal('fetch', fetchMock);
+    const backend = new StorageFilesBackend(1);
+    expect(await backend.read('dir/a')).toEqual({ kind: 'text', content: 'x', language: 'text', version: 'v1' });
+    await backend.save('dir/a', 'y', 'v1', false);
+    expect(fetchMock.mock.calls[0][0]).toContain('key=projects%2F1%2Fdir%2Fa');
+    expect(JSON.parse(fetchMock.mock.calls[1][1].body)).toEqual({ key: 'projects/1/dir/a', content: 'y', baseEtag: 'v1', force: false });
   });
   it('explains a conflict whose latest version is no longer editable text', async () => {
     vi.stubGlobal('fetch', vi.fn()
-      .mockResolvedValueOnce(response({ code: 'conflict', latest: { error: 'File contains NUL bytes', code: 'binary' } }, 409))
-      .mockResolvedValueOnce(response({ code: 'conflict', latest: null }, 409)));
+      .mockResolvedValueOnce(response({ error: 'conflict', latest: { error: 'File contains NUL bytes', code: 'binary' } }, 409))
+      .mockResolvedValueOnce(response({ error: 'conflict', latest: null }, 409)));
     const backend = new StorageFilesBackend(1);
-    expect(await backend.save('projects/1/a', 'mine', 'v1', false)).toEqual({ kind: 'conflict', latest: { kind: 'unavailable', code: 'binary', message: 'File contains NUL bytes' } });
-    expect(await backend.save('projects/1/a', 'mine', 'v1', false)).toEqual({ kind: 'conflict', latest: null });
+    expect(await backend.save('a', 'mine', 'v1', false)).toEqual({ kind: 'conflict', latest: { kind: 'unavailable', code: 'binary', message: 'File contains NUL bytes' } });
+    expect(await backend.save('a', 'mine', 'v1', false)).toEqual({ kind: 'conflict', latest: null });
   });
 });
 

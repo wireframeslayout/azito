@@ -31,7 +31,7 @@ export class ServerFilesBackend implements FilesBackend {
   async save(path: string, content: string, version: string, force: boolean): Promise<FileSaveResult> {
     if (this.projectId == null) throw new Error('projectId is required');
     const base = JSON.parse(version) as { mtime: number; hash: string };
-    const { status, body } = await apiWithStatus<ResponseBody>(`${this.root}/content`, { method: 'PUT', body: JSON.stringify({ path, content, projectId: this.projectId, force, baseMtime: base.mtime, baseHash: base.hash }) });
+    const { status, body } = await apiWithStatus<ResponseBody>(`${this.root}/content`, { method: 'PUT', body: JSON.stringify({ path, content, projectId: this.projectId, force, ...(force ? {} : { baseMtime: base.mtime, baseHash: base.hash }) }) });
     if (status === 409 || body.error === 'conflict') {
       try { return { kind: 'conflict', latest: await this.read(path) }; } catch { return { kind: 'conflict', latest: null }; }
     }

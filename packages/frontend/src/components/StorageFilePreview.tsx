@@ -5,6 +5,8 @@ import { useTranslation } from 'react-i18next';
 import { useToast } from '../hooks/useToast';
 import { Icon } from './ui/Icon';
 import { useBlobUrl } from '../hooks/useBlobUrl';
+import { useFileDownload } from './files/useFileDownload';
+import { Button } from './ui';
 
 function formatSize(bytes: number): string {
   if (bytes < 1024) return `${bytes} B`;
@@ -176,6 +178,8 @@ function MediaStorageFilePreview({ projectId, filename, originalName, size }: St
 
 export default function StorageFilePreview(props: StorageFilePreviewProps) {
   const backend = useMemo(() => new StorageFilesBackend(props.projectId), [props.projectId]);
+  const { t } = useTranslation('files');
+  const download = useFileDownload(backend, props.filename, props.originalName);
   if (isPdf(props.originalName) || isImage(props.originalName)) return <MediaStorageFilePreview {...props} />;
-  return <TextFileEditor backend={backend} path={`projects/${props.projectId}/${props.filename}`} name={props.originalName} onDirtyChange={props.onDirtyChange} />;
+  return <TextFileEditor backend={backend} path={props.filename} name={props.originalName} headerActions={<Button size="sm" variant="ghost" onClick={() => void download()}><Icon name="download" size={14} /> {t('explorer.download')}</Button>} onDirtyChange={props.onDirtyChange} />;
 }

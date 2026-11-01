@@ -3,9 +3,9 @@ import { Readable } from 'stream';
 import { GetObjectCommand, HeadObjectCommand, PutObjectCommand, type S3Client } from '@aws-sdk/client-s3';
 import { StorageTextContent } from './storageTextContent';
 
-function setup(bytes: Buffer) {
+function setup(bytes: Buffer, contentType: string | undefined = 'text/plain') {
   const send = vi.fn(async (command: unknown) => {
-    if (command instanceof HeadObjectCommand) return { ContentLength: bytes.length, ETag: '"v1"', ContentType: 'text/plain', Metadata: { name: 'test' } };
+    if (command instanceof HeadObjectCommand) return { ContentLength: bytes.length, ETag: '"v1"', ContentType: contentType || undefined, Metadata: { name: 'test' } };
     if (command instanceof GetObjectCommand) return { Body: Readable.from([bytes]), ETag: '"v1"' };
     if (command instanceof PutObjectCommand) return { ETag: '"v2"' };
     throw new Error('Unexpected command');
@@ -16,7 +16,7 @@ function setup(bytes: Buffer) {
 describe('storage text content', () => {
   it('reads valid text and preserves its ETag', async () => {
     const { text, send } = setup(Buffer.from('hello'));
-    expect(await text.read('a.txt')).toEqual({ content: 'hello', version: 'v1', language: 'text' });
+    expect(await text.read('a.txt')).toEqual({ content: 'hello', etag: 'v1', language: 'text', size: 5 });
     expect((send.mock.calls[1][0] as GetObjectCommand).input.IfMatch).toBe('"v1"');
   });
   it('rejects binary, invalid UTF-8, oversized and invalid paths', async () => {
@@ -27,7 +27,7 @@ describe('storage text content', () => {
   });
   it('uses a conditional put and preserves object metadata', async () => {
     const { text, send } = setup(Buffer.from('hello'));
-    expect(await text.write('a', 'new', 'v1')).toEqual({ version: 'v2' });
+    expect(await text.write('a', 'new', 'v1')).toEqual({ etag: 'v2' });
     expect((send.mock.calls[1][0] as PutObjectCommand).input).toMatchObject({ IfMatch: '"v1"', ContentType: 'text/plain', Metadata: { name: 'test' } });
     await expect(text.write('a', 'new', 'old')).rejects.toMatchObject({ code: 'conflict' });
   });
@@ -59,4 +59,10 @@ describe('storage text content', () => {
     send.mockImplementationOnce(async () => ({ ContentLength: 5, ETag: '"v1"', ContentType: 'text/plain', Metadata: { name: 'test' } })).mockRejectedValueOnce({ $metadata: { httpStatusCode: 412 } });
     await expect(text.read('a')).rejects.toMatchObject({ status: 409, code: 'conflict' });
   });
+  it('uses the extension MIME when the object has no content type', async () => {
+    const { text, send } = setup(Buffer.from('hello'), '');
+    await text.write('a.md', 'new', 'v1');
+    expect((send.mock.calls[1][0] as PutObjectCommand).input.ContentType).toBe('text/markdown');
+  });
+
 });

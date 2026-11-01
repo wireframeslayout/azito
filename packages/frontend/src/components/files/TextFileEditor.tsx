@@ -1,9 +1,7 @@
-import { lazy, Suspense, useRef, useState } from 'react';
-import { useToast } from '../../hooks/useToast';
+import { lazy, Suspense, useRef, useState, type ReactNode } from 'react';
 import { useVirtualKeyboard } from '../../hooks/useVirtualKeyboard';
 import { useTranslation } from 'react-i18next';
 import { useConfirm } from '../../hooks/useConfirm';
-import { api } from '../../api/client';
 import { useIsMobile } from '../../hooks/useIsMobile';
 import { lineDiff, type DiffLine } from '../../utils/lineDiff';
 import MarkdownRenderer from '../MarkdownRenderer';
@@ -24,15 +22,14 @@ interface TextFileEditorProps {
   path: string;
   name: string;
   initialLine?: number;
-  serverName?: string;
+  headerActions?: ReactNode;
   onDirtyChange?: (dirty: boolean) => void;
 }
 
-export function TextFileEditor({ backend, path, name, initialLine, serverName, onDirtyChange }: TextFileEditorProps) {
+export function TextFileEditor({ backend, path, name, initialLine, headerActions, onDirtyChange }: TextFileEditorProps) {
   const { t } = useTranslation('files');
   const mobile = useIsMobile();
   const confirm = useConfirm();
-  const { showToast } = useToast();
   const keyboardVisible = useVirtualKeyboard();
   const insertRef = useRef<((text: string) => void) | null>(null);
   const [mode, setMode] = useState<Mode>(() => {
@@ -56,23 +53,6 @@ export function TextFileEditor({ backend, path, name, initialLine, serverName, o
   const unavailableText = (value: TextUnavailable): string => t(`editor.unavailable.${value.code}`);
   const canSave = doc.dirty && !doc.saving && doc.conflict === undefined;
   const save = () => { if (canSave) void doc.save(); };
-  const download = async () => {
-    try {
-      const blob = await backend.download(path);
-      const url = URL.createObjectURL(blob);
-      const link = document.createElement('a');
-      link.href = url; link.download = name.split(/[\\/]/).pop() || name;
-      document.body.appendChild(link); link.click(); link.remove();
-      URL.revokeObjectURL(url);
-    } catch { showToast(t('explorer.downloadFailed')); }
-  };
-  const openInEditor = async (target: 'vscode' | 'zed') => {
-    if (!serverName) return;
-    try {
-      const result = await api<{ uri?: string }>(`/servers/${encodeURIComponent(serverName)}/editor-uri?path=${encodeURIComponent(path)}&editor=${target}`);
-      if (result.uri) window.location.href = result.uri;
-    } catch { showToast(t('preview.loadError')); }
-  };
   const editor = <div style={{ display: 'flex', flexDirection: 'column', height: '100%' }}>
     <div style={{ flex: 1, minHeight: 0 }}><Suspense fallback={<LoadingState />}><CodeEditorView value={doc.content} language={doc.document?.language ?? 'text'} initialLine={initialLine} vimMode={vim} onChange={doc.change} onSave={save} onInsertReady={(insert) => { insertRef.current = insert; }} onCursorChange={(line, col) => setCursor({ line, col })} onVimModeDisplay={setVimDisplay} /></Suspense></div>
     <Suspense fallback={null}><EditorStatusBar line={cursor.line} col={cursor.col} vimModeDisplay={vimDisplay} vimEnabled={vim} onVimToggle={() => setVim((previous) => { localStorage.setItem('azito-editor-vim-mode', String(!previous)); return !previous; })} saveStatus={doc.conflict !== undefined ? 'conflict' : doc.saving ? 'saving' : doc.dirty ? 'dirty' : doc.saved ? 'saved' : 'clean'} /></Suspense>
@@ -82,17 +62,13 @@ export function TextFileEditor({ backend, path, name, initialLine, serverName, o
       <div style={{ padding: 'var(--space-2) var(--space-4)', borderBottom: '1px solid var(--border)', background: 'var(--bg-card)', display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: 'var(--space-3)', flexShrink: 0, minHeight: 40 }}>
         <Icon name="file" size={14} />
         <span style={{ flex: 1, minWidth: 0, fontSize: 'var(--font-md)', fontWeight: 500, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={name}>
-          {name}{doc.dirty && <span aria-label={t('editor.unsaved')} style={{ color: 'var(--accent)' }}> •</span>}
+          {name}{doc.dirty && <span style={{ color: 'var(--accent)' }}> • {t('editor.unsaved')}</span>}
         </span>
         <Button size="sm" variant={canSave ? 'primary' : 'default'} disabled={!canSave} onClick={save} title={`${t('editor.save')} (Ctrl+S)`}>{doc.saving ? t('editor.saving') : t('editor.save')}</Button>
         {markdown && <SegmentedToggle options={options} value={currentMode} onChange={selectMode} ariaLabel={t('editor.viewMode')} />}
-        <Button size="sm" variant="ghost" onClick={() => void download()} title={t('explorer.download')}><Icon name="download" size={14} /> {t('explorer.download')}</Button>
-        {serverName && <>
-          <Button size="sm" variant="ghost" onClick={() => void openInEditor('vscode')} title={t('explorer.openInVsCode')}>VS Code</Button>
-          <Button size="sm" variant="ghost" onClick={() => void openInEditor('zed')} title={t('explorer.openInZed')}>Zed</Button>
-        </>}
+        {headerActions}
       </div>
-      <div className="sr-only" role="status" aria-live="polite" aria-atomic="true">{doc.saving ? t('editor.saving') : doc.dirty ? t('editor.unsaved') : doc.saved ? t('editor.saved') : ''}</div>
+      <div className="sr-only" role="status" aria-live="polite" aria-atomic="true">{doc.conflict !== undefined ? t('editor.conflict') : doc.saving ? t('editor.saving') : doc.dirty ? t('editor.unsaved') : doc.saved ? t('editor.saved') : ''}</div>
       {doc.conflict !== undefined && <Notice tone="warning" style={{ margin: 'var(--space-2)', flexShrink: 0 }} sub={doc.conflict === null ? t('editor.latestUnavailable') : doc.conflict.kind === 'unavailable' ? unavailableText(doc.conflict) : undefined}
         action={<div style={{ display: 'flex', flexWrap: 'wrap', gap: 'var(--space-2)' }}>
           <Button size="sm" onClick={showDiff}>{t('editor.diff')}</Button>
@@ -101,14 +77,14 @@ export function TextFileEditor({ backend, path, name, initialLine, serverName, o
         </div>}>{t('editor.conflict')}</Notice>}
       {doc.unavailable && <Notice tone="warning" style={{ margin: 'var(--space-2)', flexShrink: 0 }}
         action={<div style={{ display: 'flex', flexWrap: 'wrap', gap: 'var(--space-2)' }}>
-          <Button size="sm" onClick={() => void download()}><Icon name="download" size={14} /> {t('explorer.download')}</Button>
+          {headerActions}
           <Button size="sm" variant="ghost" onClick={() => void doc.reload()}>{t('editor.retry')}</Button>
         </div>}>{unavailableText(doc.unavailable)}</Notice>}
       {doc.error && <div role="alert" style={{ margin: 'var(--space-2)', flexShrink: 0 }}><Notice tone="danger" action={(!doc.document && !doc.loading) ? <Button size="sm" onClick={() => void doc.reload()}>{t('editor.retry')}</Button> : undefined}>{doc.error}</Notice></div>}
       {doc.loading && <LoadingState />}
       {!doc.loading && doc.document && <div style={{ flex: 1, minHeight: 0, display: 'flex', overflow: 'hidden' }}>
         {(!markdown || currentMode !== 'preview') && <div style={{ flex: 1, minWidth: 0, overflow: 'hidden' }}>{editor}</div>}
-        {markdown && currentMode !== 'source' && <div style={{ flex: 1, minWidth: 0, overflow: 'auto', padding: 'var(--space-4)' }}><MarkdownRenderer content={doc.content} /></div>}
+        {markdown && currentMode !== 'source' && <div tabIndex={0} className="text-file-preview" style={{ flex: 1, minWidth: 0, overflow: 'auto', padding: 'var(--space-4)' }}><MarkdownRenderer content={doc.content} /></div>}
       </div>}
       {mobile && keyboardVisible && markdown && currentMode === 'source' && <MarkdownKeyRow onInsert={(value) => insertRef.current?.(value)} />}
       {diff !== undefined && <LineDiffView lines={diff} mobile={mobile} onClose={() => setDiff(undefined)} />}
