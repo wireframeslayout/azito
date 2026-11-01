@@ -304,11 +304,10 @@ export default function ProjectSidebar() {
           background: 'var(--bg)',
           borderRadius: 'var(--radius-lg)',
           boxShadow: 'var(--tray-inset)',
-          padding: '6px 3px',
+          padding: '6px 6px',
           margin: '2px 0',
-          width: 42,
           boxSizing: 'border-box',
-          alignSelf: 'center',
+          alignSelf: 'stretch',
         }}
       >
         {visibleProjects.map((project) => {
