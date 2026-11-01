@@ -1,5 +1,5 @@
 import { useTranslation } from 'react-i18next';
-import { diagnosticWindowTitle } from '../../lib/activityDiagnostics';
+import { diagnosticWindowTitle, isMisaoDiagnosticWindow } from '../../lib/activityDiagnostics';
 import { Chip } from '../ui/Chip';
 import { BrailleSpinner, BlockedDot } from '../ui/WindowActivityIndicator';
 import { formatRelativeTime } from '../../utils/time';
@@ -123,7 +123,7 @@ export function MatchCell({ row }: { row: ActivityDiagnosticRow }) {
   if (!match) return <span style={{ ...DIM, fontSize: 'var(--font-sm)' }}>—</span>;
   return (
     <Chip tone={match === 'muxPaneRef' ? 'green' : 'default'}>
-      {match === 'muxPaneRef' ? 'pane' : match === 'windowSpec' ? 'spec' : 'key'}
+      {match === 'muxPaneRef' ? (isMisaoDiagnosticWindow(row) ? 'pane' : '%N') : match === 'windowSpec' ? 'spec' : 'key'}
     </Chip>
   );
 }

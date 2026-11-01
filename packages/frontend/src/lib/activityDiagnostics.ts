@@ -94,9 +94,12 @@ export function parseDiagnosticsResponse(status: number, body: unknown): Activit
   return body as ActivityDiagnosticRow[];
 }
 
+export function isMisaoDiagnosticWindow(row: ActivityDiagnosticRow): boolean {
+  return row.windowDisplay?.muxRef?.kind === 'misao' || isMisaoWindowId(stripPaneSuffix(row.target).split(':').pop() ?? '');
+}
+
 export function diagnosticWindowTitle(row: ActivityDiagnosticRow, fallback: string): string {
-  const isMisao = row.windowDisplay?.muxRef?.kind === 'misao' || isMisaoWindowId(stripPaneSuffix(row.target).split(':').pop() ?? '');
-  if (!isMisao) return row.target;
+  if (!isMisaoDiagnosticWindow(row)) return row.target;
   return formatWindowTitleLine(resolveWindowTitle({
     id: row.windowId, label: row.windowDisplay?.label, labelSource: row.windowDisplay?.labelSource,
     workerType: row.windowDisplay?.workerType ?? undefined, windowType: row.windowDisplay?.windowType, tmuxTarget: fallback,
