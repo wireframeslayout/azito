@@ -313,7 +313,7 @@ describe('MisaoAgentInstaller on a Windows agent', () => {
       const agent = new FakeWindowsAgent(bundle);
       agent.seedInstalled(OLD_VERSION, false);
       agent.host.markRunning();
-      await expect(installer().install(agent.asTarget())).rejects.toMatchObject({ code: 'daemon_not_ready', message: expect.stringContaining('Nothing was changed') });
+      await expect(installer().install(agent.asTarget())).rejects.toMatchObject({ code: 'daemon_not_ready', message: expect.stringMatching(/may still be starting or may belong to another installation.*Check the task definition/) });
       expect(agent.schtasks()).not.toContain('/Create');
       expect(agent.written).toEqual([]);
     });
@@ -407,7 +407,7 @@ describe('MisaoAgentInstaller on a Windows agent', () => {
       const agent = new FakeWindowsAgent(bundle);
       agent.seedInstalled(OLD_VERSION, false);
       agent.host.markRunning();
-      await expect(installer().update(agent.asTarget())).rejects.toMatchObject({ code: 'daemon_not_ready', message: expect.stringContaining('Nothing was changed') });
+      await expect(installer().update(agent.asTarget())).rejects.toMatchObject({ code: 'daemon_not_ready', message: expect.stringMatching(/may still be starting or may belong to another installation.*Check the task definition/) });
       expect(agent.written).toEqual([]);
       expect(agent.schtasks()).not.toContain('/Create');
       expect(agent.uploads).toEqual([]);

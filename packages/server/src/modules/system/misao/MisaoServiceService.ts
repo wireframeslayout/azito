@@ -137,7 +137,7 @@ export class MisaoServiceService {
     const task = await windows.tasks.query(windows.taskName);
     if (!task.exists) return { installed: false, windowsTaskOwner: 'none' };
     const xml = await windows.tasks.exportXml(windows.taskName);
-    if (!taskMisaoRoot(xml)) return { installed: false, windowsTaskOwner: 'unknown' };
+    if (!taskMisaoRoot(xml) || !this.deps.paths) return { installed: false, windowsTaskOwner: 'unknown' };
     if (!taskStartsMisaoOf(xml, this.paths.root)) return { installed: false, windowsTaskOwner: 'other' };
     return { installed: true, windowsTaskOwner: 'hub', inspection: { state: task.running ? 'active' : task.failed ? 'failed' : 'inactive', domains: [] } };
   }

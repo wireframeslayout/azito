@@ -94,6 +94,8 @@ describe('MisaoServiceService on Windows (the hub\'s own misao)', () => {
     expect(await service().status()).toMatchObject({ windowsTaskOwner: 'hub', serviceInstalled: true });
     exportedXml = taskXml(path.join(dir, 'other'));
     expect(await service().status()).toMatchObject({ windowsTaskOwner: 'other', serviceInstalled: false, updateAvailable: false, needsHubRestart: false });
+    windows.tasks.query = vi.fn().mockResolvedValue({ exists: true, running: true });
+    expect(await service().status()).toMatchObject({ windowsTaskOwner: 'other', serviceInstalled: false, updateAvailable: false });
     exportedXml = '<Task/>';
     expect(await service().status()).toMatchObject({ windowsTaskOwner: 'unknown', serviceInstalled: false });
     windows.tasks.exportXml = vi.fn().mockRejectedValue(new Error('export failed'));
