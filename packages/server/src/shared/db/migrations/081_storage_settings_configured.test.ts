@@ -11,7 +11,7 @@ describe('storage configured migration', () => {
     const db = new Database(':memory:');
     try {
       createStorage(db);
-      db.prepare('UPDATE storage_settings SET access_key = ?, secret_key = ?').run(seal('minioadmin'), seal('minioadmin'));
+      db.prepare('UPDATE storage_settings SET access_key = ?, secret_key = ?, max_file_size = ?, use_ssl = ?').run(seal('minioadmin'), seal('different'), 100, 1);
       up(db);
       expect(db.prepare('SELECT configured FROM storage_settings').get()).toEqual({ configured: 0 });
     } finally { db.close(); if (previous === undefined) delete process.env.AZITO_MASTER_KEY; else process.env.AZITO_MASTER_KEY = previous; }
