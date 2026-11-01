@@ -8,7 +8,7 @@ const fs = require('fs');
 const path = require('path');
 const { execFileSync } = require('child_process');
 const [kind, home, expected] = process.argv.slice(1);
-function result(outcome, detail) { console.log(JSON.stringify({ outcome, detail })); }
+function result(outcome, detail) { console.log('AZITO_MCP_RESULT:' + JSON.stringify({ outcome, detail })); }
 function owned(entry) {
   if (!entry || entry.command !== 'node' || !Array.isArray(entry.args) || entry.args.length !== 1 || typeof entry.args[0] !== 'string') return 'registration has a different command or arguments';
   if (!path.isAbsolute(entry.args[0])) return 'registration path is not absolute';
@@ -85,18 +85,25 @@ catch { result('failed', kind === 'claude' ? 'Claude settings could not be read 
 
 export function harnessMcpScript(kind: 'claude' | 'codex', node: string, home: string, expected: string): string {
   const q = powershellDialect.quote;
-  const encoded = gzipSync(Buffer.from(JSON.stringify({ source: HOST_SCRIPT, args: [kind, home, expected] }), 'utf8')).toString('base64');
+  const source = HOST_SCRIPT.split('\n').map((line) => line.trim()).join('\n');
+  const encoded = gzipSync(Buffer.from(JSON.stringify({ source, args: [kind, home, expected] }), 'utf8')).toString('base64');
   const launcher = 'const p=JSON.parse(require(`zlib`).gunzipSync(Buffer.from(process.env.AZITO_MCP_SRC,`base64`)));process.argv=[process.execPath,...p.args];eval(p.source)';
   return `$env:AZITO_MCP_SRC = ${q(encoded)}\n& ${q(node)} -e ${q(launcher)}\nif ($LASTEXITCODE -ne 0) { throw 'MCP inspection failed' }`;
 }
 
 export function parseHarnessMcpOutput(output: string): ScriptOutcome {
+  const lines = output.split(/\r?\n/).map((line) => line.trim()).filter(Boolean);
+  const marked = lines.filter((line) => line.startsWith('AZITO_MCP_RESULT:'));
+  if (marked.length !== 1) throw new Error(`MCP inspection returned an invalid response: expected one result marker, found ${marked.length} (${lines.length} output lines)`);
+  let value: unknown;
   try {
-    const value: unknown = JSON.parse(output.trim());
-    if (typeof value === 'object' && value !== null && 'outcome' in value && ['done', 'absent', 'skipped', 'failed'].includes(String(value.outcome))) {
-      const detail = 'detail' in value && typeof value.detail === 'string' ? value.detail : undefined;
-      return { outcome: value.outcome as ScriptOutcome['outcome'], ...(detail ? { detail } : {}) };
-    }
-  } catch { /* invalid host response */ }
-  throw new Error('MCP inspection returned an invalid response');
+    value = JSON.parse(marked[0]!.slice('AZITO_MCP_RESULT:'.length));
+  } catch {
+    throw new Error('MCP inspection returned an invalid response: result is not JSON');
+  }
+  if (typeof value !== 'object' || value === null || !('outcome' in value) || !['done', 'absent', 'skipped', 'failed'].includes(String(value.outcome))) {
+    throw new Error('MCP inspection returned an invalid response: missing or invalid outcome');
+  }
+  const detail = 'detail' in value && typeof value.detail === 'string' ? value.detail : undefined;
+  return { outcome: value.outcome as ScriptOutcome['outcome'], ...(detail ? { detail } : {}) };
 }

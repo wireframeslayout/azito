@@ -7,6 +7,21 @@ import { join } from 'node:path';
 import { harnessMcpScript, parseHarnessMcpOutput } from './windowsHarnessMcpUninstall';
 
 describe('Claude harness MCP removal', () => {
+  it('extracts the framed result and reports malformed output without exposing it', () => {
+    expect(parseHarnessMcpOutput('warning with secret\r\nAZITO_MCP_RESULT:{"outcome":"done"}\r\n')).toEqual({ outcome: 'done' });
+    for (const [output, reason] of [
+      ['secret', 'expected one result marker'],
+      ['AZITO_MCP_RESULT:secret', 'result is not JSON'],
+      ['AZITO_MCP_RESULT:{"token":"secret"}', 'missing or invalid outcome'],
+      ['AZITO_MCP_RESULT:{"outcome":"done"}\nAZITO_MCP_RESULT:{"outcome":"done"}', 'expected one result marker'],
+    ]) {
+      try { parseHarnessMcpOutput(output!); throw new Error('accepted invalid output'); }
+      catch (error) {
+        expect((error as Error).message).toContain(reason);
+        expect((error as Error).message).not.toContain('secret');
+      }
+    }
+  });
   it('passes the compressed script and arguments through the Node launcher', () => {
     const home = mkdtempSync(join(tmpdir(), 'azito mcp-'));
     try {

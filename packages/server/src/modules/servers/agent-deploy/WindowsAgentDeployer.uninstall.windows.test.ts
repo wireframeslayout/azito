@@ -178,7 +178,7 @@ describe.skipIf(process.platform !== 'win32')('removing the Windows agent from a
     }
 
     // The agent here was started by the test, not by the task, so ending the task does not end it: AZITO does not stop it either.
-    const first = await deployer.uninstall('ci', host, { removeMisao: false });
+    const first = await deployer.uninstall('ci', host, { removeMisao: false }, 'ci-isolated');
 
     expect(first.ok).toBe(false);
     expect(stepsOf(first)).toMatchObject({ task: 'done', processes: 'failed', folder: 'skipped' });
@@ -193,17 +193,20 @@ describe.skipIf(process.platform !== 'win32')('removing the Windows agent from a
     running.kill();
     for (let i = 0; i < 40 && alive(running); i++) await new Promise((r) => setTimeout(r, 250));
     expect(alive(running)).toBe(false);
-    const result = await deployer.uninstall('ci', host, { removeMisao: false });
+    const result = await deployer.uninstall('ci', host, { removeMisao: false }, 'ci-isolated');
 
+    // Clean up before assertions: a failure must not leave the rule for the next test.
+    const rulesBeforeCleanup = elevated ? await ruleCount() : 0;
+    if (elevated) await ps(`Remove-NetFirewallRule -DisplayName ${powershellDialect.quote(firewallRuleName(OPTIONS.port))} -ErrorAction Stop`);
     expect(result.ok, JSON.stringify(result.steps)).toBe(true);
-    expect(stepsOf(result)).toEqual({ task: 'absent', processes: 'absent', firewall: elevated ? 'skipped' : 'absent', folder: 'done' });
+    expect(stepsOf(result)).toEqual({ task: 'absent', processes: 'absent', firewall: elevated ? 'skipped' : 'absent', folder: 'done', claudeHarnessMcp: 'skipped', codexHarnessMcp: 'skipped' });
     expect(fs.existsSync(agentRoot())).toBe(false);
     if (elevated) {
       // Reported with its Name and the command to remove it, and still there.
       const text = result.steps.find((step) => step.id === 'firewall')!.detail!;
       expect(text).toContain("Remove-NetFirewallRule -Name '");
-      expect(await ruleCount()).toBe(1);
-      await ps(`Remove-NetFirewallRule -DisplayName ${powershellDialect.quote(firewallRuleName(OPTIONS.port))} -ErrorAction SilentlyContinue`);
+      expect(rulesBeforeCleanup).toBe(1);
+      expect(await ruleCount()).toBe(0);
     }
     // The misao was not asked for: its task and folder are still there.
     expect(await taskRegistered(OPTIONS.misaoTaskName)).toBe(true);
@@ -211,11 +214,12 @@ describe.skipIf(process.platform !== 'win32')('removing the Windows agent from a
   }, 600_000);
 
   it('removing again finds nothing to remove (nothing fails), and with the misao asked for, removes its task and folder', async () => {
-    const again = await deployer.uninstall('ci', host, { removeMisao: false });
+    const again = await deployer.uninstall('ci', host, { removeMisao: false }, 'ci-isolated');
     expect(again.ok, JSON.stringify(again.steps)).toBe(true);
-    expect(stepsOf(again)).toEqual({ task: 'absent', processes: 'absent', firewall: 'absent', folder: 'absent' });
+    expect(await ruleCount()).toBe(0);
+    expect(stepsOf(again)).toEqual({ task: 'absent', processes: 'absent', firewall: 'absent', folder: 'absent', claudeHarnessMcp: 'skipped', codexHarnessMcp: 'skipped' });
 
-    const result = await deployer.uninstall('ci', host, { removeMisao: true });
+    const result = await deployer.uninstall('ci', host, { removeMisao: true }, 'ci-isolated');
     expect(result.ok, JSON.stringify(result.steps)).toBe(true);
     expect(stepsOf(result)).toMatchObject({ misaoTask: 'done', misaoProcesses: 'absent', misaoFolder: 'done' });
     expect(await taskRegistered(OPTIONS.misaoTaskName)).toBe(false);
@@ -236,7 +240,7 @@ describe.skipIf(process.platform !== 'win32')('removing the Windows agent from a
     const created = await cmdExec('ci', `"${schtasksPath()}" /Create /XML "${file}" /TN ${OPTIONS.taskName} /F`, 60_000);
     expect(created.code, created.stdout + created.stderr).toBe(0);
 
-    const result = await deployer.uninstall('ci', host, { removeMisao: false });
+    const result = await deployer.uninstall('ci', host, { removeMisao: false }, 'ci-isolated');
 
     expect(result.ok).toBe(false);
     expect(stepsOf(result)).toMatchObject({ task: 'failed', processes: 'skipped', firewall: 'skipped', folder: 'skipped' });
@@ -261,7 +265,7 @@ describe.skipIf(process.platform !== 'win32')('removing the Windows agent from a
     const created = await cmdExec('ci', `"${schtasksPath()}" /Create /XML "${file}" /TN ${OPTIONS.taskName} /F`, 60_000);
     expect(created.code, created.stdout + created.stderr).toBe(0);
 
-    const result = await deployer.uninstall('ci', host, { removeMisao: false });
+    const result = await deployer.uninstall('ci', host, { removeMisao: false }, 'ci-isolated');
 
     expect(stepsOf(result)).toMatchObject({ task: 'failed', processes: 'skipped', firewall: 'skipped', folder: 'skipped' });
     expect(await taskRegistered(OPTIONS.taskName)).toBe(true);
@@ -306,13 +310,13 @@ describe.skipIf(process.platform !== 'win32')('removing the Windows agent from a
     const short = await shortFormOf(host.nodePath!);
     if (short === undefined) ctx.skip('this volume makes no 8.3 names');
     await registerAgentTaskWithNode(fwNode);
-    const other = await deployer.uninstall('ci', host, { removeMisao: false });
+    const other = await deployer.uninstall('ci', host, { removeMisao: false }, 'ci-isolated');
     expect(stepsOf(other)).toMatchObject({ task: 'failed', processes: 'skipped', folder: 'skipped' });
     expect(await taskRegistered(OPTIONS.taskName)).toBe(true);
     await removeAgentTaskAndFolder();
 
     await registerAgentTaskWithNode(short!);
-    const same = await deployer.uninstall('ci', host, { removeMisao: false });
+    const same = await deployer.uninstall('ci', host, { removeMisao: false }, 'ci-isolated');
     expect(stepsOf(same)).toMatchObject({ task: 'done', folder: 'done' });
     expect(await taskRegistered(OPTIONS.taskName)).toBe(false);
   }, 120_000);
@@ -323,7 +327,7 @@ describe.skipIf(process.platform !== 'win32')('removing the Windows agent from a
     expect((await cmdExec('ci', `mklink /J "${jn}" "${path.dirname(host.nodePath!)}"`, 60_000)).code).toBe(0);
     try {
       await registerAgentTaskWithNode(path.join(jn, 'node.exe'));
-      const result = await deployer.uninstall('ci', host, { removeMisao: false });
+      const result = await deployer.uninstall('ci', host, { removeMisao: false }, 'ci-isolated');
       expect(stepsOf(result)).toMatchObject({ task: 'failed', processes: 'skipped', folder: 'skipped' });
       expect(await taskRegistered(OPTIONS.taskName)).toBe(true);
     } finally {
@@ -344,7 +348,7 @@ describe.skipIf(process.platform !== 'win32')('removing the Windows agent from a
     fs.writeFileSync(file, encodeTaskXml(withCom));
     const created = await cmdExec('ci', `"${schtasksPath()}" /Create /XML "${file}" /TN ${OPTIONS.taskName} /F`, 60_000);
     if (created.code === 0) {
-      const result = await deployer.uninstall('ci', host, { removeMisao: false });
+      const result = await deployer.uninstall('ci', host, { removeMisao: false }, 'ci-isolated');
       expect(stepsOf(result)).toMatchObject({ task: 'failed', folder: 'skipped' });
       expect(await taskRegistered(OPTIONS.taskName)).toBe(true);
     }
@@ -366,7 +370,7 @@ describe.skipIf(process.platform !== 'win32')('removing the Windows agent from a
       try {
         await new Promise((r) => setTimeout(r, 1500));
         expect(alive(child), spelling).toBe(true);
-        const result = await deployer.uninstall('ci', host, { removeMisao: false });
+        const result = await deployer.uninstall('ci', host, { removeMisao: false }, 'ci-isolated');
         expect(stepsOf(result), `${spelling}: ${JSON.stringify(result.steps)}`).toMatchObject({ processes: 'failed', folder: 'skipped' });
         expect(result.steps.find((step) => step.id === 'processes')!.detail, spelling).toContain(`process ${child.pid}`);
         expect(fs.existsSync(script), spelling).toBe(true);
@@ -376,7 +380,7 @@ describe.skipIf(process.platform !== 'win32')('removing the Windows agent from a
       }
     }
     // Nothing runs from it now: the removal goes through.
-    const result = await deployer.uninstall('ci', host, { removeMisao: false });
+    const result = await deployer.uninstall('ci', host, { removeMisao: false }, 'ci-isolated');
     expect(stepsOf(result)).toMatchObject({ processes: 'absent', folder: 'done' });
     expect(fs.existsSync(root)).toBe(false);
   }, 180_000);
@@ -418,7 +422,7 @@ describe.skipIf(process.platform !== 'win32')('removing the Windows agent from a
     const made = await cmdExec('ci', `mklink /J "${path.join(root, 'link')}" "${outside}"`, 60_000);
     expect(made.code, made.stdout + made.stderr).toBe(0);
 
-    const result = await deployer.uninstall('ci', host, { removeMisao: false });
+    const result = await deployer.uninstall('ci', host, { removeMisao: false }, 'ci-isolated');
 
     expect(result.ok, JSON.stringify(result.steps)).toBe(true);
     expect(stepsOf(result).folder).toBe('done');
@@ -434,7 +438,7 @@ describe.skipIf(process.platform !== 'win32')('removing the Windows agent from a
     const made = await cmdExec('ci', `mklink /J "${root}" "${outside}"`, 60_000);
     expect(made.code, made.stdout + made.stderr).toBe(0);
     try {
-      const result = await deployer.uninstall('ci', host, { removeMisao: false });
+      const result = await deployer.uninstall('ci', host, { removeMisao: false }, 'ci-isolated');
       expect(result.ok).toBe(false);
       expect(stepsOf(result).folder).toBe('failed');
       expect(result.steps.find((s) => s.id === 'folder')!.detail).toContain('is a link');

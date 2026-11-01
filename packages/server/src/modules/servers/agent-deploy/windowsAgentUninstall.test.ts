@@ -60,8 +60,8 @@ class FakeUninstallHost {
   readonly tasks: Map<string, TaskInit & { running: boolean }>;
   /** What a script answers, by the start of its `what`; an Error is thrown. */
   answers: Record<string, string | Error> = {
-    'Checking claude MCP registration': '{"outcome":"absent"}',
-    'Checking codex MCP registration': '{"outcome":"absent"}',
+    'Checking claude MCP registration': 'AZITO_MCP_RESULT:{"outcome":"absent"}',
+    'Checking codex MCP registration': 'AZITO_MCP_RESULT:{"outcome":"absent"}',
     'Comparing the node.exe': 'SAME',
     'Looking for processes still running from the agent folder': 'CLEAR',
     'Looking for the Windows Firewall rule': 'ABSENT',
@@ -137,8 +137,8 @@ const LEFT_AGENT = `LEFT|4242|node.exe|C:\\Program Files\\nodejs\\node.exe`;
 describe('uninstallWindowsAgent', () => {
   it('runs both MCP steps independently of each other and the agent folder', async () => {
     const host = new FakeUninstallHost({});
-    host.answers['Checking claude MCP registration'] = '{"outcome":"failed","detail":"settings failed"}';
-    host.answers['Checking codex MCP registration'] = '{"outcome":"done"}';
+    host.answers['Checking claude MCP registration'] = 'AZITO_MCP_RESULT:{"outcome":"failed","detail":"settings failed"}';
+    host.answers['Checking codex MCP registration'] = 'AZITO_MCP_RESULT:{"outcome":"done"}';
     const result = await run(host);
     expect(host.bodies.filter((b) => b.what.includes('MCP registration')).map((b) => b.what)).toEqual([
       'Checking claude MCP registration', 'Checking codex MCP registration',
@@ -962,7 +962,7 @@ describe('WindowsAgentDeployer.uninstall', () => {
       const result = await fake.exec(h, command);
       const last = fake.calls[fake.calls.length - 1];
       if (last?.kind !== 'script') return result;
-      if (last.text.includes('AZITO_MCP_SRC')) return { ...result, stdout: '{"outcome":"absent"}\r\n' };
+      if (last.text.includes('AZITO_MCP_SRC')) return { ...result, stdout: 'AZITO_MCP_RESULT:{"outcome":"absent"}\r\n' };
       if (last.text.includes('Remove-Tree')) return { ...result, stdout: 'DONE\r\n' };
       if (last.text.includes('Get-NetFirewallRule')) return { ...result, stdout: 'ABSENT\r\n' };
       if (last.text.includes('Find-Left')) return { ...result, stdout: 'CLEAR\r\n' };
