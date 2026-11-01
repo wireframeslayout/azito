@@ -224,11 +224,11 @@ export function misaoHolderScript(root: string, pipe: string): string {
     '$short = try { (New-Object -ComObject Scripting.FileSystemObject).GetFolder($root).ShortPath } catch { $null }',
     'Write-Output (\'FORMS|\' + (Clean (Resolve-Long $root)) + \'|\' + (Clean $short))',
     'try { $id = [AzitoPipeHolder]::ServerProcessId($pipe.Substring(9)) } catch { Write-Output (\'ERROR|\' + (Clean $_.Exception.Message)); exit 0 }',
-    '$p = Get-CimInstance Win32_Process -Filter "ProcessId = $id"',
+    '$p = Get-Process -Id $id -ErrorAction SilentlyContinue',
     'if (-not $p) { Write-Output \'ERROR|the process that serves the pipe is gone\'; exit 0 }',
     '$me = [Security.Principal.WindowsIdentity]::GetCurrent().User.Value; $owner = \'unknown\'',
-    'try { $r = Invoke-CimMethod -InputObject $p -MethodName GetOwnerSid -ErrorAction Stop; if ($r.ReturnValue -eq 0 -and $r.Sid) { $owner = if ($r.Sid -eq $me) { \'mine\' } else { \'other\' } } } catch { }',
-    'Write-Output (\'HOLDER|\' + $id + \'|\' + (Clean $p.Name) + \'|\' + $owner + \'|\' + (Clean $p.ExecutablePath))',
+    '$sid = [AzitoPipeHolder]::OwnerSid($id); if ($sid) { $owner = if ($sid -eq $me) { \'mine\' } else { \'other\' } }',
+    'Write-Output (\'HOLDER|\' + $id + \'|\' + (Clean ($p.ProcessName + \'.exe\')) + \'|\' + $owner + \'|\' + (Clean $p.Path))',
   ].join('\n');
 }
 

@@ -850,7 +850,8 @@ describe('which daemon may be asked to stop', () => {
   it('the host is asked of Windows, not of the daemon, and the stop is given the pipe of the task and no way to kill', () => {
     const asked = misaoHolderScript(root, '\\\\.\\pipe\\p');
     expect(asked).toContain('[AzitoPipeHolder]::ServerProcessId');
-    expect(asked).toContain('GetOwnerSid');
+    expect(asked).toContain('[AzitoPipeHolder]::OwnerSid($id)');
+    expect(asked).not.toMatch(/Get-CimInstance|Invoke-CimMethod/);
     const stop = misaoStopScript(`${root}\\0.3.0\\misao.exe`, '\\\\.\\pipe\\p');
     expect(stop).toContain("-ArgumentList 'stop'");
     expect(stop).not.toMatch(/Stop-Process|\.Kill\(|taskkill/i);
