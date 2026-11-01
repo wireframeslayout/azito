@@ -88,7 +88,7 @@ export function useWorkspaceData(
 
   // Event-driven refresh via WebSocket
   useNotificationChannel({
-    onWindowRenamed: refreshWorkspace,
+    onWindowRenamed: (event) => { if (event.windowId != null) void refreshWorkspace(); },
     onSessionsUpdated: useCallback(() => {
       refreshSessions();
     }, [refreshSessions]),

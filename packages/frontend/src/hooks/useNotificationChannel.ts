@@ -1,9 +1,9 @@
 import { useEffect, useRef } from 'react';
-import type { AgentActivityPayload, BrowserOpenedPayload, NotificationEvent } from '../types/notification';
+import type { AgentActivityPayload, BrowserOpenedPayload, NotificationEvent, WindowRenamedPayload } from '../types/notification';
 import { buildWsUrl } from '../api/wsUrl';
 
 export interface NotificationHandlers {
-  onWindowRenamed?: (payload: Extract<NotificationEvent, { type: 'window:renamed' }>['payload']) => void;
+  onWindowRenamed?: (payload: WindowRenamedPayload) => void;
   onMuxWake?: (payload: { windowId: number; serverName: string; title?: string; taskId?: number; reason: 'ask' | 'misao_unavailable' }) => void;
   onSessionsUpdated?: (serverName: string) => void;
   onTaskStatus?: (payload: { taskId: number; status: string; title?: string; projectId?: number }) => void;

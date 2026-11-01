@@ -5,7 +5,7 @@ import { apiWithStatus } from '../api/client';
 import { PROJECTS_CHANGED_EVENT } from '../lib/projectsChanged';
 
 vi.mock('../api/client', () => ({ apiWithStatus: vi.fn() }));
-const events = vi.hoisted(() => ({ handlers: {} as { onTaskStatus?: () => void; onWorkspaceRefresh?: () => void; onWindowRenamed?: () => void } }));
+const events = vi.hoisted(() => ({ handlers: {} as { onTaskStatus?: () => void; onWorkspaceRefresh?: () => void; onWindowRenamed?: (event: { serverName: string; target: string; newName: string; windowId?: number }) => void } }));
 vi.mock('./useNotificationChannel', () => ({ useNotificationChannel: (handlers: typeof events.handlers) => { events.handlers = handlers; } }));
 const api = vi.mocked(apiWithStatus);
 beforeEach(() => { api.mockReset(); });
@@ -40,8 +40,15 @@ it('refreshes in response to task and workspace events', async () => {
   api.mockResolvedValue({ status: 200, body: [] });
   render(<WorkspaceCatalogProvider><View /></WorkspaceCatalogProvider>);
   await waitFor(() => expect(api).toHaveBeenCalledTimes(2));
-  act(() => { events.handlers.onTaskStatus?.(); events.handlers.onWorkspaceRefresh?.(); events.handlers.onWindowRenamed?.(); });
+  act(() => { events.handlers.onTaskStatus?.(); events.handlers.onWorkspaceRefresh?.(); events.handlers.onWindowRenamed?.({ serverName: "local", target: "s:1", newName: "new", windowId: 1 }); });
   await waitFor(() => expect(api).toHaveBeenCalledTimes(8));
+});
+it('does not refresh the catalog for an unregistered window rename', async () => {
+  api.mockResolvedValue({ status: 200, body: [] });
+  render(<WorkspaceCatalogProvider><View /></WorkspaceCatalogProvider>);
+  await waitFor(() => expect(api).toHaveBeenCalledTimes(2));
+  act(() => events.handlers.onWindowRenamed?.({ serverName: 'local', target: 's:1', newName: 'new' }));
+  expect(api).toHaveBeenCalledTimes(2);
 });
 it('rejects use outside the provider', () => {
   expect(() => renderHook(() => useWorkspaceCatalog())).toThrow('useWorkspaceCatalog must be used within WorkspaceCatalogProvider');

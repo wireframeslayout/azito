@@ -151,3 +151,18 @@ it('shows rename in active rows without an activity transition, including during
   await resolve(0, [running]);
   expect(screen.getByRole('status')).toHaveTextContent('Renamed');
 });
+
+it('retains an unregistered rename through status, reconnect and completion, then forgets it', async () => {
+  mount();
+  await resolve(0, [running]);
+  act(() => events.handlers.onWindowRenamed({ serverName: 'local', target: 's:1', newName: 'Renamed' }));
+  send({ ...running, status: 'blocked', label: 'Old' });
+  expect(state().entries).toMatchObject([{ label: 'Renamed', status: 'blocked' }]);
+  act(() => events.handlers.onConnected());
+  await resolve(1, [{ ...running, label: 'Old' }]);
+  expect(state().entries).toMatchObject([{ label: 'Renamed' }]);
+  send({ ...running, running: false, reason: 'completed', label: 'Old' });
+  expect(state().finished).toMatchObject([{ label: 'Renamed' }]);
+  send({ ...running, label: 'Replacement' });
+  expect(state().entries).toMatchObject([{ label: 'Replacement' }]);
+});
