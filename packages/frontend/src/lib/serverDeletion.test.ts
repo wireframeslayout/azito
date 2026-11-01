@@ -327,3 +327,13 @@ describe('deleteEntryOnly', () => {
     expect(await deleteEntryOnly({ uninstallHost: vi.fn(), deleteRow: async () => { throw new Error('network down'); } })).toEqual({ kind: 'rowFailed', message: 'network down' });
   });
 });
+
+
+it('accepts and displays both harness registration results', () => {
+  const steps = [
+    { id: 'claudeHarnessMcp', outcome: 'done' },
+    { id: 'codexHarnessMcp', outcome: 'skipped', detail: 'unverified' },
+  ] as const;
+  expect(readUninstallAnswer({ ok: true, steps })).toEqual({ kind: 'ok', steps });
+  expect(leftBehindOf(steps)).toEqual(steps);
+});

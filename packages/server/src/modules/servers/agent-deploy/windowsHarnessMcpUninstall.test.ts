@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { execFileSync } from 'node:child_process';
-import { mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { chmodSync, mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { gunzipSync } from 'node:zlib';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -27,4 +27,28 @@ describe('Claude harness MCP removal', () => {
       expect(run().outcome).toBe('skipped');
     } finally { rmSync(home, { recursive: true, force: true }); }
   });
+  it('removes a matching Codex registration through the CLI and leaves a different registration alone', () => {
+    const home = mkdtempSync(join(tmpdir(), 'azito-codex-'));
+    try {
+      const target = join(home, 'index.js');
+      const response = join(home, 'response.json');
+      const marker = join(home, 'removed');
+      const executable = join(home, 'codex.EXE');
+      writeFileSync(target, '');
+      writeFileSync(executable, `#!/bin/sh\nif [ "$2" = get ]; then /bin/cat "${response}"; else /usr/bin/touch "${marker}"; fi\n`);
+      chmodSync(executable, 0o755);
+      const script = harnessMcpScript('codex', process.execPath, home, target);
+      const encoded = /FromBase64String\('([^']+)'\)/.exec(script)![1];
+      const source = gunzipSync(Buffer.from(encoded, 'base64')).toString('utf8');
+      const run = () => parseHarnessMcpOutput(execFileSync(process.execPath, ['-e', source, 'codex', home, target], { encoding: 'utf8', env: { ...process.env, PATH: home, PATHEXT: '.EXE', CODEX_HOME: join(home, 'custom') } }));
+      // The host script uses Windows PATH separators.
+      writeFileSync(response, JSON.stringify({ transport: { command: 'node', args: [target] } }));
+      expect(run().outcome).toBe('done');
+      expect(readFileSync(marker, 'utf8')).toBe('');
+      rmSync(marker);
+      writeFileSync(response, JSON.stringify({ transport: { command: 'other', args: [target] } }));
+      expect(run().outcome).toBe('skipped');
+    } finally { rmSync(home, { recursive: true, force: true }); }
+  });
+
 });

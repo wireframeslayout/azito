@@ -11,6 +11,7 @@ const [kind, home, expected] = process.argv.slice(1);
 function result(outcome, detail) { console.log(JSON.stringify({ outcome, detail })); }
 function owned(entry) {
   if (!entry || entry.command !== 'node' || !Array.isArray(entry.args) || entry.args.length !== 1 || typeof entry.args[0] !== 'string') return 'registration has a different command or arguments';
+  if (!path.isAbsolute(entry.args[0])) return 'registration path is not absolute';
   try {
     const a = fs.realpathSync.native(entry.args[0]);
     const b = fs.realpathSync.native(expected);
@@ -19,8 +20,12 @@ function owned(entry) {
 }
 function claude() {
   const file = path.join(home, '.claude', 'settings.json');
-  if (!fs.existsSync(file)) return result('absent');
-  const original = fs.readFileSync(file, 'utf8');
+  let original;
+  try {
+    if (fs.lstatSync(file).isSymbolicLink()) return result('skipped', 'Claude settings is a link and was left in place');
+    original = fs.readFileSync(file, 'utf8');
+  }
+  catch (error) { if (error.code === 'ENOENT') return result('absent'); throw error; }
   const config = JSON.parse(original);
   if (!config || typeof config !== 'object' || Array.isArray(config)) throw Error('invalid settings');
   if (config.mcpServers === undefined) return result('absent');
@@ -30,11 +35,14 @@ function claude() {
   if (reason) return result('skipped', reason);
   delete config.mcpServers['azt-mcp'];
   const temp = file + '.' + process.pid + '.' + require('crypto').randomBytes(8).toString('hex') + '.tmp';
+  let created = false;
   try {
-    fs.writeFileSync(temp, JSON.stringify(config, null, 2) + '\n', { flag: 'wx', mode: fs.statSync(file).mode });
+    fs.copyFileSync(file, temp, fs.constants.COPYFILE_EXCL);
+    created = true;
+    fs.writeFileSync(temp, JSON.stringify(config, null, 2) + '\n');
     if (fs.readFileSync(file, 'utf8') !== original) return result('skipped', 'settings changed during inspection');
     fs.renameSync(temp, file);
-  } finally { try { fs.unlinkSync(temp); } catch (e) { if (e.code !== 'ENOENT') throw e; } }
+  } finally { if (created) { try { fs.unlinkSync(temp); } catch (e) { if (e.code !== 'ENOENT') throw e; } } }
   result('done');
 }
 function codexCommand() {

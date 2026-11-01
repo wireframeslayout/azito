@@ -59,6 +59,8 @@ class FakeUninstallHost {
   readonly tasks: Map<string, TaskInit & { running: boolean }>;
   /** What a script answers, by the start of its `what`; an Error is thrown. */
   answers: Record<string, string | Error> = {
+    'Checking claude MCP registration': '{"outcome":"absent"}',
+    'Checking codex MCP registration': '{"outcome":"absent"}',
     'Comparing the node.exe': 'SAME',
     'Looking for processes still running from the agent folder': 'CLEAR',
     'Looking for the Windows Firewall rule': 'ABSENT',
@@ -103,7 +105,7 @@ class FakeUninstallHost {
   };
 
   script = async (what: string, body: string): Promise<string> => {
-    this.log.push(`script ${what}`);
+    if (!what.includes('MCP registration')) this.log.push(`script ${what}`);
     this.bodies.push({ what, body });
     const key = Object.keys(this.answers).find((k) => what.startsWith(k));
     const answer = key === undefined ? '' : this.answers[key]!;
@@ -125,13 +127,26 @@ class FakeUninstallHost {
 }
 
 const factsOf = (home: string, nodePath: string | null) => ({ home, systemRoot: 'C:\\Windows', nodePath, userId: 'PC\\dev' });
-const outcomes = (result: WindowsUninstallResult): Record<string, string> => Object.fromEntries(result.steps.map((s) => [s.id, s.outcome]));
+const outcomes = (result: WindowsUninstallResult): Record<string, string> => Object.fromEntries(result.steps.filter((s) => s.id !== 'claudeHarnessMcp' && s.id !== 'codexHarnessMcp').map((s) => [s.id, s.outcome]));
 const detail = (result: WindowsUninstallResult, id: UninstallStepId): string => result.steps.find((s) => s.id === id)?.detail ?? '';
 const run = (host: FakeUninstallHost, removeMisao = false, options: WindowsAgentOptions = OPTIONS, hostNode: string | null = NODE): Promise<WindowsUninstallResult> => uninstallWindowsAgent(host.asHost(), factsOf(HOME, hostNode), options, { removeMisao });
 
 const LEFT_AGENT = `LEFT|4242|node.exe|C:\\Program Files\\nodejs\\node.exe`;
 
 describe('uninstallWindowsAgent', () => {
+  it('runs both MCP steps independently of each other and the agent folder', async () => {
+    const host = new FakeUninstallHost({});
+    host.answers['Checking claude MCP registration'] = '{"outcome":"failed","detail":"settings failed"}';
+    host.answers['Checking codex MCP registration'] = '{"outcome":"done"}';
+    const result = await run(host);
+    expect(result.ok).toBe(false);
+    expect(result.steps.filter((s) => s.id.endsWith('HarnessMcp'))).toEqual([
+      { id: 'claudeHarnessMcp', outcome: 'failed', detail: 'settings failed' },
+      { id: 'codexHarnessMcp', outcome: 'done' },
+    ]);
+    expect(result.steps.find((s) => s.id === 'folder')?.outcome).toBe('done');
+  });
+
   it('ends the task, unregisters it, looks for what still runs from the folder, reports the firewall rule and removes the folder, in that order', async () => {
     const host = new FakeUninstallHost({ AzitoAgent: { xml: AGENT_XML, running: true } });
     const result = await run(host);
@@ -402,7 +417,7 @@ describe('uninstallWindowsAgent', () => {
   it('leaves the misao alone when it was not asked for', async () => {
     const host = new FakeUninstallHost({ AzitoAgent: { xml: AGENT_XML }, AzitoMisao: { xml: MISAO_XML } });
     const result = await run(host);
-    expect(result.steps.map((s) => s.id)).toEqual(['task', 'processes', 'firewall', 'folder']);
+    expect(result.steps.map((s) => s.id)).toEqual(['task', 'processes', 'firewall', 'folder', 'claudeHarnessMcp', 'codexHarnessMcp']);
     expect(host.tasks.has('AzitoMisao')).toBe(true);
     expect(host.log.filter((l) => l.includes('Misao') || l.includes('misao'))).toEqual([]);
   });
@@ -927,6 +942,7 @@ describe('WindowsAgentDeployer.uninstall', () => {
       const result = await fake.exec(h, command);
       const last = fake.calls[fake.calls.length - 1];
       if (last?.kind !== 'script') return result;
+      if (last.text.includes('[IO.Compression.GzipStream]')) return { ...result, stdout: '{"outcome":"absent"}\r\n' };
       if (last.text.includes('Remove-Tree')) return { ...result, stdout: 'DONE\r\n' };
       if (last.text.includes('Get-NetFirewallRule')) return { ...result, stdout: 'ABSENT\r\n' };
       if (last.text.includes('Find-Left')) return { ...result, stdout: 'CLEAR\r\n' };

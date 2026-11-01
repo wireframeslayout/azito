@@ -63,7 +63,7 @@ export function readUninstallAnswer(body: unknown): HostRemovalDone | HostRemova
  * `skipped` and say why. They are shown after the row is deleted, since nothing else tells the person what is still there.
  */
 export function leftBehindOf(steps: readonly UninstallStep[]): UninstallStep[] {
-  return steps.filter((s) => s.outcome === 'skipped' && s.detail !== undefined && s.detail !== '');
+  return steps.filter((s) => s.id === 'claudeHarnessMcp' || s.id === 'codexHarnessMcp' || (s.outcome === 'skipped' && s.detail !== undefined && s.detail !== '')); 
 }
 
 /** The commands a step's text asks the person to run (one per line), to be shown where they can be copied. */
