@@ -31,9 +31,10 @@ export function Overlay({ open, onClose, labelledBy, children, variant = 'dialog
     if (!open) return;
     const container = ref.current;
     if (!container) return;
-    (initialFocusRef?.current ?? getFocusableElements(container)[0] ?? container).focus();
+    if (initialFocusRef?.current) { initialFocusRef.current.focus(); return; }
+    if (container.contains(document.activeElement)) return;
+    (getFocusableElements(container)[0] ?? container).focus();
   }, [open, initialFocusRef]);
-
 
   if (!open) return null;
   return createPortal(

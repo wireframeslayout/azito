@@ -129,11 +129,14 @@ export function useOverlayStack(open: boolean, elementRef: RefObject<HTMLElement
   const { addOverlay, stack } = useContextValue();
   const id = useRef(Symbol('overlay'));
   const addRef = useRef(addOverlay); addRef.current = addOverlay;
-  const returnFocusRef = useRef(returnFocus); returnFocusRef.current = returnFocus;
+  const wasOpen = useRef(false);
+  const opener = useRef<HTMLElement | null>(null);
+  // Captured while rendering: a child's autoFocus moves focus before any effect of this hook runs.
+  if (open && !wasOpen.current) opener.current = returnFocus && document.activeElement instanceof HTMLElement ? document.activeElement : null;
+  wasOpen.current = open;
   useEffect(() => {
     if (!open || !elementRef.current) return;
-    const previous = returnFocusRef.current && document.activeElement instanceof HTMLElement ? document.activeElement : null;
-    return addRef.current(id.current, elementRef.current, previous);
+    return addRef.current(id.current, elementRef.current, opener.current);
   }, [open, elementRef]);
   return { id: id.current, isTop: stack.at(-1)?.id === id.current };
 }

@@ -46,6 +46,19 @@ describe('Overlay', () => {
     trigger.remove();
   });
 
+  it('keeps a child autoFocus and still returns focus to the trigger', async () => {
+    const view = (open: boolean) => <HotkeyProvider>
+      <button>Trigger</button>
+      <Overlay open={open} labelledBy="auto" onClose={() => {}}><h2 id="auto">Auto</h2><button>Option</button><input aria-label="Name" autoFocus /></Overlay>
+    </HotkeyProvider>;
+    const { rerender } = render(view(false));
+    screen.getByText('Trigger').focus();
+    rerender(view(true));
+    expect(screen.getByLabelText('Name')).toHaveFocus();
+    rerender(view(false));
+    await waitFor(() => expect(screen.getByText('Trigger')).toHaveFocus());
+  });
+
   it('does not close a busy alert or on its backdrop', () => {
     const onClose = vi.fn();
     render(<HotkeyProvider><Overlay open labelledBy="confirm" variant="alert" busy dismissOnBackdrop={false} onClose={onClose}><h2 id="confirm">Confirm</h2>Message</Overlay></HotkeyProvider>);

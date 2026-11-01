@@ -1082,8 +1082,8 @@ input[aria-invalid="true"]:focus-visible { outline-color: var(--danger) !importa
   padding: var(--space-5);
   width: 100%;
   overflow-y: auto;
-  animation: overlay-enter 0.16s ease-out;
+  animation: overlay-enter 120ms ease-out;
 }
 .overlay-panel:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
-@keyframes overlay-enter { from { opacity: 0; transform: translateY(var(--space-2)); } to { opacity: 1; transform: translateY(0); } }
+@keyframes overlay-enter { from { opacity: 0; transform: translateY(var(--space-1)); } to { opacity: 1; transform: translateY(0); } }
 @media (prefers-reduced-motion: reduce) { .overlay-panel { animation: none; } }
