@@ -1,4 +1,4 @@
-import type { Database as SqliteDatabase } from 'better-sqlite3';
+import type { Database as SqliteDatabase, Statement } from 'better-sqlite3';
 import type { Window, PaneLayout, IWindowRepository } from './Window';
 import { isSameWindowTarget } from '@azito/shared';
 import { type MuxDriverKind, type MuxRef, formatMuxRef, parseMuxRef, muxRefFromTmuxTarget, tmuxTargetFromMuxRef, isMisaoWindowId } from '@azito/shared';
@@ -68,6 +68,9 @@ export class SqliteWindowRepository implements IWindowRepository {
   private findByServerAndRefStmt;
   private findAgentSessionIdsByServerStmt;
   private nowStmt;
+  private updateClaudePrimaryStmt;
+  private updateClaudePanesStmt;
+  private updateStatements = new Map<string, Statement<unknown[]>>();
 
   constructor(private db: SqliteDatabase) {
     this.addStmt = db.prepare(`
@@ -88,6 +91,8 @@ export class SqliteWindowRepository implements IWindowRepository {
     this.findAgentSessionIdsByServerStmt = db.prepare(
       'SELECT DISTINCT agent_session_id FROM windows WHERE server_name = ? AND agent_session_id IS NOT NULL',
     );
+    this.updateClaudePrimaryStmt = db.prepare('UPDATE windows SET agent_session_id = ?, claude_config_dir = ?, claude_config_dir_explicit = ?, claude_pane_sessions = ? WHERE id = ?');
+    this.updateClaudePanesStmt = db.prepare('UPDATE windows SET claude_pane_sessions = ? WHERE id = ?');
     this.nowStmt = db.prepare("SELECT datetime('now') as ts");
   }
 
@@ -212,6 +217,7 @@ export class SqliteWindowRepository implements IWindowRepository {
   update(id: number, data: Partial<Pick<Window,
     'tmuxTarget' | 'muxRef' | 'label' | 'labelSource' | 'agentSessionId' | 'launchCommand' | 'paneLayout' | 'workerModel' | 'workingDirectory' | 'windowType' | 'workerType' | 'sleeping' | 'projectId'
   >>): void {
+    this.db.transaction(() => {
     const fields: string[] = [];
     const values: unknown[] = [];
 
@@ -246,7 +252,11 @@ export class SqliteWindowRepository implements IWindowRepository {
 
     if (fields.length === 0) return;
     values.push(id);
-    this.db.prepare(`UPDATE windows SET ${fields.join(', ')} WHERE id = ?`).run(...values);
+    const sql = `UPDATE windows SET ${fields.join(', ')} WHERE id = ?`;
+    let stmt = this.updateStatements.get(sql);
+    if (!stmt) { stmt = this.db.prepare<unknown[]>(sql); this.updateStatements.set(sql, stmt); }
+    stmt.run(...values);
+    })();
   }
 
   private refForTargetUpdate(id: number, tmuxTarget: string): MuxRef {
@@ -279,6 +289,7 @@ export class SqliteWindowRepository implements IWindowRepository {
   }
 
   updateClaudeSessionByPane(serverName: string, tmuxTarget: string, paneOrdinal: number | null, sessionId: string, configDir: string, configDirExplicit: boolean): void {
+    this.db.transaction(() => {
     const rows = this.findByServerStmt.all(serverName) as WindowRow[];
     for (const row of rows.filter((r) => isSameWindowTarget(r.tmux_target, tmuxTarget))) {
       const sessions = row.claude_pane_sessions ? JSON.parse(row.claude_pane_sessions) as Record<string, { sessionId: string; configDir: string; configDirExplicit: boolean }> : {};
@@ -290,11 +301,12 @@ export class SqliteWindowRepository implements IWindowRepository {
         this.updatePaneLayoutStmt.run(JSON.stringify({ ...layout, panes }), row.id);
       }
       if (paneOrdinal === null || paneOrdinal === 1) {
-        this.db.prepare('UPDATE windows SET agent_session_id = ?, claude_config_dir = ?, claude_config_dir_explicit = ?, claude_pane_sessions = ? WHERE id = ?').run(sessionId, configDir, configDirExplicit ? 1 : 0, JSON.stringify(sessions), row.id);
+        this.updateClaudePrimaryStmt.run(sessionId, configDir, configDirExplicit ? 1 : 0, JSON.stringify(sessions), row.id);
       } else {
-        this.db.prepare('UPDATE windows SET claude_pane_sessions = ? WHERE id = ?').run(JSON.stringify(sessions), row.id);
+        this.updateClaudePanesStmt.run(JSON.stringify(sessions), row.id);
       }
     }
+    })();
   }
 
   remove(id: number): void {

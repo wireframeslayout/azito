@@ -526,3 +526,5 @@ Windows の agent は隔離サーバーにできません。`isolationIntent` �
 - [セキュリティ設定・環境構築ガイド](./security-setup.md) -- 主体分離（operator/task）、scoped auth の有効化手順
 - [タスク管理ガイド](./tasks.md) -- タスクの実行フロー、フェーズループ
 - [コード配信](./code-distribution.md) -- hub 代行によるコード配信の仕組み（bare mirror・bundle 転送・増分配信）、隔離サーバー以外への適用
+
+[セッション ID の追従とフック](activity-detection.md#セッション-id-の追従sessionstart-フック--sessionid) も参照してください。

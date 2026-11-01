@@ -197,7 +197,7 @@ export function buildQuestionContent(stdinText) {
  * Decides what one hook invocation sends. Returns `{ url, token, body, timeoutMs }`, or null when nothing is to be sent.
  * Everything the invocation depends on is a parameter so the rules can be tested without a process.
  */
-export async function planHook({ args, env, homeDir, stdinText, readFile = (p) => fs.readFileSync(p, 'utf8'), tmux = askTmux, hostname = os.hostname, platform = process.platform, now = Date.now }) {
+export async function planHook({ args, env, homeDir, stdinText, readFile = (p) => fs.readFileSync(p, 'utf8'), tmux = askTmux, hostname = os.hostname, platform = process.platform, now = Date.now, cwd = process.cwd }) {
   const { kind, event, prefix } = args;
 
   if (kind === 'notify') {
@@ -225,7 +225,12 @@ export async function planHook({ args, env, homeDir, stdinText, readFile = (p) =
   if (!identity) return null;
 
   const hookEvent = kind === 'activity' ? event : kind === 'session' ? 'session' : kind === 'subagent' ? 'subagent' : 'open';
-  let body = buildBody({ serverName, identity, event: hookEvent, sessionId, claudeConfigDir: kind === 'session' && platform !== 'win32' ? (env.CLAUDE_CONFIG_DIR || `${env.HOME || homeDir}/.claude`) : undefined, claudeConfigDirExplicit: kind === 'session' && platform !== 'win32' ? Boolean(env.CLAUDE_CONFIG_DIR) : undefined, hookTimestamp: kind === 'session' && platform !== 'win32' ? `${now()}000000` : undefined });
+  const home = env.HOME || homeDir;
+  let configDir = env.CLAUDE_CONFIG_DIR || `${home}/.claude`;
+  if (configDir === '~') configDir = home;
+  else if (configDir.startsWith('~/')) configDir = `${home}/${configDir.slice(2)}`;
+  else if (!configDir.startsWith('/')) configDir = `${cwd()}/${configDir}`;
+  let body = buildBody({ serverName, identity, event: hookEvent, sessionId, claudeConfigDir: kind === 'session' && platform !== 'win32' ? configDir : undefined, claudeConfigDirExplicit: kind === 'session' && platform !== 'win32' ? Boolean(env.CLAUDE_CONFIG_DIR) : undefined, hookTimestamp: kind === 'session' && platform !== 'win32' ? `${now()}000000` : undefined });
   if (kind === 'question') {
     const content = buildQuestionContent(stdinText);
     if (content !== undefined) {

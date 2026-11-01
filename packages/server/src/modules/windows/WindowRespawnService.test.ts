@@ -2699,8 +2699,8 @@ describe('WindowRespawnService.respawn — a conversation that was never written
     expect(probe.exists).toHaveBeenCalledWith(expect.anything(), 'claude', SESSION, directory);
     const options = tmux.openWindow.mock.calls[0][3] as unknown as { extraEnv: Record<string, string> };
     expect(options.extraEnv.AZITO_RESUME_CLAUDE_CONFIG_DIR).toBeUndefined();
-    expect(sentCommands.join('\n')).toContain('env -u CLAUDE_CONFIG_DIR ');
-    const actual = execFileSync('bash', ['-c', `export CLAUDE_CONFIG_DIR=/shell-override; env -u CLAUDE_CONFIG_DIR bash -c 'printf %s "\${CLAUDE_CONFIG_DIR-unset}"'`], { encoding: 'utf8' });
+    expect(sentCommands.join('\n')).toContain('(unset CLAUDE_CONFIG_DIR; ');
+    const actual = execFileSync('bash', ['-c', `export CLAUDE_CONFIG_DIR=/shell-override; claude() { printf %s "\${CLAUDE_CONFIG_DIR-unset}"; }; (unset CLAUDE_CONFIG_DIR; claude)`], { encoding: 'utf8' });
     expect(actual).toBe('unset');
   });
 

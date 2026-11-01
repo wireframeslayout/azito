@@ -167,6 +167,10 @@ describeOnPosix('azito-hook.mjs sends what the bash hooks send', () => {
     const [special] = await expectSame({ hook: 'session', stdin: JSON.stringify({ session_id: SESSION }), env: { ...fullEnv(), MISAO_PANE_ID: MISAO_PANE, CLAUDE_CONFIG_DIR: specialDir } });
     expect(JSON.parse(special.body).claudeConfigDir).toBe(specialDir);
     expect(JSON.parse(special.body).claudeConfigDirExplicit).toBe(true);
+    for (const [value, expected] of [['relative/config', `${process.cwd()}/relative/config`], ['~/.claude', `${home}/.claude`]]) {
+      const [request] = await expectSame({ hook: 'session', stdin: JSON.stringify({ session_id: SESSION }), env: { ...fullEnv(), MISAO_PANE_ID: MISAO_PANE, CLAUDE_CONFIG_DIR: value } });
+      expect(JSON.parse(request.body).claudeConfigDir).toBe(expected);
+    }
     await expectSame({ hook: 'session', stdin: '{"session_id":"x"}', env: { ...fullEnv(), MISAO_PANE_ID: MISAO_PANE }, expectNone: true });
   });
 

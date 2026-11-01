@@ -51,6 +51,12 @@ json_string() {
   printf '"'
 }
 CONFIG_DIR="${CLAUDE_CONFIG_DIR:-$HOME/.claude}"
+case "$CONFIG_DIR" in
+  '~') CONFIG_DIR="$HOME" ;;
+  '~/'*) CONFIG_DIR="$HOME/${CONFIG_DIR:2}" ;;
+  /*) ;;
+  *) CONFIG_DIR="$PWD/$CONFIG_DIR" ;;
+esac
 CONFIG_FIELD=",\"claudeConfigDir\":$(json_string "$CONFIG_DIR")"
 if [[ -n "${CLAUDE_CONFIG_DIR:-}" ]]; then CONFIG_FIELD+=',"claudeConfigDirExplicit":true'; else CONFIG_FIELD+=',"claudeConfigDirExplicit":false'; fi
 SESSION_FIELD+="$CONFIG_FIELD"

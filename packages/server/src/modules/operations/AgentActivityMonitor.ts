@@ -814,7 +814,7 @@ export class AgentActivityMonitor {
 
     if (signal.muxPaneRef && this.paneHandleResolver) {
       if (signal.event === 'session' && signal.claudeConfigDir && signal.sessionId && signal.hookTimestamp && signal.claudeConfigDirExplicit !== undefined) {
-        if (this.recordClaudeSessionHook(signal.serverName, signal.muxPaneRef, signal.sessionId, signal.claudeConfigDir, signal.hookTimestamp, signal.claudeConfigDirExplicit)) return;
+        if (this.recordClaudeSessionHook(signal.serverName, signal.muxPaneRef, signal.sessionId, signal.claudeConfigDir, signal.hookTimestamp, signal.claudeConfigDirExplicit, () => this.recordHookSignal({ ...signal, muxPaneRef: undefined, claudeConfigDir: undefined, claudeConfigDirExplicit: undefined, hookTimestamp: undefined }))) return;
       }
       const resolved = this.paneHandleResolver.getCached(signal.serverName, asPaneHandle(signal.muxPaneRef));
       if (resolved) {
@@ -848,7 +848,7 @@ export class AgentActivityMonitor {
   }
 
   /** Hold early SessionStart events until the window is registered; ignore older deliveries. */
-  recordClaudeSessionHook(serverName: string, paneHandle: string, sessionId: string, configDir: string, timestamp: string, explicit: boolean): boolean {
+  recordClaudeSessionHook(serverName: string, paneHandle: string, sessionId: string, configDir: string, timestamp: string, explicit: boolean, onUnresolved?: () => void): boolean {
     if (!this.paneHandleResolver || this.serverRepo.findByName(serverName)?.type !== 'local' || process.platform === 'win32') return false;
     const key = `${serverName}::${paneHandle}`;
     const previous = this.pendingClaudeHooks.get(key);
@@ -872,7 +872,11 @@ export class AgentActivityMonitor {
         console.warn('[agent-activity] pane resolution failed:', err);
       }
       if (Date.now() < pending.expiresAt) setTimeout(() => { void resolve(); }, 2_000).unref();
-      else if (this.pendingClaudeHooks.get(key) === pending) this.pendingClaudeHooks.delete(key);
+      else if (this.pendingClaudeHooks.get(key) === pending) {
+        this.pendingClaudeHooks.delete(key);
+        console.warn(`[agent-activity] could not resolve pane ${paneHandle} on ${serverName}; falling back to window matching`);
+        onUnresolved?.();
+      }
     };
     void resolve();
     return true;

@@ -646,16 +646,20 @@ describe('agent-activity sessionId handling', () => {
     expect(options.recordAgentActivity).toHaveBeenCalledWith(expect.objectContaining({ event: 'session', sessionId: SESSION_ID }));
   });
 
-  it('rejects a non-boolean explicit flag', async () => {
-    app = await buildApp(buildOptions());
-    const res = await post({ serverName: 'local', misaoPaneId: MISAO_PANE_ID, event: 'session', sessionId: SESSION_ID, claudeConfigDir: '/config', claudeConfigDirExplicit: 'true' });
-    expect(res.statusCode).toBe(400);
+  it.each(['', 'relative/path', '~/.claude', '/bad\0path', '/' + 'x'.repeat(4096)])('ignores invalid config metadata but keeps agent session tracking', async (claudeConfigDir) => {
+    const options = buildOptions();
+    app = await buildApp(options);
+    const res = await post({ ...validActivityBody, serverName: 'agent-server', event: 'session', sessionId: SESSION_ID, claudeConfigDir, claudeConfigDirExplicit: true, hookTimestamp: '123' });
+    expect(res.statusCode).toBe(200);
+    expect(options.recordAgentActivity).toHaveBeenCalledWith(expect.objectContaining({ serverName: 'agent-server', sessionId: SESSION_ID, claudeConfigDir: undefined, hookTimestamp: undefined }));
   });
 
-  it.each(['', 'relative/path', '/bad\0path', '/' + 'x'.repeat(4096)])('rejects an invalid config directory', async (claudeConfigDir) => {
-    app = await buildApp(buildOptions());
-    const res = await post({ serverName: 'local', misaoPaneId: MISAO_PANE_ID, event: 'session', sessionId: SESSION_ID, claudeConfigDir });
-    expect(res.statusCode).toBe(400);
+  it('ignores an invalid explicit flag but preserves the session', async () => {
+    const options = buildOptions();
+    app = await buildApp(options);
+    const res = await post({ ...validActivityBody, event: 'session', sessionId: SESSION_ID, claudeConfigDir: '/config', claudeConfigDirExplicit: 'true', hookTimestamp: '123' });
+    expect(res.statusCode).toBe(200);
+    expect(options.recordAgentActivity).toHaveBeenCalledWith(expect.objectContaining({ sessionId: SESSION_ID, claudeConfigDir: undefined, hookTimestamp: undefined }));
   });
 
   it('passes sessionId through the misao path', async () => {

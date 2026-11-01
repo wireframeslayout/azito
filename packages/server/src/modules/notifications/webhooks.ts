@@ -184,18 +184,14 @@ const webhookRoutes: FastifyPluginCallback<WebhookRouteOptions> = (fastify, opts
       hookTimestamp?: unknown;
     };
 
-    if (body.claudeConfigDir !== undefined && (typeof body.claudeConfigDir !== 'string' || body.claudeConfigDir.length === 0 || body.claudeConfigDir.length > 4096 || body.claudeConfigDir.includes('\0') || !path.posix.isAbsolute(body.claudeConfigDir))) {
-      return reply.status(400).send({ error: 'claudeConfigDir must be an absolute POSIX path of at most 4096 characters' });
-    }
-    if (body.claudeConfigDirExplicit !== undefined && typeof body.claudeConfigDirExplicit !== 'boolean') {
-      return reply.status(400).send({ error: 'claudeConfigDirExplicit must be a boolean' });
-    }
-    const claudeConfigDirExplicit = typeof body.claudeConfigDirExplicit === 'boolean' ? body.claudeConfigDirExplicit : undefined;
-    if (body.hookTimestamp !== undefined && (typeof body.hookTimestamp !== 'string' || !/^[0-9]{1,20}$/.test(body.hookTimestamp))) {
-      return reply.status(400).send({ error: 'hookTimestamp must be a nanosecond timestamp' });
-    }
-    const hookTimestamp = typeof body.hookTimestamp === 'string' ? body.hookTimestamp : undefined;
-    const claudeConfigDir = body.event === 'session' && typeof body.claudeConfigDir === 'string' ? body.claudeConfigDir : undefined;
+    const invalidConfig = body.claudeConfigDir !== undefined && (typeof body.claudeConfigDir !== 'string' || body.claudeConfigDir.length === 0 || body.claudeConfigDir.length > 4096 || body.claudeConfigDir.includes('\0') || !path.posix.isAbsolute(body.claudeConfigDir));
+    const invalidExplicit = body.claudeConfigDirExplicit !== undefined && typeof body.claudeConfigDirExplicit !== 'boolean';
+    const invalidTimestamp = body.hookTimestamp !== undefined && (typeof body.hookTimestamp !== 'string' || !/^[0-9]{1,20}$/.test(body.hookTimestamp));
+    const invalidMetadata = invalidConfig || invalidExplicit || invalidTimestamp;
+    if (invalidMetadata) request.log.warn('Ignoring invalid Claude session configuration metadata; preserving session ID');
+    const claudeConfigDirExplicit = !invalidMetadata && typeof body.claudeConfigDirExplicit === 'boolean' ? body.claudeConfigDirExplicit : undefined;
+    const hookTimestamp = !invalidMetadata && typeof body.hookTimestamp === 'string' ? body.hookTimestamp : undefined;
+    const claudeConfigDir = !invalidMetadata && body.event === 'session' && typeof body.claudeConfigDir === 'string' ? body.claudeConfigDir : undefined;
     const sessionId = typeof body.sessionId === 'string' && SESSION_ID_RE.test(body.sessionId)
       ? body.sessionId : undefined;
     const misaoPaneId = readMisaoPaneId(body);

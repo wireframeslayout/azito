@@ -543,3 +543,5 @@ A Windows agent cannot be an isolated server: declaring `isolationIntent` is ref
 - [Security Configuration & Environment Setup Guide](./security-setup.md) -- Principal separation (operator/task), enabling scoped auth
 - [Task Management Guide](./tasks.md) -- Task execution flow, the phase loop
 - [Code Distribution](./code-distribution.md) -- How hub-proxied code distribution works (bare mirror, bundle transfer, incremental delivery), and where it applies beyond isolated servers
+
+See also [session tracking and hooks](activity-detection.md).
