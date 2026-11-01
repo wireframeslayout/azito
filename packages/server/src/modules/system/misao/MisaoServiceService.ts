@@ -244,6 +244,9 @@ export class MisaoServiceService {
     if (replace || !(await windows.tasks.query(windows.taskName)).exists) return;
     const xml = await windows.tasks.exportXml(windows.taskName);
     if (!taskStartsMisaoOf(xml, this.paths.root)) {
+      if (taskMisaoRoot(xml) === undefined) {
+        throw new MisaoServiceError('custom_socket', `The task "${windows.taskName}" has a definition whose misao folder cannot be determined. Installing here would take it over; run \`azito misao install --replace-socket\` to do that on purpose.`);
+      }
       throw new MisaoServiceError('custom_socket', `The task "${windows.taskName}" is registered for a misao in another folder, not ${this.paths.root}. Installing here would take it over; run \`azito misao install --replace-socket\` to do that on purpose.`);
     }
   }
