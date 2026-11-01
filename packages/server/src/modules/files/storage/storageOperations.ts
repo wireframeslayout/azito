@@ -1,0 +1,123 @@
+import { CopyObjectCommand, DeleteObjectsCommand, HeadObjectCommand, ListObjectsV2Command, PutObjectCommand, type S3Client } from '@aws-sdk/client-s3';
+import type { StorageSettings } from './MinioStorageClient';
+
+export class StorageOperationError extends Error {
+  constructor(public status: number, public code: string, message: string) { super(message); }
+}
+
+export function validateStoragePath(path: string, folder: boolean, allowRoot = false): string {
+  if (path === '' && allowRoot) return path;
+  if (!path || /[\\\x00-\x1f\x7f]/.test(path) || path.startsWith('/') || path.endsWith('/') !== folder) throw new StorageOperationError(400, 'invalid_path', 'Invalid storage path');
+  const parts = (folder ? path.slice(0, -1) : path).split('/');
+  if (parts.some((part) => !part || part === '.' || part === '..')) throw new StorageOperationError(400, 'invalid_path', 'Invalid storage path');
+  return path;
+}
+
+function base(projectId: number): string { return `projects/${projectId}/`; }
+function copySource(bucket: string, key: string): string { return `/${encodeURIComponent(bucket)}/${key.split('/').map(encodeURIComponent).join('/')}`; }
+function isMissing(error: unknown): boolean {
+  const e = error as { name?: string; $metadata?: { httpStatusCode?: number } };
+  return e.name === 'NotFound' || e.name === 'NoSuchKey' || e.$metadata?.httpStatusCode === 404;
+}
+
+export class StorageOperations {
+  constructor(private s3: S3Client, private settings: StorageSettings, private projectId: number) {}
+  private key(path: string): string { return base(this.projectId) + path; }
+  private async head(key: string) {
+    try { return await this.s3.send(new HeadObjectCommand({ Bucket: this.settings.bucket, Key: key })); }
+    catch (error) { if (isMissing(error)) return null; throw error; }
+  }
+  private async scan(prefix: string, max?: number): Promise<string[]> {
+    const keys: string[] = [];
+    let token: string | undefined;
+    do {
+      const page = await this.s3.send(new ListObjectsV2Command({ Bucket: this.settings.bucket, Prefix: this.key(prefix), ContinuationToken: token }));
+      keys.push(...(page.Contents ?? []).flatMap((entry) => entry.Key ? [entry.Key] : []));
+      if (max !== undefined && keys.length > max) throw new StorageOperationError(413, 'too_many_objects', 'Folder contains more than 1000 objects');
+      token = page.IsTruncated ? page.NextContinuationToken : undefined;
+      if (page.IsTruncated && !token) throw new Error('Missing continuation token');
+    } while (token);
+    return keys;
+  }
+  async listPage(prefix: string, limit: number, cursor?: string) {
+    validateStoragePath(prefix, true, true);
+    const page = await this.s3.send(new ListObjectsV2Command({ Bucket: this.settings.bucket, Prefix: this.key(prefix), Delimiter: '/', MaxKeys: limit, ContinuationToken: cursor }));
+    const folders = (page.CommonPrefixes ?? []).flatMap((p) => p.Prefix ? [{ type: 'folder' as const, path: p.Prefix.slice(base(this.projectId).length) }] : []);
+    const objects = (page.Contents ?? []).filter((o) => o.Key && o.Key !== this.key(prefix));
+    const files: Array<{ type: 'file'; path: string; name: string; size: number; lastModified: string }> = [];
+    for (let i = 0; i < objects.length; i += 10) {
+      const batch = await Promise.all(objects.slice(i, i + 10).map(async (obj) => {
+        const key = obj.Key!;
+        const head = await this.head(key);
+        if (!head) throw new Error('Object disappeared during listing');
+        const encodedName = head.Metadata?.['original-name'];
+        return { type: 'file' as const, path: key.slice(base(this.projectId).length), name: encodedName ? decodeURIComponent(encodedName) : key.split('/').pop()!.replace(/^\d+_/, ''), size: obj.Size ?? 0, lastModified: obj.LastModified?.toISOString() ?? '' };
+      }));
+      files.push(...batch);
+    }
+    return { entries: [...folders, ...files], nextCursor: page.NextContinuationToken ?? null };
+  }
+  async createFolder(path: string): Promise<void> {
+    validateStoragePath(path, true);
+    if ((await this.scan(path)).length) throw new StorageOperationError(409, 'conflict', 'Folder already exists');
+    await this.s3.send(new PutObjectCommand({ Bucket: this.settings.bucket, Key: this.key(path), Body: Buffer.alloc(0) }));
+  }
+  async renameFile(path: string, name: string): Promise<void> {
+    validateStoragePath(path, false); validateStoragePath(name, false);
+    if (name.includes('/')) throw new StorageOperationError(400, 'invalid_path', 'Invalid name');
+    const key = this.key(path); const head = await this.head(key);
+    if (!head) throw new StorageOperationError(404, 'not_found', 'File not found');
+    await this.s3.send(new CopyObjectCommand({ Bucket: this.settings.bucket, Key: key, CopySource: copySource(this.settings.bucket, key), MetadataDirective: 'REPLACE', Metadata: { ...head.Metadata, 'original-name': encodeURIComponent(name) }, ContentType: head.ContentType }));
+  }
+  async statPrefix(path: string): Promise<{ count: number }> { validateStoragePath(path, true); return { count: (await this.scan(path)).length }; }
+  private async remove(keys: string[]): Promise<void> {
+    for (let i = 0; i < keys.length; i += 1000) {
+      const result = await this.s3.send(new DeleteObjectsCommand({ Bucket: this.settings.bucket, Delete: { Objects: keys.slice(i, i + 1000).map((Key) => ({ Key })) } }));
+      if (result.Errors?.length) throw new Error(`Storage deletion partially failed (${result.Errors.length} objects)`);
+    }
+  }
+  async deletePaths(paths: string[]): Promise<void> {
+    const keys: string[] = [];
+    for (const path of paths) {
+      validateStoragePath(path, path.endsWith('/'));
+      keys.push(...(path.endsWith('/') ? await this.scan(path) : [this.key(path)]));
+    }
+    await this.remove([...new Set(keys)]);
+  }
+  async renameFolder(path: string, name: string): Promise<void> {
+    validateStoragePath(path, true); validateStoragePath(name, false);
+    if (name.includes('/')) throw new StorageOperationError(400, 'invalid_path', 'Invalid name');
+    const parent = path.slice(0, -1).split('/').slice(0, -1).join('/');
+    await this.moveObjects([path], parent ? `${parent}/` : '', name);
+  }
+  async moveObjects(paths: string[], destination: string, rename?: string): Promise<void> {
+    validateStoragePath(destination, true, true);
+    const mapping = new Map<string, string>();
+    for (const path of paths) {
+      const folder = path.endsWith('/'); validateStoragePath(path, folder);
+      if (folder && destination.startsWith(path)) throw new StorageOperationError(400, 'invalid_path', 'Cannot move a folder into itself');
+      const leaf = (folder ? path.slice(0, -1) : path).split('/').pop()! + (folder ? '/' : '');
+      const target = destination + (rename ? rename + (folder ? '/' : '') : leaf);
+      if (folder && (await this.scan(target, 1000)).length) throw new StorageOperationError(409, 'conflict', 'Destination already exists');
+      const keys = folder ? await this.scan(path, 1000) : [this.key(path)];
+      if (!keys.length || (!folder && !(await this.head(keys[0])))) throw new StorageOperationError(404, 'not_found', 'Source not found');
+      for (const key of keys) {
+        const dest = this.key(target + key.slice(this.key(path).length));
+        if (mapping.has(key) || [...mapping.values()].includes(dest)) throw new StorageOperationError(400, 'duplicate', 'Duplicate selection');
+        mapping.set(key, dest);
+      }
+    }
+    if (mapping.size > 1000) throw new StorageOperationError(413, 'too_many_objects', 'Move contains more than 1000 objects');
+    for (const dest of mapping.values()) if (await this.head(dest)) throw new StorageOperationError(409, 'conflict', 'Destination already exists');
+    const copied: string[] = [];
+    try {
+      for (const [source, dest] of mapping) {
+        await this.s3.send(new CopyObjectCommand({ Bucket: this.settings.bucket, Key: dest, CopySource: copySource(this.settings.bucket, source) })); copied.push(dest);
+      }
+    } catch (error) {
+      try { await this.remove(copied); } catch { throw new Error('Copy failed and destination cleanup partially failed'); }
+      throw error;
+    }
+    await this.remove([...mapping.keys()]);
+  }
+}

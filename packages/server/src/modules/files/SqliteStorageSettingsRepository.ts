@@ -5,6 +5,8 @@ import { seal, open } from '../../shared/crypto/SecretBox';
 export interface IStorageSettingsRepository {
   get(): StorageSettings;
   update(settings: Partial<StorageSettings>): void;
+  isConfigured(): boolean;
+  markConfigured(): void;
 }
 
 export class SqliteStorageSettingsRepository implements IStorageSettingsRepository {
@@ -31,6 +33,15 @@ export class SqliteStorageSettingsRepository implements IStorageSettingsReposito
     };
   }
 
+  isConfigured(): boolean {
+    const row = this.db.prepare('SELECT configured FROM storage_settings WHERE id = 1').get() as { configured: number };
+    return row.configured === 1;
+  }
+
+  markConfigured(): void {
+    this.db.prepare('UPDATE storage_settings SET configured = 1 WHERE id = 1').run();
+  }
+
   update(settings: Partial<StorageSettings>): void {
     const fields: string[] = [];
     const values: unknown[] = [];
@@ -44,6 +55,7 @@ export class SqliteStorageSettingsRepository implements IStorageSettingsReposito
     if (settings.useSsl !== undefined) { fields.push('use_ssl = ?'); values.push(settings.useSsl ? 1 : 0); }
 
     if (fields.length === 0) return;
+    fields.push("configured = 1");
     fields.push("updated_at = datetime('now')");
 
     this.db.prepare(`UPDATE storage_settings SET ${fields.join(', ')} WHERE id = 1`).run(...values);

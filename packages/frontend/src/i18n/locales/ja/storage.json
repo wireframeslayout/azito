@@ -1,0 +1,37 @@
+{
+  "retry": "再試行",
+  "openSettings": "ストレージ設定を開く",
+  "saving": "設定を保存中…",
+  "saveError": "ストレージ設定を保存できませんでした。もう一度お試しください。",
+  "statusError": "ストレージの状態を確認できませんでした。",
+  "unreachable": {
+    "title": "ストレージに接続できません",
+    "reasons": {
+      "authentication": "認証に失敗しました。アクセスキーとシークレットキーを確認してください。",
+      "not_found": "バケットが見つかりません。バケット名を確認してください。",
+      "timeout": "接続がタイムアウトしました。接続先を確認して再試行してください。",
+      "network": "ストレージの接続先に到達できません。接続を確認してください。",
+      "unknown": "ストレージを利用できません。接続設定を確認して再試行してください。"
+    }
+  },
+  "onboarding": {
+    "title": "ストレージを連携しましょう",
+    "description": "プロジェクトの資料や画像を置き、エージェントの窓にパスで渡せるようになります。",
+    "empty": "利用できる選択肢がありません。設定画面からストレージを設定してください。",
+    "later": "あとで設定 › ストレージからも連携できます。",
+    "settings": {
+      "title": "S3 互換のストレージをつなぐ",
+      "description": "MinIO、Amazon S3、Cloudflare R2 など"
+    },
+    "minio": {
+      "title": "このマシンで MinIO を動かす",
+      "description": "Docker Compose の手順を表示",
+      "instructions": "AZITO のリポジトリで Docker Compose を使って MinIO を起動し、ストレージ設定で接続先を設定してください。 先にリポジトリの .env で MINIO_ROOT_USER と MINIO_ROOT_PASSWORD を設定してください。"
+    },
+    "configureLater": "あとで設定"
+  },
+  "delete": {
+    "title": "ファイルを削除しますか？",
+    "message": "{{name}} を削除します。この操作は取り消せません。"
+  }
+}

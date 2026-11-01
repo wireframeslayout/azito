@@ -8,6 +8,7 @@ import {
 } from '@aws-sdk/client-s3';
 import { getSignedUrl } from '@aws-sdk/s3-request-presigner';
 import { GetObjectCommand } from '@aws-sdk/client-s3';
+import { StorageOperations } from './storageOperations';
 
 export interface StorageSettings {
   endpoint: string;
@@ -28,10 +29,11 @@ export interface StoredFile {
 
 export class MinioStorageClient {
   private client: S3Client | null = null;
-  private currentEndpoint: string = '';
+  private currentConfig: string = '';
 
   private getClient(settings: StorageSettings): S3Client {
-    if (this.client && this.currentEndpoint === settings.endpoint) {
+    const config = JSON.stringify([settings.endpoint, settings.region, settings.accessKey, settings.secretKey]);
+    if (this.client && this.currentConfig === config) {
       return this.client;
     }
     this.client = new S3Client({
@@ -43,7 +45,7 @@ export class MinioStorageClient {
       },
       forcePathStyle: true,
     });
-    this.currentEndpoint = settings.endpoint;
+    this.currentConfig = config;
     return this.client;
   }
 
@@ -51,9 +53,19 @@ export class MinioStorageClient {
     const s3 = this.getClient(settings);
     try {
       await s3.send(new HeadBucketCommand({ Bucket: settings.bucket }));
-    } catch {
+    } catch (error) {
+      const e = error as { name?: string; $metadata?: { httpStatusCode?: number } };
+      if (e.name !== 'NotFound' && e.name !== 'NoSuchBucket' && e.$metadata?.httpStatusCode !== 404) throw error;
       await s3.send(new CreateBucketCommand({ Bucket: settings.bucket }));
     }
+  }
+
+  async probe(settings: StorageSettings): Promise<void> {
+    await this.getClient(settings).send(new HeadBucketCommand({ Bucket: settings.bucket }), { abortSignal: AbortSignal.timeout(2000) });
+  }
+
+  operations(settings: StorageSettings, projectId: number): StorageOperations {
+    return new StorageOperations(this.getClient(settings), settings, projectId);
   }
 
   async upload(
@@ -62,9 +74,10 @@ export class MinioStorageClient {
     fileName: string,
     data: Buffer,
     contentType: string,
+    prefix = '',
   ): Promise<StoredFile> {
     const s3 = this.getClient(settings);
-    const key = `projects/${projectId}/${fileName}`;
+    const key = `projects/${projectId}/${prefix}${fileName}`;
 
     await s3.send(new PutObjectCommand({
       Bucket: settings.bucket,

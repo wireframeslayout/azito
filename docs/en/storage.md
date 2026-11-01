@@ -98,3 +98,13 @@ For production use, consider the following changes:
 - **Change the default credentials** -- Update `MINIO_ROOT_USER` and `MINIO_ROOT_PASSWORD` in `docker-compose.yml` and in the AZITO storage settings.
 - **Persistent storage** -- The Docker volume `minio-data` persists data across container restarts. For backups, consider mounting a host directory instead.
 - **HTTPS** -- If MinIO is accessed over the network, configure TLS or place it behind a reverse proxy.
+
+## Distribution onboarding and status
+
+An optional `distribution.json` next to the hub executable may supply `storage.onboarding.options`. Build a distribution with `--distribution <file>` to validate and include it. An absent file or absent onboarding uses the OSS guidance; malformed or invalid configuration prevents startup. Each option has `type`, `title`, and `description`: types `settings` and `minio` open the corresponding guidance, `link` additionally needs an HTTP(S) `url`, and `managed` needs an HTTP(S) `endpoint` and `bucket`. Managed selection retains the saved credentials. Changes to this file require a hub restart.
+
+`GET /api/projects/:id/storage/status` distinguishes `unconfigured`, `unreachable`, and `ready`. A successful bucket probe marks even the default configuration as configured. A failed configured connection reports a safe reason, and the panel offers retry and settings.
+
+## Folder and file operations
+
+The storage API accepts project-relative paths; folders end in `/` and are represented by zero-byte marker objects. `GET storage/entries` accepts `prefix`, `limit` (default 200), and `cursor`. `POST storage/folders` accepts `path`; `PATCH storage/entries` accepts `path` and `newName`; `POST storage/move` accepts `paths` and `destination`; `POST storage/delete` accepts `paths`; and `GET storage/stat` accepts `prefix`. Upload accepts an optional `prefix` query parameter. Folder moves are limited to 1,000 objects and copy before deleting the source; partial failures are reported. S3 cannot make the existence check and copy atomic against external writers. File renames retain the object key and store the display name in metadata. The current panel continues to show the existing flat list.

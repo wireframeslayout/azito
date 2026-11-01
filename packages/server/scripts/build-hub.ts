@@ -5,6 +5,7 @@ import * as path from 'path';
 import { fileURLToPath } from 'url';
 import esbuild from 'esbuild';
 import { hostTar, listArchive } from './archive';
+import { readDistributionInfo } from '../src/shared/distributionInfo';
 import { stageNodeWin32 } from './nodeAssets';
 import { assertAgentBundleComplete } from '../src/modules/servers/agent-deploy/agentBundleCheck';
 import { MISAO_RELEASE, misaoExecutableName, misaoReleaseFileName, stageMisao, type MisaoManifest, type MisaoReleaseFile } from './misaoAssets';
@@ -24,6 +25,7 @@ interface Args {
   arch: 'x64' | 'arm64';
   repo: string;
   nodeVersion: string;
+  distribution?: string;
 }
 
 function parseArgs(): Args {
@@ -37,6 +39,7 @@ function parseArgs(): Args {
       case '--arch': args.arch = argv[++i] as Args['arch']; break;
       case '--repo': args.repo = argv[++i]; break;
       case '--node-version': args.nodeVersion = argv[++i]; break;
+      case '--distribution': args.distribution = argv[++i]; if (!args.distribution) throw new Error('--distribution requires a path'); break;
     }
   }
 
@@ -57,6 +60,7 @@ function parseArgs(): Args {
     arch: args.arch,
     repo: args.repo || process.env.AZITO_RELEASE_REPO || DEFAULT_REPO,
     nodeVersion: args.nodeVersion || DEFAULT_NODE_VERSION,
+    distribution: args.distribution,
   };
 }
 
@@ -323,6 +327,7 @@ function assertNoDataDir(archive: string): void {
 
 async function main(): Promise<void> {
   const args = parseArgs();
+  if (args.distribution) readDistributionInfo(args.distribution);
   const commit = getGitSha();
   console.log(`[build-hub] Building hub bundle v${args.version} (${args.platform}-${args.arch}, commit: ${commit})`);
 
@@ -463,6 +468,7 @@ async function main(): Promise<void> {
   }
 
   // 10. Content hash (before writing version metadata)
+  if (args.distribution) fs.copyFileSync(args.distribution, path.join(STAGE, 'distribution.json'));
   const bundleHash = hashDirContents(STAGE);
 
   // 11. Write release.json

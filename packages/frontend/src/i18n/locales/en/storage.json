@@ -1,0 +1,37 @@
+{
+  "retry": "Try again",
+  "openSettings": "Open storage settings",
+  "saving": "Saving settings…",
+  "saveError": "Could not save storage settings. Please try again.",
+  "statusError": "Could not check storage status.",
+  "unreachable": {
+    "title": "Storage is unavailable",
+    "reasons": {
+      "authentication": "Authentication failed. Check the access key and secret key.",
+      "not_found": "The storage bucket was not found. Check the bucket name.",
+      "timeout": "The connection timed out. Check the endpoint and try again.",
+      "network": "Could not reach the storage endpoint. Check the connection.",
+      "unknown": "Storage is unavailable. Check the connection settings and try again."
+    }
+  },
+  "onboarding": {
+    "title": "Connect storage",
+    "description": "Store project documents and images and share their paths with your agents.",
+    "empty": "No storage options are available. Open settings to configure storage.",
+    "later": "You can also connect storage later in Settings › Storage.",
+    "settings": {
+      "title": "Connect S3-compatible storage",
+      "description": "MinIO, Amazon S3, Cloudflare R2, and more"
+    },
+    "minio": {
+      "title": "Run MinIO on this machine",
+      "description": "Show Docker Compose instructions",
+      "instructions": "From the AZITO repository, start MinIO with Docker Compose, then configure its connection in storage settings. Set MINIO_ROOT_USER and MINIO_ROOT_PASSWORD in the repository .env first."
+    },
+    "configureLater": "Set up later"
+  },
+  "delete": {
+    "title": "Delete file?",
+    "message": "Delete {{name}}? This cannot be undone."
+  }
+}

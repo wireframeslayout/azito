@@ -680,3 +680,5 @@ existing tmux specs and `fixtures/test.ts` are unaffected. Docs: `docs/{ja,en}/m
 - Codex CLI (flat-rate plan)
 - Claude Code CLI available
 - vitest 4.1.8 (CVE-2026-47428/47429 patched)
+
+Storage onboarding is resolved once from an optional validated `distribution.json` at startup; `--distribution` includes it in a hub build. Storage status probes the bucket and distinguishes unconfigured, unreachable and ready. Project storage operations use validated relative paths and folder markers; folder moves copy before deletion and are limited to 1,000 objects. See `docs/en/storage.md` and `docs/ja/storage.md` for the API and configuration.

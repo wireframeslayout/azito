@@ -110,3 +110,13 @@ https://<host>/api/projects/<projectId>/storage/<filename>/raw
 ```
 
 プロジェクトごとにディレクトリが分離されています。
+
+## 配布物の案内と接続状態
+
+ハブ実行ファイルの隣に任意の `distribution.json` を置き、`storage.onboarding.options` を指定できます。配布ビルドの `--distribution <file>` は設定を検証して同梱します。ファイルまたは onboarding がない場合は OSS の案内を使い、不正な設定では起動を停止します。各選択肢に `type`、`title`、`description` を指定します。`settings` と `minio` は各案内を開き、`link` は HTTP(S) の `url`、`managed` は HTTP(S) の `endpoint` と `bucket` を追加で指定します。managed の選択時は保存済みの認証情報を保持します。設定変更にはハブの再起動が必要です。
+
+`GET /api/projects/:id/storage/status` は `unconfigured`、`unreachable`、`ready` を区別します。既定設定でもバケットへの接続に成功すると設定済みになります。設定済みの接続失敗時は安全な分類を返し、画面で再試行や設定変更ができます。
+
+## フォルダ・ファイル操作
+
+ストレージ API のパスはプロジェクト相対です。フォルダは末尾 `/` を付け、0 バイトの印で表します。`GET storage/entries` は `prefix`、`limit`（既定 200）、`cursor` を受け付けます。`POST storage/folders` は `path`、`PATCH storage/entries` は `path` と `newName`、`POST storage/move` は `paths` と `destination`、`POST storage/delete` は `paths`、`GET storage/stat` は `prefix` を受け付けます。アップロードには任意の `prefix` クエリを指定できます。フォルダ移動は 1,000 オブジェクトが上限で、コピー後に元を削除し、部分失敗を報告します。外部からの書き込みに対して存在確認とコピーを原子的には実行できません。ファイル名の変更はキーを維持し、表示名をメタデータに保存します。現在の画面は従来のフラット一覧を表示します。

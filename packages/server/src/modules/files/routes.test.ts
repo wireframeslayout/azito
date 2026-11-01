@@ -289,6 +289,7 @@ describe('storage /raw and /url routes — presigned URL usage', () => {
       projectRepo: projectRepo as IProjectRepository,
       storageSettingsRepo: storageSettingsRepo as IStorageSettingsRepository,
       storageClient: mockStorageClient as unknown as MinioStorageClient,
+      storageStatusService: { getStatus: vi.fn() } as unknown as import('./storage/StorageStatusService').StorageStatusService,
     });
     await app.ready();
   });
@@ -326,7 +327,7 @@ describe('storage /raw and /url routes — presigned URL usage', () => {
 
     const res = await app.inject({ method: 'GET', url: '/api/projects/1/storage/denied.png/raw' });
     expect(res.statusCode).toBe(502);
-    expect(res.json()).toEqual({ error: 'Storage access denied' });
+    expect(res.json()).toEqual({ error: 'Storage access denied', code: 'storage_error' });
   });
 
   it('/url returns a presigned URL', async () => {
@@ -343,7 +344,7 @@ describe('storage /raw and /url routes — presigned URL usage', () => {
 
     const res = await app.inject({ method: 'GET', url: '/api/projects/1/storage/img.png/url' });
     expect(res.statusCode).toBe(502);
-    expect(res.json()).toEqual({ error: 'signing failed' });
+    expect(res.json()).toEqual({ error: 'Storage operation failed', code: 'storage_error' });
   });
 
   it('/raw returns 502 when presigning fails', async () => {
@@ -351,7 +352,7 @@ describe('storage /raw and /url routes — presigned URL usage', () => {
 
     const res = await app.inject({ method: 'GET', url: '/api/projects/1/storage/img.png/raw' });
     expect(res.statusCode).toBe(502);
-    expect(res.json()).toEqual({ error: 'signing failed' });
+    expect(res.json()).toEqual({ error: 'Storage operation failed', code: 'storage_error' });
   });
 });
 
