@@ -605,10 +605,10 @@ azito version        # Show version
 
 | OS | Architecture | Status |
 |----|-------------|--------|
-| Linux | x86_64 (x64) | Hub and agent supported |
-| Linux | aarch64 (arm64) | Hub supported; agent not supported |
-| macOS | Apple Silicon (arm64) | Hub supported; agent not supported |
-| macOS | Intel (x64) | Hub not supported (will consider on demand); agent supported |
+| Linux | x86_64 (x64) | Hub and agent server supported |
+| Linux | aarch64 (arm64) | Hub supported; agent server not supported |
+| macOS | Apple Silicon (arm64) | Hub supported; agent server not supported |
+| macOS | Intel (x64) | Hub not supported (will consider on demand); agent server supported |
 | Windows | x64 | Supported, as a hub ([Windows bundle](#windows-bundle)) and as an agent server ([Windows agent servers](./windows-agent.md)) |
 | Windows | arm64 | Not supported |
 
