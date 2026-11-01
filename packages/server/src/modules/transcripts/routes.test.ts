@@ -1469,4 +1469,88 @@ describe('window subagent API', () => {
     expect(readSubagent).toHaveBeenCalledTimes(2);
     await app.close();
   });
+
+  function pollingApp(agentSessionId: string | null) {
+    const listSubagents = vi.fn((_sessionId: string) => []);
+    const readSubagent = vi.fn(() => ({ entries: [], nextOffset: 0, truncated: false, startOffset: 0, hasOlder: false }));
+    const source = buildClaudeSource({ listSubagents, readSubagent });
+    const state = { parent: SID };
+    const resolve = vi.fn(async () => ({ resolved: true as const, agentType: 'claude', sessionId: state.parent, paneId: PANE_ID, agentDetected: true }));
+    const window = { id: 10, serverName: LOCAL_SERVER.name, agentSessionId, taskId: null } as unknown as Window;
+    const app = buildApp([source], {}, { windowSessionResolver: { resolve }, windowRepo: { findById: () => window } });
+    const list = async () => (await app.inject({ method: 'GET', url: '/api/transcripts/windows/10/subagents' })).json().sessionId;
+    const read = async (sessionId: string) =>
+      (await app.inject({ method: 'GET', url: `/api/transcripts/windows/10/subagents/a123/entries?sessionId=${sessionId}&offset=0` })).statusCode;
+    return { app, state, window, resolve, listSubagents, readSubagent, list, read };
+  }
+
+  it('with a DB agentSessionId, reuses the parent across list polls for the long TTL and re-resolves on a link change', async () => {
+    vi.useFakeTimers({ toFake: ['Date'] });
+    try {
+      const OTHER = '22222222-2222-2222-2222-222222222222';
+      const t = pollingApp(SID);
+
+      // Polling every 5 s within the TTL: one resolution, children read each time.
+      expect(await t.list()).toBe(SID);
+      vi.advanceTimersByTime(5000);
+      expect(await t.list()).toBe(SID);
+      vi.advanceTimersByTime(5000);
+      expect(await t.list()).toBe(SID);
+      expect(t.resolve).toHaveBeenCalledOnce();
+      expect(t.listSubagents).toHaveBeenCalledTimes(3);
+
+      // A DB link change (SessionStart hook) is picked up on the next poll, inside the TTL.
+      t.state.parent = OTHER;
+      t.window.agentSessionId = OTHER;
+      expect(await t.list()).toBe(OTHER);
+      expect(t.resolve).toHaveBeenCalledTimes(2);
+      expect(t.listSubagents).toHaveBeenLastCalledWith(OTHER);
+      await t.app.close();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('without a DB link, re-resolves the parent on every 5 s list poll so a parent change shows within one poll', async () => {
+    vi.useFakeTimers({ toFake: ['Date'] });
+    try {
+      const OTHER = '22222222-2222-2222-2222-222222222222';
+      const t = pollingApp(null);
+
+      expect(await t.list()).toBe(SID);
+      // Child conversation polls (2 s) inside the short TTL reuse the resolution.
+      vi.advanceTimersByTime(2000);
+      expect(await t.read(SID)).toBe(200);
+      expect(t.resolve).toHaveBeenCalledOnce();
+
+      // The parent changes with no DB link change: the next list poll (5 s) already shows it.
+      t.state.parent = OTHER;
+      vi.advanceTimersByTime(3000);
+      expect(await t.list()).toBe(OTHER);
+      expect(t.resolve).toHaveBeenCalledTimes(2);
+      expect(t.listSubagents).toHaveBeenLastCalledWith(OTHER);
+      // The old parent's child is refused instead of being read.
+      expect(await t.read(SID)).toBe(409);
+      expect(t.readSubagent).toHaveBeenCalledTimes(1);
+      await t.app.close();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('uses the short TTL when the resolved parent differs from the DB agentSessionId', async () => {
+    vi.useFakeTimers({ toFake: ['Date'] });
+    try {
+      const OTHER = '22222222-2222-2222-2222-222222222222';
+      const t = pollingApp(OTHER); // The DB names OTHER, but the resolver falls back to SID.
+
+      expect(await t.list()).toBe(SID);
+      vi.advanceTimersByTime(5000);
+      expect(await t.list()).toBe(SID);
+      expect(t.resolve).toHaveBeenCalledTimes(2);
+      await t.app.close();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
 });

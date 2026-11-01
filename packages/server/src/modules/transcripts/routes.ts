@@ -45,8 +45,17 @@ const INPUT_TEXT_MAX_LENGTH = 32768;
 const PANE_CAPABLE_AGENT_TYPE = 'claude';
 /** サブエージェントの会話ファイル（`<session>/subagents/`）を持つのは Claude Code のみ。 */
 const SUBAGENT_CAPABLE_AGENT_TYPE = 'claude';
-/** 子の会話の取得（2 秒間隔）が親セッションの解決結果を使い回す時間。一覧の再取得間隔（5 秒）と揃える。 */
-const PARENT_SESSION_TTL_MS = 5000;
+/**
+ * サブエージェントの一覧（5 秒間隔・SubagentStart/Stop 通知）と子の会話（2 秒間隔）が、親セッションの
+ * 解決結果を使い回す時間。
+ *
+ * - linkedMs: 解決した親が窓の DB 上の agentSessionId と一致するとき。親の切り替えは DB の紐付けの変化
+ *   （SessionStart フック）で次の取得時に即座に解決し直すので、長く持ってよい。
+ * - unlinkedMs: それ以外（DB に紐付けの無い窓の cwd 照合フォールバック、DB の値と違う親が解決された窓）。
+ *   DB の紐付けが変わらないまま親が変わり得るため、一覧の再取得間隔と揃えて、親の変化を
+ *   TTL ＋ 再取得間隔（最大 10 秒程度）で反映する。
+ */
+const PARENT_SESSION_TTLS = { linkedMs: 30_000, unlinkedMs: 5000 };
 
 type SubagentTranscriptSource = TranscriptSource & Required<Pick<TranscriptSource, 'listSubagents' | 'readSubagent'>>;
 
@@ -201,7 +210,7 @@ function paneHandleMatchesWindow(windowRepo: IWindowRepository, windowId: number
 
 const transcriptsRoutes: FastifyPluginCallback<TranscriptsRouteOptions> = (fastify, opts, done) => {
   const { sources, sourceProvider, serverRepo, transcriptPaneService, windowSessionResolver, windowInputService, windowRepo, interactionMonitor } = opts;
-  const parentSessions = new ParentSessionCache(PARENT_SESSION_TTL_MS);
+  const parentSessions = new ParentSessionCache(PARENT_SESSION_TTLS);
 
   /**
    * 読み取りの対象にする会話ログ。windowId が指すウィンドウのサーバーのもの（リモートはエージェント上）。
@@ -274,7 +283,9 @@ const transcriptsRoutes: FastifyPluginCallback<TranscriptsRouteOptions> = (fasti
     const window = findSubagentWindow(request.params.windowId, reply);
     if (!window) return;
     try {
-      const sessionId = await resolveParentSession(window, reply);
+      // 子の一覧そのものは毎回読み直す（通知直後の新しい子を落とさない）。重いのは親の解決だけなので、
+      // それは直近の結果を使い回す（PARENT_SESSION_TTLS 参照）。
+      const sessionId = parentSessions.get(window) ?? await resolveParentSession(window, reply);
       if (!sessionId) return;
       const source = findSubagentSource(window, reply);
       if (!source) return;
