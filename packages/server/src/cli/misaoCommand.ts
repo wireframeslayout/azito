@@ -68,8 +68,11 @@ function ask(question: string): Promise<boolean> {
 }
 
 function printStatus(status: MisaoServiceStatus): void {
+  const service = status.windowsTaskOwner === 'other' ? 'taskscheduler (another installation)'
+    : status.windowsTaskOwner === 'unknown' ? 'taskscheduler (owner unknown)'
+    : status.serviceInstalled ? `${status.serviceManager} (${status.serviceState ?? 'unknown'})` : 'not installed';
   const lines = [
-    `service:   ${status.serviceInstalled ? `${status.serviceManager} (${status.serviceState ?? 'unknown'})` : 'not installed'}`,
+    `service:   ${service}`,
     ...(status.serviceDomain ? [`domain:    ${status.serviceDomain}`] : []),
     ...(status.serviceDuplicateLoad ? ['warning:   loaded into both gui and user (two copies). start / update refuse until one is booted out; see docs install-and-update.md'] : []),
     `bundled:   ${status.bundledVersion ?? '-'}`,
@@ -78,6 +81,8 @@ function printStatus(status: MisaoServiceStatus): void {
     `socket:    ${status.socketPath ?? '-'}`,
   ];
   console.log(lines.join('\n'));
+  if (status.windowsTaskOwner === 'other') console.log('warning: the AzitoMisao task starts a misao of another folder. `azito misao install --replace-socket` takes it over (that installation loses its daemon).');
+  if (status.windowsTaskOwner === 'unknown') console.log('warning: the owner of the AzitoMisao task could not be determined. Check its task definition.');
   if (!status.managed) console.log(`note: this hub cannot manage the service (${status.unmanagedReason}).`);
   if (status.updateAvailable) console.log('note: the running misao is not the bundled release. `azito misao update` switches it (closes every pane).');
   if (status.needsHubRestart) console.log(`note: restart the hub so it connects to the managed socket: ${status.serviceManager === 'taskscheduler' ? 'azito service restart' : 'systemctl --user restart azito'} (panes are not affected).`);
