@@ -17,6 +17,10 @@ interface ListResponse extends StorageResponse {
   nextCursor: string | null;
 }
 
+export class StorageApiError extends Error {
+  constructor(message: string, public readonly status: number, public readonly code?: string) { super(message); }
+}
+
 export interface StoragePage { entries: FileEntry[]; nextCursor: string | null }
 export interface StorageStat { count: number; totalSize: number }
 
@@ -89,7 +93,7 @@ export class StorageFilesBackend implements FilesBackend {
   }
   private async mutate(endpoint: string, method: string, body: object): Promise<void> {
     const result = await apiWithStatus<StorageResponse>(`${this.root}${endpoint}`, { method, body: JSON.stringify(body) });
-    if (result.status >= 400 || result.body.error) throw new Error(result.body.error || 'Storage operation failed');
+    if (result.status >= 400 || result.body.error) throw new StorageApiError(result.body.error || 'Storage operation failed', result.status, result.body.code);
   }
   async create(path: string, type: 'file' | 'directory'): Promise<string> {
     if (type === 'directory') {
@@ -110,16 +114,8 @@ export class StorageFilesBackend implements FilesBackend {
     const prefix = path.endsWith('/') ? path : `${path}/`;
     const result = await apiWithStatus<StorageResponse>(`${this.root}/folders`, { method: 'POST', body: JSON.stringify({ prefix }) });
     if (result.status < 400 && !result.body.error) return;
-    if (result.status === 409 && result.body.code === 'exists') {
-      const parent = prefix.slice(0, -1).split('/').slice(0, -1).join('/');
-      let cursor: string | null = null;
-      do {
-        const page = await this.listPage(parent ? `${parent}/` : '', cursor);
-        if (page.entries.some((entry) => entry.type === 'directory' && entry.path === prefix)) return;
-        cursor = page.nextCursor;
-      } while (cursor !== null);
-    }
-    throw new Error(result.body.error || 'Storage operation failed');
+    if (result.status === 409 && result.body.code === 'exists') return;
+    throw new StorageApiError(result.body.error || 'Storage operation failed', result.status, result.body.code);
   }
   rename(path: string, newName: string): Promise<void> {
     return this.mutate('/entries', 'PATCH', path.endsWith('/') ? { prefix: path, newName } : { key: this.key(path), displayName: newName });

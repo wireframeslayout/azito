@@ -50,7 +50,7 @@
     "nameDesc": "名前の逆順",
     "path": "パス",
     "count": "表示 {{count}} 件、選択 {{selected}} 件",
-    "moreAvailable": "未読の項目があります",
+    "moreAvailable": "まだ読み込んでいない項目があります",
     "rename": "名前を変更",
     "move": "移動",
     "delete": "削除",
@@ -66,6 +66,13 @@
     "dateAsc": "更新日時の古い順",
     "dateDesc": "更新日時の新しい順",
     "root": "ストレージ",
-    "deleteMessageFiles": "{{names}} を削除しますか？ 元に戻せません。"
+    "deleteMessageFiles": "{{names}} を削除しますか？ 元に戻せません。",
+    "busy": "処理中です。完了してから再度お試しください。",
+    "errors": {
+      "exists": "同名の項目が既に存在します。",
+      "folder_too_large": "移動できるのは最大 1000 件です。",
+      "partial_failure": "コピーは済みましたが、元の一部が残っています。一覧を確認してください。",
+      "invalid_path": "移動先または項目のパスが無効です。"
+    }
   }
 }

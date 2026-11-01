@@ -66,6 +66,13 @@
     "dateAsc": "Updated: oldest first",
     "dateDesc": "Updated: newest first",
     "root": "Storage",
-    "deleteMessageFiles": "Delete {{names}}? This cannot be undone."
+    "deleteMessageFiles": "Delete {{names}}? This cannot be undone.",
+    "busy": "An operation is in progress. Try again when it finishes.",
+    "errors": {
+      "exists": "An item with that name already exists.",
+      "folder_too_large": "A move is limited to 1,000 objects.",
+      "partial_failure": "The copy completed, but some source items remain. Check the list.",
+      "invalid_path": "The destination or item path is invalid."
+    }
   }
 }

@@ -6,14 +6,14 @@ const listPage = vi.fn();
 const deleteMany = vi.fn();
 const stat = vi.fn();
 const confirm = vi.fn();
-const { uploadFile } = vi.hoisted(() => ({ uploadFile: vi.fn() }));
+const { uploadFile, showToast } = vi.hoisted(() => ({ uploadFile: vi.fn(), showToast: vi.fn() }));
 vi.mock('react-i18next', async (importOriginal) => ({ ...await importOriginal<typeof import('react-i18next')>(), useTranslation: () => ({ t: (key: string, options?: Record<string, unknown>) => options?.name ? `${key} ${options.name}` : key }) }));
 vi.mock('../../api/client', () => ({ uploadFile, fetchBlob: vi.fn() }));
-vi.mock('../../hooks/useToast', () => ({ useToast: () => ({ showToast: vi.fn() }) }));
+vi.mock('../../hooks/useToast', () => ({ useToast: () => ({ showToast }) }));
 vi.mock('../../hooks/useConfirm', () => ({ useConfirm: () => confirm }));
 vi.mock('../ui/BottomSheet', () => ({ BottomSheet: ({ open, children }: { open: boolean; children: React.ReactNode }) => open ? <div role="dialog">{children}</div> : null }));
 vi.mock('./StorageStatusGate', () => ({ StorageStatusGate: ({ children }: { children: React.ReactNode }) => children }));
-vi.mock('../files/backend/StorageFilesBackend', () => ({ StorageFilesBackend: class {
+vi.mock('../files/backend/StorageFilesBackend', () => ({ StorageApiError: class extends Error { constructor(message: string, public status: number, public code?: string) { super(message); } }, StorageFilesBackend: class {
   source = 'storage:1'; listPage = listPage; deleteMany = deleteMany; stat = stat;
 } }));
 
@@ -134,6 +134,26 @@ describe('StoragePanel', () => {
       fireEvent.click(screen.getByRole('button', { name: 'list.actions' }));
       expect(screen.getByRole('dialog')).toBeTruthy();
     } finally { window.matchMedia = original; }
+  });
+  it('shows a localized error code for failed operations', async () => {
+    const { StorageApiError } = await import('../files/backend/StorageFilesBackend');
+    const error = new StorageApiError('raw server error', 502, 'partial_failure');
+    deleteMany.mockRejectedValueOnce(error);
+    render(<StoragePanel projectId={1} />);
+    fireEvent.click(await screen.findByRole('checkbox', { name: 'list.select a.txt' }));
+    fireEvent.click(screen.getByRole('button', { name: 'list.delete' }));
+    await waitFor(() => expect(showToast).toHaveBeenCalledWith('list.errors.partial_failure'));
+  });
+  it('reports a file drop while an operation is busy', async () => {
+    let finish!: (value: object) => void;
+    uploadFile.mockImplementationOnce(() => new Promise((resolve) => { finish = resolve; }));
+    const { container } = render(<StoragePanel projectId={1} />);
+    await screen.findByRole('button', { name: 'folder' });
+    fireEvent.change(container.querySelector('input[type="file"]')!, { target: { files: [new File(['x'], 'a.txt')] } });
+    await waitFor(() => expect(uploadFile).toHaveBeenCalled());
+    fireEvent.drop(container.firstElementChild!, { dataTransfer: { types: ['Files'] } });
+    expect(showToast).toHaveBeenCalledWith('list.busy');
+    finish({});
   });
   it('retries the failed next page even when the first page is empty', async () => {
     listPage.mockReset().mockResolvedValueOnce({ entries: [], nextCursor: 'next' }).mockRejectedValueOnce(new Error('page failed')).mockResolvedValueOnce({ entries: [], nextCursor: null });

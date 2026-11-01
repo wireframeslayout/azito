@@ -10,7 +10,7 @@ import InlineNameInput from './files/InlineNameInput';
 import { PathBreadcrumb } from './files/PathBreadcrumb';
 import FileTree from './files/FileTree';
 import type { FileEntry } from './files/backend/FilesBackend';
-import { StorageFilesBackend } from './files/backend/StorageFilesBackend';
+import { StorageApiError, StorageFilesBackend } from './files/backend/StorageFilesBackend';
 import { StorageStatusGate } from './storage/StorageStatusGate';
 import { useStorageEntries } from './storage/useStorageEntries';
 import { StorageMovePicker } from './storage/StorageMovePicker';
@@ -35,7 +35,8 @@ function StorageFileList({ projectId, onFilePreview, activeTabId }: StoragePanel
   const [selected, setSelected] = useState<string[]>([]);
   const anchor = useRef<string | null>(null);
   const [filter, setFilter] = useState('');
-  const [sort, setSort] = useState('name');
+  type Sort = 'name' | 'nameDesc' | 'sizeAsc' | 'sizeDesc' | 'dateAsc' | 'dateDesc';
+  const [sort, setSort] = useState<Sort>('name');
   const [editing, setEditing] = useState<FileEntry | 'create' | null>(null);
   const [moving, setMoving] = useState(false);
   const [actionsOpen, setActionsOpen] = useState(false);
@@ -53,6 +54,18 @@ function StorageFileList({ projectId, onFilePreview, activeTabId }: StoragePanel
   const [failures, setFailures] = useState<StorageDropFailure[]>([]);
   const [previews, setPreviews] = useState<Array<{ url: string; name: string }>>([]);
   const input = useRef<HTMLInputElement>(null);
+  const actionsButton = useRef<HTMLDivElement>(null);
+  const toolbar = useRef<HTMLDivElement>(null);
+  const movingWasOpen = useRef(false);
+  useEffect(() => {
+    if (mobile && movingWasOpen.current && !moving) (actionsButton.current?.querySelector('button') ?? toolbar.current?.querySelector<HTMLButtonElement>('button:not(:disabled)'))?.focus();
+    movingWasOpen.current = moving;
+  }, [mobile, moving]);
+  const touchStyle = mobile ? { minHeight: 'calc(var(--space-6) + var(--space-5))', minWidth: 'calc(var(--space-6) + var(--space-5))' } : undefined;
+  const operationMessage = (error: unknown) => {
+    if (error instanceof StorageApiError && error.code && ['exists', 'folder_too_large', 'partial_failure', 'invalid_path'].includes(error.code)) return t(`list.errors.${error.code}`);
+    return error instanceof Error ? error.message : t('list.operationError');
+  };
   const sentinel = useRef<HTMLDivElement>(null);
   const visible = entries.filter((entry) => entry.name.toLocaleLowerCase().includes(filter.toLocaleLowerCase())).sort((a, b) => {
     if (a.type !== b.type) return a.type === 'directory' ? -1 : 1;
@@ -83,7 +96,7 @@ function StorageFileList({ projectId, onFilePreview, activeTabId }: StoragePanel
     if (busy) return;
     setBusy(true);
     try { await operation(); setSelected([]); await refresh(); }
-    catch (err) { showToast(err instanceof Error ? err.message : t('list.operationError')); await refresh(); }
+    catch (err) { showToast(operationMessage(err)); await refresh(); }
     finally { setBusy(false); }
   }
   async function remove() {
@@ -98,7 +111,7 @@ function StorageFileList({ projectId, onFilePreview, activeTabId }: StoragePanel
       if (await confirm({ title: t('list.deleteTitle'), message, danger: true })) {
         await backend.deleteMany(chosen); setSelected([]); await refresh();
       }
-    } catch (err) { showToast(err instanceof Error ? err.message : t('list.operationError')); await refresh(); }
+    } catch (err) { showToast(operationMessage(err)); await refresh(); }
     finally { setBusy(false); }
   }
   async function uploadItems(items: Promise<StorageDropItem[]>) {
@@ -129,9 +142,10 @@ function StorageFileList({ projectId, onFilePreview, activeTabId }: StoragePanel
     return event.dataTransfer.types.includes('Files') && !event.dataTransfer.types.includes('application/x-azito-tab');
   }
   function drop(event: React.DragEvent) {
-    if (!isFileDrag(event)) return;
+    if (mobile || !isFileDrag(event)) return;
     event.preventDefault(); event.stopPropagation(); setDragOver(false);
-    if (!busy) void uploadItems(collectStorageDrop(event.dataTransfer));
+    if (busy) showToast(t('list.busy'));
+    else void uploadItems(collectStorageDrop(event.dataTransfer));
   }
   function raw(entry: FileEntry) { return `/projects/${projectId}/storage/${encodeURIComponent(entry.path)}/raw`; }
   async function download(entry: FileEntry) {
@@ -156,30 +170,30 @@ function StorageFileList({ projectId, onFilePreview, activeTabId }: StoragePanel
       showToast(filesT('storage.copiedUrl'));
     } catch { showToast(t('list.operationError')); }
   }
-  const selectionActions = <StorageSelectionActions count={chosen.length} busy={busy} onRename={() => setEditing(chosen[0])} onMove={() => setMoving(true)} onDelete={() => void remove()} onClear={() => setSelected([])} />;
+  const selectionActions = <StorageSelectionActions count={chosen.length} busy={busy} mobile={mobile} onRename={() => setEditing(chosen[0])} onMove={() => { if (mobile) { setActionsOpen(false); actionsButton.current?.querySelector('button')?.focus(); } setMoving(true); }} onDelete={() => void remove()} onClear={() => setSelected([])} />;
   function preview(entry: FileEntry) { onFilePreview?.({ key: `projects/${projectId}/${entry.path}`, originalName: entry.name, size: entry.size ?? 0, lastModified: entry.lastModified ?? '' }); }
   return <div style={{ flex: 1, display: 'flex', flexDirection: 'column', overflow: 'hidden', position: 'relative', minWidth: 0 }}
-    onDragEnter={(event) => { if (!isFileDrag(event)) return; event.preventDefault(); event.stopPropagation(); setDragOver(true); }}
-    onDragOver={(event) => { if (!isFileDrag(event)) return; event.preventDefault(); event.stopPropagation(); }}
-    onDragLeave={(event) => { if (!isFileDrag(event)) return; event.stopPropagation(); if (!event.currentTarget.contains(event.relatedTarget as Node)) setDragOver(false); }} onDrop={(event) => void drop(event)}>
-    <div style={{ display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: 'var(--space-2)', padding: 'var(--space-2)' }}>
-      <Button size="sm" variant="primary" type="button" disabled={busy} onClick={() => input.current?.click()}>{filesT('storage.uploadFile')}</Button>
+    onDragEnter={(event) => { if (mobile || !isFileDrag(event)) return; event.preventDefault(); event.stopPropagation(); setDragOver(true); }}
+    onDragOver={(event) => { if (mobile || !isFileDrag(event)) return; event.preventDefault(); event.stopPropagation(); }}
+    onDragLeave={(event) => { if (mobile || !isFileDrag(event)) return; event.stopPropagation(); if (!event.currentTarget.contains(event.relatedTarget as Node)) setDragOver(false); }} onDrop={(event) => void drop(event)}>
+    <div ref={toolbar} style={{ display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: 'var(--space-2)', padding: 'var(--space-2)' }}>
+      <Button style={touchStyle} size="sm" variant="primary" type="button" disabled={busy} onClick={() => input.current?.click()}>{filesT('storage.uploadFile')}</Button>
       <input ref={input} type="file" multiple hidden onChange={(event) => { void uploadItems(Promise.resolve(Array.from(event.target.files ?? []).map((file) => ({ type: 'file' as const, path: file.name, file })))); event.target.value = ''; }} />
-      <Button size="sm" type="button" disabled={busy} onClick={() => setEditing('create')}>{t('list.newFolder')}</Button>
+      <Button style={touchStyle} size="sm" type="button" disabled={busy} onClick={() => setEditing('create')}>{t('list.newFolder')}</Button>
       <FormInput aria-label={t('list.filter')} placeholder={t('list.filter')} value={filter} onChange={(event) => setFilter(event.target.value)} style={{ flex: '1 1 8rem', width: 'auto', minWidth: 0, padding: 'var(--space-1) var(--space-2)', fontSize: 'var(--font-sm)' }} />
-      <FormSelect aria-label={t('list.sort')} value={sort} onChange={(event) => setSort(event.target.value)} style={{ width: 'auto', padding: 'var(--space-1) var(--space-2)', fontSize: 'var(--font-sm)' }}><option value="name">{t('list.nameAsc')}</option><option value="nameDesc">{t('list.nameDesc')}</option><option value="sizeAsc">{t('list.sizeAsc')}</option><option value="sizeDesc">{t('list.sizeDesc')}</option><option value="dateAsc">{t('list.dateAsc')}</option><option value="dateDesc">{t('list.dateDesc')}</option></FormSelect>
+      <FormSelect aria-label={t('list.sort')} value={sort} onChange={(event) => setSort(event.target.value as Sort)} style={{ width: 'auto', padding: 'var(--space-1) var(--space-2)', fontSize: 'var(--font-sm)' }}><option value="name">{t('list.nameAsc')}</option><option value="nameDesc">{t('list.nameDesc')}</option><option value="sizeAsc">{t('list.sizeAsc')}</option><option value="sizeDesc">{t('list.sizeDesc')}</option><option value="dateAsc">{t('list.dateAsc')}</option><option value="dateDesc">{t('list.dateDesc')}</option></FormSelect>
     </div>
-    <PathBreadcrumb path={path} rootLabel={t('list.root')} navigationLabel={t('list.path')} onNavigate={navigate} />
-    <div aria-live="polite" style={{ padding: '0 var(--space-2)', fontSize: 'var(--font-xs)', color: 'var(--text-dim)' }}>{t('list.count', { count: visible.length, selected: selected.length })} {nextCursor && t('list.moreAvailable')}</div>
+    <PathBreadcrumb mobile={mobile} path={path} rootLabel={t('list.root')} navigationLabel={t('list.path')} onNavigate={navigate} />
+    <div aria-live="polite" style={{ padding: '0 var(--space-2)', fontSize: 'var(--font-xs)', color: 'var(--text-dim)' }}>{t('list.count', { count: visible.length, selected: chosen.length })} {nextCursor && t('list.moreAvailable')}</div>
     {chosen.length > 0 && (mobile
-      ? <div style={{ padding: 'var(--space-2)' }}><Button size="sm" type="button" onClick={() => setActionsOpen(true)}>{t('list.actions', { count: chosen.length })}</Button></div>
+      ? <div ref={actionsButton} style={{ padding: 'var(--space-2)' }}><Button style={touchStyle} size="sm" type="button" onClick={() => setActionsOpen(true)}>{t('list.actions', { count: chosen.length })}</Button></div>
       : <div style={{ padding: 'var(--space-2)' }}>{selectionActions}</div>)}
-    {mobile && <BottomSheet open={actionsOpen && chosen.length > 0 && !moving && !editing} title={t('list.count', { count: visible.length, selected: selected.length })} onClose={() => setActionsOpen(false)}>{selectionActions}</BottomSheet>}
-    {moving && <StorageMovePicker backend={backend} initialPath={path} disabled={busy} onCancel={() => setMoving(false)} onMove={(destination) => { if (chosen.some((item) => item.type === 'directory' && destination.startsWith(item.path))) { showToast(t('list.invalidDestination')); return; } setMoving(false); void run(() => backend.moveMany(chosen, destination)); }} />}
+    {mobile && <BottomSheet open={actionsOpen && chosen.length > 0 && !moving && !editing} title={t('list.count', { count: visible.length, selected: chosen.length })} onClose={() => setActionsOpen(false)}>{selectionActions}</BottomSheet>}
+    {moving && <StorageMovePicker backend={backend} initialPath={path} disabled={busy} mobile={mobile} fallbackFocusTo={actionsButton.current?.querySelector('button')} onCancel={() => setMoving(false)} onMove={(destination) => { if (chosen.some((item) => item.type === 'directory' && destination.startsWith(item.path))) { showToast(t('list.invalidDestination')); return; } setMoving(false); void run(() => backend.moveMany(chosen, destination)); }} />}
     {dragOver && <div role="status" style={{ position: 'absolute', inset: 0, background: 'var(--accent-a15)', border: '2px dashed var(--accent)', pointerEvents: 'none', zIndex: 1 }}>{filesT('storage.dropToUpload')}</div>}
-    {progress && <div role="status">{progress}</div>}
+    {progress && <div role="status" style={{ padding: 'var(--space-2)', color: 'var(--text-dim)' }}>{progress}</div>}
     {previews.length > 0 && <div style={{ display: 'flex', flexWrap: 'wrap', gap: 'var(--space-2)', maxHeight: 'min(25vh, calc(var(--space-6) * 6))', overflowY: 'auto', flexShrink: 0 }}>{previews.map((image) => <img key={image.url} src={image.url} alt={image.name} style={{ width: 'calc(var(--space-6) * 2 + var(--space-4))', height: 'calc(var(--space-6) * 2 + var(--space-4))', objectFit: 'contain', borderRadius: 'var(--radius-sm)' }} />)}</div>}
-    {failures.length > 0 && <div role="alert" style={{ maxHeight: 'min(25vh, calc(var(--space-6) * 6))', overflowY: 'auto', overflowWrap: 'anywhere', flexShrink: 0 }}><div>{t('list.uploadFailures')}</div><ul>{failures.map((failure, index) => <li key={index}>{failure.path}: {failure.error}</li>)}</ul></div>}
+    {failures.length > 0 && <div role="alert" style={{ maxHeight: 'min(25vh, calc(var(--space-6) * 6))', overflowY: 'auto', overflowWrap: 'anywhere', flexShrink: 0, padding: 'var(--space-2)', color: 'var(--danger)' }}><div>{t('list.uploadFailures')}</div><ul>{failures.map((failure, index) => <li key={index}>{failure.path}: {failure.error}</li>)}</ul></div>}
     <div style={{ flex: 1, overflowY: 'auto', paddingBottom: 'env(safe-area-inset-bottom)' }}>
       {editing === 'create' && <InlineNameInput initialValue="" kind="directory" siblingNames={entries.map((entry) => entry.name)} depth={0} onCancel={() => setEditing(null)} onCommit={(name) => { setEditing(null); void run(async () => { await backend.create(`${path}${name}/`, 'directory'); }); }} />}
       {loading && <LoadingState />}
@@ -187,7 +201,7 @@ function StorageFileList({ projectId, onFilePreview, activeTabId }: StoragePanel
       {!loading && !error && !visible.length && <EmptyState title={t('list.empty')} />}
       <FileTree nodes={visible} renderRow={(entry, depth) => editing !== 'create' && editing?.path === entry.path
         ? <InlineNameInput initialValue={entry.name} kind={entry.type} siblingNames={entries.filter((item) => item.path !== entry.path).map((item) => item.name)} depth={depth} onCancel={() => setEditing(null)} onCommit={(name) => { setEditing(null); void run(() => backend.rename(entry.path, name)); }} />
-        : <StorageEntryRow entry={entry} rawPath={raw(entry)} isSelected={selected.includes(entry.path)} isActive={activeTabId === `storage-file:${projectId}:${entry.path}`}
+        : <StorageEntryRow mobile={mobile} selectionMode={selected.length > 0} entry={entry} rawPath={raw(entry)} isSelected={selected.includes(entry.path)} isActive={activeTabId === `storage-file:${projectId}:${entry.path}`}
           onToggle={() => select(entry, true, false)} onRangeSelect={() => select(entry, true, true)}
           onOpen={() => { if (entry.type === 'directory') navigate(entry.path); else preview(entry); }}
           onDownload={() => void download(entry)} onCopyUrl={() => void copyUrl(entry)} />} />

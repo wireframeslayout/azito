@@ -70,23 +70,16 @@ describe('StorageFilesBackend', () => {
     expect(JSON.parse(fetchMock.mock.calls[2][1].body)).toEqual({ keys: [], prefixes: ['dir/'] });
     expect(JSON.parse(fetchMock.mock.calls[3][1].body)).toEqual({ prefix: 'new/' });
   });
-  it('accepts a folder conflict only after confirming the exact folder exists', async () => {
+  it('accepts an existing folder without listing it and preserves error codes', async () => {
     const fetchMock = vi.fn().mockResolvedValueOnce(response({ error: 'Folder already exists', code: 'exists' }, 409))
-      .mockResolvedValueOnce(response({ folders: [], files: [], nextCursor: 'next' }))
-      .mockResolvedValueOnce(response({ folders: [{ name: 'sub', prefix: 'dir/sub/' }], files: [], nextCursor: null }));
-    vi.stubGlobal('fetch', fetchMock);
-    await expect(new StorageFilesBackend(1).ensureFolder('dir/sub/')).resolves.toBeUndefined();
-    expect(fetchMock.mock.calls[1][0]).toContain('prefix=dir%2F');
-    expect(fetchMock.mock.calls[2][0]).toContain('cursor=next');
-  });
-  it('reports unconfirmed conflicts and other folder creation failures', async () => {
-    const fetchMock = vi.fn().mockResolvedValueOnce(response({ error: 'Folder already exists', code: 'exists' }, 409))
-      .mockResolvedValueOnce(response({ folders: [], files: [], nextCursor: null }))
-      .mockResolvedValueOnce(response({ error: 'Access denied', code: 'forbidden' }, 403));
+      .mockResolvedValueOnce(response({ error: 'Access denied', code: 'forbidden' }, 403))
+      .mockResolvedValueOnce(response({ error: 'Too large', code: 'folder_too_large' }, 413));
     vi.stubGlobal('fetch', fetchMock);
     const backend = new StorageFilesBackend(1);
-    await expect(backend.ensureFolder('missing/')).rejects.toThrow('Folder already exists');
-    await expect(backend.ensureFolder('denied/')).rejects.toThrow('Access denied');
+    await expect(backend.ensureFolder('dir/sub/')).resolves.toBeUndefined();
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    await expect(backend.ensureFolder('denied/')).rejects.toMatchObject({ status: 403, code: 'forbidden' });
+    await expect(backend.moveMany([{ name: 'a', path: 'a', type: 'file' }], 'b/')).rejects.toMatchObject({ status: 413, code: 'folder_too_large' });
   });
   it('creates a file through upload and returns its opaque key', async () => {
     const fetchMock = vi.fn().mockImplementation(async () => response({ file: { key: 'projects/1/dir/123_a.txt' } }));

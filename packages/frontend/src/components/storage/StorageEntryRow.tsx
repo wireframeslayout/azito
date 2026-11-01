@@ -1,4 +1,4 @@
-import { useRef } from 'react';
+import { useLongPress, longPressStyle } from '../../hooks/useLongPress';
 import { useTranslation } from 'react-i18next';
 import { useBlobUrl } from '../../hooks/useBlobUrl';
 import { formatSize } from '../../utils/formatSize';
@@ -9,7 +9,6 @@ import type { FileEntry } from '../files/backend/FilesBackend';
 
 const IMAGE_NAME = /\.(jpe?g|png|gif|webp|svg|bmp|ico)$/i;
 const THUMBNAIL_SIZE = 'var(--space-6)';
-const LONG_PRESS_MS = 500;
 
 function StorageThumbnail({ path }: { path: string }) {
   const { url } = useBlobUrl(path);
@@ -23,6 +22,8 @@ interface StorageEntryRowProps {
   rawPath: string;
   isSelected: boolean;
   isActive: boolean;
+  mobile: boolean;
+  selectionMode: boolean;
   onToggle: () => void;
   onRangeSelect: () => void;
   onOpen: () => void;
@@ -30,26 +31,24 @@ interface StorageEntryRowProps {
   onCopyUrl: () => void;
 }
 
-export function StorageEntryRow({ entry, rawPath, isSelected, isActive, onToggle, onRangeSelect, onOpen, onDownload, onCopyUrl }: StorageEntryRowProps) {
+export function StorageEntryRow({ entry, rawPath, isSelected, isActive, mobile, selectionMode, onToggle, onRangeSelect, onOpen, onDownload, onCopyUrl }: StorageEntryRowProps) {
   const { t } = useTranslation('storage');
   const { t: filesT } = useTranslation('files');
-  const press = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const didLongPress = useRef(false);
-  const cancelPress = () => { if (press.current) clearTimeout(press.current); };
+  const bindLongPress = useLongPress();
+  const touchSize = mobile ? 'calc(var(--space-6) + var(--space-5))' : undefined;
   const meta = entry.type === 'file'
     ? [entry.size !== undefined ? formatSize(entry.size) : null, entry.lastModified ? formatRelativeTime(entry.lastModified) : null].filter(Boolean).join(' · ')
     : '';
   return <div className={`row-hover${isSelected || isActive ? ' row-selected' : ''}`}
-    style={{ display: 'flex', alignItems: 'center', minHeight: 'calc(var(--space-6) + var(--space-5))', gap: 'var(--space-2)', padding: '0 var(--space-2)', minWidth: 0 }}
-    onTouchStart={() => { didLongPress.current = false; press.current = setTimeout(() => { didLongPress.current = true; onToggle(); }, LONG_PRESS_MS); }}
-    onTouchEnd={cancelPress} onTouchMove={cancelPress}>
-    <input type="checkbox" aria-label={t('list.select', { name: entry.name })} checked={isSelected} onChange={onToggle} />
+    style={{ display: 'flex', alignItems: 'center', minHeight: 'calc(var(--space-6) + var(--space-5))', gap: 'var(--space-2)', padding: '0 var(--space-2)', minWidth: 0 }}>
+    <label style={{ display: 'inline-flex', alignItems: 'center', justifyContent: 'center', minWidth: touchSize, minHeight: touchSize }}><input type="checkbox" aria-label={t('list.select', { name: entry.name })} checked={isSelected} onChange={onToggle} /></label>
     {entry.type === 'directory' ? <Icon name="files" size={16} /> : IMAGE_NAME.test(entry.name) ? <StorageThumbnail path={rawPath} /> : <Icon name="file" size={16} />}
     <button type="button" className="icon-btn"
-      style={{ flex: 1, minWidth: 0, display: 'flex', flexDirection: 'column', alignItems: 'flex-start', background: 'none', border: 'none', padding: 'var(--space-1) 0', color: 'var(--text)', cursor: 'pointer', textAlign: 'left' }}
+      {...bindLongPress(onToggle)}
+      style={{ ...longPressStyle, flex: 1, minWidth: 0, display: 'flex', flexDirection: 'column', alignItems: 'flex-start', background: 'none', border: 'none', padding: 'var(--space-1) 0', color: 'var(--text)', cursor: 'pointer', textAlign: 'left' }}
       onClick={(event) => {
-        if (didLongPress.current) { didLongPress.current = false; return; }
-        if (event.shiftKey) onRangeSelect();
+        if (mobile && selectionMode) onToggle();
+        else if (event.shiftKey) onRangeSelect();
         else if (event.ctrlKey || event.metaKey) onToggle();
         else onOpen();
       }}>
@@ -57,8 +56,8 @@ export function StorageEntryRow({ entry, rawPath, isSelected, isActive, onToggle
       {meta && <span style={{ fontSize: 'var(--font-2xs)', color: 'var(--text-dim)' }}>{meta}</span>}
     </button>
     {entry.type === 'file' && <>
-      <IconButton size="sm" type="button" aria-label={filesT('storage.download')} title={filesT('storage.download')} onClick={onDownload}><Icon name="download" size={16} /></IconButton>
-      <IconButton size="sm" type="button" aria-label={filesT('storage.copyUrl')} title={filesT('storage.copyUrl')} onClick={onCopyUrl}><Icon name="external-link" size={16} /></IconButton>
+      <IconButton size="sm" style={{ minWidth: touchSize, minHeight: touchSize }} type="button" aria-label={filesT('storage.download')} title={filesT('storage.download')} onClick={onDownload}><Icon name="download" size={16} /></IconButton>
+      <IconButton size="sm" style={{ minWidth: touchSize, minHeight: touchSize }} type="button" aria-label={filesT('storage.copyUrl')} title={filesT('storage.copyUrl')} onClick={onCopyUrl}><Icon name="external-link" size={16} /></IconButton>
     </>}
   </div>;
 }
