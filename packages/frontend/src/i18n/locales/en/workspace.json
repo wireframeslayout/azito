@@ -1,4 +1,5 @@
 {
+  "navigation": { "taskOpenFailed": "Could not open the task." },
   "tab": {
     "closeDirtyTitle": "Close tab with unsaved changes?",
     "closeDirtyMessage": "\"{{name}}\" has unsaved changes. Closing this tab will discard them.",
