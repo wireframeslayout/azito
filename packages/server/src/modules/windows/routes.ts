@@ -1,5 +1,5 @@
 import { recordAuditBestEffort } from '../../shared/audit/recordAuditBestEffort';
-import { shouldAskMuxSwitch } from './muxSwitchPolicy';
+import { shouldAskMuxSwitch, misaoStatusFor, WindowBusyError, UnsupportedMuxSwitchError } from './muxSwitchPolicy';
 import type { SqliteMuxSwitchSettingsRepository } from './SqliteMuxSwitchSettingsRepository';
 import type { AuditLogService } from '../../shared/audit/AuditLogService';
 import type { AgentActivityMonitor } from '../operations/AgentActivityMonitor';
@@ -561,10 +561,9 @@ const windowsRoutes: FastifyPluginCallback<WindowsRouteOptions> = (fastify, opts
     const server = serverRepo.findByName(win.serverName);
     if (!server) return reply.status(404).send({ error: 'Server not found' });
     const kind = windowKindOf(win);
-    const availability = opts.muxDriverRegistry.availabilityFor('misao', server);
+    const misao = misaoStatusFor(opts.muxDriverRegistry, server);
     const mode = opts.muxSwitchSettingsRepo.get();
-    const hosted = opts.muxDriverRegistry.supportedKinds(server).includes('misao') && (availability.available || (availability.reason !== 'not_installed' && availability.reason !== 'driver_not_registered' && availability.reason !== 'unsupported_os'));
-    return { currentMux: kind, misao: { hosted, available: availability.available, ...(availability.available ? {} : { reason: availability.reason }) }, mode, shouldAsk: shouldAskMuxSwitch(kind, mode, hosted && availability.available) };
+    return { serverName: server.name, currentMux: kind, misao, mode, shouldAsk: shouldAskMuxSwitch(kind, mode, misao.available) };
   });
 
   // ── POST /api/windows/:id/respawn ──
@@ -584,9 +583,8 @@ const windowsRoutes: FastifyPluginCallback<WindowsRouteOptions> = (fastify, opts
       const sourceMux = windowKindOf(win);
       if (sourceMux === 'misao' && mux === 'tmux') return reply.status(400).send({ error: 'unsupported_switch' });
       if (mux === 'misao') {
-        const availability = opts.muxDriverRegistry.availabilityFor('misao', srv);
-        if (!opts.muxDriverRegistry.supportedKinds(srv).includes('misao')) return reply.status(409).send({ error: 'misao_unavailable', reason: 'not_installed' });
-        if (!availability.available) return reply.status(409).send({ error: 'misao_unavailable', reason: availability.reason });
+        const status = misaoStatusFor(opts.muxDriverRegistry, srv);
+        if (!status.available) return reply.status(409).send({ error: 'misao_unavailable', reason: status.reason });
       }
 
       let resourceSkipped: ResourceUnavailable | null = null;
@@ -611,8 +609,8 @@ const windowsRoutes: FastifyPluginCallback<WindowsRouteOptions> = (fastify, opts
       } catch (err) {
         if (replyToExecutionGateError(err, reply)) return;
         if (err instanceof MuxDriverUnavailableError && err.kind === 'misao') return reply.status(409).send({ error: 'misao_unavailable', reason: err.reason });
-        if (err instanceof Error && err.message === 'window_busy') return reply.status(409).send({ error: 'window_busy' });
-        if (err instanceof Error && err.message === 'misao_to_tmux_unsupported') return reply.status(400).send({ error: 'unsupported_switch' });
+        if (err instanceof WindowBusyError) return reply.status(409).send({ error: 'window_busy' });
+        if (err instanceof UnsupportedMuxSwitchError) return reply.status(400).send({ error: 'unsupported_switch' });
         if (err instanceof DuplicateAgentSessionError) {
           return reply.status(409).send({ error: 'session_already_running', windowId: err.windowId, sessionId: err.sessionId, message: err.message });
         }

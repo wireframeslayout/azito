@@ -258,10 +258,10 @@
     "intervalOnlySpace": "Available when Space twice is selected."
   },
   "terminal": {
-    "policy": "Wake policy",
+    "policy": "When waking a sleeping tmux window",
     "policyDescription": "Choose how tmux windows are reopened.",
-    "ask": "Ask each time",
-    "misao": "Use misao",
+    "ask": "Ask every time",
+    "misao": "Always use misao",
     "tmux": "Keep tmux",
     "defaults": "Default for new windows",
     "defaultsDescription": "Change the default on supported servers.",
@@ -274,6 +274,8 @@
     "loadFailed": "Could not load settings",
     "saveFailed": "Could not save settings",
     "retry": "Retry",
-    "confirmDefaults": "Change the default to {{mux}} on {{count}} servers?"
+    "confirmDefaults": "Change the default to {{mux}} on {{count}} servers?",
+    "autoAskDescription": "Automatic wake keeps tmux and sends a notification.",
+    "defaultsCount": "{{count}} servers have tmux as default_mux."
   }
 }

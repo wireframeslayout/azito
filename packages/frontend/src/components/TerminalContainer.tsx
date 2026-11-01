@@ -1,3 +1,4 @@
+import { muxSwitchErrorKey } from '../lib/muxSwitchError';
 import { paths } from '../paths';
 import { useWakeWindow } from '../hooks/useWakeWindow';
 import { useState, useCallback, useEffect, useMemo, useRef } from 'react';
@@ -254,7 +255,7 @@ export function TerminalContainer({ registeredWindow, serverName, target: rawTar
         if (res.error === 'session_already_running' && res.windowId != null && res.sessionId) {
           setRespawnError(t('terminal.sessionAlreadyRunning', { windowId: formatWindowId(res.windowId), sessionId: res.sessionId.slice(0, 8) }));
         } else {
-          setRespawnError(res.message || (res.reason ? `${res.error}: ${res.reason}` : res.error) || 'Respawn failed');
+          setRespawnError(['misao_unavailable', 'window_busy', 'unsupported_switch'].includes(res.error ?? '') ? t(muxSwitchErrorKey(res.error, res.reason)) : res.message || t('terminal.muxErrorUnknown'));
         }
         return;
       }
@@ -570,8 +571,7 @@ export function TerminalContainer({ registeredWindow, serverName, target: rawTar
             </div>
             {muxPlanError && <div role="status" style={{ fontSize: 'var(--font-sm)', color: 'var(--text-dim)' }}>{t('terminal.muxPlanFailed')}</div>}
             {misaoNotInstalled && <div style={{ fontSize: 'var(--font-sm)', color: 'var(--text-dim)' }}>{t('terminal.muxNotInstalled', { serverName })} · <a href={paths.server(serverName, 'setup')}>{t('terminal.muxInstallLink')}</a></div>}
-            {respawnError && <div role="alert" style={{ color: 'var(--danger)' }}>{respawnError}</div>}
-            {failedMisao && <button className="btn btn-sm" disabled={respawning} onClick={() => void handleRespawn(false, 'tmux')}>{t('terminal.muxRetryTmux')}</button>}
+            {respawnError && <div role="alert" style={{ color: 'var(--danger)' }}>{failedMisao && <strong>{t('terminal.muxErrorTitle')}</strong>}<p>{respawnError}</p>{failedMisao && <><p>{t('terminal.muxErrorGuide')}</p><button className="btn btn-sm" disabled={respawning} onClick={() => void handleRespawn(false, 'tmux')}>{t('terminal.muxRetryTmux')}</button></>}</div>}
             <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
               <button
                 className="btn btn-primary btn-sm"

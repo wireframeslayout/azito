@@ -220,7 +220,7 @@ export function NotificationCenterProvider({ children }: { children: React.React
   }, [updateNotifications, dismissToast]);
 
   useNotificationChannel({
-    onMuxWake: (payload) => pushNotification({ id: makeId(), kind: 'mux_wake', messageKey: payload.reason === 'ask' ? 'notifications:kinds.muxWakeAsk' : 'notifications:kinds.muxWakeUnavailable', messageParams: { title: formatWindowTitleLine(resolveWindowTitle({ id: payload.windowId })), serverName: payload.serverName }, serverName: payload.serverName, taskId: payload.taskId, windowId: payload.windowId, read: false, createdAt: Date.now() }),
+    onMuxWake: (payload) => pushNotification({ id: makeId(), kind: 'mux_wake', messageKey: payload.reason === 'ask' ? 'notifications:kinds.muxWakeAsk' : 'notifications:kinds.muxWakeUnavailable', messageParams: { title: payload.title ?? formatWindowTitleLine(resolveWindowTitle({ id: payload.windowId })), serverName: payload.serverName }, serverName: payload.serverName, taskId: payload.taskId, windowId: payload.windowId, read: false, createdAt: Date.now() }),
     onTaskStatus: useCallback((payload: { taskId: number; status: string; title?: string; projectId?: number }) => {
       const taskTitle = taskTitleOf(payload.title, payload.taskId, t('fallbackTaskTitle', { taskId: payload.taskId }));
       switch (payload.status) {

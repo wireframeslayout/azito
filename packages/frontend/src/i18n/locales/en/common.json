@@ -216,7 +216,21 @@
     "muxRetryTmux": "Open with tmux instead",
     "muxInstallLink": "Install misao",
     "muxNotInstalled": "misao is not installed on {{serverName}}, so this window opens with tmux",
-    "muxWaking": "Opening with misao… resuming the conversation ({{windowId}})"
+    "muxWaking": "Opening with misao… resuming the conversation ({{windowId}})",
+    "muxErrorTitle": "Could not open with misao",
+    "muxErrorGuide": "Check the misao status in Settings › System.",
+    "muxErrorDaemon": "Cannot connect to the misao daemon.",
+    "muxErrorNotInstalled": "misao is not installed on this server.",
+    "muxErrorProtocol": "The misao protocol is incompatible.",
+    "muxErrorDriver": "The misao driver is unavailable.",
+    "muxErrorOs": "misao is unavailable on this server’s OS.",
+    "muxErrorBusy": "The window is active. Wait until it is idle.",
+    "muxErrorUnsupported": "A misao window cannot be switched to tmux.",
+    "muxErrorUnknown": "The window could not be reopened.",
+    "muxBenefit1": "Windows remain available after a hub restart.",
+    "muxBenefit2": "Activity and approval waits can be detected.",
+    "muxVersionUnknown": "version unknown",
+    "muxBenefit3": "Use the same terminal on Windows servers."
   },
   "resourceWarning": {
     "title": "Server resources are constrained",

@@ -1,5 +1,6 @@
+import { resolveWindowTitle, formatWindowTitleLine } from '@azito/shared';
 import { recordAuditBestEffort } from '../../shared/audit/recordAuditBestEffort';
-import { selectAutoWakeMux } from './muxSwitchPolicy';
+import { selectAutoWakeMux, misaoStatusFor, decideAutoWake, WindowBusyError, UnsupportedMuxSwitchError } from './muxSwitchPolicy';
 import type { SqliteMuxSwitchSettingsRepository } from './SqliteMuxSwitchSettingsRepository';
 import type { NotificationBus } from '../notifications/NotificationBus';
 import type { AuditLogService } from '../../shared/audit/AuditLogService';
@@ -403,7 +404,7 @@ export class WindowRespawnService {
       const sourceKind = windowKindOf(currentWin);
       let windowKind = opts?.mux ?? sourceKind;
       let supervision: SupervisionContext = { supervise: shouldSupervise(server.type, currentWin.windowType, windowKind), taskId: currentWin.taskId, unitId, windowId };
-      if (sourceKind === 'misao' && windowKind === 'tmux') throw new Error('misao_to_tmux_unsupported');
+      if (sourceKind === 'misao' && windowKind === 'tmux') throw new UnsupportedMuxSwitchError('misao_to_tmux_unsupported');
       // Decided by the mux the window is finally created in (an automatic wake may stay in tmux).
       const openNameFor = (kind: MuxDriverKind): string => kind === 'misao'
         ? (windowDisplayName(currentWin) ?? (sourceKind === 'tmux' ? windowPart : (task ? `task-${task.id}-w${windowId}` : `win-w${windowId}`)))
@@ -501,15 +502,14 @@ export class WindowRespawnService {
           : workspaceExists && (workspace?.windows.some((w: { name: string }) => w.name === windowPart) ?? false);
 
         if (windowKind !== sourceKind) {
-          const supported = this.muxDriverRegistry.supportedKinds(freshServer).includes(windowKind);
-          const availability = supported ? this.muxDriverRegistry.availabilityFor(windowKind, freshServer) : { available: false as const, reason: 'not_installed' as const };
-          if (!availability.available && !opts?.autoSwitch) throw new MuxDriverUnavailableError(windowKind, availability.reason);
+          const availability = misaoStatusFor(this.muxDriverRegistry, freshServer);
+          if (!availability.available && !opts?.autoSwitch) throw new MuxDriverUnavailableError(windowKind, availability.reason ?? 'not_installed');
           // An automatic wake never moves a window that is still alive: its processes would be lost.
           if (opts?.autoSwitch && (!availability.available || windowAlive)) {
             windowKind = sourceKind;
             supervision = { ...supervision, supervise: shouldSupervise(freshServer.type, currentWin.windowType, sourceKind) };
           } else if (windowAlive && (!opts?.isBusy || opts.isBusy(windowId))) {
-            throw new Error('window_busy');
+            throw new WindowBusyError('window_busy');
           }
         }
 
@@ -727,23 +727,15 @@ export class WindowRespawnService {
     if (!win) throw new Error('Window not found');
     const source = windowKindOf(win);
     const policy = this.muxSwitch.settings.get();
-    const supported = this.muxDriverRegistry.supportedKinds(server).includes('misao');
-    const availability = supported ? this.muxDriverRegistry.availabilityFor('misao', server) : { available: false as const, reason: 'not_installed' as const };
-    const mux = selectAutoWakeMux(source, policy, availability.available);
+    const status = misaoStatusFor(this.muxDriverRegistry, server);
+    const mux = selectAutoWakeMux(source, policy, status.available);
     const result = await this.respawn(windowId, server, { ...opts, mux, autoSwitch: true });
     const woken = this.windowRepo.findById(windowId);
     if (!woken) throw new Error('Window not found');
     const actualMux = windowKindOf(woken);
-    // The reason is read after the wake: a window kept in tmux while misao answers (it was still alive) can be switched by hand,
-    // so it gets the "can switch" notice, not "misao is unavailable".
-    const misaoAvailableNow = supported && this.muxDriverRegistry.availabilityFor('misao', server).available;
-    const suggestion = source !== 'tmux' || actualMux !== 'tmux' || policy === 'tmux'
-      ? null
-      : misaoAvailableNow ? 'ask' as const
-        : policy === 'misao' ? 'misao_unavailable' as const
-          : null;
+    const suggestion = decideAutoWake(source, actualMux, policy, misaoStatusFor(this.muxDriverRegistry, server).available);
     if (suggestion) {
-      this.muxSwitch.notifications.emit({ type: 'window:mux_switch_suggested', payload: { windowId, serverName, ...(win.taskId !== null ? { taskId: win.taskId } : {}), reason: suggestion } });
+      this.muxSwitch.notifications.emit({ type: 'window:mux_switch_suggested', payload: { windowId, serverName, title: formatWindowTitleLine(resolveWindowTitle({ id: win.id, label: win.label, labelSource: win.labelSource, tmuxTarget: win.tmuxTarget, workerType: win.workerType ?? undefined, windowType: win.windowType })), ...(win.taskId !== null ? { taskId: win.taskId } : {}), reason: suggestion } });
     }
     if (source !== actualMux) {
       recordAuditBestEffort(this.muxSwitch.audit, { actorClass: 'runtime', actorId: null, event: 'window.mux_switched', detail: { windowId, serverName, from: source, to: actualMux, trigger: 'auto' } }, (err) => console.error('Mux switch audit failed', err));

@@ -2872,6 +2872,25 @@ describe('switching mux on respawn', () => {
     expect(windowRepo.update).toHaveBeenCalledWith(7, expect.objectContaining({ muxRef: ref, label: 'old', sleeping: false }));
   });
 
+  it('updates a primary task and resumes without a supervisor when switching to misao', async () => {
+    const win = makeWindow({ id: 7, taskId: 7, tmuxTarget: 'azito:old', sleeping: true });
+    const { service, tmux, taskRepo, sentCommands } = buildService({ window: win, task: makeTask({ id: 7 }) });
+    const ref = { kind: 'misao' as const, workspace: 'azito', window: 'w_01M3XFD8H97JCPKS5Y5BH3JZQJ' };
+    tmux.openWorkspace.mockResolvedValue({ ref, result: { stdout: '', stderr: '', code: 0 } } as never);
+    await service.respawn(7, makeServer(), { mux: 'misao' });
+    expect(taskRepo.update).toHaveBeenCalledWith(7, { tmuxWindow: ref.window });
+    expect(sentCommands.join(' ')).toContain('claude');
+    expect(sentCommands.join(' ')).not.toContain('supervisor');
+  });
+
+  it('keeps the row unchanged if the misao window cannot be created', async () => {
+    const win = makeWindow({ id: 7, taskId: null, tmuxTarget: 'azito:old', sleeping: true });
+    const { service, tmux, windowRepo } = buildService({ window: win, task: null });
+    tmux.openWorkspace.mockRejectedValue(new Error('create failed'));
+    await expect(service.respawn(7, makeServer(), { mux: 'misao', skipAgentLaunch: true })).rejects.toThrow('create failed');
+    expect(windowRepo.update).not.toHaveBeenCalled();
+  });
+
   it('rejects a busy live window before killing it', async () => {
     const win = makeWindow({ id: 7, taskId: null, tmuxTarget: 'azito:old' });
     const { service, tmux, muxDriverRegistry } = buildService({ window: win, task: null });

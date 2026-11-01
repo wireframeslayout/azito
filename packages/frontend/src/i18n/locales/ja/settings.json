@@ -258,11 +258,11 @@
     "intervalOnlySpace": "Space 2 回を選んだときに設定できます。"
   },
   "terminal": {
-    "policy": "復帰方針",
+    "policy": "tmux の窓をスリープから起こすとき",
     "policyDescription": "tmux の窓を起こす方法を選びます。",
     "ask": "毎回確認",
-    "misao": "misao で開く",
-    "tmux": "tmux のまま開く",
+    "misao": "常に misao",
+    "tmux": "tmux のまま",
     "defaults": "新規窓の既定",
     "defaultsDescription": "対応サーバーの既定を変更します。",
     "noServers": "対応サーバーはありません",
@@ -274,6 +274,8 @@
     "loadFailed": "設定を取得できませんでした",
     "saveFailed": "設定を保存できませんでした",
     "retry": "再試行",
-    "confirmDefaults": "{{count}} 台のサーバーの既定を {{mux}} に変更しますか？"
+    "confirmDefaults": "{{count}} 台のサーバーの既定を {{mux}} に変更しますか？",
+    "autoAskDescription": "自動復帰では tmux のまま開いて通知します。",
+    "defaultsCount": "default_mux が tmux のサーバーが {{count}} 台あります。"
   }
 }

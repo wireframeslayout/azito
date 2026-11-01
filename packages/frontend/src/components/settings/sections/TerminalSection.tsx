@@ -89,12 +89,14 @@ export default function TerminalSection() {
             </label>
           ))}
         </div>
+        {settings.mode === 'ask' && <p style={descriptionStyle}>{t('terminal.autoAskDescription')}</p>}
         {saveFailed && <Notice tone="danger" style={{ marginTop: 12 }}>{t('terminal.saveFailed')}</Notice>}
       </fieldset>
 
       <section style={cardStyle} aria-labelledby="terminal-defaults-title">
         <h3 id="terminal-defaults-title" style={titleStyle}>{t('terminal.defaults')}</h3>
         <p style={{ ...descriptionStyle, marginBottom: 12 }}>{t('terminal.defaultsDescription')}</p>
+        {tmuxServers.length > 0 && <p style={descriptionStyle}>{t('terminal.defaultsCount', { count: tmuxServers.length })}</p>}
         {settings.servers.length === 0 ? (
           <p style={descriptionStyle}>{t('terminal.noServers')}</p>
         ) : (

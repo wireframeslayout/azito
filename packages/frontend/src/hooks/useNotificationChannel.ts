@@ -3,7 +3,7 @@ import type { AgentActivityPayload, BrowserOpenedPayload, NotificationEvent } fr
 import { buildWsUrl } from '../api/wsUrl';
 
 export interface NotificationHandlers {
-  onMuxWake?: (payload: { windowId: number; serverName: string; taskId?: number; reason: 'ask' | 'misao_unavailable' }) => void;
+  onMuxWake?: (payload: { windowId: number; serverName: string; title?: string; taskId?: number; reason: 'ask' | 'misao_unavailable' }) => void;
   onSessionsUpdated?: (serverName: string) => void;
   onTaskStatus?: (payload: { taskId: number; status: string; title?: string; projectId?: number }) => void;
   onPaneExited?: (serverName: string) => void;

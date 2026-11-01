@@ -55,7 +55,7 @@ describe('wake selection', () => {
     fireEvent.submit(dialog.querySelector('form')!);
     await screen.findByText('Could not save the preference');
     expect(chosen).not.toHaveBeenCalled();
-    fireEvent.click(screen.getByText('Cancel'));
+    fireEvent.keyDown(document, { key: 'Escape' });
     await waitFor(() => expect(chosen).toHaveBeenCalledWith(null));
   });
   it('opens an accessible mobile sheet and cancels with Escape', async () => {

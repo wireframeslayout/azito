@@ -216,7 +216,21 @@
     "muxRetryTmux": "もう一度 tmux で開く",
     "muxInstallLink": "misao を入れる",
     "muxNotInstalled": "{{serverName}} には misao が入っていないため tmux で開きます",
-    "muxWaking": "misao で開いています… 会話を再開しています（{{windowId}}）"
+    "muxWaking": "misao で開いています… 会話を再開しています（{{windowId}}）",
+    "muxErrorTitle": "misao で開けませんでした",
+    "muxErrorGuide": "設定 › システムで misao の状態を確かめてください。",
+    "muxErrorDaemon": "misao のデーモンに接続できません。",
+    "muxErrorNotInstalled": "このサーバーには misao が入っていません。",
+    "muxErrorProtocol": "misao のプロトコルに互換性がありません。",
+    "muxErrorDriver": "misao のドライバーが利用できません。",
+    "muxErrorOs": "このサーバーの OS では misao を利用できません。",
+    "muxErrorBusy": "窓が稼働中です。待機中にしてからお試しください。",
+    "muxErrorUnsupported": "misao の窓を tmux に切り替えることはできません。",
+    "muxErrorUnknown": "窓を開き直せませんでした。",
+    "muxBenefit1": "ハブの再起動後も窓を維持できます。",
+    "muxBenefit2": "稼働・承認待ちを検知できます。",
+    "muxVersionUnknown": "バージョン不明",
+    "muxBenefit3": "Windows のサーバーでも同じように使えます。"
   },
   "resourceWarning": {
     "title": "サーバーのリソースがひっ迫しています",

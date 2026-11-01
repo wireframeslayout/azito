@@ -7,10 +7,11 @@ interface BottomSheetProps {
   open: boolean;
   onClose: () => void;
   title?: string;
+  hideTitle?: boolean;
   children: React.ReactNode;
 }
 
-export function BottomSheet({ open, onClose, title, children }: BottomSheetProps) {
+export function BottomSheet({ open, onClose, title, hideTitle, children }: BottomSheetProps) {
   const ref = useRef<HTMLDivElement>(null);
   const { id, isTop } = useOverlayStack(open, ref, true);
   useHotkey({ action: 'local:overlay-close', spec: parseKeySpec('Escape'), scope: 'overlay', overlayId: id, handler: onClose }, open);
@@ -75,7 +76,7 @@ export function BottomSheet({ open, onClose, title, children }: BottomSheetProps
           transition: 'transform 0.25s ease, opacity 0.2s ease, visibility 0.25s ease',
         }}
       >
-        {title && (
+        {title && !hideTitle && (
           <div style={{ fontSize: 'var(--font-2xs)', letterSpacing: '0.08em', textTransform: 'uppercase', color: 'var(--text-dim)', padding: '6px 10px 4px' }}>
             {title}
           </div>

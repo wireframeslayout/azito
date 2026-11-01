@@ -9,7 +9,7 @@ describe('buildWindowMenuItems', () => {
   it('offers reopening with misao only on an awake tmux window, disabled while busy or without misao', () => {
     expect(find({ ...base, muxKind: 'tmux', misaoSupported: true }, 'switch-misao')?.disabled).toBeFalsy();
     expect(find({ ...base, muxKind: 'tmux', misaoSupported: true, busy: true }, 'switch-misao')?.disabled).toBe(true);
-    expect(find({ ...base, muxKind: 'tmux', misaoSupported: false }, 'switch-misao')?.disabled).toBe(true);
+    expect(find({ ...base, muxKind: 'tmux', misaoSupported: false }, 'switch-misao')).toBeUndefined();
     expect(kinds({ ...base, muxKind: 'misao', misaoSupported: true })).not.toContain('switch-misao');
     expect(kinds({ ...base, muxKind: 'tmux', misaoSupported: true, sleeping: true })).not.toContain('switch-misao');
     expect(kinds({ ...base, online: false, muxKind: 'tmux', misaoSupported: true })).not.toContain('switch-misao');

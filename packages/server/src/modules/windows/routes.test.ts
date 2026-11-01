@@ -1,3 +1,4 @@
+import { WindowBusyError } from './muxSwitchPolicy';
 import { KeyedMutex } from '../../shared/keyedMutex';
 import { HostProfileError } from '../../shared/os/hostProfile';
 import { mapAppError } from '../../app/mapAppError';
@@ -150,7 +151,7 @@ describe('POST /api/windows/:id/launch-agent', () => {
     ['POST', '/api/tasks/1/windows', ['server_name', 'tmux_target', 'ref', 'label', 'window_type', 'worker_type', 'worker_model', 'working_directory']],
     ['PUT', '/api/windows/1', ['label', 'agent_session_id', 'launch_command', 'worker_model', 'working_directory', 'window_type', 'worker_type']],
     ['POST', '/api/windows/1/launch-agent', ['command', 'force']],
-    ['POST', '/api/windows/1/respawn', ['force']],
+    ['POST', '/api/windows/1/respawn', ['force', 'mux']],
     ['PUT', '/api/windows/1/rename', ['name']],
     ['POST', '/api/windows/1/panes', ['ordinal', 'direction']],
     ['POST', '/api/windows/1/panes/1/send-keys', ['keys']],
@@ -905,7 +906,7 @@ describe('respawn mux API', () => {
     const unavailable = await app.inject({ method: 'POST', url: '/api/windows/1/respawn', payload: { mux: 'misao' } });
     expect(unavailable.statusCode).toBe(409);
     expect(unavailable.json()).toEqual({ error: 'misao_unavailable', reason: 'daemon_unreachable' });
-    respawn.mockRejectedValueOnce(new Error('window_busy'));
+    respawn.mockRejectedValueOnce(new WindowBusyError('window_busy'));
     const busy = await app.inject({ method: 'POST', url: '/api/windows/1/respawn', payload: { mux: 'misao' } });
     expect(busy.statusCode).toBe(409);
     expect(busy.json()).toEqual({ error: 'window_busy' });

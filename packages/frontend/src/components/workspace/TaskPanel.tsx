@@ -663,7 +663,11 @@ export default function TaskPanel({
   useEffect(() => {
     if (parseWindowTabId(mobileActiveTabId)) lastMobileWindowTabIdRef.current = mobileActiveTabId;
   }, [mobileActiveTabId]);
-  // Before a window tab is selected, use the first window for the ⋯ menu checkmark (Issue #338) and view-mode storage.
+  // 端末/チャットセグメント選択中に表示するウィンドウタブ id — mobileActiveTabId がまだ
+  // ウィンドウタブへ切り替わっていない最初のレンダーでも取りこぼさないよう、直近記憶値/
+  // 先頭ウィンドウへフォールバックする（承認済みモックの「ウィンドウバー」は常に何らかの
+  // ウィンドウを表示している状態を前提とするため）。Issue #338 の ⋯ メニューの ✓ に使う。
+  // 表示モード（端末/チャット）の保存先もこの窓。
   const mobileDisplayedWindowTabId = parseWindowTabId(mobileActiveTabId)
     ? mobileActiveTabId
     : (lastMobileWindowTabIdRef.current && windowTabIdsList.includes(lastMobileWindowTabIdRef.current)
