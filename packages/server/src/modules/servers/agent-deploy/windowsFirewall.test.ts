@@ -205,6 +205,10 @@ describe('checkFirewall', () => {
     const existing = run([dumped({ store: 'COM', elevated: true, networkCategory: null, rules: [rule({ displayName: 'AZITO Agent (TCP 3002) [abc]' })] })]);
     expect(await existing.result()).toMatchObject({ ruleFound: null, created: false });
     expect(existing.exec).toHaveBeenCalledTimes(1);
+    const refused = run([dumped({ store: 'COM', elevated: true, networkCategory: null }), added(false, 'access denied')]);
+    const failure = await refused.result();
+    expect(failure.ruleFound).toBeNull();
+    expect(describeFirewallProblem(failure, 3002, NODE, IP)).toContain('access denied');
   });
 
   it('refuses garbage', () => {

@@ -349,7 +349,8 @@ export async function checkFirewall(exec: FirewallExec, port: number, nodePath: 
     if (dump.store !== 'COM' || !dump.elevated || verdict.blockedBy.length > 0 || dump.rules.some((rule) => (rule.displayName === firewallRuleName(port) || rule.displayName.startsWith(`${firewallRuleName(port)} [`)))) return unknown;
     const added = await exec(buildFirewallAddCommand(port, nodePath, localAddress));
     const result = parseFirewallAdd(added.stdout, added.stderr, added.code);
-    return { ...unknown, created: result.created, problem: result.problem ?? unknown.problem };
+    const problem = result.created ? unknown.problem : `adding the rule failed: ${result.problem ?? 'no reason given'}`;
+    return { ...unknown, created: result.created, problem };
   }
   const found = verdict.allowedBy.length > 0;
   const allowedInSomeProfile = dump.networkCategory === null && ['Domain', 'Private', 'Public'].some((profile) =>
@@ -372,6 +373,9 @@ export async function checkFirewall(exec: FirewallExec, port: number, nodePath: 
 export function describeFirewallProblem(result: FirewallResult, port: number, nodePath: string, localAddress: string): string | null {
   if (result.blockedBy.length > 0) {
     return `Windows Firewall has an enabled inbound Block rule that stops the agent (TCP ${port} / ${nodePath} / ${localAddress}): ${result.blockedBy.map((n) => `"${n}"`).join(', ')}. A Block rule wins over any Allow rule. Remove or disable it (Windows creates one when the first-run firewall prompt is cancelled), then install again.`;
+  }
+  if (result.ruleFound === null && result.problem?.startsWith('adding the rule failed:')) {
+    return `Windows Firewall could not add the agent rule (${result.problem}). Inspect the firewall policy and, if appropriate, run this in an Administrator PowerShell:\n  ${firewallRuleCommand(port, nodePath, localAddress)}`;
   }
   if (result.ruleFound !== false || result.created) return null;
   const how = result.elevated
