@@ -2,7 +2,7 @@ import * as path from 'path';
 import type { ExecResult } from '../transport/ServerTransport';
 import { CREATE_SCRIPT, INSPECT_SCRIPT, PROTECT_SCRIPT, evaluateAcl, parseAclSnapshot } from '../../../shared/os/windowsSecretFileGuard';
 import { powershellDialect } from '../../../shared/os/shellDialect';
-import { buildEndProcessesScript } from '../../../shared/os/windowsProcessSweep';
+import { buildEndProcessesScript, buildProcessPresentScript, parseProcessPresent } from '../../../shared/os/windowsProcessSweep';
 import { SchtasksClient, type TaskScheduleState } from '../../../shared/os/taskScheduler/schtasks';
 import { buildTaskXml, encodeTaskXml, isTaskDefinitionDisabled } from '../../../shared/os/taskScheduler/taskDefinition';
 import { redactSecretText } from '../../../shared/redactSecretText';
@@ -262,7 +262,7 @@ export class WindowsAgentDeployer {
   }
 
   /** Stops and starts the registered task. A task that is not registered is an error (nothing is installed to restart); one disabled by hand is not touched. */
-  async restart(sshHost: string, host: WindowsPreflightInfo): Promise<'restarted' | 'disabled' | 'starting'> {
+  async restart(sshHost: string, host: WindowsPreflightInfo, force = false): Promise<'restarted' | 'disabled' | 'starting'> {
     const client = this.schtasks(sshHost, host);
     const state = await client.query(this.options.taskName);
     if (!state.exists) throw new Error(`The task "${this.options.taskName}" is not registered on the host: install the agent first`);
@@ -273,7 +273,11 @@ export class WindowsAgentDeployer {
     const root = windowsAgentRoot(host.home, this.options);
     const identity = action && agentTaskIdentity(action, host.systemRoot, root, windowsAgentEnvFile(host.home, this.options), this.options.taskName);
     if (!identity || !await this.taskOwnedByHost(sshHost, xml, host.userId)) throw new Error(`The task "${this.options.taskName}" is not a recognised agent task for ${root}`);
-    if (identity.launcher && state.running) return 'starting';
+    if (identity.launcher && state.running) {
+      if (!force) return 'starting';
+      const output = await this.script(sshHost, 'Checking the agent process', buildProcessPresentScript('node.exe', `--env-file=${windowsAgentEnvFile(host.home, this.options)}`));
+      if (!parseProcessPresent(output)) return 'starting';
+    }
     await this.stopTask(sshHost, client, windowsAgentEnvFile(host.home, this.options), host);
     await client.start(this.options.taskName);
     return 'restarted';

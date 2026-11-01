@@ -62,3 +62,29 @@ export function buildEndProcessesScript(input: ProcessSweepInput): string {
     `if ($left.Count -gt 0) { throw "An ${input.label} process did not end: $(($left | ForEach-Object { $_.Id }) -join ', ')" }`,
   ].join('\n');
 }
+
+/** Check for an owned process with an exact command-line argument without stopping it. */
+export function buildProcessPresentScript(image: string, argument: string): string {
+  const q = powershellDialect.quote;
+  return [
+    '# AZITO_PROCESS_PRESENT',
+    `$arg = ${q(argument)}`,
+    "$pattern = '(^|[\\s\"])' + [regex]::Escape($arg) + '([\\s\"]|$)'",
+    '$me = [Security.Principal.WindowsIdentity]::GetCurrent().User.Value',
+    `$ps = @(Get-CimInstance Win32_Process -Filter "Name = ${q(image)}" -ErrorAction Stop)`,
+    'foreach ($p in $ps) {',
+    '  if (-not $p.CommandLine -or $p.CommandLine -notmatch $pattern) { continue }',
+    '  $owner = Invoke-CimMethod -InputObject $p -MethodName GetOwnerSid -ErrorAction Stop',
+    '  if ($owner.ReturnValue -ne 0 -or -not $owner.Sid) { throw "Cannot determine process owner" }',
+    '  if ($owner.Sid -eq $me) { Write-Output "present"; exit 0 }',
+    '}',
+    'Write-Output "absent"',
+  ].join('\n');
+}
+
+export function parseProcessPresent(output: string): boolean {
+  const value = output.trim();
+  if (value === 'present') return true;
+  if (value === 'absent') return false;
+  throw new Error('Cannot determine whether the managed process is present');
+}

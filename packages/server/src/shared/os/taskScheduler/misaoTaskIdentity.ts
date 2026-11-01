@@ -1,6 +1,6 @@
-import { decodedTaskScript } from './taskLauncher';
+import { decodedTaskScript, sameTaskAction } from './taskLauncher';
 import * as path from 'path';
-import { legacyMisaoTaskArgumentsOf, previousMisaoTaskArgumentsOf, misaoTaskArgumentsOf } from './misaoTaskArguments';
+import { legacyMisaoTaskArgumentsOf, misaoTaskArgumentsOf } from './misaoTaskArguments';
 import type { TaskExecAction } from './taskXmlRead';
 
 const RELEASE_NAME = '[A-Za-z0-9][A-Za-z0-9._-]*';
@@ -23,8 +23,7 @@ export function misaoTaskVersion(action: TaskExecAction, systemRoot: string, roo
     try {
       const input = { systemRoot, exe: path.win32.join(root, version, 'misao.exe'), root, logFile: path.win32.join(root, 'misao.log'), pipe };
       if (legacyMisaoTaskArgumentsOf(input) === action.argumentsLine) return version;
-      if (misaoTaskArgumentsOf({ ...input, taskName }) === action.argumentsLine) return version;
-      if (previousMisaoTaskArgumentsOf({ ...input, taskName }) === action.argumentsLine) return version;
+      if (sameTaskAction(action.argumentsLine, misaoTaskArgumentsOf({ ...input, taskName }))) return version;
     } catch {
       // A value that cannot be written to a misao task is not the install's.
     }

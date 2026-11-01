@@ -708,16 +708,16 @@ export class AgentInstaller {
    * (e.g. SSH connection failure) — the caller is expected to catch and re-check health
    * afterward regardless of outcome.
    */
-  recoverAgent(sshHost: string, tailscaleIp: string, token: string, hostProfile: HostProfile | null, muxRuntime?: string): Promise<'systemd' | 'nohup' | 'taskscheduler' | 'disabled'> {
-    return this.hostLocks.withLock(this.lockKey(sshHost), () => this.recoverAgentLocked(sshHost, tailscaleIp, token, hostProfile, muxRuntime));
+  recoverAgent(sshHost: string, tailscaleIp: string, token: string, hostProfile: HostProfile | null, muxRuntime?: string, force = false): Promise<'systemd' | 'nohup' | 'taskscheduler' | 'disabled' | 'starting'> {
+    return this.hostLocks.withLock(this.lockKey(sshHost), () => this.recoverAgentLocked(sshHost, tailscaleIp, token, hostProfile, muxRuntime, force));
   }
 
-  private async recoverAgentLocked(sshHost: string, tailscaleIp: string, token: string, hostProfile: HostProfile | null, muxRuntime?: string): Promise<'systemd' | 'nohup' | 'taskscheduler' | 'disabled'> {
+  private async recoverAgentLocked(sshHost: string, tailscaleIp: string, token: string, hostProfile: HostProfile | null, muxRuntime?: string, force = false): Promise<'systemd' | 'nohup' | 'taskscheduler' | 'disabled' | 'starting'> {
     if (hostProfile?.platform === 'win32') {
       // The settings and the task are already on the host: ask it who it is, then restart the logon task.
       const probe = await this.sshClient.execIsolated(sshHost, buildWindowsPreflightCommand());
-      const outcome = await this.windowsDeployer().restart(sshHost, parseWindowsPreflight(probe.stdout, probe.stderr, probe.code));
-      return outcome === 'disabled' ? 'disabled' : 'taskscheduler';
+      const outcome = await this.windowsDeployer().restart(sshHost, parseWindowsPreflight(probe.stdout, probe.stderr, probe.code), force);
+      return outcome === 'restarted' ? 'taskscheduler' : outcome;
     }
     await this.assertNoCleanupRunning(sshHost);
     return this.startAgent(sshHost, tailscaleIp, token, muxRuntime);

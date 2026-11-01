@@ -82,15 +82,7 @@ export function legacyMisaoTaskArgumentsOf(input: MisaoTaskArgumentsInput): stri
 
 
 /** A launcher keeps retrying a failed daemon while its Task Scheduler conhost is alive. */
-export function previousMisaoTaskArgumentsOf(input: MisaoTaskArgumentsInput & { taskName: string }): string {
-  return retryTaskArguments(input, false);
-}
-
 export function misaoTaskArgumentsOf(input: MisaoTaskArgumentsInput & { taskName: string }): string {
-  return retryTaskArguments(input, true);
-}
-
-function retryTaskArguments(input: MisaoTaskArgumentsInput & { taskName: string }, job: boolean): string {
   // Apply the same path validation as the old task before embedding the values in a script.
   legacyMisaoTaskArgumentsOf(input);
   const q = powershellDialect.quote;
@@ -105,6 +97,7 @@ function retryTaskArguments(input: MisaoTaskArgumentsInput & { taskName: string 
     `$info.EnvironmentVariables['AZITO_MISAO_LOG'] = ${q(input.logFile)}`,
     `$log = ${q(input.logFile)}`,
     'function Log($m) { try { [IO.File]::AppendAllText($log, "[$([DateTime]::UtcNow.ToString(\'o\'))] launcher: $m`r`n") } catch { } }',
+    KILL_CHILDREN_JOB,
     'try { $parentId = (Get-CimInstance Win32_Process -Filter "ProcessId = $PID").ParentProcessId; $parentStart = (Get-Process -Id $parentId).StartTime } catch { Log "cannot identify parent: $_"; exit 1 }',
     'function ParentAlive { $p = Get-Process -Id $parentId -ErrorAction SilentlyContinue; return ($null -ne $p -and $p.StartTime -eq $parentStart) }',
     `function Enabled { try { return (Get-ScheduledTask -TaskPath \'\\\' -TaskName ${q(input.taskName)} -ErrorAction Stop).Settings.Enabled } catch { Log "cannot read task state: $_"; return $false } }`,
@@ -126,7 +119,7 @@ function retryTaskArguments(input: MisaoTaskArgumentsInput & { taskName: string 
     '}',
   ].join('\n');
   const powershell = win32.join(input.systemRoot, 'System32', 'WindowsPowerShell', 'v1.0', 'powershell.exe');
-  const taskScript = job ? compressedTaskScript(`${KILL_CHILDREN_JOB}\n${script}`) : script;
+  const taskScript = compressedTaskScript(script);
   const argumentsLine = joinWindowsArgs(['--headless', powershell, ...powershellEncodedArgs(taskScript)]);
   if (argumentsLine.length + win32.join(input.systemRoot, 'System32', 'conhost.exe').length + 3 > 8191) throw new Error('The misao task command line exceeds the Windows limit');
   return argumentsLine;

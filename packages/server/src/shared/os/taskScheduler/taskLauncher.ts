@@ -21,12 +21,14 @@ public static class AzitoTaskJob {
   }
 }
 '@
-[AzitoTaskJob]::Start()
+try { [AzitoTaskJob]::Start() } catch { Log "job: $_"; exit 1 }
 `;
 
 /** Keep the encoded action below the Windows command-line limit even for user paths with spaces. */
 export function compressedTaskScript(script: string): string {
-  const data = gzipSync(Buffer.from(script, 'utf8')).toString('base64');
+  const gzip = gzipSync(Buffer.from(script, 'utf8'));
+  gzip[9] = 255;
+  const data = gzip.toString('base64');
   return `$azitoTaskGzip='${data}'\n$z=[IO.Compression.GZipStream]::new([IO.MemoryStream]::new([Convert]::FromBase64String($azitoTaskGzip)),[IO.Compression.CompressionMode]::Decompress)\n$r=[IO.StreamReader]::new($z,[Text.Encoding]::UTF8)\nInvoke-Expression $r.ReadToEnd()`;
 }
 
@@ -40,4 +42,19 @@ export function decodedTaskScript(encoded: string): string | undefined {
   } catch {
     return undefined;
   }
+}
+
+/** Compare the whole action and wrapper, but compare the inflated script instead of gzip bytes. */
+export function sameTaskAction(actual: string, expected: string): boolean {
+  const pattern = /^(.*-EncodedCommand )([A-Za-z0-9+/=]+)$/;
+  const a = pattern.exec(actual), b = pattern.exec(expected);
+  if (!a || !b || a[1] !== b[1]) return actual === expected;
+  const ao = Buffer.from(a[2]!, 'base64').toString('utf16le');
+  const bo = Buffer.from(b[2]!, 'base64').toString('utf16le');
+  const marker = /^(\$azitoTaskGzip=')([A-Za-z0-9+/=]+)(')$/m;
+  const am = marker.exec(ao), bm = marker.exec(bo);
+  if (!am || !bm) return actual === expected;
+  if (ao.replace(marker, '$1DATA$3') !== bo.replace(marker, '$1DATA$3')) return false;
+  const as = decodedTaskScript(a[2]!), bs = decodedTaskScript(b[2]!);
+  return as !== undefined && as === bs;
 }

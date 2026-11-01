@@ -1,7 +1,7 @@
 import * as path from 'path';
 import type { TaskExecAction } from '../../../shared/os/taskScheduler/taskXmlRead';
 import { joinWindowsArgs } from '../../../shared/os/taskScheduler/windowsCommandLine';
-import { KILL_CHILDREN_JOB, compressedTaskScript, decodedTaskScript } from '../../../shared/os/taskScheduler/taskLauncher';
+import { KILL_CHILDREN_JOB, compressedTaskScript, decodedTaskScript, sameTaskAction } from '../../../shared/os/taskScheduler/taskLauncher';
 import { powershellDialect, powershellEncodedArgs } from '../../../shared/os/shellDialect';
 
 /** A release folder's name: what `windowsAgentLayout` accepts as a version. */
@@ -50,17 +50,12 @@ export function agentLauncherScript(nodePath: string, envFile: string, entry: st
   ].join('\n');
 }
 
-export function previousAgentTaskAction(systemRoot: string, nodePath: string, envFile: string, entry: string, taskName: string): { executable: string; args: string[] } {
-  const powershell = path.win32.join(systemRoot, 'System32', 'WindowsPowerShell', 'v1.0', 'powershell.exe');
-  const args = ['--headless', powershell, ...powershellEncodedArgs(agentLauncherScript(nodePath, envFile, entry, taskName))];
-  if (joinWindowsArgs(args).length + conhostOf(systemRoot).length + 3 > 8191) throw new Error('The agent task command line exceeds the Windows limit');
-  return { executable: conhostOf(systemRoot), args };
-}
-
 export function agentTaskAction(systemRoot: string, nodePath: string, envFile: string, entry: string, taskName: string): { executable: string; args: string[] } {
   const powershell = path.win32.join(systemRoot, 'System32', 'WindowsPowerShell', 'v1.0', 'powershell.exe');
-  const script = `${KILL_CHILDREN_JOB}\n${agentLauncherScript(nodePath, envFile, entry, taskName)}`;
-  const args = ['--headless', powershell, ...powershellEncodedArgs(compressedTaskScript(script))];
+  const script = agentLauncherScript(nodePath, envFile, entry, taskName);
+  const logEnd = script.indexOf('\ntry { $parentId');
+  const withJob = `${script.slice(0, logEnd)}\n${KILL_CHILDREN_JOB}\n${script.slice(logEnd)}`;
+  const args = ['--headless', powershell, ...powershellEncodedArgs(compressedTaskScript(withJob))];
   if (joinWindowsArgs(args).length + conhostOf(systemRoot).length + 3 > 8191) throw new Error('The agent task command line exceeds the Windows limit');
   return { executable: conhostOf(systemRoot), args };
 }
@@ -94,14 +89,7 @@ export function agentTaskIdentity(action: TaskExecAction, systemRoot: string, ro
     const version = AGENT_VERSION_IN_ENTRY.exec(entry)?.[1];
     if (!version || entry !== path.win32.join(root, version, 'azito-agent.cjs')) return undefined;
     const expected = agentTaskAction(systemRoot, nodePath, envFile, entry, taskName);
-    if (action.command.toLowerCase() !== expected.executable.toLowerCase()) return undefined;
-    if (action.argumentsLine === joinWindowsArgs(expected.args)) return { nodePath, version, launcher: true };
-    try {
-      const previous = previousAgentTaskAction(systemRoot, nodePath, envFile, entry, taskName);
-      return action.argumentsLine === joinWindowsArgs(previous.args) ? { nodePath, version, launcher: true } : undefined;
-    } catch {
-      return undefined;
-    }
+    return action.command.toLowerCase() === expected.executable.toLowerCase() && sameTaskAction(action.argumentsLine, joinWindowsArgs(expected.args)) ? { nodePath, version, launcher: true } : undefined;
   }
   const head = `${joinWindowsArgs(['--headless'])} `;
   if (action.command.toLowerCase() !== conhostOf(systemRoot).toLowerCase()) return undefined;

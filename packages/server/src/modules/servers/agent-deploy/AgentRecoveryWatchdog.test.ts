@@ -23,6 +23,8 @@ class Harness {
   /** The agent is up again once recoverAgent was called this many times. */
   recoversToStart = 1;
   readonly recovered: string[] = [];
+  readonly recoverForces: boolean[] = [];
+  recoverResult = 'taskscheduler';
   readonly revived: Array<{ name: string; force: boolean }> = [];
   readonly logs: string[] = [];
   readonly lock = new KeyedMutex();
@@ -32,12 +34,13 @@ class Harness {
   readonly watchdog = new AgentRecoveryWatchdog({
     listServers: () => this.servers,
     checkAgent: async () => { if (!this.agentUp) throw new Error('unreachable'); },
-    recoverAgent: async (s) => {
+    recoverAgent: async (s, force) => {
       this.recovered.push(s.name);
+      this.recoverForces.push(force);
       await this.duringRecover?.();
       if (this.recoverFails) throw new Error('ssh failed');
       if (this.recovered.length >= this.recoversToStart) this.agentUp = true;
-      return 'taskscheduler';
+      return this.recoverResult;
     },
     isMisaoDown: async () => { if (this.misaoStatusFails) throw new Error('older agent'); return this.misaoDown; },
     reviveMisao: async (s, force) => { this.revived.push({ name: s.name, force }); return this.reviveResult; },
@@ -58,6 +61,19 @@ class Harness {
 }
 
 describe('AgentRecoveryWatchdog: the agent', () => {
+  it('only forces a persistent failure and does not log a waiting launcher as restarted', async () => {
+    const h = new Harness();
+    h.agentUp = false;
+    h.recoversToStart = Infinity;
+    h.recoverResult = 'starting';
+    await h.watchdog.tick();
+    await h.advance(MIN);
+    expect(h.recoverForces).toEqual([false]);
+    expect(h.logs.some((line) => line.includes('tried to bring'))).toBe(false);
+    await h.advance(MIN);
+    expect(h.recoverForces).toEqual([false, true]);
+  });
+
   it('does nothing while the agent answers', async () => {
     const h = new Harness();
     await h.watchdog.tick();
