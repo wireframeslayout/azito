@@ -109,7 +109,8 @@
     "diffUnavailable": "Comparison is unavailable for this file.",
     "saved": "Saved",
     "switchConfirm": "Open another file?",
-    "switchMessage": "Your unsaved changes will remain in the current tab.",
+    "switchMessage": "Unsaved changes in \"{{name}}\" will be discarded.",
+    "switchDiscard": "Discard and open",
     "latestUnavailable": "The latest content could not be loaded.",
     "latest": "Latest",
     "yours": "Your edits"

@@ -30,4 +30,20 @@ describe('TextFileEditor', () => {
     expect(screen.getByText('+ local')).toBeTruthy();
     expect((editor as HTMLTextAreaElement).value).toBe('local');
   });
+  it('ignores Ctrl+S while the file is unchanged or a conflict is unresolved', async () => {
+    const backend: FilesBackend = {
+      read: vi.fn(async () => ({ kind: 'text' as const, content: 'base', version: 'v1', language: 'text' })),
+      save: vi.fn(async () => ({ kind: 'conflict' as const, latest: null })),
+      list: vi.fn(), create: vi.fn(), rename: vi.fn(), delete: vi.fn(), download: vi.fn(),
+    };
+    render(<TextFileEditor backend={backend} path="file" name="file" />);
+    const editor = await screen.findByRole('textbox', { name: 'editor' });
+    fireEvent.keyDown(editor, { key: 's', ctrlKey: true });
+    expect(backend.save).not.toHaveBeenCalled();
+    fireEvent.change(editor, { target: { value: 'local' } });
+    fireEvent.keyDown(editor, { key: 's', ctrlKey: true });
+    await waitFor(() => expect(screen.getByText('editor.latestUnavailable')).toBeTruthy());
+    fireEvent.keyDown(editor, { key: 's', ctrlKey: true });
+    expect(backend.save).toHaveBeenCalledTimes(1);
+  });
 });

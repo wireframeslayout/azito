@@ -47,4 +47,16 @@ describe('storage text content', () => {
     await expect(text.write('a', 'edit', 'v1')).rejects.toMatchObject({ code: 'conflict' });
   });
 
+  it('reports a missing object as not found instead of a storage outage', async () => {
+    const { text, send } = setup(Buffer.from('hello'));
+    send.mockRejectedValueOnce({ name: 'NotFound', $metadata: { httpStatusCode: 404 } });
+    await expect(text.read('a')).rejects.toMatchObject({ status: 404, code: 'not_found' });
+    send.mockRejectedValueOnce({ name: 'NotFound', $metadata: { httpStatusCode: 404 } });
+    await expect(text.write('a', 'edit', undefined)).rejects.toMatchObject({ status: 404, code: 'not_found' });
+  });
+  it('reports an object replaced between metadata and body reads as a conflict', async () => {
+    const { text, send } = setup(Buffer.from('hello'));
+    send.mockImplementationOnce(async () => ({ ContentLength: 5, ETag: '"v1"', ContentType: 'text/plain', Metadata: { name: 'test' } })).mockRejectedValueOnce({ $metadata: { httpStatusCode: 412 } });
+    await expect(text.read('a')).rejects.toMatchObject({ status: 409, code: 'conflict' });
+  });
 });

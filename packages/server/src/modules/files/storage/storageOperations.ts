@@ -14,7 +14,7 @@ export function validateStoragePath(path: string, folder: boolean, allowRoot = f
 
 function base(projectId: number): string { return `projects/${projectId}/`; }
 function copySource(bucket: string, key: string): string { return `/${encodeURIComponent(bucket)}/${key.split('/').map(encodeURIComponent).join('/')}`; }
-function isMissing(error: unknown): boolean {
+export function isMissing(error: unknown): boolean {
   const e = error as { name?: string; $metadata?: { httpStatusCode?: number } };
   return e.name === 'NotFound' || e.name === 'NoSuchKey' || e.$metadata?.httpStatusCode === 404;
 }

@@ -24,6 +24,8 @@ import { useRecentTasks } from '../hooks/useRecentTasks';
 import { useWorkspaceData } from '../hooks/useWorkspaceData';
 import { useSidebarState } from '../hooks/useSidebarState';
 import { findWindowTerminalTabs } from '../lib/retargetTab';
+import { dirtyTabsReplacedByOpen } from '../lib/dirtyTabsReplacedByOpen';
+import { fileTabPath } from '../lib/serverPath';
 import { resolveActiveTabAfterPaneClose } from '../lib/paneCloseActiveTab';
 import { fetchSessionsOrUndefined } from '../lib/fetchServerSessions';
 import { useWindowActions } from '../hooks/useWindowActions';
@@ -532,6 +534,17 @@ function WorkspaceInner() {
 
   const { focus, setFocus } = useGlobalFocus();
 
+  const confirmReplaceDirtyTabs = useCallback((targetId: string): Promise<boolean> => {
+    const discarded = dirtyTabsReplacedByOpen(tabs, targetId);
+    if (discarded.length === 0) return Promise.resolve(true);
+    return confirm({
+      title: t('files:editor.switchConfirm'),
+      message: t('files:editor.switchMessage', { name: discarded.map((tab) => tab.label).join(', ') }),
+      confirmLabel: t('files:editor.switchDiscard'),
+      danger: true,
+    });
+  }, [tabs, confirm, t]);
+
   // `projectId` is the caller's own tab.projectId (or, for callers with no owning tab yet — e.g. the
   // sidebar FileExplorer, which is always scoped to the routed project — currentProjectId), never
   // inferred from "whichever project is currently routed" here. A split-pane tab opening a file from
@@ -541,20 +554,13 @@ function WorkspaceInner() {
   const openFile = useCallback((serverName: string, filePath: string, projectId?: number, line?: number) => {
     const pathApi = serverPathApi(serverName);
     if (!pathApi) return; // the server's OS is not known yet: the tab's identity depends on it
-    const current = tabs.find((tab) => tab.id === activeTabId);
     const open = () => openFileRaw(serverName, filePath, projectId ?? currentProjectId, line, pathApi);
-    if (current?.dirty && !(current.type === 'file' && current.serverName === serverName && current.filePath === filePath)) {
-      void confirm({ title: t('files:editor.switchConfirm'), message: t('files:editor.switchMessage') }).then((ok) => { if (ok) open(); });
-    } else open();
-  }, [openFileRaw, currentProjectId, serverPathApi, tabs, activeTabId, confirm, t]);
+    void confirmReplaceDirtyTabs(`file:${serverName}:${fileTabPath(pathApi, filePath)}`).then((ok) => { if (ok) open(); });
+  }, [openFileRaw, currentProjectId, serverPathApi, confirmReplaceDirtyTabs]);
 
   const openStorageFile = useCallback((projectId: number, filename: string, originalName: string, size: number) => {
-    const current = tabs.find((tab) => tab.id === activeTabId);
-    const open = () => openStorageFileRaw(projectId, filename, originalName, size);
-    if (current?.dirty && current.id !== `storage-file:${projectId}:${filename}`) {
-      void confirm({ title: t('files:editor.switchConfirm'), message: t('files:editor.switchMessage') }).then((ok) => { if (ok) open(); });
-    } else open();
-  }, [tabs, activeTabId, confirm, t, openStorageFileRaw]);
+    void confirmReplaceDirtyTabs(`storage-file:${projectId}:${filename}`).then((ok) => { if (ok) openStorageFileRaw(projectId, filename, originalName, size); });
+  }, [confirmReplaceDirtyTabs, openStorageFileRaw]);
 
   const openDiff = useCallback((serverName: string, path: string, baseBranch?: string) => {
     openDiffRaw(serverName, path, baseBranch, currentProjectId);

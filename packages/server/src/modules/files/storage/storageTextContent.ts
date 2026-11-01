@@ -2,9 +2,11 @@ import { GetObjectCommand, HeadObjectCommand, PutObjectCommand, type S3Client } 
 import { extname } from 'path';
 import { EXT_LANG } from '../fileLanguage';
 import { MAX_FILE_SIZE } from '../FileBrowseService';
-import { StorageOperationError, validateStoragePath } from './storageOperations';
+import { StorageOperationError, isMissing, validateStoragePath } from './storageOperations';
 
 const normalizeEtag = (etag: string): string => etag.replace(/^"|"$/g, '');
+const httpStatus = (error: unknown): number | undefined => (error as { $metadata?: { httpStatusCode?: number } }).$metadata?.httpStatusCode;
+const notFound = (): StorageOperationError => new StorageOperationError(404, 'not_found', 'File not found');
 
 export class StorageTextContent {
   constructor(private readonly s3: S3Client, private readonly bucket: string, private readonly projectId: number, private readonly maxFileSize: number) {}
@@ -15,10 +17,17 @@ export class StorageTextContent {
 
   async read(path: string): Promise<{ content: string; version: string; language: string }> {
     const key = this.key(path);
-    const head = await this.s3.send(new HeadObjectCommand({ Bucket: this.bucket, Key: key }));
+    let head;
+    try { head = await this.s3.send(new HeadObjectCommand({ Bucket: this.bucket, Key: key })); }
+    catch (error) { throw isMissing(error) ? notFound() : error; }
     if (head.ContentLength === undefined || !head.ETag) throw new Error('Storage object metadata is incomplete');
     if (head.ContentLength > MAX_FILE_SIZE) throw new StorageOperationError(413, 'too_large', 'File exceeds 500 KiB');
-    const object = await this.s3.send(new GetObjectCommand({ Bucket: this.bucket, Key: key, IfMatch: head.ETag }));
+    let object;
+    try { object = await this.s3.send(new GetObjectCommand({ Bucket: this.bucket, Key: key, IfMatch: head.ETag })); }
+    catch (error) {
+      if (httpStatus(error) === 412) throw new StorageOperationError(409, 'conflict', 'File changed while reading');
+      throw isMissing(error) ? notFound() : error;
+    }
     if (!object.ETag || normalizeEtag(object.ETag) !== normalizeEtag(head.ETag)) throw new StorageOperationError(409, 'conflict', 'File changed while reading');
     if (!object.Body) throw new Error('Storage object body is missing');
     const chunks: Buffer[] = [];
@@ -44,10 +53,8 @@ export class StorageTextContent {
     let head;
     try { head = await this.s3.send(new HeadObjectCommand({ Bucket: this.bucket, Key: key })); }
     catch (error) {
-      if (version !== undefined && (error as { $metadata?: { httpStatusCode?: number } }).$metadata?.httpStatusCode === 404) {
-        throw new StorageOperationError(409, 'conflict', 'File has changed');
-      }
-      throw error;
+      if (!isMissing(error)) throw error;
+      throw version !== undefined ? new StorageOperationError(409, 'conflict', 'File has changed') : notFound();
     }
     if (!head.ETag) throw new Error('Storage object ETag is missing');
     if (version !== undefined && normalizeEtag(head.ETag) !== normalizeEtag(version)) throw new StorageOperationError(409, 'conflict', 'File has changed');
@@ -56,7 +63,7 @@ export class StorageTextContent {
       if (!result.ETag) throw new Error('Storage response ETag is missing');
       return { version: normalizeEtag(result.ETag) };
     } catch (error) {
-      if ((error as { $metadata?: { httpStatusCode?: number } }).$metadata?.httpStatusCode === 412) throw new StorageOperationError(409, 'conflict', 'File has changed');
+      if (httpStatus(error) === 412) throw new StorageOperationError(409, 'conflict', 'File has changed');
       throw error;
     }
   }

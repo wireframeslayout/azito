@@ -10,7 +10,8 @@ import MarkdownRenderer from '../MarkdownRenderer';
 import { LineDiffView } from './LineDiffView';
 import { MarkdownKeyRow } from './MarkdownKeyRow';
 import { SegmentedToggle } from '../ui/SegmentedToggle';
-import { LoadingState } from '../ui';
+import { Button, LoadingState, Notice } from '../ui';
+import { Icon } from '../ui/Icon';
 import type { FilesBackend } from './backend/FilesBackend';
 import { useTextFileDocument } from './useTextFileDocument';
 
@@ -52,24 +53,52 @@ export function TextFileEditor({ backend, path, name, initialLine, serverName, o
   ];
   const selectMode = (value: Mode) => { setMode(value); localStorage.setItem('azito-md-view-mode', value); };
   const showDiff = () => setDiff(doc.conflict?.kind === 'text' ? lineDiff(doc.conflict.content, doc.content) : null);
+  const canSave = doc.dirty && !doc.saving && doc.conflict === undefined;
+  const save = () => { if (canSave) void doc.save(); };
+  const download = async () => {
+    try {
+      const blob = await backend.download(path);
+      const url = URL.createObjectURL(blob);
+      const link = document.createElement('a');
+      link.href = url; link.download = name.split(/[\\/]/).pop() || name;
+      document.body.appendChild(link); link.click(); link.remove();
+      URL.revokeObjectURL(url);
+    } catch { showToast(t('explorer.downloadFailed')); }
+  };
+  const openInEditor = async (target: 'vscode' | 'zed') => {
+    if (!serverName) return;
+    try {
+      const result = await api<{ uri?: string }>(`/servers/${encodeURIComponent(serverName)}/editor-uri?path=${encodeURIComponent(path)}&editor=${target}`);
+      if (result.uri) window.location.href = result.uri;
+    } catch { showToast(t('preview.loadError')); }
+  };
   const editor = <div style={{ display: 'flex', flexDirection: 'column', height: '100%' }}>
-    <div style={{ flex: 1, minHeight: 0 }}><Suspense fallback={<LoadingState />}><CodeEditorView value={doc.content} language={doc.document?.language ?? 'text'} initialLine={initialLine} vimMode={vim} onChange={doc.change} onSave={() => void doc.save()} onInsertReady={(insert) => { insertRef.current = insert; }} onCursorChange={(line, col) => setCursor({ line, col })} onVimModeDisplay={setVimDisplay} /></Suspense></div>
+    <div style={{ flex: 1, minHeight: 0 }}><Suspense fallback={<LoadingState />}><CodeEditorView value={doc.content} language={doc.document?.language ?? 'text'} initialLine={initialLine} vimMode={vim} onChange={doc.change} onSave={save} onInsertReady={(insert) => { insertRef.current = insert; }} onCursorChange={(line, col) => setCursor({ line, col })} onVimModeDisplay={setVimDisplay} /></Suspense></div>
     <Suspense fallback={null}><EditorStatusBar line={cursor.line} col={cursor.col} vimModeDisplay={vimDisplay} vimEnabled={vim} onVimToggle={() => setVim((previous) => { localStorage.setItem('azito-editor-vim-mode', String(!previous)); return !previous; })} saveStatus={doc.conflict !== undefined ? 'conflict' : doc.saving ? 'saving' : doc.dirty ? 'dirty' : doc.saved ? 'saved' : 'clean'} /></Suspense>
   </div>;
   return (
-    <div onKeyDown={(event) => { if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === 's') { event.preventDefault(); void doc.save(); } }} style={{ display: 'flex', flexDirection: 'column', height: '100%', minWidth: 0, position: 'relative', background: 'var(--ws-surface)' }}>
-      <div style={{ display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: 'var(--space-2)', padding: 'var(--space-2)', borderBottom: '1px solid var(--border)' }}>
-        <span style={{ flex: 1, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{name}{doc.dirty && <span aria-label={t('editor.unsaved')}> •</span>}</span>
+    <div onKeyDown={(event) => { if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === 's') { event.preventDefault(); save(); } }} style={{ display: 'flex', flexDirection: 'column', height: '100%', minWidth: 0, position: 'relative', background: 'var(--ws-surface)' }}>
+      <div style={{ padding: 'var(--space-2) var(--space-4)', borderBottom: '1px solid var(--border)', background: 'var(--bg-card)', display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: 'var(--space-3)', flexShrink: 0, minHeight: 40 }}>
+        <Icon name="file" size={14} />
+        <span style={{ flex: 1, minWidth: 0, fontSize: 'var(--font-md)', fontWeight: 500, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={name}>
+          {name}{doc.dirty && <span aria-label={t('editor.unsaved')} style={{ color: 'var(--accent)' }}> •</span>}
+        </span>
+        <Button size="sm" variant={canSave ? 'primary' : 'default'} disabled={!canSave} onClick={save} title={`${t('editor.save')} (Ctrl+S)`}>{doc.saving ? t('editor.saving') : t('editor.save')}</Button>
         {markdown && <SegmentedToggle options={options} value={currentMode} onChange={selectMode} ariaLabel={t('editor.viewMode')} />}
-        <button onClick={async () => { try { const blob = await backend.download(path); const url = URL.createObjectURL(blob); const link = document.createElement('a'); link.href = url; link.download = name.split(/[\\/]/).pop() || name; link.click(); URL.revokeObjectURL(url); } catch (error) { showToast(error instanceof Error ? error.message : String(error)); } }}>{t('explorer.download')}</button>
-        {serverName && (['vscode', 'zed'] as const).map((editor) => <button key={editor} onClick={async () => { const result = await api<{ uri?: string }>(`/servers/${encodeURIComponent(serverName)}/editor-uri?path=${encodeURIComponent(path)}&editor=${editor}`); if (result.uri) window.location.href = result.uri; }}>{editor === 'vscode' ? 'VS Code' : 'Zed'}</button>)}
-        <button className="btn-primary" disabled={!doc.dirty || doc.saving || doc.conflict !== undefined} onClick={() => void doc.save()}>{doc.saving ? t('editor.saving') : t('editor.save')}</button>
+        <Button size="sm" variant="ghost" onClick={() => void download()} title={t('explorer.download')}><Icon name="download" size={14} /> {t('explorer.download')}</Button>
+        {serverName && <>
+          <Button size="sm" variant="ghost" onClick={() => void openInEditor('vscode')} title={t('explorer.openInVsCode')}>VS Code</Button>
+          <Button size="sm" variant="ghost" onClick={() => void openInEditor('zed')} title={t('explorer.openInZed')}>Zed</Button>
+        </>}
       </div>
-      <div role="status" aria-live="polite">{doc.saving ? t('editor.saving') : doc.dirty ? t('editor.unsaved') : doc.saved ? t('editor.saved') : ''}</div>
-      {doc.conflict !== undefined && <div role="status" aria-live="polite" style={{ padding: 'var(--space-2)', background: 'var(--orange-a08)', color: 'var(--text)', display: 'flex', flexWrap: 'wrap', gap: 'var(--space-2)' }}>
-        <span>{t('editor.conflict')} {doc.conflict === null ? t('editor.latestUnavailable') : doc.conflict.kind === 'unavailable' ? doc.conflict.reason : ''}</span><button onClick={showDiff}>{t('editor.diff')}</button><button disabled={doc.saving} onClick={async () => { if (await confirm({ title: t('editor.discardConfirm') })) void doc.reload(); }}>{t('editor.reload')}</button><button disabled={doc.saving} onClick={() => void doc.save(true)}>{t('editor.overwrite')}</button>
-      </div>}
-      {doc.error && <div role="alert" style={{ color: 'var(--danger)', padding: 'var(--space-2)' }}>{doc.error} {(!doc.document && !doc.loading) && <button onClick={() => void doc.reload()}>{t('editor.retry')}</button>}</div>}
+      <div className="sr-only" role="status" aria-live="polite" aria-atomic="true">{doc.saving ? t('editor.saving') : doc.dirty ? t('editor.unsaved') : doc.saved ? t('editor.saved') : ''}</div>
+      {doc.conflict !== undefined && <Notice tone="warning" style={{ margin: 'var(--space-2)', flexShrink: 0 }} sub={doc.conflict === null ? t('editor.latestUnavailable') : doc.conflict.kind === 'unavailable' ? doc.conflict.reason : undefined}
+        action={<div style={{ display: 'flex', flexWrap: 'wrap', gap: 'var(--space-2)' }}>
+          <Button size="sm" onClick={showDiff}>{t('editor.diff')}</Button>
+          <Button size="sm" disabled={doc.saving} onClick={async () => { if (await confirm({ title: t('editor.discardConfirm'), confirmLabel: t('editor.reload'), danger: true })) void doc.reload(); }}>{t('editor.reload')}</Button>
+          <Button size="sm" variant="danger" disabled={doc.saving} onClick={() => void doc.save(true)}>{t('editor.overwrite')}</Button>
+        </div>}>{t('editor.conflict')}</Notice>}
+      {doc.error && <div role="alert" style={{ margin: 'var(--space-2)', flexShrink: 0 }}><Notice tone="danger" action={(!doc.document && !doc.loading) ? <Button size="sm" onClick={() => void doc.reload()}>{t('editor.retry')}</Button> : undefined}>{doc.error}</Notice></div>}
       {doc.loading && <LoadingState />}
       {!doc.loading && doc.document && <div style={{ flex: 1, minHeight: 0, display: 'flex', overflow: 'hidden' }}>
         {(!markdown || currentMode !== 'preview') && <div style={{ flex: 1, minWidth: 0, overflow: 'hidden' }}>{editor}</div>}
