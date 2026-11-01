@@ -8,7 +8,7 @@ import { formatRelativeTime } from '../../utils/time';
 import { selectTaskTerminal } from './TaskPanel';
 import { useOpenTerminalTarget } from '../../hooks/useTerminalTargetOpener';
 import type { TerminalRef } from '../../lib/terminalRef';
-import { useEffect, useMemo, useState } from 'react';
+import { useMemo, useState } from 'react';
 import { IconButton } from '../ui/IconButton';
 import { Icon } from '../ui/Icon';
 import { useTranslation } from 'react-i18next';
@@ -25,9 +25,8 @@ export function MobileActiveWindowsPanel({ titleData, onClose, connectPane, open
   const openTerminal = useOpenTerminalTarget(connectPane);
   const { t } = useTranslation(['workspace', 'tasks']);
   const { rows } = useActiveWindowRows(titleData);
-  const { markFinishedSeen, markAllFinishedSeen, clearSeenFinished, dismissFinished, retention } = useAgentActivity();
+  const { markFinishedSeen, clearSeenFinished, dismissFinished, retention } = useAgentActivity();
   const [historyOpen, setHistoryOpen] = useState(false);
-  useEffect(() => { markAllFinishedSeen(); }, [markAllFinishedSeen]);
   const windowTaskMap = useMemo(() => buildWindowTaskMap(taskWindows), [taskWindows]);
 
   return (

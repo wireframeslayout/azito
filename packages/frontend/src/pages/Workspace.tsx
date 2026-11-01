@@ -518,14 +518,14 @@ function WorkspaceInner() {
     const parsed = parseTerminalTabId(focusedActiveTabId);
     if (!parsed) return;
     if (parsed.kind === 'legacy') {
-      setFocusedTarget(activityKey(parsed.serverName, parsed.target));
+      setFocusedTarget(activityKey(parsed.serverName, parsed.target), { serverName: parsed.serverName, label: parsed.target });
     } else if (parsed.kind === 'windowId') {
-      setFocusedTarget(activityKey(parsed.serverName, '', parsed.windowId));
+      setFocusedTarget(activityKey(parsed.serverName, '', parsed.windowId), { serverName: parsed.serverName, label: `w${parsed.windowId}` });
     } else {
       try {
         const ref = parseMuxRef(parsed.ref);
         const target = ref.kind === 'tmux' ? tmuxTargetFromMuxRef(ref) : `${ref.workspace}:${ref.window}`;
-        setFocusedTarget(activityKey(parsed.serverName, target));
+        setFocusedTarget(activityKey(parsed.serverName, target), { serverName: parsed.serverName, label: `ref:${parsed.ref}` });
       } catch {
         setFocusedTarget(null);
       }

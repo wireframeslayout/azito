@@ -691,7 +691,7 @@ export default function TaskPanel({
     if (!isVisible || !isPaneFocused) return;
     const target = focusedWindowTarget ?? resolveDisplayedTaskTerminal(taskId, windows);
     if (target) {
-      setFocusedTarget(activityKey(target.serverName, target.target, target.windowId ?? undefined));
+      setFocusedTarget(activityKey(target.serverName, target.target, target.windowId ?? undefined), { serverName: target.serverName, label: target.target });
     }
     return () => setFocusedTarget(null);
   }, [isVisible, isPaneFocused, focusedWindowTarget, windows, taskId, setFocusedTarget]);

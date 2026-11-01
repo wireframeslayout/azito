@@ -126,7 +126,10 @@ export function MobileStatusBar({ titleData, allTasks, openTask, connectPane }: 
   const workingCount = workingGroups.length;
 
   const handleToggle = () => {
-    if (!open) markAllFinishedSeen();
+    if (!open) {
+      if (unreadRows.length > 0) setHistoryOpen(true);
+      markAllFinishedSeen();
+    }
     setOpen(!open);
   };
 

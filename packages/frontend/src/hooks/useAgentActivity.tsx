@@ -3,7 +3,7 @@ import { api } from '../api/client';
 import type { AgentActivityPayload } from '../types/notification';
 import { stripPaneSuffix } from '@azito/shared';
 import { isWatchedWindow } from '../lib/isWatched';
-import { loadFinishedRetention, saveFinishedRetention, type FinishedRetentionSettings } from '../lib/finishedRetentionSettings';
+import { DEFAULT_FINISHED_RETENTION, loadFinishedRetention, saveFinishedRetention, type FinishedRetentionSettings } from '../lib/finishedRetentionSettings';
 import { useNotificationChannel } from './useNotificationChannel';
 import { useWorkspaceTargets } from './useWorkspaceTargets';
 import {
@@ -101,7 +101,7 @@ const AgentActivityContext = createContext<AgentActivityContextValue>({
   activityStatus: () => null,
   finishedEntries: [],
   findFinished: () => undefined,
-  retention: { maxCount: 10, retentionMs: 3600000 },
+  retention: DEFAULT_FINISHED_RETENTION,
   setRetention: () => {},
   markFinishedSeen: () => {},
   markAllFinishedSeen: () => {},
