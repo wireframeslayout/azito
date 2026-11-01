@@ -200,6 +200,23 @@ describe.skipIf(process.platform === 'win32')('azitoctl.mjs sends what the bash 
     return received[0];
   }
 
+  it('matches whoami, send and the 409 reason', async () => {
+    const env = { AZITO_URL: baseUrl, AZITO_TASK_TOKEN: 'task-token', AZITO_WINDOW_ID: '7' };
+    for (const args of [['whoami'], ['send', '--window', '123', 'hello']]) {
+      const bash = await run('bash', [BASH_CTL, ...args], env);
+      const js = await node(args, env);
+      expect(js).toEqual(bash);
+    }
+    postStatus = 409;
+    errorBody = JSON.stringify({ error: 'The agent is waiting for a dialog to be resolved.' });
+    const args = ['send', '--window', '123', 'hello'];
+    const bash = await run('bash', [BASH_CTL, ...args], env);
+    const js = await node(args, env);
+    expect(js).toEqual(bash);
+    expect(js.stderr).toContain('The agent is waiting for a dialog to be resolved.');
+    expect(js.code).not.toBe(0);
+  });
+
   it('complete with an output file, a summary and test-failed', async () => {
     const out = write('out.md', '計画 "quoted" \\ back\nline 2\ttab\n\nAZITO_PHASE_SUMMARY: {"phase":"planning"}\n');
     const request = await sameBody(['complete', '--turn', TURN, '--summary', 'a "b" c', '--output-file', out, '--test-failed']);

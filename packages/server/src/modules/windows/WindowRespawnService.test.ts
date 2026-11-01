@@ -306,13 +306,13 @@ function buildService(opts: {
   // plausible env Record so respawn()'s task-owned branch has something to
   // pass through.
   const paneEnvService = {
-    buildEnvForNewWindow: vi.fn(() => ({
-      env: { AZITO_TASK_TOKEN: 'azt.task.1.' + 'a'.repeat(64), AZITO_TASK_ID: '1' },
+    buildEnvForNewWindow: vi.fn((_task: unknown, _server: unknown, windowId?: number) => ({
+      env: { AZITO_TASK_TOKEN: 'azt.task.1.' + 'a'.repeat(64), AZITO_TASK_ID: '1', ...(windowId === undefined ? {} : { AZITO_WINDOW_ID: String(windowId) }) },
       tokenId: 5,
     })),
     // Issue #28 multi-window token collision fix: a SECONDARY task window's
     // (re)creation calls this instead — never rotates/issues a task token.
-    buildEnvForSecondaryWindow: vi.fn(() => ({ AZITO_TASK_ID: '1' })),
+    buildEnvForSecondaryWindow: vi.fn((_task: unknown, _server: unknown, windowId?: number) => ({ AZITO_TASK_ID: '1', ...(windowId === undefined ? {} : { AZITO_WINDOW_ID: String(windowId) }) })),
     // Scoped to the specific generation (`tokenId`, mocked as 5 above), not
     // the whole task, per the WindowRotation.ts revokeGeneration fix.
     revokeGeneration: vi.fn(),
@@ -1833,11 +1833,11 @@ describe('WindowRespawnService.respawn — concurrent respawns for the same task
     const events = new EventEmitter();
     let generationCounter = 0;
     const paneEnvService = {
-      buildEnvForNewWindow: vi.fn(() => {
+      buildEnvForNewWindow: vi.fn((_task: unknown, _server: unknown, windowId?: number) => {
         generationCounter += 1;
-        return { env: { AZITO_TASK_TOKEN: 'azt.task.1.' + 'a'.repeat(64), AZITO_TASK_ID: '1' }, tokenId: generationCounter };
+        return { env: { AZITO_TASK_TOKEN: 'azt.task.1.' + 'a'.repeat(64), AZITO_TASK_ID: '1', ...(windowId === undefined ? {} : { AZITO_WINDOW_ID: String(windowId) }) }, tokenId: generationCounter };
       }),
-      buildEnvForSecondaryWindow: vi.fn(() => ({ AZITO_TASK_ID: '1' })),
+      buildEnvForSecondaryWindow: vi.fn((_task: unknown, _server: unknown, windowId?: number) => ({ AZITO_TASK_ID: '1', ...(windowId === undefined ? {} : { AZITO_WINDOW_ID: String(windowId) }) })),
       revokeGeneration: vi.fn(),
       revokeForDestroyedWindow: vi.fn(),
     } as any;

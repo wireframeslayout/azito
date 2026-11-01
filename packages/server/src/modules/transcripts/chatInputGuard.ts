@@ -6,6 +6,12 @@ import { blockingWorkerDialog, isWorkerScreenReady, readInputBox, tuiAgentKindOf
 
 export interface ChatInputRejection { code: string; error: string }
 
+export async function preparePaneForChatInput(driver: IMuxClient, server: ServerConfig, handle: PaneHandle, wait: (ms: number) => Promise<void> = (ms) => new Promise(resolve => setTimeout(resolve, ms))): Promise<void> {
+  if (!driver.caps.copyMode || !await driver.isPaneInModeByHandle(server, handle)) return;
+  await driver.cancelPaneModeByHandle(server, handle);
+  await wait(100);
+}
+
 export async function guardChatInput(driver: IMuxClient, server: ServerConfig, handle: PaneHandle, workerType: string | null, text: string): Promise<ChatInputRejection | null> {
   if (/[\x00-\x08\x0b-\x1f\x7f-\x9f]/.test(text)) return { code: 'invalid_control_character', error: 'The message contains unsupported control characters.' };
   const foreground = await driver.paneCommandByHandle(server, handle);

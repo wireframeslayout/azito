@@ -68,6 +68,8 @@ export interface IMuxClient {
   closePane(server: ServerConfig, handle: PaneHandle): Promise<ExecResult>;
   captureScreen(server: ServerConfig, handle: PaneHandle, start?: number, end?: number): Promise<ExecResult>;
   sendKeysToHandle(server: ServerConfig, handle: PaneHandle, keys: string[]): Promise<void>;
+  /** Submit input, rejecting when the underlying operation fails. */
+  submitInputByHandle(server: ServerConfig, handle: PaneHandle): Promise<void>;
   sendTextToHandle(server: ServerConfig, handle: PaneHandle, text: string): Promise<void>;
   pasteTextToHandle(server: ServerConfig, handle: PaneHandle, text: string): Promise<void>;
   panePidByHandle(server: ServerConfig, handle: PaneHandle): Promise<number | null>;

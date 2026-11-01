@@ -710,6 +710,16 @@ describe('MisaoMuxClient input', () => {
     expect(daemon.callsTo('pane.send_keys')).toEqual([]);
   });
 
+  it('submits input as Enter and propagates a write failure', async () => {
+    const { daemon, client } = setup();
+    const w = daemon.addWindow('proj', 'main');
+    const p = daemon.addPane(w);
+    await client.submitInputByHandle(server, handle(p));
+    expect(daemon.writes()).toEqual(['\r']);
+    daemon.failures.set('pane.write', new Error('write failed'));
+    await expect(client.submitInputByHandle(server, handle(p))).rejects.toThrow('write failed');
+  });
+
   it('waits before Enter that follows a long literal, as the tmux driver does', async () => {
     const wait = vi.fn(async () => {});
     const { daemon, client } = setup({ wait });

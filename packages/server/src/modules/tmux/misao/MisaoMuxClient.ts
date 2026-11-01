@@ -289,6 +289,10 @@ export class MisaoMuxClient implements IMuxClient {
     return { stdout: selected.length === 0 ? '' : `${selected.join('\n')}\n`, stderr: '', code: 0 };
   }
 
+  async submitInputByHandle(server: ServerConfig, handle: PaneHandle): Promise<void> {
+    await this.sendKeysToHandle(server, handle, ['Enter']);
+  }
+
   async sendKeysToHandle(_server: ServerConfig, handle: PaneHandle, keys: string[]): Promise<void> {
     for (let i = 0; i < keys.length; i++) {
       const bytes = encodeMisaoKey(keys[i]);

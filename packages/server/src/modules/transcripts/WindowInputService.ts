@@ -5,7 +5,7 @@ import { paneInfoMatchesRef } from '../tmux/types';
 import type { IMuxClient } from '../tmux/IMuxClient';
 import type { IServerRepository } from '../servers/Server';
 import type { IWindowRepository, Window } from '../windows/Window';
-import { guardChatInput, typeChatText, type ChatInputRejection } from './chatInputGuard';
+import { guardChatInput, preparePaneForChatInput, typeChatText, type ChatInputRejection } from './chatInputGuard';
 import type { TransportFactory } from '../servers/transport/TransportFactory';
 import { findAgentProcessTypes } from './agentProcessDetection';
 import { getAgentTranscriptProfile, type InterruptKey } from './sources/profiles';
@@ -59,7 +59,7 @@ export class WindowInputService {
     const belongsToWindow = await this.paneBelongsToWindow(driver, server, window, handle);
     if (!belongsToWindow) return 'pane_not_found';
 
-    await this.preparePaneForInput(server, handle);
+    await preparePaneForChatInput(this.muxDriverRegistry.resolveKind(muxKindOfPaneHandle(handle), server), server, handle, this.wait);
     const workerType = window.workerType ?? await this.detectWorkerType(driver, server, window);
     const rejection = await guardChatInput(driver, server, handle, workerType, text);
     if (rejection) return rejection;
@@ -81,7 +81,7 @@ export class WindowInputService {
     const belongsToWindow = await this.paneBelongsToWindow(driver, server, window, handle);
     if (!belongsToWindow) return 'pane_not_found';
 
-    await this.preparePaneForInput(server, handle);
+    await preparePaneForChatInput(this.muxDriverRegistry.resolveKind(muxKindOfPaneHandle(handle), server), server, handle, this.wait);
     const resolvedKey = action === 'interrupt' ? this.resolveInterruptKey(window.workerType) : (key as InterruptKey | AnswerKey);
     await driver.sendKeysToHandle(server, handle, [resolvedKey]);
     return 'ok';
@@ -105,21 +105,6 @@ export class WindowInputService {
     const driver = this.muxDriverRegistry.resolve(server);
     const pane = (await this.listWindowPanes(driver, server, window)).find((p) => p.paneId === paneId);
     return pane ? pane.paneIndex : 'pane_not_found';
-  }
-
-  /**
-   * copy-mode 判定は MuxCapabilities.copyMode で分岐する。tmux ではスクロールバック閲覧中の
-   * send-keys がバッファ選択操作に吸収されるため、解除してから短い待機を挟む。
-   * caps はペインが属する mux（handle の形で判別）の driver のものを見る。サーバーの既定 mux の
-   * caps ではない（1 台に tmux と misao のペインが並ぶため）。
-   */
-  private async preparePaneForInput(server: ServerConfig, handle: PaneHandle): Promise<void> {
-    const driver = this.muxDriverRegistry.resolveKind(muxKindOfPaneHandle(handle), server);
-    if (!driver.caps.copyMode) return;
-    const inMode = await driver.isPaneInModeByHandle(server, handle);
-    if (!inMode) return;
-    await driver.cancelPaneModeByHandle(server, handle);
-    await this.wait(100);
   }
 
   private async detectWorkerType(driver: IMuxClient, server: ServerConfig, window: Window): Promise<string | null> {

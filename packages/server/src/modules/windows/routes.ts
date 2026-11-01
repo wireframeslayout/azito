@@ -107,7 +107,7 @@ const windowsRoutes: FastifyPluginCallback<WindowsRouteOptions> = (fastify, opts
       const task = principal.class === 'task' && principal.id !== undefined ? taskRepo.findById(principal.id) : null;
       const taskServer = task?.serverName ?? (task ? windowRepo.findByTask(task.id).find((w) => w.isPrimary)?.serverName : undefined);
       const resolvedServer = principal.class === 'task' ? taskServer : server;
-      if (!resolvedServer) return reply.status(404).send({ error: 'Cannot resolve task server' });
+      if (!resolvedServer) return principal.class === 'operator' ? reply.status(400).send({ error: 'server is required' }) : reply.status(404).send({ error: 'Cannot resolve task server' });
       id = (await opts.paneHandleResolver.resolveWindowByPaneHandle(resolvedServer, asPaneHandle(paneHandle), { fresh: true }))?.windowId ?? null;
     } else return reply.status(400).send({ error: 'Invalid identity query' });
     const win = id === null ? undefined : windowRepo.findById(id);
@@ -120,7 +120,7 @@ const windowsRoutes: FastifyPluginCallback<WindowsRouteOptions> = (fastify, opts
     const id = parseWindowId(request.params.id);
     const body = z.object({ from: z.object({ windowId: z.number().int().positive().safe() }).strict().optional(), text: z.string().min(1).max(MESSAGE_TEXT_MAX_LENGTH) }).strict().safeParse(request.body);
     if (id === null || !body.success) return reply.status(400).send({ error: 'Invalid message' });
-    const result = await messageService.send(request.principal ?? OPERATOR_PRINCIPAL, id, body.data.from?.windowId, body.data.text, (err) => request.log.error({ err }, 'Message audit failed'));
+    const result = await messageService.send(request.principal ?? OPERATOR_PRINCIPAL, id, body.data.from?.windowId, body.data.text, (err) => request.log.error({ err }, 'Message audit failed'), (err) => request.log.error({ err }, 'Message delivery failed'));
     if (result === 'not_found') return reply.status(404).send({ error: 'Window not found' });
     if (result === 'forbidden') return reply.status(403).send({ error: 'Forbidden' });
     if (result === 'sleeping') return reply.status(409).send({ error: 'Window is sleeping' });

@@ -70,6 +70,10 @@ describe('RoutingMuxClient delegation', () => {
     const { tmux, misao, routing, srv } = setup();
     await routing.captureScreen(srv, MISAO_PANE, 0, 10);
     await routing.sendTextToHandle(srv, TMUX_PANE, 'hi');
+    await routing.submitInputByHandle(srv, TMUX_PANE);
+    await routing.submitInputByHandle(srv, MISAO_PANE);
+    expect(tmux.submitInputByHandle).toHaveBeenCalledWith(srv, TMUX_PANE);
+    expect(misao.submitInputByHandle).toHaveBeenCalledWith(srv, MISAO_PANE);
     expect(misao.captureScreen).toHaveBeenCalledWith(srv, MISAO_PANE, 0, 10);
     expect(tmux.captureScreen).not.toHaveBeenCalled();
     expect(tmux.sendTextToHandle).toHaveBeenCalledWith(srv, TMUX_PANE, 'hi');

@@ -760,7 +760,7 @@ export class TmuxClient implements IMuxClient {
       }
     }
   }
-  async sendMessageEnter(server: ServerConfig, handle: PaneHandle): Promise<void> {
+  async submitInputByHandle(server: ServerConfig, handle: PaneHandle): Promise<void> {
     const result = await this.runTmuxCommand(server, ['send-keys', '-t', handle as string, 'Enter']);
     if (result.code !== 0) throw new Error('Unable to submit message');
   }

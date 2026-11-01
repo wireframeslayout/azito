@@ -23,7 +23,7 @@ function buildApp(scoped: boolean) {
     [3, { id: 3, ownerType: 'task', taskId: 8, projectId: 6, serverName: 'local', tmuxTarget: 's:c', sleeping: false, workerType: 'claude' }],
     [4, { id: 4, ownerType: 'project', taskId: null, projectId: 5, serverName: 'local', tmuxTarget: 's:d', sleeping: true, workerType: 'claude' }],
   ]);
-  const driver = { sendMessageEnter: vi.fn().mockResolvedValue(undefined), caps: { copyMode: false }, captureScreen: vi.fn().mockResolvedValue({ code: 0, stdout: '──────────────\n❯\n──────────────\nbypass permissions on' }), resolvePane: vi.fn().mockResolvedValue('%2'), pasteTextToHandle: vi.fn(), sendKeysToHandle: vi.fn(), paneCommandByHandle: vi.fn().mockResolvedValue('claude') };
+  const driver = { submitInputByHandle: vi.fn().mockResolvedValue(undefined), caps: { copyMode: false }, captureScreen: vi.fn().mockResolvedValue({ code: 0, stdout: '──────────────\n❯\n──────────────\nbypass permissions on' }), resolvePane: vi.fn().mockResolvedValue('%2'), pasteTextToHandle: vi.fn(), sendKeysToHandle: vi.fn(), paneCommandByHandle: vi.fn().mockResolvedValue('claude') };
   const record = vi.fn();
   app.addHook('onRequest', async (request, reply) => {
     const principal = resolvePrincipal(request.headers.authorization, {
@@ -77,6 +77,9 @@ describe.each([false, true])('window messaging (scoped auth %s)', (scoped) => {
     expect(paneHandleResolver.invalidate).not.toHaveBeenCalled();
     expect(who.json()).toMatchObject({ windowId: 1, idLabel: 'W-1', taskId: 7, serverName: 'local' });
     expect((await app.inject({ method: 'GET', url: '/api/windows/whoami?windowId=3', headers: taskHeaders })).statusCode).toBe(403);
+    const missingServer = await app.inject({ method: 'GET', url: '/api/windows/whoami?paneHandle=%2525', headers: operatorHeaders });
+    expect(missingServer.statusCode).toBe(400);
+    expect(missingServer.json()).toEqual({ error: 'server is required' });
     const send = (id: string, from: number, text = 'private') => app.inject({ method: 'POST', url: `/api/windows/${id}/messages`, headers: taskHeaders, payload: { from: { windowId: from }, text } });
     expect((await send('W-2', 1)).statusCode).toBe(200);
     expect((await send('2', 3)).statusCode).toBe(403);

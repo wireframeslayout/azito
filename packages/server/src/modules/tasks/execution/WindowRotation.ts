@@ -4,7 +4,7 @@ import type { ExecResult } from '../../servers/transport/ServerTransport';
 import type { IMuxClient } from '../../tmux/IMuxClient';
 import { resolveKillOutcome, type KillOutcome } from '../../tmux/killOutcome';
 import type { Task } from '../Task';
-import type { TaskPaneEnvironmentService } from './TaskPaneEnvironmentService';
+import { withWindowId, type TaskPaneEnvironmentService } from './TaskPaneEnvironmentService';
 // Issue #29 review (independent QC), M-3: `isolationMaskForServer`,
 // `ServerIsolationLock`, `ServerSnapshotMismatchError`, `withServerLock`, and
 // `ensureSessionWithLock` moved to `modules/servers/ServerIsolationLock.ts` —
@@ -372,8 +372,9 @@ export async function createPlainWindowInLock(
   uiTokenEnvFn: (server: ServerConfig) => Record<string, string>,
   freshServer: ServerConfig,
   create: (freshServer: ServerConfig, env: Record<string, string>) => Promise<{ result: ExecResult; windowName: string; ref?: MuxRef; label?: string }>,
+  windowId?: number,
 ): Promise<{ windowName: string; env: Record<string, string>; server: ServerConfig; ref?: MuxRef; label?: string }> {
-  const env = uiTokenEnvFn(freshServer);
+  const env = withWindowId(uiTokenEnvFn(freshServer), windowId);
   const created = await create(freshServer, env);
   return { windowName: created.windowName, env, server: freshServer, ref: created.ref, label: created.label };
 }
