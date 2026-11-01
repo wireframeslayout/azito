@@ -1,3 +1,4 @@
+import { forwardRef } from 'react';
 import { useTranslation } from 'react-i18next';
 
 type ButtonVariant = 'default' | 'primary' | 'danger' | 'ghost';
@@ -11,7 +12,7 @@ interface ButtonProps extends React.ButtonHTMLAttributes<HTMLButtonElement> {
   children: React.ReactNode;
 }
 
-export function Button({
+export const Button = forwardRef<HTMLButtonElement, ButtonProps>(function Button({
   variant = 'default',
   size = 'md',
   loading = false,
@@ -20,7 +21,7 @@ export function Button({
   className,
   disabled,
   ...rest
-}: ButtonProps) {
+}: ButtonProps, ref) {
   const { t } = useTranslation('common');
   const classes = [
     'btn',
@@ -31,6 +32,7 @@ export function Button({
 
   return (
     <button
+      ref={ref}
       className={classes}
       disabled={disabled || loading}
       {...rest}
@@ -38,4 +40,4 @@ export function Button({
       {loading ? (loadingLabel ?? t('actions.processing')) : children}
     </button>
   );
-}
+});

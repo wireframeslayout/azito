@@ -21,7 +21,7 @@ export function useStorageEntries(backend: StorageFilesBackend, path: string) {
   const request = useRef<{ key: string; generation: number; pending: boolean; cursor: string | null }>({ key, generation: 0, pending: false, cursor: null });
   if (request.current.key !== key) request.current = { key, generation: request.current.generation + 1, pending: false, cursor: null };
 
-  const refresh = useCallback(async (): Promise<void> => {
+  const refresh = useCallback(async (): Promise<FileEntry[] | undefined> => {
     if (request.current.key !== key) return;
     const generation = ++request.current.generation;
     request.current.pending = true;
@@ -32,6 +32,7 @@ export function useStorageEntries(backend: StorageFilesBackend, path: string) {
       if (request.current.generation !== generation || request.current.key !== key) return;
       request.current.cursor = page.nextCursor;
       setState({ key, entries: page.entries, nextCursor: page.nextCursor, loading: false, loadingMore: false, error: null });
+      return page.entries;
     } catch (error) {
       if (request.current.generation !== generation || request.current.key !== key) return;
       setState({ ...initialState(key), loading: false, error: error instanceof Error ? error.message : 'Failed to load directory' });

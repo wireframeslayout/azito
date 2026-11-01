@@ -57,6 +57,13 @@ function StorageFileList({ projectId, onFilePreview, activeTabId }: StoragePanel
   const actionsButton = useRef<HTMLDivElement>(null);
   const toolbar = useRef<HTMLDivElement>(null);
   const movingWasOpen = useRef(false);
+  const restoreMoveFocus = useRef(false);
+  useEffect(() => {
+    if (!busy && restoreMoveFocus.current) {
+      restoreMoveFocus.current = false;
+      toolbar.current?.querySelector<HTMLButtonElement>('button:not(:disabled)')?.focus();
+    }
+  }, [busy]);
   useEffect(() => {
     if (mobile && movingWasOpen.current && !moving) (actionsButton.current?.querySelector('button') ?? toolbar.current?.querySelector<HTMLButtonElement>('button:not(:disabled)'))?.focus();
     movingWasOpen.current = moving;
@@ -92,11 +99,18 @@ function StorageFileList({ projectId, onFilePreview, activeTabId }: StoragePanel
     anchor.current = entry.path;
   }
   function navigate(next: string) { if (busy) return; setPath(next); setFilter(''); }
-  async function run(operation: () => Promise<void>) {
+  async function refreshAndReconcile() {
+    const refreshed = await refresh();
+    if (refreshed) {
+      const paths = new Set(refreshed.map((entry) => entry.path));
+      setSelected((previous) => previous.filter((path) => paths.has(path)));
+    }
+  }
+  async function run(operation: () => Promise<void>, restoreFocus = false) {
     if (busy) return;
     setBusy(true);
-    try { await operation(); setSelected([]); await refresh(); }
-    catch (err) { showToast(operationMessage(err)); await refresh(); }
+    try { await operation(); setSelected([]); await refreshAndReconcile(); if (restoreFocus) restoreMoveFocus.current = true; }
+    catch (err) { showToast(operationMessage(err)); await refreshAndReconcile(); }
     finally { setBusy(false); }
   }
   async function remove() {
@@ -109,9 +123,9 @@ function StorageFileList({ projectId, onFilePreview, activeTabId }: StoragePanel
       const names = chosen.map((entry) => entry.name).join(', ');
       const message = stats.length ? t('list.deleteMessage', { names, count, size: formatSize(size) }) : t('list.deleteMessageFiles', { names });
       if (await confirm({ title: t('list.deleteTitle'), message, danger: true })) {
-        await backend.deleteMany(chosen); setSelected([]); await refresh();
+        await backend.deleteMany(chosen); setSelected([]); await refreshAndReconcile();
       }
-    } catch (err) { showToast(operationMessage(err)); await refresh(); }
+    } catch (err) { showToast(operationMessage(err)); await refreshAndReconcile(); }
     finally { setBusy(false); }
   }
   async function uploadItems(items: Promise<StorageDropItem[]>) {
@@ -136,7 +150,7 @@ function StorageFileList({ projectId, onFilePreview, activeTabId }: StoragePanel
       });
       setFailures(result.failures);
     } catch (err) { showToast(err instanceof Error ? err.message : t('list.operationError')); }
-    finally { urls.forEach((url) => URL.revokeObjectURL(url)); setPreviews([]); setProgress(''); await refresh(); setBusy(false); }
+    finally { urls.forEach((url) => URL.revokeObjectURL(url)); setPreviews([]); setProgress(''); await refreshAndReconcile(); setBusy(false); }
   }
   function isFileDrag(event: React.DragEvent) {
     return event.dataTransfer.types.includes('Files') && !event.dataTransfer.types.includes('application/x-azito-tab');
@@ -189,7 +203,7 @@ function StorageFileList({ projectId, onFilePreview, activeTabId }: StoragePanel
       ? <div ref={actionsButton} style={{ padding: 'var(--space-2)' }}><Button style={touchStyle} size="sm" type="button" onClick={() => setActionsOpen(true)}>{t('list.actions', { count: chosen.length })}</Button></div>
       : <div style={{ padding: 'var(--space-2)' }}>{selectionActions}</div>)}
     {mobile && <BottomSheet open={actionsOpen && chosen.length > 0 && !moving && !editing} title={t('list.count', { count: visible.length, selected: chosen.length })} onClose={() => setActionsOpen(false)}>{selectionActions}</BottomSheet>}
-    {moving && <StorageMovePicker backend={backend} initialPath={path} disabled={busy} mobile={mobile} fallbackFocusTo={actionsButton.current?.querySelector('button')} onCancel={() => setMoving(false)} onMove={(destination) => { if (chosen.some((item) => item.type === 'directory' && destination.startsWith(item.path))) { showToast(t('list.invalidDestination')); return; } setMoving(false); void run(() => backend.moveMany(chosen, destination)); }} />}
+    {moving && <StorageMovePicker backend={backend} initialPath={path} disabled={busy} mobile={mobile} onCancel={() => setMoving(false)} onMove={(destination) => { if (chosen.some((item) => item.type === 'directory' && destination.startsWith(item.path))) { showToast(t('list.invalidDestination')); return; } setMoving(false); void run(() => backend.moveMany(chosen, destination), true); }} />}
     {dragOver && <div role="status" style={{ position: 'absolute', inset: 0, background: 'var(--accent-a15)', border: '2px dashed var(--accent)', pointerEvents: 'none', zIndex: 1 }}>{filesT('storage.dropToUpload')}</div>}
     {progress && <div role="status" style={{ padding: 'var(--space-2)', color: 'var(--text-dim)' }}>{progress}</div>}
     {previews.length > 0 && <div style={{ display: 'flex', flexWrap: 'wrap', gap: 'var(--space-2)', maxHeight: 'min(25vh, calc(var(--space-6) * 6))', overflowY: 'auto', flexShrink: 0 }}>{previews.map((image) => <img key={image.url} src={image.url} alt={image.name} style={{ width: 'calc(var(--space-6) * 2 + var(--space-4))', height: 'calc(var(--space-6) * 2 + var(--space-4))', objectFit: 'contain', borderRadius: 'var(--radius-sm)' }} />)}</div>}
@@ -197,11 +211,11 @@ function StorageFileList({ projectId, onFilePreview, activeTabId }: StoragePanel
     <div style={{ flex: 1, overflowY: 'auto', paddingBottom: 'env(safe-area-inset-bottom)' }}>
       {editing === 'create' && <InlineNameInput initialValue="" kind="directory" siblingNames={entries.map((entry) => entry.name)} depth={0} onCancel={() => setEditing(null)} onCommit={(name) => { setEditing(null); void run(async () => { await backend.create(`${path}${name}/`, 'directory'); }); }} />}
       {loading && <LoadingState />}
-      {error && <div role="alert" style={{ display: 'flex', alignItems: 'center', gap: 'var(--space-2)', padding: 'var(--space-2)', color: 'var(--danger)' }}>{error} <Button size="sm" type="button" onClick={() => void (nextCursor !== null ? loadMore() : refresh())}>{t('retry')}</Button></div>}
+      {error && <div role="alert" style={{ display: 'flex', alignItems: 'center', gap: 'var(--space-2)', padding: 'var(--space-2)', color: 'var(--danger)' }}>{error} <Button size="sm" type="button" onClick={() => void (nextCursor !== null ? loadMore() : refreshAndReconcile())}>{t('retry')}</Button></div>}
       {!loading && !error && !visible.length && <EmptyState title={t('list.empty')} />}
       <FileTree nodes={visible} renderRow={(entry, depth) => editing !== 'create' && editing?.path === entry.path
         ? <InlineNameInput initialValue={entry.name} kind={entry.type} siblingNames={entries.filter((item) => item.path !== entry.path).map((item) => item.name)} depth={depth} onCancel={() => setEditing(null)} onCommit={(name) => { setEditing(null); void run(() => backend.rename(entry.path, name)); }} />
-        : <StorageEntryRow mobile={mobile} selectionMode={selected.length > 0} entry={entry} rawPath={raw(entry)} isSelected={selected.includes(entry.path)} isActive={activeTabId === `storage-file:${projectId}:${entry.path}`}
+        : <StorageEntryRow mobile={mobile} selectionMode={chosen.length > 0} entry={entry} rawPath={raw(entry)} isSelected={selected.includes(entry.path)} isActive={activeTabId === `storage-file:${projectId}:${entry.path}`}
           onToggle={() => select(entry, true, false)} onRangeSelect={() => select(entry, true, true)}
           onOpen={() => { if (entry.type === 'directory') navigate(entry.path); else preview(entry); }}
           onDownload={() => void download(entry)} onCopyUrl={() => void copyUrl(entry)} />} />
