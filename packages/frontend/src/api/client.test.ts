@@ -61,6 +61,17 @@ describe('api()', () => {
     expect(getUiToken()).toBe('');
   });
 
+  it('apiWithStatus clears an operator-required token', async () => {
+    const { setUiToken, getUiToken } = await import('./token');
+    const { apiWithStatus } = await import('./client');
+    setUiToken('azt.task.abc123.secret');
+    (globalThis.fetch as ReturnType<typeof vi.fn>).mockResolvedValue(
+      jsonResponse(403, { error: 'operator_required', operation: 'files.write' }),
+    );
+    await expect(apiWithStatus('/files', { method: 'PUT' })).rejects.toThrow('OperatorRequired');
+    expect(getUiToken()).toBe('');
+  });
+
   it('通常の 200 応答は成功値として resolve する', async () => {
     const { api } = await import('./client');
     (globalThis.fetch as ReturnType<typeof vi.fn>).mockResolvedValue(jsonResponse(200, { ok: true }));

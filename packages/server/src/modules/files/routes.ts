@@ -289,7 +289,7 @@ export const fileBrowseRoutes: FastifyPluginCallback<FileBrowseRouteOptions> = (
       try {
         return await fileBrowseService.getFileContent(srv, filePath);
       } catch (err: unknown) {
-        if (err instanceof FileBrowseError) return reply.status(err.status).send({ error: err.message });
+        if (err instanceof FileBrowseError) return reply.status(err.status).send(err.code ? { error: err.message, code: err.code } : { error: err.message });
         return reply.status(500).send({ error: (err as Error).message });
       }
     },

@@ -104,7 +104,15 @@ function WorkspaceInner() {
     setThemeProjectId(activeProjectId || null);
   }, [activeProjectId, setThemeProjectId]);
 
-  const { tabs, activeTabId, setActiveTabId, connectPane: connectPaneRaw, connectTarget: connectTargetRaw, migrateSavedTabs, closeTab, retargetTabs: retargetTabsRaw, retargetTabPane: retargetTabPaneRaw, openFile: openFileRaw, openUnit: openUnitRaw, openTask: openTaskRaw, openTaskForm: openTaskFormRaw, openUnitForm, openSidekickForm, openIssue: openIssueRaw, openIssueList: openIssueListRaw, openServer: _openServerTab, openBrowser, updateBrowserActiveTab, openStorageFile: openStorageFileRaw, openDiff: openDiffRaw, openProjectTasks, openSettings: openSettingsRaw, togglePin, setTabDirty } = useTabPersistence();
+  const confirm = useConfirm();
+  // Every way of opening a tab replaces the unpinned ones; unsaved edits among them go only after this agrees.
+  const confirmDiscardDirtyTabs = useCallback((discarded: PersistedTab[]): Promise<boolean> => confirm({
+    title: t('workspace:tab.replaceDirtyTitle'),
+    message: t('workspace:tab.replaceDirtyMessage', { name: discarded.map((tab) => tab.label).join(', ') }),
+    confirmLabel: t('workspace:tab.replaceDirtyConfirm'),
+    danger: true,
+  }), [confirm, t]);
+  const { tabs, activeTabId, setActiveTabId, connectPane: connectPaneRaw, connectTarget: connectTargetRaw, migrateSavedTabs, closeTab, retargetTabs: retargetTabsRaw, retargetTabPane: retargetTabPaneRaw, openFile: openFileRaw, openUnit: openUnitRaw, openTask: openTaskRaw, openTaskForm: openTaskFormRaw, openUnitForm, openSidekickForm, openIssue: openIssueRaw, openIssueList: openIssueListRaw, openServer: _openServerTab, openBrowser, updateBrowserActiveTab, openStorageFile: openStorageFileRaw, openDiff: openDiffRaw, openProjectTasks, openSettings: openSettingsRaw, togglePin, setTabDirty } = useTabPersistence(undefined, { confirmDiscard: confirmDiscardDirtyTabs });
 
   const openServer = useCallback((serverName: string) => {
     navigate(paths.server(serverName, 'overview'));
@@ -197,7 +205,6 @@ function WorkspaceInner() {
   const { menu: contextMenu, show: showContextMenu, showAt: showContextMenuAt, hide: hideContextMenu } = useContextMenu();
 
   const { showToast } = useToast();
-  const confirm = useConfirm();
   const { recordOpened: recordTaskOpened } = useRecentTasks();
 
   useNotificationChannel({
