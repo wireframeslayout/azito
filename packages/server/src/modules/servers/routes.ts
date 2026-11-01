@@ -1260,6 +1260,9 @@ const serversRoutes: FastifyPluginCallback<ServersRouteOptions> = (fastify, opts
         if (agentTransport) await agentTransport.fetchHealth().catch((err: unknown) => { if (err instanceof AgentUnreachableError || err instanceof LocalNetworkPermissionError) throw err; });
         osName = await resolveOsName(transport, transportFactory.hostProfileFor(srv));
       } catch (err: unknown) {
+        if (err instanceof LocalNetworkPermissionError) {
+          return reply.status(503).send({ error: err.message, code: err.code, detail: err.detail });
+        }
         if (err instanceof AgentUnreachableError) {
           return reply.status(503).send({ error: 'agent_unreachable', server: err.serverName, reason: err.reason, status: 'offline' });
         }
