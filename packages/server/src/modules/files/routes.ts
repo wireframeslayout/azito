@@ -89,7 +89,9 @@ const storageRoutes: FastifyPluginCallback<StorageRouteOptions> = (fastify, opts
         });
       }
 
-      const rawPrefix = (request.query as { prefix?: unknown }).prefix;
+      const prefixField = data.fields.prefix;
+      if (Array.isArray(prefixField) || (prefixField && prefixField.type !== 'field')) return reply.status(400).send({ error: 'Invalid prefix', code: 'invalid_path' });
+      const rawPrefix = prefixField?.value ?? (request.query as { prefix?: unknown }).prefix;
       if (rawPrefix !== undefined && typeof rawPrefix !== 'string') return reply.status(400).send({ error: 'Invalid prefix', code: 'invalid_path' });
       const prefix = rawPrefix ?? '';
       try { validateStoragePath(prefix, true, true); } catch { return reply.status(400).send({ error: 'Invalid prefix', code: 'invalid_path' }); }

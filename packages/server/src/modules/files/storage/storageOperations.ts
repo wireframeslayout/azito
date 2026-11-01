@@ -33,7 +33,7 @@ export class StorageOperations {
     do {
       const page = await this.s3.send(new ListObjectsV2Command({ Bucket: this.settings.bucket, Prefix: this.key(prefix), ContinuationToken: token }));
       keys.push(...(page.Contents ?? []).flatMap((entry) => entry.Key ? [entry.Key] : []));
-      if (max !== undefined && keys.length > max) throw new StorageOperationError(413, 'too_many_objects', 'Folder contains more than 1000 objects');
+      if (max !== undefined && keys.length > max) throw new StorageOperationError(413, 'folder_too_large', 'Folder contains more than 1000 objects');
       token = page.IsTruncated ? page.NextContinuationToken : undefined;
       if (page.IsTruncated && !token) throw new Error('Missing continuation token');
     } while (token);
@@ -42,24 +42,28 @@ export class StorageOperations {
   async listPage(prefix: string, limit: number, cursor?: string) {
     validateStoragePath(prefix, true, true);
     const page = await this.s3.send(new ListObjectsV2Command({ Bucket: this.settings.bucket, Prefix: this.key(prefix), Delimiter: '/', MaxKeys: limit, ContinuationToken: cursor }));
-    const folders = (page.CommonPrefixes ?? []).flatMap((p) => p.Prefix ? [{ type: 'folder' as const, path: p.Prefix.slice(base(this.projectId).length) }] : []);
+    const folders = (page.CommonPrefixes ?? []).flatMap((p) => {
+      if (!p.Prefix) return [];
+      const relative = p.Prefix.slice(base(this.projectId).length);
+      return [{ name: relative.slice(0, -1).split('/').pop()!, prefix: relative }];
+    });
     const objects = (page.Contents ?? []).filter((o) => o.Key && o.Key !== this.key(prefix));
-    const files: Array<{ type: 'file'; path: string; name: string; size: number; lastModified: string }> = [];
+    const files: Array<{ key: string; displayName: string; size: number; lastModified: string; etag: string | null }> = [];
     for (let i = 0; i < objects.length; i += 10) {
       const batch = await Promise.all(objects.slice(i, i + 10).map(async (obj) => {
         const key = obj.Key!;
         const head = await this.head(key);
         if (!head) throw new Error('Object disappeared during listing');
-        const encodedName = head.Metadata?.['original-name'];
-        return { type: 'file' as const, path: key.slice(base(this.projectId).length), name: encodedName ? decodeURIComponent(encodedName) : key.split('/').pop()!.replace(/^\d+_/, ''), size: obj.Size ?? 0, lastModified: obj.LastModified?.toISOString() ?? '' };
+        const encodedName = head.Metadata?.['display-name'];
+        return { key, displayName: encodedName ? decodeURIComponent(encodedName) : key.split('/').pop()!.replace(/^\d+_/, ''), size: obj.Size ?? 0, lastModified: obj.LastModified?.toISOString() ?? '', etag: obj.ETag ?? null };
       }));
       files.push(...batch);
     }
-    return { entries: [...folders, ...files], nextCursor: page.NextContinuationToken ?? null };
+    return { prefix, folders, files, nextCursor: page.NextContinuationToken ?? null };
   }
   async createFolder(path: string): Promise<void> {
     validateStoragePath(path, true);
-    if ((await this.scan(path)).length) throw new StorageOperationError(409, 'conflict', 'Folder already exists');
+    if ((await this.scan(path)).length) throw new StorageOperationError(409, 'exists', 'Folder already exists');
     await this.s3.send(new PutObjectCommand({ Bucket: this.settings.bucket, Key: this.key(path), Body: Buffer.alloc(0) }));
   }
   async renameFile(path: string, name: string): Promise<void> {
@@ -67,9 +71,19 @@ export class StorageOperations {
     if (name.includes('/')) throw new StorageOperationError(400, 'invalid_path', 'Invalid name');
     const key = this.key(path); const head = await this.head(key);
     if (!head) throw new StorageOperationError(404, 'not_found', 'File not found');
-    await this.s3.send(new CopyObjectCommand({ Bucket: this.settings.bucket, Key: key, CopySource: copySource(this.settings.bucket, key), MetadataDirective: 'REPLACE', Metadata: { ...head.Metadata, 'original-name': encodeURIComponent(name) }, ContentType: head.ContentType }));
+    await this.s3.send(new CopyObjectCommand({ Bucket: this.settings.bucket, Key: key, CopySource: copySource(this.settings.bucket, key), MetadataDirective: 'REPLACE', Metadata: { ...head.Metadata, 'display-name': encodeURIComponent(name) }, ContentType: head.ContentType }));
   }
-  async statPrefix(path: string): Promise<{ count: number }> { validateStoragePath(path, true); return { count: (await this.scan(path)).length }; }
+  async statPrefix(path: string): Promise<{ count: number; totalSize: number }> {
+    validateStoragePath(path, true);
+    let token: string | undefined; let count = 0; let totalSize = 0;
+    do {
+      const page = await this.s3.send(new ListObjectsV2Command({ Bucket: this.settings.bucket, Prefix: this.key(path), ContinuationToken: token }));
+      for (const object of page.Contents ?? []) { count++; totalSize += object.Size ?? 0; }
+      token = page.IsTruncated ? page.NextContinuationToken : undefined;
+      if (page.IsTruncated && !token) throw new Error('Missing continuation token');
+    } while (token);
+    return { count, totalSize };
+  }
   private async remove(keys: string[]): Promise<void> {
     for (let i = 0; i < keys.length; i += 1000) {
       const result = await this.s3.send(new DeleteObjectsCommand({ Bucket: this.settings.bucket, Delete: { Objects: keys.slice(i, i + 1000).map((Key) => ({ Key })) } }));
@@ -98,7 +112,7 @@ export class StorageOperations {
       if (folder && destination.startsWith(path)) throw new StorageOperationError(400, 'invalid_path', 'Cannot move a folder into itself');
       const leaf = (folder ? path.slice(0, -1) : path).split('/').pop()! + (folder ? '/' : '');
       const target = destination + (rename ? rename + (folder ? '/' : '') : leaf);
-      if (folder && (await this.scan(target, 1000)).length) throw new StorageOperationError(409, 'conflict', 'Destination already exists');
+      if (folder && (await this.scan(target, 1000)).length) throw new StorageOperationError(409, 'exists', 'Destination already exists');
       const keys = folder ? await this.scan(path, 1000) : [this.key(path)];
       if (!keys.length || (!folder && !(await this.head(keys[0])))) throw new StorageOperationError(404, 'not_found', 'Source not found');
       for (const key of keys) {
@@ -107,8 +121,8 @@ export class StorageOperations {
         mapping.set(key, dest);
       }
     }
-    if (mapping.size > 1000) throw new StorageOperationError(413, 'too_many_objects', 'Move contains more than 1000 objects');
-    for (const dest of mapping.values()) if (await this.head(dest)) throw new StorageOperationError(409, 'conflict', 'Destination already exists');
+    if (mapping.size > 1000) throw new StorageOperationError(413, 'folder_too_large', 'Move contains more than 1000 objects');
+    for (const dest of mapping.values()) if (await this.head(dest)) throw new StorageOperationError(409, 'exists', 'Destination already exists');
     const copied: string[] = [];
     try {
       for (const [source, dest] of mapping) {

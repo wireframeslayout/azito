@@ -11,6 +11,24 @@ describe('storage operations', () => {
     expect(() => validateStoragePath('', true)).toThrow();
     expect(validateStoragePath('', true, true)).toBe('');
   });
+  it('lists display metadata and pages statistics', async () => {
+    const send = vi.fn(async (command: unknown) => {
+      if (command instanceof HeadObjectCommand) return { Metadata: { 'display-name': encodeURIComponent('日本語.txt') }, ContentType: 'text/plain' };
+      if (command instanceof ListObjectsV2Command && command.input.Delimiter) return {
+        CommonPrefixes: [{ Prefix: 'projects/1/a/folder/' }],
+        Contents: [{ Key: 'projects/1/a/123_file', Size: 5, ETag: 'etag', LastModified: new Date('2024-01-01T00:00:00Z') }], NextContinuationToken: 'next',
+      };
+      if (command instanceof ListObjectsV2Command && !command.input.ContinuationToken) return { Contents: [{ Key: 'projects/1/a/x', Size: 5 }], IsTruncated: true, NextContinuationToken: 'next' };
+      return { Contents: [{ Key: 'projects/1/a/y', Size: 7 }] };
+    });
+    const ops = new StorageOperations({ send } as unknown as S3Client, settings, 1);
+    expect(await ops.listPage('a/', 200)).toEqual({ prefix: 'a/', folders: [{ name: 'folder', prefix: 'a/folder/' }], files: [{ key: 'projects/1/a/123_file', displayName: '日本語.txt', size: 5, lastModified: '2024-01-01T00:00:00.000Z', etag: 'etag' }], nextCursor: 'next' });
+    expect(await ops.statPrefix('a/')).toEqual({ count: 2, totalSize: 12 });
+    await ops.renameFile('a/123_file', '変更.txt');
+    const copy = send.mock.calls.map(([command]) => command).find((command) => command instanceof CopyObjectCommand) as CopyObjectCommand;
+    expect(copy.input.Metadata?.['display-name']).toBe(encodeURIComponent('変更.txt'));
+    expect(copy.input.ContentType).toBe('text/plain');
+  });
   it('copies every object before deleting sources', async () => {
     const commands: unknown[] = [];
     const send = vi.fn(async (command: unknown) => {
