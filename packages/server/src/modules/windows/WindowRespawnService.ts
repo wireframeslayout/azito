@@ -399,7 +399,7 @@ export class WindowRespawnService {
       // The window is re-created in the mux it lived in (its row's kind), not the server's default mux.
       const windowKind = windowKindOf(currentWin);
       const openName = windowKind === 'misao'
-        ? (windowDisplayName({ label: currentWin.label, labelSource: currentWin.labelSource, taskTitle: task?.title, workerType: currentWin.workerType ?? undefined, windowType: currentWin.windowType, id: currentWin.id }) ?? (task ? `task-${task.id}-w${windowId}` : `win-w${windowId}`))
+        ? (windowDisplayName(currentWin) ?? (task ? `task-${task.id}-w${windowId}` : `win-w${windowId}`))
         : windowPart;
 
       // Issue #29 review, 14th pass, Important finding 1: the per-server

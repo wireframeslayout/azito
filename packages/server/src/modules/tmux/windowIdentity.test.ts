@@ -57,8 +57,7 @@ describe('isSameWindow', () => {
 
 describe('windowDisplayName', () => {
   it('returns the label', () => {
-    expect(windowDisplayName({ label: 'My window', labelSource: 'user' })).toBe('My window');
-    expect(windowDisplayName({ label: 'task-1--ab12', taskTitle: 'Task title' })).toBe('Task title');
+    expect(windowDisplayName({ label: 'task-1--ab12' })).toBe('task-1--ab12');
   });
 
   it('ignores a missing label or one that is a window id', () => {

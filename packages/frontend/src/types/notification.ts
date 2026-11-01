@@ -82,10 +82,4 @@ export interface BrowserOpenedPayload {
   url: string | null;
   taskId?: number;
   label?: string;
-  labelSource?: 'auto' | 'user';
-  taskTitle?: string;
-  workerType?: string;
-  windowType?: string;
-  paneTitle?: string;
-  paneCommand?: string;
 }

@@ -1,7 +1,6 @@
 import { parseMuxRef } from '@azito/shared';
 export { resolveWindowTitle, formatWindowTitleLine } from '@azito/shared';
 export { resolvePaneDisplayTitle } from '@azito/shared';
-export type { WindowTitleInput as WindowDisplayInput, WindowTitle as WindowDisplay } from '@azito/shared';
 
 
 export interface WindowIndexEntry {

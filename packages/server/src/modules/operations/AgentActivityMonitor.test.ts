@@ -76,6 +76,12 @@ function mockRegistry(
   return { resolve: () => ({ listWorkspaces, listWorkspacesDetailed, captureScreen, resolvePane }) } as unknown as MuxDriverRegistry;
 }
 
+/** A window repository whose rows are whatever `findAll` returns (`findById` reads the same rows). */
+function windowRepoOf(findAll: ReturnType<typeof vi.fn>): IWindowRepository {
+  const rows = findAll as unknown as () => Window[];
+  return { findAll, findById: (id: number) => rows().find((w) => w.id === id) } as unknown as IWindowRepository;
+}
+
 describe('AgentActivityMonitor', () => {
   let getRunning: ReturnType<typeof vi.fn>;
   let findAll: ReturnType<typeof vi.fn>;
@@ -99,7 +105,7 @@ describe('AgentActivityMonitor', () => {
 
     monitor = new AgentActivityMonitor(
       { getRunning } as unknown as ExecuteTaskUseCase,
-      { findAll } as unknown as IWindowRepository,
+      windowRepoOf(findAll),
       mockRegistry(listSessions, captureScreen),
       { findByName } as unknown as IServerRepository,
       { emit } as unknown as NotificationBus,
@@ -538,7 +544,7 @@ describe('AgentActivityMonitor', () => {
       });
       monitor = new AgentActivityMonitor(
         { getRunning } as unknown as ExecuteTaskUseCase,
-        { findAll } as unknown as IWindowRepository,
+        windowRepoOf(findAll),
         mockRegistry(listSessions, captureScreen),
         { findByName } as unknown as IServerRepository,
         { emit } as unknown as NotificationBus,
@@ -566,7 +572,7 @@ describe('AgentActivityMonitor', () => {
       const captureScreen = vi.fn();
       monitor = new AgentActivityMonitor(
         { getRunning } as unknown as ExecuteTaskUseCase,
-        { findAll } as unknown as IWindowRepository,
+        windowRepoOf(findAll),
         mockRegistry(listSessions, captureScreen),
         { findByName } as unknown as IServerRepository,
         { emit } as unknown as NotificationBus,
@@ -615,7 +621,7 @@ describe('AgentActivityMonitor', () => {
       const getCached = vi.fn().mockReturnValue({ windowId: 1, ref: { kind: 'tmux', session: 'azito', window: 'agent-1' }, ordinal: 2, tmuxTarget: 'azito:agent-1' });
       monitor = new AgentActivityMonitor(
         { getRunning } as unknown as ExecuteTaskUseCase,
-        { findAll } as unknown as IWindowRepository,
+        windowRepoOf(findAll),
         mockRegistry(listSessions, captureScreen),
         { findByName } as unknown as IServerRepository,
         { emit } as unknown as NotificationBus,
@@ -1016,7 +1022,7 @@ describe('AgentActivityMonitor', () => {
         });
         monitor = new AgentActivityMonitor(
           { getRunning } as unknown as ExecuteTaskUseCase,
-          { findAll } as unknown as IWindowRepository,
+          windowRepoOf(findAll),
           mockRegistry(listSessions, screenClient),
           { findByName } as unknown as IServerRepository,
           { emit } as unknown as NotificationBus,
@@ -1662,7 +1668,7 @@ describe('AgentActivityMonitor', () => {
       };
       return new AgentActivityMonitor(
         { getRunning } as unknown as ExecuteTaskUseCase,
-        { findAll } as unknown as IWindowRepository,
+        windowRepoOf(findAll),
         mockRegistry(listSessions, captureScreen),
         { findByName } as unknown as IServerRepository,
         { emit } as unknown as NotificationBus,
@@ -2168,7 +2174,7 @@ describe('AgentActivityMonitor', () => {
       };
       monitor = new AgentActivityMonitor(
         { getRunning } as unknown as ExecuteTaskUseCase,
-        { findAll } as unknown as IWindowRepository,
+        windowRepoOf(findAll),
         mockRegistry(listSessions, captureScreen),
         { findByName } as unknown as IServerRepository,
         { emit } as unknown as NotificationBus,
@@ -2389,7 +2395,7 @@ describe('AgentActivityMonitor', () => {
       findByName.mockReturnValue({ name: 'local', type: 'local', defaultMux: 'misao' as const, muxRuntime: 'system' } as ServerConfig);
       monitor = new AgentActivityMonitor(
         { getRunning } as unknown as ExecuteTaskUseCase,
-        { findAll } as unknown as IWindowRepository,
+        windowRepoOf(findAll),
         mockRegistry(listSessions, screenReads, resolvePane),
         { findByName } as unknown as IServerRepository,
         { emit } as unknown as NotificationBus,

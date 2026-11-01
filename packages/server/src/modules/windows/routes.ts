@@ -343,7 +343,8 @@ const windowsRoutes: FastifyPluginCallback<WindowsRouteOptions> = (fastify, opts
         }
         if (existing.ownerType !== 'task' || existing.taskId !== id) {
           windowRepo.adoptForTask(existing.id, id);
-          const label = (body['label'] as string) || undefined;
+          // A label the user set (rename) outlives the adoption; only an automatic one is replaced.
+          const label = existing.labelSource === 'user' ? undefined : (body['label'] as string) || undefined;
           const windowType = (body['window_type'] as string) === 'agent' ? 'agent' as const : undefined;
           if (label || windowType) windowRepo.update(existing.id, { ...(label ? { label } : {}), ...(windowType ? { windowType } : {}) });
           return { ok: true, id: existing.id, adopted: true, tmuxTarget: existing.tmuxTarget };
@@ -391,7 +392,12 @@ const windowsRoutes: FastifyPluginCallback<WindowsRouteOptions> = (fastify, opts
 
       const body = request.body as Record<string, unknown>;
       const data: Record<string, unknown> = {};
-      if ('label' in body) data['label'] = (body['label'] as string)?.trim() || null;
+      if ('label' in body) {
+        // The label edit is the user's own; clearing it hands the title back to the automatic sources.
+        const label = (body['label'] as string)?.trim() || null;
+        data['label'] = label;
+        data['labelSource'] = label ? 'user' : 'auto';
+      }
       if ('agent_session_id' in body) data['agentSessionId'] = body['agent_session_id'];
       if ('launch_command' in body) data['launchCommand'] = body['launch_command'];
       if ('worker_model' in body) {

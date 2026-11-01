@@ -1,7 +1,7 @@
 import type { ITaskRepository } from '../tasks/Task';
 import type { ExecuteTaskUseCase } from '../tasks/execution/ExecuteTaskUseCase';
 import { ACTIVITY_THRESHOLD_SEC } from '../tasks/execution/WorkerWaiter';
-import type { AgentWindow, IWindowRepository } from '../windows/Window';
+import type { AgentWindow, IWindowRepository, Window } from '../windows/Window';
 import { isAgentWindow } from '../windows/Window';
 import type { TmuxSession, TmuxWindow } from '../tmux/types';
 import { windowSpecMatches } from '../tmux/types';
@@ -1074,8 +1074,11 @@ export class AgentActivityMonitor {
     const muxStatesAtStart = new Set(this.muxStates.values());
     const allWindows = this.windowRepo.findAll();
     this.windowIdByKey.clear();
+    const windowByKey = new Map<string, Window>();
     for (const w of allWindows) {
-      this.windowIdByKey.set(windowKey(w.serverName, w.tmuxTarget), w.id);
+      const key = windowKey(w.serverName, w.tmuxTarget);
+      this.windowIdByKey.set(key, w.id);
+      windowByKey.set(key, w);
     }
     const next = new Map<string, AgentActivityEntry>();
     const reasons = new Map<string, AgentActivityStopReason>();
@@ -1763,7 +1766,7 @@ export class AgentActivityMonitor {
 
     // Attach the same title inputs to every activity source.
     for (const [key, entry] of next) {
-      const dbWin = allWindows.find((aw) => windowKey(aw.serverName, aw.tmuxTarget) === key);
+      const dbWin = windowByKey.get(key);
       const sessions = sessionsByServer.get(entry.serverName);
       const win = sessions && findLiveWindow(sessions, entry.target, dbWin?.muxRef);
       const { windowSpec } = parseWindowTarget(entry.target);
@@ -2233,7 +2236,7 @@ export class AgentActivityMonitor {
       // short window after the run leaves getRunning().
       const operationMeta = this.recentOperationMeta.get(key);
       const windowId = this.windowIdByKey.get(key);
-      const win = windowId == null ? undefined : this.windowRepo.findAll().find((w) => w.id === windowId);
+      const win = windowId == null ? undefined : this.windowRepo.findById(windowId);
       const taskId = operationMeta?.taskId ?? probe.taskId;
       this.notificationBus.emit({
         type: 'agent:activity',

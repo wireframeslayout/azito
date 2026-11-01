@@ -105,7 +105,7 @@ export function MobileStatusBar({ allTasks, openTask, connectPane }: MobileStatu
         key: groupKey,
         taskId: row.taskId,
         projectId: row.projectId,
-        title: formatWindowTitleLine(resolveWindowTitle({ ...row, id: row.windowId, paneTitle: row.paneTitle ?? row.paneName, tmuxTarget: row.target, taskTitle: task?.title })),
+        title: formatWindowTitleLine(resolveWindowTitle({ ...row, id: row.windowId, paneTitle: row.paneTitle ?? row.paneName, tmuxTarget: row.target })),
         meta: task ? t(`common:status.${task.status}`) : undefined,
         isBlocked,
         row,
