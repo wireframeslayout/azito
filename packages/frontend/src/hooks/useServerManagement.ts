@@ -240,13 +240,13 @@ export function useServerManagement({ tabs, closeTab }: UseServerManagementParam
     if (addAutoInstall) {
       setAddLoading(true);
       setAddInstallSteps([]);
-      const res = await api<{ ok?: boolean; error?: string; steps?: InstallStep[]; type?: string; fallback?: boolean; startMethod?: string; misaoError?: string }>('/servers', {
+      const res = await api<{ ok?: boolean; error?: string; code?: string; steps?: InstallStep[]; type?: string; fallback?: boolean; startMethod?: string; misaoError?: string }>('/servers', {
         method: 'POST',
         body: JSON.stringify({ name: addName.trim(), host: addHost.trim(), autoInstall: true }),
       });
       setAddLoading(false);
       if (res.steps) setAddInstallSteps(res.steps);
-      if (res.error && !res.fallback) return showToast(res.error);
+      if (res.error && !res.fallback) return showToast(res.code === 'macos_local_network_permission' ? t('localNetwork.guidance') : res.error);
       if (res.fallback) {
         showToast(`Agent install failed: ${res.error}. Server registered as SSH instead.`);
       }
@@ -356,7 +356,7 @@ export function useServerManagement({ tabs, closeTab }: UseServerManagementParam
     if (!ok) return;
     setReinstalling(serverName);
     setReinstallSteps([]);
-    const res = await api<{ ok?: boolean; error?: string; steps?: InstallStep[] }>(
+    const res = await api<{ ok?: boolean; error?: string; code?: string; steps?: InstallStep[] }>(
       `/servers/${serverName}/agent/install`,
       { method: 'POST' },
     );
@@ -368,7 +368,9 @@ export function useServerManagement({ tabs, closeTab }: UseServerManagementParam
       // (see routes.ts's doc comment) — give it the same localized toast
       // treatment as the PUT handler's isolation gates instead of showing
       // the raw error code.
-      if (res.error === 'isolation_intent_blocks_agent_install') {
+      if (res.code === 'macos_local_network_permission') {
+        showToast(t('localNetwork.guidance'));
+      } else if (res.error === 'isolation_intent_blocks_agent_install') {
         showToast(t('overview.isolationBlocksAgentInstallToast'));
       } else {
         showToast(`Reinstall failed: ${res.error}`);

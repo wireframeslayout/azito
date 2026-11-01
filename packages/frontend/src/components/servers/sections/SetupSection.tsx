@@ -42,6 +42,7 @@ interface SetupSectionProps {
   server: Server;
   installStatus: InstallStatusResponse | null;
   installStatusError: 'offline' | 'failed' | null;
+  localNetworkDetail?: string;
   refresh: () => void;
 }
 
@@ -64,7 +65,7 @@ function SetupHeading() {
   );
 }
 
-export default function SetupSection({ server, installStatus, installStatusError, refresh }: SetupSectionProps) {
+export default function SetupSection({ server, installStatus, installStatusError, localNetworkDetail, refresh }: SetupSectionProps) {
   const { t } = useTranslation('servers');
   const [installingHarness, setInstallingHarness] = useState(false);
   const [installingAgent, setInstallingAgent] = useState(false);
@@ -137,11 +138,13 @@ export default function SetupSection({ server, installStatus, installStatusError
     setAgentSteps([]);
     try {
       const encoded = encodeURIComponent(server.name);
-      const res = await api<{ ok: boolean; steps: InstallStep[]; error?: string }>(
+      const res = await api<{ ok: boolean; steps: InstallStep[]; error?: string; code?: string; detail?: string }>(
         `/servers/${encoded}/agent/install`,
         { method: 'POST' },
       );
-      setAgentSteps(res.steps);
+      setAgentSteps(res.code === 'macos_local_network_permission' && !res.steps?.some((step) => step.code === res.code)
+        ? [...(res.steps ?? []), { step: 'error', status: 'error', message: res.error ?? '', code: res.code, detail: res.detail }]
+        : res.steps);
       if (res.ok) await refresh();
     } catch (err: unknown) {
       setAgentSteps([{ step: 'error', status: 'error', message: (err as Error).message }]);
@@ -198,7 +201,7 @@ export default function SetupSection({ server, installStatus, installStatusError
       <div>
         <SetupHeading />
         <p role="status" style={{ fontSize: 'var(--font-sm)', color: 'var(--text-dim)', margin: '0 0 var(--space-4)' }}>
-          {t('setup.offlineNotice')}
+          {localNetworkDetail ? <>{t('localNetwork.guidance')}<br />{t('localNetwork.detail')}: {localNetworkDetail}</> : t('setup.offlineNotice')}
         </p>
         {canInstallAgent && (
           <StepRow

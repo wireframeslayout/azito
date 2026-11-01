@@ -1,3 +1,4 @@
+import { LocalNetworkPermissionError } from './localNetworkDiagnosis';
 import type { FastifyPluginCallback } from 'fastify';
 import { execFileSync } from 'child_process';
 import os from 'os';
@@ -1256,7 +1257,7 @@ const serversRoutes: FastifyPluginCallback<ServersRouteOptions> = (fastify, opts
       try {
         // An agent that cannot be reached is answered here, before any row is built (the OS probe used to be the first
         // contact). Any other health failure is left to the agent row below to report.
-        if (agentTransport) await agentTransport.fetchHealth().catch((err: unknown) => { if (err instanceof AgentUnreachableError) throw err; });
+        if (agentTransport) await agentTransport.fetchHealth().catch((err: unknown) => { if (err instanceof AgentUnreachableError || err instanceof LocalNetworkPermissionError) throw err; });
         osName = await resolveOsName(transport, transportFactory.hostProfileFor(srv));
       } catch (err: unknown) {
         if (err instanceof AgentUnreachableError) {
