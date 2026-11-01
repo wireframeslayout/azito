@@ -3,7 +3,7 @@ import { Button, Chip, Notice, Spinner } from '../../ui';
 import type { ChipTone } from '../../ui';
 import { useConfirm } from '../../../hooks/useConfirm';
 import { useMisaoService } from '../../../hooks/useMisaoService';
-import { misaoActionsBlocked, misaoInstallConsents, misaoNotices, misaoServiceChipState, misaoServiceMode, misaoVersions, unmanagedReasonKey, type MisaoNotice, type MisaoServiceChipState } from '../../../lib/misaoService';
+import { misaoActionsBlocked, misaoInstallConsents, misaoNotices, misaoOtherTaskRunning, misaoServiceChipState, misaoServiceMode, misaoVersions, unmanagedReasonKey, type MisaoNotice, type MisaoServiceChipState } from '../../../lib/misaoService';
 
 const STATE_CHIP: Record<MisaoServiceChipState, { key: string; tone: ChipTone }> = {
   active: { key: 'stateActive', tone: 'green' },
@@ -61,6 +61,7 @@ export function MisaoServicePanel({ onChanged }: MisaoServicePanelProps) {
   const notices = misaoNotices(status);
   const chipState = misaoServiceChipState(status);
   const blocked = misaoActionsBlocked(status);
+  const otherTaskRunning = misaoOtherTaskRunning(status);
 
   const handleInstall = async (): Promise<void> => {
     const consents = misaoInstallConsents(status);
@@ -105,7 +106,7 @@ export function MisaoServicePanel({ onChanged }: MisaoServicePanelProps) {
         {versions.running && <span style={{ ...mutedStyle, fontFamily: 'var(--mono)' }}>{t('misaoService.runningVersion', { version: versions.running })}</span>}
       </div>
 
-      {(mode === 'other_task' || mode === 'unknown_task') && <Notice tone="warning">{t(`misaoService.${mode === 'other_task' ? 'otherTaskDetail' : 'unknownTaskDetail'}`)}</Notice>}
+      {(mode === 'other_task' || mode === 'unknown_task') && <Notice tone="warning">{t(`misaoService.${mode === 'other_task' ? (otherTaskRunning ? 'otherTaskRunning' : 'otherTaskDetail') : 'unknownTaskDetail'}`)}</Notice>}
 
       {notices.map((notice) => (
         <Notice key={notice} tone={NOTICE_TONE[notice]} sub={t(`misaoService.notice.${notice}Sub`)}>
@@ -115,7 +116,7 @@ export function MisaoServicePanel({ onChanged }: MisaoServicePanelProps) {
 
       <div style={{ display: 'flex', alignItems: 'center', gap: 'var(--space-2)', flexWrap: 'wrap' }}>
         {(mode === 'not_installed' || mode === 'other_task') && (
-          <Button size="sm" variant="primary" loading={busy === 'install'} loadingLabel={t('misaoService.installing')} disabled={busy !== null || blocked} onClick={() => { void handleInstall(); }}>
+          <Button size="sm" variant="primary" loading={busy === 'install'} loadingLabel={t('misaoService.installing')} disabled={busy !== null || blocked || otherTaskRunning} onClick={() => { void handleInstall(); }}>
             {t(mode === 'other_task' ? 'misaoService.takeoverConfirm' : 'misaoService.install')}
           </Button>
         )}
@@ -129,6 +130,7 @@ export function MisaoServicePanel({ onChanged }: MisaoServicePanelProps) {
             {t('misaoService.update')}
           </Button>
         )}
+        {otherTaskRunning && <Button size="sm" disabled={busy !== null} onClick={() => { void misao.refresh(); }}>{t('setup.retry')}</Button>}
         {blocked && <span style={mutedStyle}>{t('misaoService.actionsBlocked')}</span>}
       </div>
 

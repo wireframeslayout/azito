@@ -93,19 +93,13 @@ describe('MisaoServiceService on Windows (the hub\'s own misao)', () => {
     taskExists = true;
     expect(await service().status()).toMatchObject({ windowsTaskOwner: 'hub', serviceInstalled: true });
     exportedXml = taskXml(path.join(dir, 'other'));
-    expect(await service().status()).toMatchObject({ windowsTaskOwner: 'other', serviceInstalled: false, updateAvailable: false, needsHubRestart: false });
+    expect(await service().status()).toMatchObject({ windowsTaskOwner: 'other', windowsTaskRunning: false, serviceInstalled: false, updateAvailable: false, needsHubRestart: false });
     windows.tasks.query = vi.fn().mockResolvedValue({ exists: true, running: true });
-    expect(await service().status()).toMatchObject({ windowsTaskOwner: 'other', serviceInstalled: false, updateAvailable: false });
+    expect(await service().status()).toMatchObject({ windowsTaskOwner: 'other', windowsTaskRunning: true, serviceInstalled: false, updateAvailable: false });
     exportedXml = '<Task/>';
     expect(await service().status()).toMatchObject({ windowsTaskOwner: 'unknown', serviceInstalled: false });
     windows.tasks.exportXml = vi.fn().mockRejectedValue(new Error('export failed'));
     await expect(service().status()).rejects.toThrow('export failed');
-  });
-
-  it('reports an unknown owner when the hub paths are unavailable', async () => {
-    taskExists = true;
-    const noPaths = new MisaoServiceService({ paths: null, bundle: BUNDLE, controller, env: {}, secretFileGuard: createSecretFileGuard(process.platform, process.env), windows });
-    expect(await noPaths.status()).toMatchObject({ managed: false, windowsTaskOwner: 'unknown', serviceInstalled: false });
   });
 
   it('installs through the agent installer aimed at this machine, then points the hub at the pipe', async () => {

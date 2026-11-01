@@ -58,6 +58,10 @@ export function misaoInstallConsents(status: MisaoServiceStatus): MisaoInstallCo
   return consents;
 }
 
+export function misaoOtherTaskRunning(status: MisaoServiceStatus): boolean {
+  return misaoServiceMode(status) === 'other_task' && status.windowsTaskRunning === true;
+}
+
 /** launchd has the service loaded into both domains: install / start / update are refused until one copy is booted out, so the buttons are off. */
 export function misaoActionsBlocked(status: MisaoServiceStatus): boolean {
   return status.managed && status.serviceDuplicateLoad === true;

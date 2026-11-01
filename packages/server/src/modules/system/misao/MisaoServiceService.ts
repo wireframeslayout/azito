@@ -128,7 +128,7 @@ export class MisaoServiceService {
   }
 
   /** The service's state and whether it is installed. Windows: one query of the task plus, when it exists, its definition (to tell whose folder it starts). */
-  private async inspectService(): Promise<{ installed: boolean; inspection?: ServiceInspection; windowsTaskOwner?: 'none' | 'hub' | 'other' | 'unknown' }> {
+  private async inspectService(): Promise<{ installed: boolean; inspection?: ServiceInspection; windowsTaskOwner?: 'none' | 'hub' | 'other' | 'unknown'; windowsTaskRunning?: boolean }> {
     const { windows, controller } = this.deps;
     if (!windows) {
       const installed = await this.isServiceInstalled();
@@ -137,8 +137,8 @@ export class MisaoServiceService {
     const task = await windows.tasks.query(windows.taskName);
     if (!task.exists) return { installed: false, windowsTaskOwner: 'none' };
     const xml = await windows.tasks.exportXml(windows.taskName);
-    if (!taskMisaoRoot(xml) || !this.deps.paths) return { installed: false, windowsTaskOwner: 'unknown' };
-    if (!taskStartsMisaoOf(xml, this.paths.root)) return { installed: false, windowsTaskOwner: 'other' };
+    if (!taskMisaoRoot(xml)) return { installed: false, windowsTaskOwner: 'unknown' };
+    if (!taskStartsMisaoOf(xml, this.paths.root)) return { installed: false, windowsTaskOwner: 'other', windowsTaskRunning: task.running };
     return { installed: true, windowsTaskOwner: 'hub', inspection: { state: task.running ? 'active' : task.failed ? 'failed' : 'inactive', domains: [] } };
   }
 
@@ -148,7 +148,7 @@ export class MisaoServiceService {
     const daemon: MisaoDaemonInfo = hub
       ? await hub.probeDaemon()
       : { reachable: this.deps.paths ? await isSocketListening(this.deps.paths.socket) : false };
-    const { installed: serviceInstalled, inspection, windowsTaskOwner } = await this.inspectService();
+    const { installed: serviceInstalled, inspection, windowsTaskOwner, windowsTaskRunning } = await this.inspectService();
     const unmanagedDetail = this.deps.pathsError ?? (reason === 'unsupported_platform' ? this.deps.controllerError : undefined);
     const installedVersion = this.installedVersion();
     const socketSetting = this.socketSetting();
@@ -164,6 +164,7 @@ export class MisaoServiceService {
       ...(controller ? { serviceManager: controller.kind } : {}),
       serviceInstalled,
       ...(windowsTaskOwner ? { windowsTaskOwner } : {}),
+      ...(windowsTaskRunning !== undefined ? { windowsTaskRunning } : {}),
       ...(inspection ? { serviceState: inspection.state } : {}),
       ...(inspection?.domains.length === 1 ? { serviceDomain: inspection.domains[0] } : {}),
       ...(inspection && inspection.domains.length > 1 ? { serviceDuplicateLoad: true } : {}),

@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type { MisaoServiceStatus } from '@azito/shared';
-import { misaoActionsBlocked, misaoInstallConsents, misaoNotices, misaoServiceChipState, misaoServiceMode, misaoVersions, unmanagedReasonKey } from './misaoService';
+import { misaoActionsBlocked, misaoInstallConsents, misaoNotices, misaoOtherTaskRunning, misaoServiceChipState, misaoServiceMode, misaoVersions, unmanagedReasonKey } from './misaoService';
 
 function status(overrides: Partial<MisaoServiceStatus> = {}): MisaoServiceStatus {
   return {
@@ -111,5 +111,13 @@ describe('misaoInstallConsents', () => {
   it('shows the custom socket notice beside a task of another installation', () => {
     expect(misaoNotices(status({ ...otherTask, socketSetting: 'custom' }))).toEqual(['customSocket']);
     expect(misaoNotices(status({ ...otherTask, updateAvailable: true }))).toEqual([]);
+  });
+});
+
+describe('misaoOtherTaskRunning', () => {
+  it('blocks takeover only while the other task is running', () => {
+    expect(misaoOtherTaskRunning(status({ windowsTaskOwner: 'other', windowsTaskRunning: true }))).toBe(true);
+    expect(misaoOtherTaskRunning(status({ windowsTaskOwner: 'other', windowsTaskRunning: false }))).toBe(false);
+    expect(misaoOtherTaskRunning(status({ windowsTaskOwner: 'hub', windowsTaskRunning: true }))).toBe(false);
   });
 });

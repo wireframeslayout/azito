@@ -68,8 +68,11 @@ function ask(question: string): Promise<boolean> {
 }
 
 function printStatus(status: MisaoServiceStatus): void {
+  const service = status.windowsTaskOwner === 'other' ? 'taskscheduler (another installation)'
+    : status.windowsTaskOwner === 'unknown' ? 'taskscheduler (owner unknown)'
+    : status.serviceInstalled ? `${status.serviceManager} (${status.serviceState ?? 'unknown'})` : 'not installed';
   const lines = [
-    `service:   ${status.serviceInstalled ? `${status.serviceManager} (${status.serviceState ?? 'unknown'})` : 'not installed'}`,
+    `service:   ${service}`,
     ...(status.serviceDomain ? [`domain:    ${status.serviceDomain}`] : []),
     ...(status.serviceDuplicateLoad ? ['warning:   loaded into both gui and user (two copies). start / update refuse until one is booted out; see docs install-and-update.md'] : []),
     `bundled:   ${status.bundledVersion ?? '-'}`,

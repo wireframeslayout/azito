@@ -37,6 +37,8 @@ export interface MisaoServiceStatus {
   serviceInstalled: boolean;
   /** Windows task ownership; absent on other platforms. */
   windowsTaskOwner?: 'none' | 'hub' | 'other' | 'unknown';
+  /** Whether another installation's Windows task is currently running. */
+  windowsTaskRunning?: boolean;
   serviceState?: MisaoServiceState;
   /**
    * launchd only: the domain the job is loaded into. `gui` = the logged-in screen session, `user` = the background
