@@ -9,7 +9,7 @@ export interface AgentRecoveryDeps {
   /** Resolves when the agent answers `/health`; rejects when it cannot be reached (the circuit breaker being open is such a case). */
   checkAgent(server: ServerConfig): Promise<void>;
   /** Told once per new confirmed firewall verdict (`blocked` / `missing_allow`) that pauses the recovery of the agent. */
-  onFirewallProblem?(server: ServerConfig, detail: string): void;
+  onFirewallProblem?(server: ServerConfig, diagnosis: FirewallDiagnosis): void;
   /** Reads the host's firewall policy for the agent (never changes it) before an attempt; a confirmed block pauses the recovery. */
   inspectFirewall?(server: ServerConfig): Promise<FirewallVerdict>;
   /** Starts the agent again (`recoverAgent`: `/Query`, `/End`, `/Run` of its task). Resolves with what it did; `disabled` is a task disabled by hand, which is left alone. */
@@ -37,7 +37,8 @@ export interface FirewallVerdict {
 /** The last firewall diagnosis of an agent that does not answer, as the server status shows it. */
 export interface FirewallDiagnosis {
   state: 'blocked' | 'missing_allow' | 'unknown';
-  detail: string;
+  blockedBy: string[];
+  commands: string[];
   checkedAt: number;
   networkCategory: string | null;
 }
@@ -189,7 +190,7 @@ export class AgentRecoveryWatchdog {
   firewallStatus(server: ServerConfig): FirewallDiagnosis | undefined {
     const value = this.firewall.get(server.name);
     if (value?.identity !== identityOf(server)) return undefined;
-    return { state: value.state, detail: value.detail, checkedAt: value.checkedAt, networkCategory: value.networkCategory };
+    return { state: value.state, blockedBy: value.blockedBy, commands: value.commands, checkedAt: value.checkedAt, networkCategory: value.networkCategory };
   }
 
   private async answers(server: ServerConfig): Promise<boolean> {
@@ -257,7 +258,8 @@ export class AgentRecoveryWatchdog {
     try {
       diagnosis = diagnoseFirewall(await this.deps.inspectFirewall(server), this.deps.now());
     } catch (err) {
-      diagnosis = { state: 'unknown', detail: `Windows Firewall policy could not be verified: ${describe(err)}`, checkedAt: this.deps.now(), networkCategory: null };
+      this.deps.logger.warn(`${server.name}: firewall inspection failed: ${describe(err)}`);
+      diagnosis = { state: 'unknown', blockedBy: [], commands: [], checkedAt: this.deps.now(), networkCategory: null };
     }
     if (diagnosis === undefined) {
       this.firewall.delete(server.name);
@@ -266,10 +268,10 @@ export class AgentRecoveryWatchdog {
     }
     this.firewall.set(server.name, { ...diagnosis, identity });
     if (diagnosis.state === 'unknown') return false;
-    const notificationKey = JSON.stringify([identity, diagnosis.state, diagnosis.detail]);
+    const notificationKey = JSON.stringify([identity, diagnosis.state, diagnosis.blockedBy, diagnosis.commands]);
     if (this.firewallNotified.get(server.name) !== notificationKey) {
       this.firewallNotified.set(server.name, notificationKey);
-      this.deps.onFirewallProblem?.(server, diagnosis.detail);
+      this.deps.onFirewallProblem?.(server, diagnosis);
     }
     return true;
   }
@@ -291,15 +293,13 @@ export class AgentRecoveryWatchdog {
 function diagnoseFirewall(result: FirewallVerdict, checkedAt: number): FirewallDiagnosis | undefined {
   const networkCategory = result.networkCategory;
   if (result.networkCategory === null || result.ruleFound === null) {
-    return { state: 'unknown', detail: `Windows Firewall policy could not be verified: ${result.problem ?? (networkCategory === null ? 'the network profile could not be read' : 'the host gave no reason')}.`, checkedAt, networkCategory };
+    return { state: 'unknown', blockedBy: [], commands: [], checkedAt, networkCategory };
   }
   if (result.blockedBy.length > 0) {
-    const detail = `Windows Firewall blocks the agent: ${result.blockedBy.join(', ')}. Ask an administrator to inspect the active rule before changing it in an Administrator PowerShell: ${result.blockCommands.join('; ')}`;
-    return { state: 'blocked', detail, checkedAt, networkCategory };
+    return { state: 'blocked', blockedBy: result.blockedBy, commands: result.blockCommands, checkedAt, networkCategory };
   }
   if (result.ruleFound) return undefined;
-  const detail = `Windows Firewall has no effective Allow rule for the agent. Ask an administrator to inspect the active policy before adding a rule in an Administrator PowerShell: ${result.allowCommand}`;
-  return { state: 'missing_allow', detail, checkedAt, networkCategory };
+  return { state: 'missing_allow', blockedBy: [], commands: [result.allowCommand], checkedAt, networkCategory };
 }
 
 function describe(err: unknown): string {

@@ -24,5 +24,11 @@
   "toast": {
     "dismissAriaLabel": "Dismiss notification"
   },
-  "fallbackTaskTitle": "Task #{{taskId}}"
+  "fallbackTaskTitle": "Task #{{taskId}}",
+  "firewall": {
+    "title": "Windows Firewall: {{serverName}}",
+    "blocked": "Inbound Block rules affect this agent: {{rules}}.",
+    "missing_allow": "No inbound Allow rule could apply.",
+    "unknown": "The policy could not be verified."
+  }
 }

@@ -9,7 +9,8 @@ import { SchtasksClient, type TaskScheduleState } from '../../../shared/os/taskS
 import { buildTaskXml, encodeTaskXml, isTaskDefinitionDisabled } from '../../../shared/os/taskScheduler/taskDefinition';
 import { redactSecretText } from '../../../shared/redactSecretText';
 import { createSshCommandSpecRunner } from './windowsSshRunner';
-import { checkFirewall, inspectFirewall, describeFirewallProblem, firewallRuleCommand, type FirewallResult } from './windowsFirewall';
+import { checkFirewall, readFirewallDump, evaluateRecoveryFirewall, describeFirewallProblem, firewallRuleCommand, type FirewallResult } from './windowsFirewall';
+import { WINDOWS_PROCESS_INFO } from '../../../shared/os/windowsProcessInfo';
 import { MISAO_WINDOWS_DIR, type WindowsAgentOptions } from './windowsAgentConfig';
 import type { WindowsPreflightInfo } from './windowsPreflight';
 import { agentTaskAction, agentTaskIdentity } from './windowsAgentTask';
@@ -273,9 +274,44 @@ export class WindowsAgentDeployer {
     const root = windowsAgentRoot(host.home, this.options);
     const identity = action && agentTaskIdentity(action, host.systemRoot, root, windowsAgentEnvFile(host.home, this.options), this.options.taskName);
     if (!identity || !await this.taskOwnedByHost(sshHost, xml, host.userId)) throw new Error(`The task "${this.options.taskName}" is not a recognised agent task for ${root}`);
-    const result = await inspectFirewall((command) => this.sshExec(sshHost, command, FIREWALL_MS), port, identity.nodePath, address);
-    return { ...result, allowCommand: firewallRuleCommand(port, identity.nodePath, address),
-      blockCommands: result.blockedBy.map((name) => `Get-NetFirewallRule -PolicyStore ActiveStore | Where-Object { $_.DisplayName -eq ${powershellDialect.quote(name)} } | Format-List *`) };
+    const q = powershellDialect.quote;
+    const envFile = windowsAgentEnvFile(host.home, this.options);
+    const launcher = /-EncodedCommand ([A-Za-z0-9+/=]+)$/.exec(action!.argumentsLine)?.[1];
+    if (!identity.launcher || !launcher) throw new Error('The managed launcher could not be identified');
+    const launcherHash = createHash('sha256').update(launcher, 'ascii').digest('hex');
+    const script = [
+      WINDOWS_PROCESS_INFO,
+      `$address = ${q(address)}; $port = ${port}; $nodePath = ${q(identity.nodePath)}; $arg = ${q(`--env-file=${envFile}`)}; $entry = ${q(path.win32.join(root, identity.version, 'azito-agent.cjs'))}; $launcherHash = ${q(launcherHash)}`,
+      "$me = [Security.Principal.WindowsIdentity]::GetCurrent().User.Value",
+      "$pattern = '(^|[\\s\"])' + [regex]::Escape($arg) + '([\\s\"]|$)'",
+      '$lines = @(& (Join-Path $env:SystemRoot "System32\\netstat.exe") -ano -p tcp); if ($LASTEXITCODE -ne 0) { throw "Cannot list TCP listeners" }',
+      '$endpoint = $address + ":" + $port',
+      '$listeners = @(foreach ($line in $lines) { $parts = @($line.Trim() -split \u0027\\s+\u0027); if ($parts.Count -eq 5 -and $parts[0] -eq "TCP" -and $parts[1] -eq $endpoint -and $parts[3] -eq "LISTENING" -and $parts[4] -match "^[0-9]+$") { [int]$parts[4] } })',
+      'if ($listeners.Count -ne 1) { throw "Cannot identify the agent listener" }',
+      '$p = Get-Process -Id $listeners[0] -ErrorAction Stop',
+      'if ($p.Path -ine $nodePath -or [AzitoProcessList]::Owner($p.Id) -ne $me) { throw "Listener is not the managed agent" }',
+      '$start = $p.StartTime.ToUniversalTime(); $data = [AzitoProcessList]::Read($p.Id)',
+      'if (-not $data[1] -or $data[1] -notmatch $pattern -or -not $data[1].Contains($entry)) { throw "Cannot identify agent command line" }',
+      '$parent = Get-Process -Id $data[0] -ErrorAction Stop; $parentData = [AzitoProcessList]::Read($parent.Id)',
+      'if ($parent.ProcessName -ine "powershell" -or [AzitoProcessList]::Owner($parent.Id) -ne $me -or -not $parentData[1] -or $parentData[1] -notmatch "(?i)-EncodedCommand\\s+([A-Za-z0-9+/=]+)") { throw "Cannot identify the managed launcher" }',
+      '$sha = [Security.Cryptography.SHA256]::Create(); try { $hash = ([BitConverter]::ToString($sha.ComputeHash([Text.Encoding]::ASCII.GetBytes($Matches[1])))).Replace("-", "").ToLowerInvariant() } finally { $sha.Dispose() }',
+      'if ($hash -ne $launcherHash -or $parent.StartTime.ToUniversalTime() -gt $start) { throw "Cannot identify the managed launcher" }',
+      '$request = [System.Net.HttpWebRequest]::Create("http://${address}:${port}/health"); $request.Proxy = $null; $request.Timeout = 5000; $request.AllowAutoRedirect = $false',
+      '$response = $request.GetResponse(); try { if ([int]$response.StatusCode -ne 200) { throw "Agent health is not 200" } } finally { $response.Dispose() }',
+      'if ((Get-Process -Id $p.Id -ErrorAction Stop).StartTime.ToUniversalTime() -ne $start) { throw "Agent process changed" }',
+      'Write-Output "AZITO_AGENT_HEALTHY"',
+    ].join('\n');
+    const healthy = await this.script(sshHost, 'Checking the managed agent listener and health', compressPowerShellScript(script));
+    if (healthy.trim() !== 'AZITO_AGENT_HEALTHY') throw new Error('Could not verify the managed agent health');
+    const dump = await readFirewallDump((command) => this.sshExec(sshHost, command, FIREWALL_MS), address);
+    const verdict = evaluateRecoveryFirewall(dump, { port, nodePath: identity.nodePath, localAddress: address, networkCategory: dump.networkCategory });
+    return {
+      ruleFound: verdict.state === 'unknown' ? null : verdict.state === 'allowed',
+      elevated: dump.elevated, created: false, problem: verdict.state === 'unknown' ? 'the effective firewall policy could not be confirmed' : null,
+      blockedBy: verdict.blockedBy.map((r) => r.displayName), allowedBy: [], store: dump.store, networkCategory: dump.networkCategory,
+      allowCommand: firewallRuleCommand(port, identity.nodePath, address),
+      blockCommands: verdict.blockedBy.map((r) => `Get-NetFirewallRule -PolicyStore ActiveStore -Name ${q(r.name)} | Format-List *`),
+    };
   }
 
   /** Stops the task if it is running and waits until it is not (`/End` returns before the process is gone). */

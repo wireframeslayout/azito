@@ -1,3 +1,4 @@
+import type { FirewallDiagnosis } from '../types/notification';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { api } from '../api/client';
@@ -77,7 +78,7 @@ export interface ServerStatus {
   hubVersion?: string;
   versionMatch?: boolean;
   message?: string;
-  firewall?: { state: 'blocked' | 'missing_allow' | 'unknown'; detail: string; checkedAt: number; networkCategory: string | null };
+  firewall?: FirewallDiagnosis;
 }
 
 interface UseServerManagementParams {

@@ -24,7 +24,7 @@ class Harness {
   misaoStatusFails = false;
   recoverFails = false;
   firewall: FirewallVerdict = verdict({ ruleFound: true });
-  readonly firewallNotices: string[] = [];
+  readonly firewallNotices: import('./AgentRecoveryWatchdog').FirewallDiagnosis[] = [];
   reviveResult = 'started';
   /** The agent is up again once recoverAgent was called this many times. */
   recoversToStart = 1;
@@ -42,7 +42,7 @@ class Harness {
     listServers: () => this.servers,
     checkAgent: async () => { if (!this.agentUp) throw new Error('unreachable'); },
     inspectFirewall: async () => { await this.duringInspect?.(); return this.firewall; },
-    onFirewallProblem: (_s, detail) => { this.firewallNotices.push(detail); },
+    onFirewallProblem: (_s, diagnosis) => { this.firewallNotices.push(diagnosis); },
     recoverAgent: async (s, force) => {
       this.recovered.push(s.name);
       this.recoverForces.push(force);
@@ -79,7 +79,7 @@ describe('AgentRecoveryWatchdog: the agent', () => {
     expect(h.recovered).toEqual([]);
     expect(h.watchdog.firewallStatus(h.servers[0]!)).toMatchObject({ state: 'blocked', checkedAt: h.clock, networkCategory: 'Private' });
     expect(h.firewallNotices).toHaveLength(1);
-    expect(h.firewallNotices[0]).toContain('inspect deny');
+    expect(h.firewallNotices[0]?.commands).toContain('inspect deny');
     h.firewall = verdict({ ruleFound: true });
     await h.advance(TIMING.maxMs);
     expect(h.recoverForces).toEqual([false]);

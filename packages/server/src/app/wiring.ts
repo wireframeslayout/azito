@@ -422,7 +422,7 @@ function buildAgentRecoveryWatchdog(infra: SharedInfra, repos: Repositories): Ag
   return new AgentRecoveryWatchdog({
     listServers: () => repos.serverRepo.findAll(),
     checkAgent: async (server) => { await infra.transportFactory.getAgentTransport(server).fetchHealth(); },
-    onFirewallProblem: (server, detail) => infra.notificationBus.emit({ type: 'server:firewall', payload: { serverName: server.name, detail } }),
+    onFirewallProblem: (server, diagnosis) => infra.notificationBus.emit({ type: 'server:firewall', payload: { serverName: server.name, diagnosis } }),
     inspectFirewall: async (server) => {
       if (!server.host || !server.agentPort) throw new Error('the server has no agent address or port');
       return infra.agentInstaller.inspectAgentFirewall(sshHostOf(server), server.host, server.agentPort);

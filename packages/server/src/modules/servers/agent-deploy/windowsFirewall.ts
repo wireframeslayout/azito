@@ -45,6 +45,8 @@ export interface FirewallRuleRecord {
   program: string;
   remoteAddress: string[];
   localAddress: string[];
+  interfaceType?: string[];
+  interfaceAlias?: string[];
 }
 
 /** A list that PowerShell may have unrolled to a single value. */
@@ -63,6 +65,8 @@ const ruleSchema = z.object({
   program: z.string(),
   remoteAddress: textList,
   localAddress: textList,
+  interfaceType: textList.optional(),
+  interfaceAlias: textList.optional(),
 });
 
 const dumpSchema = z.object({
@@ -73,6 +77,7 @@ const dumpSchema = z.object({
   store: z.string(),
   /** Why the rules could not be read; then `rules` is empty. */
   problem: z.string().nullable(),
+  profiles: z.array(z.object({ name: z.string(), enabled: z.string(), defaultInboundAction: z.string(), allowInboundRules: z.string() })).optional(),
   rules: z.array(ruleSchema),
 });
 
@@ -90,6 +95,7 @@ $networkCategory = $null
 $store = 'ActiveStore'
 $problem = $null
 $rules = @()
+$profiles = @()
 try {
   $interfaceIndex = (Get-NetIPAddress -IPAddress ${powershellDialect.quote(localAddress)} -ErrorAction Stop).InterfaceIndex
   $networkCategory = "$((Get-NetConnectionProfile -InterfaceIndex $interfaceIndex -ErrorAction Stop).NetworkCategory)"
@@ -102,17 +108,20 @@ function Read-Filters($command, $policyStore) {
 function Join-Values($values) { , @($values | ForEach-Object { "$_" }) }
 try {
 
+  $profiles = @(Get-NetFirewallProfile -PolicyStore $store -ErrorAction Stop | ForEach-Object { [ordered]@{ name = "$($_.Name)"; enabled = "$($_.Enabled)"; defaultInboundAction = "$($_.DefaultInboundAction)"; allowInboundRules = "$($_.AllowInboundRules)" } })
+  $interfaces = Read-Filters Get-NetFirewallInterfaceFilter $store
+  $interfaceTypes = Read-Filters Get-NetFirewallInterfaceTypeFilter $store
   $ports = Read-Filters Get-NetFirewallPortFilter $store
   $apps = Read-Filters Get-NetFirewallApplicationFilter $store
   $addresses = Read-Filters Get-NetFirewallAddressFilter $store
   $services = Read-Filters Get-NetFirewallServiceFilter $store
   $rules = @(foreach ($rule in Get-NetFirewallRule -PolicyStore $store -Direction Inbound -Enabled True) {
     $id = $rule.Name
-    if ($null -eq $ports[$id] -or $null -eq $apps[$id] -or $null -eq $addresses[$id] -or $null -eq $services[$id]) { throw 'a firewall rule has unreadable filters' }
-    [ordered]@{ name = "$id"; displayName = "$($rule.DisplayName)"; action = "$($rule.Action)"; profile = "$($rule.Profile)"; package = "$($apps[$id].Package)"; owner = "$($rule.Owner)"; service = "$($services[$id].Service)"; protocol = "$($ports[$id].Protocol)"; localPort = Join-Values $ports[$id].LocalPort; program = "$($apps[$id].Program)"; remoteAddress = Join-Values $addresses[$id].RemoteAddress; localAddress = Join-Values $addresses[$id].LocalAddress }
+    if ($null -eq $ports[$id] -or $null -eq $apps[$id] -or $null -eq $addresses[$id] -or $null -eq $services[$id] -or $null -eq $interfaces[$id] -or $null -eq $interfaceTypes[$id]) { throw 'a firewall rule has unreadable filters' }
+    [ordered]@{ name = "$id"; displayName = "$($rule.DisplayName)"; action = "$($rule.Action)"; profile = "$($rule.Profile)"; package = "$($apps[$id].Package)"; owner = "$($rule.Owner)"; service = "$($services[$id].Service)"; protocol = "$($ports[$id].Protocol)"; localPort = Join-Values $ports[$id].LocalPort; program = "$($apps[$id].Program)"; remoteAddress = Join-Values $addresses[$id].RemoteAddress; localAddress = Join-Values $addresses[$id].LocalAddress; interfaceAlias = Join-Values $interfaces[$id].InterfaceAlias; interfaceType = Join-Values $interfaceTypes[$id].InterfaceType }
   })
 } catch { $problem = 'reading the rules failed: ' + $_.Exception.Message; $rules = @() }
-$info = [ordered]@{ elevated = $elevated; networkCategory = $networkCategory; store = $store; problem = $problem; rules = @($rules) }
+$info = [ordered]@{ elevated = $elevated; networkCategory = $networkCategory; store = $store; problem = $problem; profiles = @($profiles); rules = @($rules) }
 $global:LASTEXITCODE = 0
 Write-Output '${DUMP_BEGIN}'
 $json = ConvertTo-Json -InputObject $info -Compress -Depth 5
@@ -382,13 +391,36 @@ export interface FirewallResult {
 /** Runs one command line on the host through its SSH login shell. */
 export type FirewallExec = (command: string) => Promise<{ stdout: string; stderr: string; code: number }>;
 
+export async function readFirewallDump(exec: FirewallExec, address: string): Promise<FirewallDump> {
+  const result = await exec(buildFirewallDumpCommand(address));
+  return parseFirewallDump(result.stdout, result.stderr, result.code);
+}
+
+/** Recovery requires proof: uncertain filters, partial Allows and policy defaults never pause it. */
+export function evaluateRecoveryFirewall(dump: FirewallDump, target: FirewallTarget): { state: 'blocked' | 'missing_allow' | 'unknown' | 'allowed'; blockedBy: Array<{ name: string; displayName: string }> } {
+  const unknown = { state: 'unknown' as const, blockedBy: [] };
+  const profile = firewallProfileOf(target.networkCategory);
+  if (dump.problem || dump.store !== 'ActiveStore' || !profile) return unknown;
+  const policy = dump.profiles?.find((p) => p.name.toLowerCase() === profile.toLowerCase());
+  if (!policy || policy.enabled.toLowerCase() !== 'true' || policy.defaultInboundAction.toLowerCase() !== 'block' || policy.allowInboundRules.toLowerCase() !== 'true') return unknown;
+  const candidates = dump.rules.filter((r) => isTcp(r) && programMatches(r, target.nodePath) && profileIncludes(r.profile, profile) && blocksPort(r.localPort, target.port));
+  // A filter we cannot interpret could apply; never infer a missing Allow or a definite Block from it.
+  if (candidates.some((r) => !r.interfaceAlias || !r.interfaceType || !r.interfaceAlias.every(isUnrestricted) || !r.interfaceType.every(isUnrestricted))) return unknown;
+  const blocked = candidates.filter((r) => r.action.toLowerCase() === 'block' && isUnrestricted(r.package) && isUnrestricted(r.owner) && isUnrestricted(r.service) && containsAddress(r.localAddress, target.localAddress) && coversTailnet(r.remoteAddress));
+  if (blocked.length) return { state: 'blocked', blockedBy: blocked.map(({ name, displayName }) => ({ name, displayName })) };
+  // Any potential Allow, including scoped or partially understood filters, rules out a definite missing Allow.
+  if (dump.rules.some((r) => r.action.toLowerCase() === 'allow' && profileIncludes(r.profile, profile))) return unknown;
+  // Other unusual rule actions or filters are also inconclusive.
+  if (candidates.some((r) => r.action.toLowerCase() !== 'block')) return unknown;
+  return { state: 'missing_allow', blockedBy: [] };
+}
+
 /**
  * Reads the host's rules and decides, without changing anything (`created` is always false).
  * A host that cannot be read reports `ruleFound: null`, not a guess.
  */
 export async function inspectFirewall(exec: FirewallExec, port: number, nodePath: string, localAddress: string): Promise<FirewallResult> {
-  const dumped = await exec(buildFirewallDumpCommand(localAddress));
-  const dump = parseFirewallDump(dumped.stdout, dumped.stderr, dumped.code);
+  const dump = await readFirewallDump(exec, localAddress);
   if (dump.problem !== null) {
     return { ruleFound: null, elevated: dump.elevated, created: false, problem: dump.problem, blockedBy: [], allowedBy: [], store: dump.store, networkCategory: dump.networkCategory };
   }

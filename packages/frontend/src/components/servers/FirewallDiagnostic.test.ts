@@ -20,14 +20,14 @@ import { FirewallDiagnostic } from './FirewallDiagnostic';
 describe('FirewallDiagnostic', () => {
   it('shows the diagnosis, profile and time', () => {
     const checkedAt = Date.parse('2026-01-01T00:00:00Z');
-    const html = renderToStaticMarkup(createElement(FirewallDiagnostic, { diagnostic: { state: 'blocked', detail: 'Inspect rule', checkedAt, networkCategory: 'Public' } }));
+    const html = renderToStaticMarkup(createElement(FirewallDiagnostic, { diagnostic: { state: 'blocked', blockedBy: ['Test rule'], commands: ['Inspect rule'], checkedAt, networkCategory: 'Public' } }));
     expect(html).toContain('Inspect rule');
     expect(html).toContain('Network profile: Public');
     expect(html).toContain(new Date(checkedAt).toLocaleString());
   });
 
   it('says the profile is unknown when the host did not report it', () => {
-    const html = renderToStaticMarkup(createElement(FirewallDiagnostic, { diagnostic: { state: 'unknown', detail: 'Not verified', checkedAt: 0, networkCategory: null } }));
+    const html = renderToStaticMarkup(createElement(FirewallDiagnostic, { diagnostic: { state: 'unknown', blockedBy: [], commands: [], checkedAt: 0, networkCategory: null } }));
     expect(html).toContain('Network profile: unknown');
   });
 });

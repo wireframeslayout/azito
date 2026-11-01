@@ -1,9 +1,9 @@
 import { useEffect, useRef } from 'react';
-import type { AgentActivityPayload, BrowserOpenedPayload, NotificationEvent } from '../types/notification';
+import type { AgentActivityPayload, BrowserOpenedPayload, FirewallDiagnosis, NotificationEvent } from '../types/notification';
 import { buildWsUrl } from '../api/wsUrl';
 
 export interface NotificationHandlers {
-  onServerFirewall?: (payload: { serverName: string; detail: string }) => void;
+  onServerFirewall?: (payload: { serverName: string; diagnosis: FirewallDiagnosis }) => void;
   onSessionsUpdated?: (serverName: string) => void;
   onTaskStatus?: (payload: { taskId: number; status: string; title?: string; projectId?: number }) => void;
   onPaneExited?: (serverName: string) => void;

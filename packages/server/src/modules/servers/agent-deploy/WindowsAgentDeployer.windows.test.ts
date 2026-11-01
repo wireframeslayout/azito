@@ -12,7 +12,7 @@ import { readSha256FromSumsFile } from './integrityVerifier';
 import { AgentBundler } from './AgentBundler';
 import { updateWindowsAgent } from './windowsAgentUpdate';
 import { WindowsAgentDeployer, buildAgentEnvFile, windowsAgentLayout, type WindowsDeployInput, type WindowsFileTransfer, type WindowsSshExec } from './WindowsAgentDeployer';
-import { checkFirewall, inspectFirewall, firewallRuleName } from './windowsFirewall';
+import { checkFirewall, inspectFirewall, readFirewallDump, firewallRuleName } from './windowsFirewall';
 import { buildWindowsPreflightCommand, parseWindowsPreflight, type WindowsPreflightInfo } from './windowsPreflight';
 import type { WindowsAgentOptions } from './windowsAgentConfig';
 
@@ -219,6 +219,17 @@ describe.skipIf(process.platform !== 'win32')('the Windows agent install on a re
     };
     const create = (name: string, extra: string): Promise<string> =>
       ps(`$null = New-NetFirewallRule -DisplayName ${powershellDialect.quote(name)} -Direction Inbound -Protocol TCP -Profile Any ${extra}`);
+
+    it('reads effective profile and interface filters on the Windows runner', async (ctx) => {
+      const dump = await readFirewallDump((command) => cmdExec('ci', command, 120_000), BIND);
+      if (!dump.elevated) ctx.skip('this session is not elevated');
+      expect(dump.problem).toBeNull();
+      expect(dump.profiles?.length).toBeGreaterThan(0);
+      for (const rule of dump.rules) {
+        expect(rule.interfaceAlias).toBeDefined();
+        expect(rule.interfaceType).toBeDefined();
+      }
+    }, 300_000);
 
     it('adds a rule when the elevated ActiveStore has no matching rule', async (ctx) => {
       const port = await freePort();

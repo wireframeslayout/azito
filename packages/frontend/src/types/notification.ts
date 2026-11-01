@@ -63,8 +63,16 @@ export interface AppNotification {
   createdAt: number;
 }
 
+export interface FirewallDiagnosis {
+  state: 'blocked' | 'missing_allow' | 'unknown';
+  blockedBy: string[];
+  commands: string[];
+  checkedAt: number;
+  networkCategory: string | null;
+}
+
 export type NotificationEvent =
-  | { type: 'server:firewall'; payload: { serverName: string; detail: string } }
+  | { type: 'server:firewall'; payload: { serverName: string; diagnosis: FirewallDiagnosis } }
   | { type: 'sessions:updated'; payload: { serverName: string } }
   | { type: 'task:status'; payload: { taskId: number; status: string; title?: string; projectId?: number } }
   | { type: 'phase:completed'; payload: { taskId: number; unitId: number; phase: string; summary: Record<string, unknown> | null } }

@@ -2,7 +2,7 @@ import React, { createContext, useCallback, useContext, useEffect, useRef, useSt
 import { useTranslation } from 'react-i18next';
 import { useLocation, useNavigate } from 'react-router-dom';
 import { api } from '../api/client';
-import type { AgentActivityPayload, AppNotification, AppNotificationKind } from '../types/notification';
+import type { AgentActivityPayload, AppNotification, AppNotificationKind, FirewallDiagnosis } from '../types/notification';
 import { useAgentActivity } from './useAgentActivity';
 import { useNotificationChannel } from './useNotificationChannel';
 import { useWorkspaceTargets } from './useWorkspaceTargets';
@@ -249,9 +249,10 @@ export function NotificationCenterProvider({ children }: { children: React.React
   }, [updateNotifications, dismissToast]);
 
   useNotificationChannel({
-    onServerFirewall: useCallback((payload: { serverName: string; detail: string }) => {
-      pushNotification({ id: crypto.randomUUID(), kind: 'server_firewall', title: `Windows Firewall: ${payload.serverName}`, body: payload.detail, serverName: payload.serverName, read: false, createdAt: Date.now() });
-    }, [pushNotification]),
+    onServerFirewall: useCallback((payload: { serverName: string; diagnosis: FirewallDiagnosis }) => {
+      const { diagnosis } = payload;
+      pushNotification({ id: crypto.randomUUID(), kind: 'server_firewall', title: t('firewall.title', { serverName: payload.serverName }), body: t(`firewall.${diagnosis.state}`, { rules: diagnosis.blockedBy.join(', ') }) + (diagnosis.commands.length ? `\n${diagnosis.commands.join('\n')}` : ''), serverName: payload.serverName, read: false, createdAt: Date.now() });
+    }, [pushNotification, t]),
     onTaskStatus: useCallback((payload: { taskId: number; status: string; title?: string; projectId?: number }) => {
       const taskTitle = taskTitleOf(payload.title, payload.taskId, t('fallbackTaskTitle', { taskId: payload.taskId }));
       switch (payload.status) {

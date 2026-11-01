@@ -173,3 +173,46 @@ describe('the process sweep script', () => {
     expect([...spellings.values()].filter((set) => set.size > 1)).toEqual([]);
   });
 });
+
+describe('firewall recovery inspection', () => {
+  async function setup(healthOutput: string) {
+    const host = new FakeWindowsHost({ sha256: 'a'.repeat(64), existingTask: 'running' });
+    const info = { nodePath: 'C:\\node.exe', nodeVersion: '24', arch: 'x64' as const, windowsVersion: null, buildNumber: 22631, cim: 'ok' as const, tailscaleIp: '100.64.0.9', home: 'C:\\Users\\dev', systemRoot: 'C:\\Windows', userId: 'PC\\dev' };
+    const layout = windowsAgentLayout(info.home, DEFAULT_WINDOWS_AGENT_OPTIONS, 'abc123');
+    const action = agentTaskAction(info.systemRoot, info.nodePath, layout.envFile, layout.entry, DEFAULT_WINDOWS_AGENT_OPTIONS.taskName);
+    host.registeredXml = buildTaskXml({ userId: info.userId, description: 'agent', executable: action.executable, args: action.args, workingDirectory: layout.versionDir, restartOnFailure: { intervalMinutes: 1, count: 999 } });
+    const deployer = new WindowsAgentDeployer(host.exec, { putFile: async () => undefined, putBuffer: async () => { throw new Error('read-only inspection must not upload'); } }, DEFAULT_WINDOWS_AGENT_OPTIONS);
+    const internals = deployer as unknown as { taskOwnedByHost: () => Promise<boolean>; script: (host: string, what: string, body: string) => Promise<string> };
+    internals.taskOwnedByHost = async () => true;
+    const scripts: string[] = [];
+    internals.script = async (_host, _what, body) => { scripts.push(body); return healthOutput; };
+    return { host, info, deployer, scripts };
+  }
+
+  it('does not inspect policy if the managed listener cannot be confirmed', async () => {
+    const { host, info, deployer } = await setup('not healthy');
+    await expect(deployer.inspectFirewall('h', info, info.tailscaleIp, 3002)).rejects.toThrow(/health/);
+    expect(host.calls.some((c) => c.kind === 'firewall')).toBe(false);
+  });
+
+  it('generates a command by rule identity rather than display name', async () => {
+    const { host, info, deployer } = await setup('AZITO_AGENT_HEALTHY');
+    host.options.firewall = { ruleFound: false, elevated: true, created: false, problem: null, blockedBy: ["rule'one"] };
+    const result = await deployer.inspectFirewall('h', info, info.tailscaleIp, 3002);
+    expect(result.blockCommands).toEqual(["Get-NetFirewallRule -PolicyStore ActiveStore -Name 'rule''one' | Format-List *"]);
+  });
+
+  it('requires the managed listener and uses a read-only command', async () => {
+    const { host, info, deployer, scripts } = await setup('AZITO_AGENT_HEALTHY');
+    await deployer.inspectFirewall('h', info, info.tailscaleIp, 3002);
+    expect(host.calls.some((c) => c.kind === 'firewall')).toBe(true);
+    const { gunzipSync } = await import('node:zlib');
+    const encoded = /FromBase64String\('([^']+)'\)/.exec(scripts[0]!)![1]!;
+    const body = gunzipSync(Buffer.from(encoded, 'base64')).toString('utf8');
+    expect(body).toContain('netstat.exe');
+    expect(body).toContain('LISTENING');
+    expect(body).toContain('StatusCode -ne 200');
+    expect(body).toContain('Cannot identify the managed launcher');
+    expect(body).not.toMatch(/Get-CimInstance|Stop-Process|New-NetFirewallRule/);
+  });
+});
