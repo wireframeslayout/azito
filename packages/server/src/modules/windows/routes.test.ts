@@ -101,14 +101,14 @@ describe('POST /api/windows/:id/launch-agent', () => {
     const serverRepo: Partial<IServerRepository> = {
       findByName: (name: string) => (name === server.name ? server : null),
     };
-    const tmux: Partial<TmuxClient> = {
+    const tmux = {
       sendKeysToHandle: sendKeys as unknown as TmuxClient['sendKeysToHandle'],
       resolvePane: vi.fn().mockResolvedValue('%0') as unknown as TmuxClient['resolvePane'],
       listWorkspaces: vi.fn(async () => [{ name: 's', windows: [] }]),
       renameWindowByRef: vi.fn(async () => ({ code: 0, stdout: '', stderr: '' })),
       splitPaneByHandle: vi.fn(async () => ({ result: { code: 0, stdout: '', stderr: '' } })),
       setPaneTitle: vi.fn(async () => ({ code: 0, stdout: '', stderr: '' })),
-    };
+    } as unknown as Partial<TmuxClient>;
 
     app = Fastify();
     await app.register(windowsRoutes, {
