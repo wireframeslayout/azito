@@ -1,18 +1,16 @@
 import { createElement } from 'react';
-import { describe, expect, it, vi } from 'vitest';
+import { describe, expect, it } from 'vitest';
 import { renderToStaticMarkup } from 'react-dom/server';
 import { InstallSteps } from './InstallSteps';
-import { ServerInstallSteps } from '../servers/ServerInstallSteps';
 
-vi.mock('react-i18next', () => ({ useTranslation: () => ({ t: (key: string) => ({ 'localNetwork.guidance': 'Check local network permission or use Tailscale', 'localNetwork.detail': 'Original error' } as Record<string, string>)[key] }) }));
+const steps = [{ step: 'preflight', status: 'error' as const, message: 'refused' }];
 
 describe('InstallSteps', () => {
-  it('shows guidance and the original error for a diagnosed failure', () => {
-    const html = renderToStaticMarkup(createElement(ServerInstallSteps, { steps: [{ step: 'preflight', status: 'error', message: 'raw', code: 'macos_local_network_permission', detail: 'EHOSTUNREACH' }] }));
-    expect(html).toContain('Check local network permission or use Tailscale');
-    expect(html).toContain('Original error: EHOSTUNREACH');
+  it('shows the original message by default', () => {
+    expect(renderToStaticMarkup(createElement(InstallSteps, { steps }))).toContain('refused');
   });
-  it('leaves other errors unchanged', () => {
-    expect(renderToStaticMarkup(createElement(InstallSteps, { steps: [{ step: 'preflight', status: 'error', message: 'refused' }] }))).toContain('refused');
+  it('uses the supplied renderer', () => {
+    const html = renderToStaticMarkup(createElement(InstallSteps, { steps, renderMessage: (step) => `Details: ${step.message}` }));
+    expect(html).toContain('Details: refused');
   });
 });
