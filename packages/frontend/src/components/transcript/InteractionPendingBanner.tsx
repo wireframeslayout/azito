@@ -1,6 +1,6 @@
 import { useTranslation } from 'react-i18next';
 import { Icon } from '../ui/Icon';
-import type { WindowViewMode } from '../ui/TerminalChatToggle';
+import type { WindowViewMode } from '../../lib/windowViewMode';
 
 interface InteractionPendingBannerProps {
   /** ターミナル⇄チャットの表示切替（TerminalChatToggle と共有、Issue #69 S8）。省略時は

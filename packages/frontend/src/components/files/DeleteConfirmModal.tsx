@@ -5,7 +5,6 @@ import { Button } from '../ui';
 interface DeleteTarget {
   path: string;
   type: 'file' | 'directory';
-  serverName: string;
 }
 
 interface DeleteConfirmModalProps {
@@ -13,9 +12,10 @@ interface DeleteConfirmModalProps {
   onConfirm: () => void;
   onClose: () => void;
   loading?: boolean;
+  contextLabel?: string;
 }
 
-export default function DeleteConfirmModal({ target, onConfirm, onClose, loading }: DeleteConfirmModalProps) {
+export default function DeleteConfirmModal({ target, onConfirm, onClose, loading, contextLabel }: DeleteConfirmModalProps) {
   const { t } = useTranslation('files');
   if (!target) return null;
 
@@ -48,9 +48,7 @@ export default function DeleteConfirmModal({ target, onConfirm, onClose, loading
         }}>
           {target.path}
         </div>
-        <div style={{ marginTop: 6, fontSize: 'var(--font-xs)', color: 'var(--text-dim)' }}>
-          {target.serverName}
-        </div>
+        {contextLabel && <div style={{ marginTop: 6, fontSize: 'var(--font-xs)', color: 'var(--text-dim)' }}>{contextLabel}</div>}
       </div>
     </Modal>
   );

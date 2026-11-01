@@ -3,6 +3,9 @@ import { useTranslation } from 'react-i18next';
 import { useNavigate } from 'react-router-dom';
 import { paths } from '../../paths';
 import { TerminalContainer } from '../TerminalContainer';
+import { findWindow } from '../WindowStatusDropdown';
+import { useAgentActivity } from '../../hooks/useAgentActivity';
+import { isAgentWindow } from '../../lib/windowViewMode';
 import type { ConnectPaneFn } from '../../lib/terminalRef';
 import { FilePreviewPanel } from '../FileExplorer';
 import { ServersUnavailableNotice } from '../files/ServersUnavailableNotice';
@@ -116,6 +119,7 @@ export default function TabContentRenderer({
   refreshBrowserGroups,
   togglePin,
 }: TabContentRendererProps) {
+  const { entries } = useAgentActivity();
   const { t } = useTranslation(['tasks', 'workspace', 'units']);
   const { t: tf } = useTranslation('files');
   const serverPathApi = useServerPathApi();
@@ -149,6 +153,7 @@ export default function TabContentRenderer({
     }
   };
   const isTerminal = tab.type === 'terminal' && tab.serverName && tab.target;
+  const terminalWindow = isTerminal ? findWindow(tab.serverName!, tab.target!, project, allTasks, tab.terminalRef) : null;
   if (isTerminal && !isVisible) return null;
   return (
     <div
@@ -165,6 +170,7 @@ export default function TabContentRenderer({
       style={{ position: 'absolute', inset: 0, display: 'flex', flexDirection: 'column', visibility: isVisible ? 'visible' : 'hidden', pointerEvents: isVisible ? 'auto' : 'none' }}>
       {isTerminal && (
         <TerminalContainer
+              isAgent={isAgentWindow(terminalWindow?.id ?? null, terminalWindow?.windowType, entries.values())}
               serverName={tab.serverName!}
               target={tab.target!}
               terminalRef={tab.terminalRef}
@@ -229,6 +235,7 @@ export default function TabContentRenderer({
           filename={tab.storageFileData.filename}
           originalName={tab.storageFileData.originalName}
           size={tab.storageFileData.size}
+          onDirtyChange={setTabDirty ? (dirty) => setTabDirty(tab.id, dirty) : undefined}
         />
       )}
       {tab.type === 'unit' && tab.entityId != null && (

@@ -2,6 +2,7 @@ import { useState, useEffect, useRef, useCallback } from 'react';
 import { stripPaneSuffix, parseMuxRef, type HostPathApi } from '@azito/shared';
 import { api } from '../api/client';
 import { applyRetargetTabs } from '../lib/retargetTab';
+import { dirtyTabsReplacedByOpen, tabsKeptByOpen } from '../lib/dirtyTabsReplacedByOpen';
 import { closeBrowserGroup } from '../lib/browserGroup';
 import { fileDisplayName, fileTabPath } from '../lib/serverPath';
 import { normalizeFileTabs } from '../lib/fileTabMigration';
@@ -313,7 +314,12 @@ export function nextActiveTabIdAfterDrop(
   return next ? resolved(next) : null;
 }
 
-export function useTabPersistence(storageKey?: string) {
+export interface TabPersistenceOptions {
+  /** Asks whether unsaved tabs that opening another tab would replace may be discarded. */
+  confirmDiscard?: (tabs: PersistedTab[]) => Promise<boolean>;
+}
+
+export function useTabPersistence(storageKey?: string, options?: TabPersistenceOptions) {
   const initialized = useRef(false);
 
   // When storageKey is provided, use it directly (legacy mode, e.g. Terminals page).
@@ -371,11 +377,12 @@ export function useTabPersistence(storageKey?: string) {
     localStorage.setItem(activeKey, activeTabId || '');
   }, [activeTabId, activeKey]);
 
-  const openTab = useCallback((tab: PersistedTab) => {
-    // Opener defaults to whichever tab was active when this open call was made,
-    // so callers don't need to pass it explicitly for the "back" navigation to work.
-    const openerTabId = tab.openerTabId ?? activeTabIdRef.current ?? undefined;
-    setTabs((prev) => {
+  const confirmDiscardRef = useRef(options?.confirmDiscard);
+  confirmDiscardRef.current = options?.confirmDiscard;
+
+  const applyOpen = useCallback((tab: PersistedTab, openerTabId: string | undefined, replaceExisting: boolean, discardable: ReadonlySet<string>) => {
+    setTabs((current) => {
+      const prev = replaceExisting ? current.filter((t) => t.id !== tab.id) : current;
       const existing = prev.find((t) => t.id === tab.id);
       if (existing) {
         const fromChanged = tab.from !== undefined && existing.from !== tab.from;
@@ -395,11 +402,32 @@ export function useTabPersistence(storageKey?: string) {
         }
         return prev;
       }
-      const pinned = prev.filter((t) => t.pinned);
-      return [...pinned, { ...tab, ...(openerTabId ? { openerTabId } : {}) }];
+      return [...tabsKeptByOpen(prev, discardable), { ...tab, ...(openerTabId ? { openerTabId } : {}) }];
     });
     setActiveTabId(tab.id);
   }, []);
+
+  /**
+   * Opening a tab that is not open yet replaces the unpinned tabs. A dirty one among them is discarded only after
+   * `confirmDiscard` agrees; a cancelled confirmation opens nothing, and without `confirmDiscard` dirty tabs stay open.
+   * `replaceExisting` reopens a tab of the same id fresh (form tabs) in the same step.
+   */
+  const openTab = useCallback((tab: PersistedTab, opts: { replaceExisting?: boolean } = {}) => {
+    // Opener defaults to whichever tab was active when this open call was made,
+    // so callers don't need to pass it explicitly for the "back" navigation to work.
+    const openerTabId = tab.openerTabId ?? activeTabIdRef.current ?? undefined;
+    const replaceExisting = opts.replaceExisting === true;
+    const current = replaceExisting ? tabsRef.current.filter((t) => t.id !== tab.id) : tabsRef.current;
+    const discarded = dirtyTabsReplacedByOpen(current, tab.id);
+    const confirmDiscard = confirmDiscardRef.current;
+    if (discarded.length === 0 || !confirmDiscard) {
+      applyOpen(tab, openerTabId, replaceExisting, new Set());
+      return;
+    }
+    void confirmDiscard(discarded).then((ok) => {
+      if (ok) applyOpen(tab, openerTabId, replaceExisting, new Set(discarded.map((t) => t.id)));
+    });
+  }, [applyOpen]);
 
   /**
    * Rewrites the saved tabs that were waiting for something to be known, in one pass: legacy terminal ids once their
@@ -608,7 +636,6 @@ export function useTabPersistence(storageKey?: string) {
     const tabId = opts.mode === 'edit' && opts.taskId
       ? `task-form:edit:${opts.taskId}`
       : `task-form:new:${opts.projectId ?? 'global'}`;
-    setTabs((prev) => prev.filter((t) => t.id !== tabId));
     openTab({
       id: tabId,
       type: 'task-form',
@@ -616,35 +643,33 @@ export function useTabPersistence(storageKey?: string) {
       projectId: opts.projectId,
       taskFormData: opts,
       openerTabId,
-    });
+    }, { replaceExisting: true });
   }, [openTab]);
 
   const openUnitForm = useCallback((opts: { mode: 'create' | 'edit'; unitId?: number }, openerTabId?: string) => {
     const tabId = opts.mode === 'edit' && opts.unitId
       ? `unit-form:edit:${opts.unitId}`
       : 'unit-form:new';
-    setTabs((prev) => prev.filter((t) => t.id !== tabId));
     openTab({
       id: tabId,
       type: 'unit-form',
       label: opts.mode === 'edit' ? 'Edit Unit' : 'New Unit',
       unitFormData: opts,
       openerTabId,
-    });
+    }, { replaceExisting: true });
   }, [openTab]);
 
   const openSidekickForm = useCallback((opts: { mode: 'create' | 'edit'; sidekickName?: string }, openerTabId?: string) => {
     const tabId = opts.mode === 'edit' && opts.sidekickName
       ? `sidekick-form:edit:${opts.sidekickName}`
       : 'sidekick-form:new';
-    setTabs((prev) => prev.filter((t) => t.id !== tabId));
     openTab({
       id: tabId,
       type: 'sidekick-form',
       label: opts.mode === 'edit' ? `Edit: ${opts.sidekickName}` : 'New Sidekick',
       sidekickFormData: opts,
       openerTabId,
-    });
+    }, { replaceExisting: true });
   }, [openTab]);
 
   const openStorageFile = useCallback((projectId: number, filename: string, originalName: string, size: number) => {

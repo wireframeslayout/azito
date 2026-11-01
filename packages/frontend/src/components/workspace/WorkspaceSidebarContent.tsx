@@ -1,3 +1,4 @@
+import { storageRelativeKey } from '../files/storageKey';
 import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import type { SidebarMode, Project, Session, Window, Task } from '../../pages/workspace/types';
@@ -280,7 +281,7 @@ export default function WorkspaceSidebarContent({
       )}
       {sidebarMode === 'storage' && project && (
         <StoragePanel projectId={project.id} activeTabId={activeTabId} onFilePreview={(f) => {
-          const fn = f.key.split('/').pop() || '';
+          const fn = storageRelativeKey(project.id, f.key);
           openStorageFileRaw(project.id, fn, f.originalName, f.size);
           if (mobile) onCloseMobileSidebar();
         }} />

@@ -28,6 +28,7 @@ interface CodeEditorViewProps {
   onSave?: () => void;
   onCursorChange?: (line: number, col: number) => void;
   onVimModeDisplay?: (mode: string) => void;
+  onInsertReady?: (insert: ((text: string) => void) | null) => void;
 }
 
 export default function CodeEditorView({
@@ -40,6 +41,7 @@ export default function CodeEditorView({
   onSave,
   onCursorChange,
   onVimModeDisplay,
+  onInsertReady,
 }: CodeEditorViewProps) {
   const containerRef = useRef<HTMLDivElement>(null);
   const viewRef = useRef<unknown>(null);
@@ -59,6 +61,8 @@ export default function CodeEditorView({
   const appliedLineRef = useRef<number | undefined>(initialLine);
   const [loaded, setLoaded] = useState(false);
 
+  const onInsertReadyRef = useRef(onInsertReady);
+  onInsertReadyRef.current = onInsertReady;
   const onSaveRef = useRef(onSave);
   onSaveRef.current = onSave;
   const onChangeRef = useRef(onChange);
@@ -254,6 +258,11 @@ export default function CodeEditorView({
       });
 
       viewRef.current = view;
+      onInsertReadyRef.current?.((text) => {
+        const selection = view.state.selection.main;
+        view.dispatch({ changes: { from: selection.from, to: selection.to, insert: text }, selection: { anchor: selection.from + text.length } });
+        view.focus();
+      });
       editorViewClassRef.current = EditorView;
 
       if (vimMode) {
@@ -294,6 +303,7 @@ export default function CodeEditorView({
 
     return () => {
       destroyed = true;
+      onInsertReadyRef.current?.(null);
       cleanup?.();
       if (vimCmRef.current) {
         vimWriteSaveHandlers.delete(vimCmRef.current);

@@ -1,7 +1,7 @@
-import React, { useCallback, useEffect, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import type { HostPathApi } from '@azito/shared';
 import { useTranslation } from 'react-i18next';
-import { fetchBlob } from '../api/client';
+import { ServerFilesBackend } from './files/backend/ServerFilesBackend';
 import { useToast } from '../hooks/useToast';
 import { Icon } from './ui/Icon';
 import { LoadingState } from './ui';
@@ -12,6 +12,7 @@ import { useLongPress, longPressStyle } from '../hooks/useLongPress';
 import { useFileTree } from './files/useFileTree';
 import type { TreeNode } from './files/useFileTree';
 import { useFileCrud } from './files/useFileCrud';
+import { downloadFile } from './files/useFileDownload';
 import { useServerPath } from '../hooks/useServerPath';
 import { parentOrRoot } from '../lib/serverPath';
 import FileTree from './files/FileTree';
@@ -38,14 +39,14 @@ function FileExplorerTree({ serverName, rootPath, projectId, onFileSelect, onRef
   const { t } = useTranslation('files');
   const { showToast } = useToast();
   const [selectedPath, setSelectedPath] = useState<string | null>(null);
-  const { tree, loading, error, loadRoot, toggleDir, expandDir, refreshDir, getSiblingNames } = useFileTree(serverName, rootPath);
+  const backend = useMemo(() => new ServerFilesBackend(serverName, projectId), [serverName, projectId]);
+  const { tree, loading, error, loadRoot, toggleDir, expandDir, refreshDir, getSiblingNames } = useFileTree(backend, rootPath);
   const { menu: contextMenu, show: showContextMenu, showAt: showContextMenuAt, hide: hideContextMenu } = useContextMenu();
   const bindLongPress = useLongPress();
   const bindAreaLongPress = useLongPress();
 
   const crud = useFileCrud({
-    serverName,
-    projectId,
+    backend,
     rootPath,
     pathApi,
     loadRoot,
@@ -82,24 +83,13 @@ function FileExplorerTree({ serverName, rootPath, projectId, onFileSelect, onRef
         title: isDir ? t('explorer.downloadNotSupported') : undefined,
         onClick: () => {
           if (isDir) return;
-          fetchBlob(`/servers/${encodeURIComponent(serverName)}/files/download?path=${encodeURIComponent(node.path)}`)
-            .then((blob) => {
-              const url = URL.createObjectURL(blob);
-              const a = document.createElement('a');
-              a.href = url;
-              a.download = node.name;
-              document.body.appendChild(a);
-              a.click();
-              document.body.removeChild(a);
-              URL.revokeObjectURL(url);
-            })
-            .catch(() => showToast(t('explorer.downloadFailed')));
+          void downloadFile(backend, node.path, node.name).catch(() => showToast(t('explorer.downloadFailed')));
         },
       },
       { separator: true, label: '', onClick: () => {} },
       { label: t('explorer.delete'), icon: <Icon name="trash" size={14} />, danger: true, onClick: () => crud.startDelete(node.path, node.type) },
     ];
-  }, [t, crud, rootPath, pathApi, serverName, showToast]);
+  }, [t, crud, rootPath, pathApi, backend, showToast]);
 
   const buildAreaMenuItems = useCallback((): ContextMenuItem[] => [
     { label: t('explorer.newFile'), icon: <Icon name="file-plus" size={14} />, onClick: () => crud.startCreate(rootPath, 'file') },
@@ -160,7 +150,8 @@ function FileExplorerTree({ serverName, rootPath, projectId, onFileSelect, onRef
 
       {contextMenu && <ContextMenu menu={contextMenu} onClose={hideContextMenu} />}
       <DeleteConfirmModal
-        target={crud.deleteTarget ? { ...crud.deleteTarget, serverName } : null}
+        target={crud.deleteTarget}
+        contextLabel={serverName}
         onConfirm={crud.confirmDelete}
         onClose={crud.cancelDelete}
         loading={crud.deleteLoading}
