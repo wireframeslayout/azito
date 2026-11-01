@@ -488,7 +488,7 @@ export default function PromptInputBar({ windowId, paneId, draftKey, agentDetect
       </div>
 
       {sendError && (
-        <div style={{ marginTop: 6, fontSize: 'var(--font-xs)', color: 'var(--danger)' }}>{sendError}</div>
+        <div role="alert" style={{ marginTop: 6, fontSize: 'var(--font-xs)', color: 'var(--danger)' }}>{sendError}</div>
       )}
     </div>
   );

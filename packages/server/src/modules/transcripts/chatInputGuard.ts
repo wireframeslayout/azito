@@ -1,0 +1,28 @@
+import type { PaneHandle } from '@azito/shared';
+import type { ServerConfig } from '../servers/Server';
+import type { IMuxClient } from '../tmux/IMuxClient';
+import { isBareShellCommand } from '../../shared/os/shellCommands';
+import { blockingWorkerDialog, isWorkerScreenReady, readInputBox, tuiAgentKindOfWorkerType } from '../tasks/execution/runtime/workerScreen';
+
+export interface ChatInputRejection { code: string; error: string }
+
+export async function guardChatInput(driver: IMuxClient, server: ServerConfig, handle: PaneHandle, workerType: string | null, text: string): Promise<ChatInputRejection | null> {
+  if (/[\x00-\x09\x0b-\x1f\x7f-\x9f]/.test(text)) return { code: 'invalid_control_character', error: 'The message contains unsupported control characters.' };
+  if (text.includes('\n')) return { code: 'multiline_unavailable', error: 'Multiline input cannot be sent safely to this pane.' };
+  const kind = tuiAgentKindOfWorkerType(workerType);
+  if (!kind) return { code: 'unsupported_worker', error: 'Cannot verify that this pane is ready for chat input.' };
+  try {
+    const foreground = await driver.paneCommandByHandle(server, handle);
+    if (!foreground) return { code: 'pane_unavailable', error: 'Cannot verify the pane process.' };
+    if (isBareShellCommand(foreground)) return { code: 'worker_exited_to_shell', error: 'The pane is at a shell prompt.' };
+    const screen = await driver.captureScreen(server, handle);
+    if (screen.code !== 0) return { code: 'screen_unavailable', error: 'Cannot read the pane screen.' };
+    const dialog = blockingWorkerDialog(kind, screen.stdout);
+    if (dialog) return { code: dialog, error: 'The agent is waiting for a dialog to be resolved.' };
+    if (!isWorkerScreenReady(kind, screen.stdout)) return { code: 'not_ready', error: 'The agent input is not ready.' };
+    if (readInputBox(kind, screen.stdout).state !== 'empty') return { code: 'input_not_empty', error: 'The agent input is not empty or cannot be verified.' };
+    return null;
+  } catch {
+    return { code: 'screen_unavailable', error: 'Cannot verify the pane screen.' };
+  }
+}

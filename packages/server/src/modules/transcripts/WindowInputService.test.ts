@@ -7,6 +7,8 @@ import { MuxDriverRegistry } from '../tmux/MuxDriverRegistry';
 import { MuxOperationUnsupportedError } from '../tmux/MuxCapabilityError';
 import type { IServerRepository, ServerConfig } from '../servers/Server';
 
+const CLAUDE_SCREEN = '──────────────\n❯\n──────────────\nbypass permissions on';
+const CODEX_SCREEN = '› Ask Codex to do anything\n\n? for shortcuts';
 const LOCAL_SERVER: ServerConfig = {
   name: 'local',
   type: 'local',
@@ -65,6 +67,8 @@ function buildDeps(opts: {
   sendTextToHandle?: IMuxClient['sendTextToHandle'];
   sendKeysToHandle?: IMuxClient['sendKeysToHandle'];
   isPaneInModeByHandle?: IMuxClient['isPaneInModeByHandle'];
+  foreground?: string;
+  screen?: string;
   copyMode?: boolean;
   servers?: ServerConfig[];
 } = {}) {
@@ -76,6 +80,8 @@ function buildDeps(opts: {
     { sendTextToHandle: [], sendKeysToHandle: [], wait: [], cancelPaneModeByHandle: [] };
 
   const driver = {
+    paneCommandByHandle: async () => opts.foreground ?? 'node',
+    captureScreen: async () => ({ code: 0, stderr: '', stdout: opts.screen ?? CLAUDE_SCREEN }),
     caps: { copyMode: opts.copyMode ?? true },
     listAllPanes: opts.listAllPanes ?? (async () => [buildPane()]),
     sendTextToHandle: opts.sendTextToHandle ?? (async (...args: unknown[]) => { calls.sendTextToHandle.push(args); }),
@@ -97,6 +103,14 @@ function buildDeps(opts: {
 
 describe('WindowInputService', () => {
   describe('sendInput', () => {
+    it.each([{ foreground: 'bash' }, { screen: 'Do you trust this folder?' }])('does not send into a shell or dialog', async (opts) => {
+      const { windowRepo, muxDriverRegistry, serverRepo, calls } = buildDeps(opts);
+      const result = await new WindowInputService(windowRepo, muxDriverRegistry, serverRepo).sendInput(42, asPaneHandle('%1'), 'hello');
+      expect(result).toEqual(expect.objectContaining({ code: expect.any(String) }));
+      expect(calls.sendTextToHandle).toEqual([]);
+      expect(calls.sendKeysToHandle).toEqual([]);
+    });
+
     it('returns window_not_found when the window does not exist', async () => {
       const { windowRepo, muxDriverRegistry, serverRepo } = buildDeps({ findById: () => undefined });
       const service = new WindowInputService(windowRepo, muxDriverRegistry, serverRepo);
@@ -148,6 +162,8 @@ describe('WindowInputService', () => {
       const order: string[] = [];
       const { windowRepo, serverRepo } = buildDeps({ findById: () => buildWindow({ workerType: 'codex' }) });
       const driver = {
+        paneCommandByHandle: async () => 'node',
+        captureScreen: async () => ({ code: 0, stderr: '', stdout: CODEX_SCREEN }),
         caps: { copyMode: true },
         listAllPanes: async () => [buildPane()],
         sendTextToHandle: async () => { order.push('sendTextToHandle'); },
@@ -167,6 +183,8 @@ describe('WindowInputService', () => {
       const order: string[] = [];
       const { windowRepo, serverRepo } = buildDeps();
       const driver = {
+        paneCommandByHandle: async () => 'node',
+        captureScreen: async () => ({ code: 0, stderr: '', stdout: CLAUDE_SCREEN }),
         caps: { copyMode: true },
         listAllPanes: async () => [buildPane()],
         isPaneInModeByHandle: async () => true,
@@ -305,6 +323,8 @@ describe('WindowInputService on a server holding tmux and misao windows (#311)',
   function mixedRegistry(misaoInMode?: boolean) {
     const sent: Array<[string, unknown]> = [];
     const tmux = {
+      paneCommandByHandle: async () => 'node',
+      captureScreen: async () => ({ code: 0, stderr: '', stdout: CLAUDE_SCREEN }),
       kind: 'tmux', caps: { copyMode: true }, supportsPaneLabels: false,
       listAllPanes: async () => [buildPane({ paneId: '%1' })],
       isPaneInModeByHandle: vi.fn(async () => true),
@@ -314,6 +334,8 @@ describe('WindowInputService on a server holding tmux and misao windows (#311)',
     };
     // Same workspace name, window index and name as the tmux window: only its kind tells it apart.
     const misao = {
+      paneCommandByHandle: async () => 'node',
+      captureScreen: async () => ({ code: 0, stderr: '', stdout: CLAUDE_SCREEN }),
       kind: 'misao', caps: { copyMode: false }, supportsPaneLabels: true,
       listAllPanes: async () => [buildPane({ paneId: MISAO_PANE, ref: { kind: 'misao', workspace: 'main', window: MISAO_WINDOW } })],
       isPaneInModeByHandle: vi.fn(async () => { if (misaoInMode === undefined) throw new MuxOperationUnsupportedError('misao', 'isPaneInModeByHandle'); return misaoInMode; }),
@@ -327,8 +349,8 @@ describe('WindowInputService on a server holding tmux and misao windows (#311)',
   }
 
   const serversOf = (defaultMux: 'tmux' | 'misao') => ({ findByName: () => ({ ...LOCAL_SERVER, defaultMux }) }) as unknown as IServerRepository;
-  const tmuxWindowRepo = { findById: () => buildWindow({ tmuxTarget: 'main:0', muxRef: { kind: 'tmux', workspace: 'main', window: '0' }, workerType: null }) } as unknown as IWindowRepository;
-  const misaoWindowRepo = { findById: () => buildWindow({ tmuxTarget: `main:${MISAO_WINDOW}`, muxRef: { kind: 'misao', workspace: 'main', window: MISAO_WINDOW }, workerType: null }) } as unknown as IWindowRepository;
+  const tmuxWindowRepo = { findById: () => buildWindow({ tmuxTarget: 'main:0', muxRef: { kind: 'tmux', workspace: 'main', window: '0' }, workerType: 'claude' }) } as unknown as IWindowRepository;
+  const misaoWindowRepo = { findById: () => buildWindow({ tmuxTarget: `main:${MISAO_WINDOW}`, muxRef: { kind: 'misao', workspace: 'main', window: MISAO_WINDOW }, workerType: 'claude' }) } as unknown as IWindowRepository;
   const noWait = async () => {};
 
   it('sends to a misao pane on a tmux-default server without asking misao about copy-mode', async () => {

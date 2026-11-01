@@ -5,11 +5,12 @@ import { paneInfoMatchesRef } from '../tmux/types';
 import type { IMuxClient } from '../tmux/IMuxClient';
 import type { IServerRepository } from '../servers/Server';
 import type { IWindowRepository, Window } from '../windows/Window';
+import { guardChatInput, type ChatInputRejection } from './chatInputGuard';
 import { getAgentTranscriptProfile, type InterruptKey } from './sources/profiles';
 
 // ─── Types ───
 
-export type WindowInputResult = 'ok' | 'window_not_found' | 'pane_not_found';
+export type WindowInputResult = 'ok' | 'window_not_found' | 'pane_not_found' | ChatInputRejection;
 export type WindowSignalResult = 'ok' | 'window_not_found' | 'pane_not_found';
 /** `resolvePaneIndex` の結果。解決できた場合はそのペインの tmux ペイン index。 */
 export type PaneIndexResult = number | 'window_not_found' | 'pane_not_found';
@@ -56,6 +57,8 @@ export class WindowInputService {
     if (!belongsToWindow) return 'pane_not_found';
 
     await this.preparePaneForInput(server, handle);
+    const rejection = await guardChatInput(driver, server, handle, window.workerType, text);
+    if (rejection) return rejection;
     await driver.sendTextToHandle(server, handle, text);
     const submitDelayMs = this.resolveSubmitDelay(window.workerType);
     if (submitDelayMs > 0) await this.wait(submitDelayMs);
