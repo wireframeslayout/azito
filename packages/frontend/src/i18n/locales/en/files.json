@@ -58,8 +58,16 @@
     "includePlaceholder": "e.g. *.ts, src/**",
     "excludePlaceholder": "node_modules, .git, dist, .worktrees",
     "summary": "{{files}} files · {{hits}} hits ({{engine}}, {{time}}ms)",
-    "engine": { "rg": "ripgrep", "grep": "grep", "builtin": "built-in" },
-    "engineHint": { "rg": "Searched with ripgrep", "grep": "Searched with grep", "builtin": "Searched with the built-in search. Installing ripgrep (rg) on the host makes it faster." },
+    "engine": {
+      "rg": "ripgrep",
+      "grep": "grep",
+      "builtin": "built-in"
+    },
+    "engineHint": {
+      "rg": "Searched with ripgrep",
+      "grep": "Searched with grep",
+      "builtin": "Searched with the built-in search. Installing ripgrep (rg) on the host makes it faster."
+    },
     "truncated": "Showing top 200 results — refine your query",
     "noMatch": "No matches found",
     "noMatchHint": "Check excluded patterns",
@@ -85,5 +93,23 @@
     "orphanedNotice": "No task found for this worktree",
     "copyPath": "Copy path",
     "pathCopied": "Path copied"
+  },
+  "editor": {
+    "viewMode": "Markdown view mode",
+    "saving": "Saving…",
+    "save": "Save",
+    "unsaved": "Unsaved changes",
+    "conflict": "This file has changed elsewhere.",
+    "diff": "Compare changes",
+    "discardConfirm": "Discard your edits and reload the file?",
+    "reload": "Reload",
+    "overwrite": "Overwrite",
+    "retry": "Retry",
+    "closeDiff": "Close comparison",
+    "diffUnavailable": "Comparison is unavailable for this file.",
+    "saved": "Saved",
+    "switchConfirm": "Open another file?",
+    "switchMessage": "Your unsaved changes will remain in the current tab.",
+    "latestUnavailable": "The latest content could not be loaded."
   }
 }

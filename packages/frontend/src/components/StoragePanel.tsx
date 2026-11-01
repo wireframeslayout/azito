@@ -31,10 +31,6 @@ function isPdf(name: string): boolean {
   return /\.pdf$/i.test(name);
 }
 
-function isPreviewable(name: string): boolean {
-  return isImage(name) || isPdf(name);
-}
-
 function timeAgo(dateStr: string): string {
   const d = new Date(dateStr);
   const now = Date.now();
@@ -293,15 +289,15 @@ function StorageFileList({ projectId, onFilePreview, activeTabId }: StoragePanel
         {files.map((f) => {
           const filename = f.key.split('/').pop() || '';
           const isImg = isImage(f.originalName);
-          const canPreview = isPreviewable(f.originalName) && onFilePreview;
+          const canPreview = Boolean(onFilePreview);
           const tabId = `storage-file:${projectId}:${filename}`;
           const isActive = activeTabId === tabId;
           return (
             <div key={f.key}
-              onClick={() => { if (canPreview) onFilePreview(f); }}
+              onClick={() => { if (canPreview) onFilePreview?.(f); }}
               role={canPreview ? 'button' : undefined}
               tabIndex={canPreview ? 0 : undefined}
-              onKeyDown={(e) => { if (canPreview && (e.key === 'Enter' || e.key === ' ')) { e.preventDefault(); onFilePreview(f); } }}
+              onKeyDown={(e) => { if (canPreview && (e.key === 'Enter' || e.key === ' ')) { e.preventDefault(); onFilePreview?.(f); } }}
               className={`row-hover${isActive ? ' row-selected' : ''}`}
               style={{
               padding: '8px 12px', fontSize: 'var(--font-md)', borderRadius: 'var(--radius-sm)', margin: '1px 0',

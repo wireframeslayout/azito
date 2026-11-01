@@ -199,3 +199,5 @@ POST /api/servers/:name/install-browser-runtime
 ```
 
 レスポンス: `{ ok, chromiumVersion, fontInstalled, warning }`
+
+編集できるテキストは 500 KiB 以下の UTF-8 ファイルです。保存時に競合した場合は最新内容との差分を確認してから、再読み込みまたは明示的な上書きを選べます。保存中に追加した編集は未保存のままエディターに残ります。

@@ -58,8 +58,16 @@
     "includePlaceholder": "例: *.ts, src/**",
     "excludePlaceholder": "node_modules, .git, dist, .worktrees",
     "summary": "{{files}} ファイル · {{hits}} 件 ({{engine}}, {{time}}ms)",
-    "engine": { "rg": "ripgrep", "grep": "grep", "builtin": "内蔵" },
-    "engineHint": { "rg": "ripgrep で検索しました", "grep": "grep で検索しました", "builtin": "内蔵の検索で検索しました。ホストに ripgrep (rg) を入れると速くなります。" },
+    "engine": {
+      "rg": "ripgrep",
+      "grep": "grep",
+      "builtin": "内蔵"
+    },
+    "engineHint": {
+      "rg": "ripgrep で検索しました",
+      "grep": "grep で検索しました",
+      "builtin": "内蔵の検索で検索しました。ホストに ripgrep (rg) を入れると速くなります。"
+    },
     "truncated": "上位 200 件を表示しています — 絞り込んでください",
     "noMatch": "一致するものがありません",
     "noMatchHint": "除外パターンを確認してください",
@@ -85,5 +93,23 @@
     "orphanedNotice": "この worktree に対応するタスクが見つかりません",
     "copyPath": "パスをコピー",
     "pathCopied": "パスをコピーしました"
+  },
+  "editor": {
+    "viewMode": "Markdown 表示モード",
+    "saving": "保存中…",
+    "save": "保存",
+    "unsaved": "未保存の変更",
+    "conflict": "ファイルが他の場所で変更されました。",
+    "diff": "変更を比較",
+    "discardConfirm": "変更を破棄して再読み込みしますか？",
+    "reload": "再読み込み",
+    "overwrite": "上書き",
+    "retry": "再試行",
+    "closeDiff": "比較を閉じる",
+    "diffUnavailable": "このファイルの差分は表示できません。",
+    "saved": "保存しました",
+    "switchConfirm": "別のファイルを開きますか？",
+    "switchMessage": "未保存の変更は現在のタブに残ります。",
+    "latestUnavailable": "最新内容を読み込めませんでした。"
   }
 }

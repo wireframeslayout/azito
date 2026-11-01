@@ -1,4 +1,6 @@
-import React, { useCallback, useEffect, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { ServerFilesBackend } from './backend/ServerFilesBackend';
+import { TextFileEditor } from './TextFileEditor';
 import { useTranslation } from 'react-i18next';
 import { api, fetchBlob } from '../../api/client';
 import { useToast } from '../../hooks/useToast';
@@ -170,7 +172,7 @@ interface SaveResponse {
 
 /* ── File Preview Panel (for main area) ── */
 
-export function FilePreviewPanel({
+function LegacyFilePreviewPanel({
   serverName,
   filePath,
   projectId,
@@ -595,4 +597,10 @@ export function FilePreviewPanel({
       </div>
     </div>
   );
+}
+
+export function FilePreviewPanel(props: { serverName: string; filePath: string; projectId?: number; initialLine?: number; onDirtyChange?: (dirty: boolean) => void }) {
+  const backend = useMemo(() => new ServerFilesBackend(props.serverName, props.projectId), [props.serverName, props.projectId]);
+  if (/\.(png|jpe?g|gif|svg|webp|ico|bmp|pdf)$/i.test(props.filePath)) return <LegacyFilePreviewPanel {...props} />;
+  return <TextFileEditor backend={backend} path={props.filePath} name={props.filePath} initialLine={props.initialLine} serverName={props.serverName} onDirtyChange={props.onDirtyChange} />;
 }

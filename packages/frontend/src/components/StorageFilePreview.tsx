@@ -1,4 +1,6 @@
-import { useCallback } from 'react';
+import { useCallback, useMemo } from 'react';
+import { StorageFilesBackend } from './files/backend/StorageFilesBackend';
+import { TextFileEditor } from './files/TextFileEditor';
 import { useTranslation } from 'react-i18next';
 import { useToast } from '../hooks/useToast';
 import { Icon } from './ui/Icon';
@@ -34,9 +36,10 @@ interface StorageFilePreviewProps {
   filename: string;
   originalName: string;
   size: number;
+  onDirtyChange?: (dirty: boolean) => void;
 }
 
-export default function StorageFilePreview({ projectId, filename, originalName, size }: StorageFilePreviewProps) {
+function MediaStorageFilePreview({ projectId, filename, originalName, size }: StorageFilePreviewProps) {
   const { t } = useTranslation('files');
   const { showToast } = useToast();
   const apiPath = `/projects/${projectId}/storage/${encodeURIComponent(filename)}/raw`;
@@ -169,4 +172,10 @@ export default function StorageFilePreview({ projectId, filename, originalName, 
       )}
     </div>
   );
+}
+
+export default function StorageFilePreview(props: StorageFilePreviewProps) {
+  const backend = useMemo(() => new StorageFilesBackend(props.projectId), [props.projectId]);
+  if (isPdf(props.originalName) || isImage(props.originalName)) return <MediaStorageFilePreview {...props} />;
+  return <TextFileEditor backend={backend} path={`projects/${props.projectId}/${props.filename}`} name={props.originalName} onDirtyChange={props.onDirtyChange} />;
 }

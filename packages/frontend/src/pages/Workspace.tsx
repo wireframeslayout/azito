@@ -541,8 +541,20 @@ function WorkspaceInner() {
   const openFile = useCallback((serverName: string, filePath: string, projectId?: number, line?: number) => {
     const pathApi = serverPathApi(serverName);
     if (!pathApi) return; // the server's OS is not known yet: the tab's identity depends on it
-    openFileRaw(serverName, filePath, projectId ?? currentProjectId, line, pathApi);
-  }, [openFileRaw, currentProjectId, serverPathApi]);
+    const current = tabs.find((tab) => tab.id === activeTabId);
+    const open = () => openFileRaw(serverName, filePath, projectId ?? currentProjectId, line, pathApi);
+    if (current?.dirty && !(current.type === 'file' && current.serverName === serverName && current.filePath === filePath)) {
+      void confirm({ title: t('files:editor.switchConfirm'), message: t('files:editor.switchMessage') }).then((ok) => { if (ok) open(); });
+    } else open();
+  }, [openFileRaw, currentProjectId, serverPathApi, tabs, activeTabId, confirm, t]);
+
+  const openStorageFile = useCallback((projectId: number, filename: string, originalName: string, size: number) => {
+    const current = tabs.find((tab) => tab.id === activeTabId);
+    const open = () => openStorageFileRaw(projectId, filename, originalName, size);
+    if (current?.dirty && current.id !== `storage-file:${projectId}:${filename}`) {
+      void confirm({ title: t('files:editor.switchConfirm'), message: t('files:editor.switchMessage') }).then((ok) => { if (ok) open(); });
+    } else open();
+  }, [tabs, activeTabId, confirm, t, openStorageFileRaw]);
 
   const openDiff = useCallback((serverName: string, path: string, baseBranch?: string) => {
     openDiffRaw(serverName, path, baseBranch, currentProjectId);
@@ -1206,7 +1218,7 @@ function WorkspaceInner() {
       showContextMenuAt={showContextMenuAt}
       onCapturePanes={windowActions.handleCapturePanes}
       onStopOperation={stopTask}
-      openStorageFileRaw={openStorageFileRaw}
+      openStorageFileRaw={openStorageFile}
       projectSettings={sidebarProjectSettings}
       onOpenDiff={openDiff}
       respawningWindowIds={windowActions.respawningWindowIds}

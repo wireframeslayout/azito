@@ -199,3 +199,5 @@ POST /api/servers/:name/install-browser-runtime
 ```
 
 Response: `{ ok, chromiumVersion, fontInstalled, warning }`
+
+Text editing accepts UTF-8 files up to 500 KiB. When a save conflicts with another change, use the comparison to inspect the latest contents before reloading or explicitly overwriting. Changes made while a save is in progress remain unsaved in the editor.

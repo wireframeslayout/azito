@@ -229,6 +229,7 @@ export default function TabContentRenderer({
           filename={tab.storageFileData.filename}
           originalName={tab.storageFileData.originalName}
           size={tab.storageFileData.size}
+          onDirtyChange={setTabDirty ? (dirty) => setTabDirty(tab.id, dirty) : undefined}
         />
       )}
       {tab.type === 'unit' && tab.entityId != null && (
