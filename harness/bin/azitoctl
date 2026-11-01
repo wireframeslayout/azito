@@ -58,9 +58,9 @@ const args = process.argv.slice(1);
 const command = args.shift();
 function fail(message) { console.error(`azitoctl: ${String(message).replace(/[\r\n]+/g, " ")}`); process.exit(1); }
 function parseId(value) {
-  if (!/^(?:[wW]-?)?[0-9]+$/.test(value)) fail("invalid window ID");
+  if (!/^(?:[wW]-?)?[0-9]+$/.test(value)) fail("ウィンドウ ID（W-123）を指定してください");
   const id = Number(value.replace(/^[wW]-?/, ""));
-  if (!Number.isSafeInteger(id) || id <= 0) fail("invalid window ID");
+  if (!Number.isSafeInteger(id) || id <= 0) fail("ウィンドウ ID（W-123）を指定してください");
   return id;
 }
 async function request(path, options = {}) {
@@ -71,7 +71,15 @@ async function request(path, options = {}) {
       signal: AbortSignal.timeout(15000),
     });
   } catch (error) { fail(`request failed: ${error.message}`); }
-  if (!response.ok) fail(`HTTP ${response.status} ${response.statusText}`);
+  if (!response.ok) {
+    let reason = response.statusText;
+    try {
+      const body = await response.json();
+      if (typeof body.error === "string" && body.error.trim()) reason = body.error;
+    } catch { /* Non-JSON error responses retain the HTTP reason. */ }
+    reason = reason.replace(/[\x00-\x1f\x7f-\x9f]/g, " ").slice(0, 500);
+    fail(`HTTP ${response.status} ${reason}`);
+  }
   try { return await response.json(); } catch { fail("invalid API response"); }
 }
 async function whoami() {
@@ -90,7 +98,7 @@ async function main() {
   if (command === "whoami") {
     if (args.length > 1 || (args.length === 1 && args[0] !== "--json")) fail("usage: azitoctl whoami [--json]");
     const identity = await whoami();
-    console.log(args.length ? JSON.stringify(identity) : `${identity.idLabel} task=${identity.taskId ?? "none"} server=${identity.serverName}`);
+    console.log(args.length ? JSON.stringify(identity) : `${identity.idLabel} task=${identity.taskId == null ? "none" : `#${identity.taskId}`} server=${identity.serverName}`);
     return;
   }
   let windowId, stdin = false, positional = [];

@@ -22,18 +22,20 @@ let baseUrl: string;
 let home: string;
 let status: number;
 let postStatus: number;
+let errorBody: string;
 
 beforeEach(async () => {
   received = [];
   status = 200;
   postStatus = 200;
+  errorBody = '{}';
   server = http.createServer((req, res) => {
     const chunks: Buffer[] = [];
     req.on('data', (c: Buffer) => chunks.push(c));
     req.on('end', () => {
       received.push({ path: req.url ?? '', method: req.method, authorization: req.headers.authorization, body: Buffer.concat(chunks).toString('utf8') });
       res.statusCode = req.url?.includes('/messages') ? postStatus : status;
-      res.end(req.url?.startsWith('/api/windows/whoami') ? JSON.stringify({ windowId: 7, idLabel: 'W-7', taskId: 3, serverName: 'local' }) : '{}');
+      res.end(res.statusCode >= 400 ? errorBody : req.url?.startsWith('/api/windows/whoami') ? JSON.stringify({ windowId: 7, idLabel: 'W-7', taskId: 3, serverName: 'local' }) : '{}');
     });
   });
   await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
@@ -314,7 +316,8 @@ describe.skipIf(process.platform === 'win32')('azitoctl — window messaging', (
   it('resolves identity by ID or pane', async () => {
     expect(await bash(['whoami', '--json'])).toMatchObject({ code: 0, stdout: expect.stringContaining('"idLabel":"W-7"') });
     expect(received[0]).toMatchObject({ path: '/api/windows/whoami?windowId=7', authorization: 'Bearer task-token' });
-    await bash(['whoami'], { AZITO_WINDOW_ID: '', AZITO_SERVER_NAME: 'host name', TMUX_PANE: '%42' });
+    const resolved = await bash(['whoami'], { AZITO_WINDOW_ID: '', AZITO_SERVER_NAME: 'host name', TMUX_PANE: '%42' });
+    expect(resolved.stdout).toBe('W-7 task=#3 server=local\n');
     expect(received[1].path).toBe('/api/windows/whoami?server=host+name&paneHandle=%2542');
   });
 
@@ -327,16 +330,19 @@ describe.skipIf(process.platform === 'win32')('azitoctl — window messaging', (
   });
 
   it('rejects invalid IDs and conflicting input before making requests', async () => {
-    expect((await bash(['send', '--window', '9007199254740992', 'hello'])).code).not.toBe(0);
+    const invalid = await bash(['send', '--window', '9007199254740992', 'hello']);
+    expect(invalid.code).not.toBe(0);
+    expect(invalid.stderr).toContain('ウィンドウ ID（W-123）を指定してください');
     expect((await bash(['send', '--window', 'W-1', '--stdin', 'hello'])).code).not.toBe(0);
     expect(received).toHaveLength(0);
   });
 
   it('does not retry a failed message POST', async () => {
     postStatus = 409;
+    errorBody = JSON.stringify({ error: 'Window asleep\ntry later' });
     const result = await bash(['send', '--window', '123', 'hello']);
     expect(result.code).not.toBe(0);
-    expect(result.stderr).toMatch(/^azitoctl: HTTP 409 [^\n]*\n$/);
+    expect(result.stderr).toBe('azitoctl: HTTP 409 Window asleep try later\n');
     expect(received.map((r) => r.method)).toEqual(['GET', 'POST']);
   });
 
