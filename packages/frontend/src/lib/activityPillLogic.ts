@@ -7,6 +7,7 @@ import type { ActiveWindowRow } from '../hooks/useActiveWindowRows';
 
 export interface BlockedAwareGroup {
   groupKey: string;
+  rows: ActiveWindowRow[];
   /** グループ内のいずれかの行が blocked なら true。最初の行だけでなく全行を見る
    *  （同一タスク配下に複数ウィンドウがある場合、後続行の blocked が無視されないように）。 */
   isBlocked: boolean;
@@ -25,11 +26,13 @@ export function groupRunningRows(rows: ActiveWindowRow[]): BlockedAwareGroup[] {
     const groupKey = row.taskId != null ? `task:${row.taskId}` : `window:${row.key}`;
     const existing = map.get(groupKey);
     if (existing) {
+      existing.rows.push(row);
       if (row.activityStatus === 'blocked') existing.isBlocked = true;
       continue;
     }
     map.set(groupKey, {
       groupKey,
+      rows: [row],
       isBlocked: row.activityStatus === 'blocked',
       representativeRow: row,
     });

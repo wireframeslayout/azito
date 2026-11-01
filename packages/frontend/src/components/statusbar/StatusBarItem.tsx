@@ -4,7 +4,10 @@ import type { DotLevel } from './HealthDot';
 
 interface StatusBarItemProps {
   label: string;
-  dot: DotLevel;
+  dot?: DotLevel;
+  badge?: number;
+  badgeLabel?: string;
+  popup?: 'dialog' | 'true';
   active: boolean;
   onClick: () => void;
 }
@@ -14,7 +17,7 @@ export interface StatusBarItemRef {
 }
 
 export const StatusBarItem = forwardRef<StatusBarItemRef, StatusBarItemProps>(
-  function StatusBarItem({ label, dot, active, onClick }, ref) {
+  function StatusBarItem({ label, dot, active, onClick, badge, badgeLabel, popup = 'true' }, ref) {
     const btnRef = useRef<HTMLButtonElement>(null);
 
     useImperativeHandle(ref, () => ({
@@ -25,7 +28,7 @@ export const StatusBarItem = forwardRef<StatusBarItemRef, StatusBarItemProps>(
       <button
         ref={btnRef}
         onClick={onClick}
-        aria-haspopup="true"
+        aria-haspopup={popup}
         aria-expanded={active}
         className={active ? undefined : 'row-hover'}
         style={{
@@ -43,8 +46,9 @@ export const StatusBarItem = forwardRef<StatusBarItemRef, StatusBarItemProps>(
           transition: 'background 0.15s, color 0.15s',
         }}
       >
-        <HealthDot level={dot} />
+        {dot && <HealthDot level={dot} />}
         {label}
+        {badge != null && badge > 0 && <span aria-label={badgeLabel} style={{ borderRadius: 'var(--radius-sm)', padding: '0 var(--space-1)', color: 'var(--bg-solid)', background: 'var(--warning)' }}>{badge}</span>}
       </button>
     );
   }
