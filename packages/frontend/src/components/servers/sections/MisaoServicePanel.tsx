@@ -3,7 +3,7 @@ import { Button, Chip, Notice, Spinner } from '../../ui';
 import type { ChipTone } from '../../ui';
 import { useConfirm } from '../../../hooks/useConfirm';
 import { useMisaoService } from '../../../hooks/useMisaoService';
-import { misaoActionsBlocked, misaoNotices, misaoServiceChipState, misaoServiceMode, misaoVersions, unmanagedReasonKey, type MisaoNotice, type MisaoServiceChipState } from '../../../lib/misaoService';
+import { misaoActionsBlocked, misaoInstallConsents, misaoNotices, misaoServiceChipState, misaoServiceMode, misaoVersions, unmanagedReasonKey, type MisaoNotice, type MisaoServiceChipState } from '../../../lib/misaoService';
 
 const STATE_CHIP: Record<MisaoServiceChipState, { key: string; tone: ChipTone }> = {
   active: { key: 'stateActive', tone: 'green' },
@@ -63,22 +63,14 @@ export function MisaoServicePanel({ onChanged }: MisaoServicePanelProps) {
   const blocked = misaoActionsBlocked(status);
 
   const handleInstall = async (): Promise<void> => {
-    if (mode === 'other_task') {
-      const ok = await confirm({ title: t('misaoService.takeoverTitle'), message: t('misaoService.takeoverMessage'), confirmLabel: t('misaoService.takeoverConfirm'), danger: true });
-      if (ok) await misao.install({ replaceSocketSetting: true });
-      return;
-    }
-    if (status.socketSetting === 'custom') {
-      const ok = await confirm({
-        title: t('misaoService.replaceSocketTitle'),
-        message: t('misaoService.replaceSocketMessage'),
-        confirmLabel: t('misaoService.replaceSocketConfirm'),
-      });
+    const consents = misaoInstallConsents(status);
+    for (const consent of consents) {
+      const ok = await confirm(consent === 'takeoverTask'
+        ? { title: t('misaoService.takeoverTitle'), message: t('misaoService.takeoverMessage'), confirmLabel: t('misaoService.takeoverConfirm'), danger: true }
+        : { title: t('misaoService.replaceSocketTitle'), message: t('misaoService.replaceSocketMessage'), confirmLabel: t('misaoService.replaceSocketConfirm') });
       if (!ok) return;
-      await misao.install({ replaceSocketSetting: true });
-      return;
     }
-    await misao.install();
+    await misao.install(consents.length > 0 ? { replaceSocketSetting: true } : undefined);
   };
 
   const handleUpdate = async (): Promise<void> => {

@@ -127,7 +127,7 @@ export class MisaoServiceService {
     return controller?.isInstalled() ?? false;
   }
 
-  /** The service's state and whether it is installed. Windows: from ONE query of the task (a status poll is two process starts otherwise). */
+  /** The service's state and whether it is installed. Windows: one query of the task plus, when it exists, its definition (to tell whose folder it starts). */
   private async inspectService(): Promise<{ installed: boolean; inspection?: ServiceInspection; windowsTaskOwner?: 'none' | 'hub' | 'other' | 'unknown' }> {
     const { windows, controller } = this.deps;
     if (!windows) {

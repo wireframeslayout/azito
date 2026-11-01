@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type { MisaoServiceStatus } from '@azito/shared';
-import { misaoActionsBlocked, misaoNotices, misaoServiceChipState, misaoServiceMode, misaoVersions, unmanagedReasonKey } from './misaoService';
+import { misaoActionsBlocked, misaoInstallConsents, misaoNotices, misaoServiceChipState, misaoServiceMode, misaoVersions, unmanagedReasonKey } from './misaoService';
 
 function status(overrides: Partial<MisaoServiceStatus> = {}): MisaoServiceStatus {
   return {
@@ -85,10 +85,31 @@ describe('misaoServiceChipState', () => {
   });
 });
 
-
 describe('Windows task ownership', () => {
   it('distinguishes another installation and an unknown owner', () => {
     expect(misaoServiceMode(status({ windowsTaskOwner: 'other', serviceInstalled: false }))).toBe('other_task');
     expect(misaoServiceMode(status({ windowsTaskOwner: 'unknown', serviceInstalled: false }))).toBe('unknown_task');
+  });
+});
+
+describe('misaoInstallConsents', () => {
+  const otherTask = { windowsTaskOwner: 'other' as const, serviceInstalled: false, serviceState: undefined };
+
+  it('asks nothing for a plain install', () => {
+    expect(misaoInstallConsents(status({ serviceInstalled: false, serviceState: undefined }))).toEqual([]);
+  });
+
+  it('asks for the takeover and, when MISAO_SOCKET points elsewhere, for the socket change too', () => {
+    expect(misaoInstallConsents(status(otherTask))).toEqual(['takeoverTask']);
+    expect(misaoInstallConsents(status({ ...otherTask, socketSetting: 'custom' }))).toEqual(['takeoverTask', 'replaceSocket']);
+  });
+
+  it('asks only for the socket change when the task is not another installation\'s', () => {
+    expect(misaoInstallConsents(status({ serviceInstalled: false, serviceState: undefined, socketSetting: 'custom' }))).toEqual(['replaceSocket']);
+  });
+
+  it('shows the custom socket notice beside a task of another installation', () => {
+    expect(misaoNotices(status({ ...otherTask, socketSetting: 'custom' }))).toEqual(['customSocket']);
+    expect(misaoNotices(status({ ...otherTask, updateAvailable: true }))).toEqual([]);
   });
 });
