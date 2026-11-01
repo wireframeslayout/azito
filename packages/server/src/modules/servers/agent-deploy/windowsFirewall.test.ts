@@ -42,10 +42,11 @@ describe('evaluateFirewallRules: Allow', () => {
     expect(allowed([rule(over)])).toEqual([]);
   });
 
-  it('counts only the Public / Any rules when the adapter\'s profile cannot be read', () => {
+  it('requires every profile when the adapter\'s profile cannot be read', () => {
     const unknown = { ...TARGET, networkCategory: null };
     expect(allowed([rule({ profile: 'Private' })], unknown)).toEqual([]);
-    expect(allowed([rule({ profile: 'Public, Private' })], unknown)).toEqual(['a rule']);
+    expect(allowed([rule({ profile: 'Public, Private' })], unknown)).toEqual([]);
+    expect(allowed([rule({ profile: 'Public, Private, Domain' })], unknown)).toEqual(['a rule']);
     expect(allowed([rule({ profile: 'Any' })], unknown)).toEqual(['a rule']);
   });
 
@@ -105,8 +106,8 @@ describe('parseAddressSpec', () => {
 describe('the scripts', () => {
   it('collects inbound rules and their filters (the in-force store first), and decides nothing itself', () => {
     const script = decodeEncodedCommand(buildFirewallDumpCommand(IP));
-    expect(script).toContain("-IPAddress '100.64.0.9'");
-    for (const cmdlet of ['Get-NetFirewallRule', 'Get-NetFirewallPortFilter', 'Get-NetFirewallApplicationFilter', 'Get-NetFirewallAddressFilter', 'Get-NetFirewallServiceFilter', 'Get-NetConnectionProfile']) expect(script).toContain(cmdlet);
+    for (const cmdlet of ['Get-NetFirewallRule', 'Get-NetFirewallPortFilter', 'Get-NetFirewallApplicationFilter', 'Get-NetFirewallAddressFilter', 'Get-NetFirewallServiceFilter']) expect(script).toContain(cmdlet);
+    expect(script).not.toMatch(/Get-NetIPAddress|Get-NetConnectionProfile/);
     expect(script).toContain('ActiveStore');
     expect(script).toContain('PersistentStore');
     expect(script).not.toContain('New-NetFirewallRule');
@@ -176,6 +177,17 @@ describe('checkFirewall', () => {
   it('reports a host that cannot be read as unknown, not as "no rule"', async () => {
     const { result } = run([dumped({ problem: 'reading the rules failed: boom' })]);
     expect(await result()).toMatchObject({ ruleFound: null, problem: 'reading the rules failed: boom' });
+  });
+
+  it('does not treat a local-only store or an unknown profile as an effective allow', async () => {
+    const local = run([dumped({ store: 'PersistentStore', rules: [rule()] })]);
+    expect(await local.result()).toMatchObject({ ruleFound: null, allowedBy: [], created: false });
+    const unknown = run([dumped({ networkCategory: null, rules: [rule({ profile: 'Public' })] })]);
+    expect(await unknown.result()).toMatchObject({ ruleFound: null, allowedBy: [], created: false });
+    const absent = run([dumped({ networkCategory: null }), added(true)]);
+    expect(await absent.result()).toMatchObject({ ruleFound: false, created: true });
+    const block = run([dumped({ store: 'PersistentStore', rules: [rule({ action: 'Block' })] })]);
+    expect(await block.result()).toMatchObject({ ruleFound: null, blockedBy: ['a rule'] });
   });
 
   it('refuses garbage', () => {

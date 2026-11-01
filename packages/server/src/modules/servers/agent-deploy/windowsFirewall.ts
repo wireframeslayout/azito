@@ -82,17 +82,13 @@ export type FirewallDump = z.infer<typeof dumpSchema>;
  * whatever the host has. The in-force rules (ActiveStore: group policy included) are read when the host lets this session;
  * otherwise the local ones (PersistentStore) and `store` says so.
  */
-function buildDumpScript(localAddress: string): string {
+function buildDumpScript(): string {
   return `
 $elevated = ([Security.Principal.WindowsPrincipal][Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)
 $networkCategory = $null
 $store = 'ActiveStore'
 $problem = $null
 $rules = @()
-try {
-  $interfaceIndex = (Get-NetIPAddress -IPAddress ${powershellDialect.quote(localAddress)} -ErrorAction Stop).InterfaceIndex
-  $networkCategory = "$((Get-NetConnectionProfile -InterfaceIndex $interfaceIndex -ErrorAction Stop).NetworkCategory)"
-} catch { $networkCategory = $null }
 function Read-Filters($command, $policyStore) {
   $byRule = @{}
   foreach ($filter in & $command -PolicyStore $policyStore) { $byRule[$filter.InstanceID] = $filter }
@@ -107,7 +103,7 @@ try {
   $services = Read-Filters Get-NetFirewallServiceFilter $store
   $rules = @(foreach ($rule in Get-NetFirewallRule -PolicyStore $store -Direction Inbound -Enabled True) {
     $id = $rule.Name
-    if ($null -eq $ports[$id] -or $null -eq $apps[$id] -or $null -eq $addresses[$id] -or $null -eq $services[$id]) { continue }
+    if ($null -eq $ports[$id] -or $null -eq $apps[$id] -or $null -eq $addresses[$id] -or $null -eq $services[$id]) { throw 'a firewall rule has unreadable filters' }
     [ordered]@{ name = "$id"; displayName = "$($rule.DisplayName)"; action = "$($rule.Action)"; profile = "$($rule.Profile)"; package = "$($apps[$id].Package)"; owner = "$($rule.Owner)"; service = "$($services[$id].Service)"; protocol = "$($ports[$id].Protocol)"; localPort = Join-Values $ports[$id].LocalPort; program = "$($apps[$id].Program)"; remoteAddress = Join-Values $addresses[$id].RemoteAddress; localAddress = Join-Values $addresses[$id].LocalAddress }
   })
 } catch { $problem = 'reading the rules failed: ' + $_.Exception.Message; $rules = @() }
@@ -139,8 +135,8 @@ Write-Output '${ADD_END}'
 `.replace(/^[ \t]+/gm, '');
 }
 
-export function buildFirewallDumpCommand(localAddress: string): string {
-  return powershellDialect.wrapScript(buildDumpScript(localAddress));
+export function buildFirewallDumpCommand(_localAddress: string): string {
+  return powershellDialect.wrapScript(buildDumpScript());
 }
 
 export function buildFirewallAddCommand(port: number, nodePath: string, localAddress: string): string {
@@ -298,7 +294,7 @@ export interface FirewallVerdict {
  * is skipped. Both kinds must also fit the address the agent listens on, so a rule about another local address does not count.
  * - ALLOW counts only when it covers all of this: TCP or Any; the local port is the port itself or Any (a range does NOT count);
  *   the program is `nodePath` or Any; the remote address is Any or covers the whole tailnet range (a rule narrowed to LocalSubnet
- *   or another network does not reach the hub); the profile includes the Tailscale adapter's profile (when unreadable: Any or Public).
+ *   or another network does not reach the hub); the profile includes the Tailscale adapter's profile (when unreadable: all profiles).
  * - BLOCK counts when it could stop the hub: the port is in its ports (a range that contains it counts) or it blocks any port;
  *   the program is `nodePath` or Any; the remote address is Any, overlaps the tailnet range, or is `Internet`; the profile includes
  *   the adapter's profile or Any (when unreadable: any profile). A Block rule wins over an Allow in Windows Firewall.
@@ -315,7 +311,9 @@ export function evaluateFirewallRules(rules: readonly FirewallRuleRecord[], targ
     if (action === 'block') {
       if (blocksPort(rule.localPort, target.port) && touchesTailnet(rule.remoteAddress) && (profile === null || profileIncludes(rule.profile, profile))) blockedBy.push(rule.displayName);
     } else if (action === 'allow') {
-      const profileOk = profile === null ? profileIncludes(rule.profile, 'Public') : profileIncludes(rule.profile, profile);
+      const profileOk = profile === null
+        ? ['Domain', 'Private', 'Public'].every((name) => profileIncludes(rule.profile, name))
+        : profileIncludes(rule.profile, profile);
       if (allowsPort(rule.localPort, target.port) && coversTailnet(rule.remoteAddress) && profileOk) allowedBy.push(rule.displayName);
     }
   }
@@ -351,7 +349,16 @@ export async function checkFirewall(exec: FirewallExec, port: number, nodePath: 
     return { ruleFound: null, elevated: dump.elevated, created: false, problem: dump.problem, blockedBy: [], allowedBy: [], store: dump.store };
   }
   const verdict = evaluateFirewallRules(dump.rules, { port, nodePath, localAddress, networkCategory: dump.networkCategory });
+  if (dump.store !== 'ActiveStore') {
+    return { ruleFound: null, elevated: dump.elevated, created: false, problem: 'the effective firewall policy could not be read', blockedBy: verdict.blockedBy, allowedBy: [], store: dump.store };
+  }
   const found = verdict.allowedBy.length > 0;
+  const allowedInSomeProfile = dump.networkCategory === null && ['Domain', 'Private', 'Public'].some((profile) =>
+    evaluateFirewallRules(dump.rules, { port, nodePath, localAddress, networkCategory: profile }).allowedBy.length > 0,
+  );
+  if (!found && verdict.blockedBy.length === 0 && allowedInSomeProfile) {
+    return { ruleFound: null, elevated: dump.elevated, created: false, problem: 'the network profile could not be read', blockedBy: [], allowedBy: [], store: dump.store };
+  }
   const base = { ruleFound: found, elevated: dump.elevated, created: false, problem: null, blockedBy: verdict.blockedBy, allowedBy: verdict.allowedBy, store: dump.store };
   if (found || verdict.blockedBy.length > 0 || !dump.elevated) return base;
   const added = await exec(buildFirewallAddCommand(port, nodePath, localAddress));
