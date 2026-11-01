@@ -1,3 +1,4 @@
+import { guardChatInput, typeChatText, type ChatInputRejection } from './chatInputGuard';
 import type { PaneHandle } from '@azito/shared';
 import type { MuxDriverRegistry } from '../tmux/MuxDriverRegistry';
 import type { IServerRepository, ServerConfig } from '../servers/Server';
@@ -23,7 +24,7 @@ export interface PaneCandidatesResult {
   panes: PaneCandidate[];
 }
 
-export type SendInputResult = 'ok' | 'session_not_found' | 'pane_not_found';
+export type SendInputResult = 'ok' | 'session_not_found' | 'pane_not_found' | ChatInputRejection;
 export type SendSignalResult = 'ok' | 'session_not_found' | 'pane_not_found';
 
 // ─── Service ───
@@ -86,7 +87,9 @@ export class TranscriptPaneService {
     const { alive } = await driver.probePane(server, handle);
     if (!alive) return 'pane_not_found';
 
-    await driver.sendTextToHandle(server, handle, text);
+    const rejection = await guardChatInput(driver, server, handle, 'claude', text);
+    if (rejection) return rejection;
+    await typeChatText(driver, server, handle, text);
     await driver.sendKeysToHandle(server, handle, ['Enter']);
     return 'ok';
   }

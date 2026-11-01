@@ -66,3 +66,15 @@ export function windowDisplayName(win: Pick<WindowRowIdentity, 'label'>): string
   const label = win.label?.trim();
   return label && !isMisaoWindowId(label) ? label : undefined;
 }
+
+/** Persist a successful mux rename, reporting partial success when storage fails. */
+export function persistRenamedWindowLabel(update: () => void, notify: () => void, log: { error: (data: { err: unknown; windowId?: number }, message: string) => void }, windowId?: number): boolean {
+  try {
+    update();
+    return true;
+  } catch (err) {
+    log.error({ err, windowId }, 'Window renamed in mux but label update failed');
+    notify();
+    return false;
+  }
+}

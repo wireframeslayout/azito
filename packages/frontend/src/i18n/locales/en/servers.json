@@ -217,14 +217,14 @@
     "deleting": "Deleting…",
     "leftBehind": {
       "title": "Server \"{{name}}\" was deleted",
-      "intro": "The server entry is gone, but the removal left the following on the host on purpose. Check each one and remove it yourself if it is the install's.",
+      "intro": "The server entry is gone. Review the host removal results below; anything left in place can be checked and removed manually.",
       "harmless": "A leftover firewall rule does no harm if you do not remove it. The agent is gone, so nothing listens on its port and the rule opens nothing new. Remove it only if you want to.",
       "commands": "Commands to run on the host (Administrator PowerShell), after checking"
     },
     "hostRemoval": {
       "groupLabel": "Agent on the host",
       "removeFromHost": "Also remove the agent from the host",
-      "removeFromHostDesc": "Before the server is deleted, removes the agent from the Windows host: it ends and unregisters its scheduled task and removes the ~\\.azito\\agent folder. AZITO stops no process itself and removes no firewall rule: a process still running from the folder stops the removal (you are told which), and a firewall rule is listed with the command to remove it. The server is deleted only if this works.",
+      "removeFromHostDesc": "Before the server is deleted, removes the agent from the Windows host: it ends and unregisters its scheduled task and removes the ~\\.azito\\agent folder. AZITO stops no process itself and removes no firewall rule: a process still running from the folder stops the removal (you are told which), and a firewall rule is listed with the command to remove it. The server is deleted only if this works. Matching Claude and Codex azt-mcp registrations are removed; the shared harness may be used by other hubs. operator.env remains and may contain a token.",
       "removeMisao": "Also remove misao (every window closes)",
       "removeMisaoDesc": "Removes the misao task and the ~\\.azito\\misao folder. Every window running in misao on this host closes. A misao that belongs to a Windows hub on the same host is left in place.",
       "removeMisaoNeedsHost": "Available when the agent is removed from the host.",
@@ -250,6 +250,8 @@
         "folder": "Agent folder",
         "misaoTask": "misao task",
         "misaoProcesses": "misao processes",
+        "claudeHarnessMcp": "Claude azt-mcp registration",
+        "codexHarnessMcp": "Codex azt-mcp registration",
         "misaoFolder": "misao folder"
       },
       "outcomes": {

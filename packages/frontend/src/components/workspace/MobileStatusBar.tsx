@@ -1,3 +1,4 @@
+import { activeWindowTitleInput } from '../../lib/windowDisplay';
 import { useMemo, useState, type CSSProperties } from 'react';
 import { useTranslation } from 'react-i18next';
 import { useActiveWindowRows } from '../../hooks/useActiveWindowRows';
@@ -7,7 +8,7 @@ import { BrailleSpinner, BlockedDot, FinishedIndicator } from '../ui/WindowActiv
 import { formatRelativeTime } from '../../utils/time';
 import { openActivityTarget } from '../../lib/activityOpen';
 import { useOpenTerminalTarget } from '../../hooks/useTerminalTargetOpener';
-import { formatActiveWindowLabel } from '../../lib/windowDisplay';
+import { resolveWindowTitle, formatWindowTitleLine } from '@azito/shared';
 import type { ConnectPaneFn } from '../../lib/terminalRef';
 import { groupRunningRows, readKeyFor, pruneStaleReadKeys } from '../../lib/activityPillLogic';
 import { FINISHED_TTL_MS } from '../../hooks/useAgentActivity';
@@ -105,7 +106,7 @@ export function MobileStatusBar({ allTasks, openTask, connectPane }: MobileStatu
         key: groupKey,
         taskId: row.taskId,
         projectId: row.projectId,
-        title: task?.title || formatActiveWindowLabel(row),
+        title: formatWindowTitleLine(resolveWindowTitle(activeWindowTitleInput(row))),
         meta: task ? t(`common:status.${task.status}`) : undefined,
         isBlocked,
         row,
@@ -153,7 +154,7 @@ export function MobileStatusBar({ allTasks, openTask, connectPane }: MobileStatu
   const handleFinishedRowOpen = (row: ActiveWindowRow) => {
     openActivityTarget(
       { taskId: row.taskId, serverName: row.serverName, windowId: row.windowId, target: row.target, projectId: row.projectId },
-      formatActiveWindowLabel(row),
+      formatWindowTitleLine(resolveWindowTitle(activeWindowTitleInput(row))),
       openTask,
       openTerminal,
     );
@@ -208,7 +209,7 @@ export function MobileStatusBar({ allTasks, openTask, connectPane }: MobileStatu
               {finishedRows.map((row) => (
                 <button key={row.key} type="button" className="row-hover" onClick={() => handleFinishedRowOpen(row)} style={rowButtonStyle}>
                   <FinishedIndicator />
-                  <span style={rowTitleStyle}>{formatActiveWindowLabel(row)}</span>
+                  <span style={rowTitleStyle}>{formatWindowTitleLine(resolveWindowTitle(activeWindowTitleInput(row)))}</span>
                   {row.finishedAt != null && (
                     <span style={{ flexShrink: 0, fontSize: 'var(--font-2xs)', color: 'var(--success)' }}>
                       {formatRelativeTime(row.finishedAt)}

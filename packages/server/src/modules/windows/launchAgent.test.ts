@@ -38,6 +38,7 @@ function makeWindow(overrides: Partial<Window> = {}): Window {
     tmuxTarget,
     muxRef: { kind: 'tmux' as const, workspace: tmuxTarget.slice(0, colonIdx), window: tmuxTarget.slice(colonIdx + 1) },
     label: 'manual-agent',
+    labelSource: 'auto',
     isPrimary: false,
     windowType: 'agent',
     workerType: 'claude',

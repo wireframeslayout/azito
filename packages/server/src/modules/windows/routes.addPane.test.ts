@@ -21,6 +21,7 @@ function makeWindow(overrides: Partial<Window> = {}): Window {
   return {
     id: 5, ownerType: 'project', projectId: 1, taskId: null, serverName: 'misao1', tmuxTarget: 'ws-a:main', muxRef: ref,
     label: 'm', isPrimary: false, windowType: 'agent', workerType: 'claude', workerModel: null, agentSessionId: null,
+    labelSource: 'auto',
     launchCommand: null, workingDirectory: null, paneLayout: null, sleeping: false, createdAt: '2026-01-01T00:00:00Z',
     ...overrides,
   };

@@ -129,6 +129,7 @@ export interface ReadSessionBeforeResult {
 
 export interface TranscriptErrorResponse {
   error: string;
+  code?: string;
 }
 
 /**
