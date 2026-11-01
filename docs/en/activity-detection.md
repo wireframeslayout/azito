@@ -614,7 +614,7 @@ tmux. For tmux servers nothing below is created and the tmux behavior above is u
 - **Diagnostics.** `GET /api/debug/activity` rows carry `mux: { status, decidedBy?, at }`, and the
   panel shows `tier0 misao`.
 
-### Subagent conversations
+## 14. Subagent conversations
 
 In a Claude Code chat, select a subagent belonging to the window's current parent session to view
 its conversation. Subagent conversations are read-only; return to the parent conversation to send a
