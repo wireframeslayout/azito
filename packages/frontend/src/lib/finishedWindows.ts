@@ -67,7 +67,7 @@ export function removeFinished(entries: FinishedEntry[], key: string): FinishedE
 /** Preserve display metadata omitted by the completion event. */
 export function mergeFinishedEntry(entry: FinishedEntry, previous?: Omit<FinishedEntry, 'finishedAt'>): FinishedEntry {
   return {
-    ...previous, ...entry,
+    ...entry,
     taskId: entry.taskId ?? previous?.taskId,
     projectId: entry.projectId ?? previous?.projectId,
     label: entry.label ?? previous?.label,

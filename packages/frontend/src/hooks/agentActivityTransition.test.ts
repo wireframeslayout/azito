@@ -13,6 +13,10 @@ describe('activity transitions', () => {
     const finished = mergeFinishedEntry({ serverName: 'local', target: 's:w', windowId: 1, finishedAt: 123, paneName: '' }, completed.previous);
     const reloaded = JSON.parse(JSON.stringify(upsertFinished([], finished)));
     expect(reloaded[0].paneName).toBe('Latest');
+    expect(reloaded[0]).not.toHaveProperty('running');
+    expect(reloaded[0]).not.toHaveProperty('source');
+    expect(reloaded[0]).not.toHaveProperty('status');
+    expect(reloaded[0]).not.toHaveProperty('operation');
     expect(completed.entries.size).toBe(0);
   });
 });

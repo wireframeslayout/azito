@@ -11,6 +11,10 @@ describe('activity window titles', () => {
   it('prefers the current user label to pane and saved task titles', () => {
     expect(resolveActivityTitle({ ...base, paneName: 'Pane', taskTitle: 'Old task' }, data)).toBe('Named · W-12');
   });
+  it('does not restore a saved label when the current window label was cleared', () => {
+    const cleared = { ...data, windowById: new Map([[12, { id: 12, serverName: 'local', tmuxTarget: 'session:window', label: null, labelSource: 'auto' as const, taskId: 2 }]]) };
+    expect(resolveActivityTitle({ ...base, label: 'Saved', labelSource: 'user' }, cleared)).toBe('Current task · W-12');
+  });
   it('prefers a pane to task and type, and the current task to the saved task', () => {
     expect(resolveActivityTitle({ ...base, paneName: 'Pane', taskTitle: 'Old task' })).toBe('Pane · W-12');
     expect(resolveActivityTitle({ ...base, taskTitle: 'Old task', workerType: 'codex' }, { ...data, windowById: new Map() })).toBe('Current task · W-12');

@@ -131,7 +131,14 @@ export function transitionActivityEntries(
   const previous = entries.get(key);
   const next = new Map(entries);
   if (payload.running) {
-    next.set(key, { ...payload, status: payload.status ?? 'working' });
+    next.set(key, {
+      serverName: payload.serverName, target: payload.target, running: true, source: payload.source,
+      taskId: payload.taskId, windowId: payload.windowId, projectId: payload.projectId,
+      label: payload.label, labelSource: payload.labelSource, taskTitle: payload.taskTitle,
+      workerType: payload.workerType, windowType: payload.windowType,
+      paneTitle: payload.paneTitle, paneCommand: payload.paneCommand,
+      status: payload.status ?? 'working', paneName: payload.paneName,
+    });
   } else {
     next.delete(key);
   }

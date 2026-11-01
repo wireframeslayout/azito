@@ -5,7 +5,7 @@ export interface WindowIndexEntry {
   id: number;
   serverName: string;
   tmuxTarget: string;
-  label?: string;
+  label?: string | null;
   labelSource?: 'auto' | 'user';
   workerType?: string;
   windowType?: string;
@@ -53,8 +53,8 @@ export function resolveActivityTitle(row: Parameters<typeof activeWindowTitleInp
   const task = data?.tasks.find((t) => t.id === (win?.taskId ?? row.taskId));
   return formatWindowTitleLine(resolveWindowTitle(activeWindowTitleInput({
     ...row,
-    label: win?.label ?? row.label,
-    labelSource: win?.labelSource ?? row.labelSource,
+    label: win?.label === null ? undefined : win?.label ?? row.label,
+    labelSource: win?.label === null ? win.labelSource : win?.labelSource ?? row.labelSource,
     workerType: win?.workerType ?? row.workerType,
     windowType: win?.windowType ?? row.windowType,
     taskTitle: task?.title ?? row.taskTitle,
