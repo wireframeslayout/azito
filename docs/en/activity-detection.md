@@ -564,8 +564,6 @@ socket), which checks the `pane.state`-driven working row and the finished row p
 
 ## 13. misao windows
 
-A misao working signal decided by `bytes` is excluded from Tier 0 when the first pane has a known shell foreground command. Unknown commands and title / profile decisions retain their existing behavior. An empty codex title remains unknown and falls through to later tiers; tmux normally supplies a hostname as a non-empty title, which is classified as idle.
-
 Windows whose `mux_ref.kind` is `misao` (local servers, and agent servers that have misao: each through its own daemon connection and its own `MisaoActivityBridge`) are served by the misao daemon instead of
 tmux. For tmux servers nothing below is created and the tmux behavior above is unchanged.
 
@@ -582,6 +580,10 @@ tmux. For tmux servers nothing below is created and the tmux behavior above is u
   `sessions:updated` (for up to 60s). On a gap and on every reconnect the whole `pane.list` is
   re-read (`agentState` / `decidedBy`); while the connection is down every misao-derived key is
   `unknown`.
+  A `working` decided by `bytes` is excluded from Tier 0 when the first pane's foreground command is a
+  known shell (an unknown command and title / profile decisions are unchanged). An empty codex title is
+  `unknown` and falls through to the lower tiers (tmux normally supplies the hostname as a non-empty
+  title, which is classified as idle).
 - **Blocked refinement.** The Rust core (misao 0.3.0 and later) also reports `blocked` in `pane.state`, from its
   bundled claude / codex profiles (mapped to blocked as above). A working / idle row can still hide a prompt, and a
   not-yet-updated 0.2.0 (Node) daemon never reports `blocked`, so for a misao window the screen is read the same way as
