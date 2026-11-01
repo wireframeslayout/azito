@@ -3,14 +3,14 @@ import userEvent from '@testing-library/user-event';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import ProjectSidebar from './ProjectSidebar';
 
-const mocks = vi.hoisted(() => ({ navigate: vi.fn(), api: vi.fn() }));
+const mocks = vi.hoisted(() => ({ navigate: vi.fn(), api: vi.fn(), normalize: vi.fn() }));
 vi.mock('react-i18next', () => ({ useTranslation: () => ({ t: (key: string) => key }) }));
 vi.mock('react-router-dom', () => ({ useNavigate: () => mocks.navigate, useLocation: () => ({ pathname: '/' }), matchPath: () => null }));
 vi.mock('../api/client', () => ({ api: mocks.api }));
 vi.mock('../hooks/usePwaInstall', () => ({ usePwaInstall: () => ({ canInstall: false }) }));
 vi.mock('../hooks/useSystemUpdate', () => ({ useSystemUpdate: () => ({ status: null }) }));
 vi.mock('../hooks/useProjectRail', () => ({ useProjectRail: () => ({
-  getVisibleProjects: (projects: unknown[]) => projects.slice(0, 6), pinnedIds: [], normalize: vi.fn(), touch: vi.fn(),
+  getVisibleProjects: (projects: unknown[]) => projects.slice(0, 6), pinnedIds: [], normalize: mocks.normalize, touch: vi.fn(),
 }) }));
 vi.mock('./UsageDropdown', () => ({ default: () => null }));
 vi.mock('./notifications/NotificationBell', () => ({ default: () => null }));
@@ -23,7 +23,7 @@ describe('project rail actions', () => {
     mocks.api.mockResolvedValue(Array.from({ length: count }, (_, i) => ({ id: i + 1, name: `Project ${i + 1}` })));
     const user = userEvent.setup();
     render(<ProjectSidebar />);
-    await waitFor(() => expect(mocks.api).toHaveBeenCalledWith('/projects'));
+    await waitFor(() => expect(mocks.normalize).toHaveBeenCalledWith(Array.from({ length: count }, (_, i) => i + 1)));
     if (count) await screen.findByTitle(`Project ${Math.min(count, 6)}`);
     const add = screen.getByRole('button', { name: 'search.newProject' });
     const more = screen.getByRole('button', { name: 'sidebar.projectMenu' });
