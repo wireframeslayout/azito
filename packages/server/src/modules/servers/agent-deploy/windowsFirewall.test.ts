@@ -321,7 +321,11 @@ describe('describeFirewallProblem', () => {
 });
 
 describe('firewallRuleCommand', () => {
+  it('quotes PowerShell metacharacters without expansion', () => {
+    const command = firewallRuleCommand(3002, "C:\\agent$test`name's\\node.exe", IP);
+    expect(command).toContain("-Program 'C:\\agent$test`name''s\\node.exe'");
+  });
   it('limits the rule to the program, the local address, the port and the tailnet', () => {
-    expect(firewallRuleCommand(3002, NODE, IP)).toBe(`New-NetFirewallRule -DisplayName "AZITO Agent (TCP 3002)" -Direction Inbound -Action Allow -Protocol TCP -LocalPort 3002 -Program "${NODE}" -LocalAddress 100.64.0.9 -RemoteAddress 100.64.0.0/10 -Profile Any`);
+    expect(firewallRuleCommand(3002, NODE, IP)).toBe(`New-NetFirewallRule -DisplayName 'AZITO Agent (TCP 3002)' -Direction Inbound -Action Allow -Protocol TCP -LocalPort 3002 -Program '${NODE}' -LocalAddress '100.64.0.9' -RemoteAddress '100.64.0.0/10' -Profile Any`);
   });
 });

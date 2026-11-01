@@ -70,6 +70,7 @@ export class AgentRecoveryWatchdog {
   private readonly agents = new Map<string, Backoff>();
   /** The last firewall diagnosis by server, kept while the agent does not answer. */
   private readonly firewall = new Map<string, FirewallDiagnosis & { identity: string }>();
+  private readonly firewallNotified = new Map<string, string>();
   private readonly misaos = new Map<string, Backoff>();
   /** The looks going on, by server. */
   private readonly looking = new Map<string, Promise<void>>();
@@ -120,6 +121,7 @@ export class AgentRecoveryWatchdog {
     const servers = this.deps.listServers().filter(isWindowsAgent);
     const names = new Set(servers.map((s) => s.name));
     for (const name of this.firewall.keys()) if (!names.has(name)) this.firewall.delete(name);
+    for (const name of this.firewallNotified.keys()) if (!names.has(name)) this.firewallNotified.delete(name);
     for (const map of [this.agents, this.misaos]) for (const name of map.keys()) if (!names.has(name)) map.delete(name);
     for (const key of this.warned) if (!names.has(key.split('\0')[0]!)) this.warned.delete(key);
     for (const name of this.foreignReason.keys()) if (!names.has(name)) this.foreignReason.delete(name);
@@ -147,6 +149,7 @@ export class AgentRecoveryWatchdog {
   private reset(name: string): void {
     this.agents.delete(name);
     this.firewall.delete(name);
+    this.firewallNotified.delete(name);
     this.misaos.delete(name);
     for (const key of this.warned) if (key.startsWith(`${name}\0`)) this.warned.delete(key);
     this.foreignReason.delete(name);
@@ -165,6 +168,7 @@ export class AgentRecoveryWatchdog {
     }
     this.agents.delete(server.name);
     this.firewall.delete(server.name);
+    this.firewallNotified.delete(server.name);
     let down: boolean;
     try {
       down = await this.deps.isMisaoDown(server);
@@ -255,14 +259,18 @@ export class AgentRecoveryWatchdog {
     } catch (err) {
       diagnosis = { state: 'unknown', detail: `Windows Firewall policy could not be verified: ${describe(err)}`, checkedAt: this.deps.now(), networkCategory: null };
     }
-    const previous = this.firewall.get(server.name);
     if (diagnosis === undefined) {
       this.firewall.delete(server.name);
+      this.firewallNotified.delete(server.name);
       return false;
     }
     this.firewall.set(server.name, { ...diagnosis, identity });
     if (diagnosis.state === 'unknown') return false;
-    if (previous?.state !== diagnosis.state || previous.detail !== diagnosis.detail) this.deps.onFirewallProblem?.(server, diagnosis.detail);
+    const notificationKey = JSON.stringify([identity, diagnosis.state, diagnosis.detail]);
+    if (this.firewallNotified.get(server.name) !== notificationKey) {
+      this.firewallNotified.set(server.name, notificationKey);
+      this.deps.onFirewallProblem?.(server, diagnosis.detail);
+    }
     return true;
   }
 
@@ -282,8 +290,8 @@ export class AgentRecoveryWatchdog {
 /** undefined = the policy lets the hub reach the agent. */
 function diagnoseFirewall(result: FirewallVerdict, checkedAt: number): FirewallDiagnosis | undefined {
   const networkCategory = result.networkCategory;
-  if (result.ruleFound === null) {
-    return { state: 'unknown', detail: `Windows Firewall policy could not be verified: ${result.problem ?? 'the host gave no reason'}.`, checkedAt, networkCategory };
+  if (result.networkCategory === null || result.ruleFound === null) {
+    return { state: 'unknown', detail: `Windows Firewall policy could not be verified: ${result.problem ?? (networkCategory === null ? 'the network profile could not be read' : 'the host gave no reason')}.`, checkedAt, networkCategory };
   }
   if (result.blockedBy.length > 0) {
     const detail = `Windows Firewall blocks the agent: ${result.blockedBy.join(', ')}. Ask an administrator to inspect the active rule before changing it in an Administrator PowerShell: ${result.blockCommands.join('; ')}`;

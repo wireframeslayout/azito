@@ -22,7 +22,8 @@ export function firewallRuleName(port: number): string {
  * elevated): this program, on the Tailscale address the agent binds to, from the tailnet, on its port only.
  */
 export function firewallRuleCommand(port: number, nodePath: string, localAddress: string): string {
-  return `New-NetFirewallRule -DisplayName "${firewallRuleName(port)}" -Direction Inbound -Action Allow -Protocol TCP -LocalPort ${port} -Program "${nodePath}" -LocalAddress ${localAddress} -RemoteAddress ${TAILNET_RANGE} -Profile Any`;
+  const q = powershellDialect.quote;
+  return `New-NetFirewallRule -DisplayName ${q(firewallRuleName(port))} -Direction Inbound -Action Allow -Protocol TCP -LocalPort ${port} -Program ${q(nodePath)} -LocalAddress ${q(localAddress)} -RemoteAddress ${q(TAILNET_RANGE)} -Profile Any`;
 }
 
 // ─── What the host reports ───

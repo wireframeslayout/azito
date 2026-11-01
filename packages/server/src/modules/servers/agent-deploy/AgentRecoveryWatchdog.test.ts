@@ -13,7 +13,7 @@ function server(name: string, platform: 'win32' | 'linux' = 'win32', type: Serve
 
 /** A hub whose servers, agents and misao are scripted, and whose clock moves only when told. */
 function verdict(over: Partial<FirewallVerdict>): FirewallVerdict {
-  return { ruleFound: true, blockedBy: [], problem: null, allowCommand: 'allow', blockCommands: [], networkCategory: null, ...over };
+  return { ruleFound: true, blockedBy: [], problem: null, allowCommand: 'allow', blockCommands: [], networkCategory: 'Private', ...over };
 }
 
 class Harness {
@@ -73,11 +73,11 @@ describe('AgentRecoveryWatchdog: the agent', () => {
   it('pauses on confirmed firewall blocks and resumes when the policy changes', async () => {
     const h = new Harness();
     h.agentUp = false;
-    h.firewall = verdict({ ruleFound: false, blockedBy: ['deny'], blockCommands: ['inspect deny'] });
+    h.firewall = verdict({ ruleFound: false, blockedBy: ['deny'], blockCommands: ['inspect deny'], networkCategory: 'Private' });
     await h.watchdog.tick();
     await h.advance(MIN);
     expect(h.recovered).toEqual([]);
-    expect(h.watchdog.firewallStatus(h.servers[0]!)).toMatchObject({ state: 'blocked', checkedAt: h.clock, networkCategory: null });
+    expect(h.watchdog.firewallStatus(h.servers[0]!)).toMatchObject({ state: 'blocked', checkedAt: h.clock, networkCategory: 'Private' });
     expect(h.firewallNotices).toHaveLength(1);
     expect(h.firewallNotices[0]).toContain('inspect deny');
     h.firewall = verdict({ ruleFound: true });
@@ -85,6 +85,32 @@ describe('AgentRecoveryWatchdog: the agent', () => {
     expect(h.recoverForces).toEqual([false]);
     await h.watchdog.tick();
     expect(h.watchdog.firewallStatus(h.servers[0]!)).toBeUndefined();
+  });
+
+  it('continues recovery if a Block rule is reported but the network profile is unknown', async () => {
+    const h = new Harness();
+    h.agentUp = false;
+    h.firewall = verdict({ ruleFound: false, blockedBy: ['Public block'], networkCategory: null });
+    await h.watchdog.tick();
+    await h.advance(MIN);
+    expect(h.recovered).toEqual(['win']);
+    expect(h.watchdog.firewallStatus(h.servers[0]!)?.state).toBe('unknown');
+    expect(h.firewallNotices).toEqual([]);
+  });
+
+  it('does not repeat the same confirmed notification after an inconclusive inspection', async () => {
+    const h = new Harness();
+    h.agentUp = false;
+    h.recoversToStart = Infinity;
+    const blocked = verdict({ ruleFound: false, blockedBy: ['deny'], blockCommands: ['inspect deny'] });
+    h.firewall = blocked;
+    await h.watchdog.tick();
+    await h.advance(MIN);
+    h.firewall = verdict({ ruleFound: null, problem: 'unavailable' });
+    await h.advance(TIMING.maxMs);
+    h.firewall = blocked;
+    await h.advance(MIN);
+    expect(h.firewallNotices).toHaveLength(1);
   });
 
   it('continues recovery when effective policy cannot be read', async () => {
