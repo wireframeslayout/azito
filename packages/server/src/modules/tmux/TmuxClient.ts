@@ -167,7 +167,8 @@ export class TmuxClient implements IMuxClient {
       return parseSessionLines(stdout).filter((s) => !s.name.startsWith('_azito_'));
     } catch (err: unknown) {
       const e = err as { message?: string; stderr?: string };
-      if (e.message?.includes('no server running') || e.stderr?.includes('no server running')) {
+      const output = `${e.message ?? ''}\n${e.stderr ?? ''}`;
+      if (output.includes('no server running') && !output.includes('no such socket file')) {
         return [];
       }
       throw err;
@@ -421,7 +422,8 @@ export class TmuxClient implements IMuxClient {
         .filter((pane) => !pane.sessionName.startsWith('_azito_'));
     } catch (err: unknown) {
       const e = err as { message?: string; stderr?: string };
-      if (e.message?.includes('no server running') || e.stderr?.includes('no server running')) {
+      const output = `${e.message ?? ''}\n${e.stderr ?? ''}`;
+      if (output.includes('no server running') && !output.includes('no such socket file')) {
         return [];
       }
       throw err;
