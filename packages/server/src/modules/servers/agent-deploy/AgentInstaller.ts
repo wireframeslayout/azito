@@ -494,6 +494,7 @@ export class AgentInstaller {
         mac = await MacAgentLaunchd.connect(this.sshClient, sshHost);
         await mac.assertOwned();
         previous = await mac.readCurrent();
+        if (previous === null) throw new Error('The Mac agent current link is absent; it cannot be updated');
       }
       await this.transferAndDeploy(sshHost, version);
     } catch (err) {
@@ -511,10 +512,9 @@ export class AgentInstaller {
       if (mac) {
         try {
           await mac.restoreCurrent(previous, version);
-          if (previous !== null) {
-            await mac.start(tailscaleIp, AGENT_PORT, existingToken, muxRuntime || 'system');
-            await this.healthCheck(tailscaleIp, AGENT_PORT, undefined);
-          } else await mac.stop();
+          if (previous === null) throw new Error('The previous agent link is missing');
+          await mac.start(tailscaleIp, AGENT_PORT, existingToken, muxRuntime || 'system');
+          await this.healthCheck(tailscaleIp, AGENT_PORT, undefined);
           error += '; the previous agent was restored';
         } catch (rollbackError) {
           error += `; rollback failed: ${(rollbackError as Error).message}`;
