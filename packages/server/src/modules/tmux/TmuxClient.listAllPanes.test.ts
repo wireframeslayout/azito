@@ -41,8 +41,8 @@ describe('TmuxClient.listAllPanes', () => {
     await expect(client.listAllPanes(srv)).resolves.toEqual([]);
   });
 
-  it('rethrows other errors', async () => {
-    const client = makeClient(async () => { throw new Error('some other tmux failure'); });
-    await expect(client.listAllPanes(srv)).rejects.toThrow('some other tmux failure');
+  it('rethrows other errors without their raw text', async () => {
+    const client = makeClient(async () => { throw new Error('some other tmux failure TOKEN=secret'); });
+    await expect(client.listAllPanes(srv)).rejects.toThrow('tmux list-panes failed: execution failed');
   });
 });

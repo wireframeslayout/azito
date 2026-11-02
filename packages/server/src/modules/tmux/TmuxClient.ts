@@ -11,7 +11,7 @@ import { HostProfileError } from '../../shared/os/hostProfile';
 import { composePaneEnv, type HubPaneEnvConfig } from './hubPaneEnv';
 import { type MuxRef, type PaneHandle, type PaneOrdinal, type MuxCapabilities, type MuxDriverKind, asPaneHandle, muxRefFromTmuxTarget, tmuxTargetFromMuxRef } from '@azito/shared';
 import { windowSpecMatches, type TmuxPane, type TmuxWindow, type TmuxSession, type TmuxPaneInfo, type MuxWorkspace, type MuxWindowInfo, type MuxPane, type MuxPaneInfo } from './types';
-import { tmuxFailureReason } from './tmuxFailureReason';
+import { sanitizedTmuxError, tmuxFailureReason } from './tmuxFailureReason';
 import { HOOK_EVENTS, buildHookValue, buildHookSetArgs, buildHookUnsetArgs } from './tmuxHooks';
 
 export type { TmuxPane, TmuxWindow, TmuxSession, TmuxPaneInfo, MuxWorkspace, MuxWindowInfo, MuxPane, MuxPaneInfo };
@@ -153,11 +153,7 @@ export class TmuxClient implements IMuxClient {
       result = await this.transportFactory.getTransport(server).execMux({ kind: 'tmux', args });
     } catch (err) {
       if (err instanceof AgentUnreachableError || err instanceof MuxDriverUnavailableError || err instanceof HostProfileError) throw err;
-      const source = err as { code?: string | number; killed?: boolean };
-      const reason = source?.code === 'ENOENT' ? 'binary not found' : source?.killed ? 'timed out' : tmuxFailureReason(err instanceof Error ? err.message : '', typeof source?.code === 'number' ? source.code : 1);
-      const safe = new Error(`tmux ${args[0]} failed: ${reason}`) as Error & { code?: string | number };
-      safe.code = source?.code;
-      throw safe;
+      throw sanitizedTmuxError(args[0], err);
     }
     if (result.code === 0) return result;
     const output = `${result.stderr}\n${result.stdout}`;
@@ -232,7 +228,9 @@ export class TmuxClient implements IMuxClient {
     if (isTmuxNoServerRunning(output)) {
       return [];
     }
-    throw new Error(`tmux list-panes failed (code ${result.code}): ${output || '(no output)'}`);
+    // runTmuxCommand already words a tmux failure as `tmux list-panes failed: <class>`; only an error it rethrows
+    // as it is (unreachable agent, unavailable driver, host profile) still needs the prefix.
+    throw new Error(output.startsWith('tmux list-panes failed') ? output : `tmux list-panes failed: ${output || `exit ${result.code}`}`);
   }
 
   private async execListPanesAll(server: ServerConfig): Promise<string> {

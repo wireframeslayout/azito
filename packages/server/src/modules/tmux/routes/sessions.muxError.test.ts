@@ -2,6 +2,7 @@ import { describe, it, expect, afterEach, vi } from 'vitest';
 import Fastify, { type FastifyInstance } from 'fastify';
 import { Writable } from 'node:stream';
 import { HostProfileError } from '../../../shared/os/hostProfile';
+import { MuxDriverUnavailableError } from '../MuxCapabilityError';
 import sessionsRoutes, { type SessionsRouteOptions } from './sessions';
 import type { IServerRepository, ServerConfig } from '../../servers/Server';
 import { TmuxClient } from '../TmuxClient';
@@ -204,7 +205,56 @@ describe('legacy creation host errors', () => {
     const app = await buildApp({}, makeWindowRepo(), tmux);
     const res = await app.inject({ method: 'POST', url, payload });
     expect(res.statusCode).toBe(500);
-    expect(res.json().error).toContain(`${operation} failed`);
+    expect(res.json().error).toBe(`${operation} failed: unsupported_os`);
+    await app.close();
+  });
+
+  it.each([
+    { method: 'createSession', url: '/api/servers/srv1/sessions', payload: { name: 'main' }, operation: 'new-session' },
+    { method: 'createWindow', url: '/api/servers/srv1/sessions/main/windows', payload: {}, operation: 'new-window' },
+  ])('keeps the driver reason for $method', async ({ method, url, payload, operation }) => {
+    const tmux = { [method]: vi.fn(async () => { throw new MuxDriverUnavailableError('tmux', 'unsupported_os'); }) } as unknown as TmuxClient;
+    const app = await buildApp({}, makeWindowRepo(), tmux);
+    const res = await app.inject({ method: 'POST', url, payload });
+    expect(res.statusCode).toBe(500);
+    expect(res.json().error).toBe(`${operation} failed: unsupported_os`);
+    await app.close();
+  });
+});
+
+describe('create failure reasons by mux kind', () => {
+  it('answers a misao daemon error by its class only', async () => {
+    const openWindow = vi.fn(async () => ({ result: { code: 1, stdout: '', stderr: 'command not found: claude AZITO_UI_TOKEN=secret' }, ref: { kind: 'misao' as const, workspace: 'ws', window: 'w' }, windowName: 'w' }));
+    const app = await buildApp({ openWindow } as Partial<IMuxClient>);
+    const res = await app.inject({ method: 'POST', url: '/api/servers/srv1/mux/workspaces/ws/windows', payload: { kind: 'misao' } });
+    expect(res.statusCode).toBe(500);
+    expect(res.json().error).toBe('create window failed: command not found');
+    await app.close();
+  });
+
+  it('does not pass on a thrown misao error message', async () => {
+    const openWindow = vi.fn(async () => { throw new Error('pane.open rejected env AZITO_UI_TOKEN=secret'); });
+    const app = await buildApp({ openWindow } as Partial<IMuxClient>);
+    const res = await app.inject({ method: 'POST', url: '/api/servers/srv1/mux/workspaces/ws/windows', payload: { kind: 'misao' } });
+    expect(res.statusCode).toBe(500);
+    expect(res.json().error).toBe('create window failed: execution failed');
+    expect(res.body).not.toContain('secret');
+    await app.close();
+  });
+
+  it('keeps the tmux failure class of a sanitized timeout', async () => {
+    const openWindow = vi.fn(async () => { throw Object.assign(new Error('tmux new-window failed: timed out'), { killed: true }); });
+    const app = await buildApp({ openWindow } as Partial<IMuxClient>);
+    const res = await app.inject({ method: 'POST', url: '/api/servers/srv1/mux/workspaces/ws/windows', payload: {} });
+    expect(res.json().error).toBe('create window failed: timed out');
+    await app.close();
+  });
+
+  it('keeps duplicate session on the legacy session route', async () => {
+    const tmux = { createSession: vi.fn(async () => ({ result: { code: 1, stdout: '', stderr: 'tmux new-session failed: duplicate session' }, windowName: 'w' })) } as unknown as TmuxClient;
+    const app = await buildApp({}, makeWindowRepo(), tmux);
+    const res = await app.inject({ method: 'POST', url: '/api/servers/srv1/sessions', payload: { name: 'main' } });
+    expect(res.json().error).toBe('new-session failed: duplicate session');
     await app.close();
   });
 });

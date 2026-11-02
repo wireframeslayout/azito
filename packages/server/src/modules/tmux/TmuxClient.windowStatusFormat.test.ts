@@ -70,7 +70,7 @@ describe('TmuxClient setWindowStatusFormat (post-creation decoration is best-eff
 
     await client.createWindow(srv, 'test-session', 'win');
 
-    expect(warnSpy).toHaveBeenCalledWith(expect.stringContaining('window-status-format failed'));
+    expect(warnSpy).toHaveBeenCalledWith(expect.stringContaining('Failed to set window-status-format'));
   });
 
   it('does not attempt window-status-format at all when the window name carries no id suffix (exactName)', async () => {
