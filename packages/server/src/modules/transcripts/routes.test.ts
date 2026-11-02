@@ -1,5 +1,8 @@
 import { describe, it, expect, vi } from 'vitest';
 import Fastify from 'fastify';
+import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
 import transcriptsRoutes from './routes';
 import type { TranscriptReader, TranscriptSource } from './sources/TranscriptSource';
 import { HostTranscriptSourceProvider, type TranscriptSourceProvider } from './sources/TranscriptSourceProvider';
@@ -233,6 +236,24 @@ describe('GET /api/transcripts/:agent/:id', () => {
     const res = await app.inject({ method: 'GET', url: `/api/transcripts/claude/${SID}?before=42` });
     expect(res.statusCode).toBe(404);
     await app.close();
+  });
+
+  it.skipIf(process.platform === 'win32')('reads the matching live pane session from its recorded configuration', async () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'transcript-route-'));
+    const paneId = '22222222-2222-2222-2222-222222222222';
+    const project = path.join(root, 'projects', 'project');
+    fs.mkdirSync(project, { recursive: true });
+    fs.writeFileSync(path.join(project, `${paneId}.jsonl`), JSON.stringify({ type: 'user', uuid: 'u', message: { role: 'user', content: 'pane conversation' } }) + '\n');
+    const window = { id: 7, serverName: 'local', agentSessionId: SID, claudeConfigDir: '/different', claudePaneSessions: [{ sessionId: paneId, configDir: root }], paneLayout: null } as unknown as Window;
+    const app = buildApp([buildClaudeSource()], {}, { windowRepo: { findById: () => window } });
+    try {
+      const response = await app.inject({ method: 'GET', url: `/api/transcripts/claude/${paneId}?windowId=7` });
+      expect(response.statusCode).toBe(200);
+      expect(JSON.stringify(response.json().entries)).toContain('pane conversation');
+    } finally {
+      await app.close();
+      fs.rmSync(root, { recursive: true, force: true });
+    }
   });
 
   it('rejects a non-positive windowId with 400', async () => {

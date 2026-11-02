@@ -16,6 +16,7 @@ import { probeOutput, resolveOsName } from './installProbe';
 import type { AgentInstaller, InstallProgress } from './agent-deploy/AgentInstaller';
 import type { AgentBundler } from './agent-deploy/AgentBundler';
 import type { AgentHostRecorder } from './agent-deploy/AgentHostRecorder';
+import type { FirewallDiagnosis } from './agent-deploy/AgentRecoveryWatchdog';
 import type { TransportFactory } from './transport/TransportFactory';
 import { AgentLocalNetworkPermissionError, AgentUnreachableError } from './transport/AgentUnreachableError';
 import type { HarnessInstaller, HarnessInstallProgress, HarnessInstallResult } from './agent-deploy/HarnessInstaller';
@@ -166,6 +167,8 @@ function describeMux(registry: MuxDriverRegistry, srv: ServerConfig): Record<str
 }
 
 export interface ServersRouteOptions {
+  /** The watchdog's firewall diagnosis of an agent that does not answer (shown next to the unreachable reason, never instead of it). */
+  firewallStatus?: (server: ServerConfig) => FirewallDiagnosis | undefined;
   serverAliasRepo: IServerAliasRepository;
   serverRepo: IServerRepository;
   tmux: TmuxClient;
@@ -1170,7 +1173,8 @@ const serversRoutes: FastifyPluginCallback<ServersRouteOptions> = (fastify, opts
             };
           } catch (err: unknown) {
             if (!(err instanceof AgentUnreachableError)) return { status: 'offline' as const, mux: {}, message: `Agent returned an error: ${(err as Error).message}` };
-            return { status: 'offline' as const, mux: {}, message: `Agent unreachable: ${err.reason}` };
+            const firewall = opts.firewallStatus?.(srv);
+            return { status: 'offline' as const, mux: {}, message: `Agent unreachable: ${err.reason}`, ...(firewall ? { firewall } : {}) };
           }
         }
         const mux = await checkMuxes();

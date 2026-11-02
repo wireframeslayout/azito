@@ -1,9 +1,10 @@
 import { useEffect, useRef } from 'react';
-import type { AgentActivityPayload, BrowserOpenedPayload, NotificationEvent } from '../types/notification';
+import type { AgentActivityPayload, BrowserOpenedPayload, FirewallDiagnosis, NotificationEvent } from '../types/notification';
 import { buildWsUrl } from '../api/wsUrl';
 
 export interface NotificationHandlers {
   onMuxWake?: (payload: { windowId: number; serverName: string; title?: string; taskId?: number; reason: 'ask' | 'misao_unavailable' }) => void;
+  onServerFirewall?: (payload: { serverName: string; diagnosis: FirewallDiagnosis }) => void;
   onSessionsUpdated?: (serverName: string) => void;
   onTaskStatus?: (payload: { taskId: number; status: string; title?: string; projectId?: number }) => void;
   onPaneExited?: (serverName: string) => void;
@@ -91,6 +92,9 @@ export function useNotificationChannel(handlers: NotificationHandlers): void {
       switch (event.type) {
         case 'window:mux_switch_suggested':
           h.onMuxWake?.(event.payload);
+          break;
+        case 'server:firewall':
+          h.onServerFirewall?.(event.payload);
           break;
         case 'sessions:updated':
           h.onSessionsUpdated?.(event.payload.serverName);

@@ -42,4 +42,4 @@ export const FOREIGN_LOCK_PREFIX = 'foreign_lock:';
 export const isForeignLock = (outcome: string): boolean => outcome.startsWith(FOREIGN_LOCK_PREFIX);
 
 /** Nothing to say: the daemon answers again, someone chose this (a custom pipe, a task disabled by hand). */
-export const QUIET_OUTCOMES: ReadonlySet<string> = new Set(['running', 'custom_socket', 'disabled']);
+export const QUIET_OUTCOMES: ReadonlySet<string> = new Set(['running', 'custom_socket', 'disabled', 'starting']);

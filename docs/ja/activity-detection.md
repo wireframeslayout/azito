@@ -192,6 +192,8 @@ env ファイルの**別ハブのトークン**を注入された URL へ送っ�
 - `event: "session"` は稼働状態（Tier 1 の hook 状態）を変更しない
 - 更新は `GET /api/debug/activity` の `sessionUpdate`（`from` / `to` / `at` / `event`）に現れる
 
+SessionStart は `claudeConfigDir`、`claudeConfigDirExplicit`、`hookTimestamp` も送り、local の設定先を pane ごとに記録します。分割 pane（ordinal ≥ 2）も対象です。設定先を記録済みの窓は start / stop で ID を更新せず、スリープ中の窓は更新しません。不正な設定先は破棄し、ID の追従は続けます。詳細は [隔離実行](isolated-execution.md) を参照してください。
+
 ### ウィンドウ同定方式（段階4: muxPaneRef 優先）
 
 Tier 0（supervisor）と Tier 1（hook）が送ってくるシグナルをハブ側の `windows` テーブル行に紐付ける際、以下の優先順位で同定します:
