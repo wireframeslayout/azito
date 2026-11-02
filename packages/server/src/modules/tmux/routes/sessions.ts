@@ -1,3 +1,4 @@
+import { tmuxFailureReason } from '../tmuxFailureReason';
 import { directionBody, nameBody, titleBody, keysBody, paneBody, refBody, workspaceRenameBody } from './actionBodies';
 import { persistRenamedWindowLabel } from '../windowIdentity';
 import type { FastifyPluginCallback, FastifyReply } from 'fastify';
@@ -22,6 +23,13 @@ import { HostProfileError } from '../../../shared/os/hostProfile';
 import { muxWindowTarget } from '../muxWindowTarget';
 import { serverSupportsMux } from '../../servers/muxKinds';
 import { createSessionBody, createSessionWindowBody, createMuxWindowBody, createWorkspaceBody, parseStrictBody } from './createBodies';
+
+function createErrorReason(err: unknown): string {
+  const source = err as { code?: unknown; killed?: boolean; message?: unknown } | null;
+  if (source?.code === 'ENOENT') return 'binary not found';
+  if (source?.killed || (typeof source?.message === 'string' && /timed out/i.test(source.message))) return 'timed out';
+  return tmuxFailureReason(typeof source?.message === 'string' ? source.message : '', typeof source?.code === 'number' ? source.code : 1);
+}
 
 /** Generic route failure -> 500; an unreachable agent is rethrown so the app error handler answers 503. */
 function replyRouteError(reply: FastifyReply, err: unknown): FastifyReply {
@@ -268,7 +276,7 @@ function replyCreateError(reply: FastifyReply, kind: MuxDriverKind, err: unknown
   // An operation this host's OS does not support is answered by the error mapper (501 with the reason), not as a failed create.
   if (err instanceof AgentUnreachableError || err instanceof HostProfileError) throw err;
   const failure = createFailure(kind, err);
-  return reply.status(failure.status).send(failure.status === 500 ? { error: `${operation} failed` } : failure.body);
+  return reply.status(failure.status).send(failure.status === 500 ? { error: `${operation} failed: ${createErrorReason(err)}` } : failure.body);
 }
 
 // ─── Session cache (30 s TTL) ───
@@ -432,7 +440,7 @@ const sessionsRoutes: FastifyPluginCallback<SessionsRouteOptions> = (fastify, op
           return { ok: true, windowName, ...resourceCheckBody(resourceSkipped) };
         } catch (err: unknown) {
           if (err instanceof AgentUnreachableError || err instanceof HostProfileError) throw err;
-          return reply.status(500).send({ error: 'new-session failed: execution failed' });
+          return reply.status(500).send({ error: `new-session failed: ${createErrorReason(err)}` });
         }
       });
     },
@@ -471,7 +479,7 @@ const sessionsRoutes: FastifyPluginCallback<SessionsRouteOptions> = (fastify, op
           return { ok: true, windowName, windowId: null, ref: formatMuxRef(createdRef), ...resourceCheckBody(resourceSkipped) };
         } catch (err: unknown) {
           if (err instanceof AgentUnreachableError || err instanceof HostProfileError) throw err;
-          return reply.status(500).send({ error: 'new-window failed: execution failed' });
+          return reply.status(500).send({ error: `new-window failed: ${createErrorReason(err)}` });
         }
       });
     },
