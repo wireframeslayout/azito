@@ -127,6 +127,15 @@ describe('checkWindowsPreflight', () => {
     expect(checkWindowsPreflight(ok({ arch: 'arm64' }))[0]).toMatch(/x86_64 architecture required \(found: arm64; Windows on ARM is not supported\)/);
   });
 
+  it('reports a bounded, redacted invalid CLI IP', () => {
+    expect(checkWindowsPreflight(ok({ tailscaleIp: 'invalid-ip', tailscaleCli: 'ok' }))[0]).toContain('CLI returned an invalid IP (invalid-ip)');
+    const info = ok({ tailscaleIp: 'API_KEY=secret ' + 'x'.repeat(400), tailscaleCli: 'ok' });
+    const reason = checkWindowsPreflight(info)[0];
+    expect(reason).toContain('CLI returned an invalid IP (API_KEY=[REDACTED]');
+    expect(reason).not.toContain('secret');
+    expect(reason.length).toBeLessThan(400);
+  });
+
   it('refuses a host without a Tailscale IP', () => {
     expect(checkWindowsPreflight(ok({ tailscaleIp: null }))[0]).toMatch(/Tailscale IP not found \(CLI/);
   });

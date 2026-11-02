@@ -10,6 +10,8 @@ const END_MARKER = '<<AZITO_PREFLIGHT_END>>';
  * One PowerShell script (run through the dialect's EncodedCommand, so it is the same under a cmd.exe and a PowerShell login
  * shell) that prints the facts the preflight needs as one JSON line between markers. A missing thing is `null`, not an error.
  * tailscale.exe is looked for on PATH and then in its installer's location, because an SSH session may not have it on PATH.
+ * The OS architecture comes from the registry because x64-emulated PowerShell reports X64 on Windows on ARM.
+ * JSON is ASCII-escaped because a cmd.exe login shell returns output in the OEM code page.
  */
 const WINDOWS_PREFLIGHT_SCRIPT = `
 $n = Get-Command node -EA SilentlyContinue | Select-Object -First 1
@@ -212,5 +214,6 @@ export function checkWindowsPreflight(info: WindowsPreflightInfo): string[] {
 
 export function describeTailscaleCli(info: WindowsPreflightInfo): string {
   const descriptions = { ok: 'CLI returned an invalid IP', empty: 'CLI returned no IP', missing: 'CLI not found', denied: 'CLI access denied for this Windows user (Tailscale may be in use by another user)', failed: 'CLI failed' };
-  return `${descriptions[info.tailscaleCli]}${info.tailscaleDetail ? `: ${info.tailscaleDetail}` : ''}`;
+  const invalidIp = info.tailscaleCli === 'ok' && info.tailscaleIp ? ` (${redactSecretText(info.tailscaleIp).slice(0, 300)})` : '';
+  return `${descriptions[info.tailscaleCli]}${invalidIp}${info.tailscaleDetail ? `: ${info.tailscaleDetail}` : ''}`;
 }
