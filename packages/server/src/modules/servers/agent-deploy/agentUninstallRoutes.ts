@@ -44,7 +44,7 @@ const agentUninstallRoutes: FastifyPluginCallback<AgentUninstallRoutesOptions> =
         const sshHost = srv.sshHost || srv.host;
         if (!sshHost) return reply.status(400).send({ error: 'No SSH host configured for this server' });
         return srv.hostProfile?.platform === 'darwin'
-          ? agentInstaller.uninstallFromMacHost(sshHost, { removeMisao: body.data.removeMisao })
+          ? agentInstaller.uninstallFromMacHost(sshHost, { removeMisao: body.data.removeMisao }, { host: srv.host, port: srv.agentPort, token: srv.agentToken })
           : agentInstaller.uninstallFromWindowsHost(sshHost, { removeMisao: body.data.removeMisao });
       });
     },

@@ -56,4 +56,18 @@ describe('Mac agent launchd definition', () => {
     expect(execIsolated.mock.calls.filter((call) => call[1].includes("'launchctl' 'bootstrap'")).length).toBe(2);
   });
 
+  it('restores the previous current link only when the new version still owns it', async () => {
+    const execIsolated = vi.fn(async (_host: string, command: string) => {
+      if (command.includes('id -u')) return { code: 0, stdout: '/Users/me\n501\n', stderr: '' };
+      if (command.startsWith('if [ -L')) return { code: 0, stdout: '/Users/me/.azito/agent/old\n', stderr: '' };
+      if (command.startsWith('[ ')) return { code: 1, stdout: '', stderr: '' };
+      throw new Error(`Unexpected command: ${command}`);
+    });
+    const manager = await MacAgentLaunchd.connect({ execIsolated } as never, 'host');
+    const previous = await manager.readCurrent();
+    expect(previous).toBe('/Users/me/.azito/agent/old');
+    await expect(manager.restoreCurrent(previous, 'new')).rejects.toThrow(/changed/);
+    expect(execIsolated.mock.calls.at(-1)?.[1]).toContain('readlink');
+  });
+
 });

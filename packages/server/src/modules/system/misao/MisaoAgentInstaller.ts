@@ -145,6 +145,33 @@ export class MisaoAgentInstaller {
     return underMisaoRootLock(local.lock, operation);
   }
 
+  /** Remove a managed macOS misao only when this home has no hub sharing it. */
+  async uninstallMac(target: MisaoInstallTarget): Promise<'done' | 'absent' | 'skipped'> {
+    if (target.hostProfile?.platform !== 'darwin') throw new MisaoServiceError('unsupported_host', 'This removal is for macOS agents only.');
+    const status = await this.inspect(target);
+    const { host } = status;
+    if (host.platform !== 'darwin') throw new MisaoServiceError('unsupported_host', 'The agent did not report macOS.');
+    const root = agentMisaoRoot(host.homeDir);
+    const socket = this.requireManagedSocket(status, host);
+    const guard = await this.run(target, `if [ -e ${shellQuote(remotePath.join(host.homeDir, '.azito', 'hub'))} ]; then echo SHARED; elif pgrep -u "$(id -u)" -f 'azito[-]hub[.]cjs|[t]sx.*src/main[.]ts' >/dev/null 2>&1; then echo SHARED; elif [ "$?" -gt 1 ]; then echo UNKNOWN; elif [ -L ${shellQuote(root)} ]; then echo FOREIGN; elif [ ! -e ${shellQuote(root)} ]; then echo ABSENT; else echo PRESENT; fi`, 'inspect misao ownership');
+    if (guard.stdout.trim() === 'SHARED') return 'skipped';
+    if (guard.stdout.trim() === 'ABSENT') return 'absent';
+    if (guard.stdout.trim() !== 'PRESENT' || !status.installedVersion) throw new MisaoServiceError('not_managed', 'The misao folder is not a managed installation; it was left in place.');
+    const previous = await this.snapshot(target, host, root);
+    if (previous.link !== status.installedVersion || !/^[A-Za-z0-9][A-Za-z0-9._-]*$/.test(previous.link)) throw new MisaoServiceError('not_managed', 'The misao current link changed or is invalid; it was left in place.');
+    const current = remotePath.join(root, 'current');
+    const versionPath = remotePath.join(root, previous.link);
+    const linkCheck = `[ "$(readlink ${shellQuote(current)})" = ${shellQuote(previous.link)} ] || [ "$(readlink ${shellQuote(current)})" = ${shellQuote(versionPath)} ]`;
+    await this.run(target, `(${linkCheck}) && [ -f ${shellQuote(remotePath.join(versionPath, 'misao'))} ] && [ ! -L ${shellQuote(versionPath)} ]`, 'verify misao installation');
+    const probe = `${shellQuote(host.nodePath)} -e ${shellQuote("require('net').connect(process.argv[1]).once('connect',function(){console.log('LISTENING');process.exit(0)}).once('error',function(e){if(e.code==='ENOENT'||e.code==='ECONNREFUSED'){console.log('STOPPED');process.exit(0)};console.error(e.code);process.exit(2)})")} ${shellQuote(socket)}`;
+    const state = (await this.run(target, probe, 'probe misao')).stdout.trim();
+    if (state === 'LISTENING') await this.stopDaemon(target, host, root, socket, previous);
+    else if (state !== 'STOPPED') throw new MisaoServiceError('not_managed', 'Could not determine whether misao is running.');
+    if ((await this.run(target, probe, 'verify misao stopped')).stdout.trim() !== 'STOPPED') throw new MisaoServiceError('not_managed', 'misao is still running; its files were left in place.');
+    await this.run(target, `[ ! -e ${shellQuote(remotePath.join(host.homeDir, '.azito', 'hub'))} ] && [ ! -L ${shellQuote(root)} ] && (${linkCheck}) && rm -rf ${shellQuote(root)}`, 'remove misao');
+    return 'done';
+  }
+
   async install(target: MisaoInstallTarget, onProgress: (step: MisaoInstallStep) => void = () => undefined): Promise<MisaoAgentInstallResult> {
     const bundle = this.requireBundle();
     if (target.hostProfile?.platform === 'win32') return this.underSharedRoot(target, () => this.windows().install(target, bundle, onProgress));

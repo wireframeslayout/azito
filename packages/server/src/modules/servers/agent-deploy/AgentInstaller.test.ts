@@ -48,6 +48,7 @@ function makeSsh(opts: HostOptions = {}, host: FakeHost = { folderId: '', folder
   const execIsolated = vi.fn(async (_host: string, command: string) => {
     commands.push(command);
     if (command.includes('agent-launchd-backup.XXXXXX')) return { stdout: '/Users/test/.azito/agent-launchd-backup.abc123\n', stderr: '', code: 0 };
+    if (command.startsWith('if [ -L') && command.includes('/.azito/agent/current')) return { stdout: '/Users/test/.azito/agent/old\n', stderr: '', code: 0 };
     if (command.includes('$(id -u)')) return { stdout: '/Users/test\n501\n', stderr: '', code: 0 };
     if (command.startsWith('if [ -f') && command.includes('com.azito.agent.plist')) return { stdout: 'AZITO_NO_PLIST', stderr: '', code: 0 };
     if (command.includes("'launchctl' 'print'")) return { stdout: '', stderr: '', code: 1 };
@@ -454,6 +455,17 @@ describe('AgentInstaller', () => {
       expect(commands.some((c) => c.includes("'launchctl' 'bootstrap' 'user/501'"))).toBe(true);
       expect(commands.some((c) => c.includes('systemctl --user'))).toBe(false);
       expect(commands.some((c) => /pkill.*misao/.test(c))).toBe(false);
+    });
+
+    it('restores the previous current link when a Mac update fails health checking', async () => {
+      const { installer, commands } = make(okMisao());
+      const health = vi.fn().mockRejectedValueOnce(new Error('unhealthy')).mockResolvedValueOnce(undefined);
+      (installer as unknown as { healthCheck: typeof health }).healthCheck = health;
+      const result = await installer.update('user@host', '100.64.0.9', 'tok', { platform: 'darwin', arch: 'arm64' });
+      expect(result.success).toBe(false);
+      expect(result.error).toContain('previous agent was restored');
+      expect(commands.some((command) => command.includes('readlink') && command.includes('ln -sfn'))).toBe(true);
+      expect(health).toHaveBeenCalledTimes(2);
     });
 
     it('rejects darwin x64 Node, including Rosetta', async () => {

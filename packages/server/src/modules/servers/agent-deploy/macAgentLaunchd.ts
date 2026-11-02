@@ -49,6 +49,24 @@ export class MacAgentLaunchd {
     for (const job of jobs) await this.jobs.bootout(job.domain);
   }
 
+  async readCurrent(): Promise<string | null> {
+    const current = `${this.home}/.azito/agent/current`;
+    const result = await this.ssh.execIsolated(this.host, `if [ -L ${shellQuote(current)} ]; then readlink ${shellQuote(current)}; elif [ -e ${shellQuote(current)} ]; then exit 1; else printf AZITO_ABSENT; fi`);
+    if (result.code !== 0) throw new Error('The agent current path is not a symlink');
+    const target = result.stdout.trim();
+    if (target === 'AZITO_ABSENT') return null;
+    if (!target || target.includes('\n')) throw new Error('Could not read the agent current link');
+    return target;
+  }
+
+  async restoreCurrent(previous: string | null, version: string): Promise<void> {
+    const current = `${this.home}/.azito/agent/current`;
+    const expected = `${this.home}/.azito/agent/${version}`;
+    const change = previous === null ? `rm -f ${shellQuote(current)}` : `ln -sfn ${shellQuote(previous)} ${shellQuote(current)}`;
+    const result = await this.ssh.execIsolated(this.host, `[ "$(readlink ${shellQuote(current)})" = ${shellQuote(expected)} ] && ${change}`);
+    if (result.code !== 0) throw new Error('Agent current link changed or could not be restored');
+  }
+
   async readInstallId(): Promise<string | undefined> {
     const idFile = `${this.home}/.azito/agent/install.id`;
     const result = await this.ssh.execIsolated(this.host, `if [ -f ${shellQuote(idFile)} ]; then cat ${shellQuote(idFile)}; elif [ -e ${shellQuote(`${this.home}/.azito/agent`)} ]; then exit 2; else printf AZITO_ABSENT; fi`);

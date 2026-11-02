@@ -85,7 +85,7 @@ describe('POST /api/servers/:name/agent/uninstall', () => {
   it('routes macOS removal through the Mac implementation', async () => {
     const res = await post('m1', { removeMisao: true });
     expect(res.statusCode).toBe(200);
-    expect(uninstallFromMacHost).toHaveBeenCalledWith('dev@win', { removeMisao: true });
+    expect(uninstallFromMacHost).toHaveBeenCalledWith('dev@win', { removeMisao: true }, { host: '100.64.0.7', port: 3002, token: 'tok' });
   });
 
   it('answers 404 for a server that does not exist', async () => {

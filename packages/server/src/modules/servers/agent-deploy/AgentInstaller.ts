@@ -45,6 +45,7 @@ const MISAO_STEP_MESSAGES: Record<AgentMisaoInstallStep, string> = {
 
 export interface AgentMisaoInstaller {
   install(transport: AgentTransport, onProgress?: (step: AgentMisaoInstallStep) => void): Promise<{ version: string; startMethod: 'systemd' | 'nohup' | 'taskscheduler' | 'running'; updateAvailable: boolean }>;
+  uninstallMac?(transport: AgentTransport): Promise<'done' | 'absent' | 'skipped'>;
 }
 
 export type { AgentUpdateResult };
@@ -427,17 +428,30 @@ export class AgentInstaller {
     }
   }
 
-  /**
-   * Redeploys the agent over SSH: a Windows host (`hostProfile`) takes the install's transaction ({@link updateOnWindows}); any
-   * other host (null = a Unix agent registered before the OS was recorded) takes the Unix bootstrap (tar, nohup, systemd).
-   * `warning` is set when the update worked but left something on the host that a person should know about.
-   */
-  uninstallFromMacHost(sshHost: string, choice: WindowsUninstallChoice): Promise<WindowsUninstallResult> {
+  /** Removes the managed Mac agent and, when requested and safe, its independent misao. */
+  uninstallFromMacHost(sshHost: string, choice: WindowsUninstallChoice, agent: { host: string | null; port: number | null; token: string | null }): Promise<WindowsUninstallResult> {
     return this.hostLocks.withLock(this.lockKey(sshHost), async () => {
       const manager = await MacAgentLaunchd.connect(this.sshClient, sshHost);
       const steps: WindowsUninstallResult['steps'] = [];
+      let id: string | undefined;
       try {
-        const id = await manager.readInstallId();
+        await manager.assertOwned();
+        id = await manager.readInstallId();
+      } catch (err) {
+        return { ok: false, steps: [{ id: 'task', outcome: 'failed', detail: (err as Error).message }, { id: 'folder', outcome: 'skipped' }, { id: 'misaoFolder', outcome: 'skipped', detail: 'Agent ownership could not be verified.' }] };
+      }
+      if (choice.removeMisao) {
+        try {
+          if (!this.misaoInstaller?.uninstallMac) throw new Error('misao removal is unavailable');
+          if (!agent.host || !agent.port || !agent.token) throw new Error('Agent address or token is missing; misao was left in place');
+          const transport = new AgentTransport(agent.host, agent.port, agent.token, 'system', agent.host, { platform: 'darwin', arch: 'arm64' });
+          const outcome = await this.misaoInstaller.uninstallMac(transport);
+          steps.push({ id: 'misaoFolder', outcome, ...(outcome === 'skipped' ? { detail: 'The hub may share this misao; it was left in place.' } : {}) });
+        } catch (err) {
+          steps.push({ id: 'misaoFolder', outcome: 'failed', detail: (err as Error).message });
+        }
+      } else steps.push({ id: 'misaoFolder', outcome: 'skipped', detail: 'misao removal was not requested.' });
+      try {
         if (id === undefined) steps.push({ id: 'task', outcome: 'absent' }, { id: 'folder', outcome: 'absent' });
         else {
           await manager.cleanup(id);
@@ -446,7 +460,6 @@ export class AgentInstaller {
       } catch (err) {
         steps.push({ id: 'task', outcome: 'failed', detail: (err as Error).message }, { id: 'folder', outcome: 'skipped', detail: 'The agent could not be safely stopped or verified.' });
       }
-      steps.push({ id: 'misaoTask', outcome: choice.removeMisao ? 'failed' : 'skipped', detail: choice.removeMisao ? 'The independent misao daemon could not be safely attributed to this agent; it was left in place.' : 'misao removal was not requested.' });
       return { ok: steps.every((step) => step.outcome !== 'failed'), steps };
     });
   }
@@ -467,25 +480,40 @@ export class AgentInstaller {
       return { success: false, version, error: (err as Error).message };
     }
 
+    let mac: MacAgentLaunchd | undefined;
+    let previous: string | null = null;
     try {
-      if (hostProfile?.platform === 'darwin') await (await MacAgentLaunchd.connect(this.sshClient, sshHost)).assertOwned();
+      if (hostProfile?.platform === 'darwin') {
+        mac = await MacAgentLaunchd.connect(this.sshClient, sshHost);
+        await mac.assertOwned();
+        previous = await mac.readCurrent();
+      }
       await this.transferAndDeploy(sshHost, version);
     } catch (err) {
       return { success: false, version, error: `Transfer failed: ${(err as Error).message}` };
     }
 
-    if (hostProfile?.platform !== 'darwin') await this.stopAgent(sshHost);
-
+    if (!mac) await this.stopAgent(sshHost);
+    let stage = 'Start';
     try {
       await this.startAgent(sshHost, tailscaleIp, existingToken, muxRuntime, hostProfile);
-    } catch (err) {
-      return { success: false, version, error: `Start failed: ${(err as Error).message}` };
-    }
-
-    try {
+      stage = 'Health check';
       await this.healthCheck(tailscaleIp, AGENT_PORT, version);
     } catch (err) {
-      return { success: false, version, error: `Health check failed: ${(err as Error).message}` };
+      let error = `${stage} failed: ${(err as Error).message}`;
+      if (mac) {
+        try {
+          await mac.restoreCurrent(previous, version);
+          if (previous !== null) {
+            await mac.start(tailscaleIp, AGENT_PORT, existingToken, muxRuntime || 'system');
+            await this.healthCheck(tailscaleIp, AGENT_PORT, undefined);
+          } else await mac.stop();
+          error += '; the previous agent was restored';
+        } catch (rollbackError) {
+          error += `; rollback failed: ${(rollbackError as Error).message}`;
+        }
+      }
+      return { success: false, version, error };
     }
 
     return { success: true, version };
