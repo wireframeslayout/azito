@@ -1,15 +1,11 @@
 #!/bin/bash
 set -euo pipefail
 
-# Ensure Node.js is on PATH (systemd has minimal PATH)
-# nvm
-export NVM_DIR="${NVM_DIR:-$HOME/.nvm}"
-[ -s "$NVM_DIR/nvm.sh" ] && . "$NVM_DIR/nvm.sh" 2>/dev/null
-# nodenv / anyenv
-[ -d "$HOME/.anyenv/envs/nodenv/shims" ] && export PATH="$HOME/.anyenv/envs/nodenv/shims:$PATH"
-[ -d "$HOME/.nodenv/shims" ] && export PATH="$HOME/.nodenv/shims:$PATH"
-# ~/.local/bin
-[ -d "$HOME/.local/bin" ] && export PATH="$HOME/.local/bin:$PATH"
+# systemd and launchd do not inherit the user's login PATH.
+if [ "${1:-}" != "--azito-login" ]; then
+  : "${SHELL:?SHELL must name the user's login shell}"
+  exec "$SHELL" -lc 'exec /bin/bash "$1" --azito-login' azito "$0"
+fi
 
 NODE_MAJOR=$(node -e 'console.log(process.versions.node.split(".")[0])' 2>/dev/null || echo "0")
 if [ "$NODE_MAJOR" -lt 24 ]; then

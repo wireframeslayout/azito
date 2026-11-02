@@ -1,6 +1,7 @@
 import { LocalNetworkPermissionError } from '../localNetworkDiagnosis';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { HOST_PROBE_COMMAND } from '../../../shared/os/hostProfile';
+import { POSIX_ENVIRONMENT_COMMAND } from './posixAgentEnvironment';
 import { HOST_OS_PROBE_COMMAND } from './hostOsProbe';
 import { buildWindowsPreflightCommand } from './windowsPreflight';
 import { AGENT_PRESENCE_COMMAND, AgentInstaller, type AgentMisaoInstaller, type InstallProgress } from './AgentInstaller';
@@ -64,7 +65,7 @@ function makeSsh(opts: HostOptions = {}, host: FakeHost = { folderId: '', folder
     }
     const answers: Record<string, string> = {
       [HOST_OS_PROBE_COMMAND]: 'AZITO_OS:%OS%:0\n',
-      'node --version': 'v24.14.0\n',
+      [POSIX_ENVIRONMENT_COMMAND]: `banner\nAZITO_ENV_BEGIN\nNODE_VERSION=v24.14.0\nNODE_HOST=${(opts.probe ?? 'linux x64').trim()}\nTMUX=${(opts.tmux ?? '').trim()}\nTAILSCALE=100.64.0.9\n\nAZITO_ENV_END\n`,
       [HOST_PROBE_COMMAND]: opts.probe ?? 'linux x64\n',
       'tmux -V': opts.tmux ?? '',
       'tailscale ip -4': '100.64.0.9\n',
@@ -415,7 +416,7 @@ describe('AgentInstaller', () => {
       const { installer, commands } = make(okMisao(), { tmux: 'tmux 3.4' });
       await installer.install('user@host');
       expect(HOST_PROBE_COMMAND).toBe(`node -p "process.platform+' '+process.arch"`);
-      expect(commands).toContain(HOST_PROBE_COMMAND);
+      expect(commands).toContain(POSIX_ENVIRONMENT_COMMAND);
       expect(commands).not.toContain('uname -m');
     });
 
@@ -428,18 +429,25 @@ describe('AgentInstaller', () => {
       expect((misao.install.mock.calls[0][0] as { hostProfile: unknown }).hostProfile).toEqual({ platform: 'linux', arch: 'x64' });
     });
 
-    it('still accepts only x64: darwin arm64 is a known host that is refused as before', async () => {
-      const { installer } = make(okMisao(), { tmux: 'tmux 3.4', probe: 'darwin arm64\n' });
-      const result = await installer.install('user@host');
-      expect(result.success).toBe(false);
-      expect(result.error).toMatch(/x86_64 architecture required \(found: arm64\)/);
-    });
-
-    it('accepts darwin x64', async () => {
-      const { installer } = make(okMisao(), { tmux: 'tmux 3.4', probe: 'darwin x64\n' });
+    it('accepts linux arm64', async () => {
+      const { installer } = make(okMisao(), { tmux: 'tmux 3.4', probe: 'linux arm64\n' });
       const result = await installer.install('user@host');
       expect(result.success).toBe(true);
-      expect(result.hostProfile).toEqual({ platform: 'darwin', arch: 'x64' });
+      expect(result.hostProfile).toEqual({ platform: 'linux', arch: 'arm64' });
+    });
+
+    it('accepts darwin arm64', async () => {
+      const { installer } = make(okMisao(), { tmux: 'tmux 3.4', probe: 'darwin arm64\n' });
+      const result = await installer.install('user@host');
+      expect(result.success).toBe(true);
+      expect(result.hostProfile).toEqual({ platform: 'darwin', arch: 'arm64' });
+    });
+
+    it('rejects darwin x64 Node, including Rosetta', async () => {
+      const { installer } = make(okMisao(), { tmux: 'tmux 3.4', probe: 'darwin x64\n' });
+      const result = await installer.install('user@host');
+      expect(result.success).toBe(false);
+      expect(result.error).toMatch(/Intel Mac \/ x64 Node/);
     });
 
     it('refuses a Windows host as unsupported_os (installing there is #369)', async () => {
@@ -486,9 +494,7 @@ describe('AgentInstaller', () => {
     it('sends the OS probe first, then the usual Unix probes unchanged', async () => {
       const { installer, commands } = make(okMisao(), { tmux: 'tmux 3.4' });
       await installer.install('user@host');
-      expect(commands.slice(0, 3)).toEqual([HOST_OS_PROBE_COMMAND, 'node --version', HOST_PROBE_COMMAND]);
-      expect(commands).toContain('tmux -V');
-      expect(commands).toContain('tailscale ip -4');
+      expect(commands.slice(0, 2)).toEqual([HOST_OS_PROBE_COMMAND, POSIX_ENVIRONMENT_COMMAND]);
     });
 
     it('fails the preflight of a Windows host with every reason: old Node, arm64, no Tailscale', async () => {

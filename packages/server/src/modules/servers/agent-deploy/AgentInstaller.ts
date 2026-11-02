@@ -6,7 +6,8 @@ import { Client as Ssh2Client } from 'ssh2';
 import type { SshClient } from '../ssh/SshClient';
 import type { AgentBundler } from './AgentBundler';
 import { AgentTransport } from '../transport/AgentTransport';
-import { HOST_PROBE_COMMAND, HostProfileError, parseHostProbe, type HostProfile } from '../../../shared/os/hostProfile';
+import { HostProfileError, parseHostProbe, type HostProfile } from '../../../shared/os/hostProfile';
+import { POSIX_ENVIRONMENT_COMMAND, parsePosixAgentEnvironment } from './posixAgentEnvironment';
 import { HOST_OS_PROBE_COMMAND, parseHostOsProbe } from './hostOsProbe';
 import { buildWindowsPreflightCommand, checkWindowsPreflight, parseWindowsPreflight, type WindowsPreflightInfo } from './windowsPreflight';
 import { buildSha256VerifyCommand, buildSafeExtractCommand, readSha256FromSumsFile } from './integrityVerifier';
@@ -518,24 +519,19 @@ export class AgentInstaller {
   private async preflightPosix(sshHost: string): Promise<PreflightInfo> {
     const missing: string[] = [];
 
-    const nodeResult = await this.sshClient.execIsolated(sshHost, 'node --version');
-    const nodeVersionRaw = nodeResult.stdout.trim().replace(/^v/, '');
+    const result = await this.sshClient.execIsolated(sshHost, POSIX_ENVIRONMENT_COMMAND);
+    if (result.code !== 0) throw new Error('Preflight failed: login shell could not resolve the agent environment; check $SHELL and its startup files.');
+    const environment = parsePosixAgentEnvironment(result.stdout);
+    const nodeVersionRaw = environment.nodeVersion.replace(/^v/, '');
     const nodeMajor = parseInt(nodeVersionRaw.split('.')[0], 10);
     if (isNaN(nodeMajor) || nodeMajor < 24) {
-      missing.push(`Node.js v24+ required (found: ${nodeResult.stdout.trim() || 'not installed'})`);
+      missing.push(`Node.js v24+ required (searched login shell PATH; found: ${environment.nodeVersion || 'not installed'})`);
     }
-
-    // Without node the probe cannot run; the Node requirement above already says so.
-    const hostProfile = nodeMajor >= 24 ? await this.probeHostProfile(sshHost, missing) : undefined;
-
-    // tmux is optional: the pane server this hub installs is misao.
-    const tmuxResult = await this.sshClient.execIsolated(sshHost, 'tmux -V');
-    const tmuxVersion = tmuxResult.stdout.trim();
-
-    const tsResult = await this.sshClient.execIsolated(sshHost, 'tailscale ip -4');
-    const tailscaleIp = tsResult.stdout.trim().split('\n')[0];
-    if (!tailscaleIp || !tailscaleIp.match(/^\d+\.\d+\.\d+\.\d+$/)) {
-      missing.push(`Tailscale IP not found (got: ${tailscaleIp || 'empty'})`);
+    const hostProfile = nodeMajor >= 24 ? this.parsePosixHostProfile(environment.nodeHost, missing) : undefined;
+    const tmuxVersion = environment.tmuxVersion;
+    const tailscaleIp = environment.tailscaleIp;
+    if (!tailscaleIp.match(/^\d+\.\d+\.\d+\.\d+$/)) {
+      missing.push(`Tailscale IP not found (searched login shell PATH and /Applications/Tailscale.app/Contents/MacOS/Tailscale; got: ${tailscaleIp || 'empty'})`);
     }
 
     if (missing.length > 0) {
@@ -546,25 +542,18 @@ export class AgentInstaller {
     return { tailscaleIp, nodeVersion: nodeVersionRaw, hostProfile: hostProfile!, tmuxVersion };
   }
 
-  /**
-   * Reads the host's OS / architecture with node itself (the same text under sh, cmd and PowerShell). The hosts this installer
-   * accepts are unchanged: x64 only. A Windows host never gets here (`preflight` sends it to `preflightWindows` by the OS probe),
-   * so a win32 answer is refused as `unsupported_os`; an OS or architecture AZITO does not know is `unsupported_host`. A reason
-   * is added to `missing` for a host that is refused.
-   */
-  private async probeHostProfile(sshHost: string, missing: string[]): Promise<HostProfile | undefined> {
-    const probe = await this.sshClient.execIsolated(sshHost, HOST_PROBE_COMMAND);
+  private parsePosixHostProfile(output: string, missing: string[]): HostProfile | undefined {
     let profile: HostProfile;
     try {
-      profile = parseHostProbe(probe.stdout);
+      profile = parseHostProbe(output);
     } catch (err) {
       missing.push(err instanceof HostProfileError ? `${err.code}: ${err.message}` : (err as Error).message);
       return undefined;
     }
     if (profile.platform === 'win32') {
       missing.push('unsupported_os: this host answered as Windows to the Unix preflight; a Windows host is installed through the Windows preflight');
-    } else if (profile.arch !== 'x64') {
-      missing.push(`x86_64 architecture required (found: ${profile.arch})`);
+    } else if (profile.platform === 'darwin' && profile.arch === 'x64') {
+      missing.push('unsupported_host: Intel Mac / x64 Node is outside v0.13.0 support; use an arm64 Node for Apple Silicon');
     }
     return profile;
   }
