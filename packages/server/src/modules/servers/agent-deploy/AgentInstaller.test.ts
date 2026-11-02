@@ -508,6 +508,19 @@ describe('AgentInstaller', () => {
       expect(result.error).not.toMatch(/install.*sign in/i);
     });
 
+    it('goes past the preflight with the network address after a CLI refusal, and logs the refusal', async () => {
+      const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+      try {
+        const { installer, commands } = makeWindows('cmd', { tailscaleIp: '100.64.1.2', tailscaleCli: 'denied', tailscaleDetail: 'exit 1 : 401 Unauthorized', networkStatus: 'found' });
+        const result = await installer.install('user@host');
+        expect(result.error ?? '').not.toContain('Preflight failed');
+        expect(commands.length).toBeGreaterThan(2);
+        expect(warn).toHaveBeenCalledWith(expect.stringMatching(/using network address; CLI access denied: exit 1 : 401 Unauthorized/));
+      } finally {
+        warn.mockRestore();
+      }
+    });
+
     it('refuses a Windows host whose native architecture cannot be read, with the reason', async () => {
       const { installer } = makeWindows('powershell', { arch: null });
       const result = await installer.install('user@host');
