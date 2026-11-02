@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import { packTarGz, type TarEntry } from '../../../shared/fs/tarGz';
-import { assertAgentBundleComplete, describeNotLinuxX64Elf, describeNotLinuxElf, findAgentBundleProblems, isNodePtySpawnHelper, AGENT_PTY_NODE_PATH } from './agentBundleCheck';
+import { assertAgentBundleComplete, describeNotLinuxX64Elf, describeNotLinuxElf, findAgentBundleProblems, isNodePtySpawnHelper, AGENT_PTY_NODE_PATH, AGENT_PTY_ARM64_NODE_PATH } from './agentBundleCheck';
 
 function elf(machine: number, elfClass = 2): Buffer {
   const header = Buffer.alloc(64);
@@ -20,6 +20,7 @@ function completeBundle(): TarEntry[] {
     file('version.txt', 'abc'),
     file('run.sh', '#!/bin/bash\n', 0o755),
     file(AGENT_PTY_NODE_PATH, elf(62)),
+    file(AGENT_PTY_ARM64_NODE_PATH, elf(183)),
     file('node_modules/node-pty/lib/index.js', 'js'),
     ...['darwin-arm64', 'darwin-x64'].flatMap((dir) => [
       file(`node_modules/node-pty/prebuilds/${dir}/pty.node`, 'macho'),
@@ -59,7 +60,15 @@ describe('findAgentBundleProblems', () => {
 
   it('reports a bundle built on a Windows or macOS host: no Linux pty.node', () => {
     const entries = completeBundle().filter((e) => e.path !== AGENT_PTY_NODE_PATH);
-    expect(findAgentBundleProblems(pack(entries))).toEqual([`${AGENT_PTY_NODE_PATH} is missing (node-pty has no Linux binary in the bundle)`]);
+    expect(findAgentBundleProblems(pack(entries))).toEqual([`${AGENT_PTY_NODE_PATH} is missing (node-pty has no Linux x64 binary in the bundle)`]);
+  });
+
+  it('rejects missing, swapped and shadowed Linux arm64 binaries', () => {
+    const missing = completeBundle().filter((e) => e.path !== AGENT_PTY_ARM64_NODE_PATH);
+    expect(findAgentBundleProblems(pack(missing))).toEqual([expect.stringContaining('linux-arm64/pty.node is missing')]);
+    const swapped = completeBundle().map((e) => e.path === AGENT_PTY_ARM64_NODE_PATH ? { ...e, data: elf(62) } : e);
+    expect(findAgentBundleProblems(pack(swapped))).toEqual([expect.stringContaining('not a Linux arm64 binary')]);
+    expect(findAgentBundleProblems(pack([...completeBundle(), file('node_modules/node-pty/build/Release/pty.node', elf(62))]))).toEqual([expect.stringContaining('shadows architecture-specific prebuilds')]);
   });
 
   it('reports the prebuilds a macOS / Windows agent needs when they are missing, and a spawn-helper that cannot run', () => {
@@ -81,11 +90,11 @@ describe('findAgentBundleProblems', () => {
 
   it('reports a pty.node of the wrong OS', () => {
     const entries = completeBundle().map((e) => (e.path === AGENT_PTY_NODE_PATH ? { ...e, data: Buffer.from([0xcf, 0xfa, 0xed, 0xfe, ...new Array(30).fill(0)]) } : e));
-    expect(findAgentBundleProblems(pack(entries))[0]).toMatch(/not a Linux x86-64 binary/);
+    expect(findAgentBundleProblems(pack(entries))[0]).toMatch(/not a Linux x64 binary/);
   });
 
   it('throws with the label and every problem', () => {
-    expect(() => assertAgentBundleComplete(pack([]), 'the tarball')).toThrow(/the tarball is not a complete Linux x86_64 agent bundle: azito-agent\.cjs is missing/);
+    expect(() => assertAgentBundleComplete(pack([]), 'the tarball')).toThrow(/the tarball is not a complete agent bundle: azito-agent\.cjs is missing/);
   });
 });
 

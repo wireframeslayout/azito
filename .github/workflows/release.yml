@@ -11,7 +11,29 @@ permissions:
 jobs:
   # The agent is a Linux x86-64 program whichever OS (and CPU) the hub that ships it runs on, and node-pty's Linux binary can only be built
   # on Linux. It is built once here, so every hub tarball / zip carries the same agent (same bundle hash) and the same node-pty.
+  agent-native-arm64:
+    name: Agent node-pty (Linux arm64)
+    runs-on: ubuntu-24.04-arm
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+      - run: npm ci
+      - name: Collect node-pty (Linux arm64)
+        run: |
+          mkdir -p node-pty-linux-arm64/build/Release
+          cp node_modules/node-pty/package.json node-pty-linux-arm64/
+          cp node_modules/node-pty/build/Release/pty.node node-pty-linux-arm64/build/Release/
+      - uses: actions/upload-artifact@v4
+        with:
+          name: node-pty-linux-arm64
+          path: node-pty-linux-arm64
+          if-no-files-found: error
+
   agent-native:
+    needs: agent-native-arm64
     runs-on: ubuntu-24.04
     timeout-minutes: 15
     steps:
@@ -68,10 +90,16 @@ jobs:
           name: node-pty-linux
           path: ${{ runner.temp }}/node-pty-linux
 
+      - uses: actions/download-artifact@v4
+        with:
+          name: node-pty-linux-arm64
+          path: ${{ runner.temp }}/node-pty-linux-arm64
+
       - name: Build hub bundle
         # build-hub.ts builds the Linux x86-64 agent bundle with this node-pty (build-agent.ts reads AZITO_AGENT_NODE_PTY_LINUX).
         env:
           AZITO_AGENT_NODE_PTY_LINUX: ${{ runner.temp }}/node-pty-linux
+          AZITO_AGENT_NODE_PTY_LINUX_ARM64: ${{ runner.temp }}/node-pty-linux-arm64
         # One line, so it runs the same in bash and in the Windows runner's default PowerShell.
         run: npx -w packages/server tsx scripts/build-hub.ts --version ${{ github.ref_name }} --platform ${{ matrix.platform }} --arch ${{ matrix.arch }} --repo ${{ github.repository }}
 
