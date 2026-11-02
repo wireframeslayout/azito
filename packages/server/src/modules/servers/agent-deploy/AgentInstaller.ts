@@ -127,6 +127,7 @@ export class AgentInstaller {
     /** Absent for a hub that cannot install misao (no bundled copy): the agent is installed without it. */
     private misaoInstaller?: AgentMisaoInstaller,
     private harnessPrefix = '',
+    private misaoUninstaller?: Pick<AgentMisaoInstaller, 'uninstallMac'>,
   ) {
     // The overrides exist to try a second agent beside the real one; they are not saved per server, so a hub started without them
     // looks for the default task: say so once when they are in use.
@@ -442,10 +443,11 @@ export class AgentInstaller {
       }
       if (choice.removeMisao) {
         try {
-          if (!this.misaoInstaller?.uninstallMac) throw new Error('misao removal is unavailable');
+          const uninstaller = this.misaoUninstaller ?? this.misaoInstaller;
+          if (!uninstaller?.uninstallMac) throw new Error('misao removal is unavailable');
           if (!agent.host || !agent.port || !agent.token) throw new Error('Agent address or token is missing; misao was left in place');
           const transport = new AgentTransport(agent.host, agent.port, agent.token, 'system', agent.host, { platform: 'darwin', arch: 'arm64' });
-          const outcome = await this.misaoInstaller.uninstallMac(transport);
+          const outcome = await uninstaller.uninstallMac(transport);
           steps.push({ id: 'misaoFolder', outcome, ...(outcome === 'skipped' ? { detail: 'The hub may share this misao; it was left in place.' } : {}) });
         } catch (err) {
           steps.push({ id: 'misaoFolder', outcome: 'failed', detail: (err as Error).message });

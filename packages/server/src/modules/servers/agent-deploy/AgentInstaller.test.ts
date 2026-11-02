@@ -1,6 +1,7 @@
 import { LocalNetworkPermissionError } from '../localNetworkDiagnosis';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { HOST_PROBE_COMMAND } from '../../../shared/os/hostProfile';
+import { MacAgentLaunchd } from './macAgentLaunchd';
 import { POSIX_ENVIRONMENT_COMMAND } from './posixAgentEnvironment';
 import { HOST_OS_PROBE_COMMAND } from './hostOsProbe';
 import { buildWindowsPreflightCommand } from './windowsPreflight';
@@ -414,6 +415,17 @@ describe('AgentInstaller', () => {
     const result = await installer.install('u@192.168.1.2', (step) => steps.push(step));
     expect(result).toMatchObject({ success: false, code: error.code, detail: error.detail });
     expect(steps.at(-1)).toMatchObject({ status: 'error', code: error.code, detail: error.detail });
+  });
+
+  it('can remove managed Mac misao without a bundle to install', async () => {
+    const { ssh } = makeSsh();
+    const uninstallMac = vi.fn(async () => 'absent' as const);
+    const installer = new AgentInstaller(ssh as never, makeBundler() as never, DEFAULT_WINDOWS_AGENT_OPTIONS, undefined, '', { uninstallMac });
+    vi.spyOn(MacAgentLaunchd.prototype, 'assertOwned').mockResolvedValue();
+    vi.spyOn(MacAgentLaunchd.prototype, 'readInstallId').mockResolvedValue(undefined);
+    const result = await installer.uninstallFromMacHost('user@host', { removeMisao: true }, { host: '100.64.0.9', port: 3002, token: 'tok' });
+    expect(result.ok).toBe(true);
+    expect(uninstallMac).toHaveBeenCalledOnce();
   });
 
   describe('host OS / architecture preflight', () => {
