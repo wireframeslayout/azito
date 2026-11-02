@@ -1,6 +1,7 @@
 import { describe, it, expect, afterEach, vi } from 'vitest';
 import Fastify, { type FastifyInstance } from 'fastify';
 import { Writable } from 'node:stream';
+import { HostProfileError } from '../../../shared/os/hostProfile';
 import sessionsRoutes, { type SessionsRouteOptions } from './sessions';
 import type { IServerRepository, ServerConfig } from '../../servers/Server';
 import { TmuxClient } from '../TmuxClient';
@@ -191,4 +192,19 @@ it.skipIf(process.platform === 'win32')('does not expose pane tokens when local 
   expect(logs).not.toContain('ui-token-test-123');
   expect(logs).not.toContain('webhook-token-test-456');
   expect(logs).not.toContain('-e');
+});
+
+
+describe('legacy creation host errors', () => {
+  it.each([
+    { method: 'createSession', url: '/api/servers/srv1/sessions', payload: { name: 'main' }, operation: 'new-session' },
+    { method: 'createWindow', url: '/api/servers/srv1/sessions/main/windows', payload: {}, operation: 'new-window' },
+  ])('keeps a 500 response for $method', async ({ method, url, payload, operation }) => {
+    const tmux = { [method]: vi.fn(async () => { throw new HostProfileError('unsupported_os', 'unsupported OS'); }) } as unknown as TmuxClient;
+    const app = await buildApp({}, makeWindowRepo(), tmux);
+    const res = await app.inject({ method: 'POST', url, payload });
+    expect(res.statusCode).toBe(500);
+    expect(res.json().error).toContain(`${operation} failed`);
+    await app.close();
+  });
 });
