@@ -10,6 +10,11 @@ import { DEFAULT_WINDOWS_AGENT_OPTIONS } from './windowsAgentConfig';
 
 const VERSION = 'bundlehash1';
 
+function unwrapCommand(command: string): string {
+  const prefix = "/bin/bash -c '";
+  return command.startsWith(prefix) ? command.slice(prefix.length, -1).replaceAll("'\\''", "'") : command;
+}
+
 function makeBundler() {
   return {
     ensureBuild: vi.fn(async () => undefined),
@@ -21,6 +26,7 @@ function makeBundler() {
 
 interface HostOptions {
   tmux?: string;
+  osProbe?: string;
   probe?: string;
   /** An agent was on the host before this install. */
   hadAgent?: boolean;
@@ -46,7 +52,8 @@ interface FakeHost { folderId: string; folderExists: boolean }
 /** An SSH client whose host answers the preflight and accepts every other command, recording them all. */
 function makeSsh(opts: HostOptions = {}, host: FakeHost = { folderId: '', folderExists: false }) {
   const commands: string[] = [];
-  const execIsolated = vi.fn(async (_host: string, command: string) => {
+  const execIsolated = vi.fn(async (_host: string, rawCommand: string) => {
+    const command = unwrapCommand(rawCommand);
     commands.push(command);
     if (command.includes('agent-launchd-backup.XXXXXX')) return { stdout: '/Users/test/.azito/agent-launchd-backup.abc123\n', stderr: '', code: 0 };
     if (command.startsWith('if [ -L') && command.includes('/.azito/agent/current')) return { stdout: '/Users/test/.azito/agent/old\n', stderr: '', code: 0 };
@@ -70,7 +77,8 @@ function makeSsh(opts: HostOptions = {}, host: FakeHost = { folderId: '', folder
       return { stdout: `${result}\n`, stderr: '', code: 0 };
     }
     const answers: Record<string, string> = {
-      [HOST_OS_PROBE_COMMAND]: 'AZITO_OS:%OS%:0\n',
+      [HOST_OS_PROBE_COMMAND]: opts.osProbe ?? 'AZITO_OS:%OS%:0\n',
+      'printf AZITO_POSIX_SHELL': 'AZITO_POSIX_SHELL',
       [POSIX_ENVIRONMENT_COMMAND]: `banner\nAZITO_ENV_BEGIN\nNODE_VERSION=v24.14.0\nNODE_HOST=${(opts.probe ?? 'linux x64').trim()}\nTMUX=${(opts.tmux ?? '').trim()}\nTAILSCALE=100.64.0.9\n\nAZITO_ENV_END\n`,
       [HOST_PROBE_COMMAND]: opts.probe ?? 'linux x64\n',
       'tmux -V': opts.tmux ?? '',
@@ -528,6 +536,14 @@ describe('AgentInstaller', () => {
       return { installer, commands };
     }
 
+    it('identifies a non-POSIX login shell through a fixed bash probe', async () => {
+      const { installer, commands } = make(okMisao(), { tmux: 'tmux 3.4', osProbe: '' });
+      const result = await installer.install('user@host');
+      expect(result.success).toBe(true);
+      expect(commands).toContain('printf AZITO_POSIX_SHELL');
+      expect(commands).toContain(POSIX_ENVIRONMENT_COMMAND);
+    });
+
     it('sends the OS probe first, then the usual Unix probes unchanged', async () => {
       const { installer, commands } = make(okMisao(), { tmux: 'tmux 3.4' });
       await installer.install('user@host');
@@ -549,14 +565,14 @@ describe('AgentInstaller', () => {
       expect(result.error).toContain('Could not read the OS architecture');
     });
 
-    it('fails with a reason, and sends nothing else, when the OS probe answers as none of sh, cmd or PowerShell', async () => {
+    it('fails with a reason when neither the OS probe nor the POSIX fallback can identify the host', async () => {
       const commands: string[] = [];
       const execIsolated = vi.fn(async (_host: string, command: string) => { commands.push(command); return { stdout: 'weird\n', stderr: '', code: 0 }; });
       const installer = new AgentInstaller({ execIsolated, resolveHost: (h: string) => ({ username: 'user', host: h.replace(/^.*@/, '').replace(/:\d+$/, ''), port: 22 }) } as never, makeBundler() as never, DEFAULT_WINDOWS_AGENT_OPTIONS, okMisao());
       const result = await installer.install('user@host');
       expect(result.success).toBe(false);
       expect(result.error).toMatch(/Could not tell the host's OS/);
-      expect(commands).toEqual([HOST_OS_PROBE_COMMAND]);
+      expect(commands).toEqual([HOST_OS_PROBE_COMMAND, "/bin/bash -c 'printf AZITO_POSIX_SHELL'"]);
     });
   });
 });

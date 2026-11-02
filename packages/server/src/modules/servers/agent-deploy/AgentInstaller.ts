@@ -7,6 +7,7 @@ import type { SshClient } from '../ssh/SshClient';
 import type { AgentBundler } from './AgentBundler';
 import { AgentTransport } from '../transport/AgentTransport';
 import { HostProfileError, parseHostProbe, type HostProfile } from '../../../shared/os/hostProfile';
+import { posixRemoteCommand } from './posixRemoteCommand';
 import { MacAgentLaunchd } from './macAgentLaunchd';
 import { POSIX_ENVIRONMENT_COMMAND, parsePosixAgentEnvironment } from './posixAgentEnvironment';
 import { HOST_OS_PROBE_COMMAND, parseHostOsProbe } from './hostOsProbe';
@@ -294,14 +295,18 @@ export class AgentInstaller {
   }
 
   private async writeInstallId(sshHost: string, installId: string): Promise<void> {
-    const result = await this.sshClient.execIsolated(sshHost, `mkdir -p ~/.azito/agent && printf %s ${installId} > ${INSTALL_ID_FILE}`);
+    const result = await this.execPosix(sshHost, `mkdir -p ~/.azito/agent && printf %s ${installId} > ${INSTALL_ID_FILE}`);
     if (result.code !== 0) throw new Error(`install id write failed: ${result.stderr}`);
   }
 
   /** One command over SSH as a value: a failed command or connection is `ok: false` with the reason (the caller reports it, never hides it). */
+  private execPosix(host: string, command: string, timeoutMs?: number): ReturnType<SshClient['execIsolated']> {
+    return this.sshClient.execIsolated(host, posixRemoteCommand(command), timeoutMs);
+  }
+
   private async runOnHost(sshHost: string, command: string, timeoutMs?: number): Promise<{ ok: true; stdout: string } | { ok: false; error: string }> {
     try {
-      const result = await this.sshClient.execIsolated(sshHost, command, timeoutMs);
+      const result = await this.execPosix(sshHost, command, timeoutMs);
       return result.code === 0 ? { ok: true, stdout: result.stdout } : { ok: false, error: result.stderr.trim() || `exit ${result.code}` };
     } catch (err) {
       return { ok: false, error: (err as Error).message };
@@ -313,7 +318,7 @@ export class AgentInstaller {
    * guess. Throws {@link CleanupMarkError} while the mark of a cleanup is on the host.
    */
   private async hostHasAgent(sshHost: string): Promise<boolean> {
-    const result = await this.sshClient.execIsolated(sshHost, AGENT_PRESENCE_COMMAND);
+    const result = await this.execPosix(sshHost, AGENT_PRESENCE_COMMAND);
     if (result.code !== 0) return true;
     const mark = parseCleanupGuard(result.stdout, (line) => line === 'AZITO_AGENT_PRESENT' || line === 'AZITO_AGENT_ABSENT');
     if (mark) throw new CleanupMarkError(cleanupMarkMessage(sshHost, mark));
@@ -322,7 +327,7 @@ export class AgentInstaller {
 
   /** Throws {@link CleanupMarkError} while the mark of a cleanup is on the host. The first shell command of an update or a recovery. */
   private async assertNoCleanupRunning(sshHost: string): Promise<void> {
-    const result = await this.sshClient.execIsolated(sshHost, CLEANUP_GUARD_COMMAND);
+    const result = await this.execPosix(sshHost, CLEANUP_GUARD_COMMAND);
     if (result.code !== 0) throw new Error(`could not check the host for a running cleanup: ${result.stderr.trim() || `exit ${result.code}`}`);
     const mark = parseCleanupGuard(result.stdout, (line) => line === 'AZITO_CLEANUP_IDLE');
     if (mark) throw new CleanupMarkError(cleanupMarkMessage(sshHost, mark));
@@ -553,7 +558,15 @@ export class AgentInstaller {
   private async preflight(sshHost: string): Promise<PreflightInfo> {
     // The login shell of the target is unknown (sh, cmd.exe or PowerShell): the OS is read first, then the matching probes run.
     const osProbe = await this.sshClient.execIsolated(sshHost, HOST_OS_PROBE_COMMAND);
-    if (parseHostOsProbe(osProbe.stdout, osProbe.stderr, osProbe.code).os === 'windows') return this.preflightWindows(sshHost);
+    let os: 'posix' | 'windows';
+    try {
+      os = parseHostOsProbe(osProbe.stdout, osProbe.stderr, osProbe.code).os;
+    } catch (err) {
+      const posix = await this.execPosix(sshHost, 'printf AZITO_POSIX_SHELL');
+      if (posix.code !== 0 || posix.stdout.trim() !== 'AZITO_POSIX_SHELL') throw err;
+      os = 'posix';
+    }
+    if (os === 'windows') return this.preflightWindows(sshHost);
     return this.preflightPosix(sshHost);
   }
 
@@ -579,7 +592,7 @@ export class AgentInstaller {
   private async preflightPosix(sshHost: string): Promise<PreflightInfo> {
     const missing: string[] = [];
 
-    const result = await this.sshClient.execIsolated(sshHost, POSIX_ENVIRONMENT_COMMAND);
+    const result = await this.execPosix(sshHost, POSIX_ENVIRONMENT_COMMAND);
     if (result.code !== 0) throw new Error('Preflight failed: login shell could not resolve the agent environment; check $SHELL and its startup files.');
     const environment = parsePosixAgentEnvironment(result.stdout);
     const nodeVersionRaw = environment.nodeVersion.replace(/^v/, '');
@@ -630,22 +643,22 @@ export class AgentInstaller {
     const expectedHash = readSha256FromSumsFile(this.bundler.getSha256sumsPath(), 'azito-agent.tar.gz');
 
     const verifyCmd = buildSha256VerifyCommand(remoteTmp);
-    const shaResult = await this.sshClient.execIsolated(sshHost, verifyCmd);
+    const shaResult = await this.execPosix(sshHost, verifyCmd);
     const actualHash = shaResult.stdout.trim();
     if (actualHash !== expectedHash) {
-      await this.sshClient.execIsolated(sshHost, `rm -f "${remoteTmp}"`);
+      await this.execPosix(sshHost, `rm -f "${remoteTmp}"`);
       throw new Error(`SHA256 mismatch: expected ${expectedHash}, got ${actualHash}`);
     }
 
     const deployDir = `~/.azito/agent/${version}`;
     const extractCmd = buildSafeExtractCommand(remoteTmp, deployDir);
-    const extractResult = await this.sshClient.execIsolated(sshHost, extractCmd);
+    const extractResult = await this.execPosix(sshHost, extractCmd);
     if (extractResult.code !== 0) {
       throw new Error(`Deploy failed: ${extractResult.stderr}`);
     }
 
     const linkCmd = `ln -sfn ~/.azito/agent/${version} ~/.azito/agent/current`;
-    await this.sshClient.execIsolated(sshHost, linkCmd);
+    await this.execPosix(sshHost, linkCmd);
   }
 
   private async startAgent(
@@ -678,7 +691,7 @@ export class AgentInstaller {
       'ENV_EOF',
       ')',
     ].join('\n');
-    const envResult = await this.sshClient.execIsolated(sshHost, writeEnv);
+    const envResult = await this.execPosix(sshHost, writeEnv);
     if (envResult.code !== 0) {
       throw new Error('agent env file write failed: ' + envResult.stderr);
     }
@@ -707,7 +720,7 @@ export class AgentInstaller {
     ].join('\n');
 
     const writeUnit = `mkdir -p ~/.config/systemd/user && cat > ~/.config/systemd/user/azito-agent.service << 'UNIT_EOF'\n${unitContent}\nUNIT_EOF`;
-    const writeResult = await this.sshClient.execIsolated(sshHost, writeUnit);
+    const writeResult = await this.execPosix(sshHost, writeUnit);
     if (writeResult.code !== 0) {
       throw new Error(`systemd unit write failed: ${writeResult.stderr}`);
     }
@@ -716,9 +729,9 @@ export class AgentInstaller {
     // an active login session — otherwise the agent only starts once someone SSHes in
     // after a machine/WSL restart. Not fatal if the platform doesn't support linger
     // (e.g. no polkit) — fall back to the current session-scoped behavior.
-    await this.sshClient.execIsolated(sshHost, 'loginctl enable-linger "$(whoami)" || true');
+    await this.execPosix(sshHost, 'loginctl enable-linger "$(whoami)" || true');
 
-    const enableResult = await this.sshClient.execIsolated(
+    const enableResult = await this.execPosix(
       sshHost,
       'systemctl --user daemon-reload && systemctl --user enable azito-agent && systemctl --user restart azito-agent',
     );
@@ -730,7 +743,7 @@ export class AgentInstaller {
   }
 
   private async startNohup(sshHost: string, tailscaleIp: string, token: string, muxRuntime?: string): Promise<void> {
-    await this.sshClient.execIsolated(
+    await this.execPosix(
       sshHost,
       'test -f ~/.azito/agent/agent.pid && kill $(cat ~/.azito/agent/agent.pid) 2>/dev/null; true',
     );
@@ -742,7 +755,7 @@ export class AgentInstaller {
       'ENV_EOF',
       ')',
     ].join('\n');
-    const envResult = await this.sshClient.execIsolated(sshHost, writeEnv);
+    const envResult = await this.execPosix(sshHost, writeEnv);
     if (envResult.code !== 0) {
       throw new Error('agent env file write failed: ' + envResult.stderr);
     }
@@ -758,7 +771,7 @@ export class AgentInstaller {
       'echo $! > ~/.azito/agent/agent.pid',
     ].join(' ');
 
-    await this.sshClient.execIsolated(sshHost, cmd);
+    await this.execPosix(sshHost, cmd);
   }
 
   /**
@@ -784,7 +797,7 @@ export class AgentInstaller {
   }
 
   private async stopAgent(sshHost: string): Promise<void> {
-    await this.sshClient.execIsolated(
+    await this.execPosix(
       sshHost,
       'systemctl --user disable --now azito-agent 2>/dev/null; test -f ~/.azito/agent/agent.pid && kill $(cat ~/.azito/agent/agent.pid) 2>/dev/null; pkill -f azito-agent.cjs 2>/dev/null; sleep 1; true',
     );
