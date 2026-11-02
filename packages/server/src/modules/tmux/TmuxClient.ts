@@ -467,7 +467,7 @@ export class TmuxClient implements IMuxClient {
     const confirmedAbsent =
       output.includes("can't find") ||
       output.includes('no such session') ||
-      output.includes('no server running');
+      (output.includes('no server running') && !output.includes('no such socket file'));
     return { alive: false, verified: confirmedAbsent };
   }
 

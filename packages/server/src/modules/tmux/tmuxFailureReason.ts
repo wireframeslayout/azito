@@ -4,7 +4,8 @@ function classifyTmuxOutput(output: string): string | null {
   if (/command not found/i.test(output)) return 'command not found';
   if (/permission denied/i.test(output)) return 'permission denied';
   if (/ECONNREFUSED|connection refused/i.test(output)) return 'connection refused';
-  if (/no server running/i.test(output) || /error connecting to .*\(no such file or directory\)/i.test(output)) return 'no server running on tmux socket';
+  if (/error connecting to .*\(no such file or directory\)/i.test(output) || /no server running on tmux socket \(no such socket file\)/i.test(output)) return 'no server running on tmux socket (no such socket file)';
+  if (/no server running/i.test(output)) return 'no server running on tmux socket';
   if (/can't find/i.test(output)) return "can't find target";
   if (/no such session/i.test(output)) return 'no such session';
   if (/duplicate session/i.test(output)) return 'duplicate session';

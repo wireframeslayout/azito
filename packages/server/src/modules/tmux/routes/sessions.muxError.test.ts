@@ -228,7 +228,30 @@ describe('create failure reasons by mux kind', () => {
     const app = await buildApp({ openWindow } as Partial<IMuxClient>);
     const res = await app.inject({ method: 'POST', url: '/api/servers/srv1/mux/workspaces/ws/windows', payload: { kind: 'misao' } });
     expect(res.statusCode).toBe(500);
-    expect(res.json().error).toBe('create window failed: command not found');
+    expect(res.json().error).toBe('create window failed: program not found');
+    await app.close();
+  });
+
+  it.each([
+    [1006, 'workspace not found'],
+    [1007, 'window not found'],
+    [1001, 'pane not found'],
+  ])('reports misao RPC code %i without its message', async (code, reason) => {
+    const openWindow = vi.fn(async () => { throw Object.assign(new Error('AZITO_UI_TOKEN=secret'), { code }); });
+    const app = await buildApp({ openWindow } as Partial<IMuxClient>);
+    const res = await app.inject({ method: 'POST', url: '/api/servers/srv1/mux/workspaces/ws/windows', payload: { kind: 'misao' } });
+    expect(res.statusCode).toBe(500);
+    expect(res.json().error).toBe(`create window failed: ${reason}`);
+    expect(res.body).not.toContain('secret');
+    await app.close();
+  });
+
+  it('reports a missing misao program without its arguments', async () => {
+    const openWindow = vi.fn(async () => { throw Object.assign(new Error('command not found: secret'), { code: 1007 }); });
+    const app = await buildApp({ openWindow } as Partial<IMuxClient>);
+    const res = await app.inject({ method: 'POST', url: '/api/servers/srv1/mux/workspaces/ws/windows', payload: { kind: 'misao' } });
+    expect(res.json().error).toBe('create window failed: program not found');
+    expect(res.body).not.toContain('secret');
     await app.close();
   });
 

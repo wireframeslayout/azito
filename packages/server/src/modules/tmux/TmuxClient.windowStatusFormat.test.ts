@@ -85,3 +85,19 @@ describe('TmuxClient setWindowStatusFormat (post-creation decoration is best-eff
     expect(calls.some((c) => c[0] === 'set-window-option')).toBe(false);
   });
 });
+
+it('does not log environment values from a failed tmux command', async () => {
+  const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+  try {
+    const client = makeClient(async (args) => {
+      if (args[0] === 'set-window-option') throw new Error('Command failed: tmux -e AZITO_UI_TOKEN=ui-secret -e AZITO_WEBHOOK_TOKEN=webhook-secret');
+      return { stdout: '', stderr: '', code: 0 };
+    });
+    await client.createWindow(srv, 'test-session', 'win');
+    expect(warn).toHaveBeenCalled();
+    const logged = JSON.stringify(warn.mock.calls);
+    expect(logged).not.toContain('ui-secret');
+    expect(logged).not.toContain('webhook-secret');
+    expect(logged).not.toContain('-e');
+  } finally { warn.mockRestore(); }
+});

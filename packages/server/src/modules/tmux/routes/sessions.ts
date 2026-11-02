@@ -1,4 +1,5 @@
 import { tmuxErrorReason, tmuxFailureReason } from '../tmuxFailureReason';
+import { misaoFailureReason } from '../misao/misaoFailureReason';
 import { directionBody, nameBody, titleBody, keysBody, paneBody, refBody, workspaceRenameBody } from './actionBodies';
 import { persistRenamedWindowLabel } from '../windowIdentity';
 import type { FastifyPluginCallback, FastifyReply } from 'fastify';
@@ -255,7 +256,7 @@ function creationMuxKind(value: unknown, srv: ServerConfig, registry: MuxDriverR
 function createFailure(kind: MuxDriverKind, err: unknown, operation: string): { status: 409 | 500; body: Record<string, unknown> } {
   if (err instanceof MuxDriverUnavailableError) return { status: 409, body: unavailableBody(err.kind, err.reason) };
   if (kind === 'tmux' && isMissingBinaryError(err)) return { status: 409, body: unavailableBody(kind, MUX_BINARY_MISSING) };
-  return { status: 500, body: { error: `${operation} failed: ${tmuxErrorReason(err)}` } };
+  return { status: 500, body: { error: `${operation} failed: ${kind === 'misao' ? misaoFailureReason(err) : tmuxErrorReason(err)}` } };
 }
 
 /** An agent/ssh transport resolves with a non-zero ExecResult instead of throwing when the remote mux fails. */
@@ -263,7 +264,7 @@ function createFailure(kind: MuxDriverKind, err: unknown, operation: string): { 
 // (agent/routes.ts), so there is nothing here to tell it from another failure. An SSH server's code 127 is recognised.
 function createResultFailure(kind: MuxDriverKind, result: ExecResult, operation: string): { status: 409 | 500; body: Record<string, unknown> } {
   if (kind === 'tmux' && isMissingBinaryResult(result)) return { status: 409, body: unavailableBody(kind, MUX_BINARY_MISSING) };
-  return { status: 500, body: { error: `${operation} failed: ${tmuxFailureReason(`${result.stderr}\n${result.stdout}`, result.code)}` } };
+  return { status: 500, body: { error: `${operation} failed: ${kind === 'misao' ? misaoFailureReason({ message: `${result.stderr}\n${result.stdout}` }) : tmuxFailureReason(`${result.stderr}\n${result.stdout}`, result.code)}` } };
 }
 
 /** A legacy create route's reason: a host / driver refusal names its own fixed code, anything else only its failure class. */

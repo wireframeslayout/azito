@@ -4,7 +4,7 @@ import { sanitizedTmuxError, tmuxErrorReason, tmuxFailureReason } from './tmuxFa
 describe('tmux failure reasons', () => {
   it('classifies output without returning it', () => {
     expect(tmuxFailureReason("can't find session: TOKEN=secret", 1)).toBe("can't find target");
-    expect(tmuxFailureReason('error connecting to /tmp/tmux-1/default (No such file or directory)', 1)).toBe('no server running on tmux socket');
+    expect(tmuxFailureReason('error connecting to /tmp/tmux-1/default (No such file or directory)', 1)).toBe('no server running on tmux socket (no such socket file)');
     expect(tmuxFailureReason('TOKEN=secret', 2)).toBe('exit 2');
   });
 
