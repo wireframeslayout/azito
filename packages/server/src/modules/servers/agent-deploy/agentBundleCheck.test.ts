@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import { packTarGz, type TarEntry } from '../../../shared/fs/tarGz';
-import { assertAgentBundleComplete, describeNotLinuxX64Elf, describeNotLinuxElf, findAgentBundleProblems, isNodePtySpawnHelper, AGENT_PTY_NODE_PATH, AGENT_PTY_ARM64_NODE_PATH } from './agentBundleCheck';
+import { assertAgentBundleComplete, describeNotLinuxX64Elf, describeNotLinuxElf, findAgentBundleProblems, isNodePtySpawnHelper, listAgentBundleLinuxArches, AGENT_PTY_NODE_PATH, AGENT_PTY_ARM64_NODE_PATH } from './agentBundleCheck';
 
 function elf(machine: number, elfClass = 2): Buffer {
   const header = Buffer.alloc(64);
@@ -69,6 +69,21 @@ describe('findAgentBundleProblems', () => {
     const swapped = completeBundle().map((e) => e.path === AGENT_PTY_ARM64_NODE_PATH ? { ...e, data: elf(62) } : e);
     expect(findAgentBundleProblems(pack(swapped))).toEqual([expect.stringContaining('not a Linux arm64 binary')]);
     expect(findAgentBundleProblems(pack([...completeBundle(), file('node_modules/node-pty/build/Release/pty.node', elf(62))]))).toEqual([expect.stringContaining('shadows architecture-specific prebuilds')]);
+  });
+
+  it('accepts a bundle without the arm64 binary only when a source hub allows it, and never a wrong arm64 binary', () => {
+    const missing = completeBundle().filter((e) => e.path !== AGENT_PTY_ARM64_NODE_PATH);
+    expect(findAgentBundleProblems(pack(missing), { allowMissingLinuxArm64: true })).toEqual([]);
+    const swapped = completeBundle().map((e) => e.path === AGENT_PTY_ARM64_NODE_PATH ? { ...e, data: elf(62) } : e);
+    expect(findAgentBundleProblems(pack(swapped), { allowMissingLinuxArm64: true })).toEqual([expect.stringContaining('not a Linux arm64 binary')]);
+    const noX64 = completeBundle().filter((e) => e.path !== AGENT_PTY_NODE_PATH);
+    expect(findAgentBundleProblems(pack(noX64), { allowMissingLinuxArm64: true })).toEqual([expect.stringContaining('linux-x64/pty.node is missing')]);
+  });
+
+  it('lists the Linux architectures the bundle carries a valid node-pty for', () => {
+    expect(listAgentBundleLinuxArches(pack(completeBundle()))).toEqual(['x64', 'arm64']);
+    expect(listAgentBundleLinuxArches(pack(completeBundle().filter((e) => e.path !== AGENT_PTY_ARM64_NODE_PATH)))).toEqual(['x64']);
+    expect(listAgentBundleLinuxArches(pack(completeBundle().map((e) => e.path === AGENT_PTY_ARM64_NODE_PATH ? { ...e, data: elf(62) } : e)))).toEqual(['x64']);
   });
 
   it('reports the prebuilds a macOS / Windows agent needs when they are missing, and a spawn-helper that cannot run', () => {

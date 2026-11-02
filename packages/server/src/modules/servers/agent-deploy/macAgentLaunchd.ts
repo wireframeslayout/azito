@@ -86,6 +86,12 @@ export class MacAgentLaunchd {
     return id;
   }
 
+  /** The managed agent is still installed: its installation id and `current` link are there (both are removed with the agent). */
+  async hasInstallation(): Promise<boolean> {
+    if ((await this.readInstallId()) === undefined) return false;
+    return (await this.readCurrent()) !== null;
+  }
+
   async cleanup(installId: string): Promise<void> {
     const lock = `${this.home}/.azito/agent-cleanup.lock`;
     const idFile = `${this.home}/.azito/agent/install.id`;

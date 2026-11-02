@@ -97,6 +97,13 @@ const CLEANUP_GUARD_COMMAND = buildCleanupGuardScript();
 class CleanupMarkError extends Error {}
 
 /** The error for a host that has no tmux and no misao: the same text is the API's `error` and what the UI shows. */
+/** A Mac this release manages with launchd: Apple Silicon running arm64 Node. */
+function isLaunchdMac(profile: HostProfile | null | undefined): boolean {
+  return profile?.platform === 'darwin' && profile.arch === 'arm64';
+}
+
+const INTEL_MAC_REASON = 'Intel Mac / x64 Node is outside v0.13.0 support; use an arm64 Node for Apple Silicon';
+
 function noMuxMessage(host: string, misaoError: string | undefined): string {
   return `no mux is available on ${host}: tmux is not installed and misao could not be installed (${misaoError ?? 'this hub has no misao to install'}).`;
 }
@@ -186,7 +193,7 @@ export class AgentInstaller {
     // ── Transfer & deploy ──
     report('transfer', 'running', 'Transferring agent bundle...');
     try {
-      if (preflight.hostProfile.platform === 'darwin') await (await MacAgentLaunchd.connect(this.sshClient, sshHost)).assertOwned();
+      if (isLaunchdMac(preflight.hostProfile)) await (await MacAgentLaunchd.connect(this.sshClient, sshHost)).assertOwned();
       await this.transferAndDeploy(sshHost, version);
       await this.writeInstallId(sshHost, installId);
       report('transfer', 'ok', 'Agent deployed');
@@ -197,7 +204,7 @@ export class AgentInstaller {
     }
 
     // ── Stop existing agent (if any) ──
-    if (preflight.hostProfile.platform !== 'darwin') await this.stopAgent(sshHost);
+    if (!isLaunchdMac(preflight.hostProfile)) await this.stopAgent(sshHost);
 
     // ── Start agent ──
     report('start', 'running', 'Starting agent...');
@@ -480,6 +487,8 @@ export class AgentInstaller {
     const version = this.bundler.getBundleHash();
 
     if (hostProfile?.platform === 'win32') return this.updateOnWindows(sshHost, tailscaleIp, existingToken, version);
+    const unsupported = this.unsupportedPosixHostReason(hostProfile);
+    if (unsupported) return { success: false, version, error: `unsupported_host: ${unsupported}` };
 
     try {
       await this.assertNoCleanupRunning(sshHost);
@@ -490,7 +499,7 @@ export class AgentInstaller {
     let mac: MacAgentLaunchd | undefined;
     let previous: string | null = null;
     try {
-      if (hostProfile?.platform === 'darwin') {
+      if (isLaunchdMac(hostProfile)) {
         mac = await MacAgentLaunchd.connect(this.sshClient, sshHost);
         await mac.assertOwned();
         previous = await mac.readCurrent();
@@ -625,10 +634,24 @@ export class AgentInstaller {
     }
     if (profile.platform === 'win32') {
       missing.push('unsupported_os: this host answered as Windows to the Unix preflight; a Windows host is installed through the Windows preflight');
-    } else if (profile.platform === 'darwin' && profile.arch === 'x64') {
-      missing.push('unsupported_host: Intel Mac / x64 Node is outside v0.13.0 support; use an arm64 Node for Apple Silicon');
+    } else {
+      const unsupported = this.unsupportedPosixHostReason(profile);
+      if (unsupported) missing.push(`unsupported_host: ${unsupported}`);
     }
     return profile;
+  }
+
+  /**
+   * Why this hub cannot install or update an agent on a Unix host, or null. An Intel Mac / x64 Node is outside support, and a
+   * Linux host needs the node-pty of its architecture in this hub's bundle (a source hub may build without arm64).
+   * `null` = a Unix agent registered before the OS was recorded: Linux x64, which every bundle carries.
+   */
+  private unsupportedPosixHostReason(profile: HostProfile | null): string | null {
+    if (profile?.platform === 'darwin' && profile.arch !== 'arm64') return INTEL_MAC_REASON;
+    if (profile?.platform === 'linux' && !this.bundler.getLinuxArches().includes(profile.arch)) {
+      return `this hub's agent bundle has no Linux ${profile.arch} node-pty; set AZITO_AGENT_NODE_PTY_LINUX${profile.arch === 'arm64' ? '_ARM64' : ''} to a node-pty folder built on Linux ${profile.arch} and restart the hub so the bundle is rebuilt`;
+    }
+    return null;
   }
 
   private async transferAndDeploy(sshHost: string, version: string): Promise<void> {
@@ -668,7 +691,7 @@ export class AgentInstaller {
     muxRuntime?: string,
     hostProfile?: HostProfile | null,
   ): Promise<'systemd' | 'nohup' | 'launchd'> {
-    if (hostProfile?.platform === 'darwin') {
+    if (isLaunchdMac(hostProfile)) {
       await (await MacAgentLaunchd.connect(this.sshClient, sshHost)).start(tailscaleIp, AGENT_PORT, token, muxRuntime || 'system');
       return 'launchd';
     }
@@ -781,11 +804,11 @@ export class AgentInstaller {
    * (e.g. SSH connection failure) — the caller is expected to catch and re-check health
    * afterward regardless of outcome.
    */
-  recoverAgent(sshHost: string, tailscaleIp: string, token: string, hostProfile: HostProfile | null, muxRuntime?: string): Promise<'systemd' | 'nohup' | 'launchd' | 'taskscheduler' | 'disabled'> {
+  recoverAgent(sshHost: string, tailscaleIp: string, token: string, hostProfile: HostProfile | null, muxRuntime?: string): Promise<'systemd' | 'nohup' | 'launchd' | 'taskscheduler' | 'disabled' | 'absent'> {
     return this.hostLocks.withLock(this.lockKey(sshHost), () => this.recoverAgentLocked(sshHost, tailscaleIp, token, hostProfile, muxRuntime));
   }
 
-  private async recoverAgentLocked(sshHost: string, tailscaleIp: string, token: string, hostProfile: HostProfile | null, muxRuntime?: string): Promise<'systemd' | 'nohup' | 'launchd' | 'taskscheduler' | 'disabled'> {
+  private async recoverAgentLocked(sshHost: string, tailscaleIp: string, token: string, hostProfile: HostProfile | null, muxRuntime?: string): Promise<'systemd' | 'nohup' | 'launchd' | 'taskscheduler' | 'disabled' | 'absent'> {
     if (hostProfile?.platform === 'win32') {
       // The settings and the task are already on the host: ask it who it is, then restart the logon task.
       const probe = await this.sshClient.execIsolated(sshHost, buildWindowsPreflightCommand());
@@ -793,6 +816,14 @@ export class AgentInstaller {
       return outcome === 'disabled' ? 'disabled' : 'taskscheduler';
     }
     await this.assertNoCleanupRunning(sshHost);
+    if (isLaunchdMac(hostProfile)) {
+      // A recovery only restarts an installation that is still there: writing the launchd job again for an agent removed from
+      // the host (its folder and install id gone) would bring a deleted agent back.
+      const mac = await MacAgentLaunchd.connect(this.sshClient, sshHost);
+      if (!(await mac.hasInstallation())) return 'absent';
+      await mac.start(tailscaleIp, AGENT_PORT, token, muxRuntime || 'system');
+      return 'launchd';
+    }
     return this.startAgent(sshHost, tailscaleIp, token, muxRuntime, hostProfile);
   }
 

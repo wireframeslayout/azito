@@ -15,9 +15,10 @@ function unwrapCommand(command: string): string {
   return command.startsWith(prefix) ? command.slice(prefix.length, -1).replaceAll("'\\''", "'") : command;
 }
 
-function makeBundler() {
+function makeBundler(linuxArches: string[] = ['x64', 'arm64']) {
   return {
     ensureBuild: vi.fn(async () => undefined),
+    getLinuxArches: vi.fn(() => linuxArches),
     getBundleHash: vi.fn(() => VERSION),
     getTarballPath: vi.fn(() => '/tmp/fake.tar.gz'),
     getSha256sumsPath: vi.fn(() => '/tmp/SHA256SUMS'),
@@ -101,9 +102,9 @@ describe('AgentInstaller', () => {
     vi.restoreAllMocks();
   });
 
-  function make(misao?: AgentMisaoInstaller, sshOpts: HostOptions = {}, fakeHost?: FakeHost) {
+  function make(misao?: AgentMisaoInstaller, sshOpts: HostOptions = {}, fakeHost?: FakeHost, linuxArches?: string[]) {
     const { ssh, commands } = makeSsh(sshOpts, fakeHost);
-    const installer = new AgentInstaller(ssh as never, makeBundler() as never, DEFAULT_WINDOWS_AGENT_OPTIONS, misao);
+    const installer = new AgentInstaller(ssh as never, makeBundler(linuxArches) as never, DEFAULT_WINDOWS_AGENT_OPTIONS, misao);
     // The transfer is the SSH library's business (and needs a real server): everything around it is what is tested here.
     (installer as unknown as { transferAndDeploy: () => Promise<void> }).transferAndDeploy = async () => undefined;
     return { installer, commands };
@@ -461,6 +462,25 @@ describe('AgentInstaller', () => {
       expect(result.hostProfile).toEqual({ platform: 'linux', arch: 'arm64' });
     });
 
+    it('refuses linux arm64 when this hub built its bundle without the arm64 node-pty, before anything is sent', async () => {
+      const { installer, commands } = make(okMisao(), { tmux: 'tmux 3.4', probe: 'linux arm64\n' }, undefined, ['x64']);
+      const result = await installer.install('user@host');
+      expect(result.success).toBe(false);
+      expect(result.error).toMatch(/unsupported_host: .*no Linux arm64 node-pty.*AZITO_AGENT_NODE_PTY_LINUX_ARM64/);
+      expect(commands.some((c) => c.includes('install.id') || c.includes('systemctl') || c.includes('nohup'))).toBe(false);
+    });
+
+    it('refuses to update a linux arm64 agent with a bundle that has no arm64 node-pty, and leaves the host alone', async () => {
+      const { installer, commands } = make(okMisao(), {}, undefined, ['x64']);
+      const transfer = vi.fn(async () => undefined);
+      (installer as unknown as { transferAndDeploy: typeof transfer }).transferAndDeploy = transfer;
+      const result = await installer.update('user@host', '100.64.0.9', 'tok', { platform: 'linux', arch: 'arm64' });
+      expect(result.success).toBe(false);
+      expect(result.error).toMatch(/unsupported_host: .*no Linux arm64 node-pty/);
+      expect(transfer).not.toHaveBeenCalled();
+      expect(commands).toEqual([]);
+    });
+
     it('accepts darwin arm64', async () => {
       const { installer } = make(okMisao(), { tmux: 'tmux 3.4', probe: 'darwin arm64\n' });
       const result = await installer.install('user@host');
@@ -486,6 +506,34 @@ describe('AgentInstaller', () => {
       expect(result.error).toContain('previous agent was restored');
       expect(commands.some((command) => command.includes('readlink') && command.includes('ln -sfn'))).toBe(true);
       expect(health).toHaveBeenCalledTimes(2);
+    });
+
+    it('refuses to update an Intel Mac agent and leaves the host alone', async () => {
+      const { installer, commands } = make(okMisao());
+      const transfer = vi.fn(async () => undefined);
+      (installer as unknown as { transferAndDeploy: typeof transfer }).transferAndDeploy = transfer;
+      const result = await installer.update('user@host', '100.64.0.9', 'tok', { platform: 'darwin', arch: 'x64' });
+      expect(result.success).toBe(false);
+      expect(result.error).toMatch(/unsupported_host: Intel Mac \/ x64 Node/);
+      expect(transfer).not.toHaveBeenCalled();
+      expect(commands).toEqual([]);
+    });
+
+    it('does not bring back a Mac agent that was removed from the host', async () => {
+      const { installer, commands } = make(okMisao());
+      vi.spyOn(MacAgentLaunchd.prototype, 'hasInstallation').mockResolvedValue(false);
+      const start = vi.spyOn(MacAgentLaunchd.prototype, 'start');
+      await expect(installer.recoverAgent('user@host', '100.64.0.9', 'tok', { platform: 'darwin', arch: 'arm64' })).resolves.toBe('absent');
+      expect(start).not.toHaveBeenCalled();
+      expect(commands.some((c) => c.includes('launchctl') || c.includes('com.azito.agent.plist') || c.includes('nohup') || c.includes('systemctl'))).toBe(false);
+    });
+
+    it('restarts a Mac agent that is still installed through launchd', async () => {
+      const { installer } = make(okMisao());
+      vi.spyOn(MacAgentLaunchd.prototype, 'hasInstallation').mockResolvedValue(true);
+      const start = vi.spyOn(MacAgentLaunchd.prototype, 'start').mockResolvedValue();
+      await expect(installer.recoverAgent('user@host', '100.64.0.9', 'tok', { platform: 'darwin', arch: 'arm64' })).resolves.toBe('launchd');
+      expect(start).toHaveBeenCalledWith('100.64.0.9', 3002, 'tok', 'system');
     });
 
     it('rejects darwin x64 Node, including Rosetta', async () => {

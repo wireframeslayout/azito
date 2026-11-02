@@ -26,7 +26,7 @@ describe('POST /api/servers/:name/agent/uninstall', () => {
 
   beforeEach(async () => {
     principal = OPERATOR_PRINCIPAL;
-    servers = { w1: server({}), l1: server({ name: 'l1', hostProfile: { platform: 'linux', arch: 'x64' } }), m1: server({ name: 'm1', hostProfile: { platform: 'darwin', arch: 'arm64' } }), u1: server({ name: 'u1', hostProfile: null }), loc: server({ name: 'loc', type: 'local', hostProfile: WIN32 }) };
+    servers = { w1: server({}), l1: server({ name: 'l1', hostProfile: { platform: 'linux', arch: 'x64' } }), m1: server({ name: 'm1', hostProfile: { platform: 'darwin', arch: 'arm64' } }), mx: server({ name: 'mx', hostProfile: { platform: 'darwin', arch: 'x64' } }), u1: server({ name: 'u1', hostProfile: null }), loc: server({ name: 'loc', type: 'local', hostProfile: WIN32 }) };
     mutex = new KeyedMutex();
     uninstallFromWindowsHost.mockReset().mockResolvedValue(RESULT);
     uninstallFromMacHost.mockReset().mockResolvedValue(RESULT);
@@ -73,6 +73,7 @@ describe('POST /api/servers/:name/agent/uninstall', () => {
 
   it.each([
     ['a Linux agent', 'l1'],
+    ['an Intel Mac agent (outside support)', 'mx'],
     ['an agent whose OS was never recorded (a Unix agent)', 'u1'],
     ['a server that is not an agent', 'loc'],
   ])('answers 501 unsupported_os with the reason and #499 for %s, and does nothing', async (_label, name) => {
@@ -80,6 +81,7 @@ describe('POST /api/servers/:name/agent/uninstall', () => {
     expect(res.statusCode).toBe(501);
     expect(res.json()).toMatchObject({ code: 'unsupported_os', error: expect.stringContaining('#499') });
     expect(uninstallFromWindowsHost).not.toHaveBeenCalled();
+    expect(uninstallFromMacHost).not.toHaveBeenCalled();
   });
 
   it('routes macOS removal through the Mac implementation', async () => {

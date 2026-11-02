@@ -64,6 +64,19 @@ describe('Mac agent launchd definition', () => {
     expect(execIsolated.mock.calls.filter((call) => unwrapCommand(call[1]).includes("'launchctl' 'bootstrap'")).length).toBe(2);
   });
 
+  it('has no installation once the agent folder is gone, so nothing would be started again', async () => {
+    const execIsolated = vi.fn(async (_host: string, rawCommand: string) => {
+      const command = unwrapCommand(rawCommand);
+      if (command.includes('id -u')) return { code: 0, stdout: '/Users/me\n501\n', stderr: '' };
+      if (command.startsWith('if [ -f') && command.includes('install.id')) return { code: 0, stdout: 'AZITO_ABSENT', stderr: '' };
+      if (command.startsWith('if [ -f')) return { code: 0, stdout: 'AZITO_NO_PLIST', stderr: '' };
+      if (command.includes("'launchctl' 'print'")) return { code: 1, stdout: '', stderr: '' };
+      throw new Error(`Unexpected command: ${command}`);
+    });
+    const manager = await MacAgentLaunchd.connect({ execIsolated } as never, 'host');
+    await expect(manager.hasInstallation()).resolves.toBe(false);
+  });
+
   it('restores the previous current link only when the new version still owns it', async () => {
     const execIsolated = vi.fn(async (_host: string, rawCommand: string) => {
       const command = unwrapCommand(rawCommand);

@@ -16,7 +16,7 @@ export interface AgentUninstallRoutesOptions {
 const bodySchema = z.object({ removeMisao: z.boolean().default(false) }).strict();
 
 /**
- * `POST /api/servers/:name/agent/uninstall`: takes the agent off a Windows or macOS host (Linux is #499).
+ * `POST /api/servers/:name/agent/uninstall`: takes the agent off a Windows or Apple Silicon macOS host (Linux is #499).
  * Operator-only in both auth modes: it deletes software on a machine. It never touches the server row: `DELETE /api/servers/:name`
  * does that, so a host that is offline can still be forgotten. The answer is `{ ok, steps }`, one entry per step with its outcome
  * (`done` / `absent` / `failed` / `skipped` and why), and `ok` is false when any step failed. A host that cannot be reached at all is
@@ -37,13 +37,15 @@ const agentUninstallRoutes: FastifyPluginCallback<AgentUninstallRoutesOptions> =
       return serverIsolationMutex.withLock(request.params.name, async () => {
         const srv = serverRepo.findByName(request.params.name);
         if (!srv) return reply.status(404).send({ error: 'Server not found' });
-        // `hostProfile` null is a Unix agent registered before the OS was kept.
-        if (srv.type !== 'agent' || (srv.hostProfile?.platform !== 'win32' && srv.hostProfile?.platform !== 'darwin')) {
-          throw new HostProfileError('unsupported_os', `Removing the agent from its host is only supported for Windows and macOS agents in this release; for a Linux host, remove it by hand — tracked in #499.`);
+        // `hostProfile` null is a Unix agent registered before the OS was kept. A Mac is removed through its launchd job, which
+        // only an Apple Silicon (arm64) agent has: an Intel Mac agent is outside support.
+        const isMac = srv.hostProfile?.platform === 'darwin' && srv.hostProfile.arch === 'arm64';
+        if (srv.type !== 'agent' || (srv.hostProfile?.platform !== 'win32' && !isMac)) {
+          throw new HostProfileError('unsupported_os', `Removing the agent from its host is only supported for Windows and Apple Silicon macOS agents in this release; for a Linux host, remove it by hand — tracked in #499.`);
         }
         const sshHost = srv.sshHost || srv.host;
         if (!sshHost) return reply.status(400).send({ error: 'No SSH host configured for this server' });
-        return srv.hostProfile?.platform === 'darwin'
+        return isMac
           ? agentInstaller.uninstallFromMacHost(sshHost, { removeMisao: body.data.removeMisao }, { host: srv.host, port: srv.agentPort, token: srv.agentToken })
           : agentInstaller.uninstallFromWindowsHost(sshHost, { removeMisao: body.data.removeMisao });
       });

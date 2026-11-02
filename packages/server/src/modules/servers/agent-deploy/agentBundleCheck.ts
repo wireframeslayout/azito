@@ -44,8 +44,26 @@ function findFile(entries: readonly TarEntry[], entryPath: string): TarEntry | u
   return entries.find((entry) => entry.type === 'file' && entry.path === entryPath);
 }
 
+export type LinuxAgentArch = 'x64' | 'arm64';
+
+const LINUX_PTY_FILES: readonly (readonly [string, LinuxAgentArch])[] = [[AGENT_PTY_NODE_PATH, 'x64'], [AGENT_PTY_ARM64_NODE_PATH, 'arm64']];
+
+export interface AgentBundleRequirements {
+  /** A source hub may build without the Linux arm64 node-pty; such a bundle is refused for Linux arm64 hosts at install time. */
+  allowMissingLinuxArm64?: boolean;
+}
+
+/** The Linux architectures whose node-pty binary the tarball carries (checked as an ELF of that architecture). */
+export function listAgentBundleLinuxArches(tarGz: Buffer): LinuxAgentArch[] {
+  const entries = unpackTarGz(tarGz);
+  return LINUX_PTY_FILES.filter(([file, arch]) => {
+    const pty = findFile(entries, file);
+    return pty !== undefined && describeNotLinuxElf(pty.data ?? Buffer.alloc(0), arch) === null;
+  }).map(([, arch]) => arch);
+}
+
 /** Problems of the common agent tarball; empty when it is complete. */
-export function findAgentBundleProblems(tarGz: Buffer): string[] {
+export function findAgentBundleProblems(tarGz: Buffer, requirements: AgentBundleRequirements = {}): string[] {
   const entries = unpackTarGz(tarGz);
   const problems: string[] = [];
   for (const file of REQUIRED_FILES) {
@@ -57,8 +75,9 @@ export function findAgentBundleProblems(tarGz: Buffer): string[] {
   }
   // A Windows checkout can turn the script into CRLF (see .gitattributes), and `#!/bin/bash\r` does not start on Linux.
   if (launcher?.data?.includes(0x0d)) problems.push(`${AGENT_LAUNCHER_PATH} has CRLF line endings`);
-  for (const [file, arch] of [[AGENT_PTY_NODE_PATH, 'x64'], [AGENT_PTY_ARM64_NODE_PATH, 'arm64']] as const) {
+  for (const [file, arch] of LINUX_PTY_FILES) {
     const pty = findFile(entries, file);
+    if (!pty && arch === 'arm64' && requirements.allowMissingLinuxArm64) continue;
     if (!pty) problems.push(`${file} is missing (node-pty has no Linux ${arch} binary in the bundle)`);
     else {
       const notElf = describeNotLinuxElf(pty.data ?? Buffer.alloc(0), arch);
@@ -76,7 +95,7 @@ export function findAgentBundleProblems(tarGz: Buffer): string[] {
   return problems;
 }
 
-export function assertAgentBundleComplete(tarGz: Buffer, label: string): void {
-  const problems = findAgentBundleProblems(tarGz);
+export function assertAgentBundleComplete(tarGz: Buffer, label: string, requirements: AgentBundleRequirements = {}): void {
+  const problems = findAgentBundleProblems(tarGz, requirements);
   if (problems.length > 0) throw new Error(`${label} is not a complete agent bundle: ${problems.join('; ')}`);
 }

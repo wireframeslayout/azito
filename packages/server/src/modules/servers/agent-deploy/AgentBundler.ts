@@ -2,6 +2,7 @@ import { execFileSync } from 'child_process';
 import * as fs from 'fs';
 import * as path from 'path';
 import { isReleaseMode, getReleaseInfo, getBundleRoot } from '../../../shared/releaseInfo';
+import { listAgentBundleLinuxArches, type LinuxAgentArch } from './agentBundleCheck';
 
 const SERVER_ROOT = path.resolve(__dirname, '..', '..', '..', '..');
 
@@ -17,8 +18,15 @@ interface CachedBundleHash {
   hash: string;
 }
 
+interface CachedLinuxArches {
+  tarballMtimeMs: number;
+  tarballSize: number;
+  arches: LinuxAgentArch[];
+}
+
 export class AgentBundler {
   private cachedBundleHash: CachedBundleHash | null = null;
+  private cachedLinuxArches: CachedLinuxArches | null = null;
 
   getHubSha(): string {
     const info = getReleaseInfo();
@@ -64,6 +72,16 @@ export class AgentBundler {
     return hash;
   }
 
+  /** The Linux architectures the built tarball carries a node-pty for (a source hub may build without arm64). */
+  getLinuxArches(): LinuxAgentArch[] {
+    const tarball = this.getTarballPath();
+    const stat = fs.statSync(tarball);
+    if (this.cachedLinuxArches?.tarballMtimeMs === stat.mtimeMs && this.cachedLinuxArches.tarballSize === stat.size) return this.cachedLinuxArches.arches;
+    const arches = listAgentBundleLinuxArches(fs.readFileSync(tarball));
+    this.cachedLinuxArches = { tarballMtimeMs: stat.mtimeMs, tarballSize: stat.size, arches };
+    return arches;
+  }
+
   getBundleHashIfBuilt(): string | null {
     try {
       return this.getBundleHash();
@@ -89,9 +107,10 @@ export class AgentBundler {
     if (!this.needsBuild()) return;
     console.log('[AgentBundler] Building agent bundle...');
     // The node binary itself loads tsx: `npx` is `npx.cmd` on Windows and cannot be run without a shell.
-    // The child inherits both Linux native inputs and reports a missing or mismatched architecture.
+    // The child inherits both Linux native inputs and reports a missing or mismatched architecture. A source hub without an
+    // arm64 node-pty still builds (x64 agents only); AgentInstaller refuses a Linux arm64 host for such a bundle.
     try {
-      execFileSync(process.execPath, ['--import', 'tsx', 'scripts/build-agent.ts'], {
+      execFileSync(process.execPath, ['--import', 'tsx', 'scripts/build-agent.ts', '--allow-missing-linux-arm64'], {
         cwd: SERVER_ROOT,
         stdio: 'inherit',
         timeout: 180000,
@@ -99,7 +118,7 @@ export class AgentBundler {
     } catch (err) {
       throw new Error(
         'Building the agent bundle failed (build-agent.ts printed why to the hub log). ' +
-          'Provide Linux node-pty builds using AZITO_AGENT_NODE_PTY_LINUX and AZITO_AGENT_NODE_PTY_LINUX_ARM64 for architectures other than the build host; ' +
+          'A hub that is not Linux x64 needs AZITO_AGENT_NODE_PTY_LINUX set to a node-pty folder built on Linux x64 (AZITO_AGENT_NODE_PTY_LINUX_ARM64 adds Linux arm64 agents); ' +
           `a release hub carries a ready bundle. (${(err as Error).message})`,
       );
     }
