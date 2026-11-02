@@ -5,10 +5,13 @@ export { ServerConfig } from '../servers/Server';
 import type { ServerConfig } from '../servers/Server';
 import { generateWindowName, extractWindowId } from './windowNameUtils';
 import type { IMuxClient, PaneLocation, PaneProgram, PaneWindowLabels } from './IMuxClient';
-import { MuxOperationUnsupportedError } from './MuxCapabilityError';
+import { MuxDriverUnavailableError, MuxOperationUnsupportedError } from './MuxCapabilityError';
+import { AgentUnreachableError } from '../servers/transport/AgentUnreachableError';
+import { HostProfileError } from '../../shared/os/hostProfile';
 import { composePaneEnv, type HubPaneEnvConfig } from './hubPaneEnv';
 import { type MuxRef, type PaneHandle, type PaneOrdinal, type MuxCapabilities, type MuxDriverKind, asPaneHandle, muxRefFromTmuxTarget, tmuxTargetFromMuxRef } from '@azito/shared';
 import { windowSpecMatches, type TmuxPane, type TmuxWindow, type TmuxSession, type TmuxPaneInfo, type MuxWorkspace, type MuxWindowInfo, type MuxPane, type MuxPaneInfo } from './types';
+import { sanitizedTmuxError, tmuxFailureReason } from './tmuxFailureReason';
 import { HOOK_EVENTS, buildHookValue, buildHookSetArgs, buildHookUnsetArgs } from './tmuxHooks';
 
 export type { TmuxPane, TmuxWindow, TmuxSession, TmuxPaneInfo, MuxWorkspace, MuxWindowInfo, MuxPane, MuxPaneInfo };
@@ -145,7 +148,17 @@ export class TmuxClient implements IMuxClient {
   }
 
   private async runTmuxCommand(server: ServerConfig, args: string[]): Promise<ExecResult> {
-    return this.transportFactory.getTransport(server).execMux({ kind: 'tmux', args });
+    let result: ExecResult;
+    try {
+      result = await this.transportFactory.getTransport(server).execMux({ kind: 'tmux', args });
+    } catch (err) {
+      if (err instanceof AgentUnreachableError || err instanceof MuxDriverUnavailableError || err instanceof HostProfileError) throw err;
+      throw sanitizedTmuxError(args[0], err);
+    }
+    if (result.code === 0) return result;
+    const output = `${result.stderr}\n${result.stdout}`;
+    const reason = tmuxFailureReason(output, result.code);
+    return { code: result.code, stdout: '', stderr: `tmux ${args[0]} failed: ${reason}` };
   }
 
   async listSessions(server: ServerConfig): Promise<TmuxSession[]> {
@@ -154,7 +167,8 @@ export class TmuxClient implements IMuxClient {
       return parseSessionLines(stdout).filter((s) => !s.name.startsWith('_azito_'));
     } catch (err: unknown) {
       const e = err as { message?: string; stderr?: string };
-      if (e.message?.includes('no server running') || e.stderr?.includes('no server running')) {
+      const output = `${e.message ?? ''}\n${e.stderr ?? ''}`;
+      if (output.includes('no server running') && !output.includes('no such socket file')) {
         return [];
       }
       throw err;
@@ -215,7 +229,9 @@ export class TmuxClient implements IMuxClient {
     if (isTmuxNoServerRunning(output)) {
       return [];
     }
-    throw new Error(`tmux list-panes failed (code ${result.code}): ${output || '(no output)'}`);
+    // runTmuxCommand already words a tmux failure as `tmux list-panes failed: <class>`; only an error it rethrows
+    // as it is (unreachable agent, unavailable driver, host profile) still needs the prefix.
+    throw new Error(output.startsWith('tmux list-panes failed') ? output : `tmux list-panes failed: ${output || `exit ${result.code}`}`);
   }
 
   private async execListPanesAll(server: ServerConfig): Promise<string> {
@@ -406,7 +422,8 @@ export class TmuxClient implements IMuxClient {
         .filter((pane) => !pane.sessionName.startsWith('_azito_'));
     } catch (err: unknown) {
       const e = err as { message?: string; stderr?: string };
-      if (e.message?.includes('no server running') || e.stderr?.includes('no server running')) {
+      const output = `${e.message ?? ''}\n${e.stderr ?? ''}`;
+      if (output.includes('no server running') && !output.includes('no such socket file')) {
         return [];
       }
       throw err;
@@ -452,7 +469,7 @@ export class TmuxClient implements IMuxClient {
     const confirmedAbsent =
       output.includes("can't find") ||
       output.includes('no such session') ||
-      output.includes('no server running');
+      (output.includes('no server running') && !output.includes('no such socket file'));
     return { alive: false, verified: confirmedAbsent };
   }
 
