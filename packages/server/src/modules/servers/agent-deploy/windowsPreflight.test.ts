@@ -15,6 +15,7 @@ function output(over: Record<string, unknown> = {}, wrap = (json: string) => `${
     windowsCaption: 'Microsoft Windows 11 Pro',
     buildNumber: '22631',
     tailscaleIp: '100.64.0.9',
+    tailscaleCli: 'ok', tailscaleDetail: null, networkStatus: 'not_checked', networkDetail: null,
     home: 'C:\\Users\\dev',
     systemRoot: 'C:\\Windows',
     userId: 'DESKTOP-1\\dev',
@@ -39,7 +40,7 @@ describe('buildWindowsPreflightCommand', () => {
 });
 
 describe('checkWindowsPreflight: the Windows build', () => {
-  const info = (buildNumber: number | null): WindowsPreflightInfo => ({ nodePath: 'C:\\node.exe', nodeVersion: '24.14.0', arch: 'x64', windowsVersion: 'Windows 10', buildNumber, tailscaleIp: '100.64.0.9', home: 'C:\\Users\\d', systemRoot: 'C:\\Windows', userId: 'PC\\d' });
+  const info = (buildNumber: number | null): WindowsPreflightInfo => ({ nodePath: 'C:\\node.exe', nodeVersion: '24.14.0', arch: 'x64', windowsVersion: 'Windows 10', buildNumber, tailscaleIp: '100.64.0.9', tailscaleCli: 'ok', tailscaleDetail: null, networkStatus: 'not_checked', networkDetail: null, home: 'C:\\Users\\d', systemRoot: 'C:\\Windows', userId: 'PC\\d' });
   it('accepts 1809 (build 17763) and later', () => {
     expect(checkWindowsPreflight(info(17763))).toEqual([]);
     expect(checkWindowsPreflight(info(26100))).toEqual([]);
@@ -58,7 +59,8 @@ describe('parseWindowsPreflight', () => {
       arch: 'x64',
       windowsVersion: 'Windows 11 Pro',
       buildNumber: 22631,
-        tailscaleIp: '100.64.0.9',
+      tailscaleIp: '100.64.0.9',
+      tailscaleCli: 'ok', tailscaleDetail: null, networkStatus: 'not_checked', networkDetail: null,
       home: 'C:\\Users\\dev',
       systemRoot: 'C:\\Windows',
       userId: 'DESKTOP-1\\dev',
@@ -79,7 +81,7 @@ describe('parseWindowsPreflight', () => {
   });
 
   it('reads \\uXXXX-escaped non-ASCII text (the script prints ASCII only)', () => {
-    const noisy = output({}, () => `${BEGIN}\n{"nodePath":null,"nodeVersion":null,"arch":"AMD64","windowsCaption":null,"buildNumber":null,"tailscaleIp":null,"home":"C:\\\\Users\\u30c6\\u30b9\\u30c8","systemRoot":"C:\\\\Windows","userId":"PC\\\\\\u30c6"}\n${END}\n`);
+    const noisy = output({}, () => `${BEGIN}\n{"nodePath":null,"nodeVersion":null,"arch":"AMD64","windowsCaption":null,"buildNumber":null,"tailscaleIp":null,"tailscaleCli":"missing","tailscaleDetail":null,"networkStatus":"empty","networkDetail":null,"home":"C:\\\\Users\\u30c6\\u30b9\\u30c8","systemRoot":"C:\\\\Windows","userId":"PC\\\\\\u30c6"}\n${END}\n`);
     expect(parseWindowsPreflight(noisy).home).toBe('C:\\Users\u30c6\u30b9\u30c8');
   });
 
@@ -122,7 +124,28 @@ describe('checkWindowsPreflight', () => {
   });
 
   it('refuses a host without a Tailscale IP', () => {
-    expect(checkWindowsPreflight(ok({ tailscaleIp: null }))[0]).toMatch(/Tailscale IP not found \(got: empty/);
+    expect(checkWindowsPreflight(ok({ tailscaleIp: null }))[0]).toMatch(/Tailscale IP not found \(CLI/);
+  });
+
+  it.each([
+    ['denied', 'CLI access denied'], ['missing', 'CLI not found'],
+    ['failed', 'CLI failed'], ['empty', 'CLI returned no IP'],
+  ] as const)('reports %s when the network has no address', (tailscaleCli, reason) => {
+    const info = ok({ tailscaleIp: null, tailscaleCli, tailscaleDetail: tailscaleCli === 'denied' ? '401' : null, networkStatus: 'empty' });
+    expect(checkWindowsPreflight(info)).toEqual([expect.stringContaining(reason)]);
+    expect(checkWindowsPreflight(info)[0]).not.toMatch(/install.*sign in/i);
+  });
+
+  it('accepts a network address after CLI denial or absence', () => {
+    for (const tailscaleCli of ['denied', 'missing'] as const) {
+      expect(checkWindowsPreflight(ok({ tailscaleCli, networkStatus: 'found' }))).toEqual([]);
+    }
+  });
+
+  it('reports both CLI failure and network lookup failure with redacted details', () => {
+    const info = parseWindowsPreflight(output({ tailscaleIp: null, tailscaleCli: 'failed', tailscaleDetail: 'API_KEY=secret', networkStatus: 'failed', networkDetail: 'lookup failed' }));
+    expect(checkWindowsPreflight(info)[0]).toContain('API_KEY=[REDACTED]');
+    expect(checkWindowsPreflight(info)[0]).toContain('failed: lookup failed');
   });
 
   it('lists every problem at once', () => {
@@ -167,6 +190,27 @@ describe.skipIf(!isWindows)('the preflight script on a real PowerShell', () => {
     expect(info.systemRoot.toLowerCase()).toBe((process.env.SystemRoot ?? '').toLowerCase());
     expect(info.userId).toMatch(/^[^\\]+\\[^\\]+$/);
     expect(checkWindowsPreflight(info)).toEqual([expect.stringMatching(/^Tailscale IP not found/)]);
+  }, 120_000);
+
+  it.each([
+    [['100.63.255.255', '100.64.0.0', '100.127.255.255'], '100.64.0.0'],
+    [['::1', '100.128.0.0', '100.127.255.255'], '100.127.255.255'],
+    [['100.63.255.255', '100.128.0.0', '::1'], null],
+  ])('selects the first IPv4 address in the shared range from %j', (addresses, expected) => {
+    const encoded = line.split(' ').at(-1)!;
+    let script = Buffer.from(encoded, 'base64').toString('utf16le');
+    const setup = `$addresses = @(${addresses.map(ip => `'${ip}'`).join(',')}) | ForEach-Object { [pscustomobject]@{ Address = [System.Net.IPAddress]::Parse($_) } }
+$adapter = [pscustomobject]@{}
+$adapter | Add-Member ScriptMethod GetIPProperties { [pscustomobject]@{ UnicastAddresses = $addresses } }
+`;
+    script = script.replace(/\$tailscale = Get-Command[\s\S]*?if \(\$tsCli -ne 'ok'\) \{/, "$tsIp = $null\n$tsCli = 'denied'\n$tsDetail = '401'\n$netStatus = 'not_checked'\n$netDetail = $null\nif ($tsCli -ne 'ok') {");
+    script = setup + script.replace('[System.Net.NetworkInformation.NetworkInterface]::GetAllNetworkInterfaces()', '@($adapter)');
+    const out = spawnSync('powershell.exe', ['-NoProfile', '-NonInteractive', '-EncodedCommand', Buffer.from(script, 'utf16le').toString('base64')], { encoding: 'utf8', timeout: 120_000 });
+    expect(out.status, out.stderr).toBe(0);
+    const info = parseWindowsPreflight(out.stdout);
+    expect(info.tailscaleIp).toBe(expected);
+    expect(info.networkStatus).toBe(expected ? 'found' : 'empty');
+    expect(info.tailscaleCli).toBe('denied');
   }, 120_000);
 
   it.each(LOGINS)('prints ASCII only and reads a non-ASCII home back unchanged, with %s as the login shell', (login) => {

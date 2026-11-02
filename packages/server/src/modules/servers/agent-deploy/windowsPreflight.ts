@@ -20,12 +20,55 @@ if ($node) {
   $nodeVersion = @(& $nodePath --version)[0]
 }
 $tailscale = Get-Command tailscale -ErrorAction SilentlyContinue | Select-Object -First 1
-$tailscalePath = $null
-if ($tailscale) { $tailscalePath = $tailscale.Source }
-elseif (Test-Path -LiteralPath (Join-Path $env:ProgramFiles 'Tailscale\\tailscale.exe')) { $tailscalePath = Join-Path $env:ProgramFiles 'Tailscale\\tailscale.exe' }
-$tailscaleIp = $null
-if ($tailscalePath) {
-  try { $tailscaleIp = @(& $tailscalePath ip -4 2>$null)[0] } catch { $tailscaleIp = $null }
+$tsPath = $null
+if ($tailscale) { $tsPath = $tailscale.Source }
+elseif (Test-Path -LiteralPath (Join-Path $env:ProgramFiles 'Tailscale\\tailscale.exe')) { $tsPath = Join-Path $env:ProgramFiles 'Tailscale\\tailscale.exe' }
+$tsIp = $null
+$tsCli = 'missing'
+$tsDetail = $null
+$netStatus = 'not_checked'
+$netDetail = $null
+if ($tsPath) {
+  try {
+    $oldPref = $ErrorActionPreference
+    $ErrorActionPreference = 'Continue'
+    $cliOut = @(& $tsPath ip -4 2>&1)
+    $cliExit = $LASTEXITCODE
+    $ErrorActionPreference = $oldPref
+    $cliText = ($cliOut | ForEach-Object { $_.ToString() }) -join ' '
+    if ($cliExit -ne 0) {
+      $tsCli = if ($cliText -match '401') { 'denied' } else { 'failed' }
+      $tsDetail = "exit $cliExit : $cliText"
+    } else {
+      $tsIp = @($cliOut | Where-Object { $_ -is [string] } | Select-Object -First 1)[0]
+      $tsCli = if ($tsIp) { 'ok' } else { 'empty' }
+    }
+  } catch {
+    $ErrorActionPreference = $oldPref
+    $tsCli = 'failed'
+    $tsDetail = $_.Exception.Message
+  }
+}
+if ($tsCli -ne 'ok') {
+  try {
+    $netStatus = 'empty'
+    foreach ($adapter in [System.Net.NetworkInformation.NetworkInterface]::GetAllNetworkInterfaces()) {
+      foreach ($address in $adapter.GetIPProperties().UnicastAddresses) {
+        $ip = $address.Address
+        if ($ip.AddressFamily -ne [System.Net.Sockets.AddressFamily]::InterNetwork) { continue }
+        $bytes = $ip.GetAddressBytes()
+        if ($bytes[0] -eq 100 -and $bytes[1] -ge 64 -and $bytes[1] -le 127) {
+          $tsIp = $ip.ToString()
+          $netStatus = 'found'
+          break
+        }
+      }
+      if ($netStatus -eq 'found') { break }
+    }
+  } catch {
+    $netStatus = 'failed'
+    $netDetail = $_.Exception.Message
+  }
 }
 # The native architecture of the OS from the registry: an x64-emulated PowerShell on Windows on ARM still reports X64 through
 # RuntimeInformation.OSArchitecture and $env:PROCESSOR_ARCHITECTURE, but this machine-wide value is the OS's own. Unreadable = null (refused with a reason).
@@ -40,7 +83,11 @@ $info = [ordered]@{
   arch = $arch
   windowsCaption = $caption
   buildNumber = $build
-  tailscaleIp = $tailscaleIp
+  tailscaleIp = $tsIp
+  tailscaleCli = $tsCli
+  tailscaleDetail = $tsDetail
+  networkStatus = $netStatus
+  networkDetail = $netDetail
   home = $env:USERPROFILE
   systemRoot = $env:SystemRoot
   userId = [System.Security.Principal.WindowsIdentity]::GetCurrent().Name
@@ -55,7 +102,7 @@ Write-Output '${END_MARKER}'
 
 /** The command line to send over SSH: the preflight script as an EncodedCommand. */
 export function buildWindowsPreflightCommand(): string {
-  return powershellDialect.wrapScript(WINDOWS_PREFLIGHT_SCRIPT);
+  return powershellDialect.wrapScript(WINDOWS_PREFLIGHT_SCRIPT.split('\n').map(line => line.trim()).filter(line => line && !line.startsWith('#')).join('\n'));
 }
 
 const rawSchema = z.object({
@@ -65,6 +112,10 @@ const rawSchema = z.object({
   windowsCaption: z.string().nullable(),
   buildNumber: z.string().nullable(),
   tailscaleIp: z.string().nullable(),
+  tailscaleCli: z.enum(['ok', 'empty', 'missing', 'denied', 'failed']),
+  tailscaleDetail: z.string().nullable(),
+  networkStatus: z.enum(['not_checked', 'found', 'empty', 'failed']),
+  networkDetail: z.string().nullable(),
   home: z.string().min(1),
   systemRoot: z.string().min(1),
   userId: z.string().min(1),
@@ -81,6 +132,10 @@ export interface WindowsPreflightInfo {
   /** The Windows build number (`17763` is Windows 10 1809 / Server 2019); null = unreadable. */
   buildNumber: number | null;
   tailscaleIp: string | null;
+  tailscaleCli: z.infer<typeof rawSchema>['tailscaleCli'];
+  tailscaleDetail: string | null;
+  networkStatus: z.infer<typeof rawSchema>['networkStatus'];
+  networkDetail: string | null;
   home: string;
   /** `%SystemRoot%` of the host (where `schtasks.exe` lives). */
   systemRoot: string;
@@ -116,6 +171,10 @@ export function parseWindowsPreflight(output: string, stderr = '', code: number 
     windowsVersion: caption && buildNumber !== null && buildNumber >= 22000 ? caption.replace(/^Windows 10\b/, 'Windows 11') : caption,
     buildNumber,
     tailscaleIp: v.tailscaleIp ? v.tailscaleIp.trim() : null,
+    tailscaleCli: v.tailscaleCli,
+    tailscaleDetail: v.tailscaleDetail ? redactSecretText(v.tailscaleDetail).slice(0, 300) : null,
+    networkStatus: v.networkStatus,
+    networkDetail: v.networkDetail ? redactSecretText(v.networkDetail).slice(0, 300) : null,
     home: v.home,
     systemRoot: v.systemRoot,
     userId: v.userId,
@@ -145,7 +204,12 @@ export function checkWindowsPreflight(info: WindowsPreflightInfo): string[] {
     missing.push(`Windows 10 version 1809 (build ${MIN_WINDOWS_BUILD}) or later required (found: build ${info.buildNumber}); the agent runs under \`conhost.exe --headless\``);
   }
   if (!info.tailscaleIp || !IPV4.test(info.tailscaleIp)) {
-    missing.push(`Tailscale IP not found (got: ${info.tailscaleIp || 'empty'}; install Tailscale for Windows and sign in)`);
+    missing.push(`Tailscale IP not found (${describeTailscaleCli(info)}; network address lookup: ${info.networkStatus}${info.networkDetail ? `: ${info.networkDetail}` : ''})`);
   }
   return missing;
+}
+
+export function describeTailscaleCli(info: WindowsPreflightInfo): string {
+  const descriptions = { ok: 'CLI returned an invalid IP', empty: 'CLI returned no IP', missing: 'CLI not found', denied: 'CLI access denied', failed: 'CLI failed' };
+  return `${descriptions[info.tailscaleCli]}${info.tailscaleDetail ? `: ${info.tailscaleDetail}` : ''}`;
 }

@@ -467,7 +467,7 @@ describe('AgentInstaller', () => {
 
   describe('OS detection and the Windows preflight', () => {
     const windowsOutput = (over: Record<string, unknown> = {}) => `banner\n<<AZITO_PREFLIGHT_BEGIN>>\n${JSON.stringify({
-      nodePath: 'C:\\node.exe', nodeVersion: 'v24.14.0', arch: 'AMD64', windowsCaption: 'Microsoft Windows 11 Pro', buildNumber: '22631', tailscaleIp: '100.64.0.9', home: 'C:\\Users\\d', systemRoot: 'C:\\Windows', userId: 'PC\\d', ...over,
+      nodePath: 'C:\\node.exe', nodeVersion: 'v24.14.0', arch: 'AMD64', windowsCaption: 'Microsoft Windows 11 Pro', buildNumber: '22631', tailscaleIp: '100.64.0.9', tailscaleCli: 'ok', tailscaleDetail: null, networkStatus: 'not_checked', networkDetail: null, home: 'C:\\Users\\d', systemRoot: 'C:\\Windows', userId: 'PC\\d', ...over,
     })}\n<<AZITO_PREFLIGHT_END>>\n`;
 
     function makeWindows(login: 'cmd' | 'powershell', over: Record<string, unknown> = {}) {
@@ -498,6 +498,14 @@ describe('AgentInstaller', () => {
       expect(result.error).toContain('x86_64 architecture required (found: arm64');
       expect(result.error).toContain('Tailscale IP not found');
       expect(result.error).not.toContain('unsupported_os');
+    });
+
+    it('propagates a CLI refusal and failed network lookup without suggesting sign in', async () => {
+      const { installer } = makeWindows('cmd', { tailscaleIp: null, tailscaleCli: 'denied', tailscaleDetail: '401 Unauthorized', networkStatus: 'failed', networkDetail: 'network unavailable' });
+      const result = await installer.install('user@host');
+      expect(result.error).toContain('CLI access denied: 401 Unauthorized');
+      expect(result.error).toContain('network address lookup: failed: network unavailable');
+      expect(result.error).not.toMatch(/install.*sign in/i);
     });
 
     it('refuses a Windows host whose native architecture cannot be read, with the reason', async () => {
