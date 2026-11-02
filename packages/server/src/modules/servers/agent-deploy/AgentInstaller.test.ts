@@ -47,6 +47,9 @@ function makeSsh(opts: HostOptions = {}, host: FakeHost = { folderId: '', folder
   const commands: string[] = [];
   const execIsolated = vi.fn(async (_host: string, command: string) => {
     commands.push(command);
+    if (command.includes('$(id -u)')) return { stdout: '/Users/test\n501\n', stderr: '', code: 0 };
+    if (command.startsWith('if [ -f') && command.includes('com.azito.agent.plist')) return { stdout: 'AZITO_NO_PLIST', stderr: '', code: 0 };
+    if (command.includes("'launchctl' 'print'")) return { stdout: '', stderr: '', code: 1 };
     if (opts.cleanupMark && (command === AGENT_PRESENCE_COMMAND || command.includes('echo AZITO_CLEANUP_IDLE'))) return { stdout: `AZITO_CLEANUP_MARK:${opts.cleanupMark}\n`, stderr: '', code: 0 };
     if (command.includes('echo AZITO_CLEANUP_IDLE')) return { stdout: 'AZITO_CLEANUP_IDLE\n', stderr: '', code: 0 };
     if (opts.presenceThrows && command === AGENT_PRESENCE_COMMAND) throw new Error('connection reset');
@@ -441,6 +444,15 @@ describe('AgentInstaller', () => {
       const result = await installer.install('user@host');
       expect(result.success).toBe(true);
       expect(result.hostProfile).toEqual({ platform: 'darwin', arch: 'arm64' });
+    });
+
+    it('uses launchd for a Mac without touching systemd or the misao process', async () => {
+      const { installer, commands } = make(okMisao(), { tmux: 'tmux 3.4', probe: 'darwin arm64\n' });
+      const result = await installer.install('user@host');
+      expect(result.startMethod).toBe('launchd');
+      expect(commands.some((c) => c.includes("'launchctl' 'bootstrap' 'user/501'"))).toBe(true);
+      expect(commands.some((c) => c.includes('systemctl --user'))).toBe(false);
+      expect(commands.some((c) => /pkill.*misao/.test(c))).toBe(false);
     });
 
     it('rejects darwin x64 Node, including Rosetta', async () => {

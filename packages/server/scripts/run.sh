@@ -12,7 +12,8 @@ if [ "${1:-}" != "--azito-login" ]; then
     fi
   fi
   : "${login_shell:?Could not find the login shell}"
-  exec "$login_shell" -lc 'exec /bin/bash "$1" --azito-login' azito "$0"
+  export AZITO_AGENT_SCRIPT="$0"
+  exec "$login_shell" -lc 'exec /bin/bash "$AZITO_AGENT_SCRIPT" --azito-login'
 fi
 
 NODE_MAJOR=$(node -e 'console.log(process.versions.node.split(".")[0])' 2>/dev/null || echo "0")

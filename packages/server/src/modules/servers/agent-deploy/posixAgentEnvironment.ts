@@ -1,5 +1,7 @@
+import { shellQuote } from '../../../shared/shellQuote';
+
 /** Fixed probe run in the target user's login shell. Banners outside the markers are ignored. */
-export const POSIX_ENVIRONMENT_COMMAND = `"$SHELL" -lc '
+const PROBE_SCRIPT = `
 printf "\\nAZITO_ENV_BEGIN\\n"
 printf "NODE_VERSION=%s\\n" "$(node --version 2>/dev/null || true)"
 printf "NODE_HOST=%s\\n" "$(node -p "process.platform.concat(String.fromCharCode(32),process.arch)" 2>/dev/null || true)"
@@ -7,7 +9,8 @@ printf "TMUX=%s\\n" "$(tmux -V 2>/dev/null || true)"
 if command -v tailscale >/dev/null 2>&1; then ts=$(tailscale ip -4 2>/dev/null | head -n 1); elif [ -x /Applications/Tailscale.app/Contents/MacOS/Tailscale ]; then ts=$(/Applications/Tailscale.app/Contents/MacOS/Tailscale ip -4 2>/dev/null | head -n 1); else ts=; fi
 printf "TAILSCALE=%s\\n" "$ts"
 printf "\\nAZITO_ENV_END\\n"
-'`;
+`;
+export const POSIX_ENVIRONMENT_COMMAND = `AZITO_PREFLIGHT_SCRIPT=${shellQuote(PROBE_SCRIPT)} "$SHELL" -lc 'exec /bin/sh -c "$AZITO_PREFLIGHT_SCRIPT"'`;
 
 export interface PosixAgentEnvironment {
   nodeVersion: string;

@@ -7,6 +7,7 @@ import type { SshClient } from '../ssh/SshClient';
 import type { AgentBundler } from './AgentBundler';
 import { AgentTransport } from '../transport/AgentTransport';
 import { HostProfileError, parseHostProbe, type HostProfile } from '../../../shared/os/hostProfile';
+import { MacAgentLaunchd } from './macAgentLaunchd';
 import { POSIX_ENVIRONMENT_COMMAND, parsePosixAgentEnvironment } from './posixAgentEnvironment';
 import { HOST_OS_PROBE_COMMAND, parseHostOsProbe } from './hostOsProbe';
 import { buildWindowsPreflightCommand, checkWindowsPreflight, parseWindowsPreflight, type WindowsPreflightInfo } from './windowsPreflight';
@@ -55,7 +56,7 @@ export interface InstallResult {
   token: string;
   version: string;
   /** `taskscheduler`: a Windows agent (a logon task). */
-  startMethod: 'systemd' | 'nohup' | 'taskscheduler';
+  startMethod: 'systemd' | 'nohup' | 'launchd' | 'taskscheduler';
   steps: InstallProgress[];
   error?: string;
   code?: string;
@@ -182,6 +183,7 @@ export class AgentInstaller {
     // ── Transfer & deploy ──
     report('transfer', 'running', 'Transferring agent bundle...');
     try {
+      if (preflight.hostProfile.platform === 'darwin') await (await MacAgentLaunchd.connect(this.sshClient, sshHost)).assertOwned();
       await this.transferAndDeploy(sshHost, version);
       await this.writeInstallId(sshHost, installId);
       report('transfer', 'ok', 'Agent deployed');
@@ -192,13 +194,13 @@ export class AgentInstaller {
     }
 
     // ── Stop existing agent (if any) ──
-    await this.stopAgent(sshHost);
+    if (preflight.hostProfile.platform !== 'darwin') await this.stopAgent(sshHost);
 
     // ── Start agent ──
     report('start', 'running', 'Starting agent...');
-    let startMethod: 'systemd' | 'nohup';
+    let startMethod: 'systemd' | 'nohup' | 'launchd';
     try {
-      startMethod = await this.startAgent(sshHost, preflight.tailscaleIp, token, muxRuntime);
+      startMethod = await this.startAgent(sshHost, preflight.tailscaleIp, token, muxRuntime, preflight.hostProfile);
       report('start', 'ok', `Started via ${startMethod}`);
     } catch (err) {
       const msg = (err as Error).message;
@@ -247,9 +249,17 @@ export class AgentInstaller {
    * place, where the Windows install sets them aside for its commit / rollback): that is outside this change. Removing it would take
    * away an agent the hub may still be using.
    */
-  private async discardUnregisteredAgent(sshHost: string, install: { hadAgent: boolean; installId: string; startMethod: 'systemd' | 'nohup'; nohupSighting: NohupSighting | undefined }): Promise<string> {
+  private async discardUnregisteredAgent(sshHost: string, install: { hadAgent: boolean; installId: string; startMethod: 'systemd' | 'nohup' | 'launchd'; nohupSighting: NohupSighting | undefined }): Promise<string> {
     if (install.hadAgent) {
       return `An agent was already installed on this host before this install; it was replaced by the new one and left running, nothing was removed. The new agent holds a new token that the hub does not store: run the install again once a mux is available. To remove it by hand: ${MANUAL_STEPS_ANY_START}`;
+    }
+    if (install.startMethod === 'launchd') {
+      try {
+        await (await MacAgentLaunchd.connect(this.sshClient, sshHost)).cleanup(install.installId);
+        return 'The agent this install started was stopped and removed.';
+      } catch (err) {
+        return `The launchd agent could not be safely removed: ${(err as Error).message}`;
+      }
     }
     if (install.startMethod === 'nohup') {
       return `The agent this install started runs as a plain process (nohup), which is not stopped automatically, so it and ~/.azito/agent were left in place on ${sshHost}. To stop it and remove it: ${nohupManualSteps(install.nohupSighting)}`;
@@ -439,15 +449,16 @@ export class AgentInstaller {
     }
 
     try {
+      if (hostProfile?.platform === 'darwin') await (await MacAgentLaunchd.connect(this.sshClient, sshHost)).assertOwned();
       await this.transferAndDeploy(sshHost, version);
     } catch (err) {
       return { success: false, version, error: `Transfer failed: ${(err as Error).message}` };
     }
 
-    await this.stopAgent(sshHost);
+    if (hostProfile?.platform !== 'darwin') await this.stopAgent(sshHost);
 
     try {
-      await this.startAgent(sshHost, tailscaleIp, existingToken, muxRuntime);
+      await this.startAgent(sshHost, tailscaleIp, existingToken, muxRuntime, hostProfile);
     } catch (err) {
       return { success: false, version, error: `Start failed: ${(err as Error).message}` };
     }
@@ -593,7 +604,12 @@ export class AgentInstaller {
     tailscaleIp: string,
     token: string,
     muxRuntime?: string,
-  ): Promise<'systemd' | 'nohup'> {
+    hostProfile?: HostProfile | null,
+  ): Promise<'systemd' | 'nohup' | 'launchd'> {
+    if (hostProfile?.platform === 'darwin') {
+      await (await MacAgentLaunchd.connect(this.sshClient, sshHost)).start(tailscaleIp, AGENT_PORT, token, muxRuntime || 'system');
+      return 'launchd';
+    }
     // Try systemd first
     try {
       return await this.startSystemd(sshHost, tailscaleIp, token, muxRuntime);
@@ -703,11 +719,11 @@ export class AgentInstaller {
    * (e.g. SSH connection failure) — the caller is expected to catch and re-check health
    * afterward regardless of outcome.
    */
-  recoverAgent(sshHost: string, tailscaleIp: string, token: string, hostProfile: HostProfile | null, muxRuntime?: string): Promise<'systemd' | 'nohup' | 'taskscheduler' | 'disabled'> {
+  recoverAgent(sshHost: string, tailscaleIp: string, token: string, hostProfile: HostProfile | null, muxRuntime?: string): Promise<'systemd' | 'nohup' | 'launchd' | 'taskscheduler' | 'disabled'> {
     return this.hostLocks.withLock(this.lockKey(sshHost), () => this.recoverAgentLocked(sshHost, tailscaleIp, token, hostProfile, muxRuntime));
   }
 
-  private async recoverAgentLocked(sshHost: string, tailscaleIp: string, token: string, hostProfile: HostProfile | null, muxRuntime?: string): Promise<'systemd' | 'nohup' | 'taskscheduler' | 'disabled'> {
+  private async recoverAgentLocked(sshHost: string, tailscaleIp: string, token: string, hostProfile: HostProfile | null, muxRuntime?: string): Promise<'systemd' | 'nohup' | 'launchd' | 'taskscheduler' | 'disabled'> {
     if (hostProfile?.platform === 'win32') {
       // The settings and the task are already on the host: ask it who it is, then restart the logon task.
       const probe = await this.sshClient.execIsolated(sshHost, buildWindowsPreflightCommand());
@@ -715,7 +731,7 @@ export class AgentInstaller {
       return outcome === 'disabled' ? 'disabled' : 'taskscheduler';
     }
     await this.assertNoCleanupRunning(sshHost);
-    return this.startAgent(sshHost, tailscaleIp, token, muxRuntime);
+    return this.startAgent(sshHost, tailscaleIp, token, muxRuntime, hostProfile);
   }
 
   private async stopAgent(sshHost: string): Promise<void> {
