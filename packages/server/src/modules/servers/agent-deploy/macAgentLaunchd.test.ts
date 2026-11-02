@@ -35,4 +35,25 @@ describe('Mac agent launchd definition', () => {
     expect(execIsolated.mock.calls.some((call) => call[1].includes('launchctl'))).toBe(false);
   });
 
+  it('restores a previous definition and restarts its job when bootstrap fails', async () => {
+    let loaded = true;
+    const home = '/Users/me';
+    const execIsolated = vi.fn(async (_host: string, command: string) => {
+      if (command.includes('id -u')) return { code: 0, stdout: `${home}\n501\n`, stderr: '' };
+      if (command.startsWith('if [ -f') && command.includes('com.azito.agent.plist') && !command.includes('agent-launchd-backup')) return { code: 0, stdout: renderMacAgentPlist(home, '100.64.0.1', 3002, 'system'), stderr: '' };
+      if (command.includes("'launchctl' 'print'")) return command.includes('user/501') && loaded ? { code: 0, stdout: `path = ${home}/Library/LaunchAgents/com.azito.agent.plist\n${home}/.azito/agent/current/run.sh`, stderr: '' } : { code: 1, stdout: '', stderr: '' };
+      if (command.includes('agent-launchd-backup.XXXXXX')) return { code: 0, stdout: `${home}/.azito/agent-launchd-backup.abc123\n`, stderr: '' };
+      if (command.includes("'launchctl' 'bootout'")) { loaded = false; return { code: 0, stdout: '', stderr: '' }; }
+      if (command.includes("'launchctl' 'bootstrap'")) {
+        const count = execIsolated.mock.calls.filter((call) => call[1].includes("'launchctl' 'bootstrap'")).length;
+        return { code: count === 1 ? 1 : 0, stdout: '', stderr: 'failed' };
+      }
+      return { code: 0, stdout: '', stderr: '' };
+    });
+    const manager = await MacAgentLaunchd.connect({ execIsolated } as never, 'host');
+    await expect(manager.start('100.64.0.2', 3002, 'secret', 'system')).rejects.toThrow(/bootstrap/);
+    expect(execIsolated.mock.calls.some((call) => call[1].includes('/plist') && call[1].includes('cp -p'))).toBe(true);
+    expect(execIsolated.mock.calls.filter((call) => call[1].includes("'launchctl' 'bootstrap'")).length).toBe(2);
+  });
+
 });

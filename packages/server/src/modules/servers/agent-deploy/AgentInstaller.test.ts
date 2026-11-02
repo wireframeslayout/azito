@@ -47,6 +47,7 @@ function makeSsh(opts: HostOptions = {}, host: FakeHost = { folderId: '', folder
   const commands: string[] = [];
   const execIsolated = vi.fn(async (_host: string, command: string) => {
     commands.push(command);
+    if (command.includes('agent-launchd-backup.XXXXXX')) return { stdout: '/Users/test/.azito/agent-launchd-backup.abc123\n', stderr: '', code: 0 };
     if (command.includes('$(id -u)')) return { stdout: '/Users/test\n501\n', stderr: '', code: 0 };
     if (command.startsWith('if [ -f') && command.includes('com.azito.agent.plist')) return { stdout: 'AZITO_NO_PLIST', stderr: '', code: 0 };
     if (command.includes("'launchctl' 'print'")) return { stdout: '', stderr: '', code: 1 };

@@ -70,11 +70,32 @@ export class MacAgentLaunchd {
     await this.assertOwned();
     const jobs = (await this.jobs.printJobs()).filter((job) => job.result.code === 0);
     if (jobs.length > 1) throw new Error(`${LABEL} is loaded in both user and gui domains`);
-    if (jobs.length === 1) await this.jobs.bootout(jobs[0].domain);
-    const env = `AZITO_AGENT_TOKEN=${shellQuote(token)}\n`;
-    const script = `mkdir -p ${shellQuote(`${this.home}/.azito/agent`)} ${shellQuote(`${this.home}/Library/LaunchAgents`)} && (umask 077; printf %s ${shellQuote(env)} > ${shellQuote(`${this.home}/.azito/agent/agent.env`)}) && printf %s ${shellQuote(renderMacAgentPlist(this.home, bind, port, mux))} > ${shellQuote(this.plist)}`;
-    const write = await this.ssh.execIsolated(this.host, script);
-    if (write.code !== 0) throw new Error(`Could not write the agent launchd definition: ${write.stderr}`);
-    await this.jobs.bootstrap('user');
+    const envFile = `${this.home}/.azito/agent/agent.env`;
+    const backupResult = await this.ssh.execIsolated(this.host, `mkdir -p ${shellQuote(`${this.home}/.azito`)} && backup=$(mktemp -d ${shellQuote(`${this.home}/.azito/agent-launchd-backup.XXXXXX`)}) && { [ ! -f ${shellQuote(this.plist)} ] || cp -p ${shellQuote(this.plist)} "$backup/plist"; } && { [ ! -f ${shellQuote(envFile)} ] || cp -p ${shellQuote(envFile)} "$backup/env"; } && printf '%s\\n' "$backup"`);
+    const backup = backupResult.stdout.trim();
+    if (backupResult.code !== 0 || !backup.startsWith(`${this.home}/.azito/agent-launchd-backup.`) || backup.includes('\n')) throw new Error('Could not save the previous launchd definition');
+    let stopped = false;
+    let keepBackup = false;
+    try {
+      if (jobs.length === 1) { await this.jobs.bootout(jobs[0].domain); stopped = true; }
+      const env = `AZITO_AGENT_TOKEN=${shellQuote(token)}\n`;
+      const script = `mkdir -p ${shellQuote(`${this.home}/.azito/agent`)} ${shellQuote(`${this.home}/Library/LaunchAgents`)} && (umask 077; printf %s ${shellQuote(env)} > ${shellQuote(envFile)}) && printf %s ${shellQuote(renderMacAgentPlist(this.home, bind, port, mux))} > ${shellQuote(this.plist)}`;
+      const write = await this.ssh.execIsolated(this.host, script);
+      if (write.code !== 0) throw new Error(`Could not write the agent launchd definition: ${write.stderr}`);
+      await this.jobs.bootstrap('user');
+    } catch (err) {
+      const restore = await this.ssh.execIsolated(this.host, `if [ -f ${shellQuote(`${backup}/plist`)} ]; then cp -p ${shellQuote(`${backup}/plist`)} ${shellQuote(this.plist)}; else rm -f ${shellQuote(this.plist)}; fi && if [ -f ${shellQuote(`${backup}/env`)} ]; then cp -p ${shellQuote(`${backup}/env`)} ${shellQuote(envFile)}; else rm -f ${shellQuote(envFile)}; fi`);
+      if (restore.code !== 0) { keepBackup = true; throw new Error(`Agent launchd start failed and restoring its definition failed; backup left at ${backup}`); }
+      if (stopped) {
+        try { await this.jobs.bootstrap(jobs[0].domain); }
+        catch (restoreError) { keepBackup = true; throw new Error(`Agent launchd start failed and the previous job could not be restarted; backup left at ${backup}: ${(restoreError as Error).message}`); }
+      }
+      throw err;
+    } finally {
+      if (!keepBackup) {
+        const remove = await this.ssh.execIsolated(this.host, `rm -rf ${shellQuote(backup)}`);
+        if (remove.code !== 0) throw new Error(`Could not remove launchd backup ${backup}`);
+      }
+    }
   }
 }
