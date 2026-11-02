@@ -1,8 +1,12 @@
 import { describe, it, expect, afterEach, vi } from 'vitest';
 import Fastify, { type FastifyInstance } from 'fastify';
+import { Writable } from 'node:stream';
 import sessionsRoutes, { type SessionsRouteOptions } from './sessions';
 import type { IServerRepository, ServerConfig } from '../../servers/Server';
-import type { TmuxClient } from '../TmuxClient';
+import { TmuxClient } from '../TmuxClient';
+import { LocalTransport } from '../../servers/transport/LocalTransport';
+import { TaskTempFiles } from '../../../shared/os/taskTempFiles';
+import { testLocalHost } from '../../../shared/os/testing/testLocalHost';
 import type { SqliteWindowRepository } from '../../windows/SqliteWindowRepository';
 import { KeyedMutex } from '../../../shared/keyedMutex';
 import type { IMuxClient } from '../IMuxClient';
@@ -26,7 +30,7 @@ function makeWindowRepo(): SqliteWindowRepository {
   } as unknown as SqliteWindowRepository;
 }
 
-async function buildApp(muxOverrides: Partial<IMuxClient>, windowRepo = makeWindowRepo(), tmux = {} as TmuxClient): Promise<FastifyInstance> {
+async function buildApp(muxOverrides: Partial<IMuxClient>, windowRepo = makeWindowRepo(), tmux = {} as TmuxClient, logStream?: Writable): Promise<FastifyInstance> {
   const baseMux = {
     kind: 'tmux',
     caps: { zoom: true, paneTitle: true, paneLabels: false, outputStream: true },
@@ -35,7 +39,7 @@ async function buildApp(muxOverrides: Partial<IMuxClient>, windowRepo = makeWind
     ...muxOverrides,
   } as unknown as IMuxClient;
   const registry = { resolve: vi.fn(() => baseMux), availabilityFor: vi.fn(() => ({ available: true })) } as unknown as MuxDriverRegistry;
-  const app = Fastify();
+  const app = Fastify(logStream ? { logger: { stream: logStream } } : {});
   await app.register(sessionsRoutes, {
     serverRepo: makeServerRepo(),
     tmux,
@@ -159,7 +163,7 @@ describe('window creation failures', () => {
   it.each(['result', 'exception'])('does not expose remote %s details', async (failure) => {
     const openWindow = vi.fn(async () => {
       if (failure === 'exception') throw new Error('Command failed: tmux -e TOKEN=secret');
-      return { result: { code: 1, stdout: 'TOKEN=secret', stderr: 'TOKEN=secret' }, ref: {}, windowName: 'w' };
+      return { result: { code: 1, stdout: 'TOKEN=secret', stderr: 'TOKEN=secret' }, ref: { kind: 'tmux' as const, workspace: 'missing', window: 'w' }, windowName: 'w' };
     });
     const app = await buildApp({ openWindow } as Partial<IMuxClient>);
     const res = await app.inject({ method: 'POST', url: '/api/servers/srv1/mux/workspaces/missing/windows', payload: {} });
@@ -171,14 +175,12 @@ describe('window creation failures', () => {
 });
 
 it.skipIf(process.platform === 'win32')('does not expose pane tokens when local tmux cannot create a window', async () => {
-  const { LocalTransport } = await import('../../servers/transport/LocalTransport');
-  const { TmuxClient } = await import('../TmuxClient');
-  const { TaskTempFiles } = await import('../../../shared/os/taskTempFiles');
-  const { testLocalHost } = await import('../../../shared/os/testing/testLocalHost');
   const socket = `azito-test-${process.pid}-${Date.now()}`;
   const transport = new LocalTransport({ bin: 'tmux', baseArgs: ['-L', socket] }, 'http://hub', testLocalHost(), new TaskTempFiles('/tmp', 'linux'), { platform: 'linux', arch: 'x64' });
   const tmux = new TmuxClient({ getTransport: () => transport } as never, 'http://hub', 'ui-token-test-123', 'http://localhost', 'webhook-token-test-456', '/tmp');
-  const app = await buildApp({}, makeWindowRepo(), tmux);
+  let logs = '';
+  const logStream = new Writable({ write(chunk, _encoding, callback) { logs += chunk.toString(); callback(); } });
+  const app = await buildApp({}, makeWindowRepo(), tmux, logStream);
   const response = await app.inject({ method: 'POST', url: '/api/servers/srv1/sessions/missing/windows', payload: {} });
   expect(response.statusCode).toBe(500);
   expect(response.body).toContain('new-window failed');
@@ -186,4 +188,7 @@ it.skipIf(process.platform === 'win32')('does not expose pane tokens when local 
   expect(response.body).not.toContain('webhook-token-test-456');
   expect(response.body).not.toContain('-e');
   await app.close();
+  expect(logs).not.toContain('ui-token-test-123');
+  expect(logs).not.toContain('webhook-token-test-456');
+  expect(logs).not.toContain('-e');
 });

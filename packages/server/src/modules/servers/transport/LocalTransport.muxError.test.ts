@@ -1,4 +1,7 @@
 import { describe, it, expect, vi } from 'vitest';
+import { mkdtemp, writeFile, rm } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 vi.mock('node-pty', () => ({ spawn: vi.fn() }));
 import { LocalTransport } from './LocalTransport';
 import { TaskTempFiles } from '../../../shared/os/taskTempFiles';
@@ -18,4 +21,15 @@ describe('local mux failures', () => {
   it('retains ENOENT for missing binary classification', async () => {
     await expect(make('/missing-azito-tmux-test').execMux({ kind: 'tmux', args: ['new-window'] })).rejects.toMatchObject({ code: 'ENOENT' });
   });
+  it('classifies a timeout without exposing arguments', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'azito-mux-timeout-'));
+    try {
+      const script = join(dir, 'tmux');
+      await writeFile(script, '#!/bin/sh\nexec sleep 30\n', { mode: 0o700 });
+      const error = await make(script).execMux({ kind: 'tmux', args: ['new-window', '-e', 'CUSTOM=secret'] }).catch((err: unknown) => err);
+      expect(String(error)).toContain('timed out');
+      expect(String(error)).not.toContain('secret');
+    } finally { await rm(dir, { recursive: true, force: true }); }
+  }, 10000);
+
 });

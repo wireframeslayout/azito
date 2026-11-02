@@ -2,6 +2,7 @@ import { measureHostResources, systemDriveOf, type HostResourceSample } from '..
 import { EventEmitter } from 'events';
 import { hostRunsTmux } from '../muxKinds';
 import { MuxDriverUnavailableError } from '../../tmux/MuxCapabilityError';
+import { tmuxFailureReason } from '../../tmux/tmuxFailureReason';
 import { execFile } from 'child_process';
 import * as pty from 'node-pty';
 import type {
@@ -107,15 +108,17 @@ export class LocalTransport implements IServerTransport, IMuxTransport, IHostBou
 
   async execMux(req: MuxExecRequest): Promise<ExecResult> {
     this.assertHostRunsTmux();
-    try {
-      return await execLocal(this.rt.bin, [...this.rt.baseArgs, ...req.args]);
-    } catch (err) {
-      const source = err as { code?: string | number; killed?: boolean; signal?: string };
-      const reason = source.code === 'ENOENT' ? 'binary not found' : source.killed ? 'timed out' : typeof source.code === 'number' ? `exit ${source.code}` : 'execution failed';
-      const safe = new Error(`tmux ${req.args[0]} failed: ${reason}`) as Error & { code?: string | number };
-      safe.code = source.code;
-      throw safe;
-    }
+    return new Promise((resolve, reject) => {
+      execFile(this.rt.bin, [...this.rt.baseArgs, ...req.args], { timeout: 5000 }, (err, stdout, stderr) => {
+        if (!err) return resolve({ stdout, stderr, code: 0 });
+        const source = err as Error & { code?: string | number; killed?: boolean };
+        const reason = source.code === 'ENOENT' ? 'binary not found' : source.killed ? 'timed out'
+          : typeof source.code === 'number' ? tmuxFailureReason(stderr, source.code) : 'execution failed';
+        const safe = new Error(`tmux ${req.args[0]} failed: ${reason}`) as Error & { code?: string | number };
+        safe.code = source.code;
+        reject(safe);
+      });
+    });
   }
 
   async openTerminal(ref: MuxRef, ordinal: PaneOrdinal, cols: number, rows: number, opts?: import('./ServerTransport').OpenTerminalOpts): Promise<ITerminalStream> {

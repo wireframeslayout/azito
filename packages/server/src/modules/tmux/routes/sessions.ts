@@ -431,8 +431,8 @@ const sessionsRoutes: FastifyPluginCallback<SessionsRouteOptions> = (fastify, op
           notifySessionsChanged(request.params.name);
           return { ok: true, windowName, ...resourceCheckBody(resourceSkipped) };
         } catch (err: unknown) {
-          if (err instanceof AgentUnreachableError) throw err;
-          return reply.status(500).send({ error: 'new-session failed' });
+          if (err instanceof AgentUnreachableError || err instanceof HostProfileError) throw err;
+          return reply.status(500).send({ error: 'new-session failed: execution failed' });
         }
       });
     },
@@ -470,8 +470,8 @@ const sessionsRoutes: FastifyPluginCallback<SessionsRouteOptions> = (fastify, op
           const createdRef: MuxRef = { kind: 'tmux', workspace: request.params.session, window: windowName };
           return { ok: true, windowName, windowId: null, ref: formatMuxRef(createdRef), ...resourceCheckBody(resourceSkipped) };
         } catch (err: unknown) {
-          if (err instanceof AgentUnreachableError) throw err;
-          return reply.status(500).send({ error: 'new-window failed' });
+          if (err instanceof AgentUnreachableError || err instanceof HostProfileError) throw err;
+          return reply.status(500).send({ error: 'new-window failed: execution failed' });
         }
       });
     },
