@@ -23,7 +23,7 @@ export function LookoutDrawer({ open, onClose, sections, summaries, snapshotStat
     {snapshotStatus === 'error' && <Notice tone="warning" action={<Button size="sm" onClick={onRetry}>{t('retry')}</Button>}>{t('loadError')}</Notice>}
     {snapshotStatus === 'loading' && <p role="status" style={{ color: 'var(--text-dim)' }}>{t('loading')}</p>}
     <LookoutSection name="attention" items={sections.attention} onOpen={onOpenItem} summaries={summaries} empty={<p>{t('emptyAttention')}</p>} />
-    <LookoutSection name="active" items={sections.active} onOpen={onOpenItem} summaries={summaries} empty={snapshotStatus === 'ready' ? <p>{t('emptyActive')}</p> : <></>} />
+    <LookoutSection name="active" countKnown={snapshotStatus === 'ready'} items={sections.active} onOpen={onOpenItem} summaries={summaries} empty={snapshotStatus === 'ready' ? <p>{t('emptyActive')}</p> : <></>} />
     <LookoutSection name="finished" items={sections.finished} onOpen={onOpenItem} summaries={summaries} />
   </Overlay>;
 }

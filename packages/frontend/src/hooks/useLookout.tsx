@@ -27,6 +27,7 @@ export function LookoutProvider({ children }: { children: React.ReactNode }) {
   const { allProjects, allTasks } = useWorkspaceCatalog();
   const data = useMemo(() => ({ windowById: buildWindowIndex(allProjects, allTasks), taskById: new Map(allTasks.map(task => [task.id, task])) }), [allProjects, allTasks]);
   const [workspaceTitleData, setWorkspaceTitleData] = useState<ActivityTitleData | null>(null);
+  // Workspace の情報がない間は、カタログから作った索引を使う。
   const { rows, historyCount } = useActiveWindowRows(workspaceTitleData ?? data);
   const [lastSeen, setLastSeen] = useState(readLastSeen);
   const [drawer, setDrawer] = useState<{ openedAt: number; lastSeen: number } | null>(null);

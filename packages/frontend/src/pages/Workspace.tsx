@@ -613,6 +613,7 @@ function WorkspaceInner() {
 
   const titleData = useMemo(() => ({ windowById, taskById }), [windowById, taskById]);
   const { setWorkspaceTitleData } = useLookout();
+  // 現在のプロジェクトの窓情報はカタログより新しいため、Lookout と共有する。
   useEffect(() => { setWorkspaceTitleData(titleData); return () => setWorkspaceTitleData(null); }, [titleData, setWorkspaceTitleData]);
 
   const findTaskByTarget = useCallback(
@@ -1171,7 +1172,7 @@ function WorkspaceInner() {
     tabs.length === 0
       ? <HomeFeed allProjects={allProjects} openTask={openTaskFromActiveWindow} connectPane={connectPaneFromActiveWindow} onAddWindow={handleOpenAddTabFromSwitcher} />
       : <EmptyState title={t('workspace:pane.dragHint')} />
-  ), [tabs.length, titleData, allTasks, allProjects, openTaskFromActiveWindow, connectPaneFromActiveWindow, handleOpenAddTabFromSwitcher, t]);
+  ), [tabs.length, allProjects, openTaskFromActiveWindow, connectPaneFromActiveWindow, handleOpenAddTabFromSwitcher, t]);
 
   if (!project) {
     if (projectsLoaded && allProjects.length === 0) {
