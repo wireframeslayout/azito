@@ -1,4 +1,4 @@
-import { describe, it, expect, afterEach, vi } from 'vitest';
+import { describe, it, expect, afterEach, beforeEach, vi } from 'vitest';
 import Fastify, { type FastifyInstance } from 'fastify';
 import sessionsRoutes, { type SessionsRouteOptions } from './sessions';
 import type { IServerRepository, ServerConfig } from '../../servers/Server';
@@ -26,6 +26,8 @@ function makeWindowRepo(): SqliteWindowRepository {
   } as unknown as SqliteWindowRepository;
 }
 
+const emit = vi.fn();
+
 async function buildApp(muxOverrides: Partial<IMuxClient>, windowRepo = makeWindowRepo(), tmux = {} as TmuxClient): Promise<FastifyInstance> {
   const baseMux = {
     kind: 'tmux',
@@ -37,6 +39,7 @@ async function buildApp(muxOverrides: Partial<IMuxClient>, windowRepo = makeWind
   const registry = { resolve: vi.fn(() => baseMux) } as unknown as MuxDriverRegistry;
   const app = Fastify();
   await app.register(sessionsRoutes, {
+    notificationBus: { emit } as never,
     serverRepo: makeServerRepo(),
     tmux,
     uiToken: 'test-token',
@@ -53,6 +56,7 @@ async function buildApp(muxOverrides: Partial<IMuxClient>, windowRepo = makeWind
 const encodedRef = encodeURIComponent(JSON.stringify({ kind: 'tmux', workspace: 'main', window: '1' }));
 
 describe('PUT /api/servers/:name/mux/windows/:ref/rename error handling', () => {
+  beforeEach(() => emit.mockClear());
   let app: FastifyInstance;
   afterEach(async () => { await app.close(); });
 
@@ -64,6 +68,14 @@ describe('PUT /api/servers/:name/mux/windows/:ref/rename error handling', () => 
     const res = await app.inject({ method: 'PUT', url: `/api/servers/srv1/mux/windows/${encodedRef}/rename`, payload: { name: 'chosen' } });
     expect(res.statusCode).toBe(200);
     expect(repo.update).toHaveBeenCalledWith(4, { label: 'chosen', labelSource: 'user' });
+    expect(emit).toHaveBeenCalledWith({ type: 'window:renamed', payload: { serverName: 'srv1', target: 'main:1', newName: 'chosen', windowId: 4 } });
+  });
+
+  it('emits the old target for an unregistered window', async () => {
+    app = await buildApp({ renameWindowByRef: vi.fn(async () => ({ code: 0, stdout: '', stderr: '' })) });
+    const res = await app.inject({ method: 'PUT', url: `/api/servers/srv1/mux/windows/${encodedRef}/rename`, payload: { name: 'chosen' } });
+    expect(res.statusCode).toBe(200);
+    expect(emit).toHaveBeenCalledWith({ type: 'window:renamed', payload: { serverName: 'srv1', target: 'main:1', newName: 'chosen', windowId: undefined } });
   });
 
   it('reports a database failure after the mux rename', async () => {
@@ -74,6 +86,7 @@ describe('PUT /api/servers/:name/mux/windows/:ref/rename error handling', () => 
     const res = await app.inject({ method: 'PUT', url: `/api/servers/srv1/mux/windows/${encodedRef}/rename`, payload: { name: 'chosen' } });
     expect(res.statusCode).toBe(500);
     expect(res.json().error).toMatch(/renamed.*saving/);
+    expect(emit).not.toHaveBeenCalledWith(expect.objectContaining({ type: 'window:renamed' }));
   });
 
   it('returns 404 when rename fails with "not found"', async () => {
@@ -81,6 +94,7 @@ describe('PUT /api/servers/:name/mux/windows/:ref/rename error handling', () => 
     const res = await app.inject({ method: 'PUT', url: `/api/servers/srv1/mux/windows/${encodedRef}/rename`, payload: { name: 'new' } });
     expect(res.statusCode).toBe(404);
     expect(res.json()).toEqual({ error: 'window not found' });
+    expect(emit).not.toHaveBeenCalledWith(expect.objectContaining({ type: 'window:renamed' }));
   });
 
   it('returns 500 when rename fails with a generic error', async () => {
@@ -141,6 +155,7 @@ describe('PUT .../panes/:ordinal/rename error handling', () => {
 
 
 describe('legacy window rename', () => {
+  beforeEach(() => emit.mockClear());
   it.each([0, 1])('updates the label only when tmux returns %i', async (code) => {
     const repo = makeWindowRepo();
     repo.findByServerAndTarget = vi.fn(() => ({ id: 4 }) as never);
@@ -151,6 +166,7 @@ describe('legacy window rename', () => {
     expect(res.statusCode).toBe(code === 0 ? 200 : 500);
     if (code === 0) expect(repo.update).toHaveBeenCalledWith(4, { label: 'chosen', labelSource: 'user' });
     else expect(repo.update).not.toHaveBeenCalled();
+    expect(emit.mock.calls.some(([event]) => event.type === 'window:renamed')).toBe(code === 0);
     await app.close();
   });
 });

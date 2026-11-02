@@ -1,8 +1,9 @@
 import { useEffect, useRef } from 'react';
-import type { AgentActivityPayload, BrowserOpenedPayload, FirewallDiagnosis, NotificationEvent } from '../types/notification';
+import type { AgentActivityPayload, BrowserOpenedPayload, FirewallDiagnosis, NotificationEvent, WindowRenamedPayload } from '../types/notification';
 import { buildWsUrl } from '../api/wsUrl';
 
 export interface NotificationHandlers {
+  onWindowRenamed?: (payload: WindowRenamedPayload) => void;
   onMuxWake?: (payload: { windowId: number; serverName: string; title?: string; taskId?: number; reason: 'ask' | 'misao_unavailable' }) => void;
   onServerFirewall?: (payload: { serverName: string; diagnosis: FirewallDiagnosis }) => void;
   onSessionsUpdated?: (serverName: string) => void;
@@ -95,6 +96,9 @@ export function useNotificationChannel(handlers: NotificationHandlers): void {
           break;
         case 'server:firewall':
           h.onServerFirewall?.(event.payload);
+          break;
+        case 'window:renamed':
+          h.onWindowRenamed?.(event.payload);
           break;
         case 'sessions:updated':
           h.onSessionsUpdated?.(event.payload.serverName);
