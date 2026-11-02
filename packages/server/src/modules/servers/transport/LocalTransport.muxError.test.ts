@@ -12,7 +12,7 @@ function make(bin: string) {
 }
 
 describe('local mux failures', () => {
-  it('does not retain the command or environment in an execution error', async () => {
+  it.skipIf(process.platform === 'win32')('does not retain the command or environment in an execution error', async () => {
     const error = await make('/bin/false').execMux({ kind: 'tmux', args: ['new-window', '-e', 'ARBITRARY=secret with spaces'] }).catch((err: unknown) => err);
     expect(error).toMatchObject({ message: 'tmux new-window failed: exit 1', code: 1 });
     expect(JSON.stringify(error)).not.toContain('secret');
@@ -21,7 +21,7 @@ describe('local mux failures', () => {
   it('retains ENOENT for missing binary classification', async () => {
     await expect(make('/missing-azito-tmux-test').execMux({ kind: 'tmux', args: ['new-window'] })).rejects.toMatchObject({ code: 'ENOENT' });
   });
-  it('classifies a timeout without exposing arguments', async () => {
+  it.skipIf(process.platform === 'win32')('classifies a timeout without exposing arguments', async () => {
     const dir = await mkdtemp(join(tmpdir(), 'azito-mux-timeout-'));
     try {
       const script = join(dir, 'tmux');
