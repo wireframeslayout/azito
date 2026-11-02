@@ -607,9 +607,9 @@ azito version        # バージョン表示
 | OS | アーキテクチャ | 状態 |
 |----|---------------|------|
 | Linux | x86_64 (x64) | ハブ・エージェントサーバーともにサポート |
-| Linux | aarch64 (arm64) | ハブはサポート、エージェントサーバーは未対応 |
-| macOS | Apple Silicon (arm64) | ハブはサポート、エージェントサーバーは未対応 |
-| macOS | Intel (x64) | ハブは未対応（要望があれば検討）、エージェントサーバーはサポート |
+| Linux | aarch64 (arm64) | ハブ・エージェントサーバーともにサポート |
+| macOS | Apple Silicon (arm64) | ハブ・エージェントサーバーともにサポート |
+| macOS | Intel (x64) | ハブ・エージェントサーバーともに未対応 |
 | Windows | x64 | サポート。ハブ（[Windows 版の配布物](#windows-版の配布物)）と、エージェントサーバー（[Windows のエージェントサーバー](./windows-agent.md)）の両方 |
 | Windows | arm64 | 未対応 |
 
@@ -712,3 +712,5 @@ grep AZITO_UI_TOKEN ~/.azito/hub/.env
 ss -ltn | grep :3001
 # 開発用サーバーが動いている場合は停止
 ```
+
+macOS・Linux の agent の準備は [macOS・Linux のエージェントサーバー](./posix-agent.md) を参照してください。
