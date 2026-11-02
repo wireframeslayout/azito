@@ -34,7 +34,7 @@ async function buildApp(muxOverrides: Partial<IMuxClient>, windowRepo = makeWind
     resolvePane: vi.fn(async () => paneHandle),
     ...muxOverrides,
   } as unknown as IMuxClient;
-  const registry = { resolve: vi.fn(() => baseMux) } as unknown as MuxDriverRegistry;
+  const registry = { resolve: vi.fn(() => baseMux), availabilityFor: vi.fn(() => ({ available: true })) } as unknown as MuxDriverRegistry;
   const app = Fastify();
   await app.register(sessionsRoutes, {
     serverRepo: makeServerRepo(),
@@ -153,4 +153,37 @@ describe('legacy window rename', () => {
     else expect(repo.update).not.toHaveBeenCalled();
     await app.close();
   });
+});
+
+describe('window creation failures', () => {
+  it.each(['result', 'exception'])('does not expose remote %s details', async (failure) => {
+    const openWindow = vi.fn(async () => {
+      if (failure === 'exception') throw new Error('Command failed: tmux -e TOKEN=secret');
+      return { result: { code: 1, stdout: 'TOKEN=secret', stderr: 'TOKEN=secret' }, ref: {}, windowName: 'w' };
+    });
+    const app = await buildApp({ openWindow } as Partial<IMuxClient>);
+    const res = await app.inject({ method: 'POST', url: '/api/servers/srv1/mux/workspaces/missing/windows', payload: {} });
+    expect(res.statusCode).toBe(500);
+    expect(res.body).toContain('create window failed');
+    expect(res.body).not.toContain('secret');
+    await app.close();
+  });
+});
+
+it.skipIf(process.platform === 'win32')('does not expose pane tokens when local tmux cannot create a window', async () => {
+  const { LocalTransport } = await import('../../servers/transport/LocalTransport');
+  const { TmuxClient } = await import('../TmuxClient');
+  const { TaskTempFiles } = await import('../../../shared/os/taskTempFiles');
+  const { testLocalHost } = await import('../../../shared/os/testing/testLocalHost');
+  const socket = `azito-test-${process.pid}-${Date.now()}`;
+  const transport = new LocalTransport({ bin: 'tmux', baseArgs: ['-L', socket] }, 'http://hub', testLocalHost(), new TaskTempFiles('/tmp', 'linux'), { platform: 'linux', arch: 'x64' });
+  const tmux = new TmuxClient({ getTransport: () => transport } as never, 'http://hub', 'ui-token-test-123', 'http://localhost', 'webhook-token-test-456', '/tmp');
+  const app = await buildApp({}, makeWindowRepo(), tmux);
+  const response = await app.inject({ method: 'POST', url: '/api/servers/srv1/sessions/missing/windows', payload: {} });
+  expect(response.statusCode).toBe(500);
+  expect(response.body).toContain('new-window failed');
+  expect(response.body).not.toContain('ui-token-test-123');
+  expect(response.body).not.toContain('webhook-token-test-456');
+  expect(response.body).not.toContain('-e');
+  await app.close();
 });

@@ -5,7 +5,9 @@ export { ServerConfig } from '../servers/Server';
 import type { ServerConfig } from '../servers/Server';
 import { generateWindowName, extractWindowId } from './windowNameUtils';
 import type { IMuxClient, PaneLocation, PaneProgram, PaneWindowLabels } from './IMuxClient';
-import { MuxOperationUnsupportedError } from './MuxCapabilityError';
+import { MuxDriverUnavailableError, MuxOperationUnsupportedError } from './MuxCapabilityError';
+import { AgentUnreachableError } from '../servers/transport/AgentUnreachableError';
+import { HostProfileError } from '../../shared/os/hostProfile';
 import { composePaneEnv, type HubPaneEnvConfig } from './hubPaneEnv';
 import { type MuxRef, type PaneHandle, type PaneOrdinal, type MuxCapabilities, type MuxDriverKind, asPaneHandle, muxRefFromTmuxTarget, tmuxTargetFromMuxRef } from '@azito/shared';
 import { windowSpecMatches, type TmuxPane, type TmuxWindow, type TmuxSession, type TmuxPaneInfo, type MuxWorkspace, type MuxWindowInfo, type MuxPane, type MuxPaneInfo } from './types';
@@ -145,7 +147,24 @@ export class TmuxClient implements IMuxClient {
   }
 
   private async runTmuxCommand(server: ServerConfig, args: string[]): Promise<ExecResult> {
-    return this.transportFactory.getTransport(server).execMux({ kind: 'tmux', args });
+    let result: ExecResult;
+    try {
+      result = await this.transportFactory.getTransport(server).execMux({ kind: 'tmux', args });
+    } catch (err) {
+      if (err instanceof AgentUnreachableError || err instanceof MuxDriverUnavailableError || err instanceof HostProfileError) throw err;
+      const source = err as { code?: string | number; killed?: boolean };
+      const reason = source?.code === 'ENOENT' ? 'binary not found' : source?.killed ? 'timed out' : typeof source?.code === 'number' ? `exit ${source.code}` : 'execution failed';
+      const safe = new Error(`tmux ${args[0]} failed: ${reason}`) as Error & { code?: string | number };
+      safe.code = source?.code;
+      throw safe;
+    }
+    if (result.code === 0) return result;
+    const output = `${result.stderr}\n${result.stdout}`;
+    const reason = /command not found/i.test(output) ? 'command not found'
+      : /duplicate session/i.test(output) ? 'duplicate session'
+      : /not found|no such|does not exist/i.test(output) ? 'target not found'
+      : `exit ${result.code}`;
+    return { code: result.code, stdout: '', stderr: `tmux ${args[0]} failed: ${reason}` };
   }
 
   async listSessions(server: ServerConfig): Promise<TmuxSession[]> {

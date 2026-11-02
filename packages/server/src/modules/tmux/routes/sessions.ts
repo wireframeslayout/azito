@@ -252,22 +252,23 @@ function creationMuxKind(value: unknown, srv: ServerConfig, registry: MuxDriverR
 function createFailure(kind: MuxDriverKind, err: unknown): { status: 409 | 500; body: Record<string, unknown> } {
   if (err instanceof MuxDriverUnavailableError) return { status: 409, body: unavailableBody(err.kind, err.reason) };
   if (kind === 'tmux' && isMissingBinaryError(err)) return { status: 409, body: unavailableBody(kind, MUX_BINARY_MISSING) };
-  return { status: 500, body: { error: err instanceof Error ? err.message : String(err) } };
+  return { status: 500, body: { error: 'mux create failed' } };
 }
 
 /** An agent/ssh transport resolves with a non-zero ExecResult instead of throwing when the remote mux fails. */
 // A missing tmux on an agent server stays a 500: the agent turns a spawn ENOENT into code 1 with an empty stderr
 // (agent/routes.ts), so there is nothing here to tell it from another failure. An SSH server's code 127 is recognised.
-function createResultFailure(kind: MuxDriverKind, result: ExecResult): { status: 409 | 500; body: Record<string, unknown> } {
+function createResultFailure(kind: MuxDriverKind, result: ExecResult, operation: string): { status: 409 | 500; body: Record<string, unknown> } {
   if (kind === 'tmux' && isMissingBinaryResult(result)) return { status: 409, body: unavailableBody(kind, MUX_BINARY_MISSING) };
-  return { status: 500, body: { error: `create failed: ${result.stderr || result.stdout}` } };
+  const reason = /duplicate session/i.test(`${result.stderr}\n${result.stdout}`) ? 'duplicate session' : `exit ${result.code}`;
+  return { status: 500, body: { error: `${operation} failed: ${reason}` } };
 }
 
-function replyCreateError(reply: FastifyReply, kind: MuxDriverKind, err: unknown): FastifyReply {
+function replyCreateError(reply: FastifyReply, kind: MuxDriverKind, err: unknown, operation: string): FastifyReply {
   // An operation this host's OS does not support is answered by the error mapper (501 with the reason), not as a failed create.
   if (err instanceof AgentUnreachableError || err instanceof HostProfileError) throw err;
   const failure = createFailure(kind, err);
-  return reply.status(failure.status).send(failure.body);
+  return reply.status(failure.status).send(failure.status === 500 ? { error: `${operation} failed` } : failure.body);
 }
 
 // ─── Session cache (30 s TTL) ───
@@ -426,11 +427,12 @@ const sessionsRoutes: FastifyPluginCallback<SessionsRouteOptions> = (fastify, op
           const { result, windowName } = await tmux.createSession(freshSrv, name, { command, windowName: reqWindowName, extraEnv: uiTokenEnvForServer(opts.uiToken, freshSrv) });
           // Agent/SSH transports resolve with a non-zero code instead of throwing — surface it.
           if (result.code !== 0)
-            return reply.status(500).send({ error: `new-session failed: ${result.stderr || result.stdout}` });
+            return reply.status(500).send({ error: `new-session failed: exit ${result.code}` });
           notifySessionsChanged(request.params.name);
           return { ok: true, windowName, ...resourceCheckBody(resourceSkipped) };
         } catch (err: unknown) {
-          return replyRouteError(reply, err);
+          if (err instanceof AgentUnreachableError) throw err;
+          return reply.status(500).send({ error: 'new-session failed' });
         }
       });
     },
@@ -463,12 +465,13 @@ const sessionsRoutes: FastifyPluginCallback<SessionsRouteOptions> = (fastify, op
           // vs. `isolationMaskForServer` note on POST /api/servers/:name/sessions above.
           const { result, windowName } = await tmux.createWindow(freshSrv, request.params.session, reqName || undefined, { extraEnv: uiTokenEnvForServer(opts.uiToken, freshSrv) });
           if (result.code !== 0)
-            return reply.status(500).send({ error: `new-window failed: ${result.stderr || result.stdout}` });
+            return reply.status(500).send({ error: `new-window failed: exit ${result.code}` });
           notifySessionsChanged(request.params.name);
           const createdRef: MuxRef = { kind: 'tmux', workspace: request.params.session, window: windowName };
           return { ok: true, windowName, windowId: null, ref: formatMuxRef(createdRef), ...resourceCheckBody(resourceSkipped) };
         } catch (err: unknown) {
-          return replyRouteError(reply, err);
+          if (err instanceof AgentUnreachableError) throw err;
+          return reply.status(500).send({ error: 'new-window failed' });
         }
       });
     },
@@ -1218,7 +1221,7 @@ const sessionsRoutes: FastifyPluginCallback<SessionsRouteOptions> = (fastify, op
           if (planned === 'unsupported') return reply.status(400).send(LAUNCH_NOT_SUPPORTED);
           const { ref, result, windowName: createdName } = await driver.openWorkspace(freshSrv, name, { windowName, extraEnv: uiTokenEnvForServer(opts.uiToken, freshSrv), ...(kind ? { kind } : {}), ...(planned ? { program: planned.program } : {}) });
           if (result.code !== 0) {
-            const failure = createResultFailure(kind ?? freshSrv.defaultMux, result);
+            const failure = createResultFailure(kind ?? freshSrv.defaultMux, result, 'create workspace');
             return reply.status(failure.status).send(failure.body);
           }
           notifySessionsChanged(request.params.name);
@@ -1226,7 +1229,7 @@ const sessionsRoutes: FastifyPluginCallback<SessionsRouteOptions> = (fastify, op
           return { ok: true, ref: formatMuxRef(ref), workspaceName: name, target: muxWindowTarget(ref), windowName: createdName ?? ref.window, ...(planned ? { agentSessionId: planned.agentSessionId } : {}), ...resourceCheckBody(resourceSkipped) };
         } catch (err: unknown) {
           if (err instanceof WindowExistsError) return reply.status(409).send({ error: 'window_exists', windowName: err.windowName });
-          return replyCreateError(reply, kind ?? freshSrv.defaultMux, err);
+          return replyCreateError(reply, kind ?? freshSrv.defaultMux, err, 'create workspace');
         }
       });
     },
@@ -1261,14 +1264,14 @@ const sessionsRoutes: FastifyPluginCallback<SessionsRouteOptions> = (fastify, op
           if (planned === 'unsupported') return reply.status(400).send(LAUNCH_NOT_SUPPORTED);
           const created = await driver.openWindow(freshSrv, workspace, name, { extraEnv: uiTokenEnvForServer(opts.uiToken, freshSrv), ...(kind ? { kind } : {}), ...(planned ? { program: planned.program } : {}) });
           if (created.result.code !== 0) {
-            const failure = createResultFailure(kind ?? freshSrv.defaultMux, created.result);
+            const failure = createResultFailure(kind ?? freshSrv.defaultMux, created.result, 'create window');
             return reply.status(failure.status).send(failure.body);
           }
           notifySessionsChanged(request.params.name);
           return { ok: true, ref: formatMuxRef(created.ref), target: muxWindowTarget(created.ref), windowName: created.windowName ?? created.ref.window, ...(planned ? { agentSessionId: planned.agentSessionId } : {}), ...resourceCheckBody(resourceSkipped) };
         } catch (err: unknown) {
           if (err instanceof WindowExistsError) return reply.status(409).send({ error: 'window_exists', windowName: err.windowName });
-          return replyCreateError(reply, kind ?? freshSrv.defaultMux, err);
+          return replyCreateError(reply, kind ?? freshSrv.defaultMux, err, 'create window');
         }
       });
     },
