@@ -28,15 +28,20 @@ export function isNodePtySpawnHelper(entryPath: string): boolean {
 
 const ELF_MAGIC = [0x7f, 0x45, 0x4c, 0x46];
 const ELF_CLASS_64 = 2;
-const ELF_MACHINE_X86_64 = 62;
+const ELF_MACHINES = { x64: 62, arm64: 183 } as const;
 
-/** Why `data` is not a 64-bit x86-64 ELF shared object, or null when it is. (The preflight accepts x86_64 Linux agents only.) */
-export function describeNotLinuxX64Elf(data: Buffer): string | null {
+/** Why `data` is not a 64-bit ELF for the selected Linux architecture, or null when it is. */
+export function describeNotLinuxElf(data: Buffer, arch: 'x64' | 'arm64'): string | null {
   if (data.length < 20 || !ELF_MAGIC.every((byte, i) => data[i] === byte)) return 'it is not an ELF file (a macOS or Windows binary?)';
   if (data[4] !== ELF_CLASS_64) return 'it is not a 64-bit ELF file';
   const machine = data.readUInt16LE(18);
-  if (machine !== ELF_MACHINE_X86_64) return `it is built for ELF machine ${machine}, not x86-64 (62)`;
+  const expected = ELF_MACHINES[arch];
+  if (machine !== expected) return `it is built for ELF machine ${machine}, not ${arch === 'x64' ? 'x86-64' : 'aarch64'} (${expected})`;
   return null;
+}
+
+export function describeNotLinuxX64Elf(data: Buffer): string | null {
+  return describeNotLinuxElf(data, 'x64');
 }
 
 function findFile(entries: readonly TarEntry[], entryPath: string): TarEntry | undefined {

@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import { packTarGz, type TarEntry } from '../../../shared/fs/tarGz';
-import { assertAgentBundleComplete, describeNotLinuxX64Elf, findAgentBundleProblems, isNodePtySpawnHelper, AGENT_PTY_NODE_PATH } from './agentBundleCheck';
+import { assertAgentBundleComplete, describeNotLinuxX64Elf, describeNotLinuxElf, findAgentBundleProblems, isNodePtySpawnHelper, AGENT_PTY_NODE_PATH } from './agentBundleCheck';
 
 function elf(machine: number, elfClass = 2): Buffer {
   const header = Buffer.alloc(64);
@@ -30,6 +30,14 @@ function completeBundle(): TarEntry[] {
 }
 
 const pack = (entries: TarEntry[]): Buffer => packTarGz(entries, 1_700_000_000);
+
+describe('describeNotLinuxElf for arm64', () => {
+  it('accepts aarch64 and rejects x86-64 or a 32-bit ELF', () => {
+    expect(describeNotLinuxElf(elf(183), 'arm64')).toBeNull();
+    expect(describeNotLinuxElf(elf(62), 'arm64')).toMatch(/machine 62, not aarch64/);
+    expect(describeNotLinuxElf(elf(183, 1), 'arm64')).toMatch(/64-bit/);
+  });
+});
 
 describe('describeNotLinuxX64Elf', () => {
   it('accepts a 64-bit x86-64 ELF', () => {
