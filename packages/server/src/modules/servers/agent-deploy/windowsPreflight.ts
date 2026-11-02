@@ -10,44 +10,91 @@ const END_MARKER = '<<AZITO_PREFLIGHT_END>>';
  * One PowerShell script (run through the dialect's EncodedCommand, so it is the same under a cmd.exe and a PowerShell login
  * shell) that prints the facts the preflight needs as one JSON line between markers. A missing thing is `null`, not an error.
  * tailscale.exe is looked for on PATH and then in its installer's location, because an SSH session may not have it on PATH.
+ * The OS architecture comes from the registry because x64-emulated PowerShell reports X64 on Windows on ARM.
+ * JSON is ASCII-escaped because a cmd.exe login shell returns output in the OEM code page.
  */
 const WINDOWS_PREFLIGHT_SCRIPT = `
-$node = Get-Command node -ErrorAction SilentlyContinue | Select-Object -First 1
-$nodePath = $null
-$nodeVersion = $null
-if ($node) {
-  $nodePath = $node.Source
-  $nodeVersion = @(& $nodePath --version)[0]
+$n = Get-Command node -EA SilentlyContinue | Select-Object -First 1
+$np = $null
+$nv = $null
+if ($n) {
+$np = $n.Source
+$nv = @(& $np --version)[0]
 }
-$tailscale = Get-Command tailscale -ErrorAction SilentlyContinue | Select-Object -First 1
-$tailscalePath = $null
-if ($tailscale) { $tailscalePath = $tailscale.Source }
-elseif (Test-Path -LiteralPath (Join-Path $env:ProgramFiles 'Tailscale\\tailscale.exe')) { $tailscalePath = Join-Path $env:ProgramFiles 'Tailscale\\tailscale.exe' }
-$tailscaleIp = $null
-if ($tailscalePath) {
-  try { $tailscaleIp = @(& $tailscalePath ip -4 2>$null)[0] } catch { $tailscaleIp = $null }
+$ts = Get-Command tailscale -EA SilentlyContinue | Select-Object -First 1
+$tsPath = $null
+if ($ts) { $tsPath = $ts.Source }
+elseif (Test-Path (Join-Path $env:ProgramFiles 'Tailscale\\tailscale.exe')) { $tsPath = Join-Path $env:ProgramFiles 'Tailscale\\tailscale.exe' }
+$tsIp = $null
+$tsCli = 'missing'
+$td = $null
+$ns = 'not_checked'
+$nd = $null
+if ($tsPath) {
+try {
+$pref = $ErrorActionPreference
+$ErrorActionPreference = 'Continue'
+$out = @(& $tsPath ip -4 2>&1)
+$exit = $LASTEXITCODE
+$ErrorActionPreference = $pref
+$text = ($out | ForEach-Object { $_.ToString() }) -join ' '
+if ($exit -ne 0) {
+$tsCli = if ($text -match '\\b401\\b|Unauthorized|already in use by') { 'denied' } else { 'failed' }
+$td = "exit $exit : $text"
+} else {
+$tsIp = @($out | Where-Object { $_ -is [string] } | Select-Object -First 1)[0]
+$tsCli = if ($tsIp) { 'ok' } else { 'empty' }
 }
-# The native architecture of the OS from the registry: an x64-emulated PowerShell on Windows on ARM still reports X64 through
-# RuntimeInformation.OSArchitecture and $env:PROCESSOR_ARCHITECTURE, but this machine-wide value is the OS's own. Unreadable = null (refused with a reason).
+} catch {
+$ErrorActionPreference = $pref
+$tsCli = 'failed'
+$td = $_.Exception.Message
+}
+}
+if ($tsCli -eq 'denied') {
+try {
+$ns = 'empty'
+foreach ($a in [System.Net.NetworkInformation.NetworkInterface]::GetAllNetworkInterfaces()) {
+if ($a.OperationalStatus -ne 'Up' -or ($a.Name -notlike 'Tailscale*' -and $a.Description -notlike 'Tailscale*')) { continue }
+foreach ($u in $a.GetIPProperties().UnicastAddresses) {
+$ip = $u.Address
+if ($ip.AddressFamily -ne [System.Net.Sockets.AddressFamily]::InterNetwork) { continue }
+$bytes = $ip.GetAddressBytes()
+if ($bytes[0] -eq 100 -and $bytes[1] -ge 64 -and $bytes[1] -le 127) {
+$tsIp = $ip.ToString()
+$ns = 'found'
+break
+}
+}
+if ($ns -eq 'found') { break }
+}
+} catch {
+$ns = 'failed'
+$nd = $_.Exception.Message
+}
+}
 $arch = $null
-try { $arch = (Get-ItemProperty -LiteralPath 'HKLM:\\SYSTEM\\CurrentControlSet\\Control\\Session Manager\\Environment' -Name PROCESSOR_ARCHITECTURE -ErrorAction Stop).PROCESSOR_ARCHITECTURE } catch { $arch = $null }
+try { $arch = (Get-ItemProperty 'HKLM:\\SYSTEM\\CurrentControlSet\\Control\\Session Manager\\Environment' -Name PROCESSOR_ARCHITECTURE -EA Stop).PROCESSOR_ARCHITECTURE } catch { $arch = $null }
 $caption = $null
 $build = $null
-try { $os = Get-ItemProperty -LiteralPath 'HKLM:\\SOFTWARE\\Microsoft\\Windows NT\\CurrentVersion' -ErrorAction Stop; $build = $os.CurrentBuildNumber; $caption = $os.ProductName } catch { $caption = $null; $build = $null }
+try { $os = Get-ItemProperty 'HKLM:\\SOFTWARE\\Microsoft\\Windows NT\\CurrentVersion' -EA Stop; $build = $os.CurrentBuildNumber; $caption = $os.ProductName } catch { $caption = $null; $build = $null }
 $info = [ordered]@{
-  nodePath = $nodePath
-  nodeVersion = $nodeVersion
-  arch = $arch
-  windowsCaption = $caption
-  buildNumber = $build
-  tailscaleIp = $tailscaleIp
-  home = $env:USERPROFILE
-  systemRoot = $env:SystemRoot
-  userId = [System.Security.Principal.WindowsIdentity]::GetCurrent().Name
+nodePath = $np
+nodeVersion = $nv
+arch = $arch
+windowsCaption = $caption
+buildNumber = $build
+tailscaleIp = $tsIp
+tailscaleCli = $tsCli
+tailscaleDetail = $td
+networkStatus = $ns
+networkDetail = $nd
+home = $env:USERPROFILE
+systemRoot = $env:SystemRoot
+userId = [System.Security.Principal.WindowsIdentity]::GetCurrent().Name
 }
 $global:LASTEXITCODE = 0
 Write-Output '${BEGIN_MARKER}'
-# ASCII only: a cmd.exe login shell returns the output in the OEM code page, which would garble a non-ASCII user name or path.
 $json = ConvertTo-Json -InputObject $info -Compress
 Write-Output ([regex]::Replace($json, '[^\\x00-\\x7F]', { param($m) '\\u{0:x4}' -f [int][char]$m.Value }))
 Write-Output '${END_MARKER}'
@@ -55,6 +102,7 @@ Write-Output '${END_MARKER}'
 
 /** The command line to send over SSH: the preflight script as an EncodedCommand. */
 export function buildWindowsPreflightCommand(): string {
+  // Keep the encoded command comfortably below the Windows command-line limit of 8191 characters.
   return powershellDialect.wrapScript(WINDOWS_PREFLIGHT_SCRIPT);
 }
 
@@ -65,6 +113,10 @@ const rawSchema = z.object({
   windowsCaption: z.string().nullable(),
   buildNumber: z.string().nullable(),
   tailscaleIp: z.string().nullable(),
+  tailscaleCli: z.enum(['ok', 'empty', 'missing', 'denied', 'failed']),
+  tailscaleDetail: z.string().nullable(),
+  networkStatus: z.enum(['not_checked', 'found', 'empty', 'failed']),
+  networkDetail: z.string().nullable(),
   home: z.string().min(1),
   systemRoot: z.string().min(1),
   userId: z.string().min(1),
@@ -81,6 +133,10 @@ export interface WindowsPreflightInfo {
   /** The Windows build number (`17763` is Windows 10 1809 / Server 2019); null = unreadable. */
   buildNumber: number | null;
   tailscaleIp: string | null;
+  tailscaleCli: z.infer<typeof rawSchema>['tailscaleCli'];
+  tailscaleDetail: string | null;
+  networkStatus: z.infer<typeof rawSchema>['networkStatus'];
+  networkDetail: string | null;
   home: string;
   /** `%SystemRoot%` of the host (where `schtasks.exe` lives). */
   systemRoot: string;
@@ -116,6 +172,10 @@ export function parseWindowsPreflight(output: string, stderr = '', code: number 
     windowsVersion: caption && buildNumber !== null && buildNumber >= 22000 ? caption.replace(/^Windows 10\b/, 'Windows 11') : caption,
     buildNumber,
     tailscaleIp: v.tailscaleIp ? v.tailscaleIp.trim() : null,
+    tailscaleCli: v.tailscaleCli,
+    tailscaleDetail: v.tailscaleDetail ? redactSecretText(v.tailscaleDetail).slice(0, 300) : null,
+    networkStatus: v.networkStatus,
+    networkDetail: v.networkDetail ? redactSecretText(v.networkDetail).slice(0, 300) : null,
     home: v.home,
     systemRoot: v.systemRoot,
     userId: v.userId,
@@ -145,7 +205,15 @@ export function checkWindowsPreflight(info: WindowsPreflightInfo): string[] {
     missing.push(`Windows 10 version 1809 (build ${MIN_WINDOWS_BUILD}) or later required (found: build ${info.buildNumber}); the agent runs under \`conhost.exe --headless\``);
   }
   if (!info.tailscaleIp || !IPV4.test(info.tailscaleIp)) {
-    missing.push(`Tailscale IP not found (got: ${info.tailscaleIp || 'empty'}; install Tailscale for Windows and sign in)`);
+    const guidance = info.tailscaleCli === 'missing' || info.tailscaleCli === 'empty' ? '; install Tailscale for Windows and sign in' : '';
+    const network = info.networkStatus === 'not_checked' ? '' : `; network address lookup: ${info.networkStatus}${info.networkDetail ? `: ${info.networkDetail}` : ''}`;
+    missing.push(`Tailscale IP not found (${describeTailscaleCli(info)}${network}${guidance})`);
   }
   return missing;
+}
+
+export function describeTailscaleCli(info: WindowsPreflightInfo): string {
+  const descriptions = { ok: 'CLI returned an invalid IP', empty: 'CLI returned no IP', missing: 'CLI not found', denied: 'CLI access denied for this Windows user (Tailscale may be in use by another user)', failed: 'CLI failed' };
+  const invalidIp = info.tailscaleCli === 'ok' && info.tailscaleIp ? ` (${redactSecretText(info.tailscaleIp).slice(0, 300)})` : '';
+  return `${descriptions[info.tailscaleCli]}${invalidIp}${info.tailscaleDetail ? `: ${info.tailscaleDetail}` : ''}`;
 }
