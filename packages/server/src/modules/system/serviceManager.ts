@@ -226,18 +226,68 @@ const BOOTSTRAP_IO_ERROR = 5;
  * if that fails the original plist is put back and loaded into `gui` again. A job loaded into BOTH domains is an error
  * for every operation that would have to choose (only `stop` and `inspect` work on it).
  */
+/** Launchctl operations shared by local and remote service managers. */
+export class LaunchdJobOperations {
+  constructor(private readonly run: CommandRunner, private readonly label: string, private readonly uid: number, private readonly plistPath: string, private readonly timing: LaunchdTiming) {}
+
+  domainTarget(domain: LaunchdDomain): string {
+    return `${domain}/${this.uid}`;
+  }
+
+  jobTarget(domain: LaunchdDomain): string {
+    return `${this.domainTarget(domain)}/${this.label}`;
+  }
+
+  /** `launchctl print` of the job in each domain: one call per domain, in `gui` then `user` order. */
+  async printJobs(): Promise<{ domain: LaunchdDomain; result: CommandResult }[]> {
+    const jobs: { domain: LaunchdDomain; result: CommandResult }[] = [];
+    for (const domain of DOMAINS) {
+      jobs.push({ domain, result: await this.run('launchctl', ['print', this.jobTarget(domain)]) });
+    }
+    return jobs;
+  }
+
+  /** Boots the job out of a domain and waits until launchd no longer reports it: a bootstrap right after a bootout otherwise fails with exit 5. */
+  async bootout(domain: LaunchdDomain): Promise<void> {
+    const target = this.jobTarget(domain);
+    await mustSucceed(this.run, 'launchctl', ['bootout', target], 'launchctl bootout');
+    const deadline = Date.now() + this.timing.settleTimeoutMs;
+    while ((await this.run('launchctl', ['print', target])).code === 0 && Date.now() < deadline) {
+      await sleep(this.timing.pollIntervalMs);
+    }
+  }
+
+  /** bootstrap, tried again a few times when launchd answers exit 5 (a copy of the job that was just booted out may still be going away). */
+  async bootstrap(domain: LaunchdDomain): Promise<void> {
+    const target = this.domainTarget(domain);
+    for (let attempt = 0; ; attempt++) {
+      const result = await this.run('launchctl', ['bootstrap', target, this.plistPath]);
+      if (result.code === 0) return;
+      if (result.code === BOOTSTRAP_IO_ERROR && attempt < this.timing.bootstrapRetries) {
+        await sleep(this.timing.retryDelayMs);
+        continue;
+      }
+      const detail = (result.stderr || result.stdout).trim();
+      throw new Error(`launchctl bootstrap ${target} failed (exit ${result.code})${detail ? `: ${detail}` : ''}`);
+    }
+  }
+
+}
+
 export class LaunchdServiceManager implements ServiceManager {
   readonly kind = 'launchd' as const;
   readonly templateName: string;
   private readonly label: string;
   private readonly plistPath: string;
   private readonly duplicateLoadFix: string;
+  private readonly jobs: LaunchdJobOperations;
 
   constructor(private readonly run: CommandRunner, spec: ServiceSpec, homeDir: string, private readonly uid: number, private readonly timing: LaunchdTiming) {
     this.label = spec.launchdLabel;
     this.templateName = spec.templates.launchd;
     this.duplicateLoadFix = spec.duplicateLoadFix;
     this.plistPath = path.join(homeDir, 'Library', 'LaunchAgents', `${this.label}.plist`);
+    this.jobs = new LaunchdJobOperations(run, this.label, uid, this.plistPath, timing);
   }
 
   isInstalled(): boolean {
@@ -253,25 +303,8 @@ export class LaunchdServiceManager implements ServiceManager {
     fs.writeFileSync(this.plistPath, content);
   }
 
-  private domainTarget(domain: LaunchdDomain): string {
-    return `${domain}/${this.uid}`;
-  }
-
-  private jobTarget(domain: LaunchdDomain): string {
-    return `${this.domainTarget(domain)}/${this.label}`;
-  }
-
-  /** `launchctl print` of the job in each domain: one call per domain, in `gui` then `user` order. */
-  private async printJobs(): Promise<{ domain: LaunchdDomain; result: CommandResult }[]> {
-    const jobs: { domain: LaunchdDomain; result: CommandResult }[] = [];
-    for (const domain of DOMAINS) {
-      jobs.push({ domain, result: await this.run('launchctl', ['print', this.jobTarget(domain)]) });
-    }
-    return jobs;
-  }
-
   async inspect(): Promise<ServiceInspection> {
-    const loaded = (await this.printJobs()).filter((job) => job.result.code === 0);
+    const loaded = (await this.jobs.printJobs()).filter((job) => job.result.code === 0);
     const running = loaded.some((job) => {
       const match = /^\s*state = (\w+)/m.exec(job.result.stdout);
       return match?.[1] === 'running';
@@ -291,52 +324,27 @@ export class LaunchdServiceManager implements ServiceManager {
     return domains[0];
   }
 
-  /** Boots the job out of a domain and waits until launchd no longer reports it: a bootstrap right after a bootout otherwise fails with exit 5. */
-  private async bootout(domain: LaunchdDomain): Promise<void> {
-    const target = this.jobTarget(domain);
-    await mustSucceed(this.run, 'launchctl', ['bootout', target], 'launchctl bootout');
-    const deadline = Date.now() + this.timing.settleTimeoutMs;
-    while ((await this.run('launchctl', ['print', target])).code === 0 && Date.now() < deadline) {
-      await sleep(this.timing.pollIntervalMs);
-    }
-  }
-
-  /** bootstrap, tried again a few times when launchd answers exit 5 (a copy of the job that was just booted out may still be going away). */
-  private async bootstrap(domain: LaunchdDomain): Promise<void> {
-    const target = this.domainTarget(domain);
-    for (let attempt = 0; ; attempt++) {
-      const result = await this.run('launchctl', ['bootstrap', target, this.plistPath]);
-      if (result.code === 0) return;
-      if (result.code === BOOTSTRAP_IO_ERROR && attempt < this.timing.bootstrapRetries) {
-        await sleep(this.timing.retryDelayMs);
-        continue;
-      }
-      const detail = (result.stderr || result.stdout).trim();
-      throw new Error(`launchctl bootstrap ${target} failed (exit ${result.code})${detail ? `: ${detail}` : ''}`);
-    }
-  }
-
   /** Loads the job into `user/<uid>`, with the session limit added to the plist when it has none. */
   private async bootstrapUser(): Promise<void> {
     const plist = this.readDefinition();
     if (plist === undefined) throw new Error(`${this.plistPath} does not exist, so ${this.label} cannot be loaded.`);
     const limited = limitToBackgroundSession(plist);
     if (limited !== plist) fs.writeFileSync(this.plistPath, limited);
-    await this.bootstrap('user');
+    await this.jobs.bootstrap('user');
   }
 
   /** Moves a job that an older install loaded into `gui` to `user`; the original plist goes back into `gui` if that fails. */
   private async migrateFromGui(): Promise<void> {
     const original = this.readDefinition();
     if (original === undefined) throw new Error(`${this.plistPath} does not exist, so ${this.label} cannot be moved to user/${this.uid}.`);
-    await this.bootout('gui');
+    await this.jobs.bootout('gui');
     try {
       await this.bootstrapUser();
     } catch (err) {
       const cause = err instanceof Error ? err.message : String(err);
       try {
         fs.writeFileSync(this.plistPath, original);
-        await this.bootstrap('gui');
+        await this.jobs.bootstrap('gui');
       } catch (restoreErr) {
         throw new Error(`Moving ${this.label} from gui/${this.uid} to user/${this.uid} failed (${cause}) and loading it back into gui/${this.uid} failed too (${restoreErr instanceof Error ? restoreErr.message : String(restoreErr)}). It is not running.`);
       }
@@ -348,7 +356,7 @@ export class LaunchdServiceManager implements ServiceManager {
     // `bootstrap` reads the plist again, so an edited plist takes effect; a job loaded into user/ is only kicked.
     const loaded = await this.loadedDomain();
     if (loaded === 'user') {
-      await mustSucceed(this.run, 'launchctl', ['kickstart', this.jobTarget('user')], 'launchctl kickstart');
+      await mustSucceed(this.run, 'launchctl', ['kickstart', this.jobs.jobTarget('user')], 'launchctl kickstart');
     } else if (loaded === 'gui') {
       await this.migrateFromGui();
     } else {
@@ -360,14 +368,14 @@ export class LaunchdServiceManager implements ServiceManager {
     // Every domain the job is loaded into, not just the first: a copy in gui/ (an older install) would otherwise survive
     // a stop of the one in user/.
     const { domains } = await this.inspect();
-    for (const domain of domains) await this.bootout(domain);
+    for (const domain of domains) await this.jobs.bootout(domain);
   }
 
   /** launchd has no `restart` verb: `kickstart -k` sends SIGTERM to the running job and starts it again. */
   async restart(): Promise<void> {
     const loaded = await this.loadedDomain();
     if (loaded === 'user') {
-      await mustSucceed(this.run, 'launchctl', ['kickstart', '-k', this.jobTarget('user')], 'launchctl kickstart');
+      await mustSucceed(this.run, 'launchctl', ['kickstart', '-k', this.jobs.jobTarget('user')], 'launchctl kickstart');
     } else if (loaded === 'gui') {
       await this.migrateFromGui();
     } else {
@@ -378,7 +386,7 @@ export class LaunchdServiceManager implements ServiceManager {
   async reload(): Promise<void> {
     const loaded = await this.loadedDomain();
     if (loaded === 'user') {
-      await this.bootout('user');
+      await this.jobs.bootout('user');
       await this.bootstrapUser();
     } else if (loaded === 'gui') {
       await this.migrateFromGui();
