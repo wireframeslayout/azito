@@ -11,7 +11,7 @@ if [ "${1:-}" != "--azito-login" ]; then
       login_shell="$(/usr/bin/dscl . -read "/Users/$(id -un)" UserShell | cut -d' ' -f2-)"
     fi
   fi
-  : "${login_shell:?Could not find the user's login shell}"
+  : "${login_shell:?Could not find the login shell}"
   exec "$login_shell" -lc 'exec /bin/bash "$1" --azito-login' azito "$0"
 fi
 
