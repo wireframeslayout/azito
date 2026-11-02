@@ -1,4 +1,7 @@
 import { spawnSync } from 'child_process';
+import { mkdtempSync, rmSync, writeFileSync } from 'fs';
+import { tmpdir } from 'os';
+import { join } from 'path';
 import { describe, expect, it } from 'vitest';
 import { buildWindowsPreflightCommand, checkWindowsPreflight, parseWindowsPreflight, type WindowsPreflightInfo } from './windowsPreflight';
 
@@ -211,6 +214,46 @@ $adapter | Add-Member ScriptMethod GetIPProperties { [pscustomobject]@{ UnicastA
     expect(info.tailscaleIp).toBe(expected);
     expect(info.networkStatus).toBe(expected ? 'found' : 'empty');
     expect(info.tailscaleCli).toBe('denied');
+  }, 120_000);
+
+  it.each(hasPwsh ? ['powershell.exe', 'pwsh'] : ['powershell.exe'])('runs the CLI and network branches on %s', (shell) => {
+    const dir = mkdtempSync(join(tmpdir(), 'azito-preflight-'));
+    try {
+      const cli = join(dir, 'tailscale.cmd');
+      const original = Buffer.from(line.split(' ').at(-1)!, 'base64').toString('utf16le');
+      const cases = [
+        { cli: '@echo off\r\necho 401 Unauthorized 1>&2\r\nexit /b 1\r\n', addresses: ['100.64.1.2'], status: 'denied', ip: '100.64.1.2', network: 'found' },
+        { cli: '@echo off\r\necho 401 Unauthorized 1>&2\r\nexit /b 1\r\n', addresses: [], status: 'denied', ip: null, network: 'empty' },
+        { cli: null, addresses: ['100.64.1.2'], status: 'missing', ip: '100.64.1.2', network: 'found' },
+        { cli: null, addresses: [], status: 'missing', ip: null, network: 'empty' },
+        { cli: '@echo off\r\necho 100.99.1.1\r\nexit /b 0\r\n', addresses: ['100.64.1.2'], status: 'ok', ip: '100.99.1.1', network: 'not_checked' },
+        { cli: '@echo off\r\nexit /b 0\r\n', addresses: [], status: 'empty', ip: null, network: 'empty' },
+        { cli: '@echo off\r\necho failed 1>&2\r\nexit /b 2\r\n', addresses: [], status: 'failed', ip: null, network: 'empty' },
+      ];
+      for (const scenario of cases) {
+        if (scenario.cli) writeFileSync(cli, scenario.cli);
+        else rmSync(cli, { force: true });
+        const setup = `$addresses = @(${scenario.addresses.map(ip => `'${ip}'`).join(',')}) | ForEach-Object { [pscustomobject]@{ Address = [System.Net.IPAddress]::Parse($_) } }
+$adapter = [pscustomobject]@{}
+$adapter | Add-Member ScriptMethod GetIPProperties { [pscustomobject]@{ UnicastAddresses = $addresses } }
+`;
+        const script = setup + original
+          .replace('Get-Command tailscale -ErrorAction', 'Get-Command $env:AZITO_TEST_CLI -ErrorAction')
+          .replace('[System.Net.NetworkInformation.NetworkInterface]::GetAllNetworkInterfaces()', '@($adapter)');
+        const out = spawnSync(shell, ['-NoProfile', '-NonInteractive', '-EncodedCommand', Buffer.from(script, 'utf16le').toString('base64')], {
+          encoding: 'utf8', timeout: 120_000, env: { ...process.env, AZITO_TEST_CLI: cli, ProgramFiles: dir },
+        });
+        expect(out.status, out.stderr).toBe(0);
+        const info = parseWindowsPreflight(out.stdout);
+        expect(info.tailscaleCli).toBe(scenario.status);
+        expect(info.tailscaleIp).toBe(scenario.ip);
+        expect(info.networkStatus).toBe(scenario.network);
+        if (scenario.status === 'denied') expect(info.tailscaleDetail).toContain('401');
+        if (!scenario.ip) expect(checkWindowsPreflight(info)[0]).not.toMatch(/install.*sign in/i);
+      }
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
   }, 120_000);
 
   it.each(LOGINS)('prints ASCII only and reads a non-ASCII home back unchanged, with %s as the login shell', (login) => {
