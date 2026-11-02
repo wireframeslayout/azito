@@ -49,6 +49,20 @@ export class MacAgentLaunchd {
     for (const job of jobs) await this.jobs.bootout(job.domain);
   }
 
+  async readInstallId(): Promise<string | undefined> {
+    const idFile = `${this.home}/.azito/agent/install.id`;
+    const result = await this.ssh.execIsolated(this.host, `if [ -f ${shellQuote(idFile)} ]; then cat ${shellQuote(idFile)}; elif [ -e ${shellQuote(`${this.home}/.azito/agent`)} ]; then exit 2; else printf AZITO_ABSENT; fi`);
+    if (result.code !== 0) throw new Error('The agent folder has no installation id; it was left unchanged');
+    const id = result.stdout.trim();
+    if (id === 'AZITO_ABSENT') {
+      await this.assertOwned();
+      if ((await this.jobs.printJobs()).some((job) => job.result.code === 0)) throw new Error('A launchd job is still loaded but the agent folder is absent; it was left unchanged');
+      return undefined;
+    }
+    if (!/^[a-f0-9]{32}$/.test(id)) throw new Error('The agent installation id is invalid; it was left unchanged');
+    return id;
+  }
+
   async cleanup(installId: string): Promise<void> {
     const lock = `${this.home}/.azito/agent-cleanup.lock`;
     const idFile = `${this.home}/.azito/agent/install.id`;

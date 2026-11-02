@@ -22,12 +22,14 @@ describe('POST /api/servers/:name/agent/uninstall', () => {
   let servers: Record<string, ServerConfig>;
   let mutex: KeyedMutex;
   const uninstallFromWindowsHost = vi.fn();
+  const uninstallFromMacHost = vi.fn();
 
   beforeEach(async () => {
     principal = OPERATOR_PRINCIPAL;
     servers = { w1: server({}), l1: server({ name: 'l1', hostProfile: { platform: 'linux', arch: 'x64' } }), m1: server({ name: 'm1', hostProfile: { platform: 'darwin', arch: 'arm64' } }), u1: server({ name: 'u1', hostProfile: null }), loc: server({ name: 'loc', type: 'local', hostProfile: WIN32 }) };
     mutex = new KeyedMutex();
     uninstallFromWindowsHost.mockReset().mockResolvedValue(RESULT);
+    uninstallFromMacHost.mockReset().mockResolvedValue(RESULT);
     app = Fastify();
     // As in app/buildServer.ts: a domain error with its own answer is mapped before the default handler.
     const defaultHandler = app.errorHandler;
@@ -39,7 +41,7 @@ describe('POST /api/servers/:name/agent/uninstall', () => {
     app.addHook('onRequest', async (request) => { request.principal = principal; });
     await app.register(agentUninstallRoutes, {
       serverRepo: { findByName: (name: string) => servers[name] ?? null },
-      agentInstaller: { uninstallFromWindowsHost },
+      agentInstaller: { uninstallFromWindowsHost, uninstallFromMacHost },
       serverIsolationMutex: mutex,
     });
   });
@@ -71,7 +73,6 @@ describe('POST /api/servers/:name/agent/uninstall', () => {
 
   it.each([
     ['a Linux agent', 'l1'],
-    ['a macOS agent', 'm1'],
     ['an agent whose OS was never recorded (a Unix agent)', 'u1'],
     ['a server that is not an agent', 'loc'],
   ])('answers 501 unsupported_os with the reason and #499 for %s, and does nothing', async (_label, name) => {
@@ -79,6 +80,12 @@ describe('POST /api/servers/:name/agent/uninstall', () => {
     expect(res.statusCode).toBe(501);
     expect(res.json()).toMatchObject({ code: 'unsupported_os', error: expect.stringContaining('#499') });
     expect(uninstallFromWindowsHost).not.toHaveBeenCalled();
+  });
+
+  it('routes macOS removal through the Mac implementation', async () => {
+    const res = await post('m1', { removeMisao: true });
+    expect(res.statusCode).toBe(200);
+    expect(uninstallFromMacHost).toHaveBeenCalledWith('dev@win', { removeMisao: true });
   });
 
   it('answers 404 for a server that does not exist', async () => {

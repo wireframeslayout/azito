@@ -8,7 +8,7 @@ import type { AgentInstaller } from './AgentInstaller';
 
 export interface AgentUninstallRoutesOptions {
   serverRepo: Pick<IServerRepository, 'findByName'>;
-  agentInstaller: Pick<AgentInstaller, 'uninstallFromWindowsHost'>;
+  agentInstaller: Pick<AgentInstaller, 'uninstallFromWindowsHost' | 'uninstallFromMacHost'>;
   /** The per-server-name lock the other server routes, the updater and the watchdog take. */
   serverIsolationMutex: Pick<KeyedMutex, 'withLock'>;
 }
@@ -16,7 +16,7 @@ export interface AgentUninstallRoutesOptions {
 const bodySchema = z.object({ removeMisao: z.boolean().default(false) }).strict();
 
 /**
- * `POST /api/servers/:name/agent/uninstall`: takes the agent off its host (Windows only in this release; Linux / macOS are #499).
+ * `POST /api/servers/:name/agent/uninstall`: takes the agent off a Windows or macOS host (Linux is #499).
  * Operator-only in both auth modes: it deletes software on a machine. It never touches the server row: `DELETE /api/servers/:name`
  * does that, so a host that is offline can still be forgotten. The answer is `{ ok, steps }`, one entry per step with its outcome
  * (`done` / `absent` / `failed` / `skipped` and why), and `ok` is false when any step failed. A host that cannot be reached at all is
@@ -38,12 +38,14 @@ const agentUninstallRoutes: FastifyPluginCallback<AgentUninstallRoutesOptions> =
         const srv = serverRepo.findByName(request.params.name);
         if (!srv) return reply.status(404).send({ error: 'Server not found' });
         // `hostProfile` null is a Unix agent registered before the OS was kept.
-        if (srv.type !== 'agent' || srv.hostProfile?.platform !== 'win32') {
-          throw new HostProfileError('unsupported_os', `Removing the agent from its host is only supported for Windows agents in this release; for a Linux or macOS host, remove it by hand — tracked in #499.`);
+        if (srv.type !== 'agent' || (srv.hostProfile?.platform !== 'win32' && srv.hostProfile?.platform !== 'darwin')) {
+          throw new HostProfileError('unsupported_os', `Removing the agent from its host is only supported for Windows and macOS agents in this release; for a Linux host, remove it by hand — tracked in #499.`);
         }
         const sshHost = srv.sshHost || srv.host;
         if (!sshHost) return reply.status(400).send({ error: 'No SSH host configured for this server' });
-        return agentInstaller.uninstallFromWindowsHost(sshHost, { removeMisao: body.data.removeMisao });
+        return srv.hostProfile?.platform === 'darwin'
+          ? agentInstaller.uninstallFromMacHost(sshHost, { removeMisao: body.data.removeMisao })
+          : agentInstaller.uninstallFromWindowsHost(sshHost, { removeMisao: body.data.removeMisao });
       });
     },
   );

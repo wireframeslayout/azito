@@ -432,6 +432,25 @@ export class AgentInstaller {
    * other host (null = a Unix agent registered before the OS was recorded) takes the Unix bootstrap (tar, nohup, systemd).
    * `warning` is set when the update worked but left something on the host that a person should know about.
    */
+  uninstallFromMacHost(sshHost: string, choice: WindowsUninstallChoice): Promise<WindowsUninstallResult> {
+    return this.hostLocks.withLock(this.lockKey(sshHost), async () => {
+      const manager = await MacAgentLaunchd.connect(this.sshClient, sshHost);
+      const steps: WindowsUninstallResult['steps'] = [];
+      try {
+        const id = await manager.readInstallId();
+        if (id === undefined) steps.push({ id: 'task', outcome: 'absent' }, { id: 'folder', outcome: 'absent' });
+        else {
+          await manager.cleanup(id);
+          steps.push({ id: 'task', outcome: 'done' }, { id: 'folder', outcome: 'done' });
+        }
+      } catch (err) {
+        steps.push({ id: 'task', outcome: 'failed', detail: (err as Error).message }, { id: 'folder', outcome: 'skipped', detail: 'The agent could not be safely stopped or verified.' });
+      }
+      steps.push({ id: 'misaoTask', outcome: choice.removeMisao ? 'failed' : 'skipped', detail: choice.removeMisao ? 'The independent misao daemon could not be safely attributed to this agent; it was left in place.' : 'misao removal was not requested.' });
+      return { ok: steps.every((step) => step.outcome !== 'failed'), steps };
+    });
+  }
+
   update(sshHost: string, tailscaleIp: string, existingToken: string, hostProfile: HostProfile | null, muxRuntime?: string): Promise<AgentUpdateResult> {
     return this.hostLocks.withLock(this.lockKey(sshHost), () => this.updateLocked(sshHost, tailscaleIp, existingToken, hostProfile, muxRuntime));
   }
