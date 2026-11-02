@@ -1,5 +1,9 @@
+import * as path from 'path';
+import { resolveRealPath } from '../../../shared/os/realPath';
+import { taskMisaoRoot } from '../../../shared/os/taskScheduler/taskXmlRead';
+import { misaoTaskVersion } from '../../../shared/os/taskScheduler/misaoTaskIdentity';
+import { soleExecAction } from '../../../shared/os/taskScheduler/taskXmlRead';
 import { createHash } from 'crypto';
-import path from 'path';
 import type { CommandSpec } from '../../../shared/exec/commandSpec';
 import { runCommandSpec, runHostOf } from '../../../shared/exec/runCommandSpec';
 import { LocalFileOps, localFileOpsHost } from '../../../shared/fs/LocalFileOps';
@@ -9,8 +13,6 @@ import { rawRunnerOf, SchtasksClient } from '../../../shared/os/taskScheduler/sc
 import { readMisaoSocketStatus, stageMisaoReleaseFile, type AgentMisaoHost } from '../../servers/transport/agentMisaoSocket';
 import { MisaoWindowsInstaller, type WindowsTarget } from './MisaoWindowsInstaller';
 import { MISAO_SERVICE, type MisaoPaths } from './misaoPaths';
-import { taskMisaoRoot } from './misaoWindowsTask';
-import { resolveRealPath } from '../../../shared/os/realPath';
 import type { ProcessLock } from '../../../shared/processLock';
 import { createMisaoRootLock } from './misaoRootLock';
 
@@ -81,14 +83,16 @@ export async function misaoWindowsTaskExists(hostEnv: Pick<HostEnv, 'platform' |
 
 export { taskMisaoRoot };
 
-/**
- * Whether the task starts the misao of `root` (the hub's own folder, already in its real spelling). Both sides are the same host's
- * paths, so the task's folder is resolved here too (a task written with a short name still names the same folder); they compare as
- * Windows paths, without regard to case.
- */
+/** Compare the task's data directory using the host's real paths. */
 export function taskStartsMisaoOf(xml: string, root: string): boolean {
   const taskRoot = taskMisaoRoot(xml);
   if (taskRoot === undefined) return false;
   const same = (a: string, b: string): boolean => path.win32.normalize(a).toLowerCase() === path.win32.normalize(b).toLowerCase();
   return same(resolveRealPath(taskRoot), resolveRealPath(root));
+}
+
+/** Recognise an unmodified generated task before performing a recovery. */
+export function taskIsManagedMisao(xml: string, root: string, systemRoot: string, pipe: string, taskName: string): boolean {
+  const action = soleExecAction(xml);
+  return action !== undefined && misaoTaskVersion(action, systemRoot, root, pipe, taskName) !== undefined;
 }

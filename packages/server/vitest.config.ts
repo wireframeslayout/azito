@@ -17,7 +17,7 @@ const unitTestTimeout = isWindows ? { testTimeout: 30000, hookTimeout: 30000 } :
 // and TaskPaneEnvironmentService.tmuxIntegration.test.ts in particular was
 // observed timing out only when run alongside the rest of the suite, never
 // in isolation. Splitting into two projects serializes the tmux-integration
-// files against EACH OTHER (`fileParallelism: false`, a single fork) so they
+// files against EACH OTHER (`fileParallelism: false`, one file at a time) so they
 // never contend for the same real tmux server concurrently, on top of the
 // per-file timeout increases in those files themselves.
 export default defineConfig({
@@ -40,7 +40,6 @@ export default defineConfig({
           fileParallelism: false,
           testTimeout: 30000,
           pool: 'forks',
-          poolOptions: { forks: { singleFork: true } },
         },
       },
       {
@@ -52,7 +51,6 @@ export default defineConfig({
           fileParallelism: false,
           testTimeout: 30000,
           pool: 'forks',
-          poolOptions: { forks: { singleFork: true } },
         },
       },
     ],

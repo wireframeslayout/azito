@@ -1,4 +1,6 @@
+import { legacyMisaoTaskArgumentsOf } from '../../../shared/os/taskScheduler/misaoTaskArguments';
 import { describe, expect, it } from 'vitest';
+import { createHash } from 'node:crypto';
 import { powershellDialect } from '../../../shared/os/shellDialect';
 import { buildTaskXml } from '../../../shared/os/taskScheduler/taskDefinition';
 import { buildMisaoTaskXml, misaoWindowsLayout } from '../../system/misao/misaoWindowsTask';
@@ -6,8 +8,8 @@ import { HUB_SERVICE } from '../../system/serviceManager';
 import { MISAO_SERVICE } from '../../system/misao/misaoPaths';
 import { windowsMisaoPipe } from '../transport/agentMisaoSocket';
 import { DEFAULT_WINDOWS_AGENT_OPTIONS, MISAO_WINDOWS_TASK_NAME, type WindowsAgentOptions } from './windowsAgentConfig';
-import { WindowsAgentDeployer, windowsAgentEnvFile, type WindowsSshExec } from './WindowsAgentDeployer';
-import { FakeWindowsHost } from './testing/fakeWindowsHost';
+import { needsTransferredScript, WindowsAgentDeployer, windowsAgentEnvFile, type WindowsSshExec } from './WindowsAgentDeployer';
+import { decodeEncodedCommand, FakeWindowsHost } from './testing/fakeWindowsHost';
 import { harnessMcpScript } from './windowsHarnessMcpUninstall';
 import { WINDOWS_HUB_TASK_NAME, uninstallWindowsAgent, type UninstallStepId, type WindowsUninstallHost, type WindowsUninstallResult } from './windowsAgentUninstall';
 import { decideMisaoStop, decidePathChains, folderScript, leftoverProcessesScript, misaoHolderScript, misaoStopScript, parseFolderOutput, parseLeftoverOutput, parseMisaoHolderOutput, parsePathChainOutput, pathChainScript, tailBelow } from './windowsAgentUninstallScripts';
@@ -423,7 +425,10 @@ describe('uninstallWindowsAgent', () => {
       await run(host);
       const script = host.bodyOf('Looking for the Windows Firewall rule');
       expect(script).toContain("$name = 'AZITO Agent (TCP 3002)'");
-      expect(script).toContain('Get-NetFirewallRule -Direction Inbound -ErrorAction Stop');
+      expect(script).toContain('HNetCfg.FwPolicy2');
+      expect(script).toContain('$_.DisplayName -eq $name');
+      expect(script).toContain('$_.Name -eq $name');
+      expect(script).not.toContain('StartsWith($name');
       expect(script).not.toContain('SilentlyContinue');
     });
 
@@ -663,7 +668,7 @@ describe('uninstallWindowsAgent', () => {
       const taskWith = (argumentsLine: string, executable = conhost): string => buildTaskXml({
         userId: 'PC\\dev', description: 'x', executable, argumentsLine, workingDirectory: HOME, restartOnFailure: { intervalMinutes: 1, count: 1 },
       });
-      const exactLine = /<Arguments>([^<]*)<\/Arguments>/.exec(MISAO_XML)![1]!.replace(/&quot;/g, '"').replace(/&amp;/g, '&').replace(/&gt;/g, '>').replace(/&lt;/g, '<');
+      const exactLine = legacyMisaoTaskArgumentsOf({ systemRoot: 'C:\\Windows', root: MISAO_ROOT, exe: `${MISAO_ROOT}\\0.3.0\\misao.exe`, logFile: `${MISAO_ROOT}\\misao.log`, pipe: windowsMisaoPipe(MISAO_ROOT, 'dev') });
 
       it('takes the task the install writes (the plain form, and the launcher form for a folder with a space), whatever release it runs', async () => {
         expect(outcomes(await run(new FakeUninstallHost({ AzitoMisao: { xml: MISAO_XML } }), true)).misaoTask).toBe('done');
@@ -776,6 +781,10 @@ describe('what the scripts answer', () => {
 
   it('firewall: no rule, or the rules found (never a removal)', () => {
     expect(parseFirewallOutput('ABSENT', 'R')).toEqual({ outcome: 'absent' });
+    expect(parseFirewallOutput('UNKNOWN', 'R')).toMatchObject({ outcome: 'skipped', detail: expect.stringContaining('could not be conclusively inspected') });
+    const com = parseFirewallOutput('COMRULE|R|Allow|7|C:\\node.exe|6|3002|*|*', 'R');
+    expect(com).toMatchObject({ outcome: 'skipped', detail: expect.stringContaining('Windows Firewall with Advanced Security') });
+    expect(com.detail).not.toContain('Remove-NetFirewallRule');
     const found = parseFirewallOutput("RULE|{G}|Allow|Any|C:\\x.exe|TCP|3002|1.2.3.4|Any\nRULE|{O'Q}|Block|Any||TCP|3002||", 'R');
     expect(found.outcome).toBe('skipped');
     expect(found.detail).toContain("Remove-NetFirewallRule -Name '{G}'");
@@ -850,7 +859,8 @@ describe('which daemon may be asked to stop', () => {
   it('the host is asked of Windows, not of the daemon, and the stop is given the pipe of the task and no way to kill', () => {
     const asked = misaoHolderScript(root, '\\\\.\\pipe\\p');
     expect(asked).toContain('[AzitoPipeHolder]::ServerProcessId');
-    expect(asked).toContain('GetOwnerSid');
+    expect(asked).toContain('[AzitoPipeHolder]::OwnerSid($id)');
+    expect(asked).not.toMatch(/Get-CimInstance|Invoke-CimMethod/);
     const stop = misaoStopScript(`${root}\\0.3.0\\misao.exe`, '\\\\.\\pipe\\p');
     expect(stop).toContain("-ArgumentList 'stop'");
     expect(stop).not.toMatch(/Stop-Process|\.Kill\(|taskkill/i);
@@ -891,6 +901,11 @@ describe('the task names the uninstall relies on', () => {
 });
 
 describe('the scripts it sends', () => {
+  it('selects transfer based on the encoded command limit, including short oversized scripts', () => {
+    const body = 'x'.repeat(2990);
+    expect(needsTransferredScript(body)).toBe(true);
+    expect(needsTransferredScript('x'.repeat(100))).toBe(false);
+  });
   it('fits the MCP commands with a long non-ASCII home path', () => {
     const home = 'C:\\Users\\佐藤花子開発環境東京横浜大阪京都札幌名古屋神戸福岡仙台広島長崎熊本金沢岡山松山';
     const expected = `${home}\\.azito\\harness\\skills\\azt-mcp\\mcp-server\\index.js`;
@@ -909,7 +924,8 @@ describe('the scripts it sends', () => {
     await uninstallWindowsAgent(long.asHost(), factsOf(home, NODE), OPTIONS, { removeMisao: true });
     expect(long.bodies.length).toBeGreaterThanOrEqual(6);
     for (const { what, body } of long.bodies) {
-      expect(() => powershellDialect.wrapScript(`$ProgressPreference = 'SilentlyContinue'\n${body}`), what).not.toThrow();
+      if (needsTransferredScript(body)) expect(() => powershellDialect.wrapScript(`$ProgressPreference = 'SilentlyContinue'\n${body}`), what).toThrow(/too long/);
+      else expect(() => powershellDialect.wrapScript(`$ProgressPreference = 'SilentlyContinue'\n${body}`), what).not.toThrow();
     }
   });
 
@@ -925,11 +941,16 @@ describe('the scripts it sends', () => {
       firewallInspectScript('AZITO Agent (TCP 3002)'),
       sameFileScript(`${long}\\a\\b\\node.exe`, `${long}\\c\\d\\node.exe`),
     ];
-    for (const body of scripts) expect(() => powershellDialect.wrapScript(`$ProgressPreference = 'SilentlyContinue'\n${body}`)).not.toThrow();
+    for (const body of scripts) {
+      if (needsTransferredScript(body)) expect(() => powershellDialect.wrapScript(`$ProgressPreference = 'SilentlyContinue'\n${body}`)).toThrow(/too long/);
+      else expect(() => powershellDialect.wrapScript(`$ProgressPreference = 'SilentlyContinue'\n${body}`)).not.toThrow();
+    }
   });
 
   it('a path with a junction or symbolic link on the way is not resolved, and a folder that is there but cannot be resolved may be the hub\'s', () => {
     const guard = misaoHubScript({ root: 'C:\\h\\m', hubRoot: 'C:\\h\\m', looksForHub: false });
+    expect(guard).not.toContain('Add-Type');
+    expect(() => powershellDialect.wrapScript(guard)).not.toThrow();
     expect(guard).toContain('[System.IO.FileAttributes]::ReparsePoint');
     expect(guard).toContain('Test-Path -LiteralPath $root');
     expect(guard).toContain("Write-Output 'MAYBEHUB'");
@@ -956,7 +977,8 @@ describe('the scripts it sends', () => {
   it('the leftover look touches nothing and fails on a list it cannot read', () => {
     const script = leftoverProcessesScript(AGENT_ROOT, HOME);
     expect(script).not.toMatch(/Stop-Process|Kill|taskkill/i);
-    expect(script).toContain('Get-CimInstance Win32_Process -ErrorAction Stop');
+    expect(script).toContain('Get-Process -ErrorAction Stop');
+    expect(script).not.toMatch(/Get-CimInstance|Invoke-CimMethod/);
   });
 });
 
@@ -966,21 +988,28 @@ describe('WindowsAgentDeployer.uninstall', () => {
   it('runs the steps through the SSH session, the task through schtasks, and leaves the other task alone', async () => {
     const fake = new FakeWindowsHost({ sha256: 'a'.repeat(64), existingTask: 'running' });
     fake.registeredXml = AGENT_XML;
+    const commands: string[] = [];
     const exec: WindowsSshExec = async (h, command) => {
+      if (command.includes('-EncodedCommand')) commands.push(decodeEncodedCommand(command));
       const result = await fake.exec(h, command);
       const last = fake.calls[fake.calls.length - 1];
       if (last?.kind !== 'script') return result;
       if (last.text.includes('AZITO_MCP_SRC')) return { ...result, stdout: 'AZITO_MCP_RESULT:{"outcome":"absent"}\r\n' };
       if (last.text.includes('Remove-Tree')) return { ...result, stdout: 'DONE\r\n' };
-      if (last.text.includes('Get-NetFirewallRule')) return { ...result, stdout: 'ABSENT\r\n' };
+      if (last.text.includes('COMRULE|')) return { ...result, stdout: 'UNKNOWN\r\n' };
       if (last.text.includes('Find-Left')) return { ...result, stdout: 'CLEAR\r\n' };
       if (last.text.includes('$a = Resolve-Long')) return { ...result, stdout: 'SAME\r\n' };
       return result;
     };
-    const deployer = new WindowsAgentDeployer(exec, { putFile: async () => undefined, putBuffer: async () => undefined }, OPTIONS);
+    const deployer = new WindowsAgentDeployer(exec, { putFile: async () => undefined, putBuffer: async (_host, data, file) => { fake.uploaded.set(file, data); } }, OPTIONS);
     const result = await deployer.uninstall('h', info, { removeMisao: false });
-    expect(outcomes(result)).toEqual({ task: 'done', processes: 'absent', firewall: 'absent', folder: 'done' });
+    expect(outcomes(result)).toEqual({ task: 'done', processes: 'absent', firewall: 'skipped', folder: 'done' });
     expect(fake.taskState).toBe('absent');
+    const [file, bytes] = [...fake.uploaded.entries()].find(([name]) => name.startsWith('.azito-script-'))!;
+    const loader = commands.find((command) => command.includes('[IO.File]::ReadAllBytes'))!;
+    expect(loader).toContain(createHash('sha256').update(bytes).digest('hex'));
+    expect(loader.indexOf('Remove-Item -LiteralPath $file')).toBeLessThan(loader.indexOf('Invoke-Expression'));
+    expect(commands.some((command) => command.includes(`Remove-Item -LiteralPath '${HOME}\\${file}'`))).toBe(true);
     const verbs = fake.calls.filter((c) => c.kind === 'schtasks').map((c) => c.schtasksArgs![0]);
     expect(verbs).toContain('/End');
     expect(verbs).toContain('/Delete');

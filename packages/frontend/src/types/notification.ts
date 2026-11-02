@@ -51,7 +51,8 @@ export type AppNotificationKind =
   | 'task_done'
   | 'task_failed'
   | 'agent_finished'
-  | 'mux_wake';
+  | 'mux_wake'
+  | 'server_firewall';
 
 export interface AppNotification {
   id: string;
@@ -70,8 +71,17 @@ export interface AppNotification {
   createdAt: number;
 }
 
+export interface FirewallDiagnosis {
+  state: 'blocked' | 'missing_allow' | 'unknown';
+  blockedBy: string[];
+  commands: string[];
+  checkedAt: number;
+  networkCategory: string | null;
+}
+
 export type NotificationEvent =
   | { type: 'window:mux_switch_suggested'; payload: { windowId: number; serverName: string; title?: string; taskId?: number; reason: 'ask' | 'misao_unavailable' } }
+  | { type: 'server:firewall'; payload: { serverName: string; diagnosis: FirewallDiagnosis } }
   | { type: 'sessions:updated'; payload: { serverName: string } }
   | { type: 'task:status'; payload: { taskId: number; status: string; title?: string; projectId?: number } }
   | { type: 'phase:completed'; payload: { taskId: number; unitId: number; phase: string; summary: Record<string, unknown> | null } }

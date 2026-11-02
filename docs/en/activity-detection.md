@@ -210,6 +210,8 @@ add `sessionId` to the webhook body only when it is a UUID (`start`/`stop` from
 - `event: "session"` never changes the activity (Tier 1 hook) state
 - Each update shows up as `sessionUpdate` (`from` / `to` / `at` / `event`) in `GET /api/debug/activity`
 
+SessionStart also sends `claudeConfigDir`, `claudeConfigDirExplicit`, and `hookTimestamp` to record local configuration per pane, including split panes (ordinal ≥ 2). Start / stop do not update IDs for windows with a recorded directory, and sleeping windows are not updated. Invalid configuration metadata is discarded while session ID tracking continues. See [isolated execution](isolated-execution.md).
+
 ### Window identification (phase 4: muxPaneRef-first)
 
 When matching Tier 0 (supervisor) and Tier 1 (hook) signals to `windows` table rows on the hub, the following priority applies:

@@ -18,6 +18,8 @@ const catalog = {
     'task.pendingApproval':  { title: 'AZITO: Approval Required',  body: 'Task "{{taskTitle}}" is blocked pending your approval to run' },
     'agent.finished':        { title: 'AZITO: Agent Finished',     body: '{{label}} on {{serverName}} finished' },
     'agent.approvalRequired':{ title: 'AZITO: Approval Required',  body: '{{label}} on {{serverName}} needs approval' },
+    'firewall.blocked':      { title: 'AZITO: Windows Firewall', body: '{{serverName}}: inbound Block rules: {{rules}}. {{commands}}' },
+    'firewall.missing_allow': { title: 'AZITO: Windows Firewall', body: '{{serverName}}: no inbound Allow rule could apply. {{commands}}' },
     'agent.idle':            { title: 'AZITO: Agent Idle',         body: '{{label}} became idle on {{serverName}}' },
   },
   ja: {
@@ -32,6 +34,8 @@ const catalog = {
     'task.pendingApproval':  { title: 'AZITO: 承認が必要',          body: 'タスク「{{taskTitle}}」が実行の承認待ちで停止しています' },
     'agent.finished':        { title: 'AZITO: エージェント完了',    body: '{{label}}（{{serverName}}）が完了しました' },
     'agent.approvalRequired':{ title: 'AZITO: 承認が必要',          body: '{{label}}（{{serverName}}）が承認を待っています' },
+    'firewall.blocked':      { title: 'AZITO: Windows ファイアウォール', body: '{{serverName}}: 受信 Block 規則: {{rules}}。{{commands}}' },
+    'firewall.missing_allow': { title: 'AZITO: Windows ファイアウォール', body: '{{serverName}}: 適用可能な受信 Allow 規則がありません。{{commands}}' },
     'agent.idle':            { title: 'AZITO: エージェント待機',    body: '{{label}}が{{serverName}}上で待機状態になりました' },
   },
 } as const;
