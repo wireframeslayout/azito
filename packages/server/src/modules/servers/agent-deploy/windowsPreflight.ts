@@ -12,89 +12,87 @@ const END_MARKER = '<<AZITO_PREFLIGHT_END>>';
  * tailscale.exe is looked for on PATH and then in its installer's location, because an SSH session may not have it on PATH.
  */
 const WINDOWS_PREFLIGHT_SCRIPT = `
-$node = Get-Command node -ErrorAction SilentlyContinue | Select-Object -First 1
-$nodePath = $null
-$nodeVersion = $null
-if ($node) {
-  $nodePath = $node.Source
-  $nodeVersion = @(& $nodePath --version)[0]
+$n = Get-Command node -EA SilentlyContinue | Select-Object -First 1
+$np = $null
+$nv = $null
+if ($n) {
+$np = $n.Source
+$nv = @(& $np --version)[0]
 }
-$tailscale = Get-Command tailscale -ErrorAction SilentlyContinue | Select-Object -First 1
+$ts = Get-Command tailscale -EA SilentlyContinue | Select-Object -First 1
 $tsPath = $null
-if ($tailscale) { $tsPath = $tailscale.Source }
-elseif (Test-Path -LiteralPath (Join-Path $env:ProgramFiles 'Tailscale\\tailscale.exe')) { $tsPath = Join-Path $env:ProgramFiles 'Tailscale\\tailscale.exe' }
+if ($ts) { $tsPath = $ts.Source }
+elseif (Test-Path (Join-Path $env:ProgramFiles 'Tailscale\\tailscale.exe')) { $tsPath = Join-Path $env:ProgramFiles 'Tailscale\\tailscale.exe' }
 $tsIp = $null
 $tsCli = 'missing'
-$tsDetail = $null
-$netStatus = 'not_checked'
-$netDetail = $null
+$td = $null
+$ns = 'not_checked'
+$nd = $null
 if ($tsPath) {
-  try {
-    $oldPref = $ErrorActionPreference
-    $ErrorActionPreference = 'Continue'
-    $cliOut = @(& $tsPath ip -4 2>&1)
-    $cliExit = $LASTEXITCODE
-    $ErrorActionPreference = $oldPref
-    $cliText = ($cliOut | ForEach-Object { $_.ToString() }) -join ' '
-    if ($cliExit -ne 0) {
-      $tsCli = if ($cliText -match '401') { 'denied' } else { 'failed' }
-      $tsDetail = "exit $cliExit : $cliText"
-    } else {
-      $tsIp = @($cliOut | Where-Object { $_ -is [string] } | Select-Object -First 1)[0]
-      $tsCli = if ($tsIp) { 'ok' } else { 'empty' }
-    }
-  } catch {
-    $ErrorActionPreference = $oldPref
-    $tsCli = 'failed'
-    $tsDetail = $_.Exception.Message
-  }
+try {
+$pref = $ErrorActionPreference
+$ErrorActionPreference = 'Continue'
+$out = @(& $tsPath ip -4 2>&1)
+$exit = $LASTEXITCODE
+$ErrorActionPreference = $pref
+$text = ($out | ForEach-Object { $_.ToString() }) -join ' '
+if ($exit -ne 0) {
+$tsCli = if ($text -match '\\b401\\b|Unauthorized|already in use by') { 'denied' } else { 'failed' }
+$td = "exit $exit : $text"
+} else {
+$tsIp = @($out | Where-Object { $_ -is [string] } | Select-Object -First 1)[0]
+$tsCli = if ($tsIp) { 'ok' } else { 'empty' }
 }
-if ($tsCli -ne 'ok') {
-  try {
-    $netStatus = 'empty'
-    foreach ($adapter in [System.Net.NetworkInformation.NetworkInterface]::GetAllNetworkInterfaces()) {
-      foreach ($address in $adapter.GetIPProperties().UnicastAddresses) {
-        $ip = $address.Address
-        if ($ip.AddressFamily -ne [System.Net.Sockets.AddressFamily]::InterNetwork) { continue }
-        $bytes = $ip.GetAddressBytes()
-        if ($bytes[0] -eq 100 -and $bytes[1] -ge 64 -and $bytes[1] -le 127) {
-          $tsIp = $ip.ToString()
-          $netStatus = 'found'
-          break
-        }
-      }
-      if ($netStatus -eq 'found') { break }
-    }
-  } catch {
-    $netStatus = 'failed'
-    $netDetail = $_.Exception.Message
-  }
+} catch {
+$ErrorActionPreference = $pref
+$tsCli = 'failed'
+$td = $_.Exception.Message
 }
-# The native architecture of the OS from the registry: an x64-emulated PowerShell on Windows on ARM still reports X64 through
-# RuntimeInformation.OSArchitecture and $env:PROCESSOR_ARCHITECTURE, but this machine-wide value is the OS's own. Unreadable = null (refused with a reason).
+}
+if ($tsCli -eq 'denied') {
+try {
+$ns = 'empty'
+foreach ($a in [System.Net.NetworkInformation.NetworkInterface]::GetAllNetworkInterfaces()) {
+if ($a.OperationalStatus -ne 'Up' -or ($a.Name -notlike 'Tailscale*' -and $a.Description -notlike 'Tailscale*')) { continue }
+foreach ($u in $a.GetIPProperties().UnicastAddresses) {
+$ip = $u.Address
+if ($ip.AddressFamily -ne [System.Net.Sockets.AddressFamily]::InterNetwork) { continue }
+$bytes = $ip.GetAddressBytes()
+if ($bytes[0] -eq 100 -and $bytes[1] -ge 64 -and $bytes[1] -le 127) {
+$tsIp = $ip.ToString()
+$ns = 'found'
+break
+}
+}
+if ($ns -eq 'found') { break }
+}
+} catch {
+$ns = 'failed'
+$nd = $_.Exception.Message
+}
+}
 $arch = $null
-try { $arch = (Get-ItemProperty -LiteralPath 'HKLM:\\SYSTEM\\CurrentControlSet\\Control\\Session Manager\\Environment' -Name PROCESSOR_ARCHITECTURE -ErrorAction Stop).PROCESSOR_ARCHITECTURE } catch { $arch = $null }
+try { $arch = (Get-ItemProperty 'HKLM:\\SYSTEM\\CurrentControlSet\\Control\\Session Manager\\Environment' -Name PROCESSOR_ARCHITECTURE -EA Stop).PROCESSOR_ARCHITECTURE } catch { $arch = $null }
 $caption = $null
 $build = $null
-try { $os = Get-ItemProperty -LiteralPath 'HKLM:\\SOFTWARE\\Microsoft\\Windows NT\\CurrentVersion' -ErrorAction Stop; $build = $os.CurrentBuildNumber; $caption = $os.ProductName } catch { $caption = $null; $build = $null }
+try { $os = Get-ItemProperty 'HKLM:\\SOFTWARE\\Microsoft\\Windows NT\\CurrentVersion' -EA Stop; $build = $os.CurrentBuildNumber; $caption = $os.ProductName } catch { $caption = $null; $build = $null }
 $info = [ordered]@{
-  nodePath = $nodePath
-  nodeVersion = $nodeVersion
-  arch = $arch
-  windowsCaption = $caption
-  buildNumber = $build
-  tailscaleIp = $tsIp
-  tailscaleCli = $tsCli
-  tailscaleDetail = $tsDetail
-  networkStatus = $netStatus
-  networkDetail = $netDetail
-  home = $env:USERPROFILE
-  systemRoot = $env:SystemRoot
-  userId = [System.Security.Principal.WindowsIdentity]::GetCurrent().Name
+nodePath = $np
+nodeVersion = $nv
+arch = $arch
+windowsCaption = $caption
+buildNumber = $build
+tailscaleIp = $tsIp
+tailscaleCli = $tsCli
+tailscaleDetail = $td
+networkStatus = $ns
+networkDetail = $nd
+home = $env:USERPROFILE
+systemRoot = $env:SystemRoot
+userId = [System.Security.Principal.WindowsIdentity]::GetCurrent().Name
 }
 $global:LASTEXITCODE = 0
 Write-Output '${BEGIN_MARKER}'
-# ASCII only: a cmd.exe login shell returns the output in the OEM code page, which would garble a non-ASCII user name or path.
 $json = ConvertTo-Json -InputObject $info -Compress
 Write-Output ([regex]::Replace($json, '[^\\x00-\\x7F]', { param($m) '\\u{0:x4}' -f [int][char]$m.Value }))
 Write-Output '${END_MARKER}'
@@ -102,7 +100,8 @@ Write-Output '${END_MARKER}'
 
 /** The command line to send over SSH: the preflight script as an EncodedCommand. */
 export function buildWindowsPreflightCommand(): string {
-  return powershellDialect.wrapScript(WINDOWS_PREFLIGHT_SCRIPT.split('\n').map(line => line.trim()).filter(line => line && !line.startsWith('#')).join('\n'));
+  // Keep the encoded command comfortably below the Windows command-line limit of 8191 characters.
+  return powershellDialect.wrapScript(WINDOWS_PREFLIGHT_SCRIPT);
 }
 
 const rawSchema = z.object({
@@ -204,12 +203,14 @@ export function checkWindowsPreflight(info: WindowsPreflightInfo): string[] {
     missing.push(`Windows 10 version 1809 (build ${MIN_WINDOWS_BUILD}) or later required (found: build ${info.buildNumber}); the agent runs under \`conhost.exe --headless\``);
   }
   if (!info.tailscaleIp || !IPV4.test(info.tailscaleIp)) {
-    missing.push(`Tailscale IP not found (${describeTailscaleCli(info)}; network address lookup: ${info.networkStatus}${info.networkDetail ? `: ${info.networkDetail}` : ''})`);
+    const guidance = info.tailscaleCli === 'missing' || info.tailscaleCli === 'empty' ? '; install Tailscale for Windows and sign in' : '';
+    const network = info.networkStatus === 'not_checked' ? '' : `; network address lookup: ${info.networkStatus}${info.networkDetail ? `: ${info.networkDetail}` : ''}`;
+    missing.push(`Tailscale IP not found (${describeTailscaleCli(info)}${network}${guidance})`);
   }
   return missing;
 }
 
 export function describeTailscaleCli(info: WindowsPreflightInfo): string {
-  const descriptions = { ok: 'CLI returned an invalid IP', empty: 'CLI returned no IP', missing: 'CLI not found', denied: 'CLI access denied', failed: 'CLI failed' };
+  const descriptions = { ok: 'CLI returned an invalid IP', empty: 'CLI returned no IP', missing: 'CLI not found', denied: 'CLI access denied for this Windows user (Tailscale may be in use by another user)', failed: 'CLI failed' };
   return `${descriptions[info.tailscaleCli]}${info.tailscaleDetail ? `: ${info.tailscaleDetail}` : ''}`;
 }

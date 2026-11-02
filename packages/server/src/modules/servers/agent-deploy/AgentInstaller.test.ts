@@ -503,7 +503,7 @@ describe('AgentInstaller', () => {
     it('propagates a CLI refusal and failed network lookup without suggesting sign in', async () => {
       const { installer } = makeWindows('cmd', { tailscaleIp: null, tailscaleCli: 'denied', tailscaleDetail: '401 Unauthorized', networkStatus: 'failed', networkDetail: 'network unavailable' });
       const result = await installer.install('user@host');
-      expect(result.error).toContain('CLI access denied: 401 Unauthorized');
+      expect(result.error).toContain('CLI access denied for this Windows user (Tailscale may be in use by another user): 401 Unauthorized');
       expect(result.error).toContain('network address lookup: failed: network unavailable');
       expect(result.error).not.toMatch(/install.*sign in/i);
     });
@@ -515,7 +515,7 @@ describe('AgentInstaller', () => {
         const result = await installer.install('user@host');
         expect(result.error ?? '').not.toContain('Preflight failed');
         expect(commands.length).toBeGreaterThan(2);
-        expect(warn).toHaveBeenCalledWith(expect.stringMatching(/using network address; CLI access denied: exit 1 : 401 Unauthorized/));
+        expect(warn).toHaveBeenCalledWith(expect.stringMatching(/using network address; CLI access denied for this Windows user .*401 Unauthorized/));
       } finally {
         warn.mockRestore();
       }

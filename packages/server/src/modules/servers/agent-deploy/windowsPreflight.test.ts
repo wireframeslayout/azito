@@ -31,6 +31,7 @@ describe('buildWindowsPreflightCommand', () => {
     const line = buildWindowsPreflightCommand();
     const match = /^powershell\.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -EncodedCommand ([A-Za-z0-9+/=]+)$/.exec(line);
     expect(match).not.toBeNull();
+    expect(line.length).toBeLessThan(7900);
     const script = Buffer.from(match![1], 'base64').toString('utf16le');
     expect(script).toContain(BEGIN);
     expect(script).toContain(END);
@@ -136,11 +137,12 @@ describe('checkWindowsPreflight', () => {
   ] as const)('reports %s when the network has no address', (tailscaleCli, reason) => {
     const info = ok({ tailscaleIp: null, tailscaleCli, tailscaleDetail: tailscaleCli === 'denied' ? '401' : null, networkStatus: 'empty' });
     expect(checkWindowsPreflight(info)).toEqual([expect.stringContaining(reason)]);
-    expect(checkWindowsPreflight(info)[0]).not.toMatch(/install.*sign in/i);
+    if (tailscaleCli === 'missing' || tailscaleCli === 'empty') expect(checkWindowsPreflight(info)[0]).toMatch(/install.*sign in/i);
+    else expect(checkWindowsPreflight(info)[0]).not.toMatch(/install.*sign in/i);
   });
 
-  it('accepts a network address after CLI denial or absence', () => {
-    for (const tailscaleCli of ['denied', 'missing'] as const) {
+  it('accepts a network address after CLI denial', () => {
+    for (const tailscaleCli of ['denied'] as const) {
       expect(checkWindowsPreflight(ok({ tailscaleCli, networkStatus: 'found' }))).toEqual([]);
     }
   });
@@ -179,7 +181,7 @@ describe.skipIf(!isWindows)('the preflight script on a real PowerShell', () => {
   const line = buildWindowsPreflightCommand();
 
   /** The sent script with the network interfaces replaced by `addresses` and each replacement applied; a replacement that matches nothing fails the test. */
-  function withMockedNetwork(addresses: string[], replacements: Array<[string | RegExp, string]>): string {
+  function withMockedNetwork(addresses: string[], replacements: Array<[string | RegExp, string]>, name = 'Tailscale', status = 'Up', description = 'Tailscale Tunnel'): string {
     let script = Buffer.from(line.split(' ').at(-1)!, 'base64').toString('utf16le');
     for (const [from, to] of [...replacements, ['[System.Net.NetworkInformation.NetworkInterface]::GetAllNetworkInterfaces()', '@($adapter)'] as [string, string]]) {
       const replaced = script.replace(from, to);
@@ -187,7 +189,7 @@ describe.skipIf(!isWindows)('the preflight script on a real PowerShell', () => {
       script = replaced;
     }
     const setup = `$addresses = @(${addresses.map(ip => `'${ip}'`).join(',')}) | ForEach-Object { [pscustomobject]@{ Address = [System.Net.IPAddress]::Parse($_) } }
-$adapter = [pscustomobject]@{}
+$adapter = [pscustomobject]@{ Name = '${name}'; Description = '${description}'; OperationalStatus = '${status}' }
 $adapter | Add-Member ScriptMethod GetIPProperties { [pscustomobject]@{ UnicastAddresses = $addresses } }
 `;
     return setup + script;
@@ -215,13 +217,20 @@ $adapter | Add-Member ScriptMethod GetIPProperties { [pscustomobject]@{ UnicastA
     [['::1', '100.128.0.0', '100.127.255.255'], '100.127.255.255'],
     [['100.63.255.255', '100.128.0.0', '::1'], null],
   ])('selects the first IPv4 address in the shared range from %j', (addresses, expected) => {
-    const script = withMockedNetwork(addresses, [[/\$tailscale = Get-Command[\s\S]*?if \(\$tsCli -ne 'ok'\) \{/, "$tsIp = $null\n$tsCli = 'denied'\n$tsDetail = '401'\n$netStatus = 'not_checked'\n$netDetail = $null\nif ($tsCli -ne 'ok') {"]]);
+    const script = withMockedNetwork(addresses, [[/\$ts = Get-Command[\s\S]*?if \(\$tsCli -eq 'denied'\) \{/, "$tsIp = $null\n$tsCli = 'denied'\n$td = '401'\n$ns = 'not_checked'\n$nd = $null\nif ($tsCli -eq 'denied') {"]]);
     const out = spawnSync('powershell.exe', ['-NoProfile', '-NonInteractive', '-EncodedCommand', Buffer.from(script, 'utf16le').toString('base64')], { encoding: 'utf8', timeout: 120_000 });
     expect(out.status, out.stderr).toBe(0);
     const info = parseWindowsPreflight(out.stdout);
     expect(info.tailscaleIp).toBe(expected);
     expect(info.networkStatus).toBe(expected ? 'found' : 'empty');
     expect(info.tailscaleCli).toBe('denied');
+  }, 120_000);
+
+  it.each([['Ethernet', 'Up', 'WWAN'], ['Tailscale', 'Down', 'Tailscale Tunnel']])('ignores unrelated or inactive adapters', (name, status, description) => {
+    const script = withMockedNetwork(['100.64.1.2'], [[/\$ts = Get-Command[\s\S]*?if \(\$tsCli -eq 'denied'\) \{/, "$tsIp = $null\n$tsCli = 'denied'\n$td = '401'\n$ns = 'not_checked'\n$nd = $null\nif ($tsCli -eq 'denied') {"]], name, status, description);
+    const out = spawnSync('powershell.exe', ['-NoProfile', '-NonInteractive', '-EncodedCommand', Buffer.from(script, 'utf16le').toString('base64')], { encoding: 'utf8', timeout: 120_000 });
+    expect(out.status, out.stderr).toBe(0);
+    expect(parseWindowsPreflight(out.stdout).tailscaleIp).toBeNull();
   }, 120_000);
 
   it.each(hasPwsh ? ['powershell.exe', 'pwsh'] : ['powershell.exe'])('runs the CLI and network branches on %s', (shell) => {
@@ -231,16 +240,17 @@ $adapter | Add-Member ScriptMethod GetIPProperties { [pscustomobject]@{ UnicastA
       const cases = [
         { cli: '@echo off\r\necho 401 Unauthorized 1>&2\r\nexit /b 1\r\n', addresses: ['100.64.1.2'], status: 'denied', ip: '100.64.1.2', network: 'found' },
         { cli: '@echo off\r\necho 401 Unauthorized 1>&2\r\nexit /b 1\r\n', addresses: [], status: 'denied', ip: null, network: 'empty' },
-        { cli: null, addresses: ['100.64.1.2'], status: 'missing', ip: '100.64.1.2', network: 'found' },
-        { cli: null, addresses: [], status: 'missing', ip: null, network: 'empty' },
+        { cli: null, addresses: ['100.64.1.2'], status: 'missing', ip: null, network: 'not_checked' },
+        { cli: null, addresses: [], status: 'missing', ip: null, network: 'not_checked' },
         { cli: '@echo off\r\necho 100.99.1.1\r\nexit /b 0\r\n', addresses: ['100.64.1.2'], status: 'ok', ip: '100.99.1.1', network: 'not_checked' },
-        { cli: '@echo off\r\nexit /b 0\r\n', addresses: [], status: 'empty', ip: null, network: 'empty' },
-        { cli: '@echo off\r\necho failed 1>&2\r\nexit /b 2\r\n', addresses: [], status: 'failed', ip: null, network: 'empty' },
+        { cli: '@echo off\r\nexit /b 0\r\n', addresses: ['100.64.1.2'], status: 'empty', ip: null, network: 'not_checked' },
+        { cli: '@echo off\r\necho error 1401 1>&2\r\nexit /b 2\r\n', addresses: ['100.64.1.2'], status: 'failed', ip: null, network: 'not_checked' },
+        { cli: '@echo off\r\necho failed 1>&2\r\nexit /b 2\r\n', addresses: ['100.64.1.2'], status: 'failed', ip: null, network: 'not_checked' },
       ];
       for (const scenario of cases) {
         if (scenario.cli) writeFileSync(cli, scenario.cli);
         else rmSync(cli, { force: true });
-        const script = withMockedNetwork(scenario.addresses, [['Get-Command tailscale -ErrorAction', 'Get-Command $env:AZITO_TEST_CLI -ErrorAction']]);
+        const script = withMockedNetwork(scenario.addresses, [['Get-Command tailscale -EA', 'Get-Command $env:AZITO_TEST_CLI -EA']]);
         const out = spawnSync(shell, ['-NoProfile', '-NonInteractive', '-EncodedCommand', Buffer.from(script, 'utf16le').toString('base64')], {
           encoding: 'utf8', timeout: 120_000, env: { ...process.env, AZITO_TEST_CLI: cli, ProgramFiles: dir },
         });
@@ -250,7 +260,7 @@ $adapter | Add-Member ScriptMethod GetIPProperties { [pscustomobject]@{ UnicastA
         expect(info.tailscaleIp).toBe(scenario.ip);
         expect(info.networkStatus).toBe(scenario.network);
         if (scenario.status === 'denied') expect(info.tailscaleDetail).toContain('401');
-        if (!scenario.ip) expect(checkWindowsPreflight(info)[0]).not.toMatch(/install.*sign in/i);
+        if (!scenario.ip && scenario.status === 'denied') expect(checkWindowsPreflight(info)[0]).not.toMatch(/install.*sign in/i);
       }
     } finally {
       rmSync(dir, { recursive: true, force: true });
