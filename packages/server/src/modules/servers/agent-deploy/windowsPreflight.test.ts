@@ -178,6 +178,21 @@ function run(line: string, login: Login, env: NodeJS.ProcessEnv = process.env) {
 describe.skipIf(!isWindows)('the preflight script on a real PowerShell', () => {
   const line = buildWindowsPreflightCommand();
 
+  /** The sent script with the network interfaces replaced by `addresses` and each replacement applied; a replacement that matches nothing fails the test. */
+  function withMockedNetwork(addresses: string[], replacements: Array<[string | RegExp, string]>): string {
+    let script = Buffer.from(line.split(' ').at(-1)!, 'base64').toString('utf16le');
+    for (const [from, to] of [...replacements, ['[System.Net.NetworkInformation.NetworkInterface]::GetAllNetworkInterfaces()', '@($adapter)'] as [string, string]]) {
+      const replaced = script.replace(from, to);
+      expect(replaced, `no match for ${String(from)}`).not.toBe(script);
+      script = replaced;
+    }
+    const setup = `$addresses = @(${addresses.map(ip => `'${ip}'`).join(',')}) | ForEach-Object { [pscustomobject]@{ Address = [System.Net.IPAddress]::Parse($_) } }
+$adapter = [pscustomobject]@{}
+$adapter | Add-Member ScriptMethod GetIPProperties { [pscustomobject]@{ UnicastAddresses = $addresses } }
+`;
+    return setup + script;
+  }
+
   it.each(LOGINS)('prints JSON that is read, with %s as the login shell', (login) => {
     const out = run(line, login);
     expect(out.status, out.stderr).toBe(0);
@@ -200,14 +215,7 @@ describe.skipIf(!isWindows)('the preflight script on a real PowerShell', () => {
     [['::1', '100.128.0.0', '100.127.255.255'], '100.127.255.255'],
     [['100.63.255.255', '100.128.0.0', '::1'], null],
   ])('selects the first IPv4 address in the shared range from %j', (addresses, expected) => {
-    const encoded = line.split(' ').at(-1)!;
-    let script = Buffer.from(encoded, 'base64').toString('utf16le');
-    const setup = `$addresses = @(${addresses.map(ip => `'${ip}'`).join(',')}) | ForEach-Object { [pscustomobject]@{ Address = [System.Net.IPAddress]::Parse($_) } }
-$adapter = [pscustomobject]@{}
-$adapter | Add-Member ScriptMethod GetIPProperties { [pscustomobject]@{ UnicastAddresses = $addresses } }
-`;
-    script = script.replace(/\$tailscale = Get-Command[\s\S]*?if \(\$tsCli -ne 'ok'\) \{/, "$tsIp = $null\n$tsCli = 'denied'\n$tsDetail = '401'\n$netStatus = 'not_checked'\n$netDetail = $null\nif ($tsCli -ne 'ok') {");
-    script = setup + script.replace('[System.Net.NetworkInformation.NetworkInterface]::GetAllNetworkInterfaces()', '@($adapter)');
+    const script = withMockedNetwork(addresses, [[/\$tailscale = Get-Command[\s\S]*?if \(\$tsCli -ne 'ok'\) \{/, "$tsIp = $null\n$tsCli = 'denied'\n$tsDetail = '401'\n$netStatus = 'not_checked'\n$netDetail = $null\nif ($tsCli -ne 'ok') {"]]);
     const out = spawnSync('powershell.exe', ['-NoProfile', '-NonInteractive', '-EncodedCommand', Buffer.from(script, 'utf16le').toString('base64')], { encoding: 'utf8', timeout: 120_000 });
     expect(out.status, out.stderr).toBe(0);
     const info = parseWindowsPreflight(out.stdout);
@@ -220,7 +228,6 @@ $adapter | Add-Member ScriptMethod GetIPProperties { [pscustomobject]@{ UnicastA
     const dir = mkdtempSync(join(tmpdir(), 'azito-preflight-'));
     try {
       const cli = join(dir, 'tailscale.cmd');
-      const original = Buffer.from(line.split(' ').at(-1)!, 'base64').toString('utf16le');
       const cases = [
         { cli: '@echo off\r\necho 401 Unauthorized 1>&2\r\nexit /b 1\r\n', addresses: ['100.64.1.2'], status: 'denied', ip: '100.64.1.2', network: 'found' },
         { cli: '@echo off\r\necho 401 Unauthorized 1>&2\r\nexit /b 1\r\n', addresses: [], status: 'denied', ip: null, network: 'empty' },
@@ -233,13 +240,7 @@ $adapter | Add-Member ScriptMethod GetIPProperties { [pscustomobject]@{ UnicastA
       for (const scenario of cases) {
         if (scenario.cli) writeFileSync(cli, scenario.cli);
         else rmSync(cli, { force: true });
-        const setup = `$addresses = @(${scenario.addresses.map(ip => `'${ip}'`).join(',')}) | ForEach-Object { [pscustomobject]@{ Address = [System.Net.IPAddress]::Parse($_) } }
-$adapter = [pscustomobject]@{}
-$adapter | Add-Member ScriptMethod GetIPProperties { [pscustomobject]@{ UnicastAddresses = $addresses } }
-`;
-        const script = setup + original
-          .replace('Get-Command tailscale -ErrorAction', 'Get-Command $env:AZITO_TEST_CLI -ErrorAction')
-          .replace('[System.Net.NetworkInformation.NetworkInterface]::GetAllNetworkInterfaces()', '@($adapter)');
+        const script = withMockedNetwork(scenario.addresses, [['Get-Command tailscale -ErrorAction', 'Get-Command $env:AZITO_TEST_CLI -ErrorAction']]);
         const out = spawnSync(shell, ['-NoProfile', '-NonInteractive', '-EncodedCommand', Buffer.from(script, 'utf16le').toString('base64')], {
           encoding: 'utf8', timeout: 120_000, env: { ...process.env, AZITO_TEST_CLI: cli, ProgramFiles: dir },
         });

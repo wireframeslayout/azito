@@ -501,7 +501,7 @@ export class AgentInstaller {
     const result = await this.sshClient.execIsolated(sshHost, buildWindowsPreflightCommand());
     const info = parseWindowsPreflight(result.stdout, result.stderr, result.code);
     const missing = checkWindowsPreflight(info);
-    if (info.networkStatus === 'found') console.warn(`Windows preflight ${sshHost}: using network address; ${describeTailscaleCli(info)}`);
+    if (info.networkStatus === 'found') console.warn(`[AgentInstaller] Windows preflight ${sshHost}: using network address; ${describeTailscaleCli(info)}`);
     if (missing.length > 0) {
       throw new Error(`Preflight failed:\n${missing.map(m => `  - ${m}`).join('\n')}`);
     }
