@@ -1,366 +1,229 @@
-import { storageRelativeKey } from './files/storageKey';
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
-import { api, fetchBlob, uploadFile } from '../api/client';
-import { LoadingState, EmptyState } from './ui';
-import { Icon } from './ui/Icon';
+import { fetchBlob, uploadFile } from '../api/client';
 import { useToast } from '../hooks/useToast';
-import { useBlobUrl } from '../hooks/useBlobUrl';
 import { useConfirm } from '../hooks/useConfirm';
+import { formatSize } from '../utils/formatSize';
+import { BottomSheet } from './ui/BottomSheet';
+import { Button, EmptyState, FormInput, FormSelect, LoadingState } from './ui';
+import InlineNameInput from './files/InlineNameInput';
+import { PathBreadcrumb } from './files/PathBreadcrumb';
+import FileTree from './files/FileTree';
+import type { FileEntry } from './files/backend/FilesBackend';
+import { StorageApiError, StorageFilesBackend } from './files/backend/StorageFilesBackend';
 import { StorageStatusGate } from './storage/StorageStatusGate';
+import { useStorageEntries } from './storage/useStorageEntries';
+import { StorageMovePicker } from './storage/StorageMovePicker';
+import { StorageEntryRow } from './storage/StorageEntryRow';
+import { StorageSelectionActions } from './storage/StorageSelectionActions';
+import { collectStorageDrop, uploadStorageDrop, type StorageDropItem, type StorageDropFailure } from './storage/storageDrop';
 
-interface PreviewItem { url: string; name: string; }
-
-export interface StoredFile {
-  key: string;
-  originalName: string;
-  size: number;
-  lastModified: string;
-}
-
-function formatSize(bytes: number): string {
-  if (bytes < 1024) return `${bytes} B`;
-  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
-  return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
-}
-
-function isImage(name: string): boolean {
-  return /\.(jpe?g|png|gif|webp|svg|bmp|ico)$/i.test(name);
-}
-
-function isPdf(name: string): boolean {
-  return /\.pdf$/i.test(name);
-}
-
-function timeAgo(dateStr: string): string {
-  const d = new Date(dateStr);
-  const now = Date.now();
-  const diff = now - d.getTime();
-  if (diff < 60_000) return 'just now';
-  if (diff < 3_600_000) return `${Math.floor(diff / 60_000)}m ago`;
-  if (diff < 86_400_000) return `${Math.floor(diff / 3_600_000)}h ago`;
-  return `${Math.floor(diff / 86_400_000)}d ago`;
-}
-
-function StorageThumb({ apiPath, alt }: { apiPath: string; alt: string }): React.ReactElement {
-  const { url, state } = useBlobUrl(apiPath);
-
-  if (state !== 'success' || !url) {
-    return (
-      <span style={{ width: 28, height: 28, display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 'var(--font-lg)', flexShrink: 0, color: 'var(--text-dim)' }}>
-        <Icon name="image" size={16} />
-      </span>
-    );
-  }
-
-  return (
-    <img
-      src={url}
-      alt={alt}
-      style={{ width: 28, height: 28, borderRadius: 'var(--radius-sm)', objectFit: 'cover', flexShrink: 0 }}
-    />
-  );
-}
-
-interface StoragePanelProps {
-  projectId: number;
-  onFilePreview?: (file: StoredFile) => void;
-  activeTabId?: string | null;
-}
-
+export interface StoredFile { key: string; originalName: string; size: number; lastModified: string }
+interface StoragePanelProps { projectId: number; onFilePreview?: (file: StoredFile) => void; activeTabId?: string | null }
 export default function StoragePanel(props: StoragePanelProps) {
-  return <StorageStatusGate projectId={props.projectId}><StorageFileList {...props} /></StorageStatusGate>;
+  return <StorageStatusGate projectId={props.projectId}><StorageFileList key={props.projectId} {...props} /></StorageStatusGate>;
 }
 
 function StorageFileList({ projectId, onFilePreview, activeTabId }: StoragePanelProps) {
-  const { t } = useTranslation('files');
+  const { t } = useTranslation('storage');
+  const { t: filesT } = useTranslation('files');
   const { showToast } = useToast();
   const confirm = useConfirm();
-  const { t: storageT } = useTranslation('storage');
-  const mobile = typeof window !== 'undefined' && window.innerWidth <= 768;
-  const [files, setFiles] = useState<StoredFile[]>([]);
-  const [loading, setLoading] = useState(true);
-  const [uploading, setUploading] = useState(false);
-  const [dragOver, setDragOver] = useState(false);
-  const [previews, setPreviews] = useState<PreviewItem[]>([]);
-  const fileInputRef = useRef<HTMLInputElement>(null);
-  const previewsRef = useRef(previews);
-  previewsRef.current = previews;
-
-  const refresh = useCallback(async () => {
-    setLoading(true);
-    try {
-      const res = await api<{ files: StoredFile[] }>(`/projects/${projectId}/storage`);
-      setFiles(res.files || []);
-    } catch {
-      setFiles([]);
-    } finally {
-      setLoading(false);
-    }
-  }, [projectId]);
-
-  useEffect(() => { refresh(); }, [refresh]);
-
-  const addPreviews = useCallback((selected: File[]) => {
-    const imgs = selected
-      .filter((f) => f.type.startsWith('image/'))
-      .map((f) => ({ url: URL.createObjectURL(f), name: f.name }));
-    if (imgs.length > 0) setPreviews((prev) => [...prev, ...imgs]);
-  }, []);
-
-  const removePreview = useCallback((name: string) => {
-    const current = previewsRef.current;
-    const match = current.find((p) => p.name === name);
-    if (!match) return;
-    setPreviews((prev) => prev.filter((p) => p.url !== match.url));
-    URL.revokeObjectURL(match.url);
-  }, []);
-
+  const backend = useMemo(() => new StorageFilesBackend(projectId), [projectId]);
+  const [path, setPath] = useState('');
+  const { entries, loading, loadingMore, error, nextCursor, loadMore, refresh } = useStorageEntries(backend, path);
+  const [selected, setSelected] = useState<string[]>([]);
+  const anchor = useRef<string | null>(null);
+  const [filter, setFilter] = useState('');
+  type Sort = 'name' | 'nameDesc' | 'sizeAsc' | 'sizeDesc' | 'dateAsc' | 'dateDesc';
+  const [sort, setSort] = useState<Sort>('name');
+  const [editing, setEditing] = useState<FileEntry | 'create' | null>(null);
+  const [moving, setMoving] = useState(false);
+  const [actionsOpen, setActionsOpen] = useState(false);
+  const [mobile, setMobile] = useState(() => typeof window.matchMedia === 'function' && window.matchMedia('(max-width: 768px)').matches);
   useEffect(() => {
-    return () => { previewsRef.current.forEach((p) => URL.revokeObjectURL(p.url)); };
+    if (typeof window.matchMedia !== 'function') return;
+    const query = window.matchMedia('(max-width: 768px)');
+    const update = () => setMobile(query.matches);
+    query.addEventListener('change', update);
+    return () => query.removeEventListener('change', update);
   }, []);
-
-  const doUpload = useCallback(async (file: File) => {
-    setUploading(true);
+  const [busy, setBusy] = useState(false);
+  const [dragOver, setDragOver] = useState(false);
+  const [progress, setProgress] = useState('');
+  const [failures, setFailures] = useState<StorageDropFailure[]>([]);
+  const [previews, setPreviews] = useState<Array<{ url: string; name: string }>>([]);
+  const input = useRef<HTMLInputElement>(null);
+  const actionsButton = useRef<HTMLDivElement>(null);
+  const toolbar = useRef<HTMLDivElement>(null);
+  const movingWasOpen = useRef(false);
+  const restoreMoveFocus = useRef(false);
+  useEffect(() => {
+    if (!busy && restoreMoveFocus.current) {
+      restoreMoveFocus.current = false;
+      toolbar.current?.querySelector<HTMLButtonElement>('button:not(:disabled)')?.focus();
+    }
+  }, [busy]);
+  useEffect(() => {
+    if (mobile && movingWasOpen.current && !moving) (actionsButton.current?.querySelector('button') ?? toolbar.current?.querySelector<HTMLButtonElement>('button:not(:disabled)'))?.focus();
+    movingWasOpen.current = moving;
+  }, [mobile, moving]);
+  const touchStyle = mobile ? { minHeight: 'calc(var(--space-6) + var(--space-5))', minWidth: 'calc(var(--space-6) + var(--space-5))' } : undefined;
+  const operationMessage = (error: unknown) => {
+    if (error instanceof StorageApiError && error.code && ['exists', 'folder_too_large', 'partial_failure', 'invalid_path'].includes(error.code)) return t(`list.errors.${error.code}`);
+    return error instanceof Error ? error.message : t('list.operationError');
+  };
+  const sentinel = useRef<HTMLDivElement>(null);
+  const visible = entries.filter((entry) => entry.name.toLocaleLowerCase().includes(filter.toLocaleLowerCase())).sort((a, b) => {
+    if (a.type !== b.type) return a.type === 'directory' ? -1 : 1;
+    if (sort === 'dateAsc' || sort === 'dateDesc') return (a.lastModified === undefined && b.lastModified === undefined ? 0 : a.lastModified === undefined ? 1 : b.lastModified === undefined ? -1 : (sort === 'dateAsc' ? 1 : -1) * a.lastModified.localeCompare(b.lastModified)) || a.name.localeCompare(b.name);
+    if (sort === 'sizeAsc' || sort === 'sizeDesc') return (a.size === undefined && b.size === undefined ? 0 : a.size === undefined ? 1 : b.size === undefined ? -1 : (sort === 'sizeAsc' ? 1 : -1) * (a.size - b.size)) || a.name.localeCompare(b.name);
+    return (sort === 'nameDesc' ? -1 : 1) * a.name.localeCompare(b.name);
+  });
+  const chosen = visible.filter((entry) => selected.includes(entry.path));
+  useEffect(() => { if (selected.length === 0) setActionsOpen(false); }, [selected.length]);
+  useEffect(() => { setSelected([]); anchor.current = null; setEditing(null); setMoving(false); setActionsOpen(false); }, [path]);
+  useEffect(() => {
+    const node = sentinel.current;
+    if (!node || !nextCursor || error || typeof IntersectionObserver === 'undefined') return;
+    const observer = new IntersectionObserver((observed) => { if (observed.some((item) => item.isIntersecting)) void loadMore(); });
+    observer.observe(node); return () => observer.disconnect();
+  }, [nextCursor, error, loadMore]);
+  function select(entry: FileEntry, additive: boolean, range: boolean) {
+    if (range && anchor.current) {
+      const start = visible.findIndex((item) => item.path === anchor.current);
+      const end = visible.findIndex((item) => item.path === entry.path);
+      if (start >= 0 && end >= 0) { setSelected(visible.slice(Math.min(start, end), Math.max(start, end) + 1).map((item) => item.path)); return; }
+    }
+    setSelected((previous) => additive ? (previous.includes(entry.path) ? previous.filter((item) => item !== entry.path) : [...previous, entry.path]) : [entry.path]);
+    anchor.current = entry.path;
+  }
+  function navigate(next: string) { if (busy) return; setPath(next); setFilter(''); }
+  async function refreshAndReconcile() {
+    const refreshed = await refresh();
+    if (refreshed) {
+      const paths = new Set(refreshed.map((entry) => entry.path));
+      setSelected((previous) => previous.filter((path) => paths.has(path)));
+    }
+  }
+  async function run(operation: () => Promise<void>, restoreFocus = false) {
+    if (busy) return;
+    setBusy(true);
+    try { await operation(); setSelected([]); await refreshAndReconcile(); if (restoreFocus) restoreMoveFocus.current = true; }
+    catch (err) { showToast(operationMessage(err)); await refreshAndReconcile(); }
+    finally { setBusy(false); }
+  }
+  async function remove() {
+    if (!chosen.length || busy) return;
+    setBusy(true);
     try {
-      const res = await uploadFile<{ ok: boolean; file?: StoredFile; error?: string }>(
-        `/projects/${projectId}/storage/upload`, file,
-      );
-      if (res.error) {
-        showToast(`Upload failed: ${res.error}`);
-      } else if (res.file) {
-        showToast(`Uploaded ${file.name}`);
-        setFiles((prev) => prev.some((f) => f.key === res.file!.key) ? prev : [...prev, res.file!]);
+      const stats = await Promise.all(chosen.filter((entry) => entry.type === 'directory').map((entry) => backend.stat(entry.path)));
+      const count = stats.reduce((sum, item) => sum + item.count, 0);
+      const size = stats.reduce((sum, item) => sum + item.totalSize, 0);
+      const names = chosen.map((entry) => entry.name).join(', ');
+      const message = stats.length ? t('list.deleteMessage', { names, count, size: formatSize(size) }) : t('list.deleteMessageFiles', { names });
+      if (await confirm({ title: t('list.deleteTitle'), message, danger: true })) {
+        await backend.deleteMany(chosen); setSelected([]); await refreshAndReconcile();
       }
-    } catch (err: unknown) {
-      showToast(`Upload error: ${(err as Error).message}`);
-    } finally {
-      setUploading(false);
-      removePreview(file.name);
-    }
-  }, [projectId, showToast, removePreview]);
-
-  const handleDrop = useCallback((e: React.DragEvent) => {
-    if (mobile) return;
-    e.preventDefault();
-    e.stopPropagation();
-    setDragOver(false);
-    const droppedFiles = Array.from(e.dataTransfer.files);
-    addPreviews(droppedFiles);
-    for (const f of droppedFiles) doUpload(f);
-  }, [doUpload, addPreviews, mobile]);
-
-  const handleDelete = useCallback(async (filename: string, name: string) => {
-    if (!await confirm({ title: storageT('delete.title'), message: storageT('delete.message', { name }), danger: true })) return;
-    await api(`/projects/${projectId}/storage/${encodeURIComponent(filename)}`, { method: 'DELETE' });
-    setFiles((prev) => prev.filter((f) => storageRelativeKey(projectId, f.key) !== filename));
-  }, [projectId, confirm, storageT]);
-
-  const getApiPath = useCallback((file: StoredFile): string => {
-    const filename = storageRelativeKey(projectId, file.key);
-    return `/projects/${projectId}/storage/${encodeURIComponent(filename)}/raw`;
-  }, [projectId]);
-
-  const getProxyUrl = useCallback((file: StoredFile): string => `/api${getApiPath(file)}`, [getApiPath]);
-
-  const handleDownloadFile = useCallback(async (file: StoredFile) => {
+    } catch (err) { showToast(operationMessage(err)); await refreshAndReconcile(); }
+    finally { setBusy(false); }
+  }
+  async function uploadItems(items: Promise<StorageDropItem[]>) {
+    setBusy(true);
+    setFailures([]);
+    let urls: string[] = [];
     try {
-      const blob = await fetchBlob(getApiPath(file));
-      const objectUrl = URL.createObjectURL(blob);
-      const a = document.createElement('a');
-      a.href = objectUrl;
-      a.download = file.originalName;
-      document.body.appendChild(a);
-      a.click();
-      document.body.removeChild(a);
-      URL.revokeObjectURL(objectUrl);
-    } catch {
-      showToast('Failed to download file');
-    }
-  }, [getApiPath, showToast]);
-
-  const handleCopyUrl = useCallback(async (file: StoredFile) => {
-    const url = `${window.location.origin}${getProxyUrl(file)}`;
+      const collected = await items;
+      const images = collected.filter((item) => item.type === 'file' && item.file.type.startsWith('image/')).map((item) => {
+        if (item.type !== 'file') throw new Error('Invalid upload item');
+        return { url: URL.createObjectURL(item.file), name: item.file.name };
+      });
+      urls = images.map((image) => image.url);
+      setPreviews(images);
+      const result = await uploadStorageDrop(collected, path, {
+        createFolder: (folder) => backend.ensureFolder(folder),
+        uploadFile: async (file, prefix) => {
+          const response = await uploadFile<{ error?: string }>(`/projects/${projectId}/storage/upload?prefix=${encodeURIComponent(prefix)}`, file);
+          if (response.error) throw new Error(response.error);
+        },
+        onProgress: (completed, total) => setProgress(t('list.uploadProgress', { completed, total })),
+      });
+      setFailures(result.failures);
+    } catch (err) { showToast(err instanceof Error ? err.message : t('list.operationError')); }
+    finally { urls.forEach((url) => URL.revokeObjectURL(url)); setPreviews([]); setProgress(''); await refreshAndReconcile(); setBusy(false); }
+  }
+  function isFileDrag(event: React.DragEvent) {
+    return event.dataTransfer.types.includes('Files') && !event.dataTransfer.types.includes('application/x-azito-tab');
+  }
+  function drop(event: React.DragEvent) {
+    if (mobile || !isFileDrag(event)) return;
+    event.preventDefault(); event.stopPropagation(); setDragOver(false);
+    if (busy) showToast(t('list.busy'));
+    else void uploadItems(collectStorageDrop(event.dataTransfer));
+  }
+  function raw(entry: FileEntry) { return `/projects/${projectId}/storage/${encodeURIComponent(entry.path)}/raw`; }
+  async function download(entry: FileEntry) {
+    try { const blob = await fetchBlob(raw(entry)); const url = URL.createObjectURL(blob); const link = document.createElement('a'); link.href = url; link.download = entry.name; link.click(); URL.revokeObjectURL(url); }
+    catch { showToast(t('list.operationError')); }
+  }
+  async function copyUrl(entry: FileEntry) {
+    const value = `${window.location.origin}/api${raw(entry)}`;
     try {
-      if (navigator.clipboard?.writeText) {
-        await navigator.clipboard.writeText(url);
-      } else {
-        const ta = document.createElement('textarea');
-        ta.value = url;
-        ta.style.position = 'fixed';
-        ta.style.opacity = '0';
-        document.body.appendChild(ta);
-        ta.select();
-        document.execCommand('copy');
-        document.body.removeChild(ta);
+      if (navigator.clipboard?.writeText) await navigator.clipboard.writeText(value);
+      else {
+        const field = document.createElement('textarea');
+        field.value = value;
+        field.style.position = 'fixed';
+        field.style.opacity = '0';
+        document.body.appendChild(field);
+        field.select();
+        const copied = document.execCommand('copy');
+        field.remove();
+        if (!copied) throw new Error('Copy failed');
       }
-      showToast(t('storage.copiedUrl'));
-    } catch {
-      showToast('Failed to copy URL');
-    }
-  }, [getProxyUrl, showToast]);
-
-  return (
-    <div
-      style={{ flex: 1, display: 'flex', flexDirection: 'column', overflow: 'hidden' }}
-      onDragEnter={(e) => { if (mobile) return; e.preventDefault(); e.stopPropagation(); setDragOver(true); }}
-      onDragOver={(e) => { if (mobile) return; e.preventDefault(); e.stopPropagation(); }}
-      onDragLeave={(e) => { if (mobile) return; e.stopPropagation(); setDragOver(false); }}
-      onDrop={handleDrop}
-    >
-      {/* Header */}
-      <div style={{
-        fontSize: 'var(--font-xs)', fontWeight: 600, textTransform: 'uppercase', letterSpacing: 0.5,
-        color: 'var(--text-dim)', padding: '12px 12px 4px',
-        display: 'flex', alignItems: 'center', justifyContent: 'space-between',
-      }}>
-        <span>
-          Storage{' '}
-          <span style={{ fontWeight: 400, fontSize: 'var(--font-2xs)', background: 'var(--bg)', padding: '1px 6px', borderRadius: 'var(--radius-md)' }}>
-            {files.length}
-          </span>
-        </span>
-        <button
-          onClick={() => fileInputRef.current?.click()}
-          title={t('storage.uploadFile')}
-          className="icon-btn"
-          style={{ border: 'none', color: 'var(--text-dim)', cursor: 'pointer', padding: '2px 6px', display: 'inline-flex', alignItems: 'center' }}
-        ><Icon name="plus" size={16} /></button>
-      </div>
-
-      <input
-        ref={fileInputRef}
-        type="file"
-        multiple
-        style={{ display: 'none' }}
-        onChange={(e) => {
-          const selected = Array.from(e.target.files || []);
-          addPreviews(selected);
-          for (const f of selected) doUpload(f);
-          e.target.value = '';
-        }}
-      />
-
-      {/* Drop overlay */}
-      {dragOver && !mobile && (
-        <div style={{
-          position: 'absolute', inset: 0, background: 'var(--accent-a15)',
-          border: '2px dashed var(--accent)', borderRadius: 'var(--radius-md)',
-          display: 'flex', alignItems: 'center', justifyContent: 'center',
-          color: 'var(--accent)', fontSize: 'var(--font-base)', fontWeight: 600, zIndex: 10,
-          pointerEvents: 'none',
-        }}>
-          {t('storage.dropToUpload')}
-        </div>
-      )}
-
-      {/* Upload progress */}
-      {uploading && (
-        <div style={{ padding: '6px 12px', fontSize: 'var(--font-sm)', color: 'var(--accent)', background: 'var(--accent-a08)' }}>
-          Uploading...
-        </div>
-      )}
-
-      {/* Upload previews */}
-      {previews.length > 0 && (
-        <div style={{
-          display: 'flex', gap: 8, padding: '8px 12px', flexWrap: 'wrap',
-          borderBottom: '1px solid var(--border)', maxHeight: 140, overflowY: 'auto',
-        }}>
-          {previews.map((p) => (
-            <div key={p.url} style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 2, width: 80 }}>
-              <img
-                src={p.url} alt={p.name}
-                style={{ width: 64, height: 64, borderRadius: 'var(--radius-sm)', objectFit: 'contain', background: 'rgba(255,255,255,0.04)' }}
-              />
-              <span style={{ fontSize: 'var(--font-2xs)', color: 'var(--text-dim)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', maxWidth: 80, textAlign: 'center' }}>
-                {p.name}
-              </span>
-            </div>
-          ))}
-        </div>
-      )}
-
-      {/* File list */}
-      <div style={{ flex: 1, overflowY: 'auto', padding: 8, position: 'relative' }}>
-        {loading && files.length === 0 && <LoadingState />}
-        {!loading && files.length === 0 && (
-          <EmptyState title={t('storage.emptyMessage')} />
-        )}
-        {files.map((f) => {
-          const filename = storageRelativeKey(projectId, f.key);
-          const isImg = isImage(f.originalName);
-          const canPreview = Boolean(onFilePreview);
-          const tabId = `storage-file:${projectId}:${filename}`;
-          const isActive = activeTabId === tabId;
-          return (
-            <div key={f.key}
-              onClick={() => { if (canPreview) onFilePreview?.(f); }}
-              role={canPreview ? 'button' : undefined}
-              tabIndex={canPreview ? 0 : undefined}
-              onKeyDown={(e) => { if (canPreview && (e.key === 'Enter' || e.key === ' ')) { e.preventDefault(); onFilePreview?.(f); } }}
-              className={`row-hover${isActive ? ' row-selected' : ''}`}
-              style={{
-              padding: '8px 12px', fontSize: 'var(--font-md)', borderRadius: 'var(--radius-sm)', margin: '1px 0',
-              display: 'flex', alignItems: 'center', gap: 8, minHeight: 40,
-              cursor: canPreview ? 'pointer' : 'default',
-              color: isActive ? 'var(--accent)' : 'inherit',
-            }}>
-              {/* Thumbnail or icon */}
-              {isImg ? (
-                <StorageThumb apiPath={getApiPath(f)} alt={f.originalName} />
-              ) : (
-                <span style={{ width: 28, height: 28, display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 'var(--font-lg)', flexShrink: 0, color: 'var(--text-dim)' }}>
-                  <Icon name="file" size={16} />
-                </span>
-              )}
-
-              {/* File info */}
-              <div style={{ flex: 1, minWidth: 0 }}>
-                <div style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', fontSize: 'var(--font-md)' }}>
-                  {f.originalName}
-                </div>
-                <div style={{ fontSize: 'var(--font-2xs)', color: 'var(--text-dim)' }}>
-                  {formatSize(f.size)} &middot; {timeAgo(f.lastModified)}
-                </div>
-              </div>
-
-              {/* Actions */}
-              <button
-                onClick={(e) => { e.stopPropagation(); handleDownloadFile(f); }}
-                title={t('storage.download')}
-                className="icon-btn"
-                style={{ border: 'none', cursor: 'pointer', color: 'var(--text-dim)', padding: '2px 4px', flexShrink: 0, display: 'inline-flex', alignItems: 'center' }}
-              ><Icon name="download" size={14} /></button>
-              <button
-                onClick={(e) => { e.stopPropagation(); handleCopyUrl(f); }}
-                title={t('storage.copyUrl')}
-                className="icon-btn"
-                style={{ border: 'none', cursor: 'pointer', color: 'var(--text-dim)', padding: '2px 4px', flexShrink: 0, display: 'inline-flex', alignItems: 'center' }}
-              ><Icon name="external-link" size={14} /></button>
-              <button
-                onClick={(e) => { e.stopPropagation(); handleDelete(filename, f.originalName); }}
-                title={t('storage.deleteFile')}
-                className="icon-btn"
-                style={{ border: 'none', cursor: 'pointer', color: 'var(--danger)', padding: '2px 4px', flexShrink: 0, display: 'inline-flex', alignItems: 'center' }}
-              ><Icon name="trash" size={14} /></button>
-            </div>
-          );
-        })}
-      </div>
+      showToast(filesT('storage.copiedUrl'));
+    } catch { showToast(t('list.operationError')); }
+  }
+  const selectionActions = <StorageSelectionActions count={chosen.length} busy={busy} mobile={mobile} onRename={() => setEditing(chosen[0])} onMove={() => { if (mobile) { setActionsOpen(false); actionsButton.current?.querySelector('button')?.focus(); } setMoving(true); }} onDelete={() => void remove()} onClear={() => setSelected([])} />;
+  function preview(entry: FileEntry) { onFilePreview?.({ key: `projects/${projectId}/${entry.path}`, originalName: entry.name, size: entry.size ?? 0, lastModified: entry.lastModified ?? '' }); }
+  return <div style={{ flex: 1, display: 'flex', flexDirection: 'column', overflow: 'hidden', position: 'relative', minWidth: 0 }}
+    onDragEnter={(event) => { if (mobile || !isFileDrag(event)) return; event.preventDefault(); event.stopPropagation(); setDragOver(true); }}
+    onDragOver={(event) => { if (mobile || !isFileDrag(event)) return; event.preventDefault(); event.stopPropagation(); }}
+    onDragLeave={(event) => { if (mobile || !isFileDrag(event)) return; event.stopPropagation(); if (!event.currentTarget.contains(event.relatedTarget as Node)) setDragOver(false); }} onDrop={(event) => void drop(event)}>
+    <div ref={toolbar} style={{ display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: 'var(--space-2)', padding: 'var(--space-2)' }}>
+      <Button style={touchStyle} size="sm" variant="primary" type="button" disabled={busy} onClick={() => input.current?.click()}>{filesT('storage.uploadFile')}</Button>
+      <input ref={input} type="file" multiple hidden onChange={(event) => { void uploadItems(Promise.resolve(Array.from(event.target.files ?? []).map((file) => ({ type: 'file' as const, path: file.name, file })))); event.target.value = ''; }} />
+      <Button style={touchStyle} size="sm" type="button" disabled={busy} onClick={() => setEditing('create')}>{t('list.newFolder')}</Button>
+      <FormInput aria-label={t('list.filter')} placeholder={t('list.filter')} value={filter} onChange={(event) => setFilter(event.target.value)} style={{ flex: '1 1 8rem', width: 'auto', minWidth: 0, padding: 'var(--space-1) var(--space-2)', fontSize: 'var(--font-sm)' }} />
+      <FormSelect aria-label={t('list.sort')} value={sort} onChange={(event) => setSort(event.target.value as Sort)} style={{ width: 'auto', padding: 'var(--space-1) var(--space-2)', fontSize: 'var(--font-sm)' }}><option value="name">{t('list.nameAsc')}</option><option value="nameDesc">{t('list.nameDesc')}</option><option value="sizeAsc">{t('list.sizeAsc')}</option><option value="sizeDesc">{t('list.sizeDesc')}</option><option value="dateAsc">{t('list.dateAsc')}</option><option value="dateDesc">{t('list.dateDesc')}</option></FormSelect>
     </div>
-  );
+    <PathBreadcrumb mobile={mobile} path={path} rootLabel={t('list.root')} navigationLabel={t('list.path')} onNavigate={navigate} />
+    <div aria-live="polite" style={{ padding: '0 var(--space-2)', fontSize: 'var(--font-xs)', color: 'var(--text-dim)' }}>{t('list.count', { count: visible.length, selected: chosen.length })} {nextCursor && t('list.moreAvailable')}</div>
+    {chosen.length > 0 && (mobile
+      ? <div ref={actionsButton} style={{ padding: 'var(--space-2)' }}><Button style={touchStyle} size="sm" type="button" onClick={() => setActionsOpen(true)}>{t('list.actions', { count: chosen.length })}</Button></div>
+      : <div style={{ padding: 'var(--space-2)' }}>{selectionActions}</div>)}
+    {mobile && <BottomSheet open={actionsOpen && chosen.length > 0 && !moving && !editing} title={t('list.count', { count: visible.length, selected: chosen.length })} onClose={() => setActionsOpen(false)}>{selectionActions}</BottomSheet>}
+    {moving && <StorageMovePicker backend={backend} initialPath={path} disabled={busy} mobile={mobile} onCancel={() => setMoving(false)} onMove={(destination) => { if (chosen.some((item) => item.type === 'directory' && destination.startsWith(item.path))) { showToast(t('list.invalidDestination')); return; } setMoving(false); void run(() => backend.moveMany(chosen, destination), true); }} />}
+    {dragOver && <div role="status" style={{ position: 'absolute', inset: 0, background: 'var(--accent-a15)', border: '2px dashed var(--accent)', pointerEvents: 'none', zIndex: 1 }}>{filesT('storage.dropToUpload')}</div>}
+    {progress && <div role="status" style={{ padding: 'var(--space-2)', color: 'var(--text-dim)' }}>{progress}</div>}
+    {previews.length > 0 && <div style={{ display: 'flex', flexWrap: 'wrap', gap: 'var(--space-2)', maxHeight: 'min(25vh, calc(var(--space-6) * 6))', overflowY: 'auto', flexShrink: 0 }}>{previews.map((image) => <img key={image.url} src={image.url} alt={image.name} style={{ width: 'calc(var(--space-6) * 2 + var(--space-4))', height: 'calc(var(--space-6) * 2 + var(--space-4))', objectFit: 'contain', borderRadius: 'var(--radius-sm)' }} />)}</div>}
+    {failures.length > 0 && <div role="alert" style={{ maxHeight: 'min(25vh, calc(var(--space-6) * 6))', overflowY: 'auto', overflowWrap: 'anywhere', flexShrink: 0, padding: 'var(--space-2)', color: 'var(--danger)' }}><div>{t('list.uploadFailures')}</div><ul>{failures.map((failure, index) => <li key={index}>{failure.path}: {failure.error}</li>)}</ul></div>}
+    <div style={{ flex: 1, overflowY: 'auto', paddingBottom: 'env(safe-area-inset-bottom)' }}>
+      {editing === 'create' && <InlineNameInput initialValue="" kind="directory" siblingNames={entries.map((entry) => entry.name)} depth={0} onCancel={() => setEditing(null)} onCommit={(name) => { setEditing(null); void run(async () => { await backend.create(`${path}${name}/`, 'directory'); }); }} />}
+      {loading && <LoadingState />}
+      {error && <div role="alert" style={{ display: 'flex', alignItems: 'center', gap: 'var(--space-2)', padding: 'var(--space-2)', color: 'var(--danger)' }}>{error} <Button size="sm" type="button" onClick={() => void (nextCursor !== null ? loadMore() : refreshAndReconcile())}>{t('retry')}</Button></div>}
+      {!loading && !error && !visible.length && <EmptyState title={t('list.empty')} />}
+      <FileTree nodes={visible} renderRow={(entry, depth) => editing !== 'create' && editing?.path === entry.path
+        ? <InlineNameInput initialValue={entry.name} kind={entry.type} siblingNames={entries.filter((item) => item.path !== entry.path).map((item) => item.name)} depth={depth} onCancel={() => setEditing(null)} onCommit={(name) => { setEditing(null); void run(() => backend.rename(entry.path, name)); }} />
+        : <StorageEntryRow mobile={mobile} selectionMode={chosen.length > 0} entry={entry} rawPath={raw(entry)} isSelected={selected.includes(entry.path)} isActive={activeTabId === `storage-file:${projectId}:${entry.path}`}
+          onToggle={() => select(entry, true, false)} onRangeSelect={() => select(entry, true, true)}
+          onOpen={() => { if (entry.type === 'directory') navigate(entry.path); else preview(entry); }}
+          onDownload={() => void download(entry)} onCopyUrl={() => void copyUrl(entry)} />} />
+      {nextCursor && <div ref={sentinel} style={{ padding: 'var(--space-2)' }}><Button size="sm" variant="ghost" type="button" loading={loadingMore} loadingLabel={t('list.loading')} onClick={() => void loadMore()}>{t('list.loadMore')}</Button></div>}
+    </div>
+  </div>;
 }
 
 export async function uploadAndGetUrl(projectId: number, file: File): Promise<string | null> {
-  try {
-    const res = await uploadFile<{ ok: boolean; file?: StoredFile; error?: string }>(
-      `/projects/${projectId}/storage/upload`, file,
-    );
-    if (res.error || !res.file) return null;
-    const filename = res.file.key.split('/').pop() || '';
-    return `${window.location.origin}/api/projects/${projectId}/storage/${encodeURIComponent(filename)}/raw`;
-  } catch {
-    return null;
-  }
+  try { const res = await uploadFile<{ file?: StoredFile; error?: string }>(`/projects/${projectId}/storage/upload`, file); if (res.error || !res.file) return null; const filename = res.file.key.split('/').pop() || ''; return `${window.location.origin}/api/projects/${projectId}/storage/${encodeURIComponent(filename)}/raw`; } catch { return null; }
 }

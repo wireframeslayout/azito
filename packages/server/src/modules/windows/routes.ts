@@ -765,6 +765,7 @@ const windowsRoutes: FastifyPluginCallback<WindowsRouteOptions> = (fastify, opts
         return reply.status(500).send({ error: 'Window renamed, but saving its label failed' });
       }
       notifyWindowsChanged(win.serverName);
+      opts.notificationBus?.emit({ type: 'window:renamed', payload: { serverName: win.serverName, target: win.tmuxTarget, newName: name, windowId: win.id } });
       return { ok: true };
     },
   );

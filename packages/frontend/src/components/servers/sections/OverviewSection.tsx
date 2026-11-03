@@ -1,4 +1,5 @@
 import { useTranslation } from 'react-i18next';
+import { FirewallDiagnostic } from '../FirewallDiagnostic';
 import type { Server, Session } from '../../../hooks/useServerManagement';
 import type { IsolationReport } from '../../../hooks/useServerDetail';
 import type { ServerStatus, InstallStatusResponse } from '../serverSections';
@@ -248,6 +249,7 @@ export default function OverviewSection({
                 {status?.message && <span>{isAgent ? `(${status.message})` : status.message}</span>}
               </div>
             )}
+            {status?.firewall && <FirewallDiagnostic diagnostic={status.firewall} />}
           </div>
         </div>
 

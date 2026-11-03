@@ -824,6 +824,7 @@ const sessionsRoutes: FastifyPluginCallback<SessionsRouteOptions> = (fastify, op
           return reply.status(500).send({ error: 'Window renamed, but saving its label failed' });
         }
         notifySessionsChanged(request.params.name);
+        opts.notificationBus?.emit({ type: 'window:renamed', payload: { serverName: request.params.name, target, newName: name, windowId: windowRow?.id } });
         return { ok: true };
       } catch (err: unknown) {
         return replyRouteError(reply, err);
@@ -992,6 +993,7 @@ const sessionsRoutes: FastifyPluginCallback<SessionsRouteOptions> = (fastify, op
         return reply.status(500).send({ error: 'Window renamed, but saving its label failed' });
       }
       notifySessionsChanged(request.params.name);
+      opts.notificationBus?.emit({ type: 'window:renamed', payload: { serverName: request.params.name, target: muxWindowTarget(ref), newName: name, windowId: windowRow?.id } });
       return { ok: true };
     },
   );

@@ -1,3 +1,4 @@
+import { decodedTaskScript } from './taskLauncher';
 const XML_ENTITY = /&(lt|gt|quot|apos|amp);/g;
 const XML_ENTITIES: Readonly<Record<string, string>> = { lt: '<', gt: '>', quot: '"', apos: "'", amp: '&' };
 
@@ -43,22 +44,40 @@ export function hubRootOfScript(script: string): string | undefined {
   return hubRoot?.replace(new RegExp(`([${QUOTE_CHARS}])\\1`, 'g'), '$1');
 }
 
+/** Read the sole registered principal, accepting an account name or a SID. */
+export function taskPrincipalId(xml: string): string | undefined {
+  const principals = /<Principals\b[^>]*>([\s\S]*?)<\/Principals>/.exec(xml)?.[1];
+  if (!principals) return undefined;
+  const matches = [...principals.matchAll(/<Principal\b[^>]*>([\s\S]*?)<\/Principal>/g)];
+  if (matches.length !== 1) return undefined;
+  const users = [...matches[0]![1]!.matchAll(/<UserId>([^<]+)<\/UserId>/g)];
+  return users.length === 1 ? unescapeTaskXml(users[0]![1]!) : undefined;
+}
+
+/** Match a name or an independently resolved SID against the registered principal. */
+export function taskHasUserId(xml: string, userId: string, sid?: string): boolean {
+  const actual = taskPrincipalId(xml)?.toLowerCase();
+  return actual !== undefined && (actual === userId.toLowerCase() || (sid !== undefined && actual === sid.toLowerCase()));
+}
+
 /**
  * The folder a misao task starts the daemon in (its `--data` folder), read from the task definition: from the launcher script
  * (`AZITO_MISAO_ROOT`, a PowerShell literal where `'` is doubled) or from the plain command line (`--data "<root>"`). Undefined when
  * the definition has neither (not a misao task this code wrote).
  */
 export function taskMisaoRoot(xml: string): string | undefined {
-  return misaoRootOfCommandLine(unescapeTaskXml(xml));
+  const action = soleExecAction(xml);
+  return action ? misaoRootOfCommandLine(action.argumentsLine) : undefined;
 }
 
 /** {@link taskMisaoRoot} for text that is already unescaped (the `<Arguments>` lines of the task's actions, from {@link taskExecActions}). */
 export function misaoRootOfCommandLine(decoded: string): string | undefined {
   const encoded = /-EncodedCommand ([A-Za-z0-9+/=]+)/.exec(decoded)?.[1];
   if (encoded) {
-    const script = Buffer.from(encoded, 'base64').toString('utf16le');
-    const literal = /\$info\.EnvironmentVariables\['AZITO_MISAO_ROOT'\] = '((?:[^']|'')*)'/.exec(script)?.[1];
-    return literal?.replace(/''/g, "'");
+    const script = decodedTaskScript(encoded);
+    if (!script) return undefined;
+    const literal = /\$info\.EnvironmentVariables\['AZITO_MISAO_ROOT'\] = '((?:[^'‘’‚‛]|(['‘’‚‛])\2)*)'/.exec(script)?.[1];
+    return literal?.replace(/(['‘’‚‛])\1/g, '$1');
   }
   return /--data "([^"]*)"/.exec(decoded)?.[1];
 }

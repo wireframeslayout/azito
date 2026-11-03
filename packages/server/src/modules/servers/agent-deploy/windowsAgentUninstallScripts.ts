@@ -1,5 +1,6 @@
 import { powershellDialect } from '../../../shared/os/shellDialect';
 import { redactSecretText } from '../../../shared/redactSecretText';
+import { WINDOWS_PROCESS_RECORDS } from '../../../shared/os/windowsProcessInfo';
 import { PIPE_HOLDER_HELPER } from '../../../shared/os/pipeHolderHelper';
 
 /**
@@ -124,7 +125,9 @@ export const RESOLVE_LONG = [
  */
 export const USES_FOLDER = [
   ...RESOLVE_LONG,
+  ...WINDOWS_PROCESS_RECORDS,
   '$me = [Security.Principal.WindowsIdentity]::GetCurrent().User.Value',
+  '$elevated = ([Security.Principal.WindowsPrincipal][Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)',
   'function Norm($t) { if ($t) { ($t -replace \'/\', \'\\\').ToLowerInvariant() } else { \'\' } }',
   '$needles = New-Object System.Collections.ArrayList',
   'function Add-Needle($path) { if ($path) { $n = (Norm $path).TrimEnd([char]92) + [char]92; if (-not $needles.Contains($n)) { [void]$needles.Add($n) } } }',
@@ -134,9 +137,8 @@ export const USES_FOLDER = [
   'function Blind($p) { (-not $p.ExecutablePath) -or (-not $p.CommandLine) }',
   'function Matters($p) { @(\'node.exe\', \'misao.exe\', \'conhost.exe\', \'cmd.exe\', \'powershell.exe\', \'pwsh.exe\') -contains "$($p.Name)".ToLowerInvariant() }',
   'function Owner($p) {',
-  '  try { $r = Invoke-CimMethod -InputObject $p -MethodName GetOwnerSid -ErrorAction Stop } catch { return \'unknown\' }',
-  '  if ($r.ReturnValue -ne 0 -or -not $r.Sid) { return \'unknown\' }',
-  '  if ($r.Sid -eq $me) { \'mine\' } else { \'other\' }',
+  '  if (-not $p.OwnerSid) { if ($elevated) { return \'unknown\' }; return \'other\' }',
+  '  if ($p.OwnerSid -eq $me) { \'mine\' } else { \'other\' }',
   '}',
 ];
 
@@ -160,12 +162,11 @@ export function leftoverProcessesScript(root: string, home: string): string {
   return [
     `$root = ${q(root)}; $tail = ${q(tailBelow(home, root))}`,
     ...USES_FOLDER,
-    'function All { @(Get-CimInstance Win32_Process -ErrorAction Stop | Where-Object { $_.ProcessId -ne $PID }) }',
     'function Find-Left { @(All | Where-Object { Uses $_ }) }',
     '$left = Find-Left',
     'for ($i = 0; $i -lt 20 -and $left.Count -gt 0; $i++) { Start-Sleep -Milliseconds 500; $left = Find-Left }',
-    '$mineBlind = @(All | Where-Object { (Blind $_) -and -not (Uses $_) -and (Owner $_) -eq \'mine\' })',
-    '$blind = @($mineBlind | Where-Object { Matters $_ }); $hidden = @($mineBlind | Where-Object { -not (Matters $_) })',
+    '$unclear = @(All | Where-Object { (Blind $_) -and -not (Uses $_) -and (Owner $_) -eq \'mine\' })',
+    '$blind = @($unclear | Where-Object { Matters $_ }); $hidden = @($unclear | Where-Object { -not (Matters $_) -and (Owner $_) -eq \'mine\' })',
     'function Clean($t) { "$t" -replace \'[\\r\\n|]+\', \' \' }',
     'foreach ($p in $left) { Write-Output (\'LEFT|\' + $p.ProcessId + \'|\' + (Clean $p.Name) + \'|\' + (Clean $p.ExecutablePath)) }',
     'foreach ($p in $blind) { Write-Output (\'BLIND|\' + $p.ProcessId + \'|\' + (Clean $p.Name)) }',
@@ -224,11 +225,11 @@ export function misaoHolderScript(root: string, pipe: string): string {
     '$short = try { (New-Object -ComObject Scripting.FileSystemObject).GetFolder($root).ShortPath } catch { $null }',
     'Write-Output (\'FORMS|\' + (Clean (Resolve-Long $root)) + \'|\' + (Clean $short))',
     'try { $id = [AzitoPipeHolder]::ServerProcessId($pipe.Substring(9)) } catch { Write-Output (\'ERROR|\' + (Clean $_.Exception.Message)); exit 0 }',
-    '$p = Get-CimInstance Win32_Process -Filter "ProcessId = $id"',
+    '$p = Get-Process -Id $id -ErrorAction SilentlyContinue',
     'if (-not $p) { Write-Output \'ERROR|the process that serves the pipe is gone\'; exit 0 }',
     '$me = [Security.Principal.WindowsIdentity]::GetCurrent().User.Value; $owner = \'unknown\'',
-    'try { $r = Invoke-CimMethod -InputObject $p -MethodName GetOwnerSid -ErrorAction Stop; if ($r.ReturnValue -eq 0 -and $r.Sid) { $owner = if ($r.Sid -eq $me) { \'mine\' } else { \'other\' } } } catch { }',
-    'Write-Output (\'HOLDER|\' + $id + \'|\' + (Clean $p.Name) + \'|\' + $owner + \'|\' + (Clean $p.ExecutablePath))',
+    '$sid = [AzitoPipeHolder]::OwnerSid($id); if ($sid) { $owner = if ($sid -eq $me) { \'mine\' } else { \'other\' } }',
+    'Write-Output (\'HOLDER|\' + $id + \'|\' + (Clean ($p.ProcessName + \'.exe\')) + \'|\' + $owner + \'|\' + (Clean $p.Path))',
   ].join('\n');
 }
 

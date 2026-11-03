@@ -121,7 +121,11 @@
     "osLabel": "OS",
     "osUnknown": "不明",
     "osUnknownHint": "この agent の OS はまだ記録されていません（OS を記録する前に登録されたため）。agent の更新または再接続で記録されるまで、Unix として扱います。",
-    "os": { "linux": "Linux", "macos": "macOS", "windows": "Windows" },
+    "os": {
+      "linux": "Linux",
+      "macos": "macOS",
+      "windows": "Windows"
+    },
     "agentVersionLabel": "agent バージョン",
     "browserSupport": "ブラウザ実行対応",
     "supported": "対応",
@@ -131,7 +135,12 @@
     "hubVersionLabel": "Hub バージョン",
     "muxRuntimeNote": "tmux を使うときだけ有効",
     "misaoNotInstalled": "このサーバーには misao が入っていません",
-    "misaoNotInstalledSub": "セットアップの「misao をインストール」から入れられます。ハブが持っている misao をエージェント経由で送ります。"
+    "misaoNotInstalledSub": "セットアップの「misao をインストール」から入れられます。ハブが持っている misao をエージェント経由で送ります。",
+    "firewallMeta": "ネットワークプロファイル: {{profile}} · 確認: {{checkedAt}}",
+    "firewallProfileUnknown": "不明",
+    "firewall_blocked": "このエージェントに受信 Block 規則が適用されます: {{rules}}。管理者に確認を依頼してください。",
+    "firewall_missing_allow": "適用可能な受信 Allow 規則がありません。管理者にポリシーの確認を依頼してください。",
+    "firewall_unknown": "エージェントまたはファイアウォールの状態を確認できません。復旧を続けます。"
   },
   "setup": {
     "title": "セットアップ",

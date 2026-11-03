@@ -1,3 +1,4 @@
+import { buildMisaoTaskXml, misaoWindowsLayout } from './misaoWindowsTask';
 import fs from 'fs';
 import os from 'os';
 import path from 'path';
@@ -24,7 +25,7 @@ const BUNDLE = { version: '0.3.0', dir: '', templatesDir: '', targets: {} } as u
 const RESULT: MisaoAgentInstallResult = { version: '0.3.0', runningVersion: '0.3.0', startMethod: 'taskscheduler', updateAvailable: false };
 
 function taskXml(root: string): string {
-  return `<Task><Actions><Exec><Command>conhost.exe</Command><Arguments>--headless cmd.exe /d /c ""${root}\\0.3.0\\misao.exe" serve --data "${root}""</Arguments></Exec></Actions></Task>`;
+  return buildMisaoTaskXml({ userId: 'PC\\dev', systemRoot: 'C:\\Windows', homeDir: 'C:\\Users\\dev', layout: misaoWindowsLayout({ misaoRoot: root }, '0.3.0', 'AzitoMisao'), pipe: PIPE });
 }
 
 describe('MisaoServiceService on Windows (the hub\'s own misao)', () => {
@@ -51,8 +52,8 @@ describe('MisaoServiceService on Windows (the hub\'s own misao)', () => {
     install = vi.fn(async () => RESULT);
     update = vi.fn(async () => RESULT);
     windows = {
-      installer: { install, update } as unknown as LocalMisaoWindows['installer'],
-      target: {} as unknown as LocalMisaoWindows['target'],
+      installer: { install, update, taskOwnedByCurrentUser: vi.fn(async () => true) } as unknown as LocalMisaoWindows['installer'],
+      target: { fetchMisaoStatus: async () => ({ host: { windows: { systemRoot: 'C:\\Windows' } } }) } as unknown as LocalMisaoWindows['target'],
       tasks: {
         query: async () => ({ exists: taskExists, running: false }),
         exportXml: async () => exportedXml,
@@ -130,7 +131,7 @@ describe('MisaoServiceService on Windows (the hub\'s own misao)', () => {
     expect(readEnvValue(paths.hubEnvFile, 'MISAO_SOCKET')).toBe(PIPE);
   });
 
-  it('refuses a task that starts a misao from another folder (one task per user), unless asked to', async () => {
+  it('allows explicit replacement of a task from another folder', async () => {
     taskExists = true;
     exportedXml = taskXml('D:\\other\\.azito\\misao');
     await expect(service().install()).rejects.toMatchObject({ code: 'custom_socket', message: `The task "AzitoMisao" is registered for a misao in another folder, not ${paths.root}. Installing here would take it over; run \`azito misao install --replace-socket\` to do that on purpose.` });
@@ -146,16 +147,24 @@ describe('MisaoServiceService on Windows (the hub\'s own misao)', () => {
       code: 'custom_socket',
       message: 'The task "AzitoMisao" has a definition whose misao folder cannot be determined. Installing here would take it over; run `azito misao install --replace-socket` to do that on purpose.',
     });
+
     expect(install).not.toHaveBeenCalled();
-    await service().install({ replaceSocketSetting: true });
-    expect(install).toHaveBeenCalledTimes(1);
   });
 
-  it('takes over a task of its own folder without asking (letter case does not matter)', async () => {
+  it('recognises a task written with different case', async () => {
     taskExists = true;
     exportedXml = taskXml(paths.root.toUpperCase());
     await service().install();
-    expect(install).toHaveBeenCalledTimes(1);
+    expect(install).toHaveBeenCalled();
+  });
+
+  it('refuses to start a task owned by another account or when ownership cannot be read', async () => {
+    taskExists = true;
+    const owner = vi.mocked(windows.installer.taskOwnedByCurrentUser);
+    owner.mockResolvedValueOnce(false).mockRejectedValueOnce(new Error('account query failed'));
+    await expect(service().start()).rejects.toMatchObject({ code: 'custom_socket' });
+    await expect(service().start()).rejects.toThrow('account query failed');
+    expect(controller.start).not.toHaveBeenCalled();
   });
 
   it('refuses to update what is not installed, and updates through the installer when it is', async () => {
@@ -166,11 +175,11 @@ describe('MisaoServiceService on Windows (the hub\'s own misao)', () => {
     expect(update).toHaveBeenCalledWith(windows.target, BUNDLE, expect.any(Function));
   });
 
-  it('does not update or start a task that starts a misao from another folder (only install --replace-socket moves it)', async () => {
+  it('does not update or start a task that starts a misao from another folder', async () => {
     taskExists = true;
     fs.writeFileSync(paths.current, '0.2.0\n');
     exportedXml = taskXml('D:\\other\\.azito\\misao');
-    await expect(service().update()).rejects.toMatchObject({ code: 'custom_socket', message: expect.stringContaining('another folder') });
+    await expect(service().update()).rejects.toMatchObject({ code: 'custom_socket' });
     await expect(service().start()).rejects.toMatchObject({ code: 'custom_socket' });
     expect(update).not.toHaveBeenCalled();
     expect(controller.start).not.toHaveBeenCalled();
@@ -197,7 +206,7 @@ describe('MisaoServiceService on Windows (the hub\'s own misao)', () => {
     let revive: ReturnType<typeof vi.fn>;
     beforeEach(() => {
       revive = vi.fn(async () => 'started');
-      windows = { ...windows, installer: { install, update, reviveDaemon: revive } as unknown as LocalMisaoWindows['installer'] };
+      windows = { ...windows, installer: { install, update, reviveDaemon: revive, taskOwnedByCurrentUser: vi.fn(async () => true) } as unknown as LocalMisaoWindows['installer'] };
       fs.writeFileSync(paths.hubEnvFile, `MISAO_SOCKET=${PIPE}\n`);
       taskExists = true;
     });

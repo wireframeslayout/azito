@@ -1,3 +1,4 @@
+import { configDirForSession } from './windowConfigDir';
 import type { Window, PaneLayout } from '../windows/Window';
 import type { ITaskRepository } from '../tasks/Task';
 import type { MuxPaneInfo } from '@azito/shared';
@@ -322,9 +323,10 @@ export class WindowSessionResolver {
     psEntries: ProcessEntry[] | null,
     rootPids: number[],
   ): Promise<WindowSessionResolution | null> {
-    const windowLinked = await this.resolveViaWindow(sources, window);
-    if (windowLinked && await this.passesSessionGate(sources, gate, windowLinked.agentType, windowLinked.sessionId, EXPLICIT_LINK_SKEW_MS, psEntries, rootPids)) {
-      const pane = await this.resolvePaneWithDetection(server, sources, window, windowPanes, windowLinked.sessionId, windowLinked.agentType, psEntries);
+    const linkedSources = this.sourceProvider.forServer(server, configDirForSession(window, window.agentSessionId)) ?? sources;
+    const windowLinked = await this.resolveViaWindow(linkedSources, window);
+    if (windowLinked && await this.passesSessionGate(linkedSources, gate, windowLinked.agentType, windowLinked.sessionId, EXPLICIT_LINK_SKEW_MS, psEntries, rootPids)) {
+      const pane = await this.resolvePaneWithDetection(server, linkedSources, window, windowPanes, windowLinked.sessionId, windowLinked.agentType, psEntries);
       if (pane) return { resolved: true, agentType: windowLinked.agentType, sessionId: windowLinked.sessionId, ...pane };
     }
 
@@ -410,9 +412,6 @@ export class WindowSessionResolver {
   async getActivityStatus(window: Window, snapshot?: ActivityProbeSnapshot): Promise<WindowActivityProbeResult> {
     const server = this.serverRepo.findByName(window.serverName);
     if (!server || server.type !== 'local') return OFFLINE_PROBE_RESULT;
-    const sources = this.sourceProvider.forServer(server);
-    if (!sources) return OFFLINE_PROBE_RESULT;
-
     const windowPanes = await this.getWindowPanes(server, window, snapshot?.allPanes);
     const detection = await this.detectWindowAgentProcess(server, windowPanes, snapshot?.psEntries);
     if (!detection || detection.processStartMs === null) return OFFLINE_PROBE_RESULT;
@@ -420,6 +419,8 @@ export class WindowSessionResolver {
     const sessionId = window.agentSessionId
       ?? (window.taskId !== null ? this.taskRepo.findById(window.taskId)?.agentSessionId ?? null : null);
     if (!sessionId) return IDLE_PROBE_RESULT;
+    const sources = this.sourceProvider.forServer(server, configDirForSession(window, sessionId));
+    if (!sources) return OFFLINE_PROBE_RESULT;
 
     const agentType = window.workerType
       ?? (detection.agentTypes.size === 1 ? [...detection.agentTypes][0] : null);
