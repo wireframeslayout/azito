@@ -40,10 +40,8 @@
   },
   "storage": {
     "uploadFile": "Upload file",
-    "emptyMessage": "No files yet. Drag & drop or click + to upload.",
     "download": "Download",
     "copyUrl": "Copy API URL",
-    "deleteFile": "Delete",
     "copiedUrl": "API URL copied (for agents — requires an auth token)",
     "dropToUpload": "Drop to upload"
   },

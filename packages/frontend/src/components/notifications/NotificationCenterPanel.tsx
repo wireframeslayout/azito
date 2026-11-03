@@ -15,7 +15,7 @@ interface NotificationCenterPanelProps {
 
 export const NOTIFICATION_PANEL_WIDTH = 340;
 
-function NotificationRow({ notification, onSelect }: { notification: AppNotification; onSelect: () => void }) {
+export function NotificationRow({ notification, onSelect }: { notification: AppNotification; onSelect: () => void }) {
   const { t } = useTranslation('notifications');
   return (
     <button
@@ -41,6 +41,7 @@ function NotificationRow({ notification, onSelect }: { notification: AppNotifica
         <span style={{ display: 'block', fontSize: 'var(--font-sm)', fontWeight: notification.read ? 400 : 600, lineHeight: 1.4 }}>
           {notification.messageKey ? t(notification.messageKey, notification.messageParams) : (notification.title ?? '')}
         </span>
+        {notification.body && <span style={{ display: 'block', fontSize: 'var(--font-xs)', color: 'var(--text-dim)', overflowWrap: 'anywhere', whiteSpace: 'pre-wrap' }}>{notification.body}</span>}
         <span style={{ display: 'block', fontSize: 'var(--font-xs)', color: 'var(--text-dim)', marginTop: 2 }}>
           {formatRelativeTime(notification.createdAt)}
         </span>

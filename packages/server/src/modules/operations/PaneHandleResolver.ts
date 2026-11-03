@@ -82,6 +82,10 @@ export class PaneHandleResolver {
     });
   }
 
+  invalidatePane(serverName: string, handle: string): void {
+    this.cache.delete(cacheKey(serverName, handle));
+  }
+
   invalidate(serverName: string): void {
     const prefix = `${serverName}::`;
     for (const key of this.cache.keys()) {

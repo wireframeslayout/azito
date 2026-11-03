@@ -1,3 +1,4 @@
+import { decodedTaskScript } from '../src/shared/os/taskScheduler/taskLauncher';
 import { spawnSync } from 'child_process';
 import * as fs from 'fs';
 import * as os from 'os';
@@ -265,7 +266,7 @@ async function main(): Promise<void> {
     assert(/<LogonTrigger>/.test(taskXml.output) && /<RestartOnFailure>/.test(taskXml.output), 'the misao task must be a logon task that restarts on failure', taskXml.output);
     // The prefix has spaces and parentheses, which conhost.exe re-reads wrongly in a command line: the task runs a launcher script (-EncodedCommand), and the paths are in it, not in the command line.
     assert(/conhost\.exe/i.test(taskXml.output) && /--headless/.test(taskXml.output) && /-EncodedCommand/.test(taskXml.output), 'the misao task must run the launcher script under conhost.exe --headless', taskXml.output);
-    const launcher = Buffer.from(/-EncodedCommand ([A-Za-z0-9+/=]+)/.exec(taskXml.output)?.[1] ?? '', 'base64').toString('utf16le');
+    const launcher = decodedTaskScript(/-EncodedCommand ([A-Za-z0-9+/=]+)/.exec(taskXml.output)?.[1] ?? '') ?? '';
     // The folder is named in its real spelling (the prefix was given with an 8.3 short name, RUNNER~1), the one every process of this host derives the pipe from.
     const realRoot = fs.realpathSync.native(misaoRoot);
     assert(launcher.toLowerCase().includes(path.join(realRoot, misaoVersion, 'misao.exe').toLowerCase()) && launcher.toLowerCase().includes(`'${realRoot.toLowerCase()}'`), 'the launcher script must name this release\'s misao.exe and the folder', launcher);

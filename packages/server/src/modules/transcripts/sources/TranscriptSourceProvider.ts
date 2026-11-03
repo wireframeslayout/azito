@@ -2,6 +2,9 @@ import type { ServerConfig } from '../../servers/Server';
 import type { AgentTransport } from '../../servers/transport/AgentTransport';
 import { AgentTranscriptSource } from './AgentTranscriptSource';
 import type { TranscriptSource } from './TranscriptSource';
+import { ClaudeTranscriptSource } from './ClaudeTranscriptSource';
+import { LocalTranscriptSource } from './LocalTranscriptSource';
+import path from 'node:path';
 
 export type TranscriptServer = Pick<ServerConfig, 'name' | 'type' | 'host' | 'agentPort' | 'agentToken' | 'muxRuntime'>;
 
@@ -14,7 +17,7 @@ export interface TranscriptSourceProvider {
    * そのサーバーの会話ログを読む TranscriptSource 群。会話ログを読めないサーバー種別（ssh）は null。
    * エージェントサーバーのソースはエージェントに届かないとき（読み取り時に）AgentUnreachableError を投げる。
    */
-  forServer(server: TranscriptServer): TranscriptSource[] | null;
+  forServer(server: TranscriptServer, claudeConfigDir?: string | null): TranscriptSource[] | null;
 }
 
 /** AgentTransport を引く口（TransportFactory.getAgentTransport）。 */
@@ -32,6 +35,7 @@ export interface AgentTransportLookup {
  * 与えない（docs/{ja,en}/isolated-execution.md）。
  */
 export class HostTranscriptSourceProvider implements TranscriptSourceProvider {
+  private readonly configuredLocalSources = new Map<string, TranscriptSource[]>();
   private readonly agentSources = new Map<string, { transport: AgentTransport; sources: TranscriptSource[] }>();
 
   constructor(
@@ -39,8 +43,17 @@ export class HostTranscriptSourceProvider implements TranscriptSourceProvider {
     private readonly transports: AgentTransportLookup,
   ) {}
 
-  forServer(server: TranscriptServer): TranscriptSource[] | null {
-    if (server.type === 'local') return this.localSources;
+  forServer(server: TranscriptServer, claudeConfigDir?: string | null): TranscriptSource[] | null {
+    if (server.type === 'local') {
+      if (!claudeConfigDir || process.platform === 'win32') return this.localSources;
+      let sources = this.configuredLocalSources.get(claudeConfigDir);
+      if (!sources) {
+        const claude = new LocalTranscriptSource(new ClaudeTranscriptSource(path.join(claudeConfigDir, 'projects')));
+        sources = this.localSources.map((source) => source.agentType === 'claude' ? claude : source);
+        this.configuredLocalSources.set(claudeConfigDir, sources);
+      }
+      return sources;
+    }
     if (server.type !== 'agent') return null;
 
     // TransportFactory はトークンや mux runtime が変わると AgentTransport を作り直す。別の transport に

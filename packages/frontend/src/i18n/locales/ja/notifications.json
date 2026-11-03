@@ -26,5 +26,11 @@
   "toast": {
     "dismissAriaLabel": "通知を閉じる"
   },
-  "fallbackTaskTitle": "タスク #{{taskId}}"
+  "fallbackTaskTitle": "タスク #{{taskId}}",
+  "firewall": {
+    "title": "Windows ファイアウォール: {{serverName}}",
+    "blocked": "受信 Block 規則がエージェントに適用されます: {{rules}}。",
+    "missing_allow": "適用可能な受信 Allow 規則がありません。",
+    "unknown": "ポリシーを確認できません。"
+  }
 }
