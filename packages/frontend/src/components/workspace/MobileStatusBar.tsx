@@ -1,20 +1,19 @@
-import type { ActivityTitleData } from '../../lib/windowDisplay';
 import { useMemo, useRef, useState, type CSSProperties } from 'react';
 import { useTranslation } from 'react-i18next';
-import { useActiveWindowRows } from '../../hooks/useActiveWindowRows';
 import type { ActiveWindowRow } from '../../hooks/useActiveWindowRows';
 import { useClickOutside } from '../../hooks/useClickOutside';
 import { BrailleSpinner, BlockedDot, FinishedIndicator } from '../ui/WindowActivityIndicator';
 import { formatRelativeTime } from '../../utils/time';
 import { openActivityTarget } from '../../lib/activityOpen';
+import { openLookoutItem } from '../../lib/lookoutOpen';
 import { useOpenTerminalTarget } from '../../hooks/useTerminalTargetOpener';
 import type { ConnectPaneFn } from '../../lib/terminalRef';
-import { groupRunningRows } from '../../lib/activityPillLogic';
+import { useLookout } from '../../hooks/useLookout';
+import type { LookoutItem } from '../../lib/lookoutSummary';
 import { MOBILE_STATUS_BAR_HEIGHT } from '../../lib/mobileChrome';
 import { IconButton } from '../ui/IconButton';
 import { Icon } from '../ui/Icon';
 import { useAgentActivity } from '../../hooks/useAgentActivity';
-import type { Task } from '../../pages/workspace/types';
 import { HealthDot } from '../statusbar/HealthDot';
 import { ResourceMeter } from '../statusbar/ResourceMeter';
 import { healthReasonText } from '../statusbar/ResourceDropdown';
@@ -31,20 +30,8 @@ import { ServerHealthSheet } from './ServerHealthSheet';
 
 
 interface MobileStatusBarProps {
-  titleData: ActivityTitleData;
-  allTasks: Task[];
   openTask: (taskId: number, title: string, projectId?: number) => void;
   connectPane: ConnectPaneFn;
-}
-
-interface WorkingGroup {
-  key: string;
-  taskId?: number;
-  projectId?: number;
-  title: string;
-  meta?: string;
-  isBlocked: boolean;
-  row: ActiveWindowRow;
 }
 
 const rowButtonStyle: CSSProperties = {
@@ -82,10 +69,10 @@ const rowTitleStyle: CSSProperties = {
   whiteSpace: 'nowrap',
 };
 
-export function MobileStatusBar({ titleData, allTasks, openTask, connectPane }: MobileStatusBarProps) {
+export function MobileStatusBar({ openTask, connectPane }: MobileStatusBarProps) {
   const openTerminal = useOpenTerminalTarget(connectPane);
-  const { t } = useTranslation(['workspace', 'common']);
-  const { rows, historyCount } = useActiveWindowRows(titleData);
+  const { t } = useTranslation(['workspace', 'common', 'lookout']);
+  const { sections, rows, historyCount } = useLookout();
   const [open, setOpen] = useState(false);
   const { markFinishedSeen, dismissFinished, clearSeenFinished, retention } = useAgentActivity();
   const [historyOpen, setHistoryOpen] = useState(false);
@@ -109,22 +96,7 @@ export function MobileStatusBar({ titleData, allTasks, openTask, connectPane }: 
   const worstMemUsedPercent = worstMeasurement ? 100 - worstMeasurement.memAvailablePercent : null;
   const memTextColor = worstHealth === 'critical' ? 'var(--danger)' : worstHealth === 'warning' ? 'var(--warning)' : 'var(--text-dim)';
 
-  const taskById = useMemo(() => new Map(allTasks.map((tk) => [tk.id, tk])), [allTasks]);
-
-  const workingGroups = useMemo<WorkingGroup[]>(() => {
-    return groupRunningRows(rows).map(({ groupKey, isBlocked, representativeRow: row }) => {
-      const task = row.taskId != null ? taskById.get(row.taskId) : undefined;
-      return {
-        key: groupKey,
-        taskId: row.taskId,
-        projectId: row.projectId,
-        title: row.title,
-        meta: task ? t(`common:status.${task.status}`) : undefined,
-        isBlocked,
-        row,
-      };
-    });
-  }, [rows, taskById, t]);
+  const workingGroups = [...sections.attention, ...sections.active];
 
   const finishedRows = useMemo(() => rows.filter((r) => r.status === 'finished'), [rows]);
 
@@ -132,7 +104,7 @@ export function MobileStatusBar({ titleData, allTasks, openTask, connectPane }: 
   const historyRows = finishedRows.filter((r) => r.seenAt != null);
   const unreadFinishedCount = unreadRows.length;
 
-  const workingCount = workingGroups.length;
+  const workingCount = workingGroups.filter((group) => group.activeWindows > 0).length;
 
   const handleToggle = () => {
     if (open) {
@@ -143,13 +115,8 @@ export function MobileStatusBar({ titleData, allTasks, openTask, connectPane }: 
     }
   };
 
-  const handleWorkingRowOpen = (group: WorkingGroup) => {
-    openActivityTarget(
-      { taskId: group.taskId, serverName: group.row.serverName, windowId: group.row.windowId, target: group.row.target, projectId: group.projectId },
-      group.title,
-      openTask,
-      openTerminal,
-    );
+  const handleWorkingRowOpen = (group: LookoutItem) => {
+    openLookoutItem(group, openTask, openTerminal);
     closePanel();
   };
 
@@ -186,28 +153,28 @@ export function MobileStatusBar({ titleData, allTasks, openTask, connectPane }: 
             padding: 'var(--space-2)',
           }}
         >
-          {workingCount > 0 && (
-            <section>
-              <div style={sectionHeaderStyle}>{t('workspace:activityPill.workingSection', { count: workingCount })}</div>
-              {workingGroups.map((group) => (
+          {[sections.attention, sections.active].map((items, index) => items.length > 0 && (
+            <section key={index}>
+              <div style={sectionHeaderStyle}>{index === 0 ? `${t('lookout:sections.attention')} (${items.length})` : t('workspace:activityPill.workingSection', { count: items.length })}</div>
+              {items.map((group) => (
                 <button
                   key={group.key}
                   type="button"
-                  className={`row-hover${!group.isBlocked ? ' aw-row-working' : ''}`}
+                  className={`row-hover${group.status === 'working' ? ' aw-row-working' : ''}`}
                   onClick={() => handleWorkingRowOpen(group)}
                   style={rowButtonStyle}
                 >
-                  {group.isBlocked ? <BlockedDot /> : <BrailleSpinner />}
+                  {group.status !== 'working' ? <BlockedDot /> : <BrailleSpinner />}
                   <span style={rowTitleStyle}>{group.title}</span>
-                  {group.meta && (
+                  {group.status !== 'working' && (
                     <span style={{ flexShrink: 0, fontSize: 'var(--font-2xs)', color: 'var(--text-dim)' }}>
-                      {group.meta}
+                      {t(`lookout:status.${group.status}`)}
                     </span>
                   )}
                 </button>
               ))}
             </section>
-          )}
+          ))}
           {unreadRows.length > 0 && (
             <section>
               <div style={sectionHeaderStyle}>{t('workspace:activityPill.finishedSection', { count: unreadRows.length })}</div>
@@ -235,7 +202,7 @@ export function MobileStatusBar({ titleData, allTasks, openTask, connectPane }: 
               ))}
             </section>
           )}
-          {workingCount === 0 && finishedRows.length === 0 && (
+          {workingGroups.length === 0 && finishedRows.length === 0 && (
             <div style={{ padding: '12px 8px', textAlign: 'center', color: 'var(--text-dim)', fontSize: 'var(--font-sm)' }}>
               {t('workspace:activityPill.empty')}
             </div>

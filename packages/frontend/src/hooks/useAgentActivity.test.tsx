@@ -15,7 +15,8 @@ const running: AgentActivityPayload = { serverName: 'local', target: 's:1', runn
 let pending: Array<{ resolve: (value: AgentActivityPayload[]) => void; reject: (reason: Error) => void }>;
 function View() {
   const activity = useAgentActivity();
-  return <><output>{JSON.stringify({ entries: [...activity.entries.values()], finished: activity.finishedEntries, indicator: activity.windowIndicator('local', 's:1') })}</output>
+  return <><output>{JSON.stringify({ entries: [...activity.entries.values()], finished: activity.finishedEntries, indicator: activity.windowIndicator('local', 's:1'), snapshotStatus: activity.snapshotStatus })}</output>
+    <button onClick={() => activity.retrySnapshot()}>retry</button>
     <button onClick={() => activity.markFinishedSeen('local', 's:1')}>seen</button>
     <button onClick={() => activity.setRetention({ maxCount: 0, retentionMs: 3600000 })}>zero</button></>;
 }
@@ -137,6 +138,28 @@ it('marks an unread completion when focus and the event change together', async 
   });
   expect(state().finished[0].seenAt).toEqual(expect.any(Number));
   vi.restoreAllMocks();
+});
+
+
+it('exposes failure and retries while preserving events received during the retry', async () => {
+  mount();
+  expect(state().snapshotStatus).toBe('loading');
+  send(running);
+  await act(async () => pending[0].reject(new Error('offline')));
+  expect(state()).toMatchObject({ snapshotStatus: 'error', entries: [{ target: 's:1' }] });
+  act(() => screen.getByText('retry').click());
+  expect(state().snapshotStatus).toBe('loading');
+  send({ ...running, status: 'blocked' });
+  await resolve(1, [running]);
+  expect(state()).toMatchObject({ snapshotStatus: 'ready', entries: [{ status: 'blocked' }] });
+});
+
+it('ignores failure from an older request after a retry succeeds', async () => {
+  mount();
+  act(() => screen.getByText('retry').click());
+  await resolve(1, [running]);
+  await act(async () => pending[0].reject(new Error('offline')));
+  expect(state()).toMatchObject({ snapshotStatus: 'ready', entries: [{ target: 's:1' }] });
 });
 
 it('shows rename in active rows without an activity transition, including during snapshot loading', async () => {

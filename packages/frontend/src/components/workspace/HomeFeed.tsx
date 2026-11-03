@@ -1,14 +1,13 @@
-import type { ActivityTitleData } from '../../lib/windowDisplay';
 import { useMemo } from 'react';
 import { useTranslation } from 'react-i18next';
 import { Icon } from '../ui/Icon';
 import { Chip, WindowActivityIndicator, Button } from '../ui';
-import { useActiveWindowRows } from '../../hooks/useActiveWindowRows';
-import type { ActiveWindowRow } from '../../hooks/useActiveWindowRows';
+import { useLookout } from '../../hooks/useLookout';
+import type { LookoutItem } from '../../lib/lookoutSummary';
+import { LookoutSection } from '../lookout/LookoutSection';
 import { formatRelativeTime } from '../../utils/time';
-import { openActivityTarget } from '../../lib/activityOpen';
+import { openLookoutItem } from '../../lib/lookoutOpen';
 import { useOpenTerminalTarget } from '../../hooks/useTerminalTargetOpener';
-import type { Task } from '../../pages/workspace/types';
 import { getProjectColorFallback } from '../../pages/workspace/types';
 
 // タブ未選択時のホーム（Issue #69 Phase F-2）。「要対応」（質問待ち/承認待ちタスク）と
@@ -23,29 +22,8 @@ interface ProjectSummary {
   color?: string;
 }
 
-const ATTENTION_STATUSES = new Set(['waiting_input', 'pending_approval']);
-
-interface AttentionEntry {
-  task: Task;
-  projectId?: number;
-  updatedAtMs: number;
-}
-
-interface ActiveGroupEntry {
-  key: string;
-  taskId?: number;
-  title: string;
-  projectId?: number;
-  totalWindows: number;
-  activeWindows: number;
-  windowNames: string[];
-  hasBlocked: boolean;
-  primaryRow: ActiveWindowRow;
-}
 
 interface HomeFeedProps {
-  titleData: ActivityTitleData;
-  allTasks: Task[];
   allProjects: ProjectSummary[];
   openTask: (taskId: number, title: string, projectId?: number) => void;
   connectPane: (refOrServerName: import('../../lib/terminalRef').TerminalRef | string, targetOrProjectId?: string | number, projectId?: number) => void;
@@ -54,111 +32,37 @@ interface HomeFeedProps {
   onAddWindow: () => void;
 }
 
-function statusLabelKey(status: string): string {
-  return status === 'pending_approval' ? 'pendingApproval' : 'waitingInput';
-}
-
-export default function HomeFeed({ titleData, allTasks, allProjects, openTask, connectPane, onAddWindow }: HomeFeedProps) {
+export default function HomeFeed({ allProjects, openTask, connectPane, onAddWindow }: HomeFeedProps) {
   const openTerminal = useOpenTerminalTarget(connectPane);
-  const { t } = useTranslation(['workspace', 'common']);
-  const { rows } = useActiveWindowRows(titleData);
+  const { t } = useTranslation(['workspace', 'common', 'lookout']);
+  const { sections } = useLookout();
 
   const projectById = useMemo(() => new Map(allProjects.map((p) => [p.id, p])), [allProjects]);
-  const taskById = useMemo(() => new Map(allTasks.map((tk) => [tk.id, tk])), [allTasks]);
-
-  const attentionEntries = useMemo<AttentionEntry[]>(() => {
-    return allTasks
-      .filter((tk) => ATTENTION_STATUSES.has(tk.status))
-      .map((task) => ({ task, projectId: task.projectId, updatedAtMs: new Date(task.updatedAt).getTime() }))
-      .sort((a, b) => b.updatedAtMs - a.updatedAtMs);
-  }, [allTasks]);
-
-  const activeGroups = useMemo<ActiveGroupEntry[]>(() => {
-    const map = new Map<string, ActiveGroupEntry>();
-    for (const row of rows) {
-      if (row.status !== 'running') continue;
-      const task = row.taskId != null ? taskById.get(row.taskId) : undefined;
-      const groupKey = row.taskId != null ? `task:${row.taskId}` : `window:${row.key}`;
-      const windowName = row.title;
-      let group = map.get(groupKey);
-      if (!group) {
-        group = {
-          key: groupKey,
-          taskId: row.taskId,
-          title: windowName,
-          projectId: row.projectId ?? task?.projectId,
-          totalWindows: task?.windows?.length ?? 0,
-          activeWindows: 0,
-          windowNames: [],
-          hasBlocked: false,
-          primaryRow: row,
-        };
-        map.set(groupKey, group);
-      }
-      group.activeWindows += 1;
-      group.windowNames.push(windowName);
-      if (row.activityStatus === 'blocked') group.hasBlocked = true;
-      // 「配下ウィンドウ」に稼働中ウィンドウが割り当てられている場合、少なくともその件数を分母に含める
-      if (group.totalWindows < group.activeWindows) group.totalWindows = group.activeWindows;
-    }
-    return Array.from(map.values());
-  }, [rows, taskById]);
-
-  const handleAttentionClick = (entry: AttentionEntry) => {
-    openTask(entry.task.id, entry.task.title, entry.projectId);
-  };
-
-  const handleActiveGroupClick = (group: ActiveGroupEntry) => {
-    openActivityTarget(
-      { taskId: group.taskId, windowId: group.primaryRow.windowId, serverName: group.primaryRow.serverName, target: group.primaryRow.target, projectId: group.projectId },
-      group.title,
-      openTask,
-      openTerminal,
-    );
-  };
+  const attentionEntries = sections.attention;
+  const handleItemClick = (item: LookoutItem) => openLookoutItem(item, openTask, openTerminal);
 
   return (
     <div style={{ height: '100%', overflowY: 'auto', display: 'flex', justifyContent: 'center' }}>
       <div style={{ width: '100%', maxWidth: 720, padding: 'var(--space-4) var(--space-3)', display: 'flex', flexDirection: 'column', gap: 'var(--space-4)' }}>
-        {attentionEntries.length > 0 && (
-          <FeedSection title={t('workspace:home.needsAttention')} count={attentionEntries.length}>
-            {attentionEntries.map((entry) => (
-              <AttentionCard
-                key={entry.task.id}
-                entry={entry}
-                project={entry.projectId != null ? projectById.get(entry.projectId) : undefined}
-                onClick={() => handleAttentionClick(entry)}
-                t={t}
-              />
-            ))}
-          </FeedSection>
-        )}
-
-        <FeedSection title={t('workspace:home.active')} count={activeGroups.length}>
-          {activeGroups.length > 0 ? (
-            activeGroups.map((group) => (
-              <ActiveGroupCard
-                key={group.key}
-                group={group}
-                project={group.projectId != null ? projectById.get(group.projectId) : undefined}
-                onClick={() => handleActiveGroupClick(group)}
-                t={t}
-              />
-            ))
-          ) : (
-            <div style={{
-              display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 'var(--space-3)',
-              padding: 'var(--space-5) var(--space-4)', background: 'var(--bg-card)', borderRadius: 'var(--radius-lg)',
-              textAlign: 'center',
-            }}>
-              <span style={{ color: 'var(--text-dim)', fontSize: 'var(--font-md)' }}>{t('workspace:home.noActive')}</span>
-              <Button size="sm" onClick={onAddWindow}>
-                <Icon name="plus" size={14} />
-                {t('workspace:windows.addWindow')}
-              </Button>
-            </div>
-          )}
-        </FeedSection>
+        <section aria-label={t('lookout:title')}>
+          <div style={{ color: 'var(--text-dim)', fontSize: 'var(--font-xs)', fontWeight: 600 }}>{t('lookout:title')}</div>
+          <div style={{ display: 'flex', gap: 'var(--space-3)', marginTop: 'var(--space-2)', color: 'var(--text)', fontSize: 'var(--font-sm)' }}>
+            <span>{t('lookout:counts.attention')}: {sections.counts.attention}</span>
+            <span>{t('lookout:counts.active')}: {sections.counts.active}</span>
+          </div>
+        </section>
+        <LookoutSection name="attention" items={attentionEntries} renderItem={(entry) => (
+          <AttentionCard key={entry.key} entry={entry}
+            project={entry.projectId != null ? projectById.get(entry.projectId) : undefined}
+            onClick={() => handleItemClick(entry)} t={t} />
+        )} />
+        <LookoutSection name="active" items={sections.active} renderItem={(item) => <ActiveGroupCard key={item.key} group={item}
+            project={item.projectId != null ? projectById.get(item.projectId) : undefined}
+            onClick={() => handleItemClick(item)} t={t} />} empty={<div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 'var(--space-3)',
+          padding: 'var(--space-5) var(--space-4)', background: 'var(--bg-card)', borderRadius: 'var(--radius-lg)', textAlign: 'center' }}>
+          <span style={{ color: 'var(--text-dim)', fontSize: 'var(--font-md)' }}>{t('workspace:home.noActive')}</span>
+          <Button size="sm" onClick={onAddWindow}><Icon name="plus" size={14} />{t('workspace:windows.addWindow')}</Button>
+        </div>} />
       </div>
 
       <style>{`
@@ -170,23 +74,6 @@ export default function HomeFeed({ titleData, allTasks, allProjects, openTask, c
         }
       `}</style>
     </div>
-  );
-}
-
-function FeedSection({ title, count, children }: { title: string; count: number; children: React.ReactNode }) {
-  return (
-    <section>
-      <div style={{
-        fontSize: 'var(--font-xs)', fontWeight: 600, textTransform: 'uppercase', letterSpacing: 0.5,
-        color: 'var(--text-dim)', padding: '0 4px 8px', display: 'flex', alignItems: 'center', gap: 6,
-      }}>
-        <span>{title}</span>
-        <span style={{ fontWeight: 400, fontSize: 'var(--font-2xs)', background: 'var(--bg)', padding: '1px 6px', borderRadius: 'var(--radius-md)' }}>{count}</span>
-      </div>
-      <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
-        {children}
-      </div>
-    </section>
   );
 }
 
@@ -202,7 +89,7 @@ function ProjectMeta({ project }: { project?: ProjectSummary }) {
 }
 
 interface AttentionCardProps {
-  entry: AttentionEntry;
+  entry: LookoutItem;
   project?: ProjectSummary;
   onClick: () => void;
   t: (key: string, opts?: Record<string, unknown>) => string;
@@ -222,23 +109,23 @@ function AttentionCard({ entry, project, onClick, t }: AttentionCardProps) {
     >
       <div style={{ minWidth: 0, flex: 1 }}>
         <div style={{ fontSize: 'var(--font-md)', fontWeight: 600, color: 'var(--text)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-          {entry.task.title}
+          {entry.title}
         </div>
         <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginTop: 3, fontSize: 'var(--font-xs)', color: 'var(--text-dim)', minWidth: 0 }}>
           <ProjectMeta project={project} />
           {project && <span aria-hidden="true">·</span>}
-          <span style={{ flexShrink: 0 }}>{formatRelativeTime(entry.updatedAtMs)}</span>
+          <span style={{ flexShrink: 0 }}>{entry.task && formatRelativeTime(new Date(entry.task.updatedAt).getTime())}</span>
         </div>
       </div>
       <Chip tone="orange" style={{ flexShrink: 0 }}>
-        {t(`common:status.${statusLabelKey(entry.task.status)}`)}
+        {t(`lookout:status.${entry.status}`)}
       </Chip>
     </button>
   );
 }
 
 interface ActiveGroupCardProps {
-  group: ActiveGroupEntry;
+  group: LookoutItem;
   project?: ProjectSummary;
   onClick: () => void;
   t: (key: string, opts?: Record<string, unknown>) => string;

@@ -65,6 +65,8 @@ export type ActivityIndicator = 'working' | 'blocked' | 'finished' | null;
 
 interface AgentActivityContextValue {
   entries: Map<string, AgentActivityInfo>;
+  snapshotStatus: 'loading' | 'ready' | 'error';
+  retrySnapshot: () => void;
   isRunning: (serverName: string, target: string) => boolean;
   shouldShowActivity: (serverName: string, target: string) => boolean;
   shouldShowTaskActivity: (taskId: number) => boolean;
@@ -93,6 +95,8 @@ interface AgentActivityContextValue {
 
 const AgentActivityContext = createContext<AgentActivityContextValue>({
   entries: new Map(),
+  snapshotStatus: 'loading',
+  retrySnapshot: () => {},
   isRunning: () => false,
   shouldShowActivity: () => false,
   shouldShowTaskActivity: () => false,
@@ -209,6 +213,7 @@ export function AgentActivityProvider({ children }: { children: React.ReactNode 
   // AgentActivityMonitor が行う。完了表示には最後の表示メタデータを保持する。
   const [entries, setEntries] = useState<Map<string, AgentActivityInfo>>(new Map());
   const entriesRef = useRef(entries);
+  const [snapshotStatus, setSnapshotStatus] = useState<'loading' | 'ready' | 'error'>('loading');
   const { activeTabId, focusedTarget } = useWorkspaceTargets();
   const browserFocused = useBrowserFocused();
   const [retention, setRetentionState] = useState(loadFinishedRetention);
@@ -242,6 +247,7 @@ export function AgentActivityProvider({ children }: { children: React.ReactNode 
   const fetchSnapshot = () => {
     const generation = ++snapshotGeneration.current;
     pendingEvents.current = [];
+    setSnapshotStatus('loading');
     pendingRenames.current = [];
     api<AgentActivitySnapshotEntry[]>('/agent-activity')
       .then((snapshot) => {
@@ -262,9 +268,13 @@ export function AgentActivityProvider({ children }: { children: React.ReactNode 
         pendingRenames.current = null;
         entriesRef.current = next;
         setEntries(next);
+        setSnapshotStatus('ready');
       })
       .catch(() => {
-        if (generation === snapshotGeneration.current) { pendingEvents.current = null; pendingRenames.current = null; }
+        if (generation !== snapshotGeneration.current) return;
+        pendingEvents.current = null;
+        pendingRenames.current = null;
+        setSnapshotStatus('error');
       });
   };
 
@@ -431,6 +441,8 @@ export function AgentActivityProvider({ children }: { children: React.ReactNode 
     <AgentActivityContext.Provider
       value={{
         entries,
+        snapshotStatus,
+        retrySnapshot: fetchSnapshot,
         isRunning,
         shouldShowActivity,
         shouldShowTaskActivity,
