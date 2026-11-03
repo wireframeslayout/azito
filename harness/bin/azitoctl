@@ -21,6 +21,8 @@ Usage:
   azitoctl questions --turn <token> <questions_json>
   azitoctl fail      --turn <token> --reason <text>
   azitoctl progress  --turn <token>
+  azitoctl whoami [--json]
+  azitoctl send --window <ID> [--stdin | <text>]
 EOF
   exit 2
 }
@@ -35,9 +37,24 @@ require_value() {
 # ── サブコマンド ──
 SUBCOMMAND="${1:-}"
 case "$SUBCOMMAND" in
+  whoami|send)
+    MESSAGING_ARGS=("$@")
+    ;;
   complete|questions|fail|progress) shift ;;
   *) usage_exit ;;
 esac
+
+# Messaging uses the same URL profile but a task or operator credential.
+if [[ "$SUBCOMMAND" == whoami || "$SUBCOMMAND" == send ]]; then
+  ENV_FILE="$HOME/.azito/azitoctl${AZITO_PREFIX:+-$AZITO_PREFIX}.env"
+  if [[ -z "${AZITO_URL:-}" && -f "$ENV_FILE" ]]; then
+    # shellcheck disable=SC1090
+    source "$ENV_FILE"
+  fi
+  export AZITO_URL="${AZITO_URL:-}" AZITO_SERVER_NAME="${AZITO_SERVER_NAME:-}"
+  SCRIPT_DIR="$(cd "$(dirname "$(node -p 'require("node:fs").realpathSync(process.argv[1])' "${BASH_SOURCE[0]}")")" && pwd)"
+  exec node "$SCRIPT_DIR/azitoctl-messaging.cjs" "${MESSAGING_ARGS[@]}"
+fi
 
 # ── 引数パース ──
 TURN_TOKEN=""

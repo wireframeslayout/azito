@@ -127,6 +127,11 @@ describe('TmuxClient.sendLiteralText', () => {
     expect(chunks.every((chunk) => Buffer.byteLength(chunk, 'utf8') <= 500)).toBe(true);
   });
 
+  it('reports a failed Enter command', async () => {
+    const client = makeClient(async () => ({ stdout: '', stderr: 'failed', code: 1 }));
+    await expect(client.submitInputByHandle(srv, asPaneHandle('%1'))).rejects.toThrow('Unable to submit message');
+  });
+
   it('escapes a trailing semicolon in short literal keys', async () => {
     const calls: string[][] = [];
     const client = makeClient(async (args) => { calls.push(args); return { stdout: '', stderr: '', code: 0 }; });

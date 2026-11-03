@@ -100,6 +100,25 @@ describe('PaneHandleResolver', () => {
     expect(driver.refFromPaneHandle).toHaveBeenCalledTimes(1);
   });
 
+  it('fresh looks the one pane up again, replaces its entry and keeps the other panes cached', async () => {
+    const muxRegistry = makeMuxDriverRegistry(null);
+    const driver = muxRegistry._driver;
+    const other = asPaneHandle('%7');
+    const resolver = new PaneHandleResolver(muxRegistry, makeWindowRepo(win), makeServerRepo());
+
+    await resolver.resolveWindowByPaneHandle('local', handle);
+    await resolver.resolveWindowByPaneHandle('local', other);
+    expect(resolver.getCached('local', handle)).toBeNull();
+
+    driver.refFromPaneHandle.mockResolvedValue({ ref, ordinal: 0 });
+    const result = await resolver.resolveWindowByPaneHandle('local', handle, { fresh: true });
+    expect(result).toEqual({ windowId: 10, ref, ordinal: 0, tmuxTarget: 'sess:win' });
+    expect(driver.refFromPaneHandle).toHaveBeenCalledTimes(3);
+    expect(driver.refFromPaneHandle).toHaveBeenLastCalledWith(expect.anything(), handle);
+    expect(resolver.getCached('local', handle)).toEqual(result);
+    expect(resolver.getCached('local', other)).toBeNull();
+  });
+
   describe('getCached', () => {
     it('returns undefined on cache miss', () => {
       const resolver = new PaneHandleResolver(makeMuxDriverRegistry(), makeWindowRepo(), makeServerRepo());

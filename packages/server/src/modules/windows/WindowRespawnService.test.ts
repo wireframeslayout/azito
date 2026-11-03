@@ -308,13 +308,13 @@ function buildService(opts: {
   // plausible env Record so respawn()'s task-owned branch has something to
   // pass through.
   const paneEnvService = {
-    buildEnvForNewWindow: vi.fn(() => ({
-      env: { AZITO_TASK_TOKEN: 'azt.task.1.' + 'a'.repeat(64), AZITO_TASK_ID: '1' },
+    buildEnvForNewWindow: vi.fn((_task: unknown, _server: unknown, windowId?: number) => ({
+      env: { AZITO_TASK_TOKEN: 'azt.task.1.' + 'a'.repeat(64), AZITO_TASK_ID: '1', ...(windowId === undefined ? {} : { AZITO_WINDOW_ID: String(windowId) }) },
       tokenId: 5,
     })),
     // Issue #28 multi-window token collision fix: a SECONDARY task window's
     // (re)creation calls this instead — never rotates/issues a task token.
-    buildEnvForSecondaryWindow: vi.fn(() => ({ AZITO_TASK_ID: '1' })),
+    buildEnvForSecondaryWindow: vi.fn((_task: unknown, _server: unknown, windowId?: number) => ({ AZITO_TASK_ID: '1', ...(windowId === undefined ? {} : { AZITO_WINDOW_ID: String(windowId) }) })),
     // Scoped to the specific generation (`tokenId`, mocked as 5 above), not
     // the whole task, per the WindowRotation.ts revokeGeneration fix.
     revokeGeneration: vi.fn(),
@@ -546,7 +546,7 @@ describe('WindowRespawnService.respawn — supervisor wrap', () => {
     const rotatedEnv = paneEnvService.buildEnvForNewWindow.mock.results[0].value.env;
     expect(tmux.splitPaneByHandle).toHaveBeenCalledTimes(2);
     for (const call of tmux.splitPaneByHandle.mock.calls) {
-      expect(call[3]).toBe(rotatedEnv);
+      expect(call[3]).toEqual({ ...rotatedEnv, AZITO_WINDOW_ID: '1' });
     }
   });
 
@@ -569,7 +569,7 @@ describe('WindowRespawnService.respawn — supervisor wrap', () => {
     await service.respawn(1, makeServer());
 
     expect(tmux.splitPaneByHandle).toHaveBeenCalledTimes(1);
-    expect(tmux.splitPaneByHandle.mock.calls[0][3]).toEqual({ AZITO_UI_TOKEN: 'ui-token-fixture' });
+    expect(tmux.splitPaneByHandle.mock.calls[0][3]).toEqual({ AZITO_UI_TOKEN: 'ui-token-fixture', AZITO_WINDOW_ID: '1' });
   });
 
   // Issue #29 review (9th pass), Important finding 2: createPlainWindow only
@@ -646,9 +646,9 @@ describe('WindowRespawnService.respawn — primary vs. secondary task window tok
     await service.respawn(2, makeServer());
 
     expect(paneEnvService.buildEnvForNewWindow).not.toHaveBeenCalled();
-    expect(paneEnvService.buildEnvForSecondaryWindow).toHaveBeenCalledWith(task, expect.anything());
+    expect(paneEnvService.buildEnvForSecondaryWindow).toHaveBeenCalledWith(task, expect.anything(), 2);
     expect(tmux.openWindow).toHaveBeenCalledWith(
-      expect.anything(), 'azito', 'task-5-side', { exactName: true, extraEnv: { AZITO_TASK_ID: '1' }, kind: 'tmux' },
+      expect.anything(), 'azito', 'task-5-side', { exactName: true, extraEnv: { AZITO_TASK_ID: '1', AZITO_WINDOW_ID: '2' }, kind: 'tmux' },
     );
   });
 
@@ -808,7 +808,7 @@ describe('WindowRespawnService.respawn — window name preservation', () => {
 
     expect(tmux.closeWindow).toHaveBeenCalledWith(expect.anything(), { kind: 'tmux', workspace: 'azito', window: 'task-1--ab12' });
     expect(tmux.openWindow).toHaveBeenCalledWith(
-      expect.anything(), 'azito', 'task-1--ab12', { exactName: true, extraEnv: { AZITO_UI_TOKEN: 'ui-token-fixture' }, kind: 'tmux' },
+      expect.anything(), 'azito', 'task-1--ab12', { exactName: true, extraEnv: { AZITO_UI_TOKEN: 'ui-token-fixture', AZITO_WINDOW_ID: '1' }, kind: 'tmux' },
     );
   });
 
@@ -1022,7 +1022,7 @@ describe('WindowRespawnService.respawn — window name preservation', () => {
     const result = await service.respawn(1, makeServer());
 
     expect(tmux.openWorkspace).toHaveBeenCalledWith(
-      expect.anything(), 'azito', { windowName: 'task-1--ab12', exactName: true, extraEnv: { AZITO_UI_TOKEN: 'ui-token-fixture' }, kind: 'tmux' },
+      expect.anything(), 'azito', { windowName: 'task-1--ab12', exactName: true, extraEnv: { AZITO_UI_TOKEN: 'ui-token-fixture', AZITO_WINDOW_ID: '1' }, kind: 'tmux' },
     );
     expect(tmux.openWindow).not.toHaveBeenCalled();
     expect(result.tmuxTarget).toBe('azito:task-1--ab12');
@@ -1835,11 +1835,11 @@ describe('WindowRespawnService.respawn — concurrent respawns for the same task
     const events = new EventEmitter();
     let generationCounter = 0;
     const paneEnvService = {
-      buildEnvForNewWindow: vi.fn(() => {
+      buildEnvForNewWindow: vi.fn((_task: unknown, _server: unknown, windowId?: number) => {
         generationCounter += 1;
-        return { env: { AZITO_TASK_TOKEN: 'azt.task.1.' + 'a'.repeat(64), AZITO_TASK_ID: '1' }, tokenId: generationCounter };
+        return { env: { AZITO_TASK_TOKEN: 'azt.task.1.' + 'a'.repeat(64), AZITO_TASK_ID: '1', ...(windowId === undefined ? {} : { AZITO_WINDOW_ID: String(windowId) }) }, tokenId: generationCounter };
       }),
-      buildEnvForSecondaryWindow: vi.fn(() => ({ AZITO_TASK_ID: '1' })),
+      buildEnvForSecondaryWindow: vi.fn((_task: unknown, _server: unknown, windowId?: number) => ({ AZITO_TASK_ID: '1', ...(windowId === undefined ? {} : { AZITO_WINDOW_ID: String(windowId) }) })),
       revokeGeneration: vi.fn(),
       revokeForDestroyedWindow: vi.fn(),
     } as any;
@@ -2555,7 +2555,7 @@ describe('WindowRespawnService.respawn — a host that starts a worker as a prog
 
     const created = tmux.openWindow.mock.calls[0] as unknown as [unknown, string, string, { program: { argv: string[]; cwd: string; cols: number; rows: number }; extraEnv: Record<string, string> }];
     expect(created[3].program).toEqual({ argv: ['claude', '--resume', 'abc', '--dangerously-skip-permissions'], cwd: 'C:\\work\\app', cols: 120, rows: 40 });
-    expect(created[3].extraEnv).toEqual({ AZITO_UI_TOKEN: 'ui-token-fixture' });
+    expect(created[3].extraEnv).toEqual({ AZITO_UI_TOKEN: 'ui-token-fixture', AZITO_WINDOW_ID: '7' });
     expect(sentCommands).toEqual([]);
     expect(tmux.resolvePane).not.toHaveBeenCalled();
   });

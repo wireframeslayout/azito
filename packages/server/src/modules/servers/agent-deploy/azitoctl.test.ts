@@ -4,6 +4,8 @@ import http from 'http';
 import os from 'os';
 import path from 'path';
 import { pathToFileURL } from 'url';
+import { TaskPaneEnvironmentService } from '../../tasks/execution/TaskPaneEnvironmentService';
+import { composePaneEnv } from '../../tmux/hubPaneEnv';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 // azitoctl.mjs (Windows) is run for real, as a program, against one HTTP server and in a temp home; the bash azitoctl (POSIX) is run
@@ -21,17 +23,21 @@ let received: Received[];
 let baseUrl: string;
 let home: string;
 let status: number;
+let postStatus: number;
+let errorBody: string;
 
 beforeEach(async () => {
   received = [];
   status = 200;
+  postStatus = 200;
+  errorBody = '{}';
   server = http.createServer((req, res) => {
     const chunks: Buffer[] = [];
     req.on('data', (c: Buffer) => chunks.push(c));
     req.on('end', () => {
       received.push({ path: req.url ?? '', method: req.method, authorization: req.headers.authorization, body: Buffer.concat(chunks).toString('utf8') });
-      res.statusCode = status;
-      res.end('{}');
+      res.statusCode = req.url?.includes('/messages') ? postStatus : status;
+      res.end(res.statusCode >= 400 ? errorBody : req.url?.startsWith('/api/windows/whoami') ? JSON.stringify({ windowId: 7, idLabel: 'W-7', taskId: 3, serverName: 'local' }) : '{}');
     });
   });
   await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
@@ -194,6 +200,23 @@ describe.skipIf(process.platform === 'win32')('azitoctl.mjs sends what the bash 
     return received[0];
   }
 
+  it('matches whoami, send and the 409 reason', async () => {
+    const env = { AZITO_URL: baseUrl, AZITO_TASK_TOKEN: 'task-token', AZITO_WINDOW_ID: '7' };
+    for (const args of [['whoami'], ['send', '--window', '123', 'hello']]) {
+      const bash = await run('bash', [BASH_CTL, ...args], env);
+      const js = await node(args, env);
+      expect(js).toEqual(bash);
+    }
+    postStatus = 409;
+    errorBody = JSON.stringify({ error: 'The agent is waiting for a dialog to be resolved.' });
+    const args = ['send', '--window', '123', 'hello'];
+    const bash = await run('bash', [BASH_CTL, ...args], env);
+    const js = await node(args, env);
+    expect(js).toEqual(bash);
+    expect(js.stderr).toContain('The agent is waiting for a dialog to be resolved.');
+    expect(js.code).not.toBe(0);
+  });
+
   it('complete with an output file, a summary and test-failed', async () => {
     const out = write('out.md', '計画 "quoted" \\ back\nline 2\ttab\n\nAZITO_PHASE_SUMMARY: {"phase":"planning"}\n');
     const request = await sameBody(['complete', '--turn', TURN, '--summary', 'a "b" c', '--output-file', out, '--test-failed']);
@@ -301,5 +324,105 @@ describe('azitoctl env file selection (bash and node)', { timeout: 30_000 }, () 
       expect(received).toHaveLength(1);
       expect(received[0].authorization).toBeUndefined();
     });
+  });
+});
+
+
+describe.skipIf(process.platform === 'win32')('azitoctl — window messaging', () => {
+  const env = (): Record<string, string> => ({ AZITO_URL: baseUrl, AZITO_TASK_TOKEN: 'task-token', AZITO_WINDOW_ID: 'W-7' });
+  const bash = (args: string[], extra: Record<string, string> = {}, stdin = ''): Promise<Ran> => run(BASH_CTL, args, { ...env(), ...extra }, stdin);
+
+  it('resolves identity by ID or pane', async () => {
+    expect(await bash(['whoami', '--json'])).toMatchObject({ code: 0, stdout: expect.stringContaining('"idLabel":"W-7"') });
+    expect(received[0]).toMatchObject({ path: '/api/windows/whoami?windowId=7', authorization: 'Bearer task-token' });
+    const resolved = await bash(['whoami'], { AZITO_WINDOW_ID: '', AZITO_SERVER_NAME: 'host name', TMUX_PANE: '%42' });
+    expect(resolved.stdout).toBe('W-7 task=#3 server=local\n');
+    expect(received[1].path).toBe('/api/windows/whoami?server=host+name&paneHandle=%2542');
+  });
+
+  it('sends multiline and long stdin without retrying POST', async () => {
+    const text = 'quoted "text"\n' + 'あ'.repeat(50000) + '\n';
+    expect((await bash(['send', '--window', 'w-123', '--stdin'], {}, text)).code).toBe(0);
+    expect(received.map((r) => r.method)).toEqual(['GET', 'POST']);
+    expect(received[1].path).toBe('/api/windows/123/messages');
+    expect(JSON.parse(received[1].body)).toEqual({ text, from: { windowId: 7 } });
+  });
+
+  it('rejects invalid IDs and conflicting input before making requests', async () => {
+    const invalid = await bash(['send', '--window', '9007199254740992', 'hello']);
+    expect(invalid.code).not.toBe(0);
+    expect(invalid.stderr).toContain('ウィンドウ ID（W-123）を指定してください');
+    expect((await bash(['send', '--window', 'W-1', '--stdin', 'hello'])).code).not.toBe(0);
+    expect(received).toHaveLength(0);
+  });
+
+  it('sends with an operator token without resolving a sender window', async () => {
+    const result = await bash(['send', '--window', '5', 'hello'], { AZITO_TASK_TOKEN: '', AZITO_WINDOW_ID: '', AZITO_UI_TOKEN: 'ui-token' });
+    expect(result.code).toBe(0);
+    expect(received.map((r) => r.method)).toEqual(['POST']);
+    expect(received[0]).toMatchObject({ path: '/api/windows/5/messages', authorization: 'Bearer ui-token' });
+    expect(JSON.parse(received[0].body)).toEqual({ text: 'hello' });
+  });
+
+  it('does not retry a failed message POST', async () => {
+    postStatus = 409;
+    errorBody = JSON.stringify({ error: 'Window asleep\ntry later' });
+    const result = await bash(['send', '--window', '123', 'hello']);
+    expect(result.code).not.toBe(0);
+    expect(result.stderr).toBe('azitoctl: HTTP 409 Window asleep try later\n');
+    expect(received.map((r) => r.method)).toEqual(['GET', 'POST']);
+  });
+
+  it('reports an HTTP error on one line', async () => {
+    status = 403;
+    const result = await bash(['whoami']);
+    expect(result.code).not.toBe(0);
+    expect(result.stderr).toMatch(/^azitoctl: HTTP 403 [^\n]*\n$/);
+  });
+});
+
+
+describe('azitoctl.mjs — window messaging', () => {
+  it('uses the real initial task and hub environment without window or server IDs', async () => {
+    const service = new TaskPaneEnvironmentService(
+      { issueNextGeneration: () => ({ id: 1, token: 'task-token' }) } as any,
+      { findByProjectWithValues: () => [] } as any, 'ui-token', true, { record: vi.fn() } as any,
+    );
+    const server = { type: 'local', isolationIntent: false } as any;
+    const env = composePaneEnv({ localUrl: baseUrl, publicUrl: baseUrl, webhookToken: 'hook', harnessPrefix: '' }, server,
+      service.buildEnvForNewWindow({ id: 3, projectId: 1 } as any, server).env);
+    expect(env.AZITO_WINDOW_ID).toBeUndefined();
+    expect(env.AZITO_SERVER_NAME).toBeUndefined();
+    const paneEnv = { ...env, TMUX_PANE: '%42' };
+    expect((await node(['whoami'], paneEnv)).code).toBe(0);
+    expect((await node(['send', '--window', '123', 'hello'], paneEnv)).code).toBe(0);
+    expect(received.map((r) => r.method)).toEqual(['GET', 'GET', 'POST']);
+    expect(received[0].path).toBe('/api/windows/whoami?paneHandle=%2542');
+  });
+
+  it('warns that a timed out POST may have been delivered and does not retry', async () => {
+    const count = path.join(home, 'attempts');
+    const preload = write('timeout.cjs', `const fs = require('node:fs'); const original = global.fetch; global.fetch = async (url, opts) => { if (opts.method === 'POST') { fs.appendFileSync(${JSON.stringify(count)}, 'x'); throw new DOMException('timeout', 'TimeoutError'); } return original(url, opts); };`);
+    const result = await node(['send', '--window', '123', 'hello'], { AZITO_URL: baseUrl, AZITO_TASK_TOKEN: 'task-token', AZITO_WINDOW_ID: '7', NODE_OPTIONS: `--require=${preload}` });
+    expect(result.code).not.toBe(0);
+    expect(result.stderr).toContain('message may have been delivered (do not retry)');
+    expect(fs.readFileSync(count, 'utf8')).toBe('x');
+  });
+
+  it('reports the API rejection reason on one line without retrying', async () => {
+    postStatus = 409;
+    errorBody = JSON.stringify({ error: 'The agent is waiting for a dialog to be resolved.' });
+    const result = await node(['send', '--window', '123', 'hello'], { AZITO_URL: baseUrl, AZITO_TASK_TOKEN: 'task-token', AZITO_WINDOW_ID: '7' });
+    expect(result.code).not.toBe(0);
+    expect(result.stderr).toBe('azitoctl: HTTP 409 The agent is waiting for a dialog to be resolved.\n');
+    expect(received.map((r) => r.method)).toEqual(['GET', 'POST']);
+  });
+
+  it('resolves an initial task pane without a server name and sends', async () => {
+    const env = { AZITO_URL: baseUrl, AZITO_TASK_TOKEN: 'task-token', TMUX_PANE: '%42' };
+    expect((await node(['whoami'], env)).stdout).toBe('W-7 task=#3 server=local\n');
+    expect(received[0].path).toBe('/api/windows/whoami?paneHandle=%2542');
+    expect((await node(['send', '--window', 'W-123', 'hello'], env)).code).toBe(0);
+    expect(JSON.parse(received[2].body)).toEqual({ text: 'hello', from: { windowId: 7 } });
   });
 });

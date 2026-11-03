@@ -268,6 +268,19 @@ describe('MisaoMuxClient reads', () => {
     expect(await client.paneCommandByHandle(server, gone)).toBeNull();
   });
 
+  it('uses the directly launched program on Windows only when the pane is running and not a shell', async () => {
+    const { daemon, client } = setup({ windowsHub: true });
+    const w = daemon.addWindow('proj', 'main');
+    const winServer = { ...server, hostProfile: { platform: 'win32', arch: 'x64' } } as typeof server;
+    const worker = daemon.addPane(w, { cmd: ['C:\\tools\\claude.exe'] });
+    const shell = daemon.addPane(w, { cmd: ['C:\\Windows\\System32\\cmd.exe'] });
+    const stopped = daemon.addPane(w, { cmd: ['claude.exe'], processState: 'stopped' });
+    expect(await client.paneCommandByHandle(winServer, handle(worker))).toBe('claude.exe');
+    expect(await client.paneCommandByHandle(winServer, handle(shell))).toBeNull();
+    expect(await client.paneCommandByHandle(winServer, handle(stopped))).toBeNull();
+    expect(await client.paneCommandByHandle(server, handle(worker))).toBeNull();
+  });
+
   it('windowActivity is the latest output time in epoch seconds, or null when nothing was printed', async () => {
     const { daemon, client } = setup();
     const w = daemon.addWindow('proj', 'main');
@@ -695,6 +708,16 @@ describe('MisaoMuxClient input', () => {
     expect(daemon.writes()).toEqual(['1', '\r', '\x03', '\x1b[A', 'hello world']);
     expect(daemon.callsTo('pane.write').every((c) => c.source === 'hub' && c.paneId === p.paneId)).toBe(true);
     expect(daemon.callsTo('pane.send_keys')).toEqual([]);
+  });
+
+  it('submits input as Enter and propagates a write failure', async () => {
+    const { daemon, client } = setup();
+    const w = daemon.addWindow('proj', 'main');
+    const p = daemon.addPane(w);
+    await client.submitInputByHandle(server, handle(p));
+    expect(daemon.writes()).toEqual(['\r']);
+    daemon.failures.set('pane.write', new Error('write failed'));
+    await expect(client.submitInputByHandle(server, handle(p))).rejects.toThrow('write failed');
   });
 
   it('waits before Enter that follows a long literal, as the tmux driver does', async () => {

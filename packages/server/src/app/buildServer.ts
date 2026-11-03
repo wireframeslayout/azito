@@ -612,7 +612,7 @@ export async function buildServer(app: FastifyInstance, wiring: Wiring, port: nu
   });
   await app.register(muxSwitchSettingsRoutes, { settingsRepo: wiring.muxSwitchSettingsRepo, serverRepo, muxDriverRegistry });
   await app.register(windowsRoutes, {
-    windowRepo, projectRepo, taskRepo, tmux: tmuxClient, muxDriverRegistry, serverRepo, transportFactory,
+    windowRepo, projectRepo, taskRepo, tmux: tmuxClient, muxDriverRegistry, serverRepo, transportFactory, paneHandleResolver: wiring.paneHandleResolver,
     muxSwitchSettingsRepo: wiring.muxSwitchSettingsRepo, auditLogService, agentActivityMonitor,
     misaoVersion: async (server) => {
       const connection = server.type === 'local' ? wiring.misao.connection : wiring.misao.servers.agentNode(server.name)?.connection;

@@ -2263,6 +2263,7 @@ describe('ExecuteTaskUseCase window-rotation rollback safety (Issue #28 third-pa
       await useCase.followUp(49, 4, 'please continue');
 
       expect(tmux.openWindow).toHaveBeenCalledTimes(1);
+      expect((tmux.openWindow as ReturnType<typeof vi.fn>).mock.calls[0][3].extraEnv).not.toHaveProperty('AZITO_WINDOW_ID');
       expect(taskRepo.update).toHaveBeenCalledWith(4, { tmuxWindow: NEW_ID });
       expect(windowRepo.add).toHaveBeenCalledWith(expect.objectContaining({ tmuxTarget: `azito:${NEW_ID}`, muxRef: misaoRef(NEW_ID), label: 'task-4--new' }));
     });
@@ -2276,6 +2277,7 @@ describe('ExecuteTaskUseCase window-rotation rollback safety (Issue #28 third-pa
 
       await useCase.followUp(49, 4, 'please continue');
 
+      expect((tmux.openWindow as ReturnType<typeof vi.fn>).mock.calls[0][3].extraEnv).toHaveProperty('AZITO_WINDOW_ID', '10');
       expect(windowRepo.update).toHaveBeenCalledWith(10, expect.objectContaining({ tmuxTarget: `azito:${NEW_ID}`, muxRef: misaoRef(NEW_ID), sleeping: false, label: 'task-4--new' }));
     });
 

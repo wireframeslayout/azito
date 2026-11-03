@@ -1,3 +1,10 @@
+export function parseWindowId(value: string): number | null {
+  const match = /^(?:[Ww]-?)?([0-9]+)$/.exec(value);
+  if (!match) return null;
+  const id = Number(match[1]);
+  return Number.isSafeInteger(id) && id > 0 ? id : null;
+}
+
 export function formatWindowId(id: number): string {
   return `W-${id}`;
 }

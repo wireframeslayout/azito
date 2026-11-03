@@ -1,3 +1,4 @@
+import { isBareShellCommand, programFileName } from '../../../shared/os/shellCommands';
 import { randomUUID } from 'node:crypto';
 import { type MuxCapabilities, type MuxDriverKind, type MuxPaneInfo, type MuxRef, type MuxWorkspace, type PaneHandle, type PaneOrdinal, asPaneHandle, isMisaoWindowId } from '@azito/shared';
 import type { ExecResult, ITerminalStream } from '../../servers/transport/ServerTransport';
@@ -288,6 +289,10 @@ export class MisaoMuxClient implements IMuxClient {
     return { stdout: selected.length === 0 ? '' : `${selected.join('\n')}\n`, stderr: '', code: 0 };
   }
 
+  async submitInputByHandle(server: ServerConfig, handle: PaneHandle): Promise<void> {
+    await this.sendKeysToHandle(server, handle, ['Enter']);
+  }
+
   async sendKeysToHandle(_server: ServerConfig, handle: PaneHandle, keys: string[]): Promise<void> {
     for (let i = 0; i < keys.length; i++) {
       const bytes = encodeMisaoKey(keys[i]);
@@ -312,8 +317,13 @@ export class MisaoMuxClient implements IMuxClient {
     return (await this.paneInfo(handle))?.pid ?? null;
   }
 
-  async paneCommandByHandle(_server: ServerConfig, handle: PaneHandle): Promise<string | null> {
-    return (await this.paneInfo(handle))?.fgCommand ?? null;
+  async paneCommandByHandle(server: ServerConfig, handle: PaneHandle): Promise<string | null> {
+    const pane = await this.paneInfo(handle);
+    if (!pane || pane.processState !== 'running') return null;
+    if (pane.fgCommand) return pane.fgCommand;
+    if (server.hostProfile?.platform !== 'win32') return null;
+    const command = programFileName(pane.cmd[0] ?? '');
+    return command && !isBareShellCommand(command) ? command : null;
   }
 
   async windowActivity(_server: ServerConfig, ref: MuxRef): Promise<number | null> {

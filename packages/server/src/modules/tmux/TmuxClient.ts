@@ -760,6 +760,10 @@ export class TmuxClient implements IMuxClient {
       }
     }
   }
+  async submitInputByHandle(server: ServerConfig, handle: PaneHandle): Promise<void> {
+    const result = await this.runTmuxCommand(server, ['send-keys', '-t', handle as string, 'Enter']);
+    if (result.code !== 0) throw new Error('Unable to submit message');
+  }
   async sendTextToHandle(server: ServerConfig, handle: PaneHandle, text: string) { return this.sendLiteralText(server, handle as string, text); }
   async pasteTextToHandle(server: ServerConfig, handle: PaneHandle, text: string): Promise<void> {
     if (text.includes('\x1b')) throw new Error('Chat paste contains an escape character');

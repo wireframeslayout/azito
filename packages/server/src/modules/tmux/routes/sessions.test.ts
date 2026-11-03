@@ -608,7 +608,7 @@ describe('POST /api/servers/:name/sessions/:session/windows/:window/panes', () =
 
     expect(res.statusCode).toBe(200);
     expect(buildSecondaryWindowEnv).toHaveBeenCalledWith(42, expect.objectContaining({ name: 'srv1' }));
-    expect(splitPane).toHaveBeenCalledWith(expect.objectContaining({ name: 'srv1' }), 'session:2', 'v', maskedEnv);
+    expect(splitPane).toHaveBeenCalledWith(expect.objectContaining({ name: 'srv1' }), 'session:2', 'v', { ...maskedEnv, AZITO_WINDOW_ID: '5' });
   });
 
   it('splits with the legacy uiTokenEnvForServer() for a non-task window', async () => {
@@ -1026,7 +1026,7 @@ describe('POST /api/servers/:name/mux/windows/:ref/panes/open', () => {
     await build(vi.fn(), { windowRepo });
     const res = await app.inject({ method: 'POST', url });
     expect(res.statusCode).toBe(200);
-    expect(openPaneInWindow).toHaveBeenCalledWith(misaoServer, misaoRef, { command: undefined, extraEnv: { AZITO_UI_TOKEN: 'test-token' }, labels: { windowId: 7 } });
+    expect(openPaneInWindow).toHaveBeenCalledWith(misaoServer, misaoRef, { command: undefined, extraEnv: { AZITO_UI_TOKEN: 'test-token', AZITO_WINDOW_ID: '7' }, labels: { windowId: 7 } });
   });
 
   it('opens an unregistered window without labels', async () => {
@@ -1050,7 +1050,7 @@ describe('POST /api/servers/:name/mux/windows/:ref/panes/open', () => {
     const res = await app.inject({ method: 'POST', url });
     expect(res.statusCode).toBe(200);
     expect(buildSecondaryWindowEnv).toHaveBeenCalledWith(42, misaoServer);
-    expect(openPaneInWindow).toHaveBeenCalledWith(misaoServer, misaoRef, { command: undefined, extraEnv: maskedEnv, labels: { windowId: 5, taskId: 42 } });
+    expect(openPaneInWindow).toHaveBeenCalledWith(misaoServer, misaoRef, { command: undefined, extraEnv: { ...maskedEnv, AZITO_WINDOW_ID: '5' }, labels: { windowId: 5, taskId: 42 } });
   });
 
   it('answers 501 on a tmux server (tmux windows never lose their last pane)', async () => {
@@ -1294,7 +1294,7 @@ describe('mux creation routes hand the new pane its env inside the per-server lo
     const res = await app.inject({ method: 'POST', url: `/api/servers/misao1/mux/windows/${refParam}/panes`, payload: {} });
     expect(res.statusCode).toBe(200);
     expect(buildSecondaryWindowEnv).toHaveBeenCalledWith(42, normal);
-    expect(splitPaneByHandle).toHaveBeenCalledWith(normal, 'p_0123456789ABCDEFGHJKMNPQRS', 'v', taskEnv);
+    expect(splitPaneByHandle).toHaveBeenCalledWith(normal, 'p_0123456789ABCDEFGHJKMNPQRS', 'v', { ...taskEnv, AZITO_WINDOW_ID: '5' });
   });
 
   it('POST /mux/windows/:ref/panes (split) still refuses a task primary window', async () => {

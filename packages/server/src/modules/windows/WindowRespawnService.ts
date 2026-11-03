@@ -558,10 +558,10 @@ export class WindowRespawnService {
           // No preCheck here — the same reverify already ran above, before
           // confirmOldWindowGone, against this same `freshServer` snapshot
           // (see the comment at the top of this lock callback).
-          const created = await createRotatedWindowInLock(this.paneEnvService, freshServer, task!, 'respawn_create_failed', doCreate);
+          const created = await createRotatedWindowInLock(this.paneEnvService, freshServer, task!, 'respawn_create_failed', doCreate, undefined, windowId);
           return { newName: created.windowName, windowEnv: created.env, tokenId: created.tokenId as number | null, server: created.server, ref: created.ref };
         } else if (task) {
-          const created = await createSecondaryWindowInLock(this.paneEnvService, freshServer, task, doCreate);
+          const created = await createSecondaryWindowInLock(this.paneEnvService, freshServer, task, doCreate, windowId);
           return { newName: created.windowName, windowEnv: created.env, tokenId: null as number | null, server: created.server, ref: created.ref };
         } else {
           // Non-task window respawn — server-aware legacy default (Issue #29
@@ -572,7 +572,7 @@ export class WindowRespawnService {
           // env-resolution -> create() span inside the same per-server
           // isolation lock as the primary/secondary branches, against the
           // freshly re-fetched `freshServer` row.
-          const created = await createPlainWindowInLock(this.uiTokenEnvFn, freshServer, doCreate);
+          const created = await createPlainWindowInLock(this.uiTokenEnvFn, freshServer, doCreate, windowId);
           return { newName: created.windowName, windowEnv: created.env, tokenId: null as number | null, server: created.server, ref: created.ref };
         }
       });

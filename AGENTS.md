@@ -596,6 +596,7 @@ packages/
 - Install status: `/api/servers/:name/install-status` (dependency install detection for ServerDetailPanel)
 - Branch search: `GET /api/servers/:name/branches?working_directory=` (optional working directory override for branch listing)
 - Units: `/api/units` CRUD + `execute`/`follow-up`/`stop`/`approve-plan`/`logs` (merged Operation+WorkerProfile — behavior + runtime; Issue #263 Refine B)
+- Agent messaging: `GET /api/windows/whoami` resolves the current window by `windowId` or `server` + `paneHandle`; `POST /api/windows/:id/messages` sends text to its primary pane. See `docs/en/agent-messaging.md` / `docs/ja/agent-messaging.md`.
 - Window operations (5-A): `DELETE /api/windows/:id/kill`, `PUT /api/windows/:id/rename`, `POST /api/windows/:id/panes`,
   `GET /api/windows/:id/panes/:ordinal/capture`, `POST .../send-keys`, `POST .../zoom`, `POST .../unzoom`,
   `PUT .../rename`, `DELETE /api/windows/:id/panes/:ordinal` — windowId-based pane routes

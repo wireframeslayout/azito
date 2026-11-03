@@ -250,7 +250,14 @@ export async function run(argv, { env = process.env, homeDir = os.homedir(), rea
 
 // Compared by real path: started through a link or a junction, the paths differ and a plain comparison would run nothing and exit 0.
 const isMain = process.argv[1] !== undefined && fs.realpathSync(process.argv[1]) === fs.realpathSync(fileURLToPath(import.meta.url));
-if (isMain) {
+if (isMain && ['whoami', 'send'].includes(process.argv[2])) {
+  if (!process.env.AZITO_URL) {
+    const file = path.join(os.homedir(), '.azito', `azitoctl${process.env.AZITO_PREFIX ? `-${process.env.AZITO_PREFIX}` : ''}.env`);
+    try { Object.assign(process.env, parseEnvFile(fs.readFileSync(file, 'utf8'))); }
+    catch (err) { if (err.code !== 'ENOENT') throw err; }
+  }
+  await import('./azitoctl-messaging.cjs');
+} else if (isMain) {
   run(process.argv.slice(2)).then(
     (line) => { if (line !== null) process.stdout.write(`${line}\n`); },
     (err) => {
