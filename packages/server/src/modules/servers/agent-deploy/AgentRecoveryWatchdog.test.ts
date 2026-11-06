@@ -70,6 +70,26 @@ class Harness {
 }
 
 describe('AgentRecoveryWatchdog: the agent', () => {
+  it('recovers an Apple Silicon Mac without inspecting the firewall or reviving misao, and stops trying when absent', async () => {
+    const h = new Harness();
+    h.servers = [{ ...server('mac'), hostProfile: { platform: 'darwin', arch: 'arm64' } }];
+    h.agentUp = false;
+    h.recoversToStart = Infinity;
+    h.recoverResult = 'absent';
+    h.duringInspect = async () => { throw new Error('must not inspect Mac firewall'); };
+    await h.watchdog.tick();
+    await h.advance(MIN);
+    expect(h.recovered).toEqual(['mac']);
+    await h.advance(TIMING.maxMs * 10);
+    expect(h.recovered).toEqual(['mac']);
+    h.agentUp = true;
+    h.misaoDown = true;
+    await h.watchdog.tick();
+    await h.advance(MIN);
+    expect(h.revived).toEqual([]);
+    expect(h.logs.some((line) => line.includes('firewall inspection failed'))).toBe(false);
+  });
+
   it('pauses on confirmed firewall blocks and resumes when the policy becomes inconclusive', async () => {
     const h = new Harness();
     h.agentUp = false;

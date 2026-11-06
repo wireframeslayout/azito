@@ -146,7 +146,7 @@ export class MisaoAgentInstaller {
   }
 
   /** A Mac agent may share its daemon with a stopped hub whose installation is not discoverable here. */
-  async uninstallMac(target: MisaoInstallTarget): Promise<'done' | 'absent' | 'skipped'> {
+  async uninstallMac(target: MisaoInstallTarget): Promise<'absent' | 'skipped'> {
     if (target.hostProfile?.platform !== 'darwin') throw new MisaoServiceError('unsupported_host', 'This removal is for macOS agents only.');
     const status = await this.inspect(target);
     const { host } = status;
@@ -155,6 +155,7 @@ export class MisaoAgentInstaller {
     this.requireManagedSocket(status, host);
     const guard = await this.run(target, `if [ -L ${shellQuote(root)} ]; then echo FOREIGN; elif [ ! -e ${shellQuote(root)} ]; then echo ABSENT; else echo PRESENT; fi`, 'inspect misao ownership');
     if (guard.stdout.trim() === 'ABSENT') return 'absent';
+    if (guard.stdout.trim() === 'PRESENT') return 'skipped';
     throw new MisaoServiceError('not_managed', 'Cannot establish whether this misao is shared with a hub; it was left in place.');
   }
 

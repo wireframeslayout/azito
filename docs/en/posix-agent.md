@@ -12,7 +12,7 @@ The same agent bundle contains Linux x64 and arm64 native modules and the macOS 
 
 Linux uses a user systemd service where available and otherwise a background process. On macOS, the agent uses a Background launchd job in `user/<uid>`, independent of the GUI domain. That user domain must exist: a reboot can require a user login before launchd starts the job. Logging out of the GUI does not itself stop a job in an available background domain. The agent and misao can continue while the hub is stopped; their availability depends on the host and user domain. The macOS misao daemon is a separate background process and has no new automatic restart mechanism here.
 
-An Apple Silicon Mac agent can be removed from its server row. Removal checks the managed job and installation ID before deleting agent files. An agent removed from the host is not started again by the hub's recovery at startup. Intel Mac agents are not updated or removed from the host. If misao removal is requested but ownership cannot be established, the operation reports a failure and leaves misao in place. Linux host removal is not yet supported; removing the server row only forgets it in the hub.
+An Apple Silicon Mac agent can be removed from its server row. Removal checks the managed job and installation ID before deleting agent files. An agent removed from the host is not started again by the hub's recovery at startup. Intel Mac agents are not updated or removed from the host. If misao removal is requested but ownership cannot be established, the operation reports it as skipped and leaves misao in place. Linux host removal is not yet supported; removing the server row only forgets it in the hub.
 
 ## Troubleshooting
 

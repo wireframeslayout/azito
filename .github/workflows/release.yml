@@ -9,8 +9,7 @@ permissions:
   contents: write
 
 jobs:
-  # The agent is a Linux x86-64 program whichever OS (and CPU) the hub that ships it runs on, and node-pty's Linux binary can only be built
-  # on Linux. It is built once here, so every hub tarball / zip carries the same agent (same bundle hash) and the same node-pty.
+  # Build the Linux arm64 node-pty once; every hub bundle uses the same native inputs and agent hash.
   agent-native-arm64:
     name: Agent node-pty (Linux arm64)
     runs-on: ubuntu-24.04-arm
@@ -103,7 +102,7 @@ jobs:
           path: ${{ runner.temp }}/node-pty-linux-arm64
 
       - name: Build hub bundle
-        # build-hub.ts builds the Linux x86-64 agent bundle with this node-pty (build-agent.ts reads AZITO_AGENT_NODE_PTY_LINUX).
+        # build-hub.ts builds one agent bundle with both Linux native inputs.
         env:
           AZITO_AGENT_NODE_PTY_LINUX: ${{ runner.temp }}/node-pty-linux
           AZITO_AGENT_NODE_PTY_LINUX_ARM64: ${{ runner.temp }}/node-pty-linux-arm64

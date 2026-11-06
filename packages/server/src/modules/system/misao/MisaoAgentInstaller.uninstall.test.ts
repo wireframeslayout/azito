@@ -15,7 +15,7 @@ function fake(answer: string) {
 describe('Mac agent misao removal', () => {
   it('refuses removal when a daemon may be shared with a hub', async () => {
     const { target, exec } = fake('PRESENT\n');
-    await expect(new MisaoAgentInstaller(null).uninstallMac(target as never)).rejects.toThrow(/shared with a hub/);
+    await expect(new MisaoAgentInstaller(null).uninstallMac(target as never)).resolves.toBe('skipped');
     expect(exec.mock.calls.every((call) => !call[0].includes('rm -rf'))).toBe(true);
   });
   it('reports an absent installation', async () => {

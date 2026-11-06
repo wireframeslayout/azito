@@ -95,7 +95,7 @@ export class MacAgentLaunchd {
   async cleanup(installId: string): Promise<void> {
     const lock = `${this.home}/.azito/agent-cleanup.lock`;
     const idFile = `${this.home}/.azito/agent/install.id`;
-    const acquire = await this.exec(`mkdir ${shellQuote(lock)} && printf %s $$ > ${shellQuote(`${lock}/pid`)}`);
+    const acquire = await this.exec(`mkdir ${shellQuote(lock)} && date +%s > ${shellQuote(`${lock}/started`)}`);
     if (acquire.code !== 0) throw new Error('Could not acquire the cleanup lock or verify the installation id');
     try {
       const owner = await this.exec(`[ "$(cat ${shellQuote(idFile)} 2>/dev/null)" = ${shellQuote(installId)} ]`);

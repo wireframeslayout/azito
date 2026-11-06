@@ -429,7 +429,7 @@ describe('AgentInstaller', () => {
   it('can remove managed Mac misao without a bundle to install', async () => {
     const { ssh } = makeSsh();
     const uninstallMac = vi.fn(async () => 'absent' as const);
-    const installer = new AgentInstaller(ssh as never, makeBundler() as never, DEFAULT_WINDOWS_AGENT_OPTIONS, undefined, '', { uninstallMac });
+    const installer = new AgentInstaller(ssh as never, makeBundler() as never, DEFAULT_WINDOWS_AGENT_OPTIONS, { uninstallMac } as never);
     vi.spyOn(MacAgentLaunchd.prototype, 'assertOwned').mockResolvedValue();
     vi.spyOn(MacAgentLaunchd.prototype, 'readInstallId').mockResolvedValue(undefined);
     const result = await installer.uninstallFromMacHost('user@host', { removeMisao: true }, { host: '100.64.0.9', port: 3002, token: 'tok' });
@@ -494,6 +494,8 @@ describe('AgentInstaller', () => {
       expect(result.startMethod).toBe('launchd');
       expect(commands.some((c) => c.includes("'launchctl' 'bootstrap' 'user/501'"))).toBe(true);
       expect(commands.some((c) => c.includes('systemctl --user'))).toBe(false);
+      expect(commands.findIndex((c) => c.includes('pkill -f azito-agent.cjs'))).toBeLessThan(commands.findIndex((c) => c.includes("'launchctl' 'bootstrap' 'user/501'")));
+      expect(commands.some((c) => c.includes('agent.pid') && c.includes('pkill -f azito-agent.cjs'))).toBe(true);
       expect(commands.some((c) => /pkill.*misao/.test(c))).toBe(false);
     });
 

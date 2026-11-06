@@ -237,7 +237,7 @@
       "removeFromHostDescMac": "サーバーを削除する前に、Mac からエージェントを消します。AZITO が登録した launchd ジョブ com.azito.agent とインストール ID を確かめてから、ジョブを止めて定義を消し、~/.azito/agent フォルダー（エージェントのトークンを含む）を消します。別のものが同じ名前のジョブを使っているときは何も変えません。消せたときだけサーバーを削除します。AZITO のハーネスと azt-mcp の登録は残ります。",
       "removeMisao": "misao も消す（窓はすべて閉じます）",
       "removeMisaoDesc": "misao のタスクと ~\\.azito\\misao フォルダーを消します。このホストの misao で動いている窓はすべて閉じます。同じホストの Windows のハブが使っている misao は消しません。",
-      "removeMisaoDescMac": "misao は Mac 上のハブと共有されている場合があります。AZITO が所有を確かめられない misao は消さずに残し、失敗として知らせます（そのときサーバーは削除しません）。misao がなければ何もしません。",
+      "removeMisaoDescMac": "misao は Mac 上のハブと共有されている場合があります。AZITO が所有を確かめられない misao は消さずに残し、スキップとして知らせ、agent の削除は続けます。misao がなければ何もしません。",
       "removeMisaoNeedsHost": "ホストからもエージェントを消すときに選べます。",
       "unsupported": "ホストからエージェントを消せるのは、このリリースでは Windows と Apple Silicon の Mac のエージェントだけです（#499）。サーバーを削除したあとも、エージェントはホストで動き続けます。",
       "staysTitle": "ホストに残るもの",

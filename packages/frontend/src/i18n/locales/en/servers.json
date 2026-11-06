@@ -237,7 +237,7 @@
       "removeFromHostDescMac": "Before the server is deleted, removes the agent from the Mac: AZITO checks its launchd job com.azito.agent and installation ID, stops the job, removes its definition and removes the ~/.azito/agent folder (including the agent token). A job of the same name that AZITO did not install is left unchanged. The server is deleted only if this works. AZITO harness files and azt-mcp registrations stay.",
       "removeMisao": "Also remove misao (every window closes)",
       "removeMisaoDesc": "Removes the misao task and the ~\\.azito\\misao folder. Every window running in misao on this host closes. A misao that belongs to a Windows hub on the same host is left in place.",
-      "removeMisaoDescMac": "misao may be shared with a hub on the same Mac. A misao whose ownership AZITO cannot establish is left in place and reported as a failure (the server is then not deleted). Nothing is done when there is no misao.",
+      "removeMisaoDescMac": "misao may be shared with a hub on the same Mac. A misao whose ownership AZITO cannot establish is left in place and reported as skipped; agent removal continues. Nothing is done when there is no misao.",
       "removeMisaoNeedsHost": "Available when the agent is removed from the host.",
       "unsupported": "Removing the agent from the host is only available for Windows and Apple Silicon Mac agents in this release (#499). After the server is deleted, the agent keeps running on the host.",
       "staysTitle": "What stays on the host",

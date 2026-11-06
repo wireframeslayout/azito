@@ -46,7 +46,7 @@ const MISAO_STEP_MESSAGES: Record<AgentMisaoInstallStep, string> = {
 
 export interface AgentMisaoInstaller {
   install(transport: AgentTransport, onProgress?: (step: AgentMisaoInstallStep) => void): Promise<{ version: string; startMethod: 'systemd' | 'nohup' | 'taskscheduler' | 'running'; updateAvailable: boolean }>;
-  uninstallMac?(transport: AgentTransport): Promise<'done' | 'absent' | 'skipped'>;
+  uninstallMac?(transport: AgentTransport): Promise<'absent' | 'skipped'>;
 }
 
 export type { AgentUpdateResult };
@@ -96,7 +96,6 @@ const CLEANUP_GUARD_COMMAND = buildCleanupGuardScript();
 /** The mark of a cleanup is on the host: no install, update or recovery may start until a person has looked and removed it. */
 class CleanupMarkError extends Error {}
 
-/** The error for a host that has no tmux and no misao: the same text is the API's `error` and what the UI shows. */
 /** A Mac this release manages with launchd: Apple Silicon running arm64 Node. */
 function isLaunchdMac(profile: HostProfile | null | undefined): boolean {
   return profile?.platform === 'darwin' && profile.arch === 'arm64';
@@ -104,6 +103,7 @@ function isLaunchdMac(profile: HostProfile | null | undefined): boolean {
 
 const INTEL_MAC_REASON = 'Intel Mac / x64 Node is outside v0.13.0 support; use an arm64 Node for Apple Silicon';
 
+/** The error for a host that has no tmux and no misao. */
 function noMuxMessage(host: string, misaoError: string | undefined): string {
   return `no mux is available on ${host}: tmux is not installed and misao could not be installed (${misaoError ?? 'this hub has no misao to install'}).`;
 }
@@ -135,7 +135,6 @@ export class AgentInstaller {
     /** Absent for a hub that cannot install misao (no bundled copy): the agent is installed without it. */
     private misaoInstaller?: AgentMisaoInstaller,
     private harnessPrefix = '',
-    private misaoUninstaller?: Pick<AgentMisaoInstaller, 'uninstallMac'>,
   ) {
     // The overrides exist to try a second agent beside the real one; they are not saved per server, so a hub started without them
     // looks for the default task: say so once when they are in use.
@@ -204,7 +203,7 @@ export class AgentInstaller {
     }
 
     // ── Stop existing agent (if any) ──
-    await this.stopAgent(sshHost);
+    await this.stopAgent(sshHost, isLaunchdMac(preflight.hostProfile));
 
     // ── Start agent ──
     report('start', 'running', 'Starting agent...');
@@ -306,11 +305,11 @@ export class AgentInstaller {
     if (result.code !== 0) throw new Error(`install id write failed: ${result.stderr}`);
   }
 
-  /** One command over SSH as a value: a failed command or connection is `ok: false` with the reason (the caller reports it, never hides it). */
   private execPosix(host: string, command: string, timeoutMs?: number): ReturnType<SshClient['execIsolated']> {
     return this.sshClient.execIsolated(host, posixRemoteCommand(command), timeoutMs);
   }
 
+  /** One command over SSH as a value, with errors returned to the caller. */
   private async runOnHost(sshHost: string, command: string, timeoutMs?: number): Promise<{ ok: true; stdout: string } | { ok: false; error: string }> {
     try {
       const result = await this.execPosix(sshHost, command, timeoutMs);
@@ -455,7 +454,7 @@ export class AgentInstaller {
       }
       if (choice.removeMisao) {
         try {
-          const uninstaller = this.misaoUninstaller ?? this.misaoInstaller;
+          const uninstaller = this.misaoInstaller;
           if (!uninstaller?.uninstallMac) throw new Error('misao removal is unavailable');
           if (!agent.host || !agent.port || !agent.token) throw new Error('Agent address or token is missing; misao was left in place');
           const transport = new AgentTransport(agent.host, agent.port, agent.token, 'system', agent.host, { platform: 'darwin', arch: 'arm64' });
@@ -834,10 +833,10 @@ export class AgentInstaller {
     return this.startAgent(sshHost, tailscaleIp, token, muxRuntime, hostProfile);
   }
 
-  private async stopAgent(sshHost: string): Promise<void> {
+  private async stopAgent(sshHost: string, mac = false): Promise<void> {
     await this.execPosix(
       sshHost,
-      'systemctl --user disable --now azito-agent 2>/dev/null; test -f ~/.azito/agent/agent.pid && kill $(cat ~/.azito/agent/agent.pid) 2>/dev/null; pkill -f azito-agent.cjs 2>/dev/null; sleep 1; true',
+      `${mac ? '' : 'systemctl --user disable --now azito-agent 2>/dev/null; '}test -f ~/.azito/agent/agent.pid && kill $(cat ~/.azito/agent/agent.pid) 2>/dev/null; pkill -f azito-agent.cjs 2>/dev/null; sleep 1; true`,
     );
   }
 

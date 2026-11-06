@@ -217,15 +217,6 @@ const sleep = (ms: number): Promise<void> => new Promise((resolve) => setTimeout
 /** launchctl's "Input/output error": what bootstrap answers both for a plist the domain cannot take and for a job that is still being removed. */
 const BOOTSTRAP_IO_ERROR = 5;
 
-/**
- * launchd. The job always lives in `user/<uid>` with a plist limited to the Background session type, whether or not
- * someone is logged in on the screen, so it runs the same before and after a login and survives a logout.
- *
- * An install from before that (v0.11.x and earlier) loaded a plist without the limit into `gui/<uid>`. Starting,
- * restarting or reloading such a job moves it: boot it out of `gui`, add the limit to the plist, bootstrap into `user`;
- * if that fails the original plist is put back and loaded into `gui` again. A job loaded into BOTH domains is an error
- * for every operation that would have to choose (only `stop` and `inspect` work on it).
- */
 /** Launchctl operations shared by local and remote service managers. */
 export class LaunchdJobOperations {
   constructor(private readonly run: CommandRunner, private readonly label: string, private readonly uid: number, private readonly plistPath: string, private readonly timing: LaunchdTiming) {}
@@ -274,6 +265,15 @@ export class LaunchdJobOperations {
 
 }
 
+/**
+ * launchd. The job always lives in `user/<uid>` with a plist limited to the Background session type, whether or not
+ * someone is logged in on the screen, so it runs the same before and after a login and survives a logout.
+ *
+ * An install from before that (v0.11.x and earlier) loaded a plist without the limit into `gui/<uid>`. Starting,
+ * restarting or reloading such a job moves it: boot it out of `gui`, add the limit to the plist, bootstrap into `user`;
+ * if that fails the original plist is put back and loaded into `gui` again. A job loaded into BOTH domains is an error
+ * for every operation that would have to choose (only `stop` and `inspect` work on it).
+ */
 export class LaunchdServiceManager implements ServiceManager {
   readonly kind = 'launchd' as const;
   readonly templateName: string;
