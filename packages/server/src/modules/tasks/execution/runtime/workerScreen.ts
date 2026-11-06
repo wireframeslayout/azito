@@ -185,12 +185,19 @@ function isClaudeUpperRule(line: string): boolean {
 }
 
 /**
- * Whether the lines after a rule are only an open prompt and its continuation (Claude indents those), so the rule below them can be text of
- * that draft. Any other line at column 0 (`● reply`, `✻ Worked for`) is the conversation: the rule above is then only part of the history.
+ * Whether a rule can be text of a draft whose prompt is further up. Going up from it, rules and indented lines (Claude indents a draft's
+ * continuation) are passed over, and the first other line decides: a prompt right below a rule is an open input that holds this rule; anything
+ * else at column 0 (`● reply`, `✻ Worked for`, a sent message with no rule above it) is the conversation.
  */
-function holdsOnlyOpenPrompt(lines: string[]): boolean {
-  const [first, ...rest] = lines.filter((line) => line.trim() !== '');
-  return first !== undefined && PROMPT_LINE.test(first.trim()) && rest.every((line) => /^\s/.test(line));
+function ruleMayBeDraftText(lines: string[], rule: number): boolean {
+  for (let i = rule - 1; i >= 0; i--) {
+    const line = lines[i];
+    if (line.trim() === '' || /^\s/.test(line) || isClaudeUpperRule(line)) continue;
+    if (!PROMPT_LINE.test(line)) return false;
+    const above = lines.slice(0, i).filter((other) => other.trim() !== '').pop();
+    return above !== undefined && isClaudeUpperRule(above);
+  }
+  return false;
 }
 
 function claudeRuleBox(lines: string[]): { upper: number; lower: number } | undefined {
@@ -199,10 +206,7 @@ function claudeRuleBox(lines: string[]): { upper: number; lower: number } | unde
   const upper = candidates[candidates.length - 2];
   const lower = candidates[candidates.length - 1];
   if (!RULE_LINE.test(lines[lower].trim())) return undefined;
-  const previous = candidates[candidates.length - 3];
-  const beforePrevious = candidates[candidates.length - 4];
-  const previousIsLower = previous !== undefined && beforePrevious !== undefined && RULE_LINE.test(lines[previous].trim()) && lines.slice(beforePrevious + 1, previous).some((line) => PROMPT_LINE.test(line.trim()));
-  if (previous !== undefined && !previousIsLower && holdsOnlyOpenPrompt(lines.slice(previous + 1, upper))) return undefined;
+  if (ruleMayBeDraftText(lines, upper)) return undefined;
   const inside = lines.slice(upper + 1, lower).filter((line) => line.trim() !== '');
   const below = lines.slice(lower + 1).filter((line) => line.trim() !== '');
   if (inside.length === 0 || !PROMPT_LINE.test(inside[0].trim())) return undefined;

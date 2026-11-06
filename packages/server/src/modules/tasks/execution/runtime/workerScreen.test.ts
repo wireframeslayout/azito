@@ -214,6 +214,17 @@ describe('readInputBox on the screens of real panes (#532)', () => {
       expect(readInputBox('claude', `${named}\n❯ draft\n  more draft\n${named}\n❯ \n${rule}\nbypass permissions on`)).toEqual({ state: 'unknown' });
       expect(readInputBox('claude', `${rule}\n❯ draft\n${rule}\n❯ \n${rule}\nbypass permissions on`)).toEqual({ state: 'unknown' });
     });
+    it.each([
+      ['two rules with text between them', `❯ a\n  ${rule}\n  b\n  ${rule}\n  ❯`],
+      ['two adjacent rules', `❯ a\n  ${rule}\n  ${rule}\n  ❯`],
+      ['a prompt line between the rules', `❯ a\n  ${rule}\n  ❯ b\n  ${rule}\n  ❯`],
+      ['blank lines between the lines', `❯ a\n\n  ${rule}\n\n  b\n\n  ${rule}\n\n  ❯`],
+    ])('does not read a draft as empty when it holds %s and ends in a bare prompt', (_label, draft) => {
+      expect(readInputBox('claude', `${named}\n${draft}\n${rule}\nbypass permissions on`)).toEqual({ state: 'unknown' });
+    });
+    it('reads the current input below a reply whose text holds rules', () => {
+      expect(readInputBox('claude', `❯ earlier\n\n● reply\n  ${rule}\n  more\n  ${rule}\n\n${named}\n❯ \n${rule}\nbypass permissions on`)).toEqual({ state: 'empty' });
+    });
   });
 
   describe('Claude Code 2.1.310', () => {
