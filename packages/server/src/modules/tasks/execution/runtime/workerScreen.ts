@@ -157,10 +157,15 @@ export type InputBox =
   | { state: 'disabled' }
   | { state: 'unknown' };
 
+/** Number of lines requested for task readiness captures. */
+export const SCREEN_CAPTURE_LINES = -50;
+
 const UNKNOWN: InputBox = { state: 'unknown' };
 
 function screenLines(output: string): string[] {
-  return stripAnsi(output).split('\n').map((line) => line.replace(/\s+$/, ''));
+  const lines = stripAnsi(output).split('\n');
+  if (output.endsWith('\n')) lines.pop();
+  return lines.map((line) => line.replace(/\s+$/, ''));
 }
 
 /** What Claude Code shows in an empty input: the `Try "..."` hint, and `Press up to edit queued messages` while a message waits for the turn to end. */
@@ -190,14 +195,15 @@ function isClaudeUpperRule(line: string): boolean {
  * else at column 0 (`● reply`, `✻ Worked for`, a sent message with no rule above it) is the conversation.
  */
 function ruleMayBeDraftText(lines: string[], rule: number): boolean {
+  const mayBeClipped = lines.length >= -SCREEN_CAPTURE_LINES;
   for (let i = rule - 1; i >= 0; i--) {
     const line = lines[i];
     if (line.trim() === '' || /^\s/.test(line) || isClaudeUpperRule(line)) continue;
     if (!PROMPT_LINE.test(line)) return false;
     const above = lines.slice(0, i).filter((other) => other.trim() !== '').pop();
-    return above === undefined || isClaudeUpperRule(above);
+    return above === undefined ? mayBeClipped : isClaudeUpperRule(above);
   }
-  return true;
+  return mayBeClipped;
 }
 
 function claudeRuleBox(lines: string[]): { upper: number; lower: number } | undefined {

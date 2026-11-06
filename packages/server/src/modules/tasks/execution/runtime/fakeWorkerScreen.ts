@@ -17,7 +17,6 @@ export function workerScreenWith(draft: string, wrapWidth?: number, onlyClaude =
   const pieces = wrapped(draft, wrapWidth);
   // Claude's input between its two rules, codex's composer and footer at the bottom (each parser reads its own part).
   return [
-    "● ready",
     RULE,
     ...pieces.map((piece, i) => (i === 0 ? `❯ ${piece}` : `  ${piece}`)),
     RULE,

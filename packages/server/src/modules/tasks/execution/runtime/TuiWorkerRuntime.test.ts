@@ -482,7 +482,7 @@ describe('TuiWorkerRuntime.sendPrompt — the worker has to be at an empty input
       if (again.workerInput.submitPrompt.mock.calls.length === 0) return normal();
       if (Date.now() === lastLookAt) readableAgain = true;
       lastLookAt = Date.now();
-      return readableAgain ? { stdout: `● ready\n${rule}\n❯ ${LINE}\n${rule}\n  bypass permissions on (shift+tab to cycle)` } : { stdout: unreadable };
+      return readableAgain ? { stdout: `${rule}\n❯ ${LINE}\n${rule}\n  bypass permissions on (shift+tab to cycle)` } : { stdout: unreadable };
     });
     const readableErr = await again.send();
     expect(readableErr).toMatchObject({ reason: 'input_state_unknown', inputLeft: true, inputUnreadable: false });
@@ -502,7 +502,7 @@ describe('TuiWorkerRuntime.sendPrompt — the worker has to be at an empty input
 
   it('an input that reads as text for a moment (a wording not known yet) gets the grace before the task is stopped', async () => {
     const rule = '─'.repeat(60);
-    const unknownHint = `● ready\n${rule}\n❯ Some new hint of an empty input\n${rule}\n  bypass permissions on (shift+tab to cycle)`;
+    const unknownHint = `${rule}\n❯ Some new hint of an empty input\n${rule}\n  bypass permissions on (shift+tab to cycle)`;
     const h = sendHarness('claude', { firstScreens: [unknownHint, unknownHint] });
     expect(await h.send()).toBeNull();
     const stuck = sendHarness('claude', { idle: unknownHint });
