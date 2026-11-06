@@ -68,7 +68,7 @@ jobs:
           - os: ubuntu-24.04-arm
             platform: linux
             arch: arm64
-          - os: macos-14
+          - os: macos-15
             platform: darwin
             arch: arm64
           - os: windows-latest
@@ -82,6 +82,13 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: '24'
+
+      # The oldest macOS the bundle supports: 13.5 is Node 24's minimum (the bundled node records minos 13.5). node-gyp
+      # builds take it from Node's common.gypi (-mmacosx-version-min), not from this variable or the runner's macOS;
+      # the value set here is the limit the check below holds every bundled binary to, and applies to any direct clang build.
+      - name: Set the minimum macOS the bundle supports
+        if: matrix.platform == 'darwin'
+        run: echo "MACOSX_DEPLOYMENT_TARGET=13.5" >> "$GITHUB_ENV"
 
       - run: npm ci
 
@@ -111,6 +118,14 @@ jobs:
           SMOKE=$(mktemp -d)
           tar xzf packages/server/dist-hub/azito-hub-*.tar.gz -C "$SMOKE"
           bash packages/server/scripts/smoke-misao.sh "$SMOKE"
+
+      # Every Mach-O file in the bundle (native modules, node, misao) must load on the pinned minimum macOS.
+      - name: Check the minimum macOS of the bundled binaries
+        if: matrix.platform == 'darwin'
+        run: |
+          CHECK=$(mktemp -d)
+          tar xzf packages/server/dist-hub/azito-hub-*.tar.gz -C "$CHECK"
+          bash packages/server/scripts/check-macos-minos.sh "$CHECK"
 
       # The Intel macOS binary is shipped for agent hosts, but no runner of this matrix is Intel: make sure it at least starts
       # (under Rosetta) on the Apple-silicon one.
@@ -143,7 +158,7 @@ jobs:
       # platform-independent, so linting it once on Linux is enough.
       - name: shellcheck install.sh
         if: runner.os == 'Linux'
-        run: shellcheck install.sh packages/server/scripts/run-hub.sh packages/server/scripts/download-node.sh packages/server/scripts/smoke-misao.sh
+        run: shellcheck install.sh packages/server/scripts/run-hub.sh packages/server/scripts/download-node.sh packages/server/scripts/smoke-misao.sh packages/server/scripts/check-macos-minos.sh
 
       - uses: actions/upload-artifact@v4
         with:

@@ -15,7 +15,7 @@ import { buildWindowsPreflightCommand, checkWindowsPreflight, parseWindowsPrefli
 import { buildSha256VerifyCommand, buildSafeExtractCommand, readSha256FromSumsFile } from './integrityVerifier';
 import { KeyedMutex } from '../../../shared/keyedMutex';
 import { CLEANUP_LOCK_DIR, CLEANUP_TIMEOUT_MS, INSTALL_ID_FILE, MANUAL_STEPS_ANY_START, SYSTEMD_MANUAL_STEPS, buildCleanupGuardScript, buildCleanupScript, buildNohupSightingScript, cleanupMarkMessage, parseCleanupGuard, nohupManualSteps, parseCleanupOutcome, parseNohupSighting, type NohupSighting } from './unixAgentCleanup';
-import { WindowsAgentDeployer, windowsAgentLayout, type WindowsDeployment } from './WindowsAgentDeployer';
+import { WindowsAgentDeployer, windowsAgentLayout, type FirewallInspection, type WindowsDeployment } from './WindowsAgentDeployer';
 import { DEFAULT_WINDOWS_AGENT_OPTIONS, type WindowsAgentOptions } from './windowsAgentConfig';
 import { updateWindowsAgent, type AgentUpdateResult } from './windowsAgentUpdate';
 import type { WindowsUninstallChoice, WindowsUninstallResult } from './windowsAgentUninstall';
@@ -204,7 +204,7 @@ export class AgentInstaller {
     }
 
     // ── Stop existing agent (if any) ──
-    if (!isLaunchdMac(preflight.hostProfile)) await this.stopAgent(sshHost);
+    await this.stopAgent(sshHost);
 
     // ── Start agent ──
     report('start', 'running', 'Starting agent...');
@@ -797,6 +797,13 @@ export class AgentInstaller {
     await this.execPosix(sshHost, cmd);
   }
 
+  /** Reads (never changes) the Windows Firewall policy that decides whether the hub reaches the agent of the recognised task. */
+  async inspectAgentFirewall(sshHost: string, address: string, port: number): Promise<FirewallInspection> {
+    const probe = await this.sshClient.execIsolated(sshHost, buildWindowsPreflightCommand());
+    const host = parseWindowsPreflight(probe.stdout, probe.stderr, probe.code);
+    return this.windowsDeployer().inspectFirewall(sshHost, host, address, port);
+  }
+
   /**
    * Start an already-deployed agent, used to recover an agent left stopped after an update
    * flow was interrupted (e.g. by a hub restart between stop and start). Reuses the same
@@ -804,16 +811,16 @@ export class AgentInstaller {
    * (e.g. SSH connection failure) — the caller is expected to catch and re-check health
    * afterward regardless of outcome.
    */
-  recoverAgent(sshHost: string, tailscaleIp: string, token: string, hostProfile: HostProfile | null, muxRuntime?: string): Promise<'systemd' | 'nohup' | 'launchd' | 'taskscheduler' | 'disabled' | 'absent'> {
-    return this.hostLocks.withLock(this.lockKey(sshHost), () => this.recoverAgentLocked(sshHost, tailscaleIp, token, hostProfile, muxRuntime));
+  recoverAgent(sshHost: string, tailscaleIp: string, token: string, hostProfile: HostProfile | null, muxRuntime?: string, force = false): Promise<'systemd' | 'nohup' | 'launchd' | 'taskscheduler' | 'disabled' | 'starting' | 'absent'> {
+    return this.hostLocks.withLock(this.lockKey(sshHost), () => this.recoverAgentLocked(sshHost, tailscaleIp, token, hostProfile, muxRuntime, force));
   }
 
-  private async recoverAgentLocked(sshHost: string, tailscaleIp: string, token: string, hostProfile: HostProfile | null, muxRuntime?: string): Promise<'systemd' | 'nohup' | 'launchd' | 'taskscheduler' | 'disabled' | 'absent'> {
+  private async recoverAgentLocked(sshHost: string, tailscaleIp: string, token: string, hostProfile: HostProfile | null, muxRuntime?: string, force = false): Promise<'systemd' | 'nohup' | 'launchd' | 'taskscheduler' | 'disabled' | 'starting' | 'absent'> {
     if (hostProfile?.platform === 'win32') {
       // The settings and the task are already on the host: ask it who it is, then restart the logon task.
       const probe = await this.sshClient.execIsolated(sshHost, buildWindowsPreflightCommand());
-      const outcome = await this.windowsDeployer().restart(sshHost, parseWindowsPreflight(probe.stdout, probe.stderr, probe.code));
-      return outcome === 'disabled' ? 'disabled' : 'taskscheduler';
+      const outcome = await this.windowsDeployer().restart(sshHost, parseWindowsPreflight(probe.stdout, probe.stderr, probe.code), force);
+      return outcome === 'restarted' ? 'taskscheduler' : outcome;
     }
     await this.assertNoCleanupRunning(sshHost);
     if (isLaunchdMac(hostProfile)) {

@@ -1,5 +1,6 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { EventEmitter } from 'events';
+import { execFileSync } from 'node:child_process';
 import { chmodSync, mkdtempSync, mkdirSync, realpathSync, rmSync, symlinkSync, writeFileSync } from 'fs';
 import { tmpdir } from 'os';
 import * as path from 'path';
@@ -205,7 +206,7 @@ function buildService(opts: {
     findByServerAndRef: vi.fn(() => undefined),
     findByServerAndSession: vi.fn(() => []),
     update: vi.fn(),
-    updateAgentSessionIdByWindow: vi.fn(),
+    updateAgentSessionIdByWindow: vi.fn(), updateClaudeSessionByPane: vi.fn(),
     remove: vi.fn(),
     removeByServerAndTarget: vi.fn(() => 0),
     updatePaneLayout: vi.fn(),
@@ -232,6 +233,7 @@ function buildService(opts: {
     }),
     splitPaneByHandle: vi.fn(async (_server: unknown, _handle: unknown, _dir: 'h' | 'v', _env?: Record<string, string>) => ({ handle: '%1', result: { stdout: '', stderr: '', code: 0 } })),
     resolvePane: vi.fn(async () => '%0'),
+    paneCommandByHandle: vi.fn(async () => 'bash'),
     supportsPaneLabels: false,
     labelWindowPanes: vi.fn(async () => undefined),
     listPanesByRef: vi.fn(async () => [{ ordinal: 1, handle: '%0', title: '', command: 'bash', active: true }]),
@@ -306,13 +308,13 @@ function buildService(opts: {
   // plausible env Record so respawn()'s task-owned branch has something to
   // pass through.
   const paneEnvService = {
-    buildEnvForNewWindow: vi.fn(() => ({
-      env: { AZITO_TASK_TOKEN: 'azt.task.1.' + 'a'.repeat(64), AZITO_TASK_ID: '1' },
+    buildEnvForNewWindow: vi.fn((_task: unknown, _server: unknown, windowId?: number) => ({
+      env: { AZITO_TASK_TOKEN: 'azt.task.1.' + 'a'.repeat(64), AZITO_TASK_ID: '1', ...(windowId === undefined ? {} : { AZITO_WINDOW_ID: String(windowId) }) },
       tokenId: 5,
     })),
     // Issue #28 multi-window token collision fix: a SECONDARY task window's
     // (re)creation calls this instead — never rotates/issues a task token.
-    buildEnvForSecondaryWindow: vi.fn(() => ({ AZITO_TASK_ID: '1' })),
+    buildEnvForSecondaryWindow: vi.fn((_task: unknown, _server: unknown, windowId?: number) => ({ AZITO_TASK_ID: '1', ...(windowId === undefined ? {} : { AZITO_WINDOW_ID: String(windowId) }) })),
     // Scoped to the specific generation (`tokenId`, mocked as 5 above), not
     // the whole task, per the WindowRotation.ts revokeGeneration fix.
     revokeGeneration: vi.fn(),
@@ -544,7 +546,7 @@ describe('WindowRespawnService.respawn — supervisor wrap', () => {
     const rotatedEnv = paneEnvService.buildEnvForNewWindow.mock.results[0].value.env;
     expect(tmux.splitPaneByHandle).toHaveBeenCalledTimes(2);
     for (const call of tmux.splitPaneByHandle.mock.calls) {
-      expect(call[3]).toBe(rotatedEnv);
+      expect(call[3]).toEqual({ ...rotatedEnv, AZITO_WINDOW_ID: '1' });
     }
   });
 
@@ -567,7 +569,7 @@ describe('WindowRespawnService.respawn — supervisor wrap', () => {
     await service.respawn(1, makeServer());
 
     expect(tmux.splitPaneByHandle).toHaveBeenCalledTimes(1);
-    expect(tmux.splitPaneByHandle.mock.calls[0][3]).toEqual({ AZITO_UI_TOKEN: 'ui-token-fixture' });
+    expect(tmux.splitPaneByHandle.mock.calls[0][3]).toEqual({ AZITO_UI_TOKEN: 'ui-token-fixture', AZITO_WINDOW_ID: '1' });
   });
 
   // Issue #29 review (9th pass), Important finding 2: createPlainWindow only
@@ -644,9 +646,9 @@ describe('WindowRespawnService.respawn — primary vs. secondary task window tok
     await service.respawn(2, makeServer());
 
     expect(paneEnvService.buildEnvForNewWindow).not.toHaveBeenCalled();
-    expect(paneEnvService.buildEnvForSecondaryWindow).toHaveBeenCalledWith(task, expect.anything());
+    expect(paneEnvService.buildEnvForSecondaryWindow).toHaveBeenCalledWith(task, expect.anything(), 2);
     expect(tmux.openWindow).toHaveBeenCalledWith(
-      expect.anything(), 'azito', 'task-5-side', { exactName: true, extraEnv: { AZITO_TASK_ID: '1' }, kind: 'tmux' },
+      expect.anything(), 'azito', 'task-5-side', { exactName: true, extraEnv: { AZITO_TASK_ID: '1', AZITO_WINDOW_ID: '2' }, kind: 'tmux' },
     );
   });
 
@@ -806,7 +808,7 @@ describe('WindowRespawnService.respawn — window name preservation', () => {
 
     expect(tmux.closeWindow).toHaveBeenCalledWith(expect.anything(), { kind: 'tmux', workspace: 'azito', window: 'task-1--ab12' });
     expect(tmux.openWindow).toHaveBeenCalledWith(
-      expect.anything(), 'azito', 'task-1--ab12', { exactName: true, extraEnv: { AZITO_UI_TOKEN: 'ui-token-fixture' }, kind: 'tmux' },
+      expect.anything(), 'azito', 'task-1--ab12', { exactName: true, extraEnv: { AZITO_UI_TOKEN: 'ui-token-fixture', AZITO_WINDOW_ID: '1' }, kind: 'tmux' },
     );
   });
 
@@ -1020,7 +1022,7 @@ describe('WindowRespawnService.respawn — window name preservation', () => {
     const result = await service.respawn(1, makeServer());
 
     expect(tmux.openWorkspace).toHaveBeenCalledWith(
-      expect.anything(), 'azito', { windowName: 'task-1--ab12', exactName: true, extraEnv: { AZITO_UI_TOKEN: 'ui-token-fixture' }, kind: 'tmux' },
+      expect.anything(), 'azito', { windowName: 'task-1--ab12', exactName: true, extraEnv: { AZITO_UI_TOKEN: 'ui-token-fixture', AZITO_WINDOW_ID: '1' }, kind: 'tmux' },
     );
     expect(tmux.openWindow).not.toHaveBeenCalled();
     expect(result.tmuxTarget).toBe('azito:task-1--ab12');
@@ -1752,7 +1754,7 @@ describe('WindowRespawnService.respawn — concurrent respawns for the same task
       update: vi.fn((_id: number, fields: Partial<Window>) => {
         windowRow = { ...windowRow, ...fields };
       }),
-      updateAgentSessionIdByWindow: vi.fn(),
+      updateAgentSessionIdByWindow: vi.fn(), updateClaudeSessionByPane: vi.fn(),
       remove: vi.fn(),
       removeByServerAndTarget: vi.fn(() => 0),
       updatePaneLayout: vi.fn(),
@@ -1833,11 +1835,11 @@ describe('WindowRespawnService.respawn — concurrent respawns for the same task
     const events = new EventEmitter();
     let generationCounter = 0;
     const paneEnvService = {
-      buildEnvForNewWindow: vi.fn(() => {
+      buildEnvForNewWindow: vi.fn((_task: unknown, _server: unknown, windowId?: number) => {
         generationCounter += 1;
-        return { env: { AZITO_TASK_TOKEN: 'azt.task.1.' + 'a'.repeat(64), AZITO_TASK_ID: '1' }, tokenId: generationCounter };
+        return { env: { AZITO_TASK_TOKEN: 'azt.task.1.' + 'a'.repeat(64), AZITO_TASK_ID: '1', ...(windowId === undefined ? {} : { AZITO_WINDOW_ID: String(windowId) }) }, tokenId: generationCounter };
       }),
-      buildEnvForSecondaryWindow: vi.fn(() => ({ AZITO_TASK_ID: '1' })),
+      buildEnvForSecondaryWindow: vi.fn((_task: unknown, _server: unknown, windowId?: number) => ({ AZITO_TASK_ID: '1', ...(windowId === undefined ? {} : { AZITO_WINDOW_ID: String(windowId) }) })),
       revokeGeneration: vi.fn(),
       revokeForDestroyedWindow: vi.fn(),
     } as any;
@@ -2553,7 +2555,7 @@ describe('WindowRespawnService.respawn — a host that starts a worker as a prog
 
     const created = tmux.openWindow.mock.calls[0] as unknown as [unknown, string, string, { program: { argv: string[]; cwd: string; cols: number; rows: number }; extraEnv: Record<string, string> }];
     expect(created[3].program).toEqual({ argv: ['claude', '--resume', 'abc', '--dangerously-skip-permissions'], cwd: 'C:\\work\\app', cols: 120, rows: 40 });
-    expect(created[3].extraEnv).toEqual({ AZITO_UI_TOKEN: 'ui-token-fixture' });
+    expect(created[3].extraEnv).toEqual({ AZITO_UI_TOKEN: 'ui-token-fixture', AZITO_WINDOW_ID: '7' });
     expect(sentCommands).toEqual([]);
     expect(tmux.resolvePane).not.toHaveBeenCalled();
   });
@@ -2675,6 +2677,72 @@ describe('WindowRespawnService.respawn — a conversation that was never written
     expect(built.windowRepo.update).not.toHaveBeenCalled();
     expect(built.sentCommands).toEqual([]);
   }
+
+  it('passes the recorded directory through the pane environment without putting it in the shell command', async () => {
+    const directory = "/tmp/Claude $HOME 'quoted'";
+    const probe = { exists: vi.fn(async () => true) };
+    const { tmux, sentCommands, outcome } = await respawnWith(makeWindow({ agentSessionId: SESSION, claudeConfigDir: directory, claudeConfigDirExplicit: true }), probe);
+    expect(outcome).toBeNull();
+    expect(probe.exists).toHaveBeenCalledWith(expect.anything(), 'claude', SESSION, directory);
+    const options = tmux.openWindow.mock.calls[0][3] as unknown as { extraEnv: Record<string, string> };
+    expect(options.extraEnv.AZITO_RESUME_CLAUDE_CONFIG_DIR).toBe(directory);
+    expect(sentCommands.join('\n')).toContain('CLAUDE_CONFIG_DIR="$AZITO_RESUME_CLAUDE_CONFIG_DIR"');
+    expect(sentCommands.join('\n')).not.toContain(directory);
+    const actual = execFileSync('bash', ['-c', `export CLAUDE_CONFIG_DIR=/shell-override; CLAUDE_CONFIG_DIR="$AZITO_RESUME_CLAUDE_CONFIG_DIR" bash -c 'printf %s "$CLAUDE_CONFIG_DIR"'`], {
+      env: { ...process.env, AZITO_RESUME_CLAUDE_CONFIG_DIR: directory }, encoding: 'utf8',
+    });
+    expect(actual).toBe(directory);
+  });
+
+  it('unsets CLAUDE_CONFIG_DIR when the recorded pane used the default', async () => {
+    const directory = '/home/user/.claude';
+    const probe = { exists: vi.fn(async () => true) };
+    const { tmux, sentCommands, outcome } = await respawnWith(makeWindow({ agentSessionId: SESSION, claudeConfigDir: directory, claudeConfigDirExplicit: false }), probe);
+    expect(outcome).toBeNull();
+    expect(probe.exists).toHaveBeenCalledWith(expect.anything(), 'claude', SESSION, directory);
+    const options = tmux.openWindow.mock.calls[0][3] as unknown as { extraEnv: Record<string, string> };
+    expect(options.extraEnv.AZITO_RESUME_CLAUDE_CONFIG_DIR).toBeUndefined();
+    expect(sentCommands.join('\n')).toContain('(unset CLAUDE_CONFIG_DIR; ');
+    const actual = execFileSync('bash', ['-c', `export CLAUDE_CONFIG_DIR=/shell-override; claude() { printf %s "\${CLAUDE_CONFIG_DIR-unset}"; }; (unset CLAUDE_CONFIG_DIR; claude)`], { encoding: 'utf8' });
+    expect(actual).toBe('unset');
+  });
+
+  it('uses fish-compatible syntax when resuming a fish pane', async () => {
+    const window = makeWindow({ agentSessionId: SESSION, claudeConfigDir: '/home/user/.claude', claudeConfigDirExplicit: false });
+    const built = buildService({ window, strategyFactory: claudeFactory, conversationProbe: { exists: vi.fn(async () => true) } });
+    built.tmux.paneCommandByHandle.mockResolvedValue('fish');
+    await built.service.respawn(window.id, makeServer());
+    expect(built.sentCommands.join('\n')).toContain('env -u CLAUDE_CONFIG_DIR ');
+    expect(built.sentCommands.join('\n')).not.toContain('(unset CLAUDE_CONFIG_DIR;');
+  });
+
+  it('restores separate pane directories through their pane environments', async () => {
+    const paneLayout = { layout: '', panes: [
+      { index: 0, command: null, workingDirectory: null, title: null, workerType: 'claude', agentSessionId: SESSION, claudeConfigDir: '/config one', claudeConfigDirExplicit: true },
+      { index: 1, command: null, workingDirectory: null, title: null, workerType: 'claude', agentSessionId: 'second', claudeConfigDir: '/config two', claudeConfigDirExplicit: true },
+    ] };
+    const probe = { exists: vi.fn(async () => true) };
+    const built = buildService({ window: makeWindow({ paneLayout, agentSessionId: SESSION }), strategyFactory: claudeFactory, conversationProbe: probe });
+    built.tmux.listPanesByRef.mockResolvedValue([{ ordinal: 1, handle: '%0', title: '', command: 'bash', active: true }, { ordinal: 2, handle: '%1', title: '', command: 'bash', active: false }]);
+    await built.service.respawn(1, makeServer());
+    expect(probe.exists).toHaveBeenCalledWith(expect.anything(), 'claude', SESSION, '/config one');
+    expect(probe.exists).toHaveBeenCalledWith(expect.anything(), 'claude', 'second', '/config two');
+    expect(built.tmux.splitPaneByHandle.mock.calls[0][3]).toMatchObject({ AZITO_RESUME_CLAUDE_CONFIG_DIR_0: '/config one', AZITO_RESUME_CLAUDE_CONFIG_DIR_1: '/config two' });
+    expect(built.sentCommands.join('\n')).toContain('CLAUDE_CONFIG_DIR="$AZITO_RESUME_CLAUDE_CONFIG_DIR_0"');
+    expect(built.sentCommands.join('\n')).toContain('CLAUDE_CONFIG_DIR="$AZITO_RESUME_CLAUDE_CONFIG_DIR_1"');
+  });
+
+  it('resumes a sleeping window from before the migration using the process source', async () => {
+    conversation('old');
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    try {
+      const { sentCommands, outcome } = await respawnWith(makeWindow({ sleeping: true, agentSessionId: SESSION }), probeOver());
+      expect(outcome).toBeNull();
+      expect(sentCommands.join('\n')).toContain(`claude --resume ${SESSION}`);
+      if (process.platform === 'win32') expect(warn).not.toHaveBeenCalledWith(expect.stringContaining('no recorded Claude config directory'));
+      else expect(warn).toHaveBeenCalledWith(expect.stringContaining('no recorded Claude config directory'));
+    } finally { warn.mockRestore(); }
+  });
 
   it('starts a window whose conversation file exists nowhere with --session-id <id>', async () => {
     const { sentCommands, outcome } = await respawnWith(makeWindow({ agentSessionId: SESSION, workingDirectory: '/work/app' }), probeOver());

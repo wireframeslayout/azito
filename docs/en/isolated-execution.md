@@ -518,6 +518,17 @@ including isolated ones. The decision, and why it does not weaken isolation:
   it as text; a prompt-injected agent can write misleading text into its own log, exactly as it can
   into its pane.
 
+On POSIX local servers, the Claude SessionStart hook records the pane's effective configuration directory
+with the conversation ID. The window's chat log and the conversation existence check during respawn use
+that recorded directory. Respawn also preserves whether `CLAUDE_CONFIG_DIR` was set, so Claude continues to use its original global configuration. If it was not recorded (including windows asleep before the update or windows
+whose hook did not arrive), they use the hub process configuration as before; respawn logs the reason and
+includes it in any check failure. A mismatch with the pane can still cause an incorrect result. Check that
+the hook is installed and delivered, and align `CLAUDE_CONFIG_DIR` in the hub and pane before retrying.
+
+Agent servers are outside this improvement and are tracked in [#609](https://github.com/wireframeslayout/azito/issues/609).
+Windows, SSH transcript reading, Codex configuration, and the search scope of conversation lists without a
+window are unchanged. On an agent, align the agent process and pane configuration before retrying.
+
 The subagent endpoints also accept no paths: they identify conversations by parent session UUID and subagent ID.
 
 If you would rather not surface an isolated server's conversation in the hub UI, leave the window in
@@ -532,3 +543,5 @@ A Windows agent cannot be an isolated server: declaring `isolationIntent` is ref
 - [Security Configuration & Environment Setup Guide](./security-setup.md) -- Principal separation (operator/task), enabling scoped auth
 - [Task Management Guide](./tasks.md) -- Task execution flow, the phase loop
 - [Code Distribution](./code-distribution.md) -- How hub-proxied code distribution works (bare mirror, bundle transfer, incremental delivery), and where it applies beyond isolated servers
+
+See also [session tracking and hooks](activity-detection.md).

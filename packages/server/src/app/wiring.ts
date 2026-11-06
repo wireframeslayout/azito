@@ -432,9 +432,14 @@ function buildAgentRecoveryWatchdog(infra: SharedInfra, repos: Repositories): Ag
   return new AgentRecoveryWatchdog({
     listServers: () => repos.serverRepo.findAll(),
     checkAgent: async (server) => { await infra.transportFactory.getAgentTransport(server).fetchHealth(); },
-    recoverAgent: async (server) => {
+    onFirewallProblem: (server, diagnosis) => infra.notificationBus.emit({ type: 'server:firewall', payload: { serverName: server.name, diagnosis } }),
+    inspectFirewall: async (server) => {
+      if (!server.host || !server.agentPort) throw new Error('the server has no agent address or port');
+      return infra.agentInstaller.inspectAgentFirewall(sshHostOf(server), server.host, server.agentPort);
+    },
+    recoverAgent: async (server, force) => {
       if (!server.host || !server.agentToken) throw new Error('the server has no agent address or token');
-      return infra.agentInstaller.recoverAgent(sshHostOf(server), server.host, server.agentToken, server.hostProfile, server.muxRuntime);
+      return infra.agentInstaller.recoverAgent(sshHostOf(server), server.host, server.agentToken, server.hostProfile, server.muxRuntime, force);
     },
     isMisaoDown: async (server) => {
       return isManagedMisaoDown(await infra.transportFactory.getAgentTransport(server).fetchMisaoStatus());

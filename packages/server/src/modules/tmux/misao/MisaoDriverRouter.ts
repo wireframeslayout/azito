@@ -48,6 +48,7 @@ export class MisaoDriverRouter implements IMuxClient {
   async openPaneInWindow(server: ServerConfig, ref: MuxRef, opts?: Parameters<IMuxClient['openPaneInWindow']>[2]): Promise<PaneHandle> { return this.to(server).openPaneInWindow(server, ref, opts); }
   async closePane(server: ServerConfig, handle: PaneHandle): Promise<ExecResult> { return this.to(server).closePane(server, handle); }
   async captureScreen(server: ServerConfig, handle: PaneHandle, start?: number, end?: number): Promise<ExecResult> { return this.to(server).captureScreen(server, handle, start, end); }
+  async submitInputByHandle(server: ServerConfig, handle: PaneHandle): Promise<void> { return this.to(server).submitInputByHandle(server, handle); }
   async sendKeysToHandle(server: ServerConfig, handle: PaneHandle, keys: string[]): Promise<void> { return this.to(server).sendKeysToHandle(server, handle, keys); }
   async sendTextToHandle(server: ServerConfig, handle: PaneHandle, text: string): Promise<void> { return this.to(server).sendTextToHandle(server, handle, text); }
   async pasteTextToHandle(server: ServerConfig, handle: PaneHandle, text: string): Promise<void> { return this.to(server).pasteTextToHandle(server, handle, text); }

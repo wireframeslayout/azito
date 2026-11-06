@@ -7,5 +7,5 @@ import type { ServerConfig } from '../servers/Server';
  * (unreadable log, agent unreachable or outdated, a server whose logs cannot be read) throws a ConversationCheckError.
  */
 export interface ConversationProbe {
-  exists(server: ServerConfig, agentType: string, sessionId: string): Promise<boolean>;
+  exists(server: ServerConfig, agentType: string, sessionId: string, claudeConfigDir?: string | null): Promise<boolean>;
 }

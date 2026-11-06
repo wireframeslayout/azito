@@ -1,3 +1,4 @@
+import { WINDOWS_PROCESS_RECORDS } from '../../../shared/os/windowsProcessInfo';
 import { powershellDialect } from '../../../shared/os/shellDialect';
 import { redactSecretText } from '../../../shared/redactSecretText';
 import { RESOLVE_LONG, USES_FOLDER, lines, tailBelow, unreadable, type ScriptOutcome } from './windowsAgentUninstallScripts';
@@ -5,23 +6,30 @@ import { RESOLVE_LONG, USES_FOLDER, lines, tailBelow, unreadable, type ScriptOut
 // ─── The firewall rule ───
 
 /**
- * Looks for the rule the install adds (`New-NetFirewallRule -DisplayName "AZITO Agent (TCP <port>)" -Direction Inbound ...`, see
- * `firewallRuleCommand`; it has no name of its own, so Windows gives it a GUID) and REPORTS it. Nothing is removed: a display name built
- * from the port says what the install called the rule, not that this rule is the install's, and there are more conditions on a rule than
- * a person or a script can be sure to have compared. Each rule found is printed as `RULE|name|action|profile|program|protocol|port|local|remote`
- * and the person is told how to remove the one that is the install's. A list that cannot be read is an error, never "no rule".
+ * Reports matching inbound rules without removing them. An elevated session reads the rule IDs through NetSecurity; otherwise COM
+ * only provides names, and an empty listing is unknown. A matching name does not prove ownership, so the operator must inspect each rule.
  */
 export function firewallInspectScript(displayName: string): string {
   const q = powershellDialect.quote;
   return [
     `$name = ${q(displayName)}`,
-    'function Join-All($values) { (@($values) | ForEach-Object { "$_" }) -join \',\' }',
     'function Clean($text) { ("$text" -replace \'[\\r\\n|]+\', \' \') }',
-    '$rules = @(Get-NetFirewallRule -Direction Inbound -ErrorAction Stop | Where-Object { $_.DisplayName -eq $name })',
-    'if ($rules.Count -eq 0) { Write-Output \'ABSENT\'; exit 0 }',
-    'foreach ($rule in $rules) {',
-    '  $app = $rule | Get-NetFirewallApplicationFilter; $ports = $rule | Get-NetFirewallPortFilter; $address = $rule | Get-NetFirewallAddressFilter',
-    '  Write-Output (\'RULE|\' + (Clean $rule.Name) + \'|\' + (Clean $rule.Action) + \'|\' + (Clean $rule.Profile) + \'|\' + (Clean $app.Program) + \'|\' + (Clean $ports.Protocol) + \'|\' + (Clean (Join-All $ports.LocalPort)) + \'|\' + (Clean (Join-All $address.LocalAddress)) + \'|\' + (Clean (Join-All $address.RemoteAddress)))',
+    '$admin = ([Security.Principal.WindowsPrincipal][Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)',
+    'if ($admin) {',
+    '  $rules = @(Get-NetFirewallRule -Direction Inbound -ErrorAction Stop | Where-Object { $_.DisplayName -eq $name })',
+    '  if ($rules.Count -eq 0) { Write-Output \'ABSENT\'; exit 0 }',
+    '  foreach ($rule in $rules) {',
+    '    $app = $rule | Get-NetFirewallApplicationFilter -ErrorAction Stop; $ports = $rule | Get-NetFirewallPortFilter -ErrorAction Stop; $address = $rule | Get-NetFirewallAddressFilter -ErrorAction Stop',
+    '    Write-Output (\'RULE|\' + (Clean $rule.Name) + \'|\' + (Clean $rule.Action) + \'|\' + (Clean $rule.Profile) + \'|\' + (Clean $app.Program) + \'|\' + (Clean $ports.Protocol) + \'|\' + (Clean ($ports.LocalPort -join \',\')) + \'|\' + (Clean ($address.LocalAddress -join \',\')) + \'|\' + (Clean ($address.RemoteAddress -join \',\')))',
+    '  }',
+    '  exit 0',
+    '}',
+    '$policy = New-Object -ComObject HNetCfg.FwPolicy2 -ErrorAction Stop',
+    '$foundRules = @($policy.Rules | Where-Object { $_.Direction -eq 1 -and $_.Name -eq $name })',
+    'if ($foundRules.Count -eq 0) { Write-Output \'UNKNOWN\'; exit 0 }',
+    'foreach ($r in $foundRules) {',
+    '  $action = if ($r.Action -eq 0) { \'Block\' } else { \'Allow\' }',
+    '  Write-Output (\'COMRULE|\' + (Clean $r.Name) + \'|\' + $action + \'|\' + (Clean $r.Profiles) + \'|\' + (Clean $r.ApplicationName) + \'|\' + (Clean $r.Protocol) + \'|\' + (Clean $r.LocalPorts) + \'|\' + (Clean $r.LocalAddresses) + \'|\' + (Clean $r.RemoteAddresses))',
     '}',
   ].join('\n');
 }
@@ -30,6 +38,12 @@ export function parseFirewallOutput(output: string, displayName: string): Script
   const all = lines(output);
   if (all.length === 0) throw unreadable(output);
   if (all.length === 1 && all[0] === 'ABSENT') return { outcome: 'absent' };
+  if (all.length === 1 && all[0] === 'UNKNOWN') return { outcome: 'skipped', detail: 'Windows Firewall rules could not be conclusively inspected. Check for the agent rule in Windows Firewall with Advanced Security.' };
+  const comRules = all.filter((line) => line.startsWith('COMRULE|'));
+  if (comRules.length > 0) {
+    const listed = comRules.map((line) => `- ${redactSecretText(line.slice(8)).slice(0, 1000).replace(/\|/g, ', ')}`).join('\n');
+    return { outcome: 'skipped', detail: `Windows reported ${comRules.length} inbound rule(s) named "${displayName}"; their identity and effective policy cannot be verified here. They were left in place:\n${listed}\nInspect them in Windows Firewall with Advanced Security before removing any rule.` };
+  }
   const rules = all.filter((l) => l.startsWith('RULE|')).map((l) => {
     const [, name = '', action = '', profile = '', program = '', protocol = '', port = '', local = '', remote = ''] = l.split('|').map((v) => redactSecretText(v).slice(0, 200));
     return { name, action, profile, program, protocol, port, local, remote };
@@ -95,15 +109,12 @@ export function misaoHubScript(input: MisaoHubInput): string {
   return [
     `$root = ${q(input.root)}`,
     ...(input.hubRoot !== undefined ? [`$hubRoot = ${q(input.hubRoot)}`] : []),
-    '$me = [Security.Principal.WindowsIdentity]::GetCurrent().User.Value',
     ...RESOLVE_LONG,
-    'function Get-Owner($process) {',
-    '  try {',
-    '    $r = Invoke-CimMethod -InputObject $process -MethodName GetOwnerSid -ErrorAction Stop',
-    '    if ($r.ReturnValue -ne 0 -or -not $r.Sid) { return \'unknown\' }',
-    '    if ($r.Sid -eq $me) { return \'mine\' } else { return \'other\' }',
-    '  } catch { return \'unknown\' }',
-    '}',
+    ...(input.looksForHub ? [
+      '$me = [Security.Principal.WindowsIdentity]::GetCurrent().User.Value',
+      '$elevated = ([Security.Principal.WindowsPrincipal][Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)',
+      ...WINDOWS_PROCESS_RECORDS,
+    ] : []),
     ...(input.hubRoot !== undefined ? [
       '$here = Resolve-Long $root; $hub = Resolve-Long $hubRoot',
       // A folder that is there but cannot be resolved (a link on the way, unreadable) may be the hub's; one that is not there has nothing to remove.
@@ -112,8 +123,12 @@ export function misaoHubScript(input: MisaoHubInput): string {
     ] : []),
     ...(input.looksForHub ? [
       `$hubPattern = ${q(HUB_COMMAND_LINE_PATTERN)}`,
-      'foreach ($candidate in @(Get-CimInstance Win32_Process -Filter "Name = \'node.exe\'" | Where-Object { $_.CommandLine -and ($_.CommandLine -match $hubPattern) })) {',
-      '  $owner = Get-Owner $candidate',
+      'foreach ($candidate in @(All | Where-Object { $_.Name -eq \'node.exe\' })) {',
+      '  $owner = if (-not $candidate.OwnerSid) { \'unknown\' } elseif ($candidate.OwnerSid -eq $me) { \'mine\' } else { \'other\' }',
+      '  if ($owner -eq \'other\') { continue }',
+      '  if ($owner -eq \'unknown\' -and -not $elevated) { continue }',
+      '  if (-not $candidate.CommandLine) { Write-Output ("UNKNOWN " + $candidate.ProcessId); exit 0 }',
+      '  if ($candidate.CommandLine -notmatch $hubPattern) { continue }',
       '  if ($owner -eq \'unknown\') { Write-Output ("UNKNOWN " + $candidate.ProcessId); exit 0 }',
       '  if ($owner -eq \'mine\') { Write-Output ("HUB " + $candidate.ProcessId); exit 0 }',
       '}',
@@ -134,16 +149,17 @@ export function misaoDaemonScript(root: string, home: string): string {
   return [
     `$root = ${q(root)}; $tail = ${q(tailBelow(home, root))}`,
     ...USES_FOLDER,
-    'function All { @(Get-CimInstance Win32_Process -ErrorAction Stop | Where-Object { $_.ProcessId -ne $PID }) }',
     'foreach ($d in @(All | Where-Object { $_.Name -eq \'misao.exe\' -and (Uses $_) })) {',
     '  $o = Owner $d',
     '  if ($o -eq \'unknown\') { Write-Output ("UNKNOWN " + $d.ProcessId); exit 0 }',
     '  if ($o -ne \'mine\') { continue }',
-    '  $id = $d.ParentProcessId; $byTask = $false',
+    '  $id = $d.ParentProcessId; $childStart = $d.CreationDate; $byTask = $false',
     '  for ($i = 0; $i -lt 4 -and $id; $i++) {',
-    '    $parent = Get-CimInstance Win32_Process -Filter "ProcessId = $id"',
-    '    if (-not $parent) { break }',
+    '    $process = Get-Process -Id $id -ErrorAction SilentlyContinue; $parent = if ($process) { Read-Process $process } else { $null }',
+    '    if (-not $parent -or -not $parent.CreationDate -or -not $childStart -or $parent.CreationDate -gt $childStart) { break }',
+    '    if ((Owner $parent) -ne \'mine\') { break }',
     '    if ($parent.Name -eq \'conhost.exe\' -and $parent.CommandLine -match \'--headless\') { $byTask = $true; break }',
+    '    $childStart = $parent.CreationDate',
     '    $id = $parent.ParentProcessId',
     '  }',
     '  if (-not $byTask) { Write-Output ("FOREIGN " + $d.ProcessId); exit 0 }',

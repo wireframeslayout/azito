@@ -32,11 +32,12 @@ export class PaneHandleResolver {
     private serverRepo: IServerRepository,
   ) {}
 
-  async resolveWindowByPaneHandle(serverName: string, handle: PaneHandle): Promise<ResolvedWindow | null> {
+  /** `fresh` looks this one pane up again instead of trusting its cached entry (the result is cached as usual; other panes' entries are kept). */
+  async resolveWindowByPaneHandle(serverName: string, handle: PaneHandle, opts?: { fresh?: boolean }): Promise<ResolvedWindow | null> {
     const key = cacheKey(serverName, handle);
     const now = Date.now();
     const cached = this.cache.get(key);
-    if (cached && cached.expiresAt > now) return cached.result;
+    if (!opts?.fresh && cached && cached.expiresAt > now) return cached.result;
 
     const server = this.serverRepo.findByName(serverName);
     if (!server) {
@@ -79,6 +80,10 @@ export class PaneHandleResolver {
     this.resolveWindowByPaneHandle(serverName, handle).catch((err) => {
       console.warn('[PaneHandleResolver] warm failed for %s::%s: %s', serverName, muxPaneRef, (err as Error).message);
     });
+  }
+
+  invalidatePane(serverName: string, handle: string): void {
+    this.cache.delete(cacheKey(serverName, handle));
   }
 
   invalidate(serverName: string): void {

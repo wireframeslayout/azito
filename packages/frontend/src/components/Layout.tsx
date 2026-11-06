@@ -6,6 +6,7 @@ import { useLocation } from 'react-router-dom';
 import ProjectSidebar from './ProjectSidebar';
 import { WorkspaceTargetsProvider } from '../hooks/useWorkspaceTargets';
 import { AgentActivityProvider } from '../hooks/useAgentActivity';
+import { LookoutProvider } from '../hooks/useLookout';
 import { NotificationCenterProvider } from '../hooks/useNotificationCenter';
 import { ToastProvider } from '../hooks/useToast';
 import { ConfirmProvider } from '../hooks/useConfirm';
@@ -43,6 +44,7 @@ export default function Layout() {
     <WorkspaceTargetsProvider>
     <CrossProjectNavigationProvider>
       <AgentActivityProvider>
+      <LookoutProvider>
       <NotificationCenterProvider>
       <GlobalSearchProvider>
       <ServerResourcesProvider servers={servers}>
@@ -112,6 +114,7 @@ export default function Layout() {
       </ServerResourcesProvider>
       </GlobalSearchProvider>
       </NotificationCenterProvider>
+      </LookoutProvider>
       </AgentActivityProvider>
     </CrossProjectNavigationProvider>
     </WorkspaceTargetsProvider>

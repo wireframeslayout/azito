@@ -1,14 +1,12 @@
 import * as path from 'path';
-import { misaoTaskArgumentsOf } from '../../../shared/os/taskScheduler/misaoTaskArguments';
 import type { TaskExecAction } from '../../../shared/os/taskScheduler/taskXmlRead';
 import { joinWindowsArgs } from '../../../shared/os/taskScheduler/windowsCommandLine';
-import { windowsMisaoPipe } from '../transport/agentMisaoSocket';
+import { KILL_CHILDREN_JOB, compressedTaskScript, decodedTaskScript, sameTaskAction } from '../../../shared/os/taskScheduler/taskLauncher';
+import { powershellDialect, powershellEncodedArgs } from '../../../shared/os/shellDialect';
 
 /** A release folder's name: what `windowsAgentLayout` accepts as a version. */
 export const RELEASE_NAME = '[A-Za-z0-9][A-Za-z0-9._-]*';
 const AGENT_VERSION_IN_ENTRY = new RegExp(`\\\\(${RELEASE_NAME})\\\\azito-agent\\.cjs"?$`);
-
-const escapeRegExp = (text: string): string => text.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 
 /** The `conhost.exe` both tasks run under (`--headless` gives the program a console without a window). */
 function conhostOf(systemRoot: string): string {
@@ -19,8 +17,46 @@ function conhostOf(systemRoot: string): string {
  * The program and the arguments of the agent's logon task. The ONE definition: the install writes the task from it, and the removal
  * recognises the install's task by building the same text again and comparing, not by parsing whatever is registered.
  */
-export function agentTaskAction(systemRoot: string, nodePath: string, envFile: string, entry: string): { executable: string; args: string[] } {
+export function legacyAgentTaskAction(systemRoot: string, nodePath: string, envFile: string, entry: string): { executable: string; args: string[] } {
   return { executable: conhostOf(systemRoot), args: ['--headless', nodePath, `--env-file=${envFile}`, entry] };
+}
+
+export function agentLauncherScript(nodePath: string, envFile: string, entry: string, taskName: string, job = ''): string {
+  const q = powershellDialect.quote;
+  return [
+    `$node = ${q(nodePath)}`, `$envFile = ${q(envFile)}`, `$entry = ${q(entry)}`, `$taskName = ${q(taskName)}`,
+    '$log = Join-Path (Split-Path -Parent $envFile) \'agent.log\'',
+    'function Log($m) { try { [IO.File]::AppendAllText($log, "[$([DateTime]::UtcNow.ToString(\'o\'))] launcher: $m`r`n") } catch {} }',
+    ...(job ? [`${job}\n`] : []),
+    'try { $parentId = (Get-CimInstance Win32_Process -Filter "ProcessId = $PID").ParentProcessId; $parentStart = (Get-Process -Id $parentId).StartTime } catch { Log "cannot find parent: $_"; exit 1 }',
+    'function ParentAlive { $p = Get-Process -Id $parentId -ErrorAction SilentlyContinue; return ($p -and $p.StartTime -eq $parentStart) }',
+    '$delay = 5',
+    'while (ParentAlive) {',
+    '  try { if (-not (Get-ScheduledTask -TaskPath \'\\\' -TaskName $taskName -ErrorAction Stop).Settings.Enabled) { Log "task disabled: not restarting"; exit 0 } } catch { Log "cannot check task state: $_"; exit 1 }',
+    '  if (-not (ParentAlive)) { exit 0 }',
+    '  $began = [DateTime]::UtcNow; $code = 1',
+    '  try {',
+    '    $info = New-Object System.Diagnostics.ProcessStartInfo',
+    '    $info.FileName = $node; $info.Arguments = \'"--env-file=\' + $envFile + \'" "\' + $entry + \'"\'; $info.UseShellExecute = $false; $info.CreateNoWindow = $true',
+    '    $child = [Diagnostics.Process]::Start($info)',
+    '    while (-not $child.WaitForExit(1000)) { if (-not (ParentAlive)) { $child.Kill(); $child.WaitForExit(); exit 0 } }',
+    '    $code = $child.ExitCode',
+    '  } catch { Log "start failed: $_" }',
+    '  if ($code -eq 0) { exit 0 }',
+    '  if (([DateTime]::UtcNow - $began).TotalSeconds -ge 300) { $delay = 5 }',
+    '  Log "exit $code; retry in $delay seconds"',
+    '  for ($i = 0; $i -lt $delay; $i++) { if (-not (ParentAlive)) { exit 0 }; Start-Sleep -Seconds 1 }',
+    '  $delay = [Math]::Min(60, $delay * 2)',
+    '}',
+  ].join('\n');
+}
+
+export function agentTaskAction(systemRoot: string, nodePath: string, envFile: string, entry: string, taskName: string): { executable: string; args: string[] } {
+  const powershell = path.win32.join(systemRoot, 'System32', 'WindowsPowerShell', 'v1.0', 'powershell.exe');
+  const script = agentLauncherScript(nodePath, envFile, entry, taskName, KILL_CHILDREN_JOB);
+  const args = ['--headless', powershell, ...powershellEncodedArgs(compressedTaskScript(script))];
+  if (joinWindowsArgs(args).length + conhostOf(systemRoot).length + 3 > 8191) throw new Error('The agent task command line exceeds the Windows limit');
+  return { executable: conhostOf(systemRoot), args };
 }
 
 /** What the removal learns from a task it has recognised as the install's. */
@@ -28,6 +64,7 @@ export interface AgentTaskIdentity {
   nodePath: string;
   /** The release folder the task runs the agent from. */
   version: string;
+  launcher?: boolean;
 }
 
 /**
@@ -39,7 +76,20 @@ export interface AgentTaskIdentity {
  * The node.exe and the release folder are the two parts the removal cannot know in advance. The node.exe has to be one token that is
  * quoted exactly as `joinWindowsArgs` quotes that path; the release folder has to be a plain version name; the rest is compared whole.
  */
-export function agentTaskIdentity(action: TaskExecAction, systemRoot: string, root: string, envFile: string): AgentTaskIdentity | undefined {
+export function agentTaskIdentity(action: TaskExecAction, systemRoot: string, root: string, envFile: string, taskName: string): AgentTaskIdentity | undefined {
+  const encoded = /-EncodedCommand ([A-Za-z0-9+/=]+)$/.exec(action.argumentsLine)?.[1];
+  if (encoded) {
+    const script = decodedTaskScript(encoded);
+    if (!script) return undefined;
+    const match = /\$node = '((?:''|[^'])*)'\n\$envFile = '((?:''|[^'])*)'\n\$entry = '((?:''|[^'])*)'/.exec(script);
+    if (!match) return undefined;
+    const [nodePath, foundEnv, entry] = match.slice(1).map((v) => v!.replace(/(['‘’‚‛])\1/g, '$1'));
+    if (!nodePath || foundEnv !== envFile || !entry || !/^[A-Za-z]:\\/.test(nodePath) || path.win32.basename(nodePath).toLowerCase() !== 'node.exe') return undefined;
+    const version = AGENT_VERSION_IN_ENTRY.exec(entry)?.[1];
+    if (!version || entry !== path.win32.join(root, version, 'azito-agent.cjs')) return undefined;
+    const expected = agentTaskAction(systemRoot, nodePath, envFile, entry, taskName);
+    return action.command.toLowerCase() === expected.executable.toLowerCase() && sameTaskAction(action.argumentsLine, joinWindowsArgs(expected.args)) ? { nodePath, version, launcher: true } : undefined;
+  }
   const head = `${joinWindowsArgs(['--headless'])} `;
   if (action.command.toLowerCase() !== conhostOf(systemRoot).toLowerCase()) return undefined;
   if (!action.argumentsLine.startsWith(head)) return undefined;
@@ -52,32 +102,6 @@ export function agentTaskIdentity(action: TaskExecAction, systemRoot: string, ro
   if (!/^[A-Za-z]:\\/.test(nodePath) || path.win32.basename(nodePath).toLowerCase() !== 'node.exe') return undefined;
   const version = AGENT_VERSION_IN_ENTRY.exec(tail)?.[1];
   if (version === undefined) return undefined;
-  const expected = agentTaskAction(systemRoot, nodePath, envFile, path.win32.join(root, version, 'azito-agent.cjs'));
+  const expected = legacyAgentTaskAction(systemRoot, nodePath, envFile, path.win32.join(root, version, 'azito-agent.cjs'));
   return tail === joinWindowsArgs(expected.args.slice(2)) ? { nodePath, version } : undefined;
-}
-
-/**
- * The release folder the misao task runs when `action` is exactly what the install writes for the misao in `root`: one program,
- * `conhost.exe`, and an arguments line equal to `misaoTaskArgumentsOf` (the very function that writes it) for `<root>\<version>\misao.exe`,
- * the log in `root` and the pipe made from `root` and the user. The version is the one part not known in advance: it is looked for in the
- * line (or in the launcher script it carries), and only a candidate that rebuilds the line exactly counts. Undefined = not known to be the
- * install's. `userName` is the account name without its domain (`os.userInfo().username` on the host), which the pipe name is made from.
- */
-export function misaoTaskVersion(action: TaskExecAction, systemRoot: string, root: string, userName: string): string | undefined {
-  if (action.command.toLowerCase() !== conhostOf(systemRoot).toLowerCase()) return undefined;
-  const encoded = /-EncodedCommand ([A-Za-z0-9+/=]+)/.exec(action.argumentsLine)?.[1];
-  const searched = `${action.argumentsLine}\n${encoded === undefined ? '' : Buffer.from(encoded, 'base64').toString('utf16le')}`;
-  const found = new RegExp(`${escapeRegExp(root)}\\\\(${RELEASE_NAME})\\\\misao\\.exe`, 'gi');
-  for (const match of searched.matchAll(found)) {
-    const version = match[1]!;
-    try {
-      const expected = misaoTaskArgumentsOf({
-        systemRoot, exe: path.win32.join(root, version, 'misao.exe'), root, logFile: path.win32.join(root, 'misao.log'), pipe: windowsMisaoPipe(root, userName),
-      });
-      if (expected === action.argumentsLine) return version;
-    } catch {
-      // A value that cannot be written to a misao task is not the install's.
-    }
-  }
-  return undefined;
 }

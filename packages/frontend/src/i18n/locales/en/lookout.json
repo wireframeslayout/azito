@@ -1,0 +1,38 @@
+{
+  "title": "Lookout",
+  "close": "Close Lookout",
+  "retry": "Retry",
+  "loadError": "Could not load activity.",
+  "loading": "Loading activity…",
+  "empty": "Nothing to show.",
+  "counts": {
+    "attention": "Needs attention",
+    "active": "In progress",
+    "finished": "Completed",
+    "failed": "Failed"
+  },
+  "sections": {
+    "attention": "Needs attention",
+    "active": "In progress",
+    "finished": "Completed since last visit"
+  },
+  "status": {
+    "blocked": "Blocked",
+    "waiting_input": "Waiting for input",
+    "pending_approval": "Pending approval",
+    "phase_review": "Review",
+    "failed": "Failed",
+    "working": "Working",
+    "finished": "Completed"
+  },
+  "summary": {
+    "off": "Summary unavailable",
+    "pending": "Preparing summary",
+    "error": "Summary unavailable",
+    "ready": "Summary"
+  },
+  "attentionCount": "{{count}} need attention",
+  "updated": "Updated {{time}}",
+  "emptyAttention": "Nothing needs your attention right now.",
+  "emptyActive": "Nothing is currently running."
+}

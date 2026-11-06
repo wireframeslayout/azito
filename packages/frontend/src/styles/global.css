@@ -1280,3 +1280,8 @@ input[aria-invalid="true"]:focus-visible { outline-color: var(--danger) !importa
 .aw-history-delete { opacity: 0; }
 .aw-history-row:hover .aw-history-delete,
 .aw-history-row:focus-within .aw-history-delete { opacity: 1; }
+
+.lookout-row { background: var(--bg-card); }
+.lookout-row:hover { background: var(--bg-hover); }
+.lookout-row:active { background: var(--selected-bg-strong); }
+.lookout-row:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }

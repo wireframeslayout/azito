@@ -2,6 +2,8 @@ import i18n from 'i18next';
 import { initReactI18next } from 'react-i18next';
 import { resolveInitialLanguage } from './detectLanguage';
 
+import enLookout from './locales/en/lookout.json';
+import jaLookout from './locales/ja/lookout.json';
 import enCommon from './locales/en/common.json';
 import enNavigation from './locales/en/navigation.json';
 import enSettings from './locales/en/settings.json';
@@ -47,6 +49,7 @@ function getStored(): string | null {
 i18n.use(initReactI18next).init({
   resources: {
     en: {
+      lookout: enLookout,
       common: enCommon,
       navigation: enNavigation,
       settings: enSettings,
@@ -64,6 +67,7 @@ i18n.use(initReactI18next).init({
       transcript: enTranscript,
     },
     ja: {
+      lookout: jaLookout,
       common: jaCommon,
       navigation: jaNavigation,
       settings: jaSettings,

@@ -1,3 +1,4 @@
+import { useLookout } from '../hooks/useLookout';
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { useTranslation } from 'react-i18next';
@@ -611,6 +612,9 @@ function WorkspaceInner() {
   }, [allTasks]);
 
   const titleData = useMemo(() => ({ windowById, taskById }), [windowById, taskById]);
+  const { setWorkspaceTitleData } = useLookout();
+  // 現在のプロジェクトの窓情報はカタログより新しいため、Lookout と共有する。
+  useEffect(() => { setWorkspaceTitleData(titleData); return () => setWorkspaceTitleData(null); }, [titleData, setWorkspaceTitleData]);
 
   const findTaskByTarget = useCallback(
     (target: string) => findTaskByTargetLib(target, [tasks, allTasks], windowById),
@@ -1166,9 +1170,9 @@ function WorkspaceInner() {
   // としての空状態（既存の dragHint）はそのまま維持する。
   const renderPaneEmpty = useCallback(() => (
     tabs.length === 0
-      ? <HomeFeed titleData={titleData} allTasks={allTasks} allProjects={allProjects} openTask={openTaskFromActiveWindow} connectPane={connectPaneFromActiveWindow} onAddWindow={handleOpenAddTabFromSwitcher} />
+      ? <HomeFeed allProjects={allProjects} openTask={openTaskFromActiveWindow} connectPane={connectPaneFromActiveWindow} onAddWindow={handleOpenAddTabFromSwitcher} />
       : <EmptyState title={t('workspace:pane.dragHint')} />
-  ), [tabs.length, titleData, allTasks, allProjects, openTaskFromActiveWindow, connectPaneFromActiveWindow, handleOpenAddTabFromSwitcher, t]);
+  ), [tabs.length, allProjects, openTaskFromActiveWindow, connectPaneFromActiveWindow, handleOpenAddTabFromSwitcher, t]);
 
   if (!project) {
     if (projectsLoaded && allProjects.length === 0) {
@@ -1410,14 +1414,14 @@ function WorkspaceInner() {
 
             <div style={{ flex: 1, position: 'relative', background: 'var(--ws-content)' }}>
               {tabs.length === 0 && (
-                <HomeFeed titleData={titleData} allTasks={allTasks} allProjects={allProjects} openTask={openTaskFromActiveWindow} connectPane={connectPaneFromActiveWindow} onAddWindow={handleOpenAddTabFromSwitcher} />
+                <HomeFeed allProjects={allProjects} openTask={openTaskFromActiveWindow} connectPane={connectPaneFromActiveWindow} onAddWindow={handleOpenAddTabFromSwitcher} />
               )}
 
               {tabs.map((tab) => renderTabContent(tab, { position: 'absolute', inset: 0 }, tab.id === activeTabId, closeTabAndRefreshBrowser))}
             </div>
 
             {(() => {
-              const bar = <MobileStatusBar titleData={titleData} allTasks={allTasks} openTask={openTaskFromActiveWindow} connectPane={connectPaneFromActiveWindow} />;
+              const bar = <MobileStatusBar openTask={openTaskFromActiveWindow} connectPane={connectPaneFromActiveWindow} />;
               // mobile-shell-slot と同じ理由（Layout がグローバルページ表示中にこのサブツリーを
               // display:none で隠しても、ポータル先はその外側にあるため常駐し続ける）で
               // mobile-status-slot（Layout.tsx）へ portal する。

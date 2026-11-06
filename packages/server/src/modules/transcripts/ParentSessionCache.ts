@@ -50,5 +50,5 @@ export class ParentSessionCache {
 }
 
 function linkOf(window: Window): string {
-  return JSON.stringify([window.serverName, window.agentSessionId, window.taskId]);
+  return JSON.stringify([window.serverName, window.agentSessionId, window.taskId, window.claudeConfigDir, window.claudePaneSessions, window.paneLayout]);
 }

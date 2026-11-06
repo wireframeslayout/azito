@@ -3,9 +3,10 @@ import { beforeEach, expect, it, vi } from 'vitest';
 import { api } from '../api/client';
 import type { AgentActivityPayload } from '../types/notification';
 import { AgentActivityProvider, useAgentActivity } from './useAgentActivity';
+import { useActiveWindowRows } from './useActiveWindowRows';
 
 vi.mock('../api/client', () => ({ api: vi.fn() }));
-const events = vi.hoisted(() => ({ handlers: {} as { onAgentActivity: (payload: AgentActivityPayload) => void; onConnected: () => void } }));
+const events = vi.hoisted(() => ({ handlers: {} as { onAgentActivity: (payload: AgentActivityPayload) => void; onConnected: () => void; onWindowRenamed: (payload: { serverName: string; target: string; newName: string; windowId?: number }) => void } }));
 vi.mock('./useNotificationChannel', () => ({ useNotificationChannel: (handlers: typeof events.handlers) => { events.handlers = handlers; } }));
 const targets = vi.hoisted(() => ({ activeTabId: null as string | null, focusedTarget: null as string | null }));
 vi.mock('./useWorkspaceTargets', () => ({ useWorkspaceTargets: () => targets }));
@@ -14,7 +15,8 @@ const running: AgentActivityPayload = { serverName: 'local', target: 's:1', runn
 let pending: Array<{ resolve: (value: AgentActivityPayload[]) => void; reject: (reason: Error) => void }>;
 function View() {
   const activity = useAgentActivity();
-  return <><output>{JSON.stringify({ entries: [...activity.entries.values()], finished: activity.finishedEntries, indicator: activity.windowIndicator('local', 's:1') })}</output>
+  return <><output>{JSON.stringify({ entries: [...activity.entries.values()], finished: activity.finishedEntries, indicator: activity.windowIndicator('local', 's:1'), snapshotStatus: activity.snapshotStatus })}</output>
+    <button onClick={() => activity.retrySnapshot()}>retry</button>
     <button onClick={() => activity.markFinishedSeen('local', 's:1')}>seen</button>
     <button onClick={() => activity.setRetention({ maxCount: 0, retentionMs: 3600000 })}>zero</button></>;
 }
@@ -136,4 +138,70 @@ it('marks an unread completion when focus and the event change together', async 
   });
   expect(state().finished[0].seenAt).toEqual(expect.any(Number));
   vi.restoreAllMocks();
+});
+
+
+it('exposes failure and retries while preserving events received during the retry', async () => {
+  mount();
+  expect(state().snapshotStatus).toBe('loading');
+  send(running);
+  await act(async () => pending[0].reject(new Error('offline')));
+  expect(state()).toMatchObject({ snapshotStatus: 'error', entries: [{ target: 's:1' }] });
+  act(() => screen.getByText('retry').click());
+  expect(state().snapshotStatus).toBe('loading');
+  send({ ...running, status: 'blocked' });
+  await resolve(1, [running]);
+  expect(state()).toMatchObject({ snapshotStatus: 'ready', entries: [{ status: 'blocked' }] });
+});
+
+it('ignores failure from an older request after a retry succeeds', async () => {
+  mount();
+  act(() => screen.getByText('retry').click());
+  await resolve(1, [running]);
+  await act(async () => pending[0].reject(new Error('offline')));
+  expect(state()).toMatchObject({ snapshotStatus: 'ready', entries: [{ target: 's:1' }] });
+});
+
+it('shows rename in active rows without an activity transition, including during snapshot loading', async () => {
+  function Rows() {
+    const { rows } = useActiveWindowRows({ windowById: new Map(), taskById: new Map() });
+    return <output>{rows.map((row) => row.title).join(',')}</output>;
+  }
+  render(<AgentActivityProvider><Rows /></AgentActivityProvider>);
+  send(running);
+  act(() => events.handlers.onWindowRenamed({ serverName: 'local', target: 's:1', newName: 'Renamed' }));
+  expect(screen.getByRole('status')).toHaveTextContent('Renamed');
+  await resolve(0, [running]);
+  expect(screen.getByRole('status')).toHaveTextContent('Renamed');
+});
+
+it('retains an unregistered rename through status, reconnect and completion, then forgets it', async () => {
+  mount();
+  await resolve(0, [running]);
+  act(() => events.handlers.onWindowRenamed({ serverName: 'local', target: 's:1', newName: 'Renamed' }));
+  send({ ...running, status: 'blocked', label: 'Old' });
+  expect(state().entries).toMatchObject([{ label: 'Renamed', status: 'blocked' }]);
+  act(() => events.handlers.onConnected());
+  await resolve(1, [{ ...running, label: 'Old' }]);
+  expect(state().entries).toMatchObject([{ label: 'Renamed' }]);
+  send({ ...running, running: false, reason: 'completed', label: 'Old' });
+  expect(state().finished).toMatchObject([{ label: 'Renamed' }]);
+  send({ ...running, label: 'Replacement' });
+  expect(state().entries).toMatchObject([{ label: 'Replacement' }]);
+});
+
+it('updates a registered active row title when its window label changes', async () => {
+  function Rows({ label }: { label: string }) {
+    const { rows } = useActiveWindowRows({
+      windowById: new Map([[42, { id: 42, serverName: 'local', tmuxTarget: 's:1', label, labelSource: 'user' }]]),
+      taskById: new Map(),
+    });
+    return <output>{rows.map((row) => row.title).join(',')}</output>;
+  }
+  const view = render(<AgentActivityProvider><Rows label="Old" /></AgentActivityProvider>);
+  await resolve(0, [{ ...running, windowId: 42 }]);
+  expect(screen.getByRole('status')).toHaveTextContent('Old · W-42');
+  act(() => events.handlers.onWindowRenamed({ serverName: 'local', target: 's:1', newName: 'New', windowId: 42 }));
+  view.rerender(<AgentActivityProvider><Rows label="New" /></AgentActivityProvider>);
+  expect(screen.getByRole('status')).toHaveTextContent('New · W-42');
 });

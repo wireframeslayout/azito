@@ -157,7 +157,7 @@ function makeDeps(overrides: Partial<TaskRestoreDeps> = {}): TaskRestoreDeps {
       findByServer: vi.fn(() => []),
       findByServerAndSession: vi.fn(() => []),
       update: vi.fn(),
-      updateAgentSessionIdByWindow: vi.fn(),
+      updateAgentSessionIdByWindow: vi.fn(), updateClaudeSessionByPane: vi.fn(),
       remove: vi.fn(),
       removeByServerAndTarget: vi.fn(() => 0),
       updatePaneLayout: vi.fn(),

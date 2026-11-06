@@ -1,3 +1,9 @@
+import { LookoutDrawer } from './lookout/LookoutDrawer';
+import { useLookout } from '../hooks/useLookout';
+import { useAgentActivity } from '../hooks/useAgentActivity';
+import { useCrossProjectNavigation } from '../hooks/useCrossProjectNavigation';
+import type { LookoutItem } from '../lib/lookoutSummary';
+import { openLookoutItem } from '../lib/lookoutOpen';
 import { useOpenGlobalSearch } from './search/GlobalSearch';
 import { useState, useMemo, useEffect, useRef, useCallback } from 'react';
 import { useTranslation } from 'react-i18next';
@@ -36,6 +42,14 @@ interface RegistryItem {
 
 export function StatusBar({ servers }: StatusBarProps) {
   const { t } = useTranslation('common');
+  const { t: tl } = useTranslation('lookout');
+  const lookout = useLookout();
+  const { snapshotStatus, retrySnapshot } = useAgentActivity();
+  const { openTask, openTerminal } = useCrossProjectNavigation();
+  const handleOpenLookoutItem = (item: LookoutItem) => {
+    openLookoutItem(item, id => openTask(id), openTerminal);
+    lookout.closeDrawer();
+  };
   const { t: tn } = useTranslation('navigation');
   const openSearch = useOpenGlobalSearch();
   const { focusedTargetDisplay } = useWorkspaceTargets();
@@ -123,6 +137,7 @@ export function StatusBar({ servers }: StatusBarProps) {
   }, [servers, focusedServer, updateStatus, handleStartUpdate, checkNow, diagnosticsEnabled, diagnosticRows, diagnosticsError, t]);
 
   const handleItemClick = useCallback((itemId: string, width: number) => {
+    if (lookout.open) lookout.closeDrawer();
     if (openItemId === itemId) {
       setOpenItemId(null);
       return;
@@ -137,7 +152,7 @@ export function StatusBar({ servers }: StatusBarProps) {
       });
     }
     setOpenItemId(itemId);
-  }, [openItemId]);
+  }, [openItemId, lookout]);
 
   useEffect(() => {
     if (!openItemId) return;
@@ -189,6 +204,7 @@ export function StatusBar({ servers }: StatusBarProps) {
         )}
         <span style={{ flex: 1 }} />
         <button type="button" onClick={() => openSearch()} className="row-hover" style={{ padding: '2px 10px', borderRadius: 'var(--radius-sm)', color: 'var(--text-dim)', border: 'none', cursor: 'pointer', fontFamily: 'var(--mono)', fontSize: 'var(--font-xs)' }}>{tn('globalSearch.title')}</button>
+        <StatusBarItem label={tl('title')} active={lookout.open} popup="dialog" badge={lookout.sections.counts.attention} badgeLabel={tl('attentionCount', { count: lookout.sections.counts.attention })} onClick={() => { setOpenItemId(null); if (lookout.open) lookout.closeDrawer(); else lookout.openDrawer(); }} />
         {registry.map((item) => (
           <StatusBarItem
             key={item.id}
@@ -203,6 +219,8 @@ export function StatusBar({ servers }: StatusBarProps) {
           />
         ))}
       </div>
+
+      <LookoutDrawer open={lookout.open} onClose={lookout.closeDrawer} sections={lookout.sections} snapshotStatus={snapshotStatus} onRetry={retrySnapshot} onOpenItem={handleOpenLookoutItem} />
 
       {openItem && (
         <div

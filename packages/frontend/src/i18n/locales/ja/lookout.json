@@ -1,0 +1,38 @@
+{
+  "title": "Lookout",
+  "close": "Lookout を閉じる",
+  "retry": "再試行",
+  "loadError": "活動情報を取得できませんでした。",
+  "loading": "活動情報を読み込み中…",
+  "empty": "表示する項目はありません。",
+  "counts": {
+    "attention": "要対応",
+    "active": "進行中",
+    "finished": "完了",
+    "failed": "失敗"
+  },
+  "sections": {
+    "attention": "要対応",
+    "active": "進行中",
+    "finished": "前回確認以降の完了"
+  },
+  "status": {
+    "blocked": "停止中",
+    "waiting_input": "入力待ち",
+    "pending_approval": "承認待ち",
+    "phase_review": "レビュー待ち",
+    "failed": "失敗",
+    "working": "稼働中",
+    "finished": "完了"
+  },
+  "summary": {
+    "off": "要約は利用できません",
+    "pending": "要約を準備中",
+    "error": "要約を取得できません",
+    "ready": "要約"
+  },
+  "attentionCount": "要対応 {{count}} 件",
+  "updated": "更新 {{time}}",
+  "emptyAttention": "いま対応が要るものはありません",
+  "emptyActive": "現在稼働中のものはありません。"
+}
