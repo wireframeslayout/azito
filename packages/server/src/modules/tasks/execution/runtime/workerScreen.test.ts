@@ -195,6 +195,25 @@ describe('readInputBox on the screens of real panes (#532)', () => {
       expect(readInputBox('claude', `● conversation\n${named}\nmore text\n${rule}\n❯\n${rule}\nbypass permissions on`)).toEqual({ state: 'empty' });
       expect(readInputBox('claude', `${named}\n❯ first\n  second\n${rule}\nbypass permissions on`)).toEqual({ state: 'filled', text: 'firstsecond' });
     });
+    it.each([
+      ['a plain rule', rule],
+      ['a named rule', named],
+    ])('reads the current input below %s followed by an earlier message and its reply', (_label, historyRule) => {
+      const history = `${historyRule}\n\n❯ an earlier message\n  second line\n\n● reply\n  more reply\n\n`;
+      const screen = (input: string): string => `${history}${named}\n${input}\n${rule}\n  bypass permissions on`;
+      expect(readInputBox('claude', screen('❯ '))).toEqual({ state: 'empty' });
+      expect(readInputBox('claude', screen('❯ draft'))).toEqual({ state: 'filled', text: 'draft' });
+      expect(screenAboveInput('claude', screen('❯ '))).toContain('● reply');
+      expect(isWorkerBusy('claude', `${history}✽ Spinning…\n\n${named}\n❯ \n${rule}\n  bypass permissions on`)).toBe(true);
+    });
+    it('reads the captured input with a rule, a message and a reply scrolled above it', () => {
+      expect(readInputBox('claude', `${rule}\n● text\n\n❯ earlier\n\n● reply\n\n${captured}`)).toEqual({ state: 'empty' });
+      expect(readInputBox('claude', `${rule}\n❯ earlier\n\n● reply\n\n${captured}`)).toEqual({ state: 'empty' });
+    });
+    it('still rejects a frame whose upper rule may be text of a draft: nothing but the prompt and its indented continuation lie above it', () => {
+      expect(readInputBox('claude', `${named}\n❯ draft\n  more draft\n${named}\n❯ \n${rule}\nbypass permissions on`)).toEqual({ state: 'unknown' });
+      expect(readInputBox('claude', `${rule}\n❯ draft\n${rule}\n❯ \n${rule}\nbypass permissions on`)).toEqual({ state: 'unknown' });
+    });
   });
 
   describe('Claude Code 2.1.310', () => {

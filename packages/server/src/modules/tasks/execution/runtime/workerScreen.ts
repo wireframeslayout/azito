@@ -176,10 +176,21 @@ function boxOf(text: string, isEmpty: (text: string) => boolean): InputBox {
 const RULE_LINE = /^─{10,}$/;
 /** A line made of rule characters and spaces: a rule, or one that is not a clean run of them (broken by the pane). */
 const ROUGH_RULE = /^[─\s]*─[─\s]*$/;
+/** The upper rule of a session with a name (Claude Code 2.1.317): `──── <name> ─`. The lower rule stays a clean run. */
 const NAMED_RULE = /^─{10,}\s+\S(?:.*\S)?\s+─+$/;
+const PROMPT_LINE = /^[❯>]/;
 
 function isClaudeUpperRule(line: string): boolean {
   return RULE_LINE.test(line.trim()) || NAMED_RULE.test(line.trim());
+}
+
+/**
+ * Whether the lines after a rule are only an open prompt and its continuation (Claude indents those), so the rule below them can be text of
+ * that draft. Any other line at column 0 (`● reply`, `✻ Worked for`) is the conversation: the rule above is then only part of the history.
+ */
+function holdsOnlyOpenPrompt(lines: string[]): boolean {
+  const [first, ...rest] = lines.filter((line) => line.trim() !== '');
+  return first !== undefined && PROMPT_LINE.test(first.trim()) && rest.every((line) => /^\s/.test(line));
 }
 
 function claudeRuleBox(lines: string[]): { upper: number; lower: number } | undefined {
@@ -190,21 +201,22 @@ function claudeRuleBox(lines: string[]): { upper: number; lower: number } | unde
   if (!RULE_LINE.test(lines[lower].trim())) return undefined;
   const previous = candidates[candidates.length - 3];
   const beforePrevious = candidates[candidates.length - 4];
-  const previousIsLower = previous !== undefined && beforePrevious !== undefined && RULE_LINE.test(lines[previous].trim()) && lines.slice(beforePrevious + 1, previous).some((line) => /^[❯>]/.test(line.trim()));
-  if (previous !== undefined && !previousIsLower && lines.slice(previous + 1, upper).some((line) => /^[❯>]/.test(line.trim()))) return undefined;
+  const previousIsLower = previous !== undefined && beforePrevious !== undefined && RULE_LINE.test(lines[previous].trim()) && lines.slice(beforePrevious + 1, previous).some((line) => PROMPT_LINE.test(line.trim()));
+  if (previous !== undefined && !previousIsLower && holdsOnlyOpenPrompt(lines.slice(previous + 1, upper))) return undefined;
   const inside = lines.slice(upper + 1, lower).filter((line) => line.trim() !== '');
   const below = lines.slice(lower + 1).filter((line) => line.trim() !== '');
-  if (inside.length === 0 || !/^[❯>]/.test(inside[0].trim())) return undefined;
-  if (below.length > 4 || [...below, ...inside.slice(1)].some((line) => ROUGH_RULE.test(line.trim()) || NAMED_RULE.test(line.trim())) || below.some((line) => /^[❯>]/.test(line.trim()))) return undefined;
+  if (inside.length === 0 || !PROMPT_LINE.test(inside[0].trim())) return undefined;
+  if (below.length > 4 || [...below, ...inside.slice(1)].some((line) => ROUGH_RULE.test(line.trim()) || NAMED_RULE.test(line.trim())) || below.some((line) => PROMPT_LINE.test(line.trim()))) return undefined;
   return { upper, lower };
 }
+
 /** codex's lines below the composer: the model line is after a blank line, the shortcuts / context line carries these. */
 /** A row of codex's footer: the model line (`<model> default · <dir>`), the shortcuts / context row, the warning row (`⚠ 3 warnings · f2 to view`; a path with the word `warning` in it is not one). */
 const CODEX_FOOTER_ROW = /·|\? for shortcuts|context left|esc to interrupt|⚠\s*\d+ warnings?|\bf\d to |tab to queue|queued message/i;
 const CODEX_FOOTER_LINE = /\? for shortcuts|context left|esc to interrupt/i;
 
 /**
- * Claude Code 2.1.x: the box is the lines between the last two horizontal rules (`────`), first line `❯ <text>`, the rest wrapped
+ * Claude Code 2.1.x: the box is the lines between the last two horizontal rules (`────`; the upper one can carry the session name), first line `❯ <text>`, the rest wrapped
  * continuation. Claude Code 2.0.x: a frame (`╭──╮ │ > <text> │ ╰──╯`). Anything else is `unknown`: the lines between the rules must
  * start with the prompt, and only a few status lines may follow the lower rule.
  */
