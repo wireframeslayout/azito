@@ -1,3 +1,4 @@
+import { fixture } from '../tasks/execution/runtime/fixtures/readFixture';
 import { describe, expect, it, vi } from 'vitest';
 import { asPaneHandle } from '@azito/shared';
 import type { IMuxClient } from '../tmux/IMuxClient';
@@ -13,6 +14,11 @@ function driver(command: string | null, screen: string, code = 0): IMuxClient {
 describe('guardChatInput', () => {
   it('accepts an empty Claude input', async () => {
     expect(await guardChatInput(driver('node', ready), server, pane, 'claude', 'hello')).toBeNull();
+  });
+  it('accepts the captured named input and rejects a modified draft', async () => {
+    const screen = fixture('claude-2.1.317-named-empty.txt');
+    expect(await guardChatInput(driver('node', screen), server, pane, 'claude', 'hello')).toBeNull();
+    expect(await guardChatInput(driver('node', screen.replace('❯ \n', '❯ draft\n')), server, pane, 'claude', 'hello')).toMatchObject({ code: 'input_not_empty' });
   });
   it('accepts an empty Codex input', async () => {
     const screen = '› Ask Codex to do anything\n\n? for shortcuts';

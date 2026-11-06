@@ -3,7 +3,7 @@ import type { IMuxClient } from '../../../tmux/IMuxClient';
 import { WorkerNotRunningError, type WorkerInputService } from '../WorkerInputService';
 import type { PromptFileDelivery } from '../PromptFileDelivery';
 import { getAgentTranscriptProfile } from '../../../transcripts/sources/profiles';
-import { blockingWorkerDialog, detectWorkerDialog, inputHoldsLine, type InputBox, isWorkerBusy, isWorkerScreenReady, readInputBox, hasUserMessageAbove, screenAboveInput, showsTurnEnd, tuiAgentKindOf, type TuiAgentKind, type WorkerDialog } from './workerScreen';
+import { SCREEN_CAPTURE_LINES, blockingWorkerDialog, detectWorkerDialog, inputHoldsLine, type InputBox, isWorkerBusy, isWorkerScreenReady, readInputBox, hasUserMessageAbove, screenAboveInput, showsTurnEnd, tuiAgentKindOf, type TuiAgentKind, type WorkerDialog } from './workerScreen';
 import type { WorkerWaiter } from '../WorkerWaiter';
 import type { HttpSignalTurnCoordinator } from '../HttpSignalTurnCoordinator';
 import type { ServerConfig } from '../../../servers/Server';
@@ -85,9 +85,6 @@ function submitDelayMsOf(kind: TuiAgentKind | null): number {
   if (!profile) throw new Error(`No transcript profile for the ${kind} worker`);
   return profile.submitDelayMs;
 }
-
-/** The screen the readiness checks read: the pane's last lines. */
-const SCREEN_CAPTURE_LINES = -50;
 
 /** How long a screen that shows neither the input nor a known dialog (a worker still drawing it) gets before the prompt is refused. */
 const SEND_READY_GRACE_MS = 5000;
