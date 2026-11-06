@@ -8,8 +8,8 @@ import type { AuditLogService } from '../../shared/audit/AuditLogService';
 
 function setup() {
   const windows = new Map<number, Window>([
-    [1, { id: 1, ownerType: 'task', taskId: 10, projectId: null, serverName: 'local', tmuxTarget: 's:a', sleeping: false, workerType: 'claude' } as Window],
-    [2, { id: 2, ownerType: 'project', taskId: null, projectId: 5, serverName: 'local', tmuxTarget: 's:b', sleeping: false, workerType: 'claude' } as Window],
+    [1, { id: 1, ownerType: 'task', role: null, originProjectId: null, taskId: 10, projectId: null, serverName: 'local', tmuxTarget: 's:a', sleeping: false, workerType: 'claude' } as Window],
+    [2, { id: 2, ownerType: 'project', role: null, originProjectId: null, taskId: null, projectId: 5, serverName: 'local', tmuxTarget: 's:b', sleeping: false, workerType: 'claude' } as Window],
   ]);
   const driver = { submitInputByHandle: vi.fn().mockResolvedValue(undefined), caps: { copyMode: false }, captureScreen: vi.fn().mockResolvedValue({ code: 0, stdout: '──────────────\n❯\n──────────────\nbypass permissions on' }), resolvePane: vi.fn().mockResolvedValue('%2'), pasteTextToHandle: vi.fn().mockResolvedValue(undefined), sendKeysToHandle: vi.fn().mockResolvedValue(undefined), paneCommandByHandle: vi.fn().mockResolvedValue('claude') };
   const record = vi.fn();

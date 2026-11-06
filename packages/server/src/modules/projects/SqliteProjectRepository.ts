@@ -37,6 +37,9 @@ interface RepoRow {
 }
 
 export class SqliteProjectRepository implements IProjectRepository {
+  private deletionObserver?: (id: number) => void;
+  setDeletionObserver(observer: (id: number) => void): void { this.deletionObserver = observer; }
+
   private listStmt;
   private getStmt;
   private createStmt;
@@ -95,6 +98,7 @@ export class SqliteProjectRepository implements IProjectRepository {
   }
 
   delete(id: number): void {
+    this.deletionObserver?.(id);
     this.deleteStmt.run(id);
   }
 

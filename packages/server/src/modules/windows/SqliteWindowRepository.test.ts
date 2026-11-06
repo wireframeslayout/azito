@@ -7,7 +7,7 @@ import type { Window } from './Window';
 
 function baseWindow(overrides: Partial<Omit<Window, 'id' | 'createdAt'>> = {}): Omit<Window, 'id' | 'createdAt'> {
   return {
-    ownerType: 'project',
+    ownerType: 'project', role: null, originProjectId: null,
     projectId: null,
     taskId: null,
     serverName: 'local-server',
@@ -50,7 +50,7 @@ describe('SqliteWindowRepository.findByServerAndTarget', () => {
 
   it('returns the task-owning row for a task target', () => {
     const taskA = insertTask(db, projectId, 'Task A');
-    repo.add(baseWindow({ ownerType: 'task', projectId: null, taskId: taskA, tmuxTarget: 'proj:win1' }));
+    repo.add(baseWindow({ ownerType: 'task', role: null, originProjectId: null, projectId: null, taskId: taskA, tmuxTarget: 'proj:win1' }));
 
     const found = repo.findByServerAndTarget('local-server', 'proj:win1');
     expect(found?.taskId).toBe(taskA);
@@ -67,7 +67,7 @@ describe('SqliteWindowRepository.findByServerAndTarget', () => {
   it('distinguishes different targets on the same server', () => {
     const taskA = insertTask(db, projectId, 'Task A');
     repo.add(baseWindow({ projectId, tmuxTarget: 'proj:win-project' }));
-    repo.add(baseWindow({ ownerType: 'task', projectId: null, taskId: taskA, tmuxTarget: 'proj:win-task' }));
+    repo.add(baseWindow({ ownerType: 'task', role: null, originProjectId: null, projectId: null, taskId: taskA, tmuxTarget: 'proj:win-task' }));
 
     expect(repo.findByServerAndTarget('local-server', 'proj:win-task')?.taskId).toBe(taskA);
     expect(repo.findByServerAndTarget('local-server', 'proj:win-project')?.ownerType).toBe('project');
@@ -90,7 +90,7 @@ describe('SqliteWindowRepository.findByServerAndSession', () => {
 
   it('returns every window (task-owned and project-owned) whose target belongs to the session', () => {
     const taskA = insertTask(db, projectId, 'Task A');
-    repo.add(baseWindow({ ownerType: 'task', projectId: null, taskId: taskA, tmuxTarget: 'azito:task-1' }));
+    repo.add(baseWindow({ ownerType: 'task', role: null, originProjectId: null, projectId: null, taskId: taskA, tmuxTarget: 'azito:task-1' }));
     repo.add(baseWindow({ projectId, tmuxTarget: 'azito:extra' }));
 
     const found = repo.findByServerAndSession('local-server', 'azito', 'tmux');
@@ -176,7 +176,7 @@ describe('SqliteWindowRepository.updateAgentSessionIdByWindow', () => {
 
   it('updates the matching window row', () => {
     const taskId = insertTask(db, projectId, 'Task A');
-    const taskWinId = repo.add(baseWindow({ ownerType: 'task', projectId: null, taskId, tmuxTarget: 'proj:win1', windowType: 'agent', workerType: 'claude' }));
+    const taskWinId = repo.add(baseWindow({ ownerType: 'task', role: null, originProjectId: null, projectId: null, taskId, tmuxTarget: 'proj:win1', windowType: 'agent', workerType: 'claude' }));
 
     repo.updateAgentSessionIdByWindow('local-server', 'proj:win1', 'test-session-uuid');
 

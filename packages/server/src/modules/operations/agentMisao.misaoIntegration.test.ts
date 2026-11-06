@@ -250,7 +250,7 @@ describe.skipIf(!fs.existsSync(MISAO_CLI))('an agent server\'s misao, through th
       const name = `act${Math.random().toString(36).slice(2, 6)}`;
       const opened = await driver().openWorkspace(server, `azr-${name}`, { windowName: name, exactName: true, command: 'echo done-quickly' });
       windows.push({
-        id: windows.length + 1, ownerType: 'project', projectId: 1, taskId: null, serverName: server.name, tmuxTarget: opened.ref.window,
+        id: windows.length + 1, ownerType: 'project', role: null, originProjectId: null, projectId: 1, taskId: null, serverName: server.name, tmuxTarget: opened.ref.window,
         label: name, isPrimary: false, windowType: 'agent', workerType: 'claude', workerModel: null, agentSessionId: null,
         labelSource: 'auto',
         launchCommand: null, workingDirectory: null, paneLayout: null, sleeping: false, createdAt: '2026-01-01T00:00:00Z', muxRef: opened.ref,

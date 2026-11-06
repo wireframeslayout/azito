@@ -51,7 +51,7 @@ describe('RecoverStuckTasksUseCase with a misao server whose driver is unavailab
       logger,
       { getOrThrow: vi.fn(() => devopsType), get: vi.fn(() => devopsType) } as never,
       // The misao task's window is a misao one (its row says so); a task without a row is read by its window string.
-      { findByTask: vi.fn((id: number) => (id === 20 ? [{ isPrimary: true, ownerType: 'task', tmuxTarget: 'azito:w_01M3XFD8H97JCPKS5Y5BH3JZQH', muxRef: { kind: 'misao', workspace: 'azito', window: 'w_01M3XFD8H97JCPKS5Y5BH3JZQH' } }] : [])) } as never,
+      { findByTask: vi.fn((id: number) => (id === 20 ? [{ isPrimary: true, ownerType: 'task', role: null, originProjectId: null, tmuxTarget: 'azito:w_01M3XFD8H97JCPKS5Y5BH3JZQH', muxRef: { kind: 'misao', workspace: 'azito', window: 'w_01M3XFD8H97JCPKS5Y5BH3JZQH' } }] : [])) } as never,
       new TaskTempFiles('/tmp', 'linux'),
     );
 
@@ -109,7 +109,7 @@ describe('RecoverStuckTasksUseCase with a connected misao driver', () => {
   }
 
   it('resolves the pane from the primary window row\'s window id, not from a display name left in task.tmuxWindow', async () => {
-    const row = { isPrimary: true, ownerType: 'task', tmuxTarget: `azito:${WINDOW_ID}`, muxRef: { kind: 'misao', workspace: 'azito', window: WINDOW_ID } };
+    const row = { isPrimary: true, ownerType: 'task', role: null, originProjectId: null, tmuxTarget: `azito:${WINDOW_ID}`, muxRef: { kind: 'misao', workspace: 'azito', window: WINDOW_ID } };
     const { useCase, misaoDriver, resumeStateMachine } = build({ ...task(30, 'misao-server'), tmuxWindow: 'task-30--ab12' }, [row]);
 
     await useCase.run();
@@ -204,7 +204,7 @@ describe('RecoverStuckTasksUseCase.runSkippedForDaemon', () => {
       { info: vi.fn(), warn: vi.fn() },
       { getOrThrow: vi.fn(() => devopsType), get: vi.fn(() => devopsType) } as never,
       // The misao task's primary window row carries its misao ref (stored data without a ref is tmux).
-      { findByTask: vi.fn((id: number) => (id === 40 ? [{ isPrimary: true, ownerType: 'task', tmuxTarget: `azito:${WINDOW_ID}`, muxRef: { kind: 'misao', workspace: 'azito', window: WINDOW_ID } }] : [])) } as never,
+      { findByTask: vi.fn((id: number) => (id === 40 ? [{ isPrimary: true, ownerType: 'task', role: null, originProjectId: null, tmuxTarget: `azito:${WINDOW_ID}`, muxRef: { kind: 'misao', workspace: 'azito', window: WINDOW_ID } }] : [])) } as never,
       new TaskTempFiles('/tmp', 'linux'),
     );
 
@@ -254,7 +254,7 @@ describe('RecoverStuckTasksUseCase keeps a task pending while the daemon keeps d
       logger,
       { getOrThrow: vi.fn(() => devopsType), get: vi.fn(() => devopsType) } as never,
       // The misao task's primary window row carries its misao ref (stored data without a ref is tmux).
-      { findByTask: vi.fn((id: number) => (true ? [{ isPrimary: true, ownerType: 'task', tmuxTarget: `azito:${WINDOW_ID}`, muxRef: { kind: 'misao', workspace: 'azito', window: WINDOW_ID } }] : [])) } as never,
+      { findByTask: vi.fn((id: number) => (true ? [{ isPrimary: true, ownerType: 'task', role: null, originProjectId: null, tmuxTarget: `azito:${WINDOW_ID}`, muxRef: { kind: 'misao', workspace: 'azito', window: WINDOW_ID } }] : [])) } as never,
       new TaskTempFiles('/tmp', 'linux'),
     );
 

@@ -230,10 +230,12 @@ printf '%s' "$BODY" > "$BODY_TMP"
 # Authorization ヘッダは AZITO_WEBHOOK_TOKEN が読み込めた場合のみ付与する
 # （--config - 経由・stdin、トークンを argv/ps に出さない）。未設定でも
 # turnToken 単独でハブ側が認証するため、ヘッダ無しで送信を試みる。
+WINDOW_HEADER=()
+if [[ -n "${AZITO_WINDOW_ID:-}" ]]; then WINDOW_HEADER=(-H "X-Azito-Window-Id: ${AZITO_WINDOW_ID}"); fi
 if [[ -n "${AZITO_WEBHOOK_TOKEN:-}" ]]; then
   HTTP_CODE="$(curl --retry 3 --retry-connrefused --max-time 15 -sS -f -o /dev/null -w '%{http_code}' \
     -X POST "${AZITO_URL}/api/agent-signals" \
-    -H "Content-Type: application/json" \
+    -H "Content-Type: application/json" "${WINDOW_HEADER[@]}" \
     --config - \
     --data-binary @"$BODY_TMP" <<CURLCFG
 header = "Authorization: Bearer ${AZITO_WEBHOOK_TOKEN}"
@@ -245,7 +247,7 @@ CURLCFG
 else
   HTTP_CODE="$(curl --retry 3 --retry-connrefused --max-time 15 -sS -f -o /dev/null -w '%{http_code}' \
     -X POST "${AZITO_URL}/api/agent-signals" \
-    -H "Content-Type: application/json" \
+    -H "Content-Type: application/json" "${WINDOW_HEADER[@]}" \
     --data-binary @"$BODY_TMP")" || {
     echo "azitoctl: failed to send $SUBCOMMAND signal" >&2
     exit 1

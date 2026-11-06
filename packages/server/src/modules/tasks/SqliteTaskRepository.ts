@@ -117,6 +117,9 @@ function parseSubagentConfig(raw: unknown): SubagentConfig | null {
 }
 
 export class SqliteTaskRepository implements ITaskRepository {
+  private deletionObserver?: (id: number) => void;
+  setDeletionObserver(observer: (id: number) => void): void { this.deletionObserver = observer; }
+
   private listStmt;
   private listByProjectStmt;
   private listByUnitStmt;
@@ -456,6 +459,7 @@ export class SqliteTaskRepository implements ITaskRepository {
   }
 
   delete(id: number): void {
+    this.deletionObserver?.(id);
     // Deletion revokes (not cascades) outstanding task tokens in the same
     // transaction — see the doc comment on ITaskTokenRepository.revokeAllForTask.
     const run = this.db.transaction(() => {

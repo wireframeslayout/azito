@@ -65,6 +65,7 @@ function makeTask(overrides: Partial<Task> = {}): Task {
 
 function makeOpts(existingTask: Task | null): TasksRouteOptions {
   return {
+    attribution: { recordInteraction: vi.fn() },
     taskRepo: {
       findAll: vi.fn(() => []),
       findByProject: vi.fn(() => []),

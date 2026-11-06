@@ -9,7 +9,7 @@ import type { IServerRepository, ServerConfig } from '../servers/Server';
 function makeWindow(overrides: Partial<Window> = {}): Window {
   return {
     id: 1,
-    ownerType: 'task',
+    ownerType: 'task', role: null, originProjectId: null,
     projectId: null,
     taskId: 1,
     serverName: 'local-server',

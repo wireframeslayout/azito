@@ -186,6 +186,7 @@ export async function sendSignal({ url, token }, body, { fetchImpl = fetch, retr
   const headers = { 'Content-Type': 'application/json' };
   // The token authenticates the signal channel when present; the turn token alone is accepted by the hub otherwise.
   if (token) headers.Authorization = `Bearer ${token}`;
+  if (process.env.AZITO_WINDOW_ID) headers['X-Azito-Window-Id'] = process.env.AZITO_WINDOW_ID;
   const payload = JSON.stringify(body);
   let failure = 'no attempt was made';
   for (let attempt = 1; attempt <= SEND_ATTEMPTS; attempt++) {

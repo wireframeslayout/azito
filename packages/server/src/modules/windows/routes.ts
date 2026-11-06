@@ -12,8 +12,10 @@ import { windowSnapshotSchema } from './windowSnapshotSchema';
 import type { WindowSnapshotService } from './WindowSnapshotService';
 import { parseStrictBody } from '../tmux/routes/createBodies';
 import { nameBody, keysBody, paneBody } from '../tmux/routes/actionBodies';
-import { projectWindowBody, projectSessionBody, taskWindowBody, updateWindowBody, launchAgentBody, respawnBody } from './windowBodies';
-import type { FastifyPluginCallback } from 'fastify';
+import { projectWindowBody, serverWindowBody, projectSessionBody, taskWindowBody, updateWindowBody, launchAgentBody, respawnBody } from './windowBodies';
+import type { FastifyPluginCallback, FastifyRequest, FastifyReply } from 'fastify';
+import type { WindowRoleService } from './WindowRoleService';
+import { recordAttribution, type Attribution } from '../../shared/attribution';
 import { resourceCheckBody, type ResourceGuard, type ResourceUnavailable } from '../servers/resources/ResourceGuard';
 import { workerStartsAsProgram } from '../../shared/os/hostFeature';
 import { HostProfileError } from '../../shared/os/hostProfile';
@@ -51,6 +53,8 @@ import type { SessionCaptureService } from './SessionCaptureService';
 import type { WindowActivityStatusService } from './WindowActivityStatusService';
 
 export interface WindowsRouteOptions {
+  attribution: Attribution;
+  windowRoles: WindowRoleService;
   paneHandleResolver: PaneHandleResolver;
   muxSwitchSettingsRepo: SqliteMuxSwitchSettingsRepository;
   misaoVersion?: (server: ServerConfig) => Promise<string | undefined>;
@@ -126,6 +130,16 @@ const windowsRoutes: FastifyPluginCallback<WindowsRouteOptions> = (fastify, opts
     if (result === 'sleeping') return reply.status(409).send({ error: 'Window is sleeping' });
     if (result === 'send_failed') return reply.status(502).send({ error: 'Message delivery failed; it may have been partially delivered' });
     if (typeof result === 'object') return reply.status(result.code === 'invalid_control_character' ? 400 : 409).send({ error: result.error });
+    recordAttribution(request, opts.attribution, { windowId: id });
+    return { ok: true };
+  });
+
+  fastify.put<{ Params: { id: string } }>('/api/windows/:id/role', async (request, reply) => {
+    const id = parseWindowId(request.params.id);
+    const body = z.object({ role: z.enum(['orchestrator']).nullable() }).strict().safeParse(request.body);
+    if (id === null || !body.success) return reply.status(400).send({ error: 'invalid_role' });
+    const result = opts.windowRoles.set(id, body.data.role);
+    if (result !== 'ok') return reply.status(result === 'not_found' ? 404 : 409).send({ error: result });
     return { ok: true };
   });
 
@@ -200,13 +214,11 @@ const windowsRoutes: FastifyPluginCallback<WindowsRouteOptions> = (fastify, opts
   );
 
   // ── POST /api/projects/:id/windows ──
-  fastify.post<{ Params: { id: string } }>(
-    '/api/projects/:id/windows',
-    async (request, reply) => {
-      const id = parseInt(request.params.id, 10);
-      if (!projectRepo.findById(id))
+  const registerWindow = async (request: FastifyRequest<{ Params: { id?: string } }>, reply: FastifyReply) => {
+      const id = request.params.id === undefined ? null : parseInt(request.params.id, 10);
+      if (id !== null && !projectRepo.findById(id))
         return reply.status(404).send({ error: 'Project not found' });
-      const parsedBody = parseStrictBody(projectWindowBody, request.body);
+      const parsedBody = parseStrictBody(id === null ? serverWindowBody : projectWindowBody, request.body);
       if (!parsedBody.ok) return reply.status(400).send(parsedBody.body);
       const body = parsedBody.data;
       const serverName = body.server_name;
@@ -240,14 +252,10 @@ const windowsRoutes: FastifyPluginCallback<WindowsRouteOptions> = (fastify, opts
       const unavailable = srv && (givenRef?.kind ?? rawKind) ? muxUnavailableBody(srv, (givenRef?.kind ?? rawKind)!) : null;
       if (unavailable) return reply.status(400).send(unavailable);
 
+      const role = id === null ? serverWindowBody.parse(request.body).role ?? null : null;
+      if (role && (body.window_type !== 'agent' || !body.worker_type)) return reply.status(409).send({ error: 'not_agent_window' });
       const existing = findExistingWindow(serverName, tmuxTarget, givenRef);
-      if (existing) {
-        if (existing.projectId !== id) {
-          windowRepo.update(existing.id, { projectId: id });
-          notifyWindowsChanged(serverName);
-        }
-        return { ok: true, id: existing.id };
-      }
+      if (existing) return { ok: true, id: existing.id };
 
       const workerType = body.worker_type || null;
       const workerModel = body.worker_model || null;
@@ -261,7 +269,7 @@ const windowsRoutes: FastifyPluginCallback<WindowsRouteOptions> = (fastify, opts
         return reply.code(400).send({ error: 'Invalid agent_session_id format' });
       }
       const winId = windowRepo.add({
-        ownerType: 'project',
+        ownerType: id === null ? 'server' : 'project', role, originProjectId: null,
         projectId: id,
         taskId: null,
         serverName,
@@ -282,8 +290,9 @@ const windowsRoutes: FastifyPluginCallback<WindowsRouteOptions> = (fastify, opts
       sessionCaptureService.scheduleInitialScan(winId, workerType, serverName, workingDirectory);
       notifyWindowsChanged(serverName);
       return { ok: true, id: winId };
-    },
-  );
+    };
+  fastify.post<{ Params: { id: string } }>('/api/projects/:id/windows', registerWindow);
+  fastify.post('/api/windows', registerWindow);
 
   // ── POST /api/projects/:id/windows/session ──
   fastify.post<{ Params: { id: string } }>(
@@ -318,12 +327,11 @@ const windowsRoutes: FastifyPluginCallback<WindowsRouteOptions> = (fastify, opts
         const winTarget = win.ref?.kind === 'misao' ? muxWindowTarget(win.ref) : `${session}:${win.name}`;
         const existing = findExistingWindow(serverName, winTarget, win.ref);
         if (existing) {
-          if (existing.projectId !== id) windowRepo.update(existing.id, { projectId: id });
           addedIds.push(existing.id);
           continue;
         }
         const winId = windowRepo.add({
-          ownerType: 'project',
+          ownerType: 'project', role: null, originProjectId: null,
           projectId: id,
           taskId: null,
           serverName,
@@ -410,6 +418,7 @@ const windowsRoutes: FastifyPluginCallback<WindowsRouteOptions> = (fastify, opts
           return reply.status(409).send({ error: `Window already belongs to task ${existing.taskId}`, windowId: existing.id, taskId: existing.taskId });
         }
         if (existing.ownerType !== 'task' || existing.taskId !== id) {
+          if (existing.role === 'orchestrator') return reply.status(409).send({ error: 'orchestrator_window' });
           windowRepo.adoptForTask(existing.id, id);
           // A label the user set (rename) outlives the adoption; only an automatic one is replaced.
           const label = existing.labelSource === 'user' ? undefined : body.label || undefined;
@@ -426,7 +435,7 @@ const windowsRoutes: FastifyPluginCallback<WindowsRouteOptions> = (fastify, opts
       const workerType = body.worker_type || null;
       const workingDirectory = body.working_directory || null;
       const winId = windowRepo.add({
-        ownerType: 'task',
+        ownerType: 'task', role: null, originProjectId: null,
         projectId: null,
         taskId: id,
         serverName,
@@ -483,6 +492,7 @@ const windowsRoutes: FastifyPluginCallback<WindowsRouteOptions> = (fastify, opts
         if (windowType !== 'terminal' && windowType !== 'agent')
           return reply.status(400).send({ error: `invalid window_type: ${windowType}` });
         const workerType = 'worker_type' in body ? body.worker_type : win.workerType;
+        if (win.role === 'orchestrator' && windowType !== 'agent') return reply.status(409).send({ error: 'orchestrator_window' });
         if (windowType === 'agent' && !workerType)
           return reply.status(400).send({ error: 'worker_type is required when window_type is agent' });
         data['windowType'] = windowType;
@@ -871,9 +881,11 @@ const windowsRoutes: FastifyPluginCallback<WindowsRouteOptions> = (fastify, opts
       if (startLine == null && endLine == null && request.query.history) {
         const h = parseInt(request.query.history, 10);
         const { stdout } = await driverFor(srv).captureScreen(srv, handle, -h, undefined);
+        recordAttribution(request, opts.attribution, { windowId: id });
         return { content: stdout };
       }
       const { stdout } = await driverFor(srv).captureScreen(srv, handle, startLine, endLine);
+      recordAttribution(request, opts.attribution, { windowId: id });
       return { content: stdout };
     },
   );
@@ -894,6 +906,7 @@ const windowsRoutes: FastifyPluginCallback<WindowsRouteOptions> = (fastify, opts
       if (!keys || !Array.isArray(keys))
         return reply.status(400).send({ error: 'keys array required' });
       await driverFor(srv).sendKeysToHandle(srv, handle, keys);
+      recordAttribution(request, opts.attribution, { windowId: id });
       return { ok: true };
     },
   );

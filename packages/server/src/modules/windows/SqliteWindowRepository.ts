@@ -33,6 +33,8 @@ export type { Window, IWindowRepository } from './Window';
 interface WindowRow {
   id: number;
   owner_type: string;
+  role: Window['role'];
+  origin_project_id: number | null;
   project_id: number | null;
   task_id: number | null;
   server_name: string;
@@ -56,6 +58,9 @@ interface WindowRow {
 }
 
 export class SqliteWindowRepository implements IWindowRepository {
+  private deletionObserver?: (id: number) => void;
+  setDeletionObserver(observer: (id: number) => void): void { this.deletionObserver = observer; }
+
   private addStmt;
   private findAllStmt;
   private findByIdStmt;
@@ -74,8 +79,8 @@ export class SqliteWindowRepository implements IWindowRepository {
 
   constructor(private db: SqliteDatabase) {
     this.addStmt = db.prepare(`
-      INSERT INTO windows (owner_type, project_id, task_id, server_name, tmux_target, mux_ref, label, label_source, is_primary, window_type, worker_type, worker_model, agent_session_id, launch_command, working_directory, pane_layout)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      INSERT INTO windows (owner_type, role, origin_project_id, project_id, task_id, server_name, tmux_target, mux_ref, label, label_source, is_primary, window_type, worker_type, worker_model, agent_session_id, launch_command, working_directory, pane_layout)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `);
     this.findAllStmt = db.prepare('SELECT * FROM windows');
     this.findByIdStmt = db.prepare('SELECT * FROM windows WHERE id = ?');
@@ -117,6 +122,8 @@ export class SqliteWindowRepository implements IWindowRepository {
     }
     const result = this.addStmt.run(
       window.ownerType,
+      window.role,
+      window.originProjectId,
       window.projectId,
       window.taskId,
       window.serverName,
@@ -310,11 +317,14 @@ export class SqliteWindowRepository implements IWindowRepository {
   }
 
   remove(id: number): void {
+    this.deletionObserver?.(id);
     this.removeStmt.run(id);
   }
 
   removeByServerAndTarget(serverName: string, tmuxTarget: string): number {
     const targetPrefix = tmuxTarget.includes('.') ? tmuxTarget : `${tmuxTarget}.`;
+    const rows = this.db.prepare('SELECT id FROM windows WHERE server_name = ? AND (tmux_target = ? OR tmux_target LIKE ?)').all(serverName, tmuxTarget, `${targetPrefix}%`) as Array<{ id: number }>;
+    for (const row of rows) this.deletionObserver?.(row.id);
     const result = this.db.prepare(
       'DELETE FROM windows WHERE server_name = ? AND (tmux_target = ? OR tmux_target LIKE ?)',
     ).run(serverName, tmuxTarget, `${targetPrefix}%`);
@@ -345,6 +355,8 @@ export class SqliteWindowRepository implements IWindowRepository {
     return {
       id: row.id,
       ownerType: row.owner_type as Window['ownerType'],
+      role: row.role,
+      originProjectId: row.origin_project_id,
       projectId: row.project_id,
       taskId: row.task_id,
       serverName: row.server_name,

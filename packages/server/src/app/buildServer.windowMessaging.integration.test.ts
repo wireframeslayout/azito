@@ -18,13 +18,14 @@ const operatorHeaders = { authorization: 'Bearer operator' };
 function buildApp(scoped: boolean) {
   const app = Fastify();
   const windows = new Map([
-    [1, { id: 1, ownerType: 'task', taskId: 7, projectId: null, serverName: 'local', tmuxTarget: 's:a', sleeping: false, isPrimary: true, workerType: 'claude' }],
-    [2, { id: 2, ownerType: 'project', taskId: null, projectId: 5, serverName: 'local', tmuxTarget: 's:b', sleeping: false, workerType: 'claude' }],
-    [3, { id: 3, ownerType: 'task', taskId: 8, projectId: 6, serverName: 'local', tmuxTarget: 's:c', sleeping: false, workerType: 'claude' }],
-    [4, { id: 4, ownerType: 'project', taskId: null, projectId: 5, serverName: 'local', tmuxTarget: 's:d', sleeping: true, workerType: 'claude' }],
+    [1, { id: 1, ownerType: 'task', role: null, originProjectId: null, taskId: 7, projectId: null, serverName: 'local', tmuxTarget: 's:a', sleeping: false, isPrimary: true, workerType: 'claude' }],
+    [2, { id: 2, ownerType: 'project', role: null, originProjectId: null, taskId: null, projectId: 5, serverName: 'local', tmuxTarget: 's:b', sleeping: false, workerType: 'claude' }],
+    [3, { id: 3, ownerType: 'task', role: null, originProjectId: null, taskId: 8, projectId: 6, serverName: 'local', tmuxTarget: 's:c', sleeping: false, workerType: 'claude' }],
+    [4, { id: 4, ownerType: 'project', role: null, originProjectId: null, taskId: null, projectId: 5, serverName: 'local', tmuxTarget: 's:d', sleeping: true, workerType: 'claude' }],
   ]);
   const driver = { submitInputByHandle: vi.fn().mockResolvedValue(undefined), caps: { copyMode: false }, captureScreen: vi.fn().mockResolvedValue({ code: 0, stdout: '──────────────\n❯\n──────────────\nbypass permissions on' }), resolvePane: vi.fn().mockResolvedValue('%2'), pasteTextToHandle: vi.fn(), sendKeysToHandle: vi.fn(), paneCommandByHandle: vi.fn().mockResolvedValue('claude') };
   const record = vi.fn();
+  const recordInteraction = vi.fn();
   app.addHook('onRequest', async (request, reply) => {
     const principal = resolvePrincipal(request.headers.authorization, {
       verifyUiToken: (header) => header === operatorHeaders.authorization,
@@ -35,15 +36,17 @@ function buildApp(scoped: boolean) {
     if (scoped && !evaluateRouteAuth(principal, request).allowed) return reply.status(403).send({ error: 'operator_required' });
   });
   const opts = {
+    attribution: { recordInteraction },
+    windowRoles: { set: vi.fn().mockReturnValue('ok') },
     windowRepo: { findById: (id: number) => windows.get(id), findByTask: (id: number) => [...windows.values()].filter((w) => w.taskId === id) },
     taskRepo: { findById: (id: number) => id === 7 ? { id: 7, projectId: 5, serverName: null } : undefined },
     serverRepo: { findByName: () => ({ name: 'local' }) },
-    muxDriverRegistry: { resolveKind: () => driver },
+    muxDriverRegistry: { resolveKind: () => driver, resolve: () => driver },
     auditLogService: { record },
     paneHandleResolver: { invalidate: vi.fn(), resolveWindowByPaneHandle: vi.fn().mockResolvedValue({ windowId: 1 }) },
   };
   app.register(windowsRoutes, opts as unknown as WindowsRouteOptions);
-  return { app, driver, record, paneHandleResolver: opts.paneHandleResolver };
+  return { app, driver, record, recordInteraction, paneHandleResolver: opts.paneHandleResolver };
 }
 
 describe.each([false, true])('window messaging (scoped auth %s)', (scoped) => {
@@ -102,4 +105,30 @@ describe.each([false, true])('window messaging (scoped auth %s)', (scoped) => {
     expect(JSON.stringify(record.mock.calls)).not.toContain('private');
     await app.close();
   });
+});
+
+
+it('records successful messages from the attribution header and keeps role API operator-only', async () => {
+  const { app, recordInteraction } = buildApp(true);
+  const message = await app.inject({ method: 'POST', url: '/api/windows/2/messages', headers: { ...operatorHeaders, 'x-azito-window-id': '1' }, payload: { text: 'hello' } });
+  expect(message.statusCode).toBe(200);
+  expect(recordInteraction).toHaveBeenCalledWith(1, { windowId: 2 });
+  const denied = await app.inject({ method: 'PUT', url: '/api/windows/2/role', headers: taskHeaders, payload: { role: 'orchestrator' } });
+  expect(denied.statusCode).toBe(403);
+  const allowed = await app.inject({ method: 'PUT', url: '/api/windows/2/role', headers: operatorHeaders, payload: { role: 'orchestrator' } });
+  expect(allowed.statusCode).toBe(200);
+  await app.close();
+});
+
+
+it('records successful capture and send-keys calls', async () => {
+  const { app, recordInteraction } = buildApp(true);
+  const headers = { ...operatorHeaders, 'x-azito-window-id': '1' };
+  const capture = await app.inject({ method: 'GET', url: '/api/windows/2/panes/1/capture?history=10', headers });
+  expect(capture.statusCode).toBe(200);
+  const send = await app.inject({ method: 'POST', url: '/api/windows/2/panes/1/send-keys', headers, payload: { keys: ['Enter'] } });
+  expect(send.statusCode).toBe(200);
+  expect(recordInteraction).toHaveBeenCalledTimes(2);
+  expect(recordInteraction).toHaveBeenCalledWith(1, { windowId: 2 });
+  await app.close();
 });

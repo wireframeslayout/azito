@@ -1,11 +1,13 @@
 import type { MuxDriverKind, MuxRef } from '@azito/shared';
 
 export type WindowType = 'terminal' | 'agent';
-export type OwnerType = 'project' | 'task';
+export type OwnerType = 'project' | 'task' | 'server';
 
 export interface Window {
   id: number;
   ownerType: OwnerType;
+  role: 'orchestrator' | null;
+  originProjectId: number | null;
   projectId: number | null;
   taskId: number | null;
   serverName: string;

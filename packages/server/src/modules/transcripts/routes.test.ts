@@ -348,7 +348,7 @@ describe('GET /api/transcripts/:agent/:id', () => {
     const codex = buildCodexSource({ getSessionTailState });
     const codexWindow: Window = {
       id: 7,
-      ownerType: 'project',
+      ownerType: 'project', role: null, originProjectId: null,
       projectId: 1,
       taskId: null,
       serverName: 'local',
@@ -851,7 +851,7 @@ describe('POST /api/transcripts/:sessionId/input (legacy)', () => {
 describe('GET /api/transcripts/resolve-window', () => {
   const WINDOW: Window = {
     id: 42,
-    ownerType: 'task',
+    ownerType: 'task', role: null, originProjectId: null,
     projectId: 1,
     taskId: 7,
     serverName: 'local',

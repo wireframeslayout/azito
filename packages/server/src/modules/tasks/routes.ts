@@ -1,3 +1,4 @@
+import { recordAttribution, type Attribution } from '../../shared/attribution';
 import type { FastifyPluginCallback } from 'fastify';
 import { HostProfileError } from '../../shared/os/hostProfile';
 import type { ITaskRepository, Task } from './Task';
@@ -98,6 +99,7 @@ export function validateGitFields(body: Record<string, unknown>, platform: HostP
 // ─── Types ───
 
 export interface TasksRouteOptions {
+  attribution: Attribution;
   taskTempFiles: TaskTempFiles;
   taskRepo: ITaskRepository;
   muxDriverRegistry: MuxDriverRegistry;
@@ -347,6 +349,7 @@ const tasksRoutes: FastifyPluginCallback<TasksRouteOptions> = (fastify, opts, do
         pendingFollowUpBody: null,
         pendingFollowUpPhases: null,
       }, originFromPrincipal(request.principal), request.principal ?? OPERATOR_PRINCIPAL);
+      recordAttribution(request, opts.attribution, { taskId: id });
       return { ok: true, id };
     } catch (err: unknown) {
       return reply.status(500).send({ error: (err as Error).message });

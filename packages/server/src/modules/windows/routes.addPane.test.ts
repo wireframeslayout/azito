@@ -19,7 +19,7 @@ const ref = { kind: 'misao' as const, workspace: 'ws-a', window: 'w_0123456789AB
 
 function makeWindow(overrides: Partial<Window> = {}): Window {
   return {
-    id: 5, ownerType: 'project', projectId: 1, taskId: null, serverName: 'misao1', tmuxTarget: 'ws-a:main', muxRef: ref,
+    id: 5, ownerType: 'project', role: null, originProjectId: null, projectId: 1, taskId: null, serverName: 'misao1', tmuxTarget: 'ws-a:main', muxRef: ref,
     label: 'm', isPrimary: false, windowType: 'agent', workerType: 'claude', workerModel: null, agentSessionId: null,
     labelSource: 'auto',
     launchCommand: null, workingDirectory: null, paneLayout: null, sleeping: false, createdAt: '2026-01-01T00:00:00Z',
@@ -42,6 +42,7 @@ describe('POST /api/windows/:id/panes', () => {
     mutex.withLock = (async (key: string, fn: () => Promise<unknown>) => withLock(key, async () => { lockHeld = true; try { return await fn(); } finally { lockHeld = false; } })) as typeof mutex.withLock;
     app = Fastify();
     await app.register(windowsRoutes, {
+    attribution: { recordInteraction: vi.fn() }, windowRoles: {} as never,
       paneHandleResolver: {} as never,
       muxSwitchSettingsRepo: {} as never, auditLogService: {} as never, agentActivityMonitor: {} as never,
       harnessPrefix: '',
@@ -89,7 +90,7 @@ describe('POST /api/windows/:id/panes', () => {
   it('gives a secondary task window its own masked env', async () => {
     const taskEnv = { AZITO_TASK_ID: '42', ...MASKED };
     const buildSecondaryWindowEnv = vi.fn(() => taskEnv);
-    await build(normal, makeWindow({ ownerType: 'task', taskId: 42, isPrimary: false }), buildSecondaryWindowEnv);
+    await build(normal, makeWindow({ ownerType: 'task', role: null, originProjectId: null, taskId: 42, isPrimary: false }), buildSecondaryWindowEnv);
     const res = await app.inject({ method: 'POST', url: '/api/windows/5/panes', payload: {} });
     expect(res.statusCode).toBe(200);
     expect(buildSecondaryWindowEnv).toHaveBeenCalledWith(42, normal);
@@ -115,7 +116,7 @@ describe('POST /api/windows/:id/panes', () => {
   });
 
   it("refuses a task's primary window with 409 and splits nothing", async () => {
-    await build(normal, makeWindow({ ownerType: 'task', taskId: 42, isPrimary: true }));
+    await build(normal, makeWindow({ ownerType: 'task', role: null, originProjectId: null, taskId: 42, isPrimary: true }));
     const res = await app.inject({ method: 'POST', url: '/api/windows/5/panes', payload: {} });
     expect(res.statusCode).toBe(409);
     expect(res.json().error).toBe('primary_task_window_pane_add_unsupported');
@@ -135,6 +136,7 @@ describe('DELETE /api/windows/:id/panes/:ordinal', () => {
   beforeEach(async () => {
     app = Fastify();
     await app.register(windowsRoutes, {
+    attribution: { recordInteraction: vi.fn() }, windowRoles: {} as never,
       paneHandleResolver: {} as never,
       muxSwitchSettingsRepo: {} as never, auditLogService: {} as never, agentActivityMonitor: {} as never,
       harnessPrefix: '',
@@ -192,6 +194,7 @@ describe('windows change notification', () => {
     calls.length = 0;
     app = Fastify();
     await app.register(windowsRoutes, {
+    attribution: { recordInteraction: vi.fn() }, windowRoles: {} as never,
       paneHandleResolver: {} as never,
       muxSwitchSettingsRepo: {} as never, auditLogService: {} as never, agentActivityMonitor: {} as never,
       harnessPrefix: '',

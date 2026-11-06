@@ -31,7 +31,7 @@ function makeWindow(overrides: Partial<Window> = {}): Window {
   const colonIdx = tmuxTarget.indexOf(':');
   return {
     id: 1,
-    ownerType: 'project',
+    ownerType: 'project', role: null, originProjectId: null,
     projectId: 1,
     taskId: null,
     serverName: 'local-server',
@@ -177,6 +177,7 @@ describe('POST /api/windows/:id/launch-agent — MCP blocking', () => {
       return reply.status(mapped.status).send(mapped.body);
     });
     await instance.register(windowsRoutes, {
+    attribution: { recordInteraction: vi.fn() }, windowRoles: {} as never,
       paneHandleResolver: {} as never,
       muxSwitchSettingsRepo: {} as never, auditLogService: {} as never, agentActivityMonitor: {} as never,
       harnessPrefix: '',

@@ -55,6 +55,7 @@ function makeTask(overrides: Partial<Task> = {}): Task {
 function makeOpts(taskOverrides?: Partial<Task>): TasksRouteOptions {
   const task = makeTask(taskOverrides);
   return {
+    attribution: { recordInteraction: vi.fn() },
     taskRepo: {
       findAll: vi.fn(() => [task]),
       findByProject: vi.fn(() => [task]),
@@ -155,7 +156,7 @@ function makeOpts(taskOverrides?: Partial<Task>): TasksRouteOptions {
       findAll: vi.fn(() => []),
       findById: vi.fn(() => undefined),
       findByProject: vi.fn(() => []),
-      findByTask: vi.fn(() => [{ id: 50, ownerType: 'task' as const, taskId: 1, isPrimary: true, serverName: 'test-server', tmuxTarget: 'azito:task-1.1', label: 'task-1', labelSource: 'auto' as const, windowType: 'agent' as const, workerType: 'claude', workerModel: null, agentSessionId: null, launchCommand: null, workingDirectory: null, paneLayout: null, sleeping: false, projectId: null, createdAt: '' }]),
+      findByTask: vi.fn(() => [{ id: 50, ownerType: 'task' as const, role: null, originProjectId: null, taskId: 1, isPrimary: true, serverName: 'test-server', tmuxTarget: 'azito:task-1.1', label: 'task-1', labelSource: 'auto' as const, windowType: 'agent' as const, workerType: 'claude', workerModel: null, agentSessionId: null, launchCommand: null, workingDirectory: null, paneLayout: null, sleeping: false, projectId: null, createdAt: '' }]),
       findAgentSessionIdsByServer: vi.fn(() => new Set<string>()),
       findByServerAndTarget: vi.fn(() => undefined),
       findByServerAndRef: vi.fn(() => undefined),

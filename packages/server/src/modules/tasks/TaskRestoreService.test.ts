@@ -306,7 +306,7 @@ describe('TaskRestoreService', () => {
       { extraEnv: expect.objectContaining({ AZITO_TASK_TOKEN: expect.any(String), AZITO_TASK_ID: '1' }) },
     );
     expect(deps.windowRepo.add).toHaveBeenCalledWith(expect.objectContaining({
-      ownerType: 'task',
+      ownerType: 'task', role: null, originProjectId: null,
       taskId: 1,
       isPrimary: true,
       tmuxTarget: 'azito:task-1',

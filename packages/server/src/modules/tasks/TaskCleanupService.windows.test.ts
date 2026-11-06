@@ -26,7 +26,7 @@ function setup(opts: { windows?: unknown[]; closeWindow?: ReturnType<typeof vi.f
     logRepo: { findByTask: () => [] } as never,
     taskTempFiles: new TaskTempFiles('/tmp', 'linux'),
     // By default the misao task has its primary row with a misao ref (stored data without a ref is tmux).
-    windowRepo: { findByTask: () => opts.windows ?? [{ isPrimary: true, ownerType: 'task', tmuxTarget: `azito:${WINDOW_ID}`, muxRef: { kind: 'misao', workspace: 'azito', window: WINDOW_ID } }] } as never,
+    windowRepo: { findByTask: () => opts.windows ?? [{ isPrimary: true, ownerType: 'task', role: null, originProjectId: null, tmuxTarget: `azito:${WINDOW_ID}`, muxRef: { kind: 'misao', workspace: 'azito', window: WINDOW_ID } }] } as never,
   });
   const log = { warn: vi.fn() };
   const task = { id: 987654, projectId: 1, serverName: 'local', tmuxWindow: WINDOW_ID, worktreePath: null } as unknown as Task;
@@ -36,7 +36,7 @@ function setup(opts: { windows?: unknown[]; closeWindow?: ReturnType<typeof vi.f
 describe('TaskCleanupService window close', () => {
   it('closes the window by the primary row\'s mux_ref, even when task.tmuxWindow holds something else (a restored task)', async () => {
     const ref = { kind: 'misao', workspace: 'azito', window: WINDOW_ID };
-    const { service, closeWindow, log, task } = setup({ windows: [{ isPrimary: true, ownerType: 'task', tmuxTarget: `azito:${WINDOW_ID}`, muxRef: ref }] });
+    const { service, closeWindow, log, task } = setup({ windows: [{ isPrimary: true, ownerType: 'task', role: null, originProjectId: null, tmuxTarget: `azito:${WINDOW_ID}`, muxRef: ref }] });
     task.tmuxWindow = 'task-1--ab12';
 
     await service.closeWindow(task, log);
@@ -102,7 +102,7 @@ describe('TaskCleanupService window close', () => {
   });
 
   it('tmux: closes task.tmuxWindow in the project workspace even when the window row disagrees (behaviour unchanged)', async () => {
-    const row = { isPrimary: true, ownerType: 'task', tmuxTarget: 'other:stale-window', muxRef: { kind: 'tmux', workspace: 'other', window: 'stale-window' } };
+    const row = { isPrimary: true, ownerType: 'task', role: null, originProjectId: null, tmuxTarget: 'other:stale-window', muxRef: { kind: 'tmux', workspace: 'other', window: 'stale-window' } };
     const { service, closeWindow, log, task } = setup({ kind: 'tmux', windows: [row] });
     task.tmuxWindow = 'task-1';
 

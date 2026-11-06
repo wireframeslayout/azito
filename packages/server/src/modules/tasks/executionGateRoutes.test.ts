@@ -91,6 +91,7 @@ function makeOpts(existingTask: Task): { opts: TasksRouteOptions; createCalls: R
   // that would silently stop testing that mapping at all.
   const originationService = new TaskOriginationService(taskRepo, { record: vi.fn() } as unknown as TasksRouteOptions['auditLogService']);
   const opts: TasksRouteOptions = {
+    attribution: { recordInteraction: vi.fn() },
     taskRepo,
     projectRepo: {
       findAll: vi.fn(() => []),
@@ -193,6 +194,15 @@ function makeOpts(existingTask: Task): { opts: TasksRouteOptions; createCalls: R
 }
 
 describe('POST /api/tasks — input_trust immutability (Issue #328)', () => {
+  it('records a successful creation from the caller window header', async () => {
+    const { opts } = makeOpts(makeTask());
+    const app = Fastify(); await app.register(tasksRoutes, opts);
+    const res = await app.inject({ method: 'POST', url: '/api/tasks', headers: { 'x-azito-window-id': '7' }, payload: { project_id: 10, title: 'New task' } });
+    expect(res.statusCode).toBe(200);
+    expect(opts.attribution.recordInteraction).toHaveBeenCalledWith(7, { taskId: res.json().id });
+    await app.close();
+  });
+
   it('ignores an input_trust field in the request body and always creates a trusted task', async () => {
     const { opts, createCalls } = makeOpts(makeTask());
     const app = Fastify();
@@ -632,7 +642,7 @@ describe('recover-session and restore — a host that cannot run a worker in a p
   it('recover-session (window-record path) answers 501 unsupported_os', async () => {
     const { opts } = makeOpts(makeTask({ status: 'review' }));
     opts.windowRepo.findByTask = vi.fn(() => [
-      { id: 1, ownerType: 'task' as const, projectId: null, taskId: 1, serverName: 'test-server', tmuxTarget: 'azito:task-1.1', label: 'task-1', labelSource: 'auto' as const, isPrimary: true, windowType: 'agent' as const, workerType: 'claude', workerModel: 'opus', agentSessionId: null, launchCommand: null, workingDirectory: null, paneLayout: null, sleeping: false, createdAt: '' },
+      { id: 1, ownerType: 'task' as const, role: null, originProjectId: null, projectId: null, taskId: 1, serverName: 'test-server', tmuxTarget: 'azito:task-1.1', label: 'task-1', labelSource: 'auto' as const, isPrimary: true, windowType: 'agent' as const, workerType: 'claude', workerModel: 'opus', agentSessionId: null, launchCommand: null, workingDirectory: null, paneLayout: null, sleeping: false, createdAt: '' },
     ]);
     opts.respawnService = { respawn: vi.fn(async () => { throw refuse(); }) } as unknown as TasksRouteOptions['respawnService'];
     const res = await (await appWith(opts)).inject({ method: 'POST', url: '/api/tasks/1/recover-session' });
@@ -662,7 +672,7 @@ describe('POST /api/tasks/:id/recover-session — execution gate (Issue #328)', 
   it('translates WindowRespawnService gate errors into the same HTTP shape as /execute (window-record path)', async () => {
     const { opts } = makeOpts(makeTask({ inputTrust: 'untrusted', status: 'pending_approval' }));
     opts.windowRepo.findByTask = vi.fn(() => [
-      { id: 1, ownerType: 'task' as const, projectId: null, taskId: 1, serverName: 'test-server', tmuxTarget: 'azito:task-1.1', label: 'task-1', labelSource: 'auto' as const, isPrimary: true, windowType: 'agent' as const, workerType: 'claude', workerModel: 'opus', agentSessionId: null, launchCommand: null, workingDirectory: null, paneLayout: null, sleeping: false, createdAt: '' },
+      { id: 1, ownerType: 'task' as const, role: null, originProjectId: null, projectId: null, taskId: 1, serverName: 'test-server', tmuxTarget: 'azito:task-1.1', label: 'task-1', labelSource: 'auto' as const, isPrimary: true, windowType: 'agent' as const, workerType: 'claude', workerModel: 'opus', agentSessionId: null, launchCommand: null, workingDirectory: null, paneLayout: null, sleeping: false, createdAt: '' },
     ]);
     opts.respawnService = {
       respawn: vi.fn(async () => { throw new ExecutionGateDeniedError(1); }),

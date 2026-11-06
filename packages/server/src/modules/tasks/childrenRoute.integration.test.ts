@@ -105,6 +105,7 @@ function buildApp(scopedAuthEnabled: boolean, db: SqliteDatabase, createCalls: R
   const originationService = new TaskOriginationService(taskRepo as unknown as ITaskRepository, auditLogService);
 
   const opts: TasksRouteOptions = {
+    attribution: { recordInteraction: vi.fn() },
     taskRepo,
     projectRepo: { findAll: vi.fn(() => []), findById: vi.fn(() => ({ id: 10, name: 'P', slug: 'p' })), create: vi.fn(), update: vi.fn(), delete: vi.fn(), addRepository: vi.fn(), findRepositoryById: vi.fn(() => null), removeRepository: vi.fn(), findRepositoryCredentialsByIds: vi.fn(() => []) } as unknown as TasksRouteOptions['projectRepo'],
     projectServerRepo: { findByProject: vi.fn(() => []), findByProjects: vi.fn(() => new Map()), findByServer: vi.fn(() => []), find: vi.fn(() => null), upsert: vi.fn(), remove: vi.fn() },

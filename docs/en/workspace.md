@@ -171,3 +171,11 @@ AZITO is optimized for mobile browsers with the following features:
 ## Sidebar Resize
 
 The sidebar can be resized by dragging its right edge (200px-600px). Double-click resets it to the default width (320px). The width is remembered across sessions and shared across all projects. When collapsed via `Ctrl+B`, the sidebar hides completely to maximize the main content area.
+
+### Orchestrators
+
+An agent window can have the orchestrator role. It belongs to a server rather than a project; removing the role restores its original project if that project still exists. Orchestrators can link windows and tasks, including nested orchestrators with one parent and no cycles. Links can be added or removed manually; recorded interactions do not restore a manually removed link. `X-Azito-Window-Id` records attribution only: it can be forged and does not grant or restrict authorization.
+
+Use `POST /api/windows` to register a server-owned window, optionally with `role: "orchestrator"`, and `PUT /api/windows/:id/role` with `role: "orchestrator"` or `null` to change it. `GET /api/orchestrators` lists orchestrators and their link summaries. `GET /api/windows/:id/links` lists active links; `includeUnlinked=1` includes removed links and `kind` filters them. Add one with `POST /api/windows/:id/links` using either `targetWindowId` or `taskId`, and remove it with `DELETE /api/windows/:id/links/:linkId`. These management routes require an operator.
+
+`azitoctl` sends the window ID from `AZITO_WINDOW_ID` in this header when available.

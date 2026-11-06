@@ -49,6 +49,7 @@ function makeTask(id: number): Task {
 
 function makeOpts(tasks: Task[], findByTaskIds = vi.fn(() => new Map()), projectServers: string[] = []): TasksRouteOptions {
   return {
+    attribution: { recordInteraction: vi.fn() },
     taskRepo: {
       findAll: vi.fn(() => tasks),
       findByProject: vi.fn(() => tasks),

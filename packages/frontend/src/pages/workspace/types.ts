@@ -20,8 +20,9 @@ export interface WindowPaneLayout {
 
 export interface Window {
   id: number;
-  ownerType: 'project' | 'task';
-  role?: string;
+  ownerType: 'project' | 'task' | 'server';
+  role: 'orchestrator' | null;
+  originProjectId: number | null;
   projectId?: number;
   taskId?: number;
   serverName: string;

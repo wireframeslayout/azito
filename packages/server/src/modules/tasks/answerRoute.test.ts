@@ -76,6 +76,7 @@ function makeOpts(existingTask: Task, opts: { gateAllows: boolean }): { opts: Ta
   });
 
   const routeOpts: TasksRouteOptions = {
+    attribution: { recordInteraction: vi.fn() },
     taskRepo: {
       findAll: vi.fn(() => []),
       findByProject: vi.fn(() => []),
