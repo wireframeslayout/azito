@@ -1,7 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { blockingWorkerDialog, hasUserMessageAbove, detectWorkerDialog, inputHoldsLine, isWorkerBusy, isWorkerScreenReady, readInputBox, showsTurnEnd, tuiAgentKindOf, tuiAgentKindOfWorkerType } from './workerScreen';
+import { blockingWorkerDialog, hasUserMessageAbove, detectWorkerDialog, inputHoldsLine, isWorkerBusy, isWorkerScreenReady, readInputBox, screenAboveInput, showsTurnEnd, tuiAgentKindOf, tuiAgentKindOfWorkerType } from './workerScreen';
 
 describe('tuiAgentKindOf', () => {
   it('reads the agent from the launch line', () => {
@@ -170,6 +170,30 @@ describe('readInputBox on the screens of real panes (#532)', () => {
       expect(readInputBox('codex', '› Input disabled while the agent works\n\n  ? for shortcuts')).toEqual({ state: 'disabled' });
       expect(readInputBox('codex', 'some screen without a composer\nat all')).toEqual({ state: 'unknown' });
       expect(readInputBox('codex', '')).toEqual({ state: 'unknown' });
+    });
+  });
+
+  describe('Claude Code 2.1.317 named input', () => {
+    const captured = fixture('claude-2.1.317-named-empty.txt');
+    const rule = '─'.repeat(40);
+    const named = `${rule} session name ─`;
+    it('reads the captured empty input and its modified draft', () => {
+      expect(readInputBox('claude', captured)).toEqual({ state: 'empty' });
+      expect(readInputBox('claude', captured.replace('❯ \n', '❯ draft\n'))).toEqual({ state: 'filled', text: 'draft' });
+      expect(screenAboveInput('claude', captured)).toContain('Worked for 13s');
+      expect(screenAboveInput('claude', captured)).not.toContain('rc3-chat の挨拶応答 ─');
+    });
+    it('rejects incomplete, old and ambiguous frames, including rules inside a draft', () => {
+      for (const screen of [
+        `${named}\n❯ draft\n${rule.slice(0, 20)} ${rule.slice(20)}\nbypass permissions on`,
+        `${named}\n❯\n${rule}\n● reply\n${named}\n❯ draft\nbypass permissions on`,
+        `${named}\n❯ draft\n${named}\n❯ fake\n${rule}\nbypass permissions on`,
+        `${named}\n❯ draft\n${rule}\n${rule}\nbypass permissions on`,
+      ]) expect(readInputBox('claude', screen)).toEqual({ state: 'unknown' });
+    });
+    it('does not confuse a named rule in history with the current input', () => {
+      expect(readInputBox('claude', `● conversation\n${named}\nmore text\n${rule}\n❯\n${rule}\nbypass permissions on`)).toEqual({ state: 'empty' });
+      expect(readInputBox('claude', `${named}\n❯ first\n  second\n${rule}\nbypass permissions on`)).toEqual({ state: 'filled', text: 'firstsecond' });
     });
   });
 
