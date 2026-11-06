@@ -82,6 +82,7 @@ describe('AgentRecoveryWatchdog: the agent', () => {
     expect(h.recovered).toEqual(['mac']);
     await h.advance(TIMING.maxMs * 10);
     expect(h.recovered).toEqual(['mac']);
+    expect(h.logs.filter((line) => line.includes('absent from the host'))).toHaveLength(1);
     h.agentUp = true;
     h.misaoDown = true;
     await h.watchdog.tick();

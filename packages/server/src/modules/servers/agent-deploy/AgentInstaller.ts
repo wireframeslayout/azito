@@ -46,7 +46,6 @@ const MISAO_STEP_MESSAGES: Record<AgentMisaoInstallStep, string> = {
 
 export interface AgentMisaoInstaller {
   install(transport: AgentTransport, onProgress?: (step: AgentMisaoInstallStep) => void): Promise<{ version: string; startMethod: 'systemd' | 'nohup' | 'taskscheduler' | 'running'; updateAvailable: boolean }>;
-  uninstallMac?(transport: AgentTransport): Promise<'absent' | 'skipped'>;
 }
 
 export type { AgentUpdateResult };
@@ -132,7 +131,9 @@ export class AgentInstaller {
     private bundler: AgentBundler,
     /** Task name, folder and port of an agent installed on a Windows host (resolved at the entry point). */
     private windowsAgent: WindowsAgentOptions,
-    /** Absent for a hub that cannot install misao (no bundled copy): the agent is installed without it. */
+    /** Removal is available even when this hub has no bundle to install. */
+    private misaoUninstaller: { uninstallMac(transport: AgentTransport): Promise<'absent' | 'skipped'> },
+    /** Absent for a hub that cannot install misao (no bundled copy). */
     private misaoInstaller?: AgentMisaoInstaller,
     private harnessPrefix = '',
   ) {
@@ -454,8 +455,7 @@ export class AgentInstaller {
       }
       if (choice.removeMisao) {
         try {
-          const uninstaller = this.misaoInstaller;
-          if (!uninstaller?.uninstallMac) throw new Error('misao removal is unavailable');
+          const uninstaller = this.misaoUninstaller;
           if (!agent.host || !agent.port || !agent.token) throw new Error('Agent address or token is missing; misao was left in place');
           const transport = new AgentTransport(agent.host, agent.port, agent.token, 'system', agent.host, { platform: 'darwin', arch: 'arm64' });
           const outcome = await uninstaller.uninstallMac(transport);

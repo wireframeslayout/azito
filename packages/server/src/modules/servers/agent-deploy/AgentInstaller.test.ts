@@ -104,7 +104,7 @@ describe('AgentInstaller', () => {
 
   function make(misao?: AgentMisaoInstaller, sshOpts: HostOptions = {}, fakeHost?: FakeHost, linuxArches?: string[]) {
     const { ssh, commands } = makeSsh(sshOpts, fakeHost);
-    const installer = new AgentInstaller(ssh as never, makeBundler(linuxArches) as never, DEFAULT_WINDOWS_AGENT_OPTIONS, misao);
+    const installer = new AgentInstaller(ssh as never, makeBundler(linuxArches) as never, DEFAULT_WINDOWS_AGENT_OPTIONS, {} as never, misao);
     // The transfer is the SSH library's business (and needs a real server): everything around it is what is tested here.
     (installer as unknown as { transferAndDeploy: () => Promise<void> }).transferAndDeploy = async () => undefined;
     return { installer, commands };
@@ -124,6 +124,19 @@ describe('AgentInstaller', () => {
     expect(result.success).toBe(true);
     expect(result.tmuxFound).toBe(false);
     expect(steps.find((s) => s.step === 'preflight' && s.status === 'ok')?.message).toContain('no tmux (optional)');
+  });
+
+  it('omits misao steps when the hub has no bundle even when removal is available', async () => {
+    const { ssh } = makeSsh({ tmux: 'tmux 3.4\n' });
+    const uninstaller = { uninstallMac: vi.fn(async () => 'absent' as const) };
+    const installer = new AgentInstaller(ssh as never, makeBundler() as never, DEFAULT_WINDOWS_AGENT_OPTIONS, uninstaller, undefined);
+    (installer as unknown as { transferAndDeploy: () => Promise<void> }).transferAndDeploy = async () => undefined;
+    const steps: InstallProgress[] = [];
+    const result = await installer.install('user@host', (step) => steps.push(step));
+    expect(result.success).toBe(true);
+    expect(result.misaoError).toBeUndefined();
+    expect(steps.some((step) => step.step === 'misao')).toBe(false);
+    expect(uninstaller.uninstallMac).not.toHaveBeenCalled();
   });
 
   const NO_MISAO = undefined;
@@ -259,7 +272,7 @@ describe('AgentInstaller', () => {
   it('runs two installs to one host one after the other: the second starts after the first has finished its cleanup', async () => {
     const host: FakeHost = { folderId: '', folderExists: false };
     const { ssh, commands } = makeSsh({ tmux: '' }, host);
-    const installer = new AgentInstaller(ssh as never, makeBundler() as never, DEFAULT_WINDOWS_AGENT_OPTIONS, undefined);
+    const installer = new AgentInstaller(ssh as never, makeBundler() as never, DEFAULT_WINDOWS_AGENT_OPTIONS, {} as never, undefined);
     (installer as unknown as { transferAndDeploy: () => Promise<void> }).transferAndDeploy = async () => undefined;
     // Same host under two spellings (as two server names would have it).
     const [a, b] = await Promise.all([installer.install('user@host'), installer.install('user@HOST:22')]);
@@ -276,7 +289,7 @@ describe('AgentInstaller', () => {
   it('takes one lock for an SSH alias, an omitted port and an explicit one: they are one host', async () => {
     const host: FakeHost = { folderId: '', folderExists: false };
     const { ssh, commands } = makeSsh({ tmux: '' }, host);
-    const installer = new AgentInstaller(ssh as never, makeBundler() as never, DEFAULT_WINDOWS_AGENT_OPTIONS, undefined);
+    const installer = new AgentInstaller(ssh as never, makeBundler() as never, DEFAULT_WINDOWS_AGENT_OPTIONS, {} as never, undefined);
     (installer as unknown as { transferAndDeploy: () => Promise<void> }).transferAndDeploy = async () => undefined;
     const [a, b] = await Promise.all([installer.install('box'), installer.install('user@host:22')]);
     expect(a.error).toContain('stopped and removed');
@@ -287,7 +300,7 @@ describe('AgentInstaller', () => {
 
   it('makes a recovery wait for an install of the same host', async () => {
     const { ssh, commands } = makeSsh({ tmux: 'tmux 3.4\n' });
-    const installer = new AgentInstaller(ssh as never, makeBundler() as never, DEFAULT_WINDOWS_AGENT_OPTIONS, undefined);
+    const installer = new AgentInstaller(ssh as never, makeBundler() as never, DEFAULT_WINDOWS_AGENT_OPTIONS, {} as never, undefined);
     const gate: { release?: () => void } = {};
     (installer as unknown as { transferAndDeploy: () => Promise<void> }).transferAndDeploy = () => new Promise<void>((resolve) => { gate.release = resolve; });
     const install = installer.install('user@host');
@@ -312,7 +325,7 @@ describe('AgentInstaller', () => {
     const gate: { release?: () => void } = {};
     const blocked = new Promise<void>((resolve) => { gate.release = resolve; });
     const { ssh: sshA } = makeSsh({ tmux: '' });
-    const installerA = new AgentInstaller(sshA as never, makeBundler() as never, DEFAULT_WINDOWS_AGENT_OPTIONS, undefined);
+    const installerA = new AgentInstaller(sshA as never, makeBundler() as never, DEFAULT_WINDOWS_AGENT_OPTIONS, {} as never, undefined);
     (installerA as unknown as { transferAndDeploy: () => Promise<void> }).transferAndDeploy = () => blocked;
     const first = installerA.install('user@one');
     const second = installerA.install('user@two');
@@ -419,7 +432,7 @@ describe('AgentInstaller', () => {
   it('preserves a local network diagnosis in the result and progress', async () => {
     const error = new LocalNetworkPermissionError('connect EHOSTUNREACH 192.168.1.2:22');
     const ssh = { resolveHost: () => ({ username: 'u', host: '192.168.1.2', port: 22 }), execIsolated: async () => { throw error; } };
-    const installer = new AgentInstaller(ssh as never, makeBundler() as never, DEFAULT_WINDOWS_AGENT_OPTIONS);
+    const installer = new AgentInstaller(ssh as never, makeBundler() as never, DEFAULT_WINDOWS_AGENT_OPTIONS, {} as never);
     const steps: InstallProgress[] = [];
     const result = await installer.install('u@192.168.1.2', (step) => steps.push(step));
     expect(result).toMatchObject({ success: false, code: error.code, detail: error.detail });
@@ -429,7 +442,7 @@ describe('AgentInstaller', () => {
   it('can remove managed Mac misao without a bundle to install', async () => {
     const { ssh } = makeSsh();
     const uninstallMac = vi.fn(async () => 'absent' as const);
-    const installer = new AgentInstaller(ssh as never, makeBundler() as never, DEFAULT_WINDOWS_AGENT_OPTIONS, { uninstallMac } as never);
+    const installer = new AgentInstaller(ssh as never, makeBundler() as never, DEFAULT_WINDOWS_AGENT_OPTIONS, { uninstallMac });
     vi.spyOn(MacAgentLaunchd.prototype, 'assertOwned').mockResolvedValue();
     vi.spyOn(MacAgentLaunchd.prototype, 'readInstallId').mockResolvedValue(undefined);
     const result = await installer.uninstallFromMacHost('user@host', { removeMisao: true }, { host: '100.64.0.9', port: 3002, token: 'tok' });
@@ -582,7 +595,7 @@ describe('AgentInstaller', () => {
         if (command === buildWindowsPreflightCommand()) return { stdout: windowsOutput(over), stderr: '', code: 0 };
         throw new Error(`unexpected command on a Windows host: ${command}`);
       });
-      const installer = new AgentInstaller({ execIsolated, resolveHost: (h: string) => ({ username: 'user', host: h.replace(/^.*@/, '').replace(/:\d+$/, ''), port: 22 }) } as never, makeBundler() as never, DEFAULT_WINDOWS_AGENT_OPTIONS, okMisao());
+      const installer = new AgentInstaller({ execIsolated, resolveHost: (h: string) => ({ username: 'user', host: h.replace(/^.*@/, '').replace(/:\d+$/, ''), port: 22 }) } as never, makeBundler() as never, DEFAULT_WINDOWS_AGENT_OPTIONS, {} as never, okMisao());
       return { installer, commands };
     }
 
@@ -618,7 +631,7 @@ describe('AgentInstaller', () => {
     it('fails with a reason when neither the OS probe nor the POSIX fallback can identify the host', async () => {
       const commands: string[] = [];
       const execIsolated = vi.fn(async (_host: string, command: string) => { commands.push(command); return { stdout: 'weird\n', stderr: '', code: 0 }; });
-      const installer = new AgentInstaller({ execIsolated, resolveHost: (h: string) => ({ username: 'user', host: h.replace(/^.*@/, '').replace(/:\d+$/, ''), port: 22 }) } as never, makeBundler() as never, DEFAULT_WINDOWS_AGENT_OPTIONS, okMisao());
+      const installer = new AgentInstaller({ execIsolated, resolveHost: (h: string) => ({ username: 'user', host: h.replace(/^.*@/, '').replace(/:\d+$/, ''), port: 22 }) } as never, makeBundler() as never, DEFAULT_WINDOWS_AGENT_OPTIONS, {} as never, okMisao());
       const result = await installer.install('user@host');
       expect(result.success).toBe(false);
       expect(result.error).toMatch(/Could not tell the host's OS/);

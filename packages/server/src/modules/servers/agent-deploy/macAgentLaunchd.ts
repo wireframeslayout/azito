@@ -1,4 +1,4 @@
-import { LaunchdJobOperations, DEFAULT_LAUNCHD_TIMING, limitToBackgroundSession, type CommandRunner } from '../../system/serviceManager';
+import { LaunchdJobOperations, DEFAULT_LAUNCHD_TIMING, limitToBackgroundSession, type CommandRunner } from '../../../shared/os/launchd';
 import { posixRemoteCommand } from './posixRemoteCommand';
 import { shellQuote } from '../../../shared/shellQuote';
 import type { SshClient } from '../ssh/SshClient';

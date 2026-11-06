@@ -235,7 +235,11 @@ export class AgentRecoveryWatchdog {
       waits.set(server.name, { ...wait, nextAt: this.deps.now() + this.timing.maxMs });
       return;
     }
-    if (outcome === 'absent') { waits.set(server.name, { ...wait, nextAt: Number.POSITIVE_INFINITY }); return; }
+    if (outcome === 'absent') {
+      this.deps.logger.info(`${server.name}: the agent is absent from the host; recovery has stopped`);
+      waits.set(server.name, { ...wait, nextAt: Number.POSITIVE_INFINITY });
+      return;
+    }
     if (outcome === 'busy') return; // another operation holds the misao folder: not an attempt, looked at again next tick
     if (outcome !== undefined && isForeignLock(outcome)) {
       // The lock of a folder shared with the hub is held by someone who is not this user: not an attempt, said once per state.
