@@ -7,7 +7,7 @@ import { guardChatInput } from './chatInputGuard';
 
 const server = {} as ServerConfig;
 const pane = asPaneHandle('%1');
-const ready = '──────────────\n❯\n──────────────\nbypass permissions on';
+const ready = '● ready\n──────────────\n❯\n──────────────\nbypass permissions on';
 function driver(command: string | null, screen: string, code = 0): IMuxClient {
   return { paneCommandByHandle: vi.fn().mockResolvedValue(command), captureScreen: vi.fn().mockResolvedValue({ stdout: screen, stderr: '', code }) } as unknown as IMuxClient;
 }

@@ -195,9 +195,9 @@ function ruleMayBeDraftText(lines: string[], rule: number): boolean {
     if (line.trim() === '' || /^\s/.test(line) || isClaudeUpperRule(line)) continue;
     if (!PROMPT_LINE.test(line)) return false;
     const above = lines.slice(0, i).filter((other) => other.trim() !== '').pop();
-    return above !== undefined && isClaudeUpperRule(above);
+    return above === undefined || isClaudeUpperRule(above);
   }
-  return false;
+  return true;
 }
 
 function claudeRuleBox(lines: string[]): { upper: number; lower: number } | undefined {

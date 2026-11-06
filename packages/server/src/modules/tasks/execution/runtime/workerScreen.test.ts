@@ -200,7 +200,7 @@ describe('readInputBox on the screens of real panes (#532)', () => {
     });
     it('does not confuse a named rule in history with the current input', () => {
       expect(readInputBox('claude', `● conversation\n${named}\nmore text\n${rule}\n❯\n${rule}\nbypass permissions on`)).toEqual({ state: 'empty' });
-      expect(readInputBox('claude', `${named}\n❯ first\n  second\n${rule}\nbypass permissions on`)).toEqual({ state: 'filled', text: 'firstsecond' });
+      expect(readInputBox('claude', `● ready\n${named}\n❯ first\n  second\n${rule}\nbypass permissions on`)).toEqual({ state: 'filled', text: 'firstsecond' });
     });
     it.each([
       ['a plain rule', rule],
@@ -229,6 +229,12 @@ describe('readInputBox on the screens of real panes (#532)', () => {
     ])('does not read a draft as empty when it holds %s and ends in a bare prompt', (_label, draft) => {
       expect(readInputBox('claude', `${named}\n${draft}\n${rule}\nbypass permissions on`)).toEqual({ state: 'unknown' });
     });
+    it.each([
+      ['a prompt at the start', `❯ draft line\n  ${rule}\n  >`],
+      ['only indented continuation visible', `  draft line\n  ${rule}\n  >`],
+    ])('rejects a clipped draft with %s', (_label, draft) => {
+      expect(readInputBox('claude', `${draft}\n${rule}\nbypass permissions on`)).toEqual({ state: 'unknown' });
+    });
     it('reads the current input below a reply whose text holds rules', () => {
       expect(readInputBox('claude', `❯ earlier\n\n● reply\n  ${rule}\n  more\n  ${rule}\n\n${named}\n❯ \n${rule}\nbypass permissions on`)).toEqual({ state: 'empty' });
     });
@@ -255,8 +261,8 @@ describe('readInputBox on the screens of real panes (#532)', () => {
 
     it('the hint of an empty input ("Try ...") is empty, a draft is filled, a screen without a box is unknown', () => {
       const rule = '─'.repeat(60);
-      expect(readInputBox('claude', `${rule}\n❯ Try "fix lint errors"\n${rule}\n  bypass permissions on (shift+tab to cycle)`)).toEqual({ state: 'empty' });
-      expect(readInputBox('claude', `${rule}\n❯ check the logs\n${rule}\n  bypass permissions on (shift+tab to cycle)`)).toEqual({ state: 'filled', text: 'check the logs' });
+      expect(readInputBox('claude', `● ready\n${rule}\n❯ Try "fix lint errors"\n${rule}\n  bypass permissions on (shift+tab to cycle)`)).toEqual({ state: 'empty' });
+      expect(readInputBox('claude', `● ready\n${rule}\n❯ check the logs\n${rule}\n  bypass permissions on (shift+tab to cycle)`)).toEqual({ state: 'filled', text: 'check the logs' });
       expect(readInputBox('claude', 'bypass permissions on (shift+tab to cycle)')).toEqual({ state: 'unknown' });
       expect(readInputBox('claude', '')).toEqual({ state: 'unknown' });
     });
