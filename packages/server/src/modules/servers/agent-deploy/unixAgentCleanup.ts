@@ -17,7 +17,7 @@ export const AGENT_ENTRY_PATH = '$HOME/.azito/agent/current/azito-agent.cjs';
 export const CLEANUP_TIMEOUT_MS = 120_000;
 
 /**
- * The mark a running cleanup keeps on the host: a directory holding the script's pid. It lives outside `~/.azito/agent` (which the
+ * The mark a running cleanup keeps on the host: a directory holding the script's pid or the Mac cleanup start time. It lives outside `~/.azito/agent` (which the
  * cleanup removes) and is the exclusion that outlasts the SSH connection: when a call times out or drops, the script may still be
  * running on the host, and the hub, which has lost sight of it, must not let another install start until the mark is gone.
  */
@@ -87,7 +87,9 @@ export function buildCleanupGuardScript(thenPrint?: string): string {
     'if [ -d "$l" ]; then',
     '  p=$(cat "$l/pid" 2>/dev/null || true)',
     '  s=unknown',
+    '  started=$(cat "$l/started" 2>/dev/null || true)',
     '  if [ -n "$p" ]; then if kill -0 "$p" 2>/dev/null; then s=alive; else s=ended; fi; fi',
+    '  case "$started" in ""|*[!0-9]*) ;; *) now=$(date +%s); if [ "$now" -lt "$((started + 120))" ]; then s=alive; p=deadline; fi;; esac',
     '  echo "AZITO_CLEANUP_MARK:${p:-none}:$s"',
     thenPrint ? `else ${thenPrint}` : 'else echo AZITO_CLEANUP_IDLE',
     'fi',
@@ -106,12 +108,12 @@ export function parseCleanupGuard(stdout: string, idle: (line: string) => boolea
 }
 
 export function cleanupMarkMessage(host: string, mark: CleanupMark): string {
-  const seen = mark.state === 'alive' ? `its pid ${mark.pid} is alive: a cleanup is still running`
+  const seen = mark.state === 'alive' ? (mark.pid === 'deadline' ? 'the cleanup deadline has not passed' : `its pid ${mark.pid} is alive: a cleanup is still running`)
     : mark.state === 'ended' ? `its pid ${mark.pid} has ended: the cleanup stopped, but may not have finished its work`
       : 'it holds no pid yet';
   // Without a pid the cleanup may be paused between making the mark and writing its pid: removing the mark then lets it resume
   // over a newer install. So the operator first makes sure no cleanup script is left on the host, whatever the pid says.
-  const check = mark.state === 'unknown'
+  const check = mark.state === 'unknown' || mark.pid === 'deadline'
     ? `read ${CLEANUP_LOCK_DIR}/pid again (the cleanup writes it right after making the mark) and check it with kill -0; if there is still no pid, make sure no cleanup script of the agent is left running on ${host} (for example: pgrep -u "$(id -u)" -f agent-cleanup.lock prints nothing) before going on`
     : `check with kill -0 ${mark.pid} that it has ended`;
   return `The mark ${CLEANUP_LOCK_DIR} of a previous cleanup of the agent on ${host} is still there (${seen}), so nothing was changed. Do not remove the mark or retry until that cleanup has ended: on ${host}, ${check}, look at ~/.azito/agent and the azito-agent unit if you need to, then remove the mark: rm -rf ${CLEANUP_LOCK_DIR}`;

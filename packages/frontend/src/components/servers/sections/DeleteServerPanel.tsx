@@ -3,9 +3,22 @@ import { useTranslation } from 'react-i18next';
 import { Button, DocsLink, Notice, ToggleField } from '../../ui';
 import { UninstallStepList } from '../UninstallStepList';
 import type { ServerDeletion } from '../../../hooks/useServerDeletion';
+import { canRemoveFromHost, type HostRemovalSupport } from '../../../lib/serverDeletion';
+import type { DocsPage } from '../../../lib/docsUrl';
 
 interface DeleteServerPanelProps {
   deletion: ServerDeletion;
+}
+
+/** The texts that differ by the host the agent runs on (a Windows logon task, a Mac launchd job). */
+const HOST_TEXT = {
+  windows: { removeFromHostDesc: 'danger.hostRemoval.removeFromHostDesc', removeMisaoDesc: 'danger.hostRemoval.removeMisaoDesc', stays: 'danger.hostRemoval.staysWindows' },
+  macos: { removeFromHostDesc: 'danger.hostRemoval.removeFromHostDescMac', removeMisaoDesc: 'danger.hostRemoval.removeMisaoDescMac', stays: 'danger.hostRemoval.staysMac' },
+} as const;
+
+function docsPageFor(support: HostRemovalSupport): DocsPage {
+  if (support === 'windows') return 'windows-agent';
+  return support === 'macos' ? 'posix-agent' : 'install-and-update';
 }
 
 /** Why the row could not be deleted: visible text, read out by the live region of the panel (so it is hidden from the reader here, not said twice). */
@@ -25,7 +38,7 @@ function RowError({ reason }: { reason: string }) {
  */
 function HostFailure({ deletion }: DeleteServerPanelProps) {
   const { t } = useTranslation('servers');
-  const { failure, busy, rowError, deletingRow } = deletion;
+  const { failure, busy, rowError, deletingRow, support } = deletion;
   const heading = useRef<HTMLDivElement>(null);
   useEffect(() => { heading.current?.focus(); }, []);
   if (failure === null) return null;
@@ -37,7 +50,7 @@ function HostFailure({ deletion }: DeleteServerPanelProps) {
         </Notice>
       </div>
       {failure.kind === 'steps'
-        ? <UninstallStepList steps={failure.steps} />
+        ? canRemoveFromHost(support) && <UninstallStepList steps={failure.steps} hostOs={support} />
         : (
           <div style={{ fontSize: 'var(--font-sm)', color: 'var(--text-dim)', overflowWrap: 'anywhere' }}>
             {failure.message === '' ? t('danger.hostRemoval.failedUnknown') : t('danger.hostRemoval.failedNoAnswer', { reason: failure.message })}
@@ -62,26 +75,27 @@ function HostFailure({ deletion }: DeleteServerPanelProps) {
 function Choices({ deletion }: DeleteServerPanelProps) {
   const { t } = useTranslation('servers');
   const { phase, support, choice, busy, rowError } = deletion;
-  const touchesHost = support === 'windows' && choice.removeFromHost;
+  const removable = canRemoveFromHost(support);
+  const touchesHost = removable && choice.removeFromHost;
   const showStays = support !== 'none' && !touchesHost;
   const container = useRef<HTMLDivElement>(null);
   useEffect(() => { container.current?.focus(); }, []);
   return (
     <div ref={container} tabIndex={-1} role="group" aria-label={t('danger.deleteServer')} style={{ outline: 'none', display: 'flex', flexDirection: 'column', gap: 'var(--space-3)' }}>
-      {support === 'windows' && (
+      {removable && (
         <div role="group" aria-label={t('danger.hostRemoval.groupLabel')} style={{ display: 'flex', flexDirection: 'column', gap: 'var(--space-3)' }}>
           <ToggleField
             checked={choice.removeFromHost}
             onChange={deletion.setRemoveFromHost}
             label={t('danger.hostRemoval.removeFromHost')}
-            description={t('danger.hostRemoval.removeFromHostDesc')}
+            description={t(HOST_TEXT[support].removeFromHostDesc)}
             disabled={busy}
           />
           <ToggleField
             checked={choice.removeMisao}
             onChange={deletion.setRemoveMisao}
             label={t('danger.hostRemoval.removeMisao')}
-            description={choice.removeFromHost ? t('danger.hostRemoval.removeMisaoDesc') : t('danger.hostRemoval.removeMisaoNeedsHost')}
+            description={choice.removeFromHost ? t(HOST_TEXT[support].removeMisaoDesc) : t('danger.hostRemoval.removeMisaoNeedsHost')}
             disabled={busy || !choice.removeFromHost}
           />
         </div>
@@ -93,12 +107,12 @@ function Choices({ deletion }: DeleteServerPanelProps) {
           sub={(
             <>
               {t('danger.hostRemoval.staysHarness')}{' '}
-              <DocsLink page={support === 'windows' ? 'windows-agent' : 'install-and-update'} label={t('danger.hostRemoval.manualSteps')} />
+              <DocsLink page={docsPageFor(support)} label={t('danger.hostRemoval.manualSteps')} />
             </>
           )}
         >
           <strong>{t('danger.hostRemoval.staysTitle')}</strong>{' '}
-          {support === 'windows' ? t('danger.hostRemoval.staysWindows') : t('danger.hostRemoval.staysUnix')}
+          {removable ? t(HOST_TEXT[support].stays) : t('danger.hostRemoval.staysUnix')}
         </Notice>
       )}
       {rowError !== null && <RowError reason={rowError} />}
@@ -118,7 +132,7 @@ function Choices({ deletion }: DeleteServerPanelProps) {
 }
 
 /**
- * The confirmation of deleting a server. For a Windows agent it offers to remove the agent from the host first (default on) and,
+ * The confirmation of deleting a server. For a Windows or Apple Silicon Mac agent it offers to remove the agent from the host first (default on) and,
  * as a separate choice that closes every window of the host, the misao beside it (default off, only with the first). Other agents
  * say why the host is not touched (#499). With the host removal off (or not available) it says what stays on the host and links the
  * manual steps. A failed host removal shows every step's result and lets the person try again, delete only the entry, or cancel.

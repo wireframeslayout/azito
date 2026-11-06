@@ -609,9 +609,9 @@ azito version        # Show version
 | OS | Architecture | Status |
 |----|-------------|--------|
 | Linux | x86_64 (x64) | Hub and agent server supported |
-| Linux | aarch64 (arm64) | Hub supported; agent server not supported |
-| macOS | Apple Silicon (arm64) | Hub supported; agent server not supported |
-| macOS | Intel (x64) | Hub not supported (will consider on demand); agent server supported |
+| Linux | aarch64 (arm64) | Hub and agent server supported |
+| macOS | Apple Silicon (arm64) | Hub and agent server supported |
+| macOS | Intel (x64) | Hub and agent server not supported |
 | Windows | x64 | Supported, as a hub ([Windows bundle](#windows-bundle)) and as an agent server ([Windows agent servers](./windows-agent.md)) |
 | Windows | arm64 | Not supported |
 
@@ -714,3 +714,5 @@ grep AZITO_UI_TOKEN ~/.azito/hub/.env
 ss -ltn | grep :3001
 # Stop any dev server running on that port
 ```
+
+For agent setup on macOS and Linux, see [macOS and Linux agent servers](./posix-agent.md).

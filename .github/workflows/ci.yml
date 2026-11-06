@@ -48,6 +48,7 @@ jobs:
 
   test:
     name: Unit tests
+    needs: agent-native-arm64
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v4
@@ -59,7 +60,13 @@ jobs:
 
       - run: npm ci
 
+      - uses: actions/download-artifact@v4
+        with:
+          name: node-pty-linux-arm64
+          path: ${{ runner.temp }}/node-pty-linux-arm64
       - name: Server unit tests
+        env:
+          AZITO_AGENT_NODE_PTY_LINUX_ARM64: ${{ runner.temp }}/node-pty-linux-arm64
         run: npx -w packages/server vitest run
       - name: Frontend unit tests
         run: npm test -w packages/frontend
@@ -87,15 +94,44 @@ jobs:
           name: node-pty-linux
           path: ${{ runner.temp }}/node-pty-linux
 
+      - uses: actions/download-artifact@v4
+        with:
+          name: node-pty-linux-arm64
+          path: ${{ runner.temp }}/node-pty-linux-arm64
+
       - name: Server unit tests
         env:
           AZITO_AGENT_NODE_PTY_LINUX: ${{ runner.temp }}/node-pty-linux
+          AZITO_AGENT_NODE_PTY_LINUX_ARM64: ${{ runner.temp }}/node-pty-linux-arm64
         run: npx -w packages/server vitest run --project unit
 
-  # The agent runs on Linux x86-64 whichever OS the hub runs on, and node-pty's Linux binary can only be built on Linux. This job builds
+  # Build Linux arm64 node-pty for the shared agent bundle.
+  agent-native-arm64:
+    name: Agent node-pty (Linux arm64)
+    runs-on: ubuntu-24.04-arm
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+      - run: npm ci
+      - name: Collect node-pty (Linux arm64)
+        run: |
+          mkdir -p node-pty-linux-arm64/build/Release
+          cp node_modules/node-pty/package.json node-pty-linux-arm64/
+          cp node_modules/node-pty/build/Release/pty.node node-pty-linux-arm64/build/Release/
+      - uses: actions/upload-artifact@v4
+        with:
+          name: node-pty-linux-arm64
+          path: node-pty-linux-arm64
+          if-no-files-found: error
+
+  # The agent bundle includes Linux x86-64 node-pty built on Linux. This job builds
   # the agent bundle on its own platform (checking the tarball the way verify-agent-tarball.ts does) and hands that node-pty to the jobs that
   # cross-build the bundle: a Windows hub builds the very same agent from it.
   agent-native:
+    needs: agent-native-arm64
     name: Agent bundle (Linux, node-pty for other hosts)
     runs-on: ubuntu-24.04
     timeout-minutes: 15
@@ -109,7 +145,14 @@ jobs:
 
       - run: npm ci
 
+      - uses: actions/download-artifact@v4
+        with:
+          name: node-pty-linux-arm64
+          path: ${{ runner.temp }}/node-pty-linux-arm64
+
       - name: Build and verify the agent bundle
+        env:
+          AZITO_AGENT_NODE_PTY_LINUX_ARM64: ${{ runner.temp }}/node-pty-linux-arm64
         run: |
           npx -w packages/server tsx scripts/build-agent.ts
           npx -w packages/server tsx scripts/verify-agent-tarball.ts dist-agent/azito-agent.tar.gz
@@ -130,6 +173,24 @@ jobs:
         with:
           name: agent-bundle-linux
           path: packages/server/dist-agent
+
+  agent-bundle-arm64-smoke:
+    name: Agent bundle on Linux arm64
+    runs-on: ubuntu-24.04-arm
+    needs: agent-native
+    steps:
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+      - uses: actions/download-artifact@v4
+        with:
+          name: agent-bundle-linux
+          path: bundle
+      - name: Load node-pty and start a PTY
+        run: |
+          mkdir agent && tar xzf bundle/azito-agent.tar.gz -C agent
+          cd agent
+          node -e "const pty = require('./node_modules/node-pty'); const t = pty.spawn('/bin/echo', ['arm64-pty']); let out = ''; t.onData(d => out += d); t.onExit(() => process.exit(out.includes('arm64-pty') ? 0 : 1));"
 
   # The agent tarball built on a Windows host, from the Linux node-pty above. Windows has no execute bit and no Linux binary of its own, so
   # this is where the bundle's modes and contents are proved: the file list, ELF pty.node, run.sh executable, as read by the hub's reader and
@@ -157,6 +218,11 @@ jobs:
           name: node-pty-linux
           path: ${{ runner.temp }}/node-pty-linux
 
+      - uses: actions/download-artifact@v4
+        with:
+          name: node-pty-linux-arm64
+          path: ${{ runner.temp }}/node-pty-linux-arm64
+
       - name: Without a Linux node-pty the build refuses instead of making a broken bundle
         run: |
           if npx -w packages/server tsx scripts/build-agent.ts > refuse.log 2>&1; then echo "build-agent must fail on a Windows host without --node-pty-linux" >&2; exit 1; fi
@@ -166,6 +232,7 @@ jobs:
       - name: Build the agent bundle on Windows
         env:
           AZITO_AGENT_NODE_PTY_LINUX: ${{ runner.temp }}/node-pty-linux
+          AZITO_AGENT_NODE_PTY_LINUX_ARM64: ${{ runner.temp }}/node-pty-linux-arm64
         run: npx -w packages/server tsx scripts/build-agent.ts
 
       - name: Verify the tarball (hub reader and Windows tar.exe)
@@ -245,9 +312,15 @@ jobs:
           name: node-pty-linux
           path: ${{ runner.temp }}/node-pty-linux
 
+      - uses: actions/download-artifact@v4
+        with:
+          name: node-pty-linux-arm64
+          path: ${{ runner.temp }}/node-pty-linux-arm64
+
       - name: Build the Windows hub bundle
         env:
           AZITO_AGENT_NODE_PTY_LINUX: ${{ runner.temp }}/node-pty-linux
+          AZITO_AGENT_NODE_PTY_LINUX_ARM64: ${{ runner.temp }}/node-pty-linux-arm64
         run: npx -w packages/server tsx scripts/build-hub.ts --version v0.0.0-ci --platform win32 --arch x64 --repo ${{ github.repository }}
 
       - name: Smoke-test the Windows hub bundle

@@ -4,7 +4,7 @@ import * as fs from 'fs';
 import * as path from 'path';
 import { fileURLToPath } from 'url';
 import esbuild from 'esbuild';
-import { assertAgentBundleComplete, AGENT_LAUNCHER_PATH, AGENT_PTY_NODE_PATH, describeNotLinuxX64Elf, isNodePtySpawnHelper } from '../src/modules/servers/agent-deploy/agentBundleCheck';
+import { assertAgentBundleComplete, AGENT_LAUNCHER_PATH, AGENT_PTY_NODE_PATH, AGENT_PTY_ARM64_NODE_PATH, describeNotLinuxElf, isNodePtySpawnHelper } from '../src/modules/servers/agent-deploy/agentBundleCheck';
 import { collectTreeEntries, packTarGz } from '../src/shared/fs/tarGz';
 
 const SCRIPT_DIR = path.dirname(fileURLToPath(import.meta.url));
@@ -81,7 +81,12 @@ async function main(): Promise<void> {
     logLevel: 'warning',
   });
 
-  stageNodePty(resolveLinuxNodePtyDir(), path.join(STAGE, 'node_modules', 'node-pty'));
+  // A source hub (AgentBundler) may build on Linux x64 without an arm64 node-pty: the bundle then serves x64 agents only, and
+  // AgentInstaller refuses a Linux arm64 host with the reason. Release builds never pass the flag, so they still need both.
+  const allowMissingLinuxArm64 = process.argv.slice(2).includes(ALLOW_MISSING_ARM64_FLAG);
+  const arm64Dir = allowMissingLinuxArm64 ? resolveOptionalLinuxNodePtyDir('arm64') : resolveLinuxNodePtyDir('arm64');
+  if (arm64Dir === null) console.warn(`[build-agent] No Linux arm64 node-pty (${ALLOW_MISSING_ARM64_FLAG}): this bundle cannot be installed on Linux arm64 agents. Set AZITO_AGENT_NODE_PTY_LINUX_ARM64 to include it.`);
+  stageNodePty(resolveLinuxNodePtyDir('x64'), arm64Dir, path.join(STAGE, 'node_modules', 'node-pty'));
 
   for (const pkgName of ['playwright', 'playwright-core']) {
     const pkgSrc = path.join(ROOT, 'node_modules', pkgName);
@@ -114,7 +119,7 @@ async function main(): Promise<void> {
     }),
     Math.floor(Date.now() / 1000),
   );
-  assertAgentBundleComplete(tarball, 'the agent tarball just built');
+  assertAgentBundleComplete(tarball, 'the agent tarball just built', { allowMissingLinuxArm64 });
   fs.writeFileSync(path.join(DIST, 'azito-agent.tar.gz'), tarball);
 
   const tarballSha256 = crypto.createHash('sha256').update(tarball).digest('hex');
@@ -131,27 +136,23 @@ async function main(): Promise<void> {
   console.log(`[build-agent] Done → dist-agent/azito-agent.tar.gz (SHA: ${sha}, bundle hash: ${bundleHash})`);
 }
 
-/**
- * The directory that holds the Linux x86-64 build of node-pty (`build/Release/pty.node`). The agent runs on Linux, so this is
- * never the hub's own node-pty unless the hub is a Linux x86-64 machine: a Windows or macOS hub (and a Linux arm64 one) has
- * only its own binaries, and a bundle made from them would die at the agent's first `require('node-pty')`.
- * `--node-pty-linux <dir>` (or AZITO_AGENT_NODE_PTY_LINUX, which AgentBundler.ensureBuild passes on) names a node-pty folder
- * built on Linux x86-64; the release workflow builds one once and hands it to every platform's job.
- */
-function resolveLinuxNodePtyDir(): string {
-  const argv = process.argv.slice(2);
-  const flag = argv.indexOf('--node-pty-linux');
-  const given = flag === -1 ? process.env.AZITO_AGENT_NODE_PTY_LINUX : argv[flag + 1];
-  if (flag !== -1 && !given) throw new Error('--node-pty-linux needs a directory');
-  if (given) return path.resolve(given);
+const ALLOW_MISSING_ARM64_FLAG = '--allow-missing-linux-arm64';
 
-  if (process.platform !== 'linux' || process.arch !== 'x64') {
-    throw new Error(
-      `This host is ${process.platform}-${process.arch}, so its node-pty cannot run on a Linux x86-64 agent. ` +
-        'Pass --node-pty-linux <dir> (or set AZITO_AGENT_NODE_PTY_LINUX) with a node-pty folder built on Linux x86-64 ' +
-        '(its build/Release/pty.node).',
-    );
-  }
+function nativeInputNames(arch: 'x64' | 'arm64'): { flagName: string; envName: string } {
+  return arch === 'x64'
+    ? { flagName: '--node-pty-linux', envName: 'AZITO_AGENT_NODE_PTY_LINUX' }
+    : { flagName: '--node-pty-linux-arm64', envName: 'AZITO_AGENT_NODE_PTY_LINUX_ARM64' };
+}
+
+/** A native input from an explicit cross-build input or the matching Linux host; null when neither exists. */
+function resolveOptionalLinuxNodePtyDir(arch: 'x64' | 'arm64'): string | null {
+  const { flagName, envName } = nativeInputNames(arch);
+  const argv = process.argv.slice(2);
+  const flag = argv.indexOf(flagName);
+  const given = flag === -1 ? process.env[envName] : argv[flag + 1];
+  if (flag !== -1 && !given) throw new Error(`${flagName} needs a directory`);
+  if (given) return path.resolve(given);
+  if (process.platform !== 'linux' || process.arch !== arch) return null;
   for (const root of [path.join(ROOT, 'node_modules'), path.resolve(ROOT, '..', '..', 'node_modules')]) {
     const candidate = path.join(root, 'node-pty');
     if (fs.existsSync(candidate)) return candidate;
@@ -159,29 +160,35 @@ function resolveLinuxNodePtyDir(): string {
   throw new Error('node-pty not found in node_modules');
 }
 
-/**
- * node-pty's JS, the Linux binary (`build/Release/pty.node`, from `linuxDir`) and the npm package's own prebuilds (macOS and Windows,
- * debug symbols left out): one bundle serves a Linux, a macOS and a Windows agent, and node-pty picks `build/Release` on Linux and
- * `prebuilds/<platform>-<arch>` elsewhere. (Linux needs no spawn-helper.)
- */
-function stageNodePty(linuxDir: string, dest: string): void {
-  const native = path.join(linuxDir, 'build', 'Release', 'pty.node');
-  if (!fs.existsSync(native)) throw new Error(`${native} does not exist: the directory is not a built node-pty`);
-  const notElf = describeNotLinuxX64Elf(fs.readFileSync(native));
-  if (notElf) throw new Error(`${native} cannot run on a Linux x86-64 agent: ${notElf}`);
+/** Resolve a native input from the matching Linux host or an explicit cross-build input. */
+function resolveLinuxNodePtyDir(arch: 'x64' | 'arm64'): string {
+  const dir = resolveOptionalLinuxNodePtyDir(arch);
+  if (dir !== null) return dir;
+  const { flagName, envName } = nativeInputNames(arch);
+  throw new Error(`This host is ${process.platform}-${process.arch}, so its node-pty cannot run on a Linux ${arch === 'x64' ? 'x86-64' : 'arm64'} agent. Pass ${flagName} <dir> (or set ${envName}) with a node-pty folder built on Linux ${arch}.`);
+}
 
-  // lib/, prebuilds/ and package.json come from this checkout's own node-pty (the same on every OS); only pty.node is the Linux one.
+function stageNodePty(x64Dir: string, arm64Dir: string | null, dest: string): void {
   const jsSrc = ['node_modules', path.join('..', '..', 'node_modules')].map((r) => path.join(ROOT, r, 'node-pty')).find((d) => fs.existsSync(path.join(d, 'package.json')));
   if (!jsSrc) throw new Error('node-pty not found in node_modules');
-  const linuxVersion = JSON.parse(fs.readFileSync(path.join(linuxDir, 'package.json'), 'utf-8')).version as string;
   const jsVersion = JSON.parse(fs.readFileSync(path.join(jsSrc, 'package.json'), 'utf-8')).version as string;
-  if (linuxVersion !== jsVersion) throw new Error(`node-pty ${linuxVersion} (${linuxDir}) does not match this checkout's node-pty ${jsVersion}`);
-
-  fs.mkdirSync(path.join(dest, 'build', 'Release'), { recursive: true });
+  fs.mkdirSync(dest, { recursive: true });
   fs.copyFileSync(path.join(jsSrc, 'package.json'), path.join(dest, 'package.json'));
   copyDir(path.join(jsSrc, 'lib'), path.join(dest, 'lib'));
   copyDir(path.join(jsSrc, 'prebuilds'), path.join(dest, 'prebuilds'), (name) => !name.endsWith('.pdb'));
-  fs.copyFileSync(native, path.join(dest, AGENT_PTY_NODE_PATH.replace('node_modules/node-pty/', '')));
+  const natives = [[x64Dir, 'x64', AGENT_PTY_NODE_PATH], [arm64Dir, 'arm64', AGENT_PTY_ARM64_NODE_PATH]] as const;
+  for (const [source, arch, target] of natives) {
+    if (source === null) continue;
+    const native = path.join(source, 'build', 'Release', 'pty.node');
+    if (!fs.existsSync(native)) throw new Error(`${native} does not exist: the directory is not a built node-pty`);
+    const notElf = describeNotLinuxElf(fs.readFileSync(native), arch);
+    if (notElf) throw new Error(`${native} cannot run on a Linux ${arch} agent: ${notElf}`);
+    const version = JSON.parse(fs.readFileSync(path.join(source, 'package.json'), 'utf-8')).version as string;
+    if (version !== jsVersion) throw new Error(`node-pty ${version} (${source}) does not match this checkout's node-pty ${jsVersion}`);
+    const output = path.join(dest, target.replace('node_modules/node-pty/', ''));
+    fs.mkdirSync(path.dirname(output), { recursive: true });
+    fs.copyFileSync(native, output);
+  }
 }
 
 function copyDir(src: string, dest: string, include: (fileName: string) => boolean = () => true): void {

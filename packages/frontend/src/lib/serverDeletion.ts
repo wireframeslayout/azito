@@ -1,12 +1,25 @@
 import { errorMessageOf } from './apiResult';
 import type { HostProfile } from './hostProfile';
 
-/** What deleting a server can also do to its host. `windows`: the agent can be removed from the host with the row. `unsupported`: an agent on a host this release cannot clean (#499). `none`: nothing runs on the host for this server. */
-export type HostRemovalSupport = 'windows' | 'unsupported' | 'none';
+/**
+ * What deleting a server can also do to its host. `windows` / `macos`: the agent can be removed from the host with the row (a Mac only
+ * when it is Apple Silicon: an Intel Mac agent is outside support). `unsupported`: an agent on a host this release cannot clean (#499).
+ * `none`: nothing runs on the host for this server.
+ */
+export type HostRemovalSupport = 'windows' | 'macos' | 'unsupported' | 'none';
+
+/** The hosts whose agent can be removed with the row. */
+export type RemovableHostOs = Extract<HostRemovalSupport, 'windows' | 'macos'>;
 
 export function hostRemovalSupport(server: { type: string; hostProfile?: HostProfile | null }): HostRemovalSupport {
   if (server.type !== 'agent') return 'none';
-  return server.hostProfile?.platform === 'win32' ? 'windows' : 'unsupported';
+  if (server.hostProfile?.platform === 'win32') return 'windows';
+  if (server.hostProfile?.platform === 'darwin' && server.hostProfile.arch === 'arm64') return 'macos';
+  return 'unsupported';
+}
+
+export function canRemoveFromHost(support: HostRemovalSupport): support is RemovableHostOs {
+  return support === 'windows' || support === 'macos';
 }
 
 export type UninstallStepId = 'task' | 'processes' | 'firewall' | 'folder' | 'misaoTask' | 'misaoProcesses' | 'misaoFolder' | 'claudeHarnessMcp' | 'codexHarnessMcp';
@@ -73,7 +86,7 @@ export function commandsOf(steps: readonly UninstallStep[]): string[] {
 }
 
 export interface HostRemovalChoice {
-  /** Remove the agent from the host before the row is deleted. Meaningful for `windows` only. */
+  /** Remove the agent from the host before the row is deleted. Meaningful for `windows` / `macos` only. */
   removeFromHost: boolean;
   /** Also remove the misao beside the agent (every window of the host closes). Only with `removeFromHost`. */
   removeMisao: boolean;
@@ -83,7 +96,7 @@ export const DEFAULT_HOST_REMOVAL: HostRemovalChoice = { removeFromHost: true, r
 
 /** What `POST .../agent/uninstall` is sent for this choice; `null` = delete the row without touching the host. */
 export function uninstallRequestFor(support: HostRemovalSupport, choice: HostRemovalChoice): { removeMisao: boolean } | null {
-  if (support !== 'windows' || !choice.removeFromHost) return null;
+  if (!canRemoveFromHost(support) || !choice.removeFromHost) return null;
   return { removeMisao: choice.removeMisao };
 }
 
@@ -192,7 +205,7 @@ export async function runEntryOnly(calls: DeletionCalls, dispatch: (event: Delet
 }
 
 /**
- * The deletion the person confirmed: when the host is to be touched (a Windows agent, the choice on), the agent is taken off it
+ * The deletion the person confirmed: when the host is to be touched (a Windows or Apple Silicon Mac agent, the choice on), the agent is taken off it
  * FIRST, and the row is deleted only if that worked. A failed host removal never deletes the row; the screen shows the steps and the
  * person chooses {@link runEntryOnly}. Every step is an event, so the screen follows what is happening.
  */
