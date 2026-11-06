@@ -176,7 +176,7 @@ function boxOf(text: string, isEmpty: (text: string) => boolean): InputBox {
 const RULE_LINE = /^─{10,}$/;
 /** A line made of rule characters and spaces: a rule, or one that is not a clean run of them (broken by the pane). */
 const ROUGH_RULE = /^[─\s]*─[─\s]*$/;
-/** The upper rule of a session with a name (Claude Code 2.1.317): `──── <name> ─`. The lower rule stays a clean run. */
+/** The upper rule of a session with a name (Claude Code 2.1.317): `──── <name> ─`. The left run requires at least 10 ─ characters; the lower rule stays a clean run. */
 const NAMED_RULE = /^─{10,}\s+\S(?:.*\S)?\s+─+$/;
 const PROMPT_LINE = /^[❯>]/;
 

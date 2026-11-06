@@ -1,6 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { readFileSync } from 'node:fs';
-import { join } from 'node:path';
+import { fixture } from './fixtures/readFixture';
 import { blockingWorkerDialog, hasUserMessageAbove, detectWorkerDialog, inputHoldsLine, isWorkerBusy, isWorkerScreenReady, readInputBox, screenAboveInput, showsTurnEnd, tuiAgentKindOf, tuiAgentKindOfWorkerType } from './workerScreen';
 
 describe('tuiAgentKindOf', () => {
@@ -123,9 +122,6 @@ describe('claude screens', () => {
   });
 });
 
-/** A screen taken from a real pane (see fixtures/): Claude Code 2.1.310 on Linux and Windows, codex 0.164.0 on Windows. */
-const fixture = (name: string): string => readFileSync(join(__dirname, 'fixtures', name), 'utf8');
-
 describe('readInputBox on the screens of real panes (#532)', () => {
   const LINE = 'AZITO prompt file. Read the file named at the end of this line and carry out every instruction in it exactly: C:/Users/SERVER~1/AppData/Local/Temp/azito-prompt-99-0123456789abcdef.md';
 
@@ -173,6 +169,14 @@ describe('readInputBox on the screens of real panes (#532)', () => {
     });
   });
 
+  describe('synthetic Codex composer with and without a named rule (not a real screen)', () => {
+    it.each([false, true])('reads empty and filled input with named rule: %s', (named) => {
+      const prefix = named ? `${'─'.repeat(40)} session name ─\n` : '';
+      expect(readInputBox('codex', `${prefix}› Ask Codex to do anything\n\n? for shortcuts`)).toEqual({ state: 'empty' });
+      expect(readInputBox('codex', `${prefix}› draft\n\n? for shortcuts`)).toEqual({ state: 'filled', text: 'draft' });
+    });
+  });
+
   describe('Claude Code 2.1.317 named input', () => {
     const captured = fixture('claude-2.1.317-named-empty.txt');
     const rule = '─'.repeat(40);
@@ -182,6 +186,9 @@ describe('readInputBox on the screens of real panes (#532)', () => {
       expect(readInputBox('claude', captured.replace('❯ \n', '❯ draft\n'))).toEqual({ state: 'filled', text: 'draft' });
       expect(screenAboveInput('claude', captured)).toContain('Worked for 13s');
       expect(screenAboveInput('claude', captured)).not.toContain('rc3-chat の挨拶応答 ─');
+    });
+    it.each(['long session name', '長いセッション名'])('rejects a narrow named rule with fewer than ten left strokes: %s', (name) => {
+      expect(readInputBox('claude', `${'─'.repeat(9)} ${name} ─\n❯\n${rule}\nbypass permissions on`)).toEqual({ state: 'unknown' });
     });
     it('rejects incomplete, old and ambiguous frames, including rules inside a draft', () => {
       for (const screen of [

@@ -1,6 +1,5 @@
 import { describe, it, expect, vi } from 'vitest';
-import { readFileSync } from 'node:fs';
-import { join } from 'node:path';
+import { fixture } from './fixtures/readFixture';
 import { createFakeWorkerPane, workerScreenWith } from './fakeWorkerScreen';
 import { asPaneHandle } from '@azito/shared';
 import { TuiNotReadyError, TuiWorkerRuntime, workerNotReadyReason } from './TuiWorkerRuntime';
@@ -159,9 +158,6 @@ describe('TuiWorkerRuntime.launch — the Bypass Permissions mode dialog (Claude
   }, 15_000);
 });
 
-/** A screen taken from a real pane (see fixtures/). */
-const fixture = (name: string): string => readFileSync(join(__dirname, 'fixtures', name), 'utf8');
-
 const LINE = 'AZITO prompt file. Read the file named at the end of this line and carry out every instruction in it exactly: C:/Users/SERVER~1/AppData/Local/Temp/azito-prompt-99-0123456789abcdef.md';
 
 interface HarnessOptions {
@@ -259,18 +255,18 @@ describe('TuiWorkerRuntime.sendPrompt — nothing of the prompt is typed into a 
   });
 });
 
-it('sends to the captured named input and refuses a modified draft', async () => {
-  const captured = fixture('claude-2.1.317-named-empty.txt');
-  const empty = sendHarness('claude', { idle: captured });
-  expect(await empty.send()).toBeNull();
-  expect(empty.workerInput.typePrompt).toHaveBeenCalledTimes(1);
-  const draft = sendHarness('claude', { idle: captured.replace('❯ \n', '❯ draft\n') });
-  expect(await draft.send()).toMatchObject({ reason: 'input_not_empty' });
-  expect(draft.promptFiles.stage).not.toHaveBeenCalled();
-  expect(draft.workerInput.typePrompt).not.toHaveBeenCalled();
-});
-
 describe('TuiWorkerRuntime.sendPrompt — the worker has to be at an empty input (#532)', () => {
+  it('sends to the captured named input and refuses a modified draft', async () => {
+    const captured = fixture('claude-2.1.317-named-empty.txt');
+    const empty = sendHarness('claude', { idle: captured });
+    expect(await empty.send()).toBeNull();
+    expect(empty.workerInput.typePrompt).toHaveBeenCalledTimes(1);
+    const draft = sendHarness('claude', { idle: captured.replace('❯ \n', '❯ draft\n') });
+    expect(await draft.send()).toMatchObject({ reason: 'input_not_empty' });
+    expect(draft.promptFiles.stage).not.toHaveBeenCalled();
+    expect(draft.workerInput.typePrompt).not.toHaveBeenCalled();
+  });
+
   it.each([
     ['codex', 'an unknown screen', 'Welcome to Codex\n  1. Sign in with ChatGPT\n  2. Provide your own API key'],
     ['codex', 'an empty screen', ''],
