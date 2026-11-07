@@ -148,9 +148,16 @@ export function findAgentProcessStartMs(entries: ProcessEntry[], rootPid: number
  * 「このプロセスが実際にこのセッションを再開して動いている」ことの直接証拠になり、mtime の前後関係
  * （supervisor 経由の起動でファイル作成がプロセス起動に先行し得る）に左右されない。トークン単位の
  * 完全一致で比較する（部分一致による誤検出を避けるため、argsContainAgentBinary と同じ方針）。
+ *
+ * daemon 保持の会話を `claude attach <短いid>` で開いた窓もこれに当てる（Issue #540）: attach の client は
+ * 完全 UUID を持たず、CLI が付けた短い id（先頭 8 文字。`claude agents --json` の `id`）だけを引数に持つ。
+ * 短い id もトークン単位の完全一致に限る。トレードオフとして、同じcwd の別の会話の短い id と偶然一致
+ * （先頭 8 hex = 32bit）すれば誤検出しうるが、部分一致と違い何の接頭辞でも一致しないため実用上は稀で、
+ * 誤検出の先は「重複検出が窓を特定する」こと（respawn の拒否か follow-up の待ち）に留まる。
  */
 export function argsContainSessionId(entries: ProcessEntry[], rootPids: number[], sessionId: string): boolean {
   if (!sessionId) return false;
+  const shortId = shortSessionIdOf(sessionId);
   const entryByPid = new Map(entries.map((entry) => [entry.pid, entry] as const));
 
   const descendantPids = new Set<number>();
@@ -161,9 +168,17 @@ export function argsContainSessionId(entries: ProcessEntry[], rootPids: number[]
 
   for (const pid of descendantPids) {
     const entry = entryByPid.get(pid);
-    if (entry && tokenizeCommandLine(entry.commandLine).includes(sessionId)) return true;
+    if (!entry) continue;
+    const tokens = tokenizeCommandLine(entry.commandLine);
+    if (tokens.includes(sessionId)) return true;
+    if (shortId !== null && tokens.includes(shortId)) return true;
   }
   return false;
+}
+
+/** The short id `claude attach` takes for a session: its first 8 hex characters of a full UUID, or null for any other id shape. */
+function shortSessionIdOf(sessionId: string): string | null {
+  return /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(sessionId) ? sessionId.slice(0, 8) : null;
 }
 
 /**

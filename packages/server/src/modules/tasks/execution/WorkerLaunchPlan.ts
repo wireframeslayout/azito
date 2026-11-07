@@ -3,6 +3,9 @@ import type { Unit } from '../../units/Unit';
 import { buildWorkerLaunch } from '../../agents/LaunchCommand';
 import type { ISessionStrategy, ISessionStrategyFactory } from '../../agents/SessionStrategy';
 import { withFlags, type WorkerLaunch } from '../../agents/WorkerLaunch';
+import { buildClaudeAttachLaunch } from '../../agents/claude/launchCommand';
+import { DaemonSessionChecker } from '../../agents/claude/DaemonSessionChecker';
+import type { ServerConfig } from '../../servers/Server';
 
 /** How a task's worker is started the first time: the launch (with the session id it is given) and the strategy that owns its session. */
 export interface NewWorkerLaunchPlan {
@@ -43,4 +46,46 @@ export function planResumeWorkerLaunch(
   if (!agentSessionId) return base;
   const strategy = strategies.create(unit.workerType);
   return strategy.supportsSession ? withFlags(base, strategy.buildResumeArgs(agentSessionId)) : base;
+}
+
+/** The daemon-aware resume launch, plus why the daemon check could not be asked when it could not (#540; empty otherwise). */
+export interface ResumeWorkerLaunchPlan {
+  launch: WorkerLaunch;
+  daemonCheckUnknownReason: string;
+}
+
+/**
+ * The resume launch that also knows whether the Claude Code daemon holds the conversation (#540): one it holds is
+ * opened with `claude attach <id>` as the daemon's client — `--resume` of it is refused — and everything else keeps
+ * the resume arguments as before. Asked only for claude (`conversationLogAgentType`): Codex has no daemon to hold a
+ * conversation. When the check cannot be asked (an old CLI, a failed one — the two features entered Claude Code
+ * together, so an old CLI cannot hold a daemon conversation either) the launch is the plain resume one and the reason
+ * travels out for the caller to log; the answer is never swallowed.
+ *
+ * `claudeConfigDir` is the conversation's own config directory when the caller knows one: the daemon registers
+ * background sessions under the config directory that started them.
+ */
+export async function planResumeWorkerLaunchDaemonAware(
+  unit: Pick<Unit, 'workerType' | 'workerModel' | 'workerExtraArgs'>,
+  agentSessionId: string | null,
+  strategies: ISessionStrategyFactory,
+  daemonChecker: DaemonSessionChecker,
+  server: ServerConfig,
+  claudeConfigDir?: string | null,
+): Promise<ResumeWorkerLaunchPlan | null> {
+  const base = buildWorkerLaunch(unit.workerType, unit.workerModel, unit.workerExtraArgs);
+  if (!base) return null;
+  if (!agentSessionId) return { launch: base, daemonCheckUnknownReason: '' };
+  const strategy = strategies.create(unit.workerType);
+  if (!strategy.supportsSession) return { launch: base, daemonCheckUnknownReason: '' };
+  if (strategy.conversationLogAgentType === 'claude') {
+    const verdict = await daemonChecker.check(server, agentSessionId, claudeConfigDir ?? null);
+    if (verdict.status === 'attach') {
+      return { launch: buildClaudeAttachLaunch(verdict.attachId), daemonCheckUnknownReason: '' };
+    }
+    if (verdict.status === 'unknown') {
+      return { launch: withFlags(base, strategy.buildResumeArgs(agentSessionId)), daemonCheckUnknownReason: verdict.reason };
+    }
+  }
+  return { launch: withFlags(base, strategy.buildResumeArgs(agentSessionId)), daemonCheckUnknownReason: '' };
 }
