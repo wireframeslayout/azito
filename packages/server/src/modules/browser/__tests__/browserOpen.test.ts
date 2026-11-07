@@ -142,6 +142,7 @@ describe('POST /api/browser/open', () => {
   });
 
   it('forwards to agent server and returns its response', async () => {
+    const timeoutSpy = vi.spyOn(AbortSignal, 'timeout');
     const agentResponse = { groupId: 'agent-deadbeef', tabId: 't1', targetId: 'target-remote', cdpEndpoint: 'http://127.0.0.1:9222' };
     const fetchSpy = vi.spyOn(globalThis, 'fetch').mockResolvedValueOnce({
       ok: true,
@@ -170,6 +171,9 @@ describe('POST /api/browser/open', () => {
       }),
     );
 
+    expect(timeoutSpy).toHaveBeenCalledWith(30_000);
+    expect(fetchSpy.mock.calls[0][1]?.signal).toBeInstanceOf(AbortSignal);
+    timeoutSpy.mockRestore();
     fetchSpy.mockRestore();
   });
 

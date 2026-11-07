@@ -138,14 +138,20 @@ export class MisaoConnection implements MisaoRpc, MisaoEventSource, MisaoDisconn
   }
 
   async request<M extends MethodName>(method: M, params: MethodParams<M>): Promise<MethodResult<M>> {
-    const client = this.requireClient();
-    if (!this.options.connect) {
-      try { return await client.request(method, params); } catch (err) { throw this.translate(err); }
+    try {
+      const client = this.requireClient();
+      return await this.withDeadline(client, client.request(method, params));
+    } catch (err) {
+      throw this.translate(err);
     }
+  }
+
+  private async withDeadline<T>(client: MisaoClient, operation: Promise<T>): Promise<T> {
+    if (!this.options.connect) return operation;
     let timer: NodeJS.Timeout | undefined;
     try {
       return await Promise.race([
-        client.request(method, params),
+        operation,
         new Promise<never>((_, reject) => {
           timer = setTimeout(() => {
             if (this.client === client && !this.disposed) client.close();
@@ -153,8 +159,6 @@ export class MisaoConnection implements MisaoRpc, MisaoEventSource, MisaoDisconn
           }, 10_000);
         }),
       ]);
-    } catch (err) {
-      throw this.translate(err);
     } finally {
       if (timer) clearTimeout(timer);
     }
@@ -191,10 +195,11 @@ export class MisaoConnection implements MisaoRpc, MisaoEventSource, MisaoDisconn
 
   private ensureEventSubscription(): Promise<void> {
     if (this.eventSubscription) return Promise.resolve();
-    this.eventSubscribing ??= this.requireClient().subscribeEvents((event) => this.dispatchEvent(event))
+    const client = this.requireClient();
+    this.eventSubscribing ??= this.withDeadline(client, client.subscribeEvents((event) => this.dispatchEvent(event)))
       .then((subscription) => {
         // The last registration left (or the connection closed) while this was in flight: nobody wants it any more.
-        if (this.eventHandlers.size === 0 || this.disposed) {
+        if (this.eventHandlers.size === 0 || this.disposed || client !== this.client) {
           subscription.unsubscribe();
           return;
         }
@@ -277,7 +282,8 @@ export class MisaoConnection implements MisaoRpc, MisaoEventSource, MisaoDisconn
   async subscribeLines(paneId: string, handler: LineHandler): Promise<Subscription> {
     let inner: Subscription;
     try {
-      inner = await this.requireClient().subscribeLines(paneId, handler);
+      const client = this.requireClient();
+      inner = await this.withDeadline(client, client.subscribeLines(paneId, handler));
     } catch (err) {
       throw this.translate(err);
     }
@@ -329,7 +335,7 @@ export class MisaoConnection implements MisaoRpc, MisaoEventSource, MisaoDisconn
     for (const registration of [...this.lineRegistrations]) {
       if (registration.subscription) continue;
       const since = registration.lastCursor;
-      client.subscribeLines(registration.paneId, registration.handler, since ? { since: since.seq, epoch: since.epoch } : undefined).then(
+      this.withDeadline(client, client.subscribeLines(registration.paneId, registration.handler, since ? { since: since.seq, epoch: since.epoch } : undefined)).then(
         (subscription) => {
           if (this.lineRegistrations.has(registration)) registration.subscription = subscription;
           else subscription.unsubscribe();
@@ -382,7 +388,7 @@ export class MisaoConnection implements MisaoRpc, MisaoEventSource, MisaoDisconn
   }
 
   isConnectionError(err: unknown): boolean {
-    return err instanceof this.options.sdk.MisaoConnectionError;
+    return err instanceof this.options.sdk.MisaoConnectionError || err instanceof MuxDriverUnavailableError;
   }
 
   close(): void {
@@ -399,7 +405,7 @@ export class MisaoConnection implements MisaoRpc, MisaoEventSource, MisaoDisconn
   }
 
   private translate(err: unknown): unknown {
-    return this.isConnectionError(err) ? new MuxDriverUnavailableError('misao', 'daemon_unreachable') : err;
+    return err instanceof this.options.sdk.MisaoConnectionError ? new MuxDriverUnavailableError('misao', 'daemon_unreachable') : err;
   }
 
   private handleState(state: ConnectionState): void {
@@ -484,5 +490,23 @@ export async function connectDedicatedMisaoClient(sdk: MisaoSdk, target: MisaoTa
     if (err instanceof sdk.MisaoConnectionError) throw new MuxDriverUnavailableError('misao', 'daemon_unreachable');
     throw err;
   }
-  return client;
+  if (!target.connect) return client;
+  const withDeadline = async <T>(operation: Promise<T>): Promise<T> => {
+    let timer: NodeJS.Timeout | undefined;
+    try {
+      return await Promise.race([operation, new Promise<never>((_, reject) => {
+        timer = setTimeout(() => {
+          client.close();
+          reject(new MuxDriverUnavailableError('misao', 'daemon_unreachable'));
+        }, 10_000);
+      })]);
+    } finally { if (timer) clearTimeout(timer); }
+  };
+  return {
+    request: (method, params) => withDeadline(client.request(method, params)),
+    subscribeEvents: (handler, options) => withDeadline(client.subscribeEvents(handler, options)),
+    onNotification: client.onNotification.bind(client),
+    onStateChange: client.onStateChange.bind(client),
+    close: client.close.bind(client),
+  };
 }

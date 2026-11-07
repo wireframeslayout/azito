@@ -75,6 +75,7 @@ function fetchAgent(srv: ServerConfig, path: string, body: unknown): Promise<Res
       ...(authHeader ? { authorization: authHeader } : {}),
     },
     body: JSON.stringify(body),
+    signal: AbortSignal.timeout(30_000),
   });
 }
 
