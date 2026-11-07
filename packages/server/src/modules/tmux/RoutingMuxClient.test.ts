@@ -1,3 +1,4 @@
+import { AgentUnreachableError } from '../servers/transport/AgentUnreachableError';
 import { describe, it, expect, vi } from 'vitest';
 import { asPaneHandle, type MuxDriverKind, type MuxRef, type MuxWorkspace } from '@azito/shared';
 import type { ServerConfig } from '../servers/Server';
@@ -160,6 +161,16 @@ describe('RoutingMuxClient merging', () => {
     const { workspaces, unavailable } = await routing.listWorkspacesDetailed(srv);
     expect(workspaces.map((w) => w.name)).toEqual(['t']);
     expect(unavailable).toEqual([{ kind: 'misao', reason: 'daemon_unreachable', detail: expect.any(String) }]);
+  });
+
+  it('reports agent reachability for one kind while preserving the other listing', async () => {
+    const { routing, srv } = setup({
+      tmux: fakeDriver('tmux', { listWorkspaces: vi.fn(async () => { throw new AgentUnreachableError('agent', 'circuit_open'); }) }),
+      misao: fakeDriver('misao', { listWorkspaces: vi.fn(async () => [workspace('m')]) }),
+    });
+    const result = await routing.listWorkspacesDetailed(srv);
+    expect(result.workspaces.map((item) => item.name)).toEqual(['m']);
+    expect(result.unavailable).toEqual([{ kind: 'tmux', reason: 'agent_unreachable', detail: expect.stringContaining('circuit_open') }]);
   });
 
   it('records a non-availability failure as driver_error, and still returns the other kind', async () => {

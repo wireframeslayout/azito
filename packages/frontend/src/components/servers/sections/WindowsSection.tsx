@@ -20,6 +20,7 @@ import CreateSessionModal from '../CreateSessionModal';
 import { TerminalContainer } from '../../TerminalContainer';
 import { EmptyState, LoadingState, Notice, Button } from '../../ui';
 import { Icon } from '../../ui/Icon';
+import { windowsEmptyView } from './windowsSectionState';
 
 interface WindowsSectionProps {
   server: Server;
@@ -204,20 +205,19 @@ export default function WindowsSection({ server, sessions, sessionsState = 'read
     />
   ) : null;
 
-  if (sessionsState === 'loading' && sessions.length === 0) return <LoadingState message={t('sessionState.loading')} />;
+  const emptyView = windowsEmptyView(sessionsState, sessions.length);
+  if (emptyView === 'loading') return <LoadingState message={t('sessionState.loading')} />;
 
-  if ((sessionsState === 'error' || sessionsState === 'partial') && sessions.length === 0) return (
+  if (emptyView === 'unavailable') return (
     <Notice tone="danger" role="alert" action={<Button size="sm" onClick={refresh}>{t('windows.retry')}</Button>}>
       {t(`sessionState.${sessionsState}`)}
     </Notice>
   );
 
-  if (sessions.length === 0) {
+  if (emptyView === 'empty') {
     return (
       <div>
         {metaErrorBar}
-      {sessionsState === 'loading' && <LoadingState message={t('sessionState.loading')} />}
-      {(sessionsState === 'error' || sessionsState === 'partial') && <Notice tone="danger" role="alert" action={<Button size="sm" onClick={refresh}>{t('windows.retry')}</Button>}>{t(`sessionState.${sessionsState}`)}</Notice>}
         {createSessionModal}
         <EmptyState title={t('windows.noSessions')} />
         <div style={{ textAlign: 'center', marginTop: 'var(--space-3)' }}>

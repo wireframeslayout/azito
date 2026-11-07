@@ -1,3 +1,4 @@
+import { describeUnavailable } from '../RoutingMuxClient';
 import { tmuxErrorReason, tmuxFailureReason } from '../tmuxFailureReason';
 import { misaoFailureReason } from '../misao/misaoFailureReason';
 import { directionBody, nameBody, titleBody, keysBody, paneBody, refBody, workspaceRenameBody } from './actionBodies';
@@ -391,8 +392,7 @@ const sessionsRoutes: FastifyPluginCallback<SessionsRouteOptions> = (fastify, op
         return respond(entry);
       } catch (err: unknown) {
         if (detail && tmuxOnly) {
-          const reason = err instanceof AgentUnreachableError ? 'agent_unreachable' : isMissingBinaryError(err) ? MUX_BINARY_MISSING : 'driver_error';
-          return respond({ data: [], unavailable: [{ kind: 'tmux', reason, detail: err instanceof Error ? err.message : String(err) }] });
+          return respond({ data: [], unavailable: [describeUnavailable('tmux', err)] });
         }
         return replyRouteError(reply, err);
       }

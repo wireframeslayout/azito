@@ -257,7 +257,11 @@ export function useServerDetail(serverName: string | null): UseServerDetailResul
         if (fetchGenRef.current !== gen) return;
         setSessions((prev) => keepUnavailableKinds(prev, result));
         setSessionsState(sessionListingState(result));
-      }, () => { if (fetchGenRef.current === gen) setSessionsState('error'); });
+      }, () => {
+        if (fetchGenRef.current !== gen) return;
+        setSessions((prev) => prev.map((session) => ({ ...session, stale: true })));
+        setSessionsState('error');
+      });
       const mainPromise = Promise.all([
         refreshStatuses(),
         // 到達不能なサーバー（503 agent_unreachable）でも詳細全体を落とさず、失敗の種類を区別して返す

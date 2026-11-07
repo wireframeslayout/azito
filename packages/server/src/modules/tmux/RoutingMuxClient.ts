@@ -1,3 +1,4 @@
+import { AgentUnreachableError } from '../servers/transport/AgentUnreachableError';
 import { muxKindOfPaneHandle, type MuxCapabilities, type MuxDriverKind, type MuxPaneInfo, type MuxRef, type MuxUnavailableKind, type MuxWorkspace, type PaneHandle, type PaneOrdinal } from '@azito/shared';
 import type { ExecResult, ITerminalStream, OpenTerminalOpts } from '../servers/transport/ServerTransport';
 import type { ServerConfig } from '../servers/Server';
@@ -16,7 +17,8 @@ export interface RoutingMuxDeps {
   downKinds(server: ServerConfig): Array<{ kind: MuxDriverKind; reason: MuxDriverUnavailableReason }>;
 }
 
-function describeUnavailable(kind: MuxDriverKind, err: unknown): MuxUnavailableKind {
+export function describeUnavailable(kind: MuxDriverKind, err: unknown): MuxUnavailableKind {
+  if (err instanceof AgentUnreachableError) return { kind, reason: 'agent_unreachable', detail: err.message };
   if (err instanceof MuxDriverUnavailableError) return { kind, reason: err.reason, detail: err.message };
   if (kind === 'tmux' && isMissingBinaryError(err)) return { kind, reason: MUX_BINARY_MISSING, detail: err instanceof Error ? err.message : String(err) };
   return { kind, reason: 'driver_error', detail: err instanceof Error ? err.message : String(err) };
