@@ -21,6 +21,7 @@ export type PaneLocation =
 export interface PaneProgram {
   /** The program and its arguments; the program is looked up by the host's own rules (PATH, PATHEXT on Windows). */
   argv: readonly string[];
+  /** Environment for the program itself; overrides matching keys in extraEnv. */
   env?: Record<string, string>;
   /** Where it starts. Omitted: the mux's own default. */
   cwd?: string;

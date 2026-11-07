@@ -245,7 +245,7 @@ export class TuiWorkerRuntime implements IWorkerRuntime {
       const box = readInputBox(kind, screen);
       // Text in the input (the line of an earlier prompt, a person's draft) would be sent together with ours. It is waited on for the
       // grace like any screen that is not settled: a wording of an empty input that is not known yet reads as text, and goes away.
-      if ((box.state === 'empty' || (box.state === 'unknown' && isWorkerBusy(kind, screen))) && isWorkerScreenReady(kind, screen)) {
+      if ((box.state === 'empty' || (box.state === 'ambiguous' && isWorkerBusy(kind, screen))) && isWorkerScreenReady(kind, screen)) {
         const now = Date.now();
         const above = screenAboveInput(kind, screen);
         const busy = isWorkerBusy(kind, screen);

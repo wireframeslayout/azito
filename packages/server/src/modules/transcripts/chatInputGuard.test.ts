@@ -12,6 +12,10 @@ function driver(command: string | null, screen: string, code = 0): IMuxClient {
   return { paneCommandByHandle: vi.fn().mockResolvedValue(command), captureScreen: vi.fn().mockResolvedValue({ stdout: screen, stderr: '', code }) } as unknown as IMuxClient;
 }
 describe('guardChatInput', () => {
+  it('reports a queued message as not ready', async () => {
+    const screen = ready.replace('❯', '❯ Press up to edit queued messages');
+    expect(await guardChatInput(driver('node', screen), server, pane, 'claude', 'hello')).toMatchObject({ code: 'not_ready' });
+  });
   it('currently rejects the captured Claude suggestion', async () => {
     const screen = fixture('claude-2.1.319-tmux-ghost.ansi');
     expect(await guardChatInput(driver('node', screen), server, pane, 'claude', 'hello')).toMatchObject({ code: 'input_not_empty' });

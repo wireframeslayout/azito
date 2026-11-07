@@ -458,6 +458,7 @@ describe('WindowRespawnService.respawn — supervisor wrap', () => {
 
     expect(sentCommands).toHaveLength(1);
     expect(sentCommands[0]).toMatch(/supervisor/);
+    expect(sentCommands[0]).toContain("CLAUDE_CODE_ENABLE_PROMPT_SUGGESTION='false'");
     expect(sentCommands[0]).toContain('--task-id 5');
     expect(sentCommands[0]).toContain('--unit-id 10');
     expect(sentCommands[0]).toContain("-- 'claude --resume abc --dangerously-skip-permissions'");

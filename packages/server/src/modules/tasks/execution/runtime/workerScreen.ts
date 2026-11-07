@@ -153,6 +153,7 @@ export function blockingWorkerDialog(kind: TuiAgentKind, output: string): Worker
 export type InputBox =
   | { state: 'empty' }
   | { state: 'filled'; text: string }
+  | { state: 'ambiguous'; text: string }
   | { state: 'disabled' }
   | { state: 'unknown' };
 
@@ -178,7 +179,7 @@ function boxOf(text: string, isEmpty: (text: string) => boolean): InputBox {
 }
 
 function claudeBoxOf(text: string): InputBox {
-  return isClaudePlaceholder(text.trim()) ? UNKNOWN : boxOf(text, () => false);
+  return isClaudePlaceholder(text.trim()) ? { state: 'ambiguous', text: text.trim() } : boxOf(text, () => false);
 }
 
 const RULE_LINE = /^─{10,}$/;
@@ -292,7 +293,7 @@ export function promptFileNameOf(instruction: string): string {
 
 /** Whether the input holds our instruction line, whatever the pane did to wrap it (the file name is compared without white space). */
 export function inputHoldsLine(box: InputBox, instruction: string): boolean {
-  if (box.state !== 'filled') return false;
+  if (box.state !== 'filled' && box.state !== 'ambiguous') return false;
   const squashed = box.text.toLowerCase().replace(/\s+/g, '');
   return squashed.includes('azitopromptfile.') && squashed.includes(promptFileNameOf(instruction).replace(/\s+/g, ''));
 }

@@ -327,6 +327,22 @@ describe('TuiWorkerRuntime.sendPrompt — the worker has to be at an empty input
     expect(h.workerInput.typePrompt).not.toHaveBeenCalled();
   });
 
+  it('stops after the ready grace when a busy Codex input is unreadable', async () => {
+    const h = sendHarness('codex', { idle: `• Working (3s • esc to interrupt)
+
+  ? for shortcuts` });
+    expect(await h.send()).toMatchObject({ reason: 'not_ready' });
+    expect(h.waitedMs()).toBe(5000);
+    expect(h.workerInput.typePrompt).not.toHaveBeenCalled();
+  });
+
+  it('confirms a submitted line when Claude displays a queued hint', async () => {
+    const h = sendHarness('claude', { submitted: fixture('claude-2.1.310-linux-queued-placeholder.txt') });
+    expect(await h.send()).toBeNull();
+    expect(h.workerInput.submitPrompt).toHaveBeenCalledTimes(1);
+    expect(h.workerInput.clearInputLine).not.toHaveBeenCalled();
+  });
+
   it('waits for an ambiguous Claude hint to disappear before sending', async () => {
     const queued = fixture('claude-2.1.310-linux-queued-placeholder.txt');
     const h = sendHarness('claude', { firstScreens: [queued, queued, queued] });

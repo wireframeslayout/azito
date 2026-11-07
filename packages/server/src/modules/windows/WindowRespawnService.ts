@@ -1005,7 +1005,7 @@ export class WindowRespawnService {
       const windowTarget = muxWindowTarget(legacyRef);
       try {
         const paneId = await legacyDriver.resolvePane(server, legacyRef, 1);
-        const resumeCommand = `claude --resume ${task.agentSessionId} --dangerously-skip-permissions --strict-mcp-config`;
+        const resumeCommand = this.dialectOf(server).withEnv({ CLAUDE_CODE_ENABLE_PROMPT_SUGGESTION: 'false' }, `claude --resume ${task.agentSessionId} --dangerously-skip-permissions --strict-mcp-config`);
         const isSupervised = shouldSupervise(server.type, 'agent', legacyRef.kind);
         if (isSupervised) {
           this.supervisorRegistry.clearExitMarker(server.name, windowTarget);

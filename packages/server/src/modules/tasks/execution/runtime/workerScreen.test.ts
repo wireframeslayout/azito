@@ -277,7 +277,7 @@ describe('readInputBox on the screens of real panes (#532)', () => {
 
     it('a hint that could also be a draft is unknown, a draft is filled, and a screen without a box is unknown', () => {
       const rule = '─'.repeat(60);
-      expect(readInputBox('claude', `${rule}\n❯ Try "fix lint errors"\n${rule}\n  bypass permissions on (shift+tab to cycle)`)).toEqual({ state: 'unknown' });
+      expect(readInputBox('claude', `${rule}\n❯ Try "fix lint errors"\n${rule}\n  bypass permissions on (shift+tab to cycle)`)).toEqual({ state: 'ambiguous', text: 'Try "fix lint errors"' });
       expect(readInputBox('claude', `${rule}\n❯ check the logs\n${rule}\n  bypass permissions on (shift+tab to cycle)`)).toEqual({ state: 'filled', text: 'check the logs' });
       expect(readInputBox('claude', 'bypass permissions on (shift+tab to cycle)')).toEqual({ state: 'unknown' });
       expect(readInputBox('claude', '')).toEqual({ state: 'unknown' });
@@ -286,7 +286,7 @@ describe('readInputBox on the screens of real panes (#532)', () => {
     it('the queued-message placeholder cannot be distinguished from a draft', () => {
       const screen = fixture('claude-2.1.310-linux-queued-placeholder.txt');
       expect(screen).toContain('Press up to edit queued messages');
-      expect(readInputBox('claude', screen)).toEqual({ state: 'unknown' });
+      expect(readInputBox('claude', screen)).toEqual({ state: 'ambiguous', text: 'Press up to edit queued messages' });
     });
 
     it('an old empty frame in the history is not the input when the current input below it cannot be read', () => {

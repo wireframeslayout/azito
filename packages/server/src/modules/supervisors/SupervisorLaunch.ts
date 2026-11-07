@@ -40,9 +40,15 @@ export interface WrapWithSupervisorOptions {
  */
 export function wrapWithSupervisor(cmd: string, opts: WrapWithSupervisorOptions): string {
   const { dialect } = opts;
+  const childEnv: Record<string, string> = {};
+  const prefix = dialect.withEnv({ CLAUDE_CODE_ENABLE_PROMPT_SUGGESTION: 'false' }, '');
+  if (cmd.startsWith(prefix)) {
+    childEnv.CLAUDE_CODE_ENABLE_PROMPT_SUGGESTION = 'false';
+    cmd = cmd.slice(prefix.length);
+  }
   const supervisorCmd = resolveSupervisorCommand(opts.server, dialect);
   // Passed even when empty: an empty value overrides an AZITO_PREFIX left in the pane's session/shell.
-  const env: Record<string, string> = { AZITO_PREFIX: opts.harnessPrefix };
+  const env: Record<string, string> = { ...childEnv, AZITO_PREFIX: opts.harnessPrefix };
 
   if (opts.launchId !== undefined && opts.bootstrapToken !== undefined) {
     // Launch binding is passed via env vars prefixed onto the command line
