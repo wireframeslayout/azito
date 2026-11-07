@@ -362,7 +362,7 @@
     "updateConfirmLabel": "Stop and update"
   },
   "localNetwork": {
-    "guidance": "Local Network permission on macOS may be blocking this connection. Try the agent’s Tailscale address, or check System Settings › Privacy & Security › Local Network for this hub and retry. The permission and its effect have not yet been verified.",
+    "guidance": "Local Network permission on macOS may be blocking this connection. Try the agent’s Tailscale address, or check System Settings › Privacy & Security › Local Network for this hub and retry. On macOS 26.6.2 a launchd hub reached the LAN without being stopped by this permission and did not appear in that list, but other versions or conditions may still need it.",
     "detail": "Original error"
   }
 }
