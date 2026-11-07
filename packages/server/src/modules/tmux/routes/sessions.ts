@@ -1,3 +1,4 @@
+import { describeUnavailable } from '../RoutingMuxClient';
 import { tmuxErrorReason, tmuxFailureReason } from '../tmuxFailureReason';
 import { misaoFailureReason } from '../misao/misaoFailureReason';
 import { directionBody, nameBody, titleBody, keysBody, paneBody, refBody, workspaceRenameBody } from './actionBodies';
@@ -346,16 +347,22 @@ const sessionsRoutes: FastifyPluginCallback<SessionsRouteOptions> = (fastify, op
       const srv = serverRepo.findByName(request.params.name);
       if (!srv) return reply.status(404).send({ error: 'Server not found' });
       const detail = request.query.detail === '1';
-      const respond = (entry: Pick<SessionCacheEntry, 'data' | 'unavailable'>) => {
+      const respond = (entry: Pick<SessionCacheEntry, 'data' | 'unavailable'>, noneListed = false) => {
         const sessions = enrichSessions(entry.data, request.params.name, opts.windowRepo);
-        return detail ? { sessions, unavailable: entry.unavailable } : sessions;
+        return detail ? { sessions, unavailable: entry.unavailable, listedKinds: noneListed ? [] : kinds.filter((kind) => !entry.unavailable.some((item) => item.kind === kind)) } : sessions;
       };
 
       const registry = opts.muxDriverRegistry;
       const kinds: MuxDriverKind[] = registry ? registry.supportedKinds(srv) : ['tmux'];
       const tmuxOnly = kinds.length === 1 && kinds[0] === 'tmux';
       // Resolved before the cache is read so a lost daemon is a 503 (global handler), not a stale 200 list.
-      const routing = registry && !tmuxOnly ? registry.resolve(srv) : undefined;
+      let routing;
+      try {
+        routing = registry && !tmuxOnly ? registry.resolve(srv) : undefined;
+      } catch (err) {
+        if (!detail || !(err instanceof MuxDriverUnavailableError)) throw err;
+        return respond({ data: [], unavailable: [{ kind: srv.defaultMux, reason: err.reason, detail: err.message }] }, true);
+      }
 
       const cached = sessionCache.get(request.params.name);
       if (cached && Date.now() - cached.ts < SESSION_CACHE_TTL) return respond(cached);
@@ -363,13 +370,13 @@ const sessionsRoutes: FastifyPluginCallback<SessionsRouteOptions> = (fastify, op
       try {
         let entry: SessionCacheEntry;
         if (routing) {
-          const { workspaces, unavailable } = await routing.listWorkspacesDetailed(srv);
+          const { workspaces, unavailable } = await routing.listWorkspacesDetailed(srv, detail);
           entry = { data: workspaces, unavailable, ts: Date.now() };
         } else {
           const sessions = await tmux.listSessions(srv);
           entry = { data: sessions.map((s) => ({ ...s, kind: 'tmux' as const })), unavailable: [], ts: Date.now() };
         }
-        sessionCache.set(request.params.name, entry);
+        if (!(detail && entry.unavailable.length > 0 && entry.data.length === 0)) sessionCache.set(request.params.name, entry);
 
         // Linked-session GC is tmux work: only while tmux answered this listing.
         const tmuxListed = kinds.includes('tmux') && !entry.unavailable.some((u) => u.kind === 'tmux');
@@ -384,6 +391,9 @@ const sessionsRoutes: FastifyPluginCallback<SessionsRouteOptions> = (fastify, op
 
         return respond(entry);
       } catch (err: unknown) {
+        if (detail && tmuxOnly) {
+          return respond({ data: [], unavailable: [describeUnavailable('tmux', err)] });
+        }
         return replyRouteError(reply, err);
       }
     },

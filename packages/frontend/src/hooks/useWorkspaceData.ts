@@ -97,7 +97,11 @@ export function useWorkspaceData(
     setSessionData((prev) => {
       const freshSessions: Record<string, Session[]> = {};
       for (const r of results) {
-        if (r.status === 'fulfilled') freshSessions[r.value.name] = keepUnavailableKinds(prev[r.value.name], r.value.listing);
+        if (r.status === 'fulfilled') {
+          const { name, listing } = r.value;
+          if (listing.unavailable.length && listing.sessions.length === 0 && !prev[name]) continue;
+          freshSessions[name] = keepUnavailableKinds(prev[name], listing);
+        }
       }
       return { ...prev, ...freshSessions };
     });

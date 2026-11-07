@@ -2,7 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { api, apiWithStatus } from '../api/client';
 import type { Server, Session, ServerStatus } from './useServerManagement';
 import { useServerStatuses } from './useServerStatuses';
-import { fetchSessionListing, keepUnavailableKinds } from '../lib/fetchServerSessions';
+import { fetchSessionListing, sessionListingState, keepUnavailableKinds } from '../lib/fetchServerSessions';
 import type { InstallStatusResponse } from '../components/servers/serverSections';
 import type { Window } from '../pages/workspace/types';
 import { buildWindowIndex, type WindowIndexEntry } from '../lib/windowDisplay';
@@ -142,6 +142,7 @@ interface UseServerDetailResult {
   installStatusError: 'offline' | 'failed' | null;
   localNetworkDetail: string | undefined;
   sessions: Session[];
+  sessionsState: 'loading' | 'error' | 'partial' | 'ready';
   windowById: Map<number, WindowIndexEntry>;
   taskById: Map<number, { title?: string }>;
   /** Whether the hub can reach this server's mux driver (detail API `mux`); 'unknown' until fetched or when the body is not understood. */
@@ -179,6 +180,8 @@ export function useServerDetail(serverName: string | null): UseServerDetailResul
   const [installStatusError, setInstallStatusError] = useState<'offline' | 'failed' | null>(null);
   const [localNetworkDetail, setLocalNetworkDetail] = useState<string | undefined>();
   const [sessions, setSessions] = useState<Session[]>([]);
+  const [sessionsState, setSessionsState] = useState<'loading' | 'error' | 'partial' | 'ready'>('loading');
+  const sessionServerRef = useRef<string | null>(null);
   const [allProjects, setAllProjects] = useState<Array<{ windows?: Window[] }>>([]);
   const [allTasks, setAllTasks] = useState<Array<{ id: number; title?: string; windows?: Window[] }>>([]);
   const [isolationReport, setIsolationReport] = useState<IsolationReport | null>(null);
@@ -216,7 +219,9 @@ export function useServerDetail(serverName: string | null): UseServerDetailResul
     setInstallStatus(null);
     setInstallStatusError(null);
     setLocalNetworkDetail(undefined);
-    setSessions([]);
+    if (sessionServerRef.current !== serverName) setSessions([]);
+    sessionServerRef.current = serverName;
+    setSessionsState('loading');
     setIsolationReport(null);
     setIsolationReportUnavailable(false);
     setIsolationCleanupReport(null);
@@ -237,20 +242,33 @@ export function useServerDetail(serverName: string | null): UseServerDetailResul
       // "unavailable", not as "no warning".
       // Window metadata (projects/tasks) fetched in parallel with the main
       // requests so they don't wait for install-status / sessions to finish.
-      const metaPromise = Promise.allSettled([
+      void Promise.allSettled([
         api<Array<{ windows?: Window[] }>>('/projects'),
         api<Array<{ id: number; title?: string; windows?: Window[] }>>('/tasks'),
-      ]);
+      ]).then(([projResult, taskResult]) => {
+        if (fetchGenRef.current !== gen) return;
+        const projectsOk = projResult.status === 'fulfilled' && Array.isArray(projResult.value);
+        const tasksOk = taskResult.status === 'fulfilled' && Array.isArray(taskResult.value);
+        setAllProjects(projectsOk ? projResult.value : []);
+        setAllTasks(tasksOk ? taskResult.value : []);
+        setWindowMetaError(!projectsOk || !tasksOk);
+      });
+      void fetchSessionListing<Session>(serverName).then((result) => {
+        if (fetchGenRef.current !== gen) return;
+        setSessions((prev) => keepUnavailableKinds(prev, result));
+        setSessionsState(sessionListingState(result));
+      }, () => {
+        if (fetchGenRef.current !== gen) return;
+        setSessions((prev) => prev.map((session) => ({ ...session, stale: true })));
+        setSessionsState('error');
+      });
       const mainPromise = Promise.all([
         refreshStatuses(),
         // 到達不能なサーバー（503 agent_unreachable）でも詳細全体を落とさず、失敗の種類を区別して返す
         fetchInstallStatus(encoded),
-        fetchSessionListing<Session>(serverName).catch(() => null),
         apiWithStatus<unknown>(`/servers/${encoded}`).catch(() => null),
       ]);
-      const [mainResult, metaResult] = await Promise.all([mainPromise, metaPromise]);
-      const [srvList, installRes, sessionsRes, detailResult] = mainResult;
-      const [projResult, taskResult] = metaResult;
+      const [srvList, installRes, detailResult] = await mainPromise;
       if (!srvList.some((s) => s.name === serverName)) throw new Error(`Server "${serverName}" not found`);
       // Issue #29 review (8th pass), Important finding 3: a newer fetchAll
       // call (triggered by a serverName change or an external refresh())
@@ -261,23 +279,6 @@ export function useServerDetail(serverName: string | null): UseServerDetailResul
       setInstallStatus(installRes.status);
       setInstallStatusError(installRes.error);
       setLocalNetworkDetail(installRes.detail);
-      // A mux that could not be listed keeps its previous sessions (its windows are unreadable, not gone).
-      setSessions((prev) => (sessionsRes ? keepUnavailableKinds(prev, sessionsRes) : []));
-      let metaFailed = false;
-      if (projResult.status === 'fulfilled' && Array.isArray(projResult.value)) {
-        setAllProjects(projResult.value);
-      } else {
-        setAllProjects([]);
-        metaFailed = true;
-      }
-      if (taskResult.status === 'fulfilled' && Array.isArray(taskResult.value)) {
-        setAllTasks(taskResult.value);
-      } else {
-        setAllTasks([]);
-        metaFailed = true;
-      }
-      setWindowMetaError(metaFailed);
-
       // Review round (Important finding 4): the server now returns the
       // verification report and the cleanup report as two independent
       // fields on the same body — parsed here with the exact same
@@ -336,7 +337,10 @@ export function useServerDetail(serverName: string | null): UseServerDetailResul
     }
   }, [serverName, refreshStatuses]);
 
-  useEffect(() => { fetchAll(); }, [fetchAll]);
+  useEffect(() => {
+    void fetchAll();
+    return () => { fetchGenRef.current += 1; };
+  }, [fetchAll]);
 
   const server = servers.find((s) => s.name === serverName) ?? null;
   const status = serverName ? statuses[serverName] ?? null : null;
@@ -349,7 +353,7 @@ export function useServerDetail(serverName: string | null): UseServerDetailResul
   }, [allTasks]);
 
   return {
-    server, servers, status, installStatus, installStatusError, localNetworkDetail, sessions,
+    server, servers, status, installStatus, installStatusError, localNetworkDetail, sessions, sessionsState,
     windowById, taskById,
     muxDriverStatus,
     isolationReport, isolationReportUnavailable,
