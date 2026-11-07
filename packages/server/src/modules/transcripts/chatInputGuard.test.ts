@@ -33,6 +33,14 @@ describe('guardChatInput', () => {
     const screen = '› Ask Codex to do anything\n\n? for shortcuts';
     expect(await guardChatInput(driver('codex', screen), server, pane, 'codex', 'hello')).toBeNull();
   });
+  it('rejects a Codex draft that starts with the placeholder text', async () => {
+    const screen = '› Ask Codex to do anything else\n\n? for shortcuts';
+    expect(await guardChatInput(driver('codex', screen), server, pane, 'codex', 'hello')).toMatchObject({ code: 'input_not_empty' });
+  });
+  it('rejects a wrapped Codex draft that extends the placeholder text', async () => {
+    const screen = '› Ask Codex to do anything\n  else\n\n? for shortcuts';
+    expect(await guardChatInput(driver('codex', screen), server, pane, 'codex', 'hello')).toMatchObject({ code: 'input_not_empty' });
+  });
   it('accepts a tab', async () => {
     expect(await guardChatInput(driver('node', ready), server, pane, 'claude', 'a\tb')).toBeNull();
   });

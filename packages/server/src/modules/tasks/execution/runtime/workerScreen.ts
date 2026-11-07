@@ -271,7 +271,7 @@ function readCodexInput(lines: string[]): InputBox {
   if (below.length > 3 || !below.every((line) => CODEX_FOOTER_ROW.test(line))) return UNKNOWN;
   const text = composer.join(' ').trim();
   if (/^input disabled/i.test(text)) return { state: 'disabled' };
-  return boxOf(composer.join(''), (t) => t.toLowerCase().startsWith('ask codex to do anything'));
+  return boxOf(composer.join(''), (t) => t.toLowerCase() === 'ask codex to do anything');
 }
 
 /** What the input box of `kind`'s worker holds on this screen. */
