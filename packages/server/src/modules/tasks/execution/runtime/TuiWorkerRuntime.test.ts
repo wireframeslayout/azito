@@ -256,6 +256,13 @@ describe('TuiWorkerRuntime.sendPrompt — nothing of the prompt is typed into a 
 });
 
 describe('TuiWorkerRuntime.sendPrompt — the worker has to be at an empty input (#532)', () => {
+  it('currently times out on the captured Claude suggestion', async () => {
+    const h = sendHarness('claude', { idle: fixture('claude-2.1.319-tmux-ghost.ansi') });
+    expect(await h.send()).toMatchObject({ name: 'TuiNotReadyError', reason: 'input_not_empty' });
+    expect(h.waitedMs()).toBe(5000);
+    expect(h.promptFiles.stage).not.toHaveBeenCalled();
+    expect(h.workerInput.typePrompt).not.toHaveBeenCalled();
+  });
   it('currently times out on a synthetic suggestion rendered as text in the Claude input', async () => {
     // Synthetic text-only screen: no claim is made about the attributes of a real suggestion.
     const screen = '──────────────\n❯ suggested next message\n──────────────\nbypass permissions on';

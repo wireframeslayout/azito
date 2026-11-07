@@ -12,6 +12,10 @@ function driver(command: string | null, screen: string, code = 0): IMuxClient {
   return { paneCommandByHandle: vi.fn().mockResolvedValue(command), captureScreen: vi.fn().mockResolvedValue({ stdout: screen, stderr: '', code }) } as unknown as IMuxClient;
 }
 describe('guardChatInput', () => {
+  it('currently rejects the captured Claude suggestion', async () => {
+    const screen = fixture('claude-2.1.319-tmux-ghost.ansi');
+    expect(await guardChatInput(driver('node', screen), server, pane, 'claude', 'hello')).toMatchObject({ code: 'input_not_empty' });
+  });
   it('currently rejects a synthetic suggestion rendered as text in the Claude input', async () => {
     // Synthetic text-only screen: this reproduces the old classification, not an observed ghost's attributes.
     const screen = ready.replace('❯', '❯ suggested next message');

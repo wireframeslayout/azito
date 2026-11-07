@@ -2,6 +2,14 @@ import { describe, it, expect } from 'vitest';
 import { fixture } from './fixtures/readFixture';
 import { blockingWorkerDialog, hasUserMessageAbove, detectWorkerDialog, inputHoldsLine, isWorkerBusy, isWorkerScreenReady, readInputBox, screenAboveInput, showsTurnEnd, tuiAgentKindOf, tuiAgentKindOfWorkerType } from './workerScreen';
 
+it('records indistinguishable Claude suggestion and same-text draft at the start cursor', () => {
+  const suggestion = fixture('claude-2.1.319-tmux-ghost.ansi');
+  const draft = fixture('claude-2.1.319-tmux-same-draft-start.ansi');
+  expect(suggestion).toBe(draft);
+  expect(suggestion).toContain('❯ \x1b[7mg\x1b[0mive another tip');
+  expect(readInputBox('claude', suggestion)).toEqual({ state: 'filled', text: 'give another tip' });
+});
+
 describe('tuiAgentKindOf', () => {
   it('reads the agent from the launch line', () => {
     expect(tuiAgentKindOf('claude --dangerously-skip-permissions')).toBe('claude');
