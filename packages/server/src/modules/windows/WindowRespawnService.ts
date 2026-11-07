@@ -26,7 +26,7 @@ import type { IExecutionLogRepository } from '../tasks/ExecutionLog';
 import { assertDirectoryContained } from '../git/PathContainment';
 import { shellDialectFor, type ShellDialect } from '../../shared/os/shellDialect';
 import { renderLaunchLine, type WorkerLaunch } from '../agents/WorkerLaunch';
-import { buildClaudeLaunch } from '../agents/claude/launchCommand';
+import { buildClaudeAttachLaunch, buildClaudeLaunch } from '../agents/claude/launchCommand';
 import type { SupervisorRegistry } from '../supervisors/SupervisorRegistry';
 import { shouldSupervise, wrapWithSupervisor } from '../supervisors/SupervisorLaunch';
 import type { SessionCaptureService } from './SessionCaptureService';
@@ -34,6 +34,8 @@ import { checkExecutionGate, ExecutionGateDeniedError, ExecutionGatePendingAppro
 import { resolveExecutionManifest, hashExecutionManifest, type RespawnManifestInput } from '../tasks/execution/ExecutionManifest';
 import { appendLogAndEmit } from '../tasks/execution/AppendLog';
 import { prepareClaudeLaunch } from '../agents/claude/prepareClaudeLaunch';
+import { DaemonSessionChecker, type DaemonSessionVerdict } from '../agents/claude/DaemonSessionChecker';
+import { verifyLaunchedWorker, type VerifyLaunchedResult } from './VerifyLaunchedWorker';
 import { shouldBlockMcp } from '../agents/shouldBlockMcp';
 import type { TaskPaneEnvironmentService } from '../tasks/execution/TaskPaneEnvironmentService';
 import { resolveMuxWorkspace, resolveBaseBranch, resolveAndDetectBaseBranch } from '../tasks/execution/TaskExecutionEnv';
@@ -104,12 +106,16 @@ interface SupervisionContext {
   windowId?: number;
 }
 
-/** What a worker pane is started with by a respawn: the conversation id (null = a fresh start) and whether to resume it or start it under the same id. */
+/** What a worker pane is started with by a respawn: the conversation id (null = a fresh start) and whether to resume it, start it under the same id, or attach to the daemon holding it. */
 interface AgentLaunchPlan {
   sessionId: string | null;
   conversation: RespawnConversation;
+  /** The short id `claude attach` takes, when `conversation` is `attach` (#540). */
+  attachId?: string | null;
   configDir?: string | null;
   configDirExplicit?: boolean | null;
+  /** Why the daemon check could not be asked (`unknown`): logged once by the caller, never swallowed silently. */
+  daemonCheckUnknownReason?: string | null;
 }
 
 export class WindowRespawnService {
@@ -194,6 +200,8 @@ export class WindowRespawnService {
     private harnessPrefix: string,
     // Asked before a conversation is resumed whether it exists (#542); required so a respawn can never skip the check by a forgotten wiring.
     private conversationProbe: ConversationProbe,
+    // Asked before a Claude conversation is opened whether the Claude Code daemon holds it (#540); required for the same reason conversationProbe is.
+    private daemonSessionChecker: DaemonSessionChecker,
     private sessionCaptureService?: SessionCaptureService,
   ) {}
 
@@ -313,6 +321,7 @@ export class WindowRespawnService {
     // The conversation each pane resumes is looked for on the host here too, before anything is destroyed: one that cannot be told
     // stops the respawn with its reason, and one that was never written is started fresh under the same id (#542).
     const launchPlan = opts?.skipAgentLaunch ? null : await this.planAgentLaunches(server, win, windowId);
+    this.logDaemonCheckUnavailable(launchPlan, task, unitId);
 
     const resumeEnv: Record<string, string> = {};
     if (server.type === 'local' && !this.startsWorkerAsProgram(server) && launchPlan) {
@@ -333,7 +342,7 @@ export class WindowRespawnService {
     if (this.startsWorkerAsProgram(server) && win.workerType && !opts?.skipAgentLaunch) {
       if (supervise) throw new Error(`A worker started as a program cannot run under a supervisor (${server.name}).`);
       const single = launchPlan?.single;
-      const launch = this.sessionStrategyFactory.create(win.workerType).buildRespawnLaunch(single?.sessionId ?? null, win.workerModel, null, blockMcp, single?.conversation);
+      const launch = this.sessionStrategyFactory.create(win.workerType).buildRespawnLaunch(single?.sessionId ?? null, win.workerModel, null, blockMcp, single?.conversation, single?.attachId ?? null);
       // A window whose launch cannot be rebuilt (a custom command is not stored, so a generic worker has none) would be destroyed and
       // recreated as a bare shell with nothing started: refused before anything is touched.
       if (!launch) {
@@ -614,6 +623,13 @@ export class WindowRespawnService {
           // (A worker started as a program is already the window's pane: there is nothing to type.)
           const paneId = await restoreDriver.resolvePane(respawnServer, newRef, 1);
           await this.setupSinglePane(respawnServer, paneId, baseTarget, win, supervision, resolvedCwds.singleCwd, blockMcp, launchPlan?.single ?? null);
+          // Issue #540: a claude launch the CLI refused (a daemon-held conversation, a missing conversation) leaves the pane
+          // silently back at a shell — say so in the log and the notification. Single-pane windows only; a layout restore
+          // of several panes is the known limit this check does not cover. Reports only: nothing is rolled back, so a
+          // misjudged "not running" cannot destroy a window whose worker was just slow to start.
+          if (win.workerType === 'claude' && task && unitId !== null) {
+            await this.verifyWorkerStarted(respawnServer, paneId, task.id, unitId);
+          }
         }
       } catch (err) {
         try {
@@ -889,6 +905,53 @@ export class WindowRespawnService {
     return win.workerType === 'claude' || (win.paneLayout?.panes.some((pane) => pane.workerType === 'claude') ?? false);
   }
 
+  /**
+   * Issue #540: records why a daemon check could not be asked — once per respawn, in the execution log when the
+   * window's task has a unit, on the console otherwise (a window with no task has no execution log to write to).
+   */
+  private logDaemonCheckUnavailable(launchPlan: { single: AgentLaunchPlan | null; panes: Map<number, AgentLaunchPlan> } | null, task: Task | null, unitId: number | null): void {
+    if (!launchPlan) return;
+    const reasons = [
+      ...(launchPlan.single?.daemonCheckUnknownReason ? [launchPlan.single.daemonCheckUnknownReason] : []),
+      ...[...launchPlan.panes.values()].flatMap((plan) => plan.daemonCheckUnknownReason ? [plan.daemonCheckUnknownReason] : []),
+    ];
+    if (!reasons.length) return;
+    const reason = reasons.join('; ');
+    if (task && unitId !== null) {
+      appendLogAndEmit(this.logRepo, this.events, task.id, unitId, 'command', { type: 'daemon_check_unavailable', reason });
+    } else {
+      console.warn(`[WindowRespawnService] daemon_check_unavailable: ${reason}`);
+    }
+  }
+
+  /**
+   * Issue #540: after a claude launch line was typed into a pane, checks the worker actually came up — the CLI can
+   * refuse a launch (a `--resume` of a daemon-held conversation, a missing conversation) and leave the pane silently
+   * back at a shell. Reports only: nothing is killed, no status is changed, so a false "not running" leaves the
+   * window exactly as it is. The pane screen's tail (the CLI's refusal message) and a notification through the
+   * existing status_change bridge (the task's CURRENT status with the reason, not a status transition) carry the
+   * why to the operator.
+   */
+  private async verifyWorkerStarted(server: ServerConfig, handle: PaneHandle, taskId: number, unitId: number): Promise<void> {
+    const result: VerifyLaunchedResult = await verifyLaunchedWorker({
+      driver: this.resolveDriver(server),
+      server,
+      handle,
+      listProcesses: () => this.transportFactory.getTransport(server).listProcesses(),
+    });
+    if (result.unverifiableReason) {
+      appendLogAndEmit(this.logRepo, this.events, taskId, unitId, 'command', { type: 'worker_launch_unverified', reason: result.unverifiableReason });
+      return;
+    }
+    if (result.running) return;
+    const message = 'The claude worker did not come up after the respawn (the CLI likely refused the launch — see the pane for its message). The window was left as it is.';
+    appendLogAndEmit(this.logRepo, this.events, taskId, unitId, 'command', { type: 'worker_launch_failed', message, ...(result.screenTail ? { screen: result.screenTail } : {}) });
+    // A status_change so the existing NotificationBus bridge announces it; the status itself is the task's current
+    // one — this verification never transitions anything (a wrong "not running" must not fail a working task).
+    const task = this.taskRepo.findById(taskId);
+    appendLogAndEmit(this.logRepo, this.events, taskId, unitId, 'status_change', { status: task?.status ?? 'unknown', reason: message });
+  }
+
   /** Before a Claude worker is started on `server` (see {@link prepareClaudeLaunch}); reported in the execution log of the task's unit when there is one. */
   private async prepareClaudeLaunchFor(server: ServerConfig, taskId: number, unitId: number | null): Promise<void> {
     await prepareClaudeLaunch(this.transportFactory.getTransport(server), (entry) => {
@@ -919,7 +982,8 @@ export class WindowRespawnService {
     }
     const task = this.taskRepo.findById(taskId);
     if (!task) throw new Error(`Task ${taskId} not found`);
-    if (!task.agentSessionId) throw new Error(`Task ${taskId} has no agent session ID`);
+    const legacySessionId = task.agentSessionId;
+    if (!legacySessionId) throw new Error(`Task ${taskId} has no agent session ID`);
 
     // Issue #63: same detection safety net as respawn().
     let legacyBaseBranch: string | null | undefined;
@@ -1006,7 +1070,19 @@ export class WindowRespawnService {
       const windowTarget = muxWindowTarget(legacyRef);
       try {
         const paneId = await legacyDriver.resolvePane(server, legacyRef, 1);
-        const resumeLaunch = buildClaudeLaunch({ model: null, extraArgs: null }, task.agentSessionId);
+        // Issue #540: this path is claude-only, so the daemon check is asked before the launch line is decided — a conversation
+        // the Claude Code daemon holds is opened with `claude attach <id>`, everything else keeps `claude --resume <id>`. A
+        // legacy task records no CLAUDE_CONFIG_DIR of its own, so the check runs against the host's default one.
+        const daemonVerdict = await this.daemonSessionChecker.check(server, legacySessionId, null);
+        if (daemonVerdict.status === 'unknown' && unitId !== null) {
+          appendLogAndEmit(this.logRepo, this.events, task.id, unitId, 'command', { type: 'daemon_check_unavailable', reason: daemonVerdict.reason });
+        }
+        let resumeLaunch: WorkerLaunch;
+        if (daemonVerdict.status === 'attach') {
+          resumeLaunch = buildClaudeAttachLaunch(daemonVerdict.attachId);
+        } else {
+          resumeLaunch = buildClaudeLaunch({ model: null, extraArgs: null }, task.agentSessionId);
+        }
         const resumeCommand = renderLaunchLine({ ...resumeLaunch, env: undefined }, this.dialectOf(server));
         const isSupervised = shouldSupervise(server.type, 'agent', legacyRef.kind);
         if (isSupervised) {
@@ -1031,6 +1107,10 @@ export class WindowRespawnService {
             })
           : renderLaunchLine(resumeLaunch, this.dialectOf(server));
         await legacyDriver.sendKeysToHandle(server, paneId, [sendCmd, 'Enter']);
+        // Issue #540: same post-launch verification as respawn() — reports a refused launch, never tears anything down.
+        if (unitId !== null) {
+          await this.verifyWorkerStarted(server, paneId, task.id, unitId);
+        }
       } catch (err) {
         // resolvePaneId()/sendKeys() failing after createRotatedWindow already
         // succeeded used to leave an untracked window (tmuxWindow never
@@ -1223,9 +1303,13 @@ export class WindowRespawnService {
 
   /**
    * The session each worker pane of the window starts with, decided before the window is destroyed: the recorded id (the first pane
-   * also takes the window's, or the one found by a scan of the host when none was recorded) and whether its conversation exists
-   * (`resume`) or never was written (`new`). The conversation is looked up by its id in the server's conversation logs, not by the
-   * directory of the window; one that cannot be looked up is a ConversationCheckError.
+   * also takes the window's, or the one found by a scan of the host when none was recorded) and how its conversation is opened —
+   * `resume` (it exists), `new` (it never was written) or `attach` (the Claude Code daemon holds it running; #540). The
+   * conversation is looked up by its id in the server's conversation logs, not by the directory of the window; one that cannot be
+   * looked up is a ConversationCheckError. A claude conversation is first asked of the daemon checker: one the daemon holds has no
+   * transcript on disk to probe, so the probe's answer would be wrong — the probe runs only when the check answered `resume` or
+   * `unknown`. A check that cannot be asked (`unknown`, an old CLI cannot hold a daemon conversation either) carries its reason in
+   * the plan for the caller to log.
    */
   private async planAgentLaunches(
     server: ServerConfig,
@@ -1237,7 +1321,19 @@ export class WindowRespawnService {
       if (!sessionId) return { sessionId: null, conversation: 'resume' };
       const agentType = this.sessionStrategyFactory.create(workerType).conversationLogAgentType;
       if (agentType === null) return { sessionId, conversation: 'resume' };
-      return { sessionId, configDirExplicit: server.type === 'local' && !this.startsWorkerAsProgram(server) && agentType === 'claude' && recorded === sessionId && configDir ? configDirExplicit : null, configDir: server.type === 'local' && !this.startsWorkerAsProgram(server) && agentType === 'claude' && recorded === sessionId ? configDir : null, conversation: (await this.conversationProbe.exists(server, agentType, sessionId, recorded === sessionId ? configDir : null)) ? 'resume' : 'new' };
+      const probeConfigDir = (recorded === sessionId ? configDir : null) ?? null;
+      const planConfigDir = server.type === 'local' && !this.startsWorkerAsProgram(server) && agentType === 'claude' && recorded === sessionId ? configDir : null;
+      const planConfigDirExplicit = planConfigDir ? configDirExplicit : null;
+      if (agentType === 'claude') {
+        const verdict: DaemonSessionVerdict = await this.daemonSessionChecker.check(server, sessionId, probeConfigDir);
+        if (verdict.status === 'attach') {
+          return { sessionId, conversation: 'attach', attachId: verdict.attachId, configDir: planConfigDir, configDirExplicit: planConfigDirExplicit };
+        }
+        if (verdict.status === 'unknown') {
+          return { sessionId, conversation: (await this.conversationProbe.exists(server, agentType, sessionId, probeConfigDir)) ? 'resume' : 'new', configDir: planConfigDir, configDirExplicit: planConfigDirExplicit, daemonCheckUnknownReason: verdict.reason };
+        }
+      }
+      return { sessionId, conversation: (await this.conversationProbe.exists(server, agentType, sessionId, probeConfigDir)) ? 'resume' : 'new', configDir: planConfigDir, configDirExplicit: planConfigDirExplicit };
     };
     if (!win.paneLayout) {
       return { single: win.workerType ? await decide(win.workerType, win.agentSessionId, win.claudeConfigDir, win.claudeConfigDirExplicit) : null, panes: new Map() };
@@ -1311,7 +1407,7 @@ export class WindowRespawnService {
         if (workerType) {
           const strategy = this.sessionStrategyFactory.create(workerType);
           const plan = panePlans?.get(pane.index);
-          const launch = strategy.buildRespawnLaunch(plan?.sessionId ?? null, win.workerModel, null, blockMcp, plan?.conversation);
+          const launch = strategy.buildRespawnLaunch(plan?.sessionId ?? null, win.workerModel, null, blockMcp, plan?.conversation, plan?.attachId ?? null);
           if (launch) {
             const wrapped = this.wrapIfSupervised(launch, server, baseTarget, supervision);
             const sendCmd = plan?.configDirExplicit === true ? `CLAUDE_CONFIG_DIR="$AZITO_RESUME_CLAUDE_CONFIG_DIR_${pane.index}" ${wrapped}` : plan?.configDirExplicit === false ? this.dialectOf(server).withoutEnv('CLAUDE_CONFIG_DIR', wrapped, await driver.paneCommandByHandle(server, paneId).catch(() => null)) : wrapped;
@@ -1341,7 +1437,7 @@ export class WindowRespawnService {
 
     if (win.workerType) {
       const strategy = this.sessionStrategyFactory.create(win.workerType);
-      const launch = strategy.buildRespawnLaunch(plan?.sessionId ?? null, win.workerModel, null, blockMcp, plan?.conversation);
+      const launch = strategy.buildRespawnLaunch(plan?.sessionId ?? null, win.workerModel, null, blockMcp, plan?.conversation, plan?.attachId ?? null);
       if (launch) {
         const wrapped = this.wrapIfSupervised(launch, server, supervisorTarget, supervision);
         const sendCmd = plan?.configDirExplicit === true ? `CLAUDE_CONFIG_DIR="$AZITO_RESUME_CLAUDE_CONFIG_DIR" ${wrapped}` : plan?.configDirExplicit === false ? this.dialectOf(server).withoutEnv('CLAUDE_CONFIG_DIR', wrapped, await driver.paneCommandByHandle(server, handle).catch(() => null)) : wrapped;

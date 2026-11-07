@@ -9,6 +9,7 @@ vi.mock('../git/ensureGitIdentity', () => ({ ensureGitIdentity: vi.fn(async () =
 // What the host's Claude Code settings get is tested on its own; here only that a restore calls it before the window that starts the worker exists.
 vi.mock('../agents/claude/prepareClaudeLaunch', () => ({ prepareClaudeLaunch: vi.fn(async () => {}) }));
 import { prepareClaudeLaunch } from '../agents/claude/prepareClaudeLaunch';
+import { DaemonSessionChecker } from '../agents/claude/DaemonSessionChecker';
 
 // The hub's own `gh`/`glab` login is the second stage of distribution's token
 // resolution (Issue #87). Stubbed to "not logged in" so these tests exercise
@@ -262,6 +263,8 @@ function makeDeps(overrides: Partial<TaskRestoreDeps> = {}): TaskRestoreDeps {
     // real/mocked repo via `overrides`.
     distributionStateRepo: null,
     hubGitIdentity: null,
+    // Issue #540: the default answers that no daemon holds any conversation, so restores keep the plain resume launch.
+    daemonSessionChecker: { check: vi.fn(async () => ({ status: 'resume' })) } as unknown as DaemonSessionChecker,
     ...overrides,
   };
 }

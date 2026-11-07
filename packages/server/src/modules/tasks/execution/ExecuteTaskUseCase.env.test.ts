@@ -501,6 +501,8 @@ function buildUseCase(opts: {
     '',
     null,
     { claudeConfigDir: null, codexHome: null },
+    // Issue #540: the default answers that no daemon holds any conversation, so follow-ups keep the plain resume launch.
+    { check: vi.fn(async () => ({ status: 'resume' })) } as any,
   );
 
   return { useCase, primaryWindowWaker, sessionStrategyFactory, taskRepo, windowRepo, logRepo, tmux, supervisorRegistry, worktreeServiceFactory, transportFactory, unitRepo, projectRepo, projectServerRepo, serverRepo, projectSecretRepo, unitTypeLoader, sidekickLoader, paneEnvService, gitProvider };
@@ -1833,6 +1835,7 @@ describe('ExecuteTaskUseCase.followUp http-signal execution mode (Issue: AZITOç›
     '',
     null,
     { claudeConfigDir: null, codexHome: null },
+    { check: vi.fn(async () => ({ status: 'resume' })) } as any,
     );
 
     await useCase.followUp(42, 1, 'please continue');
@@ -3078,6 +3081,7 @@ describe('ExecuteTaskUseCase.execute() execution-gate self-invalidation regressi
     '',
     null,
     { claudeConfigDir: null, codexHome: null },
+    { check: vi.fn(async () => ({ status: 'resume' })) } as any,
     );
 
     // execute() itself resolves once setup (session/window/worktree

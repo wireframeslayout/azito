@@ -27,7 +27,8 @@ import { shellDialectFor } from '../../shared/os/shellDialect';
 import { programFor } from '../agents/workerProgram';
 import type { PaneProgram } from '../tmux/IMuxClient';
 import type { ISessionStrategyFactory } from '../agents/SessionStrategy';
-import { planResumeWorkerLaunch } from './execution/WorkerLaunchPlan';
+import { planResumeWorkerLaunchDaemonAware } from './execution/WorkerLaunchPlan';
+import { DaemonSessionChecker } from '../agents/claude/DaemonSessionChecker';
 import { changeDirectoryLine } from '../../shared/os/changeDirectoryLine';
 import { checkExecutionGate, ExecutionGateDeniedError, ExecutionGatePendingApprovalError, reverifyExecutionGateInLock } from './execution/ExecutionGate';
 import { resolveExecutionManifest, hashExecutionManifest } from './execution/ExecutionManifest';
@@ -114,6 +115,10 @@ export interface TaskRestoreDeps {
   // rationale.
   distributionStateRepo: IDistributionStateRepository | null;
   hubGitIdentity: GitIdentity | null;
+  // Issue #540: asked before the restored worker is started whether the Claude Code daemon holds the conversation
+  // (an attach launch then, instead of a --resume the CLI would refuse). The SAME instance ExecuteTaskUseCase and
+  // WindowRespawnService are wired with.
+  daemonSessionChecker: DaemonSessionChecker;
 }
 
 export class TaskRestoreService {
@@ -613,7 +618,14 @@ export class TaskRestoreService {
         if (startsAsProgram) {
           server = freshServer;
           await prepareEnvironment();
-          const launch = unit ? planResumeWorkerLaunch(unit, task.agentSessionId, this.deps.sessionStrategyFactory) : null;
+          // Issue #540: daemon-aware — a conversation the Claude Code daemon holds is reopened with `claude attach <id>`
+          // (a `--resume` of it is refused), everything else as before. On a win32 host the check answers unknown (a bare
+          // `claude` cannot be spawned there), which leaves the plain resume launch and logs the reason below.
+          const resumePlan = unit ? await planResumeWorkerLaunchDaemonAware(unit, task.agentSessionId, this.deps.sessionStrategyFactory, this.deps.daemonSessionChecker, freshServer) : null;
+          if (resumePlan?.daemonCheckUnknownReason && unitId !== null) {
+            appendLogAndEmit(logRepo, events, task.id, unitId, 'command', { type: 'daemon_check_unavailable', reason: resumePlan.daemonCheckUnknownReason });
+          }
+          const launch = resumePlan?.launch ?? null;
           if (launch) {
             program = await programFor(launch, effectiveDir, () => transportFactory.getFileOps(freshServer));
             programSessionId = task.agentSessionId;
