@@ -1,6 +1,8 @@
 import { test, expect } from '../fixtures/test';
 import type { WebSocketRoute } from '@playwright/test';
 
+// #641: ハーネスの 127.0.0.1 はセキュアコンテキストなので、HTTP の非セキュア環境での randomUUID 不在を再現する。
+// events WebSocket は routeWebSocket でモックし、ハブ側の送出は対象外とする。
 test('randomUUID がない環境でもファイアウォール通知を表示して保存する', async ({ app, harness }) => {
   await app.addInitScript(() => {
     Object.defineProperty(crypto, 'randomUUID', { value: undefined, configurable: true });
