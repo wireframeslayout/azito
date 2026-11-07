@@ -203,6 +203,23 @@ describe('POST /api/windows/:id/launch-agent — MCP blocking', () => {
     return keys[0];
   }
 
+  it.each(['tmux', 'misao'] as const)('adds the Claude setting on %s window launches', async (kind) => {
+    const ref = kind === 'misao' ? { kind, workspace: 'proj', window: 'w_01' } : { kind, workspace: 'proj', window: 'win1' };
+    app = await buildApp({ win: makeWindow({ muxRef: ref }) });
+    const res = await app.inject({ method: 'POST', url: `/api/windows/${window.id}/launch-agent`, payload: { command: 'claude' } });
+    expect(res.statusCode).toBe(200);
+    expect(sentCommand()).toContain('CLAUDE_CODE_ENABLE_PROMPT_SUGGESTION');
+    await app.close();
+  });
+
+  it('does not add the Claude setting to a generic window launch', async () => {
+    app = await buildApp({ win: makeWindow({ workerType: 'generic' }), strategy: { ...claudeStrategy(), supportsSession: false } });
+    const res = await app.inject({ method: 'POST', url: `/api/windows/${window.id}/launch-agent`, payload: { command: 'my-tool' } });
+    expect(res.statusCode).toBe(200);
+    expect(sentCommand()).not.toContain('CLAUDE_CODE_ENABLE_PROMPT_SUGGESTION');
+    await app.close();
+  });
+
   describe('a Windows host (an agent is started as the first pane of a new window, never in an existing one)', () => {
     const win32 = { platform: 'win32' as const, arch: 'x64' as const };
 
@@ -227,6 +244,7 @@ describe('POST /api/windows/:id/launch-agent — MCP blocking', () => {
     });
     expect(res.statusCode).toBe(200);
     const cmd = sentCommand();
+    expect(cmd).toContain('CLAUDE_CODE_ENABLE_PROMPT_SUGGESTION');
     expect(cmd).toContain('--strict-mcp-config');
     expect(cmd).toContain('--session-id');
     await app.close();
@@ -244,6 +262,7 @@ describe('POST /api/windows/:id/launch-agent — MCP blocking', () => {
     });
     expect(res.statusCode).toBe(200);
     const cmd = sentCommand();
+    expect(cmd).not.toContain('CLAUDE_CODE_ENABLE_PROMPT_SUGGESTION');
     expect(cmd).toContain('-c mcp_servers.azt-mcp.enabled=false -c mcp_servers.azt-mcp.command=azt-mcp-disabled');
     await app.close();
   });

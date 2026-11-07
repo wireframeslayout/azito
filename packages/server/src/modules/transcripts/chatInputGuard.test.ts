@@ -24,6 +24,9 @@ describe('guardChatInput', () => {
   it('accepts an empty Claude input', async () => {
     expect(await guardChatInput(driver('node', ready), server, pane, 'claude', 'hello')).toBeNull();
   });
+  it('rejects Claude placeholder text, which may instead be a draft', async () => {
+    expect(await guardChatInput(driver('node', ready.replace('❯', '❯ Try "hello"')), server, pane, 'claude', 'hello')).toMatchObject({ code: 'input_not_empty' });
+  });
   it('accepts the captured named input and rejects a modified draft', async () => {
     const screen = fixture('claude-2.1.317-named-empty.txt');
     expect(await guardChatInput(driver('node', screen), server, pane, 'claude', 'hello')).toBeNull();

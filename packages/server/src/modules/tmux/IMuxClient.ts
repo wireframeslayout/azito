@@ -21,6 +21,7 @@ export type PaneLocation =
 export interface PaneProgram {
   /** The program and its arguments; the program is looked up by the host's own rules (PATH, PATHEXT on Windows). */
   argv: readonly string[];
+  env?: Record<string, string>;
   /** Where it starts. Omitted: the mux's own default. */
   cwd?: string;
   /** The size the program starts with: a Node TUI does not follow a later resize on Windows (a ConPTY limit), so it must be right at start. */

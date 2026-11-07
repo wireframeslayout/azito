@@ -73,7 +73,7 @@
       "codex_update_prompt": "Resolve the Codex update dialog before sending.",
       "codex_trust_prompt": "Resolve the Codex folder trust dialog before sending.",
       "not_ready": "The agent is not ready for input.",
-      "input_not_empty": "The agent input is not empty or cannot be verified."
+      "input_not_empty": "The input may contain a suggestion or a draft. Check it in the terminal and clear or submit it before trying again."
     },
     "sendError": "Failed to send",
     "retry": "Retry",

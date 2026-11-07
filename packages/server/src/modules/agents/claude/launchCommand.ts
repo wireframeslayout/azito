@@ -16,6 +16,7 @@ import { extraArgValues, flag, raw, value, type LaunchArg, type ProgramLaunch } 
  * codex/generic worker launches would just be an unrecognized argument.
  */
 const STRICT_MCP_CONFIG_FLAG = '--strict-mcp-config';
+export const CLAUDE_LAUNCH_ENV = { CLAUDE_CODE_ENABLE_PROMPT_SUGGESTION: 'false' } as const;
 
 /**
  * `claude` started fresh, or resumed when `agentSessionId` is given (`claude --resume <id> ...`; a new session's id is added by the caller).
@@ -26,6 +27,7 @@ export function buildClaudeLaunch({ model, extraArgs, blockMcp = true }: LaunchO
   return {
     kind: 'program',
     file: 'claude',
+    env: CLAUDE_LAUNCH_ENV,
     args: [
       ...(agentSessionId ? [flag(startNew ? '--session-id' : '--resume'), flag(agentSessionId)] : []),
       flag('--dangerously-skip-permissions'),

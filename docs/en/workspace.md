@@ -2,6 +2,8 @@
 
 The Workspace is the primary interface for interacting with a project in AZITO. It combines terminal access, agent management, file browsing, and issue tracking into a single, tab-based view.
 
+AZITO disables prompt suggestions when it starts a new Claude Code process. A window started outside AZITO or before this version may still show suggestions; chat may refuse to send and explain why. Check the terminal and submit or clear the input before trying again.
+
 ## Layout
 
 The Workspace is divided into four areas:

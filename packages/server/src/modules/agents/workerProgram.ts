@@ -6,6 +6,7 @@ import { DEFAULT_TERMINAL_COLS, DEFAULT_TERMINAL_ROWS } from '../tmux/terminalSi
 import { isAgentSessionId } from './agentSessionId';
 import type { ISessionStrategyFactory } from './SessionStrategy';
 import { commandLineLaunch, launchArgv, withFlags, type WorkerLaunch } from './WorkerLaunch';
+import { CLAUDE_LAUNCH_ENV } from './claude/launchCommand';
 
 /**
  * The first pane of a window that a Windows host starts a worker in (#371): the program and its arguments as the argv of misao's
@@ -16,7 +17,7 @@ import { commandLineLaunch, launchArgv, withFlags, type WorkerLaunch } from './W
 export async function programFor(launch: WorkerLaunch, cwd: string | null, files: () => IFileOps): Promise<PaneProgram> {
   const argv = launchArgv(launch);
   const resolved = cwd === null ? null : await resolveShellDirectory(files, cwd);
-  return { argv, ...(resolved !== null ? { cwd: resolved } : {}), cols: DEFAULT_TERMINAL_COLS, rows: DEFAULT_TERMINAL_ROWS };
+  return { argv, ...(launch.env ? { env: { ...launch.env } } : {}), ...(resolved !== null ? { cwd: resolved } : {}), cols: DEFAULT_TERMINAL_COLS, rows: DEFAULT_TERMINAL_ROWS };
 }
 
 export interface NewWindowProgramRequest {
@@ -38,6 +39,7 @@ export async function planNewWindowProgram(
 ): Promise<{ program: PaneProgram; agentSessionId: string | null }> {
   const strategy = strategies.create(request.workerType);
   let launch: WorkerLaunch = commandLineLaunch(request.command.trim());
+  if (request.workerType === 'claude') launch = { ...launch, env: CLAUDE_LAUNCH_ENV };
   let agentSessionId: string | null = null;
   if (strategy.supportsSession && !strategy.needsPostLaunchScan) {
     // Read from the split argument list, as the program will get it: a standalone `--session-id` / `--resume` and the word after it,

@@ -26,6 +26,7 @@ import type { TransportFactory } from '../servers/transport/TransportFactory';
 import { shouldSupervise, wrapWithSupervisor } from '../supervisors/SupervisorLaunch';
 import { replyToExecutionGateError } from '../tasks/execution/ExecutionGate';
 import { shouldBlockMcp, ensureMcpBlockByCommand } from '../agents/shouldBlockMcp';
+import { CLAUDE_LAUNCH_ENV } from '../agents/claude/launchCommand';
 import { DuplicateAgentSessionError } from './DuplicateAgentSessionError';
 import { isSameWindowTarget, isValidModelId } from '@azito/shared';
 import { muxRefFromTmuxTarget, parseMuxRef, type MuxRef, type PaneOrdinal, type MuxDriverKind } from '@azito/shared';
@@ -514,6 +515,9 @@ const windowsRoutes: FastifyPluginCallback<WindowsRouteOptions> = (fastify, opts
       // is never overwritten by the session-id append above.
       if (blockMcp) {
         effectiveCommand = ensureMcpBlockByCommand(effectiveCommand);
+      }
+      if (win.workerType === 'claude') {
+        effectiveCommand = shellDialectFor(opts.transportFactory.hostProfileFor(srv)).withEnv(CLAUDE_LAUNCH_ENV, effectiveCommand);
       }
 
       const supervised = shouldSupervise(srv.type, win.windowType, windowKindOf(win));

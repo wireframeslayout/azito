@@ -560,6 +560,7 @@ describe('ExecuteTaskUseCase execution-env resolution', () => {
       expect(prepareClaudeLaunch).toHaveBeenCalledTimes(1);
       expect(prepareClaudeLaunch).toHaveBeenCalledWith(expect.anything(), expect.any(Function));
       expect(preparedBeforeLaunch(tmux)).toBe(true);
+      expect(tmux.sendKeysToHandle.mock.calls.some((call: unknown[]) => (call[2] as string[])[0]?.includes('CLAUDE_CODE_ENABLE_PROMPT_SUGGESTION'))).toBe(true);
     });
 
     it('execute() writes what is reported into the task\'s execution log', async () => {
@@ -607,6 +608,7 @@ describe('ExecuteTaskUseCase execution-env resolution', () => {
 
       expect(prepareClaudeLaunch).toHaveBeenCalledTimes(1);
       expect(preparedBeforeLaunch(tmux)).toBe(true);
+      expect(tmux.sendKeysToHandle.mock.calls.some((call: unknown[]) => (call[2] as string[])[0]?.includes('CLAUDE_CODE_ENABLE_PROMPT_SUGGESTION'))).toBe(true);
     });
 
     it('a Bypass Permissions dialog that is still on the screen fails the task with its reason, without waiting or typing the prompt', async () => {
@@ -5536,7 +5538,7 @@ describe('ExecuteTaskUseCase on a host that starts the worker as the window\'s p
     task.worktreePath = worktreePath;
     sessionStrategyFactory.create.mockReturnValue({ supportsSession: true, buildResumeArgs: (id: string) => ['--resume', id] } as never);
     worktreeServiceFactory.create.mockReturnValue({ exists: vi.fn(async () => true) });
-    let opened: { program?: { argv: string[]; cwd?: string } } | undefined;
+    let opened: { program?: { argv: string[]; cwd?: string; env?: Record<string, string> } } | undefined;
     tmux.openWindow.mockImplementation((async (_srv: unknown, ws: string, _name: string, o: typeof opened) => {
       opened = o;
       return { ref: { kind: 'tmux' as const, workspace: ws, window: 'w1' }, result: { stdout: '', stderr: '', code: 0 } };
@@ -5550,6 +5552,7 @@ describe('ExecuteTaskUseCase on a host that starts the worker as the window\'s p
     expect(vi.mocked(prepareClaudeLaunch).mock.invocationCallOrder[0]).toBeLessThan(tmux.openWindow.mock.invocationCallOrder[0]);
     expect(opened?.program?.argv.slice(-2)).toEqual(['--resume', '7a8b0f9c-1d2e-4f30-8a45-6b7c8d9e0f12']);
     expect(opened?.program?.cwd).toBe(worktreePath);
+    expect(opened?.program?.env).toEqual({ CLAUDE_CODE_ENABLE_PROMPT_SUGGESTION: 'false' });
     const typed = tmux.sendKeysToHandle.mock.calls.map((c: unknown[]) => (c[2] as string[])[0]);
     expect(typed.filter((line) => line.startsWith('cd ') || line.includes('claude'))).toEqual([]);
   });

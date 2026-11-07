@@ -28,12 +28,14 @@ export interface ProgramLaunch {
   readonly kind: 'program';
   readonly file: string;
   readonly args: readonly LaunchArg[];
+  readonly env?: Readonly<Record<string, string>>;
 }
 
 /** A command the user wrote as one line (a generic worker, a manually launched window): typed as it is on a POSIX host, split into arguments on a Windows one. */
 export interface CommandLineLaunch {
   readonly kind: 'commandLine';
   readonly line: string;
+  readonly env?: Readonly<Record<string, string>>;
 }
 
 export type WorkerLaunch = ProgramLaunch | CommandLineLaunch;
@@ -50,14 +52,14 @@ export function commandLineLaunch(line: string): CommandLineLaunch {
 /** `launch` with these flags after its own arguments (a session id: `--session-id <id>`, `resume <id>`). Each is a bare word the caller wrote or validated. */
 export function withFlags(launch: WorkerLaunch, flags: readonly string[]): WorkerLaunch {
   if (flags.length === 0) return launch;
-  if (launch.kind === 'commandLine') return commandLineLaunch([launch.line, ...flags].join(' '));
+  if (launch.kind === 'commandLine') return { ...launch, line: [launch.line, ...flags].join(' ') };
   return { ...launch, args: [...launch.args, ...flags.map(flag)] };
 }
 
 /** The line that starts `launch` in a pane running `dialect`'s shell. */
 export function renderLaunchLine(launch: WorkerLaunch, dialect: ShellDialect): string {
-  if (launch.kind === 'commandLine') return launch.line;
-  return [launch.file, ...launch.args.map((arg) => (arg.kind === 'value' ? dialect.quote(arg.text) : arg.text))].join(' ');
+  const line = launch.kind === 'commandLine' ? launch.line : [launch.file, ...launch.args.map((arg) => (arg.kind === 'value' ? dialect.quote(arg.text) : arg.text))].join(' ');
+  return launch.env ? dialect.withEnv(launch.env, line) : line;
 }
 
 /**

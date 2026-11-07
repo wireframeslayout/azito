@@ -18,7 +18,7 @@ export async function guardChatInput(driver: IMuxClient, server: ServerConfig, h
   const dialog = blockingWorkerDialog(kind, screen.stdout);
   if (dialog) return { code: dialog, error: 'The agent is waiting for a dialog to be resolved.' };
   if (!isWorkerScreenReady(kind, screen.stdout)) return { code: 'not_ready', error: 'The agent input is not ready.' };
-  if (readInputBox(kind, screen.stdout).state !== 'empty') return { code: 'input_not_empty', error: 'The agent input is not empty or cannot be verified.' };
+  if (readInputBox(kind, screen.stdout).state !== 'empty') return { code: 'input_not_empty', error: 'The input may contain a suggestion or a draft. Check it in the terminal and clear or submit it before trying again.' };
   return null;
 }
 

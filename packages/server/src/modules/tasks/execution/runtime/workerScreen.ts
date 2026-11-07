@@ -147,9 +147,8 @@ export function blockingWorkerDialog(kind: TuiAgentKind, output: string): Worker
 }
 
 /**
- * What the worker's input box holds right now (Issue #532). `empty`: the box is there and has nothing in it (Claude: only the `❯`, or its
- * `Try "..."` hint; codex: its placeholder). `filled`: there is text in it (a draft, or the line we typed). `disabled`: codex shows
- * "Input disabled". `unknown`: no box of a known shape is on the screen: that is never taken for empty.
+ * What the worker's input box holds right now (Issue #532). `empty`: Claude's bare prompt or codex's placeholder. `filled`: text in the
+ * input. `disabled`: codex shows "Input disabled". `unknown`: an unrecognised box or a Claude hint indistinguishable from a draft.
  */
 export type InputBox =
   | { state: 'empty' }
@@ -176,6 +175,10 @@ function isClaudePlaceholder(text: string): boolean {
 function boxOf(text: string, isEmpty: (text: string) => boolean): InputBox {
   const trimmed = text.trim();
   return trimmed === '' || isEmpty(trimmed) ? { state: 'empty' } : { state: 'filled', text: trimmed };
+}
+
+function claudeBoxOf(text: string): InputBox {
+  return isClaudePlaceholder(text.trim()) ? UNKNOWN : boxOf(text, () => false);
 }
 
 const RULE_LINE = /^─{10,}$/;
@@ -234,7 +237,7 @@ function readClaudeInput(lines: string[]): InputBox {
   const box = claudeRuleBox(lines);
   if (box !== undefined) {
     const inside = lines.slice(box.upper + 1, box.lower).filter((line) => line.trim() !== '');
-    return boxOf([inside[0].trim().replace(/^[❯>]\s?/, ''), ...inside.slice(1).map((line) => line.trim())].join(''), isClaudePlaceholder);
+    return claudeBoxOf([inside[0].trim().replace(/^[❯>]\s?/, ''), ...inside.slice(1).map((line) => line.trim())].join(''));
   }
   const top = lines.map((line, i) => (line.trim().startsWith('╭') ? i : -1)).filter((i) => i >= 0).pop();
   const bottom = lines.map((line, i) => (line.trim().startsWith('╰') ? i : -1)).filter((i) => i >= 0).pop();
@@ -245,7 +248,7 @@ function readClaudeInput(lines: string[]): InputBox {
   if (top !== undefined && bottom !== undefined && bottom > top + 1 && frameIsCurrent) {
     const inside = lines.slice(top + 1, bottom).map((line) => line.trim().replace(/^│\s?/, '').replace(/\s?│$/, '').trim()).filter((line) => line !== '');
     if (inside.length > 0 && /^[❯>]/.test(inside[0])) {
-      return boxOf([inside[0].replace(/^[❯>]\s?/, ''), ...inside.slice(1)].join(''), isClaudePlaceholder);
+      return claudeBoxOf([inside[0].replace(/^[❯>]\s?/, ''), ...inside.slice(1)].join(''));
     }
   }
   return UNKNOWN;

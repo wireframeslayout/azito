@@ -4,6 +4,8 @@
 
 A task is a unit of work assigned to a Unit (the team that runs an operation). Each task holds information such as a title, description, and priority, and is executed autonomously according to the Unit's UnitType (phase definition) and execution runtime (worker type, model). Which Sidekick (tagged skill package) runs each phase is determined by the Unit's `phase_config`.
 
+AZITO disables prompt suggestions when it starts a new Claude Code process. A window started outside AZITO or before this version may still show a suggestion. If the input cannot be distinguished from a draft, the task stops before sending; check the terminal and submit or clear the input before resuming.
+
 ## Creating a Task
 
 ### From the Workspace

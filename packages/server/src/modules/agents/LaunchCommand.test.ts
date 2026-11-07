@@ -5,33 +5,33 @@ import { posixDialect, powershellDialect } from '../../shared/os/shellDialect';
 describe('buildWorkerLaunchCommand', () => {
   it('builds claude command with no model or extra args', () => {
     expect(buildWorkerLaunchCommand('claude', null, null, posixDialect)).toBe(
-      'claude --dangerously-skip-permissions --strict-mcp-config',
+      "CLAUDE_CODE_ENABLE_PROMPT_SUGGESTION='false' claude --dangerously-skip-permissions --strict-mcp-config",
     );
   });
 
   it('builds claude command with model', () => {
     expect(buildWorkerLaunchCommand('claude', 'claude-opus-4-5', null, posixDialect)).toBe(
-      "claude --dangerously-skip-permissions --strict-mcp-config --model 'claude-opus-4-5'",
+      "CLAUDE_CODE_ENABLE_PROMPT_SUGGESTION='false' claude --dangerously-skip-permissions --strict-mcp-config --model 'claude-opus-4-5'",
     );
   });
 
   it('single-quotes Claude 1M context model suffix to avoid shell glob expansion', () => {
     const result = buildWorkerLaunchCommand('claude', 'claude-opus-4-6[1m]', null, posixDialect);
     expect(result).toBe(
-      "claude --dangerously-skip-permissions --strict-mcp-config --model 'claude-opus-4-6[1m]'",
+      "CLAUDE_CODE_ENABLE_PROMPT_SUGGESTION='false' claude --dangerously-skip-permissions --strict-mcp-config --model 'claude-opus-4-6[1m]'",
     );
   });
 
   it('appends extraArgs after model flag (shell-quoted)', () => {
     const result = buildWorkerLaunchCommand('claude', 'claude-sonnet-4-6', '--verbose', posixDialect);
     expect(result).toBe(
-      "claude --dangerously-skip-permissions --strict-mcp-config --model 'claude-sonnet-4-6' '--verbose'",
+      "CLAUDE_CODE_ENABLE_PROMPT_SUGGESTION='false' claude --dangerously-skip-permissions --strict-mcp-config --model 'claude-sonnet-4-6' '--verbose'",
     );
   });
 
   it('trims whitespace from extraArgs', () => {
     const result = buildWorkerLaunchCommand('claude', null, '  --verbose  ', posixDialect);
-    expect(result).toBe("claude --dangerously-skip-permissions --strict-mcp-config '--verbose'");
+    expect(result).toBe("CLAUDE_CODE_ENABLE_PROMPT_SUGGESTION='false' claude --dangerously-skip-permissions --strict-mcp-config '--verbose'");
   });
 
   it('builds codex command with model', () => {
@@ -72,7 +72,7 @@ describe('buildWorkerLaunchCommand', () => {
 describe('buildWorkerLaunchCommand for a PowerShell pane', () => {
   it('quotes the model and extra arguments the PowerShell way', () => {
     expect(buildWorkerLaunchCommand('claude', "o'brien", '--verbose', powershellDialect)).toBe(
-      "claude --dangerously-skip-permissions --strict-mcp-config --model 'o''brien' '--verbose'",
+      "$env:CLAUDE_CODE_ENABLE_PROMPT_SUGGESTION = 'false'; claude --dangerously-skip-permissions --strict-mcp-config --model 'o''brien' '--verbose'",
     );
     expect(buildWorkerLaunchCommand('codex', 'gpt-5.6-sol', null, powershellDialect)).toBe(
       "codex --dangerously-bypass-approvals-and-sandbox -c check_for_update_on_startup=false -c mcp_servers.azt-mcp.enabled=false -c mcp_servers.azt-mcp.command=azt-mcp-disabled --model 'gpt-5.6-sol'",

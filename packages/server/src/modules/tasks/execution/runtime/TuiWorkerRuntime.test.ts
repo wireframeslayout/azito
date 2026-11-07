@@ -327,7 +327,7 @@ describe('TuiWorkerRuntime.sendPrompt — the worker has to be at an empty input
     expect(h.workerInput.typePrompt).not.toHaveBeenCalled();
   });
 
-  it('a Claude input that shows "Press up to edit queued messages" is empty, but the turn is still running: ours waits for the turn to end', async () => {
+  it('waits for an ambiguous Claude hint to disappear before sending', async () => {
     const queued = fixture('claude-2.1.310-linux-queued-placeholder.txt');
     const h = sendHarness('claude', { firstScreens: [queued, queued, queued] });
     expect(await h.send()).toBeNull();
@@ -335,11 +335,17 @@ describe('TuiWorkerRuntime.sendPrompt — the worker has to be at an empty input
     expect(h.tmux.captureScreen.mock.calls.length).toBeGreaterThan(3);
   });
 
+  it('stops without typing when a Claude hint remains indistinguishable from a draft', async () => {
+    const h = sendHarness('claude', { idle: fixture('claude-2.1.310-linux-queued-placeholder.txt') });
+    expect(await h.send()).toMatchObject({ name: 'TuiNotReadyError', reason: 'worker_busy' });
+    expect(h.promptFiles.stage).not.toHaveBeenCalled();
+    expect(h.workerInput.typePrompt).not.toHaveBeenCalled();
+  });
+
   it.each([
     ['codex', 'codex-0.163-linux-working-empty.txt'],
     ['codex', 'codex-0.163-linux-working-queued.txt'],
     ['claude', 'claude-2.1.310-linux-working.txt'],
-    ['claude', 'claude-2.1.310-linux-queued-placeholder.txt'],
   ] as const)('a %s worker whose turn does not end (%s): stops with worker_busy after 60 s, sending and writing nothing', async (kind, file) => {
     const h = sendHarness(kind, { idle: fixture(file) });
     expect(await h.send()).toMatchObject({ name: 'TuiNotReadyError', reason: 'worker_busy' });

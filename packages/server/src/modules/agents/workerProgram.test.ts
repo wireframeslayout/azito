@@ -39,7 +39,7 @@ describe('planNewWindowProgram', () => {
   it('gives an agent that takes a session id at launch one of its own, appended to the command, and reports it for the window row', async () => {
     const planned = await planNewWindowProgram(claude, hostFiles().files, { command: "claude --model 'opus'", workerType: 'claude', workingDirectory: 'C:\\work' });
     expect(planned.agentSessionId).toMatch(/^[0-9a-f-]{36}$/);
-    expect(planned.program).toMatchObject({ argv: ['claude', '--model', 'opus', '--session-id', planned.agentSessionId], cwd: 'C:\\work' });
+    expect(planned.program).toMatchObject({ argv: ['claude', '--model', 'opus', '--session-id', planned.agentSessionId], cwd: 'C:\\work', env: { CLAUDE_CODE_ENABLE_PROMPT_SUGGESTION: 'false' } });
   });
 
   it('keeps a session id the command already carries (a resumed one) and adds none', async () => {
@@ -71,6 +71,8 @@ describe('planNewWindowProgram', () => {
     const codex = strategies({ supportsSession: true, needsPostLaunchScan: true });
     expect(await planNewWindowProgram(codex, hostFiles().files, { command: 'codex', workerType: 'codex', workingDirectory: null })).toMatchObject({ agentSessionId: null, program: { argv: ['codex'] } });
     expect(await planNewWindowProgram(strategies({}), hostFiles().files, { command: 'my-tool --x', workerType: 'generic', workingDirectory: null })).toMatchObject({ agentSessionId: null, program: { argv: ['my-tool', '--x'] } });
+    expect((await planNewWindowProgram(codex, hostFiles().files, { command: 'codex', workerType: 'codex', workingDirectory: null })).program.env).toBeUndefined();
+    expect((await planNewWindowProgram(strategies({}), hostFiles().files, { command: 'my-tool', workerType: 'generic', workingDirectory: null })).program.env).toBeUndefined();
   });
 
   it('refuses a command with shell syntax as unsupported_os', async () => {

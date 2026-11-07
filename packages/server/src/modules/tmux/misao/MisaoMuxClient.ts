@@ -407,7 +407,7 @@ export class MisaoMuxClient implements IMuxClient {
         ...(program ? { ...(program.cwd !== undefined ? { cwd: program.cwd } : {}), cols: program.cols, rows: program.rows } : {}),
         windowId,
         labels: { origin: 'hub', name: windowName },
-        ...this.paneEnvParams(server, extraEnv),
+        ...this.paneEnvParams(server, program?.env ? { ...extraEnv, ...program.env } : extraEnv),
       });
     } catch (err) {
       await this.rpc.request('window.close', { windowId }).catch(() => undefined);

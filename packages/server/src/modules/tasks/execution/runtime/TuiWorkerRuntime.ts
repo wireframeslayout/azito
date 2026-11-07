@@ -35,8 +35,8 @@ const NOT_READY_MESSAGES: Record<TuiNotReadyReason, string> = {
   codex_update_prompt: 'Codex の更新の確認画面が出ているため、プロンプトを送らずにタスクを止めました',
   codex_trust_prompt: 'Codex のフォルダー信頼の確認画面が出ているため、プロンプトを送らずにタスクを止めました',
   worker_exited_to_shell: 'ワーカーが終了してシェルに戻っているため、プロンプトを送らずにタスクを止めました',
-  not_ready: 'ワーカーの画面が入力待ちになっていない（既知の入力欄が見えない）ため、プロンプトを送らずにタスクを止めました',
-  input_not_empty: 'ワーカーの入力欄に文字（前の 1 行や利用者の下書き）が残っているため、プロンプトを送らずにタスクを止めました',
+  not_ready: 'ワーカーの入力欄や候補・下書きの有無を確認できないため、送信せずに停止しました。端末で入力欄を確認してから再開してください',
+  input_not_empty: 'ワーカーの入力欄に候補または下書きがある可能性があるため、送信せずに停止しました。端末で入力欄を確認し、内容を送るか消してから再開してください',
   prompt_not_typed: '送った 1 行がワーカーの入力欄に描かれなかったため、Enter を送らずにタスクを止めました',
   prompt_not_submitted: 'ワーカーの入力欄に送った 1 行が残ったままで、Enter を再送しても送信されなかったため、タスクを止めました',
   input_state_unknown: 'ワーカーの入力欄の状態を読み取れないまま時間切れになったため、送信できたと判断せずにタスクを止めました',
@@ -245,7 +245,7 @@ export class TuiWorkerRuntime implements IWorkerRuntime {
       const box = readInputBox(kind, screen);
       // Text in the input (the line of an earlier prompt, a person's draft) would be sent together with ours. It is waited on for the
       // grace like any screen that is not settled: a wording of an empty input that is not known yet reads as text, and goes away.
-      if (box.state === 'empty' && isWorkerScreenReady(kind, screen)) {
+      if ((box.state === 'empty' || (box.state === 'unknown' && isWorkerBusy(kind, screen))) && isWorkerScreenReady(kind, screen)) {
         const now = Date.now();
         const above = screenAboveInput(kind, screen);
         const busy = isWorkerBusy(kind, screen);

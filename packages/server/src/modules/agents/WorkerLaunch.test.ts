@@ -5,10 +5,15 @@ import { buildWorkerLaunch } from './LaunchCommand';
 import { commandLineLaunch, flag, launchArgv, renderLaunchLine, splitCommandLine, value, withFlags, type ProgramLaunch } from './WorkerLaunch';
 
 describe('one launch, two ways to start it', () => {
+  it('sets the suggestion option only on Claude launches', () => {
+    expect(buildWorkerLaunch('claude', null, null)?.env).toEqual({ CLAUDE_CODE_ENABLE_PROMPT_SUGGESTION: 'false' });
+    expect(buildWorkerLaunch('codex', null, null)?.env).toBeUndefined();
+    expect(buildWorkerLaunch('generic', null, 'my-tool')?.env).toBeUndefined();
+  });
   it('claude: a POSIX line and a Windows argv from the same definition', () => {
     const launch = buildWorkerLaunch('claude', 'claude-opus-4-6[1m]', "--verbose it's");
     expect(renderLaunchLine(launch!, posixDialect)).toBe(
-      "claude --dangerously-skip-permissions --strict-mcp-config --model 'claude-opus-4-6[1m]' '--verbose' 'it'\\''s'",
+      "CLAUDE_CODE_ENABLE_PROMPT_SUGGESTION='false' claude --dangerously-skip-permissions --strict-mcp-config --model 'claude-opus-4-6[1m]' '--verbose' 'it'\\''s'",
     );
     expect(launchArgv(launch!)).toEqual([
       'claude', '--dangerously-skip-permissions', '--strict-mcp-config', '--model', 'claude-opus-4-6[1m]', '--verbose', "it's",
@@ -37,7 +42,7 @@ describe('one launch, two ways to start it', () => {
 
   it('session arguments are added after the launch in both forms', () => {
     const launch = withFlags(buildWorkerLaunch('claude', null, null)!, ['--session-id', 's-1']);
-    expect(renderLaunchLine(launch, posixDialect)).toBe('claude --dangerously-skip-permissions --strict-mcp-config --session-id s-1');
+    expect(renderLaunchLine(launch, posixDialect)).toBe("CLAUDE_CODE_ENABLE_PROMPT_SUGGESTION='false' claude --dangerously-skip-permissions --strict-mcp-config --session-id s-1");
     expect(launchArgv(launch)).toEqual(['claude', '--dangerously-skip-permissions', '--strict-mcp-config', '--session-id', 's-1']);
     expect(withFlags(commandLineLaunch('my-tool --x'), ['--session-id', 's-1'])).toEqual(commandLineLaunch('my-tool --x --session-id s-1'));
     const bare = buildWorkerLaunch('claude', null, null)!;

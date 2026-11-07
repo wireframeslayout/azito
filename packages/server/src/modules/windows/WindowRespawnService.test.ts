@@ -2638,7 +2638,7 @@ describe('WindowRespawnService.respawn — a host that starts a worker as a prog
 describe('WindowRespawnService.respawn — a conversation that was never written (#542)', () => {
   const SESSION = '6f1e3403-aaaa-4bbb-8ccc-0123456789ab';
   const MISAO_REF = { kind: 'misao', workspace: 'azito', window: 'w_01' } as const;
-  type Created = [unknown, string, string, { program: { argv: string[] } }];
+  type Created = [unknown, string, string, { program: { argv: string[]; env?: Record<string, string> } }];
 
   let projects: string;
   beforeEach(() => {
@@ -2881,6 +2881,7 @@ describe('WindowRespawnService.respawn — a conversation that was never written
     const launches = built.sentCommands.filter((c) => c.includes('claude'));
     expect(launches[0]).toContain(`--session-id ${SESSION}`);
     expect(launches[1]).toContain(`--resume ${other}`);
+    expect(launches.every((line) => line.includes('CLAUDE_CODE_ENABLE_PROMPT_SUGGESTION'))).toBe(true);
   });
 
   describe('on a Windows host (the worker is the pane program)', () => {
@@ -2899,12 +2900,14 @@ describe('WindowRespawnService.respawn — a conversation that was never written
       const built = await respawnWin(probeOver());
       expect(built.outcome).toBeNull();
       expect((built.tmux.openWindow.mock.calls[0] as unknown as Created)[3].program.argv.slice(0, 3)).toEqual(['claude', '--session-id', SESSION]);
+      expect((built.tmux.openWindow.mock.calls[0] as unknown as Created)[3].program.env).toEqual({ CLAUDE_CODE_ENABLE_PROMPT_SUGGESTION: 'false' });
     });
 
     it('keeps --resume when the conversation exists, whatever the encoded folder of C:\\Users\\me\\app', async () => {
       conversation('C--Users-me-elsewhere');
       const built = await respawnWin(probeOver());
       expect((built.tmux.openWindow.mock.calls[0] as unknown as Created)[3].program.argv.slice(0, 3)).toEqual(['claude', '--resume', SESSION]);
+      expect((built.tmux.openWindow.mock.calls[0] as unknown as Created)[3].program.env).toEqual({ CLAUDE_CODE_ENABLE_PROMPT_SUGGESTION: 'false' });
     });
 
     it('stops before the window is closed or opened when the agent cannot be reached', async () => {
