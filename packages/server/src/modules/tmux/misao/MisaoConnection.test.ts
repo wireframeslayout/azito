@@ -91,7 +91,7 @@ class FakeClient {
     this.subscribeEvents = async (handler) => { await held; return original(handler); };
     return { release };
   }
-  close(): void { this.closed = true; }
+  close(): void { this.closed = true; for (const cb of this.stateListeners) cb({ status: 'closed' }); }
 }
 
 /** A stand-in for the ESM-only SDK module: only what MisaoConnection touches. */
@@ -122,6 +122,23 @@ function setup() {
 afterEach(() => { vi.useRealTimers(); });
 
 describe('MisaoConnection', () => {
+  it('closes a stalled remote RPC connection and reports it unavailable', async () => {
+    vi.useFakeTimers();
+    const { sdk, control } = createFakeSdk();
+    const connection = new MisaoConnection({ connect: async () => { throw new Error('unused'); }, sdk, log: { warn: vi.fn() } });
+    await connection.start();
+    control.clients[0].requestHandler = () => new Promise(() => {});
+    const request = connection.request('pane.list', {});
+    const rejected = expect(request).rejects.toMatchObject({ reason: 'daemon_unreachable' });
+    await vi.advanceTimersByTimeAsync(10_000);
+    await rejected;
+    expect(control.clients[0].closed).toBe(true);
+    await vi.advanceTimersByTimeAsync(100);
+    expect(control.clients).toHaveLength(2);
+    expect(connection.availability()).toEqual({ available: true });
+    connection.close();
+  });
+
   it('is unavailable before start and available once connected', async () => {
     const { connection, control } = setup();
     expect(connection.availability()).toEqual({ available: false, reason: 'daemon_unreachable' });

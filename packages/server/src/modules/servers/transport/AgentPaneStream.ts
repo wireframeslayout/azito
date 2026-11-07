@@ -82,8 +82,17 @@ export class AgentPaneStream extends BasePaneStream {
     const url = `${this.wsBaseUrl}/ws?mode=file-tail&path=${encodeURIComponent(this.filePath)}`;
     const ws = new WebSocket(url, { headers: { authorization: this.authHeader } });
     this.ws = ws;
-
+    const connectTimer = setTimeout(() => ws.terminate(), 15_000);
+    let heartbeat: ReturnType<typeof setInterval> | undefined;
+    let missedPongs = 0;
+    ws.on('pong', () => { missedPongs = 0; });
     ws.on('open', () => {
+      clearTimeout(connectTimer);
+      heartbeat = setInterval(() => {
+        if (missedPongs >= 2) { ws.terminate(); return; }
+        missedPongs += 1;
+        ws.ping();
+      }, 15_000);
       this.retryCount = 0;
     });
 
@@ -93,6 +102,8 @@ export class AgentPaneStream extends BasePaneStream {
     });
 
     ws.on('close', () => {
+      clearTimeout(connectTimer);
+      if (heartbeat) clearInterval(heartbeat);
       if (this.stopped) return;
       this.scheduleReconnect();
     });

@@ -47,6 +47,7 @@ interface OverviewSectionProps {
   status: ServerStatus | null;
   installStatus: InstallStatusResponse | null;
   sessions: Session[];
+  sessionsState?: 'loading' | 'error' | 'partial' | 'ready';
   isolationReport: IsolationReport | null;
   // Issue #29 review, Important finding 3: true when this server declares
   // isolationIntent but the detail fetch that would carry isolationReport
@@ -69,7 +70,7 @@ interface OverviewSectionProps {
 }
 
 export default function OverviewSection({
-  server, status, installStatus, sessions,
+  server, status, installStatus, sessions, sessionsState = 'ready',
   isolationReport, isolationReportUnavailable,
   isolationCleanupReport, isolationCleanupReportUnavailable,
   muxDriverStatus,
@@ -187,7 +188,7 @@ export default function OverviewSection({
 
   const sessionCount = sessions.length;
   const windowCount = sessions.reduce((sum, s) => sum + s.windowCount, 0);
-  const sessionsSummary = t('overview.sessionsSummary', { sessionCount, windowCount });
+  const sessionsSummary = sessionsState === 'ready' ? t('overview.sessionsSummary', { sessionCount, windowCount }) : t(`sessionState.${sessionsState}`);
 
   const memUsedBytes = measurement ? measurement.memTotalBytes - measurement.memAvailableBytes : null;
   const loadPerCore = measurement?.loadPerCore ?? null;
@@ -239,7 +240,7 @@ export default function OverviewSection({
               <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginTop: 4, fontSize: 'var(--font-xs)', color: 'var(--text-dim)' }}>
                 {isAgent && (
                   <>
-                    <span style={{ fontFamily: 'var(--mono)' }}>
+                    <span role="status" style={{ fontFamily: 'var(--mono)' }}>
                       agent {(server.agentVersion ?? '').slice(0, 7) || '—'}
                     </span>
                     {status?.versionMatch === true && <Chip tone="green">{t('overview.hubMatch')}</Chip>}

@@ -130,6 +130,18 @@ describe('RoutingMuxClient pane labels are decided per window, not by the defaul
 });
 
 describe('RoutingMuxClient merging', () => {
+  it('reports every failed kind in a detailed listing while keeping ordinary listings strict', async () => {
+    const failure = new Error('down');
+    const { routing, srv } = setup({
+      tmux: fakeDriver('tmux', { listWorkspaces: vi.fn(async () => { throw failure; }) }),
+      misao: fakeDriver('misao', { listWorkspaces: vi.fn(async () => { throw failure; }) }),
+    });
+    const result = await routing.listWorkspacesDetailed(srv, true);
+    expect(result.workspaces).toEqual([]);
+    expect(result.unavailable.map((item) => item.kind)).toEqual(['tmux', 'misao']);
+    await expect(routing.listWorkspaces(srv)).rejects.toBe(failure);
+  });
+
   it('concatenates the workspaces of every usable kind, stamped with their kind', async () => {
     const { routing, srv } = setup({
       tmux: fakeDriver('tmux', { listWorkspaces: vi.fn(async () => [workspace('same')]) }),

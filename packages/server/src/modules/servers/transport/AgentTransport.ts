@@ -379,28 +379,42 @@ export class AgentTransport implements IServerTransport, IMuxTransport, IHostBou
    * SDK sees as a lost connection.
    */
   connectMisaoRelay(signal: AbortSignal): Promise<Duplex> {
+    try { this.assertCircuitClosed(); } catch (err) { return Promise.reject(err); }
     return new Promise((resolve, reject) => {
-      if (signal.aborted) {
-        reject(new Error('aborted'));
-        return;
-      }
+      if (signal.aborted) { reject(new Error('aborted')); return; }
+      const seq = ++this.nextSeq;
       const ws = new WebSocket(`${this.wsBaseUrl}/ws?mode=misao`, { headers: { authorization: this.authHeader } });
-      const abandon = (): void => {
-        ws.removeListener('open', onOpen);
-        ws.on('error', () => { /* the terminate()-induced error: nobody is left to hear it */ });
-        ws.terminate();
-        reject(new Error('aborted'));
+      const recordFailure = (): void => {
+        if (seq <= this.appliedSeq) return;
+        this.appliedSeq = seq;
+        this.unreachableUntil = Date.now() + CIRCUIT_OPEN_MS;
+        this.localNetworkDetail = undefined;
       };
-      const onError = (err: Error): void => {
-        signal.removeEventListener('abort', abandon);
+      const cleanup = (): void => {
+        clearTimeout(timer);
+        signal.removeEventListener('abort', onAbort);
+        ws.removeListener('open', onOpen);
+        ws.removeListener('error', onError);
+      };
+      const abandon = (err: Error): void => {
+        cleanup();
+        ws.on('error', () => { /* terminate can emit an error while connecting */ });
+        ws.terminate();
         reject(err);
       };
+      const onAbort = (): void => abandon(new Error('aborted'));
+      const onError = (err: Error): void => { cleanup(); recordFailure(); reject(err); };
       const onOpen = (): void => {
-        signal.removeEventListener('abort', abandon);
-        ws.removeListener('error', onError);
+        cleanup();
+        if (seq > this.appliedSeq) {
+          this.appliedSeq = seq;
+          this.unreachableUntil = 0;
+          this.localNetworkDetail = undefined;
+        }
         resolve(createWebSocketStream(ws));
       };
-      signal.addEventListener('abort', abandon, { once: true });
+      const timer = setTimeout(() => { recordFailure(); abandon(new Error('misao relay timed out')); }, 4_000);
+      signal.addEventListener('abort', onAbort, { once: true });
       ws.once('error', onError);
       ws.once('open', onOpen);
     });

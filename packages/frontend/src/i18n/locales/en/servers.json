@@ -1,4 +1,5 @@
 {
+  "sessionState": { "loading": "Loading sessions…", "error": "Could not load sessions", "partial": "Some session lists are unavailable" },
   "status": {
     "online": "Online",
     "offline": "Offline",

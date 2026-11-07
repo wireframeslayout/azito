@@ -138,10 +138,25 @@ export class MisaoConnection implements MisaoRpc, MisaoEventSource, MisaoDisconn
   }
 
   async request<M extends MethodName>(method: M, params: MethodParams<M>): Promise<MethodResult<M>> {
+    const client = this.requireClient();
+    if (!this.options.connect) {
+      try { return await client.request(method, params); } catch (err) { throw this.translate(err); }
+    }
+    let timer: NodeJS.Timeout | undefined;
     try {
-      return await this.requireClient().request(method, params);
+      return await Promise.race([
+        client.request(method, params),
+        new Promise<never>((_, reject) => {
+          timer = setTimeout(() => {
+            if (this.client === client && !this.disposed) client.close();
+            reject(new MuxDriverUnavailableError('misao', 'daemon_unreachable'));
+          }, 10_000);
+        }),
+      ]);
     } catch (err) {
       throw this.translate(err);
+    } finally {
+      if (timer) clearTimeout(timer);
     }
   }
 

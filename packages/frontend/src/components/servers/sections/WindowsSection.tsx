@@ -24,13 +24,14 @@ import { Icon } from '../../ui/Icon';
 interface WindowsSectionProps {
   server: Server;
   sessions: Session[];
+  sessionsState?: 'loading' | 'error' | 'partial' | 'ready';
   refresh: () => void;
   windowById: Map<number, WindowIndexEntry>;
   taskById: Map<number, { title?: string }>;
   windowMetaError?: boolean;
 }
 
-export default function WindowsSection({ server, sessions, refresh, windowById, taskById, windowMetaError = false }: WindowsSectionProps) {
+export default function WindowsSection({ server, sessions, sessionsState = 'ready', refresh, windowById, taskById, windowMetaError = false }: WindowsSectionProps) {
   const { t } = useTranslation('servers');
   const { t: tw } = useTranslation('workspace');
   const confirm = useConfirm();
@@ -203,10 +204,13 @@ export default function WindowsSection({ server, sessions, refresh, windowById, 
     />
   ) : null;
 
+  if (sessionsState !== 'ready' && sessions.length === 0) return <div role="status">{t(`sessionState.${sessionsState}`)}</div>;
+
   if (sessions.length === 0) {
     return (
       <div>
         {metaErrorBar}
+      {sessionsState !== 'ready' && <div role="status">{t(`sessionState.${sessionsState}`)}</div>}
         {createSessionModal}
         <EmptyState title={t('windows.noSessions')} />
         <div style={{ textAlign: 'center', marginTop: 'var(--space-3)' }}>
@@ -229,6 +233,7 @@ export default function WindowsSection({ server, sessions, refresh, windowById, 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', height: '100%', position: 'relative' }}>
       {metaErrorBar}
+      {sessionsState !== 'ready' && <div role="status">{t(`sessionState.${sessionsState}`)}</div>}
       {createSessionModal}
       <div style={{
         display: 'flex', alignItems: 'center', gap: 8,

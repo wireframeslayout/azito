@@ -1,4 +1,5 @@
 {
+  "sessionState": { "loading": "セッションを読み込み中…", "error": "セッションを取得できません", "partial": "一部のセッション一覧を取得できません" },
   "status": {
     "online": "稼働中",
     "offline": "オフライン",
