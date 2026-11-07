@@ -1,6 +1,7 @@
 import { shellQuote } from '../../../shared/shellQuote';
 import type { LaunchOptions } from '../AgentProvider';
 import { extraArgValues, flag, raw, value, type LaunchArg, type ProgramLaunch } from '../WorkerLaunch';
+import { CLAUDE_LAUNCH_ENV } from './suggestionEnv';
 
 /**
  * `--strict-mcp-config` (Issue #28 design v3 §3): a task worker's tmux pane
@@ -16,7 +17,6 @@ import { extraArgValues, flag, raw, value, type LaunchArg, type ProgramLaunch } 
  * codex/generic worker launches would just be an unrecognized argument.
  */
 const STRICT_MCP_CONFIG_FLAG = '--strict-mcp-config';
-export const CLAUDE_LAUNCH_ENV = { CLAUDE_CODE_ENABLE_PROMPT_SUGGESTION: 'false' } as const;
 
 /**
  * `claude` started fresh, or resumed when `agentSessionId` is given (`claude --resume <id> ...`; a new session's id is added by the caller).

@@ -26,7 +26,7 @@ import type { TransportFactory } from '../servers/transport/TransportFactory';
 import { shouldSupervise, wrapWithSupervisor } from '../supervisors/SupervisorLaunch';
 import { replyToExecutionGateError } from '../tasks/execution/ExecutionGate';
 import { shouldBlockMcp, ensureMcpBlockByCommand } from '../agents/shouldBlockMcp';
-import { CLAUDE_LAUNCH_ENV } from '../agents/claude/launchCommand';
+import { CLAUDE_LAUNCH_ENV, isClaudeCommand } from '../agents/claude/suggestionEnv';
 import { DuplicateAgentSessionError } from './DuplicateAgentSessionError';
 import { isSameWindowTarget, isValidModelId } from '@azito/shared';
 import { muxRefFromTmuxTarget, parseMuxRef, type MuxRef, type PaneOrdinal, type MuxDriverKind } from '@azito/shared';
@@ -516,7 +516,7 @@ const windowsRoutes: FastifyPluginCallback<WindowsRouteOptions> = (fastify, opts
       if (blockMcp) {
         effectiveCommand = ensureMcpBlockByCommand(effectiveCommand);
       }
-      if (win.workerType === 'claude' && /^claude(?:\s|$)/.test(command)) {
+      if (isClaudeCommand(command)) {
         effectiveCommand = shellDialectFor(opts.transportFactory.hostProfileFor(srv)).withEnv(CLAUDE_LAUNCH_ENV, effectiveCommand);
       }
 

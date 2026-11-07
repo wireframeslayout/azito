@@ -17,7 +17,7 @@ function strategies(over: Partial<ISessionStrategy>): ISessionStrategyFactory {
 describe('programFor', () => {
   it('is the argv, the UI terminal size and the directory; a ~ directory is expanded against the host home because pane.open does not', async () => {
     const { files, realpath } = hostFiles();
-    expect(await programFor(commandLineLaunch('claude --x'), '~\\repo', files)).toEqual({ argv: ['claude', '--x'], cwd: 'C:\\Users\\me\\repo', cols: 120, rows: 40 });
+    expect(await programFor(commandLineLaunch('claude --x'), '~\\repo', files)).toEqual({ argv: ['claude', '--x'], env: { CLAUDE_CODE_ENABLE_PROMPT_SUGGESTION: 'false' }, cwd: 'C:\\Users\\me\\repo', cols: 120, rows: 40 });
     expect(realpath).toHaveBeenCalledTimes(1);
   });
 
@@ -79,6 +79,13 @@ describe('planNewWindowProgram', () => {
     const planned = await planNewWindowProgram(strategies({}), hostFiles().files, { command: 'codex', workerType: 'claude', workingDirectory: null });
     expect(planned.program.env).toBeUndefined();
   });
+
+  it.each(['claude', 'C:\\tools\\claude.cmd', "'C:\\Program Files\\Claude\\claude.exe'"])(
+    'sets the Claude environment for %s even when the window is generic', async (command) => {
+      const planned = await planNewWindowProgram(strategies({}), hostFiles().files, { command, workerType: 'generic', workingDirectory: null });
+      expect(planned.program.env).toEqual({ CLAUDE_CODE_ENABLE_PROMPT_SUGGESTION: 'false' });
+    },
+  );
 
   it('refuses a command with shell syntax as unsupported_os', async () => {
     await expect(planNewWindowProgram(strategies({}), hostFiles().files, { command: 'tool | tee x', workerType: 'generic', workingDirectory: null })).rejects.toMatchObject({ code: 'unsupported_os' });

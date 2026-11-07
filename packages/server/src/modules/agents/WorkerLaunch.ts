@@ -1,5 +1,6 @@
 import { HostProfileError } from '../../shared/os/hostProfile';
 import type { ShellDialect } from '../../shared/os/shellDialect';
+import { CLAUDE_LAUNCH_ENV, isClaudeCommand } from './claude/suggestionEnv';
 
 /**
  * How a worker (claude / codex / a generic command) is started in a pane, written once and turned into either of the two ways a
@@ -46,7 +47,7 @@ export function extraArgValues(extraArgs: string | null | undefined): LaunchArg[
 }
 
 export function commandLineLaunch(line: string): CommandLineLaunch {
-  return { kind: 'commandLine', line };
+  return { kind: 'commandLine', line, ...(isClaudeCommand(line) ? { env: CLAUDE_LAUNCH_ENV } : {}) };
 }
 
 /** `launch` with these flags after its own arguments (a session id: `--session-id <id>`, `resume <id>`). Each is a bare word the caller wrote or validated. */

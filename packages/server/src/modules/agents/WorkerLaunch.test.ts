@@ -9,6 +9,7 @@ describe('one launch, two ways to start it', () => {
     expect(buildWorkerLaunch('claude', null, null)?.env).toEqual({ CLAUDE_CODE_ENABLE_PROMPT_SUGGESTION: 'false' });
     expect(buildWorkerLaunch('codex', null, null)?.env).toBeUndefined();
     expect(buildWorkerLaunch('generic', null, 'my-tool')?.env).toBeUndefined();
+    expect(buildWorkerLaunch('generic', null, '/usr/local/bin/claude --version')?.env).toEqual({ CLAUDE_CODE_ENABLE_PROMPT_SUGGESTION: 'false' });
   });
   it('claude: a POSIX line and a Windows argv from the same definition', () => {
     const launch = buildWorkerLaunch('claude', 'claude-opus-4-6[1m]', "--verbose it's");
