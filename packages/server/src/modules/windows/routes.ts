@@ -516,7 +516,7 @@ const windowsRoutes: FastifyPluginCallback<WindowsRouteOptions> = (fastify, opts
       if (blockMcp) {
         effectiveCommand = ensureMcpBlockByCommand(effectiveCommand);
       }
-      if (win.workerType === 'claude') {
+      if (win.workerType === 'claude' && /^claude(?:\s|$)/.test(command)) {
         effectiveCommand = shellDialectFor(opts.transportFactory.hostProfileFor(srv)).withEnv(CLAUDE_LAUNCH_ENV, effectiveCommand);
       }
 

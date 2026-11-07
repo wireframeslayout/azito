@@ -220,6 +220,14 @@ describe('POST /api/windows/:id/launch-agent — MCP blocking', () => {
     await app.close();
   });
 
+  it('does not add the Claude setting to a Codex command in a Claude-labelled window', async () => {
+    app = await buildApp({ win: makeWindow({ workerType: 'claude' }), strategy: { ...claudeStrategy(), supportsSession: false } });
+    const res = await app.inject({ method: 'POST', url: `/api/windows/${window.id}/launch-agent`, payload: { command: 'codex' } });
+    expect(res.statusCode).toBe(200);
+    expect(sentCommand()).not.toContain('CLAUDE_CODE_ENABLE_PROMPT_SUGGESTION');
+    await app.close();
+  });
+
   describe('a Windows host (an agent is started as the first pane of a new window, never in an existing one)', () => {
     const win32 = { platform: 'win32' as const, arch: 'x64' as const };
 

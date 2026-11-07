@@ -75,6 +75,11 @@ describe('planNewWindowProgram', () => {
     expect((await planNewWindowProgram(strategies({}), hostFiles().files, { command: 'my-tool', workerType: 'generic', workingDirectory: null })).program.env).toBeUndefined();
   });
 
+  it('does not set the Claude environment for a Codex program in a Claude-labelled request', async () => {
+    const planned = await planNewWindowProgram(strategies({}), hostFiles().files, { command: 'codex', workerType: 'claude', workingDirectory: null });
+    expect(planned.program.env).toBeUndefined();
+  });
+
   it('refuses a command with shell syntax as unsupported_os', async () => {
     await expect(planNewWindowProgram(strategies({}), hostFiles().files, { command: 'tool | tee x', workerType: 'generic', workingDirectory: null })).rejects.toMatchObject({ code: 'unsupported_os' });
   });

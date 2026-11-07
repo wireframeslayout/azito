@@ -39,7 +39,7 @@ export async function planNewWindowProgram(
 ): Promise<{ program: PaneProgram; agentSessionId: string | null }> {
   const strategy = strategies.create(request.workerType);
   let launch: WorkerLaunch = commandLineLaunch(request.command.trim());
-  if (request.workerType === 'claude') launch = { ...launch, env: CLAUDE_LAUNCH_ENV };
+  if (request.workerType === 'claude' && launchArgv(launch)[0] === 'claude') launch = { ...launch, env: CLAUDE_LAUNCH_ENV };
   let agentSessionId: string | null = null;
   if (strategy.supportsSession && !strategy.needsPostLaunchScan) {
     // Read from the split argument list, as the program will get it: a standalone `--session-id` / `--resume` and the word after it,
