@@ -251,7 +251,7 @@ export function NotificationCenterProvider({ children }: { children: React.React
   useNotificationChannel({
     onServerFirewall: useCallback((payload: { serverName: string; diagnosis: FirewallDiagnosis }) => {
       const { diagnosis } = payload;
-      pushNotification({ id: crypto.randomUUID(), kind: 'server_firewall', title: t('firewall.title', { serverName: payload.serverName }), body: t(`firewall.${diagnosis.state}`, { rules: diagnosis.blockedBy.join(', ') }) + (diagnosis.commands.length ? `\n${diagnosis.commands.join('\n')}` : ''), serverName: payload.serverName, read: false, createdAt: Date.now() });
+      pushNotification({ id: makeId(), kind: 'server_firewall', title: t('firewall.title', { serverName: payload.serverName }), body: t(`firewall.${diagnosis.state}`, { rules: diagnosis.blockedBy.join(', ') }) + (diagnosis.commands.length ? `\n${diagnosis.commands.join('\n')}` : ''), serverName: payload.serverName, read: false, createdAt: Date.now() });
     }, [pushNotification, t]),
     onTaskStatus: useCallback((payload: { taskId: number; status: string; title?: string; projectId?: number }) => {
       const taskTitle = taskTitleOf(payload.title, payload.taskId, t('fallbackTaskTitle', { taskId: payload.taskId }));
