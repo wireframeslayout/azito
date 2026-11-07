@@ -58,6 +58,12 @@ describe('attachIdOf', () => {
   it('falls back to the first 8 characters of the session id when the entry has none', () => {
     expect(attachIdOf({ kind: 'background', sessionId: SESSION_ID }, SESSION_ID)).toBe(SESSION_ID.slice(0, 8));
   });
+
+  it('ignores a printed id that is not one plain word (it goes into a shell line unquoted)', () => {
+    for (const bad of ['a b', '$(id)', 'x;rm', '', '   ', 'a"b']) {
+      expect(attachIdOf({ id: bad, kind: 'background', sessionId: SESSION_ID }, SESSION_ID)).toBe(SESSION_ID.slice(0, 8));
+    }
+  });
 });
 
 describe('DaemonSessionChecker.check', () => {

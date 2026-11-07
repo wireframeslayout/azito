@@ -52,9 +52,12 @@ export function matchBackgroundSession(entries: ClaudeAgentsEntry[], sessionId: 
 /**
  * The id `claude attach` takes for this conversation: the `id` the listing printed, or — when an entry omits it — the
  * first 8 characters of the session id (the short form the CLI itself prints, which `attach` also accepts as a prefix).
+ * A printed id is only taken when it is one plain word of letters, digits, `_` and `-` (no whitespace, no shell or
+ * cmd.exe metacharacter): it is typed into a pane's shell line unquoted, so anything else falls back to the session
+ * id's own hex prefix, which is always safe.
  */
 export function attachIdOf(entry: ClaudeAgentsEntry, sessionId: string): string {
-  if (typeof entry.id === 'string' && entry.id.length > 0) return entry.id;
+  if (typeof entry.id === 'string' && /^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$/.test(entry.id)) return entry.id;
   return sessionId.slice(0, 8);
 }
 

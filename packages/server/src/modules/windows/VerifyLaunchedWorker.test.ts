@@ -91,6 +91,8 @@ describe('verifyLaunchedWorker', () => {
     const io = makeIo({ capture: `~ ${refusal}` });
     const result = await verifyLaunchedWorker(io);
     expect(result).toEqual({ running: false, screenTail: `~ ${refusal}`, unverifiableReason: '' });
+    // The tail is the LAST lines: captureScreen's start counts from the bottom (negative), like SCREEN_CAPTURE_LINES.
+    expect(io.driver.captureScreen).toHaveBeenCalledWith(server, 'pane-1', -10);
   });
 
   it('reports the pane screen as null when it cannot be captured', async () => {

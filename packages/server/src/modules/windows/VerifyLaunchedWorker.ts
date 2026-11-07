@@ -24,7 +24,7 @@ import type { ServerConfig } from '../servers/Server';
 export const VERIFY_FIRST_WAIT_MS = 3_000;
 export const VERIFY_SECOND_WAIT_MS = 3_000;
 
-/** How many screen lines the failure report keeps (the CLI's refusal message sits at the bottom). */
+/** How many screen lines the failure report keeps, counted from the bottom (`captureScreen`'s `start` is negative for that — the CLI's refusal message sits at the bottom). */
 export const VERIFY_SCREEN_LINES = 10;
 
 /**
@@ -103,7 +103,7 @@ export async function verifyLaunchedWorker(io: VerifyLaunchedIo): Promise<Verify
   }
   let screenTail: string | null = null;
   try {
-    screenTail = (await io.driver.captureScreen(io.server, io.handle, VERIFY_SCREEN_LINES)).stdout.trim() || null;
+    screenTail = (await io.driver.captureScreen(io.server, io.handle, -VERIFY_SCREEN_LINES)).stdout.trim() || null;
   } catch {
     screenTail = null;
   }

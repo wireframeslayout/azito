@@ -947,9 +947,12 @@ export class WindowRespawnService {
     const message = 'The claude worker did not come up after the respawn (the CLI likely refused the launch — see the pane for its message). The window was left as it is.';
     appendLogAndEmit(this.logRepo, this.events, taskId, unitId, 'command', { type: 'worker_launch_failed', message, ...(result.screenTail ? { screen: result.screenTail } : {}) });
     // A status_change so the existing NotificationBus bridge announces it; the status itself is the task's current
-    // one — this verification never transitions anything (a wrong "not running" must not fail a working task).
+    // one — this verification never transitions anything (a wrong "not running" must not fail a working task). A task
+    // row that vanished mid-respawn has no status to announce, so only the log line above stays.
     const task = this.taskRepo.findById(taskId);
-    appendLogAndEmit(this.logRepo, this.events, taskId, unitId, 'status_change', { status: task?.status ?? 'unknown', reason: message });
+    if (task) {
+      appendLogAndEmit(this.logRepo, this.events, taskId, unitId, 'status_change', { status: task.status, reason: message });
+    }
   }
 
   /** Before a Claude worker is started on `server` (see {@link prepareClaudeLaunch}); reported in the execution log of the task's unit when there is one. */
@@ -1074,8 +1077,12 @@ export class WindowRespawnService {
         // the Claude Code daemon holds is opened with `claude attach <id>`, everything else keeps `claude --resume <id>`. A
         // legacy task records no CLAUDE_CONFIG_DIR of its own, so the check runs against the host's default one.
         const daemonVerdict = await this.daemonSessionChecker.check(server, legacySessionId, null);
-        if (daemonVerdict.status === 'unknown' && unitId !== null) {
-          appendLogAndEmit(this.logRepo, this.events, task.id, unitId, 'command', { type: 'daemon_check_unavailable', reason: daemonVerdict.reason });
+        if (daemonVerdict.status === 'unknown') {
+          if (unitId !== null) {
+            appendLogAndEmit(this.logRepo, this.events, task.id, unitId, 'command', { type: 'daemon_check_unavailable', reason: daemonVerdict.reason });
+          } else {
+            console.warn(`[WindowRespawnService] daemon_check_unavailable: ${daemonVerdict.reason}`);
+          }
         }
         let resumeLaunch: WorkerLaunch;
         if (daemonVerdict.status === 'attach') {
