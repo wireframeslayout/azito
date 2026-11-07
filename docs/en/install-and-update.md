@@ -426,10 +426,18 @@ reachable from the launchd hub (confirmed with v0.12.0-rc.3, from a macOS 26.3.1
 Local Network privacy permission (macOS 15 and later) may be involved.
 
 - **Workaround**: use the agent's Tailscale address (or its MagicDNS name) as its address (confirmed).
-- Using the same macOS user as the hub, open System Settings › Privacy & Security › Local Network. If an entry for the hub appears, allow it and retry. The entry name, permission prompt and effect have not been verified in AZITO; if no entry appears, use Tailscale.
+- Using the same macOS user as the hub, open System Settings › Privacy & Security › Local Network. If an entry for the hub appears, allow it and retry. If no entry appears, use Tailscale.
 - Running Node from an SSH or Terminal shell does not establish that the hub has permission, because those shells can have exceptions.
 
-The diagnostic is a possibility, not proof: routing or the remote host can produce the same error. RC R2 checks the LAN failure and guidance, permission display and effect, Tailscale connectivity, and unaffected cases on a Mac.
+The diagnostic is a possibility, not proof: routing or the remote host can produce the same error.
+
+What the v0.12.1 RC observed (macOS 26.6.2 arm64, a v0.12.1-rc.2 hub installed with `install.sh` as a launchd Background job in the `user/<uid>` domain, with that user also logged in to the GUI):
+
+- The hub **reached** a LAN address (TCP port 80 of the gateway on the same LAN). There was no `EHOSTUNREACH`, so no guidance was shown (which is the correct behaviour).
+- The macOS logs (`com.apple.network` and `tccd`) had no record of a Local Network denial.
+- System Settings › Privacy & Security › Local Network listed **nothing at all**, the hub included.
+
+Under these conditions the Local Network permission did not stop the hub. Other macOS versions, a session with no GUI login, or another way of starting the hub may still need the permission, so the guidance and the checks above stay as they are. If the hub does not appear in the list, use the Tailscale address.
 
 See [Apple TN3179](https://developer.apple.com/documentation/technotes/tn3179-understanding-local-network-privacy) for details.
 
