@@ -433,11 +433,11 @@ The diagnostic is a possibility, not proof: routing or the remote host can produ
 
 What the v0.12.1 RC observed (macOS 26.6.2 arm64, a v0.12.1-rc.2 hub installed with `install.sh` as a launchd Background job in the `user/<uid>` domain, with that user also logged in to the GUI):
 
-- The hub **reached** a LAN address (TCP port 80 of the gateway on the same LAN). There was no `EHOSTUNREACH`, so no guidance was shown (which is the correct behaviour).
-- The macOS logs (`com.apple.network` and `tccd`) had no record of a Local Network denial.
-- System Settings › Privacy & Security › Local Network listed **nothing at all**, the hub included.
+- The hub **reached** a LAN address (adding an agent at the gateway on the same LAN, TCP port 80 `x@192.168.100.1:80`, connected over TCP and failed at the SSH handshake with `Connection lost before handshake`). There was no `EHOSTUNREACH`, so no guidance was shown (which is the correct behaviour).
+- The macOS logs (`com.apple.network` and `tccd`) for the 10 minutes before the attempt had no record of a Local Network denial.
+- System Settings › Privacy & Security › Local Network listed **nothing at all**, the hub included. Because nothing was listed, the effect of granting the permission was not checked.
 
-Under these conditions the Local Network permission did not stop the hub. Other macOS versions, a session with no GUI login, or another way of starting the hub may still need the permission, so the guidance and the checks above stay as they are. If the hub does not appear in the list, use the Tailscale address.
+Under these conditions the Local Network permission did not stop the hub. Other macOS versions, a session with no GUI login, or another way of starting the hub may still need the permission, so the guidance and the checks above stay as they are.
 
 See [Apple TN3179](https://developer.apple.com/documentation/technotes/tn3179-understanding-local-network-privacy) for details.
 
