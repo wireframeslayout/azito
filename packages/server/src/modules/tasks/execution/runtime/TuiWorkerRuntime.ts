@@ -332,9 +332,8 @@ export class TuiWorkerRuntime implements IWorkerRuntime {
   }
 
   /**
-   * Looks at the input again and takes the task's line back if it is there (Ctrl+U, repeated while text is left: Claude Code clears one
-   * display line of a wrapped input per key). A draft of someone else is never cleared: only a line seen to be ours. Returns what the
-   * input was at the last look, or null when the screen could not be read at all.
+   * Takes the task's line back with Ctrl+U while the remaining input can still be identified as ours. If a wrapped remainder can no
+   * longer be identified, stop and leave it for the user to clear. Returns the last input state, or null if the screen could not be read.
    */
   private async clearOwnLine(ctx: WorkerContext, kind: TuiAgentKind, instruction: string): Promise<{ screen: string; box: InputBox } | null> {
     let screen = await this.captureScreenOrNull(ctx);

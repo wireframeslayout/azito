@@ -1546,6 +1546,20 @@ describe('WindowRespawnService.resumeLegacySession (Issue #328 fourth-round revi
     expect(result.windowName).toBe('task-7-new');
   });
 
+  it('launches legacy Claude with suggestions disabled when the window is not supervised', async () => {
+    const task = makeTask({ id: 7, unitId: 10, agentSessionId: 'sess-abc', inputTrust: 'trusted' });
+    const unit = makeUnit({ id: 10 });
+    const { service, tmux, sentCommands } = buildService({ window: makeWindow({ taskId: 7 }), task, unit });
+    const ref = { kind: 'misao' as const, workspace: 'azito', window: 'w_01M3XFD8H97JCPKS5Y5BH3JZQH' };
+    tmux.openWindow.mockResolvedValue({ ref, result: { stdout: '', stderr: '', code: 0 }, windowName: 'task-7' } as never);
+
+    await service.resumeLegacySession(7, makeServer());
+
+    expect(sentCommands).toHaveLength(1);
+    expect(sentCommands[0]).toMatch(/^CLAUDE_CODE_ENABLE_PROMPT_SUGGESTION='false' claude --resume sess-abc /);
+    expect(sentCommands[0]).not.toContain('supervisor');
+  });
+
   it('(#313) saves the primary window row with the created window\'s mux_ref (misao), right before the task\'s tmuxWindow', async () => {
     const task = makeTask({ id: 7, unitId: 10, agentSessionId: 'sess-abc', inputTrust: 'trusted' });
     const unit = makeUnit({ id: 10 });
