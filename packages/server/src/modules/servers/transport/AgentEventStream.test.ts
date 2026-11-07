@@ -6,12 +6,15 @@ import { NotificationBus } from '../../notifications/NotificationBus';
 /** Minimal ws.WebSocket stand-in that always fails to open, forcing reconnect scheduling. */
 class MockWebSocket extends EventEmitter {
   static instances: MockWebSocket[] = [];
+  static autoClose = true;
+  ping = vi.fn();
+  terminate = vi.fn(() => this.emit('close'));
 
   constructor(_url: string, _opts?: unknown) {
     super();
     MockWebSocket.instances.push(this);
     // Fail on next tick so `connect()` has finished wiring listeners first.
-    setTimeout(() => this.emit('close'), 0);
+    if (MockWebSocket.autoClose) setTimeout(() => this.emit('close'), 0);
   }
 
   close(): void {
@@ -31,10 +34,26 @@ describe('AgentEventStream reconnection', () => {
   beforeEach(() => {
     vi.useFakeTimers();
     MockWebSocket.instances = [];
+    MockWebSocket.autoClose = true;
   });
 
   afterEach(() => {
     vi.useRealTimers();
+  });
+
+  it('reconnects after a stalled handshake or missed pongs', async () => {
+    MockWebSocket.autoClose = false;
+    const stream = new AgentEventStream('test-server', 'ws://example.invalid', 'Bearer token', new NotificationBus());
+    stream.start();
+    await vi.advanceTimersByTimeAsync(15_000);
+    expect(MockWebSocket.instances[0].terminate).toHaveBeenCalledOnce();
+    await vi.advanceTimersByTimeAsync(1_000);
+    const socket = MockWebSocket.instances[1];
+    socket.emit('open');
+    await vi.advanceTimersByTimeAsync(45_000);
+    expect(socket.ping).toHaveBeenCalledTimes(2);
+    expect(socket.terminate).toHaveBeenCalledOnce();
+    stream.stop();
   });
 
   it('keeps retrying indefinitely past the old 10-attempt cap', async () => {

@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { MisaoConnection, type MisaoSdk } from './MisaoConnection';
 import { MuxDriverUnavailableError } from '../MuxCapabilityError';
+import { describeMisaoDaemon } from './misaoDriver';
 
 type StateListener = (state: { status: 'connected' } | { status: 'reconnecting'; attempt: number; delayMs: number; cause: Error } | { status: 'closed' }) => void;
 
@@ -122,6 +123,21 @@ function setup() {
 afterEach(() => { vi.useRealTimers(); });
 
 describe('MisaoConnection', () => {
+  it('returns an unavailable status for a stalled server.info and recovers after reconnect', async () => {
+    vi.useFakeTimers();
+    const { sdk, control } = createFakeSdk();
+    const connection = new MisaoConnection({ connect: async () => { throw new Error('unused'); }, sdk, log: { warn: vi.fn() } });
+    await connection.start();
+    control.clients[0].requestHandler = () => new Promise(() => {});
+    const status = describeMisaoDaemon(connection);
+    await vi.advanceTimersByTimeAsync(10_000);
+    expect(await status).toEqual({ installed: false, detail: 'daemon_unreachable' });
+    await vi.advanceTimersByTimeAsync(100);
+    control.clients[1].requestHandler = () => ({ protocolVersion: '0.3.0', version: '0.3.0' });
+    expect(await describeMisaoDaemon(connection)).toEqual({ installed: true, version: '0.3.0', daemonVersion: '0.3.0' });
+    connection.close();
+  });
+
   it('closes a stalled remote RPC connection and reports it unavailable', async () => {
     vi.useFakeTimers();
     const { sdk, control } = createFakeSdk();
