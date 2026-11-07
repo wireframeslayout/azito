@@ -1,6 +1,7 @@
 import { shellQuote } from '../../../shared/shellQuote';
 import type { LaunchOptions } from '../AgentProvider';
 import { extraArgValues, flag, raw, value, type LaunchArg, type ProgramLaunch } from '../WorkerLaunch';
+import { CLAUDE_LAUNCH_ENV } from './suggestionEnv';
 
 /**
  * `--strict-mcp-config` (Issue #28 design v3 §3): a task worker's tmux pane
@@ -26,6 +27,7 @@ export function buildClaudeLaunch({ model, extraArgs, blockMcp = true }: LaunchO
   return {
     kind: 'program',
     file: 'claude',
+    env: CLAUDE_LAUNCH_ENV,
     args: [
       ...(agentSessionId ? [flag(startNew ? '--session-id' : '--resume'), flag(agentSessionId)] : []),
       flag('--dangerously-skip-permissions'),

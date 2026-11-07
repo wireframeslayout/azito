@@ -68,7 +68,7 @@ export const defaultRegistry = createDefaultRegistry();
 function catalogLine(provider: IAgentProvider): string | null {
   if (!provider.definition.launchable) return null;
   const launch = provider.buildLaunch({ model: null, extraArgs: null, blockMcp: false });
-  return launch ? renderLaunchLine(launch, posixDialect) : null;
+  return launch ? renderLaunchLine({ ...launch, env: undefined }, posixDialect) : null;
 }
 
 export function listAgentDefinitions(): AgentApiDefinition[] {

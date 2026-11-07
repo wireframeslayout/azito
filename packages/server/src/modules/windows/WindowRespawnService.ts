@@ -25,7 +25,8 @@ import type { ProcessEntry } from '../../shared/os/processList';
 import type { IExecutionLogRepository } from '../tasks/ExecutionLog';
 import { assertDirectoryContained } from '../git/PathContainment';
 import { shellDialectFor, type ShellDialect } from '../../shared/os/shellDialect';
-import { renderLaunchLine } from '../agents/WorkerLaunch';
+import { renderLaunchLine, type WorkerLaunch } from '../agents/WorkerLaunch';
+import { buildClaudeLaunch } from '../agents/claude/launchCommand';
 import type { SupervisorRegistry } from '../supervisors/SupervisorRegistry';
 import { shouldSupervise, wrapWithSupervisor } from '../supervisors/SupervisorLaunch';
 import type { SessionCaptureService } from './SessionCaptureService';
@@ -1005,7 +1006,8 @@ export class WindowRespawnService {
       const windowTarget = muxWindowTarget(legacyRef);
       try {
         const paneId = await legacyDriver.resolvePane(server, legacyRef, 1);
-        const resumeCommand = `claude --resume ${task.agentSessionId} --dangerously-skip-permissions --strict-mcp-config`;
+        const resumeLaunch = buildClaudeLaunch({ model: null, extraArgs: null }, task.agentSessionId);
+        const resumeCommand = renderLaunchLine({ ...resumeLaunch, env: undefined }, this.dialectOf(server));
         const isSupervised = shouldSupervise(server.type, 'agent', legacyRef.kind);
         if (isSupervised) {
           this.supervisorRegistry.clearExitMarker(server.name, windowTarget);
@@ -1014,6 +1016,7 @@ export class WindowRespawnService {
           ? wrapWithSupervisor(resumeCommand, {
               server,
               dialect: this.dialectOf(server),
+              childEnv: resumeLaunch.env,
               target: windowTarget,
               taskId: task.id,
               unitId: task.unitId ?? undefined,
@@ -1026,7 +1029,7 @@ export class WindowRespawnService {
                 windowId: null,
               }),
             })
-          : resumeCommand;
+          : renderLaunchLine(resumeLaunch, this.dialectOf(server));
         await legacyDriver.sendKeysToHandle(server, paneId, [sendCmd, 'Enter']);
       } catch (err) {
         // resolvePaneId()/sendKeys() failing after createRotatedWindow already
@@ -1182,12 +1185,14 @@ export class WindowRespawnService {
     }
   }
 
-  private wrapIfSupervised(cmd: string, server: ServerConfig, supervisorTarget: string, supervision: SupervisionContext): string {
-    if (!supervision.supervise) return cmd;
+  private wrapIfSupervised(launch: WorkerLaunch, server: ServerConfig, supervisorTarget: string, supervision: SupervisionContext): string {
+    if (!supervision.supervise) return renderLaunchLine(launch, this.dialectOf(server));
+    const cmd = renderLaunchLine({ ...launch, env: undefined }, this.dialectOf(server));
     this.supervisorRegistry.clearExitMarker(server.name, supervisorTarget);
     return wrapWithSupervisor(cmd, {
       server,
       dialect: this.dialectOf(server),
+      childEnv: launch.env,
       target: supervisorTarget,
       taskId: supervision.taskId ?? undefined,
       unitId: supervision.unitId ?? undefined,
@@ -1308,7 +1313,7 @@ export class WindowRespawnService {
           const plan = panePlans?.get(pane.index);
           const launch = strategy.buildRespawnLaunch(plan?.sessionId ?? null, win.workerModel, null, blockMcp, plan?.conversation);
           if (launch) {
-            const wrapped = this.wrapIfSupervised(renderLaunchLine(launch, this.dialectOf(server)), server, baseTarget, supervision);
+            const wrapped = this.wrapIfSupervised(launch, server, baseTarget, supervision);
             const sendCmd = plan?.configDirExplicit === true ? `CLAUDE_CONFIG_DIR="$AZITO_RESUME_CLAUDE_CONFIG_DIR_${pane.index}" ${wrapped}` : plan?.configDirExplicit === false ? this.dialectOf(server).withoutEnv('CLAUDE_CONFIG_DIR', wrapped, await driver.paneCommandByHandle(server, paneId).catch(() => null)) : wrapped;
             await driver.sendKeysToHandle(server, paneId, [sendCmd, 'Enter']);
           }
@@ -1338,7 +1343,7 @@ export class WindowRespawnService {
       const strategy = this.sessionStrategyFactory.create(win.workerType);
       const launch = strategy.buildRespawnLaunch(plan?.sessionId ?? null, win.workerModel, null, blockMcp, plan?.conversation);
       if (launch) {
-        const wrapped = this.wrapIfSupervised(renderLaunchLine(launch, this.dialectOf(server)), server, supervisorTarget, supervision);
+        const wrapped = this.wrapIfSupervised(launch, server, supervisorTarget, supervision);
         const sendCmd = plan?.configDirExplicit === true ? `CLAUDE_CONFIG_DIR="$AZITO_RESUME_CLAUDE_CONFIG_DIR" ${wrapped}` : plan?.configDirExplicit === false ? this.dialectOf(server).withoutEnv('CLAUDE_CONFIG_DIR', wrapped, await driver.paneCommandByHandle(server, handle).catch(() => null)) : wrapped;
         await driver.sendKeysToHandle(server, handle, [sendCmd, 'Enter']);
       }

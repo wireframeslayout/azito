@@ -35,8 +35,8 @@ const NOT_READY_MESSAGES: Record<TuiNotReadyReason, string> = {
   codex_update_prompt: 'Codex の更新の確認画面が出ているため、プロンプトを送らずにタスクを止めました',
   codex_trust_prompt: 'Codex のフォルダー信頼の確認画面が出ているため、プロンプトを送らずにタスクを止めました',
   worker_exited_to_shell: 'ワーカーが終了してシェルに戻っているため、プロンプトを送らずにタスクを止めました',
-  not_ready: 'ワーカーの画面が入力待ちになっていない（既知の入力欄が見えない）ため、プロンプトを送らずにタスクを止めました',
-  input_not_empty: 'ワーカーの入力欄に文字（前の 1 行や利用者の下書き）が残っているため、プロンプトを送らずにタスクを止めました',
+  not_ready: 'ワーカーの入力欄や候補・下書きの有無を確認できないため、送信せずに停止しました。端末で入力欄を確認してから再開してください',
+  input_not_empty: 'ワーカーの入力欄に候補または下書きがある可能性があるため、送信せずに停止しました。端末で入力欄を確認し、内容を送るか消してから再開してください',
   prompt_not_typed: '送った 1 行がワーカーの入力欄に描かれなかったため、Enter を送らずにタスクを止めました',
   prompt_not_submitted: 'ワーカーの入力欄に送った 1 行が残ったままで、Enter を再送しても送信されなかったため、タスクを止めました',
   input_state_unknown: 'ワーカーの入力欄の状態を読み取れないまま時間切れになったため、送信できたと判断せずにタスクを止めました',
@@ -131,6 +131,7 @@ export class TuiWorkerRuntime implements IWorkerRuntime {
       ? wrapWithSupervisor(ctx.effectiveLaunchCommand, {
           server: ctx.server,
           dialect: ctx.dialect,
+          childEnv: ctx.childEnv,
           target: ctx.supervisorTarget,
           taskId: ctx.taskId,
           unitId: ctx.unitId,
@@ -147,7 +148,7 @@ export class TuiWorkerRuntime implements IWorkerRuntime {
             windowId: ctx.windowId ?? null,
           }),
         })
-      : ctx.effectiveLaunchCommand;
+      : ctx.childEnv ? ctx.dialect.withEnv(ctx.childEnv, ctx.effectiveLaunchCommand) : ctx.effectiveLaunchCommand;
     await ctx.driver.sendKeysToHandle(ctx.server, ctx.handle, [sendCommand, 'Enter']);
     await this.waitForTuiReady(ctx.driver, ctx.server, ctx.handle, tuiAgentKindOf(ctx.effectiveLaunchCommand));
     return sendCommand;
@@ -245,7 +246,7 @@ export class TuiWorkerRuntime implements IWorkerRuntime {
       const box = readInputBox(kind, screen);
       // Text in the input (the line of an earlier prompt, a person's draft) would be sent together with ours. It is waited on for the
       // grace like any screen that is not settled: a wording of an empty input that is not known yet reads as text, and goes away.
-      if (box.state === 'empty' && isWorkerScreenReady(kind, screen)) {
+      if ((box.state === 'empty' || (box.state === 'ambiguous' && isWorkerBusy(kind, screen))) && isWorkerScreenReady(kind, screen)) {
         const now = Date.now();
         const above = screenAboveInput(kind, screen);
         const busy = isWorkerBusy(kind, screen);
@@ -331,16 +332,15 @@ export class TuiWorkerRuntime implements IWorkerRuntime {
   }
 
   /**
-   * Looks at the input again and takes the task's line back if it is there (Ctrl+U, repeated while text is left: Claude Code clears one
-   * display line of a wrapped input per key). A draft of someone else is never cleared: only a line seen to be ours. Returns what the
-   * input was at the last look, or null when the screen could not be read at all.
+   * Takes the task's line back with Ctrl+U while the remaining input can still be identified as ours. If a wrapped remainder can no
+   * longer be identified, stop and leave it for the user to clear. Returns the last input state, or null if the screen could not be read.
    */
   private async clearOwnLine(ctx: WorkerContext, kind: TuiAgentKind, instruction: string): Promise<{ screen: string; box: InputBox } | null> {
     let screen = await this.captureScreenOrNull(ctx);
     if (screen === null) return null;
     let box = readInputBox(kind, screen);
     if (inputHoldsLine(box, instruction)) {
-      for (let keys = 0; keys < CLEAR_MAX_KEYS && box.state !== 'empty'; keys++) {
+      for (let keys = 0; keys < CLEAR_MAX_KEYS && inputHoldsLine(box, instruction); keys++) {
         await this.workerInput.clearInputLine(ctx.server, ctx.handle);
         await sleep(CLEAR_POLL_MS);
         screen = (await this.captureScreenOrNull(ctx)) ?? screen;
@@ -364,7 +364,7 @@ export class TuiWorkerRuntime implements IWorkerRuntime {
       return new TuiNotReadyError(reason, '', true, true, err instanceof Error ? err.message : String(err));
     }
     if (left === null) return new TuiNotReadyError(reason, '', true, true);
-    return new TuiNotReadyError(reason, left.screen, left.box.state !== 'empty', left.box.state === 'unknown');
+    return new TuiNotReadyError(reason, left.screen, left.box.state !== 'empty', left.box.state === 'unknown' || left.box.state === 'ambiguous');
   }
 
   /** The same for an error that is not one of the checks' (a failed look at the screen, a key that did not go): the original error is kept, with a note when the input may hold a line. */
@@ -377,7 +377,7 @@ export class TuiWorkerRuntime implements IWorkerRuntime {
       left = null;
     }
     if (left !== null && left.box.state === 'empty') return error;
-    const note = left === null || left.box.state === 'unknown'
+    const note = left === null || (left.box.state === 'unknown' || left.box.state === 'ambiguous')
       ? '入力欄の状態を確かめられませんでした。入力欄を確かめてから再開してください'
       : '入力欄に残った 1 行を消してから再開してください';
     return new Error(`${error.message}。${note}`, { cause: error });

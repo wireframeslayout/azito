@@ -244,7 +244,7 @@ function buildService(opts: {
   const stubStrategyFactory = {
     create: vi.fn(() => ({
       supportsSession: true,
-      buildRespawnLaunch: vi.fn(() => (opts.noRespawnLaunch ? null : program('claude', ['--resume', 'abc', '--dangerously-skip-permissions']))),
+      buildRespawnLaunch: vi.fn(() => (opts.noRespawnLaunch ? null : { ...program('claude', ['--resume', 'abc', '--dangerously-skip-permissions']), env: { CLAUDE_CODE_ENABLE_PROMPT_SUGGESTION: 'false' } })),
       conversationLogAgentType: null,
     })),
   };
@@ -458,6 +458,7 @@ describe('WindowRespawnService.respawn — supervisor wrap', () => {
 
     expect(sentCommands).toHaveLength(1);
     expect(sentCommands[0]).toMatch(/supervisor/);
+    expect(sentCommands[0]).toContain("CLAUDE_CODE_ENABLE_PROMPT_SUGGESTION='false'");
     expect(sentCommands[0]).toContain('--task-id 5');
     expect(sentCommands[0]).toContain('--unit-id 10');
     expect(sentCommands[0]).toContain("-- 'claude --resume abc --dangerously-skip-permissions'");
@@ -1537,10 +1538,26 @@ describe('WindowRespawnService.resumeLegacySession (Issue #328 fourth-round revi
     expect(sentCommands).toHaveLength(1);
     expect(sentCommands[0]).toMatch(/supervisor/);
     expect(sentCommands[0]).toContain('claude --resume sess-abc --dangerously-skip-permissions');
+    expect(sentCommands[0]).toContain("CLAUDE_CODE_ENABLE_PROMPT_SUGGESTION='false'");
+    expect(sentCommands[0]).toContain("-- 'claude --resume sess-abc");
     expect(sentCommands[0]).toContain('--task-id 7');
     expect(sentCommands[0]).toContain('--unit-id 10');
     expect(clearExitMarker).toHaveBeenCalled();
     expect(result.windowName).toBe('task-7-new');
+  });
+
+  it('launches legacy Claude with suggestions disabled when the window is not supervised', async () => {
+    const task = makeTask({ id: 7, unitId: 10, agentSessionId: 'sess-abc', inputTrust: 'trusted' });
+    const unit = makeUnit({ id: 10 });
+    const { service, tmux, sentCommands } = buildService({ window: makeWindow({ taskId: 7 }), task, unit });
+    const ref = { kind: 'misao' as const, workspace: 'azito', window: 'w_01M3XFD8H97JCPKS5Y5BH3JZQH' };
+    tmux.openWindow.mockResolvedValue({ ref, result: { stdout: '', stderr: '', code: 0 }, windowName: 'task-7' } as never);
+
+    await service.resumeLegacySession(7, makeServer());
+
+    expect(sentCommands).toHaveLength(1);
+    expect(sentCommands[0]).toMatch(/^CLAUDE_CODE_ENABLE_PROMPT_SUGGESTION='false' claude --resume sess-abc /);
+    expect(sentCommands[0]).not.toContain('supervisor');
   });
 
   it('(#313) saves the primary window row with the created window\'s mux_ref (misao), right before the task\'s tmuxWindow', async () => {
@@ -1811,7 +1828,7 @@ describe('WindowRespawnService.respawn — concurrent respawns for the same task
     const sessionStrategyFactory = {
       create: vi.fn(() => ({
         supportsSession: true,
-        buildRespawnLaunch: vi.fn(() => program('claude', ['--resume', 'abc', '--dangerously-skip-permissions'])),
+        buildRespawnLaunch: vi.fn(() => ({ ...program('claude', ['--resume', 'abc', '--dangerously-skip-permissions']), env: { CLAUDE_CODE_ENABLE_PROMPT_SUGGESTION: 'false' } })),
         conversationLogAgentType: null,
       })),
     };
@@ -2552,7 +2569,7 @@ describe('WindowRespawnService.respawn — a host that starts a worker as a prog
     await service.respawn(7, makeServer());
 
     const created = tmux.openWindow.mock.calls[0] as unknown as [unknown, string, string, { program: { argv: string[]; cwd: string; cols: number; rows: number }; extraEnv: Record<string, string> }];
-    expect(created[3].program).toEqual({ argv: ['claude', '--resume', 'abc', '--dangerously-skip-permissions'], cwd: 'C:\\work\\app', cols: 120, rows: 40 });
+    expect(created[3].program).toEqual({ argv: ['claude', '--resume', 'abc', '--dangerously-skip-permissions'], env: { CLAUDE_CODE_ENABLE_PROMPT_SUGGESTION: 'false' }, cwd: 'C:\\work\\app', cols: 120, rows: 40 });
     expect(created[3].extraEnv).toEqual({ AZITO_UI_TOKEN: 'ui-token-fixture' });
     expect(sentCommands).toEqual([]);
     expect(tmux.resolvePane).not.toHaveBeenCalled();
@@ -2638,7 +2655,7 @@ describe('WindowRespawnService.respawn — a host that starts a worker as a prog
 describe('WindowRespawnService.respawn — a conversation that was never written (#542)', () => {
   const SESSION = '6f1e3403-aaaa-4bbb-8ccc-0123456789ab';
   const MISAO_REF = { kind: 'misao', workspace: 'azito', window: 'w_01' } as const;
-  type Created = [unknown, string, string, { program: { argv: string[] } }];
+  type Created = [unknown, string, string, { program: { argv: string[]; env?: Record<string, string> } }];
 
   let projects: string;
   beforeEach(() => {
@@ -2881,6 +2898,7 @@ describe('WindowRespawnService.respawn — a conversation that was never written
     const launches = built.sentCommands.filter((c) => c.includes('claude'));
     expect(launches[0]).toContain(`--session-id ${SESSION}`);
     expect(launches[1]).toContain(`--resume ${other}`);
+    expect(launches.every((line) => line.includes('CLAUDE_CODE_ENABLE_PROMPT_SUGGESTION'))).toBe(true);
   });
 
   describe('on a Windows host (the worker is the pane program)', () => {
@@ -2899,12 +2917,14 @@ describe('WindowRespawnService.respawn — a conversation that was never written
       const built = await respawnWin(probeOver());
       expect(built.outcome).toBeNull();
       expect((built.tmux.openWindow.mock.calls[0] as unknown as Created)[3].program.argv.slice(0, 3)).toEqual(['claude', '--session-id', SESSION]);
+      expect((built.tmux.openWindow.mock.calls[0] as unknown as Created)[3].program.env).toEqual({ CLAUDE_CODE_ENABLE_PROMPT_SUGGESTION: 'false' });
     });
 
     it('keeps --resume when the conversation exists, whatever the encoded folder of C:\\Users\\me\\app', async () => {
       conversation('C--Users-me-elsewhere');
       const built = await respawnWin(probeOver());
       expect((built.tmux.openWindow.mock.calls[0] as unknown as Created)[3].program.argv.slice(0, 3)).toEqual(['claude', '--resume', SESSION]);
+      expect((built.tmux.openWindow.mock.calls[0] as unknown as Created)[3].program.env).toEqual({ CLAUDE_CODE_ENABLE_PROMPT_SUGGESTION: 'false' });
     });
 
     it('stops before the window is closed or opened when the agent cannot be reached', async () => {

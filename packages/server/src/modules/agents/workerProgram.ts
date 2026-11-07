@@ -16,7 +16,7 @@ import { commandLineLaunch, launchArgv, withFlags, type WorkerLaunch } from './W
 export async function programFor(launch: WorkerLaunch, cwd: string | null, files: () => IFileOps): Promise<PaneProgram> {
   const argv = launchArgv(launch);
   const resolved = cwd === null ? null : await resolveShellDirectory(files, cwd);
-  return { argv, ...(resolved !== null ? { cwd: resolved } : {}), cols: DEFAULT_TERMINAL_COLS, rows: DEFAULT_TERMINAL_ROWS };
+  return { argv, ...(launch.env ? { env: { ...launch.env } } : {}), ...(resolved !== null ? { cwd: resolved } : {}), cols: DEFAULT_TERMINAL_COLS, rows: DEFAULT_TERMINAL_ROWS };
 }
 
 export interface NewWindowProgramRequest {

@@ -131,10 +131,10 @@ describe('ClaudeSessionStrategy', () => {
 
   it('a resumed launch carries extraArgs in the line as the user wrote it (quotes and spacing kept), as it always has; a fresh one quotes each word', () => {
     expect(respawnLine(strategy, SESSION_ID, 'sonnet', "--append-system-prompt 'a  b'")).toBe(
-      `claude --resume ${SESSION_ID} --dangerously-skip-permissions --strict-mcp-config --model 'sonnet' --append-system-prompt 'a  b'`,
+      `CLAUDE_CODE_ENABLE_PROMPT_SUGGESTION='false' claude --resume ${SESSION_ID} --dangerously-skip-permissions --strict-mcp-config --model 'sonnet' --append-system-prompt 'a  b'`,
     );
     expect(respawnLine(strategy, null, 'sonnet', '--verbose --x')).toBe(
-      "claude --dangerously-skip-permissions --strict-mcp-config --model 'sonnet' '--verbose' '--x'",
+      "CLAUDE_CODE_ENABLE_PROMPT_SUGGESTION='false' claude --dangerously-skip-permissions --strict-mcp-config --model 'sonnet' '--verbose' '--x'",
     );
     // For a host that starts the program itself, the same text is split into words.
     expect(launchArgv(strategy.buildRespawnLaunch(SESSION_ID, null, '--verbose --x'))).toEqual(
@@ -157,6 +157,6 @@ describe('ClaudeSessionStrategy', () => {
   it('omits --strict-mcp-config for fresh launch when blockMcp is false', () => {
     const cmd = respawnLine(strategy, null, null, null, false);
     expect(cmd).not.toContain('--strict-mcp-config');
-    expect(cmd).toBe('claude --dangerously-skip-permissions');
+    expect(cmd).toBe("CLAUDE_CODE_ENABLE_PROMPT_SUGGESTION='false' claude --dangerously-skip-permissions");
   });
 });

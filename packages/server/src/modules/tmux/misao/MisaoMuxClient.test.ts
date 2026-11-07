@@ -433,6 +433,12 @@ describe('MisaoMuxClient writes', () => {
   });
 
   describe('a window whose first pane is a program (a worker started with no shell: #371)', () => {
+    it('passes the program environment to the daemon alongside the window environment', async () => {
+      const { daemon, client } = setup({ windowsHub: true });
+      daemon.workspaces.set('proj', []);
+      await client.openWindow(server, 'proj', 'agent', { program: { argv: ['claude'], cols: 120, rows: 40, env: { CLAUDE_CODE_ENABLE_PROMPT_SUGGESTION: 'false' } } });
+      expect(daemon.callsTo('pane.open')[0]).toMatchObject({ ephemeralEnv: { CLAUDE_CODE_ENABLE_PROMPT_SUGGESTION: 'false' } });
+    });
     const program = { argv: ['claude', '--model', 'sonnet'], cwd: 'C:\\work\\wt', cols: 120, rows: 40 };
 
     it('openWorkspace opens the program as the first pane: its argv, cwd and size as given, the window env, the hub labels; no shell is resolved or typed into', async () => {

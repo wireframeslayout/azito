@@ -40,7 +40,7 @@ export function buildWorkerLaunchCommand(
   dialect: ShellDialect,
 ): string | null {
   const launch = buildWorkerLaunch(workerType, workerModel, extraArgs);
-  return launch ? renderLaunchLine(launch, dialect) : null;
+  return launch ? renderLaunchLine({ ...launch, env: undefined }, dialect) : null;
 }
 
 

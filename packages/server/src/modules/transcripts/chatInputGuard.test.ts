@@ -12,8 +12,24 @@ function driver(command: string | null, screen: string, code = 0): IMuxClient {
   return { paneCommandByHandle: vi.fn().mockResolvedValue(command), captureScreen: vi.fn().mockResolvedValue({ stdout: screen, stderr: '', code }) } as unknown as IMuxClient;
 }
 describe('guardChatInput', () => {
+  it('reports a queued message as not ready', async () => {
+    const screen = ready.replace('❯', '❯ Press up to edit queued messages');
+    expect(await guardChatInput(driver('node', screen), server, pane, 'claude', 'hello')).toMatchObject({ code: 'not_ready' });
+  });
+  it('currently rejects the captured Claude suggestion', async () => {
+    const screen = fixture('claude-2.1.319-tmux-ghost.ansi');
+    expect(await guardChatInput(driver('node', screen), server, pane, 'claude', 'hello')).toMatchObject({ code: 'input_not_empty' });
+  });
+  it('currently rejects a synthetic suggestion rendered as text in the Claude input', async () => {
+    // Synthetic text-only screen: this reproduces the old classification, not an observed ghost's attributes.
+    const screen = ready.replace('❯', '❯ suggested next message');
+    expect(await guardChatInput(driver('node', screen), server, pane, 'claude', 'hello')).toMatchObject({ code: 'input_not_empty' });
+  });
   it('accepts an empty Claude input', async () => {
     expect(await guardChatInput(driver('node', ready), server, pane, 'claude', 'hello')).toBeNull();
+  });
+  it('rejects Claude placeholder text, which may instead be a draft', async () => {
+    expect(await guardChatInput(driver('node', ready.replace('❯', '❯ Try "hello"')), server, pane, 'claude', 'hello')).toMatchObject({ code: 'input_not_empty' });
   });
   it('accepts the captured named input and rejects a modified draft', async () => {
     const screen = fixture('claude-2.1.317-named-empty.txt');
@@ -23,6 +39,14 @@ describe('guardChatInput', () => {
   it('accepts an empty Codex input', async () => {
     const screen = '› Ask Codex to do anything\n\n? for shortcuts';
     expect(await guardChatInput(driver('codex', screen), server, pane, 'codex', 'hello')).toBeNull();
+  });
+  it('rejects a Codex draft that starts with the placeholder text', async () => {
+    const screen = '› Ask Codex to do anything else\n\n? for shortcuts';
+    expect(await guardChatInput(driver('codex', screen), server, pane, 'codex', 'hello')).toMatchObject({ code: 'input_not_empty' });
+  });
+  it('rejects a wrapped Codex draft that extends the placeholder text', async () => {
+    const screen = '› Ask Codex to do anything\n  else\n\n? for shortcuts';
+    expect(await guardChatInput(driver('codex', screen), server, pane, 'codex', 'hello')).toMatchObject({ code: 'input_not_empty' });
   });
   it('accepts a tab', async () => {
     expect(await guardChatInput(driver('node', ready), server, pane, 'claude', 'a\tb')).toBeNull();

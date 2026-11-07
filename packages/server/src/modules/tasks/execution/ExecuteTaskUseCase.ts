@@ -1411,7 +1411,8 @@ export class ExecuteTaskUseCase {
           windowId: launchPrimaryWin?.id,
           windowType,
           workerExecutionMode: unit.workerExecutionMode,
-          effectiveLaunchCommand: renderLaunchLine(effectiveLaunch, this.dialectOf(server)),
+          effectiveLaunchCommand: renderLaunchLine({ ...effectiveLaunch, env: undefined }, this.dialectOf(server)),
+          childEnv: effectiveLaunch.env,
           dialect: this.dialectOf(server),
           startedAsProgram,
         });
@@ -1936,7 +1937,8 @@ export class ExecuteTaskUseCase {
             windowId: primaryWin?.id,
             windowType: followUpWindowType,
             workerExecutionMode: unit.workerExecutionMode,
-            effectiveLaunchCommand: renderLaunchLine(effectiveFollowUpLaunch, this.dialectOf(server)),
+            effectiveLaunchCommand: renderLaunchLine({ ...effectiveFollowUpLaunch, env: undefined }, this.dialectOf(server)),
+            childEnv: effectiveFollowUpLaunch.env,
             dialect: this.dialectOf(server),
             startedAsProgram,
           });

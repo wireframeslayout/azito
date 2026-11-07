@@ -1348,6 +1348,7 @@ describe('TaskRestoreService', () => {
       expect(order).toEqual(['worktree', 'window']);
       const options = (mockDriver().openWindow as ReturnType<typeof vi.fn>).mock.calls[0][3];
       expect(options.program.argv[0]).toBe('claude');
+      expect(options.program.env).toEqual({ CLAUDE_CODE_ENABLE_PROMPT_SUGGESTION: 'false' });
       expect(options.program.argv.slice(-2)).toEqual(['--resume', '7a8b0f9c-1d2e-4f30-8a45-6b7c8d9e0f12']);
       expect(options.program).toMatchObject({ cwd: worktreeDir, cols: 120, rows: 40 });
       expect(mockDriver().sendKeysToHandle).not.toHaveBeenCalled();
