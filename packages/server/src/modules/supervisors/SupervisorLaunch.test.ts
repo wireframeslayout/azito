@@ -56,7 +56,7 @@ describe('wrapWithSupervisor for a PowerShell pane', () => {
 
 describe('wrapWithSupervisor', () => {
   it('passes Claude environment to supervisor and leaves the child command recognizable', () => {
-    const wrapped = wrapWithSupervisor("CLAUDE_CODE_ENABLE_PROMPT_SUGGESTION='false' claude --resume id", { server: { name: 'local', type: 'local' }, dialect: posixDialect, target: 's:1', harnessPrefix: '' });
+    const wrapped = wrapWithSupervisor('claude --resume id', { childEnv: { CLAUDE_CODE_ENABLE_PROMPT_SUGGESTION: 'false' }, server: { name: 'local', type: 'local' }, dialect: posixDialect, target: 's:1', harnessPrefix: '' });
     expect(wrapped).toContain("CLAUDE_CODE_ENABLE_PROMPT_SUGGESTION='false'");
     expect(wrapped).toContain("-- 'claude --resume id'");
   });

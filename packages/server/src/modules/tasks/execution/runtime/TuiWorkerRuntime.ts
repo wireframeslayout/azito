@@ -131,6 +131,7 @@ export class TuiWorkerRuntime implements IWorkerRuntime {
       ? wrapWithSupervisor(ctx.effectiveLaunchCommand, {
           server: ctx.server,
           dialect: ctx.dialect,
+          childEnv: ctx.childEnv,
           target: ctx.supervisorTarget,
           taskId: ctx.taskId,
           unitId: ctx.unitId,
@@ -147,7 +148,7 @@ export class TuiWorkerRuntime implements IWorkerRuntime {
             windowId: ctx.windowId ?? null,
           }),
         })
-      : ctx.effectiveLaunchCommand;
+      : ctx.childEnv ? ctx.dialect.withEnv(ctx.childEnv, ctx.effectiveLaunchCommand) : ctx.effectiveLaunchCommand;
     await ctx.driver.sendKeysToHandle(ctx.server, ctx.handle, [sendCommand, 'Enter']);
     await this.waitForTuiReady(ctx.driver, ctx.server, ctx.handle, tuiAgentKindOf(ctx.effectiveLaunchCommand));
     return sendCommand;
@@ -340,7 +341,7 @@ export class TuiWorkerRuntime implements IWorkerRuntime {
     if (screen === null) return null;
     let box = readInputBox(kind, screen);
     if (inputHoldsLine(box, instruction)) {
-      for (let keys = 0; keys < CLEAR_MAX_KEYS && box.state !== 'empty'; keys++) {
+      for (let keys = 0; keys < CLEAR_MAX_KEYS && inputHoldsLine(box, instruction); keys++) {
         await this.workerInput.clearInputLine(ctx.server, ctx.handle);
         await sleep(CLEAR_POLL_MS);
         screen = (await this.captureScreenOrNull(ctx)) ?? screen;
@@ -364,7 +365,7 @@ export class TuiWorkerRuntime implements IWorkerRuntime {
       return new TuiNotReadyError(reason, '', true, true, err instanceof Error ? err.message : String(err));
     }
     if (left === null) return new TuiNotReadyError(reason, '', true, true);
-    return new TuiNotReadyError(reason, left.screen, left.box.state !== 'empty', left.box.state === 'unknown');
+    return new TuiNotReadyError(reason, left.screen, left.box.state !== 'empty', left.box.state === 'unknown' || left.box.state === 'ambiguous');
   }
 
   /** The same for an error that is not one of the checks' (a failed look at the screen, a key that did not go): the original error is kept, with a note when the input may hold a line. */
@@ -377,7 +378,7 @@ export class TuiWorkerRuntime implements IWorkerRuntime {
       left = null;
     }
     if (left !== null && left.box.state === 'empty') return error;
-    const note = left === null || left.box.state === 'unknown'
+    const note = left === null || (left.box.state === 'unknown' || left.box.state === 'ambiguous')
       ? '入力欄の状態を確かめられませんでした。入力欄を確かめてから再開してください'
       : '入力欄に残った 1 行を消してから再開してください';
     return new Error(`${error.message}。${note}`, { cause: error });

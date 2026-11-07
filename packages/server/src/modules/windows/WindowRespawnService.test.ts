@@ -244,7 +244,7 @@ function buildService(opts: {
   const stubStrategyFactory = {
     create: vi.fn(() => ({
       supportsSession: true,
-      buildRespawnLaunch: vi.fn(() => (opts.noRespawnLaunch ? null : program('claude', ['--resume', 'abc', '--dangerously-skip-permissions']))),
+      buildRespawnLaunch: vi.fn(() => (opts.noRespawnLaunch ? null : { ...program('claude', ['--resume', 'abc', '--dangerously-skip-permissions']), env: { CLAUDE_CODE_ENABLE_PROMPT_SUGGESTION: 'false' } })),
       conversationLogAgentType: null,
     })),
   };
@@ -1538,6 +1538,8 @@ describe('WindowRespawnService.resumeLegacySession (Issue #328 fourth-round revi
     expect(sentCommands).toHaveLength(1);
     expect(sentCommands[0]).toMatch(/supervisor/);
     expect(sentCommands[0]).toContain('claude --resume sess-abc --dangerously-skip-permissions');
+    expect(sentCommands[0]).toContain("CLAUDE_CODE_ENABLE_PROMPT_SUGGESTION='false'");
+    expect(sentCommands[0]).toContain("-- 'claude --resume sess-abc");
     expect(sentCommands[0]).toContain('--task-id 7');
     expect(sentCommands[0]).toContain('--unit-id 10');
     expect(clearExitMarker).toHaveBeenCalled();
@@ -1812,7 +1814,7 @@ describe('WindowRespawnService.respawn — concurrent respawns for the same task
     const sessionStrategyFactory = {
       create: vi.fn(() => ({
         supportsSession: true,
-        buildRespawnLaunch: vi.fn(() => program('claude', ['--resume', 'abc', '--dangerously-skip-permissions'])),
+        buildRespawnLaunch: vi.fn(() => ({ ...program('claude', ['--resume', 'abc', '--dangerously-skip-permissions']), env: { CLAUDE_CODE_ENABLE_PROMPT_SUGGESTION: 'false' } })),
         conversationLogAgentType: null,
       })),
     };
@@ -2553,7 +2555,7 @@ describe('WindowRespawnService.respawn — a host that starts a worker as a prog
     await service.respawn(7, makeServer());
 
     const created = tmux.openWindow.mock.calls[0] as unknown as [unknown, string, string, { program: { argv: string[]; cwd: string; cols: number; rows: number }; extraEnv: Record<string, string> }];
-    expect(created[3].program).toEqual({ argv: ['claude', '--resume', 'abc', '--dangerously-skip-permissions'], cwd: 'C:\\work\\app', cols: 120, rows: 40 });
+    expect(created[3].program).toEqual({ argv: ['claude', '--resume', 'abc', '--dangerously-skip-permissions'], env: { CLAUDE_CODE_ENABLE_PROMPT_SUGGESTION: 'false' }, cwd: 'C:\\work\\app', cols: 120, rows: 40 });
     expect(created[3].extraEnv).toEqual({ AZITO_UI_TOKEN: 'ui-token-fixture' });
     expect(sentCommands).toEqual([]);
     expect(tmux.resolvePane).not.toHaveBeenCalled();

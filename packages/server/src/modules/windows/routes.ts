@@ -516,9 +516,7 @@ const windowsRoutes: FastifyPluginCallback<WindowsRouteOptions> = (fastify, opts
       if (blockMcp) {
         effectiveCommand = ensureMcpBlockByCommand(effectiveCommand);
       }
-      if (isClaudeCommand(command)) {
-        effectiveCommand = shellDialectFor(opts.transportFactory.hostProfileFor(srv)).withEnv(CLAUDE_LAUNCH_ENV, effectiveCommand);
-      }
+      const childEnv = isClaudeCommand(command) ? CLAUDE_LAUNCH_ENV : undefined;
 
       const supervised = shouldSupervise(srv.type, win.windowType, windowKindOf(win));
       const paneRef = win.muxRef ?? muxRefFromTmuxTarget(win.tmuxTarget);
@@ -527,11 +525,12 @@ const windowsRoutes: FastifyPluginCallback<WindowsRouteOptions> = (fastify, opts
         ? wrapWithSupervisor(effectiveCommand, {
             server: srv,
             dialect: shellDialectFor(opts.transportFactory.hostProfileFor(srv)),
+            childEnv,
             target: win.tmuxTarget,
             harnessPrefix: opts.harnessPrefix,
             ...supervisorRegistry.issueLaunch({ serverName: srv.name, target: win.tmuxTarget, taskId: null, unitId: null, windowId: win.id }),
           })
-        : effectiveCommand;
+        : childEnv ? shellDialectFor(opts.transportFactory.hostProfileFor(srv)).withEnv(childEnv, effectiveCommand) : effectiveCommand;
 
       if (supervised) {
         supervisorRegistry.clearExitMarker(srv.name, win.tmuxTarget);

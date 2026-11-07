@@ -9,7 +9,7 @@ import { posixDialect } from '../../../../shared/os/shellDialect';
 function makeRuntime(capturePaneResponses: string[], foreground: string | null = 'claude') {
   let callIndex = 0;
   const tmux = {
-    sendKeysToHandle: vi.fn(async () => {}),
+    sendKeysToHandle: vi.fn(async (_server: unknown, _handle: unknown, _keys: string[]) => {}),
     paneCommandByHandle: vi.fn(async () => foreground),
     captureScreen: vi.fn(async () => {
       const stdout = capturePaneResponses[callIndex] ?? capturePaneResponses[capturePaneResponses.length - 1];
@@ -45,6 +45,14 @@ function makeLaunchCtx(tmux: any) {
 }
 
 describe('TuiWorkerRuntime.launch — waitForTuiReady', () => {
+  it('passes the worker environment to the supervisor and keeps the child command clean', async () => {
+    const { runtime, tmux } = makeRuntime(['bypass permissions on (shift+tab to cycle)']);
+    const ctx = { ...makeLaunchCtx(tmux), effectiveLaunchCommand: 'claude --resume abc', childEnv: { CLAUDE_CODE_ENABLE_PROMPT_SUGGESTION: 'false' } };
+    await runtime.launch(ctx);
+    const command = tmux.sendKeysToHandle.mock.calls[0][2][0];
+    expect(command).toContain("CLAUDE_CODE_ENABLE_PROMPT_SUGGESTION='false'");
+    expect(command).toContain("-- 'claude --resume abc'");
+  });
   it('returns immediately after polling when TUI shows ready indicators (claude worker)', async () => {
     const { runtime, tmux } = makeRuntime(['bypass permissions on (shift+tab to cycle)']);
     const ctx = { ...makeLaunchCtx(tmux), effectiveLaunchCommand: 'claude --dangerously-skip-permissions' };
@@ -636,20 +644,30 @@ describe('TuiWorkerRuntime.sendPrompt — the line has to be drawn, submitted an
     expect(h.workerInput.clearInputLine).toHaveBeenCalledTimes(5);
   });
 
-  it('keeps clearing while text is left: Claude Code clears one display line of a wrapped input per Ctrl+U', async () => {
-    const h = sendHarness('claude', { enterIgnored: 99, wrapWidth: 40, clearsOneLine: true });
+  it('stops clearing once the input shows an ambiguous hint after our line is removed', async () => {
+    const h = sendHarness('claude', { enterIgnored: 99 });
+    const normal = h.tmux.captureScreen.getMockImplementation()!;
+    h.tmux.captureScreen.mockImplementation(async () => h.workerInput.clearInputLine.mock.calls.length > 0
+      ? { stdout: fixture('claude-2.1.310-linux-queued-placeholder.txt') } : normal());
     const err = await h.send();
-    expect(err).toMatchObject({ reason: 'prompt_not_submitted', inputLeft: false });
-    expect((err as Error).message).not.toMatch(/消してから再開/);
-    expect(h.workerInput.clearInputLine.mock.calls.length).toBeGreaterThan(1);
-    expect(h.pane.screen()).toContain('❯ \n');
+    expect(err).toMatchObject({ reason: 'prompt_not_submitted', inputUnreadable: true });
+    expect((err as Error).message).toMatch(/入力欄を確かめてから再開/);
+    expect(h.workerInput.clearInputLine).toHaveBeenCalledTimes(1);
   });
 
-  it('gives up after five Ctrl+U and says to clear the rest when the input is still not empty', async () => {
+  it('stops clearing a wrapped input when the remaining text is no longer identifiable', async () => {
+    const h = sendHarness('claude', { enterIgnored: 99, wrapWidth: 40, clearsOneLine: true });
+    const err = await h.send();
+    expect(err).toMatchObject({ reason: 'prompt_not_submitted', inputLeft: true });
+    expect((err as Error).message).toMatch(/消してから再開/);
+    expect(h.workerInput.clearInputLine).toHaveBeenCalledTimes(1);
+  });
+
+  it('stops clearing a narrow wrapped input once it cannot identify the remainder', async () => {
     const h = sendHarness('claude', { enterIgnored: 99, wrapWidth: 10, clearsOneLine: true });
     const err = await h.send();
     expect(err).toMatchObject({ reason: 'prompt_not_submitted', inputLeft: true });
-    expect(h.workerInput.clearInputLine).toHaveBeenCalledTimes(5);
+    expect(h.workerInput.clearInputLine).toHaveBeenCalledTimes(1);
   });
 
   it('prompt_not_typed: the screen is read again, and an input that is not empty (or cannot be read) is reported as left', async () => {

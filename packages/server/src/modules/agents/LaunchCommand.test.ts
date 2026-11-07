@@ -5,7 +5,7 @@ import { posixDialect, powershellDialect } from '../../shared/os/shellDialect';
 describe('buildWorkerLaunchCommand', () => {
   it('builds claude command with no model or extra args', () => {
     expect(buildWorkerLaunchCommand('claude', null, null, posixDialect)).toBe(
-      "claude --dangerously-skip-permissions --strict-mcp-config",
+      'claude --dangerously-skip-permissions --strict-mcp-config',
     );
   });
 
