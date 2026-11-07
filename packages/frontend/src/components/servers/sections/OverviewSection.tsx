@@ -240,7 +240,7 @@ export default function OverviewSection({
               <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginTop: 4, fontSize: 'var(--font-xs)', color: 'var(--text-dim)' }}>
                 {isAgent && (
                   <>
-                    <span role="status" style={{ fontFamily: 'var(--mono)' }}>
+                    <span style={{ fontFamily: 'var(--mono)' }}>
                       agent {(server.agentVersion ?? '').slice(0, 7) || '—'}
                     </span>
                     {status?.versionMatch === true && <Chip tone="green">{t('overview.hubMatch')}</Chip>}
@@ -502,7 +502,7 @@ export default function OverviewSection({
             </span>
           </KvRow>
           <KvRow label={t('overview.sessionsLabel')}>
-            <span style={{ fontFamily: 'var(--mono)', fontSize: 'var(--font-xs)' }}>{sessionsSummary}</span>
+            <span role="status" style={{ fontFamily: 'var(--mono)', fontSize: 'var(--font-xs)' }}>{sessionsSummary}</span>
           </KvRow>
         </KvCard>
       </div>

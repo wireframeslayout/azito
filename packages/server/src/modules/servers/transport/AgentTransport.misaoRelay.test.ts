@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
-const sockets = vi.hoisted(() => [] as Array<{ terminate: () => void }>);
+const sockets = vi.hoisted(() => [] as Array<{ terminate: () => void; emit: (event: string, ...args: unknown[]) => boolean }>);
 vi.mock('ws', async () => {
   const { EventEmitter } = await import('node:events');
   class Socket extends EventEmitter {
@@ -24,6 +24,15 @@ describe('misao relay deadline', () => {
     expect(sockets[0].terminate).toHaveBeenCalledOnce();
     await expect(transport.connectMisaoRelay(new AbortController().signal)).rejects.toMatchObject({ reason: 'circuit_open' });
     expect(sockets).toHaveLength(1);
+  });
+
+  it('does not open the circuit when the agent rejects the websocket handshake', async () => {
+    const transport = new AgentTransport('unused', 1, 'token', 'system', 'server', null);
+    const attempt = transport.connectMisaoRelay(new AbortController().signal);
+    sockets[0].emit('unexpected-response', {}, { statusCode: 401 });
+    await expect(attempt).rejects.toThrow('401');
+    expect(transport.isCircuitOpen()).toBe(false);
+    expect(sockets[0].terminate).toHaveBeenCalledOnce();
   });
 
   it('terminates an aborted attempt without opening the circuit', async () => {

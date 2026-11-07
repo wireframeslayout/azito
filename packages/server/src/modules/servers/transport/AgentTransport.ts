@@ -395,6 +395,7 @@ export class AgentTransport implements IServerTransport, IMuxTransport, IHostBou
         signal.removeEventListener('abort', onAbort);
         ws.removeListener('open', onOpen);
         ws.removeListener('error', onError);
+        ws.removeListener('unexpected-response', onUnexpectedResponse);
       };
       const abandon = (err: Error): void => {
         cleanup();
@@ -404,18 +405,26 @@ export class AgentTransport implements IServerTransport, IMuxTransport, IHostBou
       };
       const onAbort = (): void => abandon(new Error('aborted'));
       const onError = (err: Error): void => { cleanup(); recordFailure(); reject(err); };
-      const onOpen = (): void => {
-        cleanup();
+      const recordReachable = (): void => {
         if (seq > this.appliedSeq) {
           this.appliedSeq = seq;
           this.unreachableUntil = 0;
           this.localNetworkDetail = undefined;
         }
+      };
+      const onUnexpectedResponse = (_request: unknown, response: { statusCode?: number }): void => {
+        recordReachable();
+        abandon(new Error(`misao relay rejected (${response.statusCode ?? 'unknown'})`));
+      };
+      const onOpen = (): void => {
+        cleanup();
+        recordReachable();
         resolve(createWebSocketStream(ws));
       };
       const timer = setTimeout(() => { recordFailure(); abandon(new Error('misao relay timed out')); }, 4_000);
       signal.addEventListener('abort', onAbort, { once: true });
       ws.once('error', onError);
+      ws.once('unexpected-response', onUnexpectedResponse);
       ws.once('open', onOpen);
     });
   }

@@ -204,7 +204,14 @@ export default function WindowsSection({ server, sessions, sessionsState = 'read
     />
   ) : null;
 
-  if (sessionsState !== 'ready' && sessions.length === 0) return <div role="status">{t(`sessionState.${sessionsState}`)}</div>;
+  if (sessionsState === 'loading' && sessions.length === 0) return <div role="status">{t('sessionState.loading')}</div>;
+
+  if (sessionsState === 'error' && sessions.length === 0) return (
+    <div>
+      <div role="status">{t('sessionState.error')}</div>
+      <button className="icon-btn" onClick={refresh}>{t('windows.retry')}</button>
+    </div>
+  );
 
   if (sessions.length === 0) {
     return (

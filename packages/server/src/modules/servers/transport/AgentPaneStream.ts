@@ -83,6 +83,7 @@ export class AgentPaneStream extends BasePaneStream {
     const ws = new WebSocket(url, { headers: { authorization: this.authHeader } });
     this.ws = ws;
     const connectTimer = setTimeout(() => ws.terminate(), 15_000);
+    connectTimer.unref();
     let heartbeat: ReturnType<typeof setInterval> | undefined;
     let missedPongs = 0;
     ws.on('pong', () => { missedPongs = 0; });
@@ -93,6 +94,7 @@ export class AgentPaneStream extends BasePaneStream {
         missedPongs += 1;
         ws.ping();
       }, 15_000);
+      heartbeat.unref();
       this.retryCount = 0;
     });
 
