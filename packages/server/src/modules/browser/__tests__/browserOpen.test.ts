@@ -171,9 +171,18 @@ describe('POST /api/browser/open', () => {
       }),
     );
 
-    expect(timeoutSpy).toHaveBeenCalledWith(30_000);
+    expect(timeoutSpy).toHaveBeenCalledWith(75_000);
     expect(fetchSpy.mock.calls[0][1]?.signal).toBeInstanceOf(AbortSignal);
     timeoutSpy.mockRestore();
+    fetchSpy.mockRestore();
+  });
+
+  it('returns 504 for a timed out agent open', async () => {
+    const fetchSpy = vi.spyOn(globalThis, 'fetch').mockRejectedValueOnce(new DOMException('timed out', 'TimeoutError'));
+    (mockServerRepo as unknown as { findByName: ReturnType<typeof vi.fn> }).findByName.mockReturnValueOnce({ type: 'agent', host: 'agent.invalid', agentPort: 4000 });
+    const res = await app.inject({ method: 'POST', url: '/api/browser/open', payload: { server: 'remote-agent' } });
+    expect(res.statusCode).toBe(504);
+    expect(res.json()).toEqual({ error: 'agent_timeout' });
     fetchSpy.mockRestore();
   });
 

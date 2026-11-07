@@ -1462,6 +1462,13 @@ describe('GET /api/servers/:name/sessions merges the muxes a server can use (#31
     await app.close();
   });
 
+  it('reports an unreachable tmux-only agent with its reason', async () => {
+    const agent = { name: 'agent-down', type: 'agent', defaultMux: 'tmux' } as ServerConfig;
+    await build(agent, { tmux: {} }, { listSessions: vi.fn(async () => { throw new AgentUnreachableError('agent-down', 'circuit_open'); }) });
+    const res = await app.inject({ method: 'GET', url: '/api/servers/agent-down/sessions?detail=1' });
+    expect(res.json()).toMatchObject({ sessions: [], listedKinds: [], unavailable: [{ kind: 'tmux', reason: 'agent_unreachable', detail: expect.stringContaining('circuit_open') }] });
+  });
+
   it('lists an agent server that has no misao (tmux-only) exactly as before, with only the kind stamp added', async () => {
     const agent = { name: 'agent1', type: 'agent', defaultMux: 'tmux' } as ServerConfig;
     const misaoList = vi.fn();

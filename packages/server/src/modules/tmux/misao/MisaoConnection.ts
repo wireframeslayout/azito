@@ -88,6 +88,7 @@ export class MisaoConnection implements MisaoRpc, MisaoEventSource, MisaoDisconn
   private status: Status = 'idle';
   /** True once close() was called: the only thing that ends the retrying. */
   private disposed = false;
+  private deadlineClosingClient: MisaoClient | undefined;
   /** Set while the daemon's protocol is incompatible with this hub's SDK; cleared on the next successful connect. */
   private incompatibility: MisaoProtocolVersionErrorLike | undefined;
   private retryTimer: NodeJS.Timeout | undefined;
@@ -154,7 +155,10 @@ export class MisaoConnection implements MisaoRpc, MisaoEventSource, MisaoDisconn
         operation,
         new Promise<never>((_, reject) => {
           timer = setTimeout(() => {
-            if (this.client === client && !this.disposed) client.close();
+            if (this.client === client && !this.disposed) {
+              this.deadlineClosingClient = client;
+              client.close();
+            }
             reject(new MuxDriverUnavailableError('misao', 'daemon_unreachable'));
           }, 10_000);
         }),
@@ -420,7 +424,11 @@ export class MisaoConnection implements MisaoRpc, MisaoEventSource, MisaoDisconn
       const wasConnected = this.status === 'connected';
       this.status = 'disconnected';
       if (wasConnected) for (const listener of this.disconnectedListeners) listener();
-      if (state.status === 'closed') this.handleClientClosed(state.cause);
+      if (state.status === 'closed') {
+        const cause = this.deadlineClosingClient === this.client ? new Error('agent request timed out') : state.cause;
+        this.deadlineClosingClient = undefined;
+        this.handleClientClosed(cause);
+      }
     }
   }
 

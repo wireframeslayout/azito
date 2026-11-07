@@ -18,7 +18,7 @@ import { useToast } from '../../../hooks/useToast';
 import WindowTreePopover from '../WindowTreePopover';
 import CreateSessionModal from '../CreateSessionModal';
 import { TerminalContainer } from '../../TerminalContainer';
-import { EmptyState } from '../../ui';
+import { EmptyState, LoadingState, Notice, Button } from '../../ui';
 import { Icon } from '../../ui/Icon';
 
 interface WindowsSectionProps {
@@ -204,20 +204,20 @@ export default function WindowsSection({ server, sessions, sessionsState = 'read
     />
   ) : null;
 
-  if (sessionsState === 'loading' && sessions.length === 0) return <div role="status">{t('sessionState.loading')}</div>;
+  if (sessionsState === 'loading' && sessions.length === 0) return <LoadingState message={t('sessionState.loading')} />;
 
-  if (sessionsState === 'error' && sessions.length === 0) return (
-    <div>
-      <div role="status">{t('sessionState.error')}</div>
-      <button className="icon-btn" onClick={refresh}>{t('windows.retry')}</button>
-    </div>
+  if ((sessionsState === 'error' || sessionsState === 'partial') && sessions.length === 0) return (
+    <Notice tone="danger" role="alert" action={<Button size="sm" onClick={refresh}>{t('windows.retry')}</Button>}>
+      {t(`sessionState.${sessionsState}`)}
+    </Notice>
   );
 
   if (sessions.length === 0) {
     return (
       <div>
         {metaErrorBar}
-      {sessionsState !== 'ready' && <div role="status">{t(`sessionState.${sessionsState}`)}</div>}
+      {sessionsState === 'loading' && <LoadingState message={t('sessionState.loading')} />}
+      {(sessionsState === 'error' || sessionsState === 'partial') && <Notice tone="danger" role="alert" action={<Button size="sm" onClick={refresh}>{t('windows.retry')}</Button>}>{t(`sessionState.${sessionsState}`)}</Notice>}
         {createSessionModal}
         <EmptyState title={t('windows.noSessions')} />
         <div style={{ textAlign: 'center', marginTop: 'var(--space-3)' }}>
@@ -240,7 +240,8 @@ export default function WindowsSection({ server, sessions, sessionsState = 'read
   return (
     <div style={{ display: 'flex', flexDirection: 'column', height: '100%', position: 'relative' }}>
       {metaErrorBar}
-      {sessionsState !== 'ready' && <div role="status">{t(`sessionState.${sessionsState}`)}</div>}
+      {sessionsState === 'loading' && <LoadingState message={t('sessionState.loading')} />}
+      {(sessionsState === 'error' || sessionsState === 'partial') && <Notice tone="danger" role="alert" action={<Button size="sm" onClick={refresh}>{t('windows.retry')}</Button>}>{t(`sessionState.${sessionsState}`)}</Notice>}
       {createSessionModal}
       <div style={{
         display: 'flex', alignItems: 'center', gap: 8,

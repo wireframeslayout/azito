@@ -173,7 +173,7 @@ export function useServerManagement({ tabs, closeTab }: UseServerManagementParam
         newSessions[r.value.name] = r.value.sessions;
         if (r.value.complete) successfulServers.add(r.value.name);
       } else {
-        newSessions[srvs[i]?.name] = sessionsRef.current[srvs[i]?.name] ?? [];
+        newSessions[srvs[i]?.name] = (sessionsRef.current[srvs[i]?.name] ?? []).map((session) => ({ ...session, stale: true }));
       }
     }
     setSessions(newSessions);

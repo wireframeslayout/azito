@@ -2,7 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { api, apiWithStatus } from '../api/client';
 import type { Server, Session, ServerStatus } from './useServerManagement';
 import { useServerStatuses } from './useServerStatuses';
-import { fetchSessionListing, keepUnavailableKinds } from '../lib/fetchServerSessions';
+import { fetchSessionListing, sessionListingState, keepUnavailableKinds } from '../lib/fetchServerSessions';
 import type { InstallStatusResponse } from '../components/servers/serverSections';
 import type { Window } from '../pages/workspace/types';
 import { buildWindowIndex, type WindowIndexEntry } from '../lib/windowDisplay';
@@ -256,7 +256,7 @@ export function useServerDetail(serverName: string | null): UseServerDetailResul
       void fetchSessionListing<Session>(serverName).then((result) => {
         if (fetchGenRef.current !== gen) return;
         setSessions((prev) => keepUnavailableKinds(prev, result));
-        setSessionsState(result.unavailable.length ? 'partial' : 'ready');
+        setSessionsState(sessionListingState(result));
       }, () => { if (fetchGenRef.current === gen) setSessionsState('error'); });
       const mainPromise = Promise.all([
         refreshStatuses(),

@@ -346,9 +346,9 @@ const sessionsRoutes: FastifyPluginCallback<SessionsRouteOptions> = (fastify, op
       const srv = serverRepo.findByName(request.params.name);
       if (!srv) return reply.status(404).send({ error: 'Server not found' });
       const detail = request.query.detail === '1';
-      const respond = (entry: Pick<SessionCacheEntry, 'data' | 'unavailable'>) => {
+      const respond = (entry: Pick<SessionCacheEntry, 'data' | 'unavailable'>, noneListed = false) => {
         const sessions = enrichSessions(entry.data, request.params.name, opts.windowRepo);
-        return detail ? { sessions, unavailable: entry.unavailable } : sessions;
+        return detail ? { sessions, unavailable: entry.unavailable, listedKinds: noneListed ? [] : kinds.filter((kind) => !entry.unavailable.some((item) => item.kind === kind)) } : sessions;
       };
 
       const registry = opts.muxDriverRegistry;
@@ -360,7 +360,7 @@ const sessionsRoutes: FastifyPluginCallback<SessionsRouteOptions> = (fastify, op
         routing = registry && !tmuxOnly ? registry.resolve(srv) : undefined;
       } catch (err) {
         if (!detail || !(err instanceof MuxDriverUnavailableError)) throw err;
-        return respond({ data: [], unavailable: [{ kind: srv.defaultMux, reason: err.reason, detail: err.message }] });
+        return respond({ data: [], unavailable: [{ kind: srv.defaultMux, reason: err.reason, detail: err.message }] }, true);
       }
 
       const cached = sessionCache.get(request.params.name);
@@ -391,7 +391,7 @@ const sessionsRoutes: FastifyPluginCallback<SessionsRouteOptions> = (fastify, op
         return respond(entry);
       } catch (err: unknown) {
         if (detail && tmuxOnly) {
-          const reason = isMissingBinaryError(err) ? MUX_BINARY_MISSING : 'driver_error';
+          const reason = err instanceof AgentUnreachableError ? 'agent_unreachable' : isMissingBinaryError(err) ? MUX_BINARY_MISSING : 'driver_error';
           return respond({ data: [], unavailable: [{ kind: 'tmux', reason, detail: err instanceof Error ? err.message : String(err) }] });
         }
         return replyRouteError(reply, err);
