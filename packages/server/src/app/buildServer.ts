@@ -887,8 +887,8 @@ export async function buildServer(app: FastifyInstance, wiring: Wiring, port: nu
         status: entry.content.status,
         title: task?.title,
         projectId: task?.projectId,
-        // Notification-only statuses (e.g. worker_launch_failed, #639) carry a reason the UI shows; real status
-        // transitions have none and the field stays absent.
+        // Notification-only statuses (e.g. worker_launch_failed, #639) carry a short reason code (not shown in the
+        // UI; the sentence comes from the frontend i18n); real status transitions have none and the field stays absent.
         ...(entry.content.reason ? { reason: entry.content.reason } : {}),
       },
     });
