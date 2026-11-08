@@ -43,6 +43,27 @@ function resumeExtraArgs(extraArgs: string | null | undefined): LaunchArg[] {
   return extraArgs?.trim() ? [raw(extraArgs.trim())] : [];
 }
 
+/**
+ * `claude attach <id>` opens a conversation the Claude Code daemon is already running, as its client (Issue #639 —
+ * `--resume` of a daemon-held conversation is refused with "That session is running in the background"). Deliberately
+ * bare of the flags that shape a NEW claude process (`--dangerously-skip-permissions`, `--model`,
+ * `--strict-mcp-config`): they are meaningless or refused for a client of a conversation the daemon already runs with
+ * its own settings. Consequence: the MCP blocking of #471 does NOT apply through this launch — the conversation runs
+ * with whatever the daemon started it with. When AZITO itself first started the conversation, the daemon inherited the
+ * launch flags of that start (including the MCP blocking ones; both sides unconfirmed on real versions); when the user
+ * started it elsewhere, it keeps theirs. The `CLAUDE_LAUNCH_ENV` still rides on the line (same as every other claude
+ * launch, #648) so the CLIENT this pane starts does not offer prompt suggestions — whether the daemon side honours it
+ * is unconfirmed.
+ */
+export function buildClaudeAttachLaunch(attachId: string): ProgramLaunch {
+  return {
+    kind: 'program',
+    file: 'claude',
+    env: CLAUDE_LAUNCH_ENV,
+    args: [flag('attach'), flag(attachId)],
+  };
+}
+
 export function buildClaudeHeadlessCommand(model: string): string {
   const modelFlag = ` --model ${shellQuote(model)}`;
   return `claude -p${modelFlag}`;
