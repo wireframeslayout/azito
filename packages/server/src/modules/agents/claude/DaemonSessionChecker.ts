@@ -3,7 +3,7 @@ import type { ServerConfig } from '../../servers/Server';
 import type { TransportFactory } from '../../servers/transport/TransportFactory';
 
 /**
- * What asking the server's own `claude agents --json` said about one recorded conversation id (Issue #540):
+ * What asking the server's own `claude agents --json` said about one recorded conversation id (Issue #639):
  * - `attach`  — the Claude Code daemon holds this conversation (it survives a closed pane, and `claude --resume`
  *   refuses it with "That session is running in the background"). Open it with `claude attach <id>` instead.
  * - `resume`  — the daemon does not hold it; `--resume` is the right launch, as before.

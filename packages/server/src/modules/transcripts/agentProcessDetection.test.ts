@@ -179,7 +179,7 @@ describe('argsContainSessionId', () => {
     expect(argsContainSessionId([proc(300, 1, 10, 'claude --resume ' + SESSION_ID)], [300], '')).toBe(false);
   });
 
-  it('matches the short attach id token of the session (Issue #540: `claude attach <short id>` carries no full UUID)', () => {
+  it('matches the short attach id token of the session (Issue #639: `claude attach <short id>` carries no full UUID)', () => {
     expect(argsContainSessionId([proc(300, 1, 10, 'claude attach 019fea40')], [300], SESSION_ID)).toBe(true);
   });
 

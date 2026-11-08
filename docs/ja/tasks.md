@@ -283,17 +283,18 @@ Retry ボタンをクリックすると、タスクログの WebSocket 接続を
 - ペインが消失すると、ステータス表示が「lost」に変わり、復帰ボタンが表示される
 - 復帰ボタンをクリックすると、保存されたセッションID（`agent_session_id`）を使用してエージェントを再起動（`claude --resume <session-id>`）
 
-### Claude Code の daemon（background）が会話を保持しているとき（#540）
+### Claude Code の daemon（background）が会話を保持しているとき（#639）
 
 Claude Code（2.1.31x 以降）は、更新の再起動などで会話を daemon の下に移すことがあります。daemon の下の会話は窓を閉じても止まらず、`claude --resume <id>` は「That session is running in the background」と断られて窓がシェルに戻ります。そこでスリープからの復帰（respawn / legacy 復帰）や follow-up の worker 再起動では、起動の前に `claude agents --json` で daemon がその会話を保持しているかを確かめます。
 
 - 保持している場合（`kind: "background"` のエントリがその session id で見つかる）は `claude attach <id>` で daemon の client として開きます（`--resume` は打ちません）。attach は session id を変えないため、記録された id はそのまま有効です。
 - 保持していない場合は従来どおり `--resume` です。
 - 判定できない場合（`agents` サブコマンドのない古い CLI、実行失敗）も従来どおり `--resume` に進み、実行ログに `daemon_check_unavailable`（理由付き）を記録します。判定が `--resume` に落ちる理由: `agents` の一覧と daemon（background）機能は同時に Claude Code に入ったため、一覧を持たない CLI が daemon の下に会話を保持していることはありません（推測ではなく、`claude --help` の `attach` / `agents` コマンドと `--bg, --background` オプションが同じバージョンで提供されていることによる対応関係です）。
-- スリープしても daemon の下の会話は止めません（`claude stop` は打たない）。復帰で attach すると、必要なら daemon が会話を起こしてから client を開きます。
-- 起動後、pane のプロセスツリーに worker が立ったかを確認します（単一 pane の窓のみ）。立っていなければ（CLI が拒否してシェルに戻った）実行ログに `worker_launch_failed`（pane 画面の末尾付き）を出し、`status_change` 経由で通知します。ステータスは変えず、窓も壊しません。
-- **attach では MCP の遮断（#471 の `--strict-mcp-config`）は効きません**: attach は daemon がすでにその設定で走らせている会話の client を開く操作で、起動時フラグは意味を持ちません。その会話を最初に AZITO が起動した場合は daemon が起動時の引数（遮断込み）を引き継いでいます。ユーザーが別の場所で起動した会話は、そちらの設定のままです。
-- Windows のホストでは `claude agents --json` を直接実行できず、判定は常に「判定できず」になるため、従来どおり `--resume` が使われます（daemon 保持の会話の復帰が断られる問題は Windows では未対応です）。
+- スリープしても daemon の下の会話は止めません（`claude stop` は打たない）。復帰で attach すると必要なら daemon 側が会話を起こしてから client を開く、という挙動は観測に基づきますが、実機の版での確認は未確認です。
+- attach の行には AZITO の claude 起動が通常付ける `CLAUDE_CODE_ENABLE_PROMPT_SUGGESTION=false` が乗ります（この pane が開く client に対して）。daemon 側がこれを尊重するかは未確認です。
+- 起動後、pane のプロセスツリーに worker が立ったかを確認します（単一 pane の窓のみ）。立っていなければ（CLI が拒否してシェルに戻った）実行ログに `worker_launch_failed`（pane 画面の末尾付き）を出し、通知専用の `status_change`（タスクの実際のステータスは変えない、窓も壊さない）で通知します。確認自体ができなかったとき（プロセス一覧や pane の pid が読めない）は代わりに `worker_launch_unverified` を記録します。
+- **attach では MCP の遮断（#471 の `--strict-mcp-config`）は効きません**: attach は daemon がすでにその設定で走らせている会話の client を開く操作で、起動時フラグは意味を持ちません。その会話を最初に AZITO が起動した場合は daemon が起動時の引数（遮断込み）を引き継いでいるはずです（未確認）。ユーザーが別の場所で起動した会話は、そちらの設定のままです。
+- Windows のホストでは判定をスキップします: npm 版の `claude` は `.cmd` シムでシェルなしのコマンド実行から spawn できず、判定は毎回「判定できず」になるためです。復帰は従来どおり `--resume` で、`daemon_check_unavailable` のログも出ません（daemon 保持の会話の復帰が断られる問題は Windows では未対応です）。
 - 分割 pane を持つ窓は起動後確認の対象外です（既知の限界）。
 
 ## タスクサマリ

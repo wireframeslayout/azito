@@ -1,4 +1,4 @@
-// ─── 起動後検証（Issue #540） ───
+// ─── 起動後検証（Issue #639） ───
 //
 // respawn / legacy recovery が Claude（attach または --resume）の起動行を pane のシェルに打った後、その起動が
 // 実際に受け取られたかを確かめる。Claude Code が daemon 保持の会話を --resume で断るように、CLI は起動行を
@@ -9,10 +9,11 @@
 // 判定は純粋関数（workerRunningInSnapshot）、待ちと I/O は verifyLaunchedWorker に分ける。検証はタスク窓から
 // 呼ぶ（実行ログと通知のために taskId/unitId と logRepo/events が要る。plain 窓は検証しない — そこは人が見る）。
 //
-// 誤検知（起動は進んでいるのにまだプロセスが立っていない）に備えて 2 回見る: 1 回目の待ちで立っていなければ
-// 2 回目の待ちの後に同じスナップショット方式で見直す。それでも立っていなければ pane の画面の末尾（CLI の
-// 拒否メッセージが残っている）を取り、呼び出し側が実行ログと通知に出す。この検証自体は窓を壊さない:
-// 何も kill せず status も変えず、報告だけする。
+// 送った直後には見ない: 断られる起動でも claude は一度立ち上がり、メッセージを出して 1 秒足らずで終わるため、
+// 直後のスナップショットは生きている worker と区別がつかない。まず FIRST_WAIT 待ってから 1 回目を見る —
+// いなければ起動は失敗。いれば SECOND_WAIT 待ってもう一度見る — いなければ（立った後に消えた）失敗、
+// いれば起動は続いている。どちらの失敗でも pane の画面の末尾（CLI の拒否メッセージが残っている）を取り、
+// 呼び出し側が実行ログと通知に出す。この検証自体は窓を壊さない: 何も kill せず status も変えず、報告だけする。
 
 import { isAgentProcessRunning } from '../transcripts/agentProcessDetection';
 import type { ProcessEntry } from '../../shared/os/processList';
@@ -20,7 +21,7 @@ import type { IMuxClient } from '../tmux/IMuxClient';
 import type { PaneHandle } from '@azito/shared';
 import type { ServerConfig } from '../servers/Server';
 
-/** The pane's process tree is looked at this long after the launch line was typed, and once more this much later. */
+/** How long the launch line gets to take effect before the pane's process tree is looked at, and how long more before the second look. */
 export const VERIFY_FIRST_WAIT_MS = 3_000;
 export const VERIFY_SECOND_WAIT_MS = 3_000;
 
@@ -48,7 +49,7 @@ export interface VerifyLaunchedIo {
 }
 
 export interface VerifyLaunchedResult {
-  /** Whether a worker process was found in the pane's process tree. */
+  /** Whether a worker process was found in the pane's process tree on the LAST probe. */
   running: boolean;
   /** The pane screen's last lines when it was not (the CLI's refusal message), or null when they could not be read. */
   screenTail: string | null;
@@ -81,31 +82,44 @@ async function probeOnce(io: VerifyLaunchedIo): Promise<{ verdict: boolean | nul
 }
 
 /**
- * Sends nothing, kills nothing: looks at the pane's process tree, and when no worker stands there yet, waits and looks
- * again — twice in all, so a worker that is merely slow to start is not taken for a refused launch. A check that
- * cannot be answered (no process list, no pane pid) is reported through `unverifiableReason` and leaves the pane as
- * it is — the caller decides whether that is worth a log line; it is never taken as "the launch failed".
+ * Sends nothing, kills nothing: waits FIRST (a refused launch also starts a claude that prints its refusal and exits
+ * within a second, so a look right after the send cannot tell it from a worker that came up), looks, and only accepts
+ * "running" when the worker still stands on the LAST look — one that appeared and then vanished is a refusal, not a
+ * start. A check that cannot be answered (no process list, no pane pid) is reported through `unverifiableReason` and
+ * leaves the pane as it is — the caller decides whether that is worth a log line; it is never taken as "the launch
+ * failed".
  */
 export async function verifyLaunchedWorker(io: VerifyLaunchedIo): Promise<VerifyLaunchedResult> {
   const sleep = io.sleep ?? defaultSleep;
-  // The first look is immediate: a worker that is already up needs no wait, and a pane whose pid cannot even be read
-  // never gets one (an unverifiable check does not report a launch failure).
-  let probe = await probeOnce(io);
-  for (const waitMs of [VERIFY_FIRST_WAIT_MS, VERIFY_SECOND_WAIT_MS]) {
-    if (probe.verdict === null || probe.verdict === true) {
-      return { running: probe.verdict === true, screenTail: null, unverifiableReason: probe.unverifiableReason };
+  await sleep(VERIFY_FIRST_WAIT_MS);
+  const first = await probeOnce(io);
+  if (first.verdict !== true) {
+    // Never stood (or cannot be told). An unreadable check is not a failed launch — the caller logs the reason; a
+    // real refusal gets the screen tail (the CLI's message) for the caller's log.
+    if (first.verdict === null) {
+      return { running: false, screenTail: null, unverifiableReason: first.unverifiableReason };
     }
-    await sleep(waitMs);
-    probe = await probeOnce(io);
+    return { running: false, screenTail: await captureTail(io), unverifiableReason: '' };
   }
-  if (probe.verdict === null || probe.verdict === true) {
-    return { running: probe.verdict === true, screenTail: null, unverifiableReason: probe.unverifiableReason };
+  await sleep(VERIFY_SECOND_WAIT_MS);
+  const second = await probeOnce(io);
+  if (second.verdict !== true) {
+    // Stood on the first look and is gone now (or cannot be told): a process the CLI started and ended with its
+    // refusal message. An unverifiable second look is not a running worker either — report it as unverifiable, never
+    // as a bare success, so the caller logs why nothing could be said.
+    if (second.verdict === null) {
+      return { running: false, screenTail: null, unverifiableReason: second.unverifiableReason };
+    }
+    return { running: false, screenTail: await captureTail(io), unverifiableReason: '' };
   }
-  let screenTail: string | null = null;
+  return { running: true, screenTail: null, unverifiableReason: '' };
+}
+
+/** The pane screen's last lines (the CLI's refusal message sits at the bottom), or null when they cannot be read. */
+async function captureTail(io: VerifyLaunchedIo): Promise<string | null> {
   try {
-    screenTail = (await io.driver.captureScreen(io.server, io.handle, -VERIFY_SCREEN_LINES)).stdout.trim() || null;
+    return (await io.driver.captureScreen(io.server, io.handle, -VERIFY_SCREEN_LINES)).stdout.trim() || null;
   } catch {
-    screenTail = null;
+    return null;
   }
-  return { running: false, screenTail, unverifiableReason: '' };
 }

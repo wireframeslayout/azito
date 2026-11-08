@@ -49,46 +49,45 @@ describe('verifyLaunchedWorker', () => {
       handle: 'pane-1' as never,
       listProcesses: vi.fn(async () => {
         if (over.listError) throw over.listError;
-        return over.entries ?? [entry({ pid: 10, ppid: 1 })];
+        return over.entries ?? [entry({ pid: 10, ppid: 1 }), claudeProcess(11, 10)];
       }),
       sleep: noWait,
     };
   }
 
-  it('reports running on the immediate first probe, without any wait', async () => {
-    const io = makeIo({ entries: [entry({ pid: 10, ppid: 1 }), claudeProcess(11, 10)] });
+  it('waits before the first look, and once more before the confirming look', async () => {
+    const io = makeIo();
     const waits: number[] = [];
     const result = await verifyLaunchedWorker({ ...io, sleep: async (ms) => { waits.push(ms); } });
     expect(result).toEqual({ running: true, screenTail: null, unverifiableReason: '' });
-    expect(io.listProcesses).toHaveBeenCalledTimes(1);
-    expect(waits).toEqual([]);
+    expect(waits).toEqual([VERIFY_FIRST_WAIT_MS, VERIFY_SECOND_WAIT_MS]);
+    expect(io.listProcesses).toHaveBeenCalledTimes(2);
   });
 
-  it('reports running on the second probe when the worker is slow to appear', async () => {
+  it('reports not running when the first look finds no worker (no second look, no wait)', async () => {
+    const io = makeIo({ entries: [entry({ pid: 10, ppid: 1 })] });
+    const waits: number[] = [];
+    const result = await verifyLaunchedWorker({ ...io, sleep: async (ms) => { waits.push(ms); } });
+    expect(result).toEqual({ running: false, screenTail: null, unverifiableReason: '' });
+    expect(io.listProcesses).toHaveBeenCalledTimes(1);
+    expect(waits).toEqual([VERIFY_FIRST_WAIT_MS]);
+  });
+
+  it('reports not running when the worker stood on the first look but is gone on the second', async () => {
     let call = 0;
     const io = makeIo();
     io.listProcesses = vi.fn(async () => {
       call += 1;
-      return call === 1 ? [entry({ pid: 10, ppid: 1 })] : [entry({ pid: 10, ppid: 1 }), claudeProcess(11, 10)];
+      return call === 1 ? [entry({ pid: 10, ppid: 1 }), claudeProcess(11, 10)] : [entry({ pid: 10, ppid: 1 })];
     });
     const result = await verifyLaunchedWorker(io);
-    expect(result.running).toBe(true);
-    expect(io.listProcesses).toHaveBeenCalledTimes(2);
-    expect(io.listProcesses).toHaveBeenCalledAfter(io.driver.panePidByHandle as never);
-  });
-
-  it('waits the documented constants between the probes', async () => {
-    const io = makeIo();
-    const waits: number[] = [];
-    const result = await verifyLaunchedWorker({ ...io, sleep: async (ms) => { waits.push(ms); } });
     expect(result.running).toBe(false);
-    expect(waits).toEqual([VERIFY_FIRST_WAIT_MS, VERIFY_SECOND_WAIT_MS]);
-    expect(io.listProcesses).toHaveBeenCalledTimes(3);
+    expect(io.listProcesses).toHaveBeenCalledTimes(2);
   });
 
   it('reports not running with the pane screen tail when the CLI refused the launch', async () => {
     const refusal = 'That session is running in the background (14b46fcb). Run `claude attach 14b46fcb` to open it.';
-    const io = makeIo({ capture: `~ ${refusal}` });
+    const io = makeIo({ entries: [entry({ pid: 10, ppid: 1 })], capture: `~ ${refusal}` });
     const result = await verifyLaunchedWorker(io);
     expect(result).toEqual({ running: false, screenTail: `~ ${refusal}`, unverifiableReason: '' });
     // The tail is the LAST lines: captureScreen's start counts from the bottom (negative), like SCREEN_CAPTURE_LINES.
@@ -115,6 +114,19 @@ describe('verifyLaunchedWorker', () => {
     const io = makeIo({ panePid: null });
     const result = await verifyLaunchedWorker(io);
     expect(result.unverifiableReason).toContain('no pid');
+  });
+
+  it('treats a second look that cannot be answered as unverifiable, never as a bare success', async () => {
+    let call = 0;
+    const io = makeIo();
+    io.listProcesses = vi.fn(async () => {
+      call += 1;
+      if (call === 1) return [entry({ pid: 10, ppid: 1 }), claudeProcess(11, 10)];
+      throw new Error('process list vanished');
+    });
+    const result = await verifyLaunchedWorker(io);
+    expect(result.running).toBe(false);
+    expect(result.unverifiableReason).toContain('vanished');
   });
 
   it('keeps the two waits at their documented constants', () => {

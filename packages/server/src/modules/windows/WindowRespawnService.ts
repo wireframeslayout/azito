@@ -110,7 +110,7 @@ interface SupervisionContext {
 interface AgentLaunchPlan {
   sessionId: string | null;
   conversation: RespawnConversation;
-  /** The short id `claude attach` takes, when `conversation` is `attach` (#540). */
+  /** The short id `claude attach` takes, when `conversation` is `attach` (#639). */
   attachId?: string | null;
   configDir?: string | null;
   configDirExplicit?: boolean | null;
@@ -200,9 +200,11 @@ export class WindowRespawnService {
     private harnessPrefix: string,
     // Asked before a conversation is resumed whether it exists (#542); required so a respawn can never skip the check by a forgotten wiring.
     private conversationProbe: ConversationProbe,
-    // Asked before a Claude conversation is opened whether the Claude Code daemon holds it (#540); required for the same reason conversationProbe is.
+    // Asked before a Claude conversation is opened whether the Claude Code daemon holds it (#639); required for the same reason conversationProbe is.
     private daemonSessionChecker: DaemonSessionChecker,
     private sessionCaptureService?: SessionCaptureService,
+    // The waits of the post-launch verification, injectable for tests (production uses a real timer).
+    private verifySleep?: (ms: number) => Promise<void>,
   ) {}
 
   private get serverIsolationLock(): ServerIsolationLock {
@@ -264,12 +266,12 @@ export class WindowRespawnService {
       unitId = this.enforceExecutionGate(task, server, 'respawn', windowId, buildRespawnManifestInput(win), respawnBaseBranch);
     }
 
-    // Issue #274 / #540: duplicate session detection — the conversation this
+    // Issue #274 / #639: duplicate session detection — the conversation this
     // window will resume (win.agentSessionId, which is what the launch of its
     // first pane resumes) must not already be running in a DIFFERENT window of
     // the task. A window with no session of its own falls back to the task's
     // session only when it is the task's primary window; any other window has
-    // nothing to collide with. Known limit, older than #540 and left as is: a
+    // nothing to collide with. Known limit, older than #639 and left as is: a
     // window with several panes is checked for this one session only, not for
     // the conversation of each pane.
     if (task) {
@@ -606,6 +608,7 @@ export class WindowRespawnService {
       // resumeLegacySession's onStillAlive branch. A non-primary window has
       // no generation to protect, so it only needs the kill + discoverability
       // half (no revoke call).
+      let verifyPaneHandle: PaneHandle | null = null;
       try {
         if (opts?.skipAgentLaunch) {
           // Issue #274: only restore working directory, skip agent launch.
@@ -623,12 +626,14 @@ export class WindowRespawnService {
           // (A worker started as a program is already the window's pane: there is nothing to type.)
           const paneId = await restoreDriver.resolvePane(respawnServer, newRef, 1);
           await this.setupSinglePane(respawnServer, paneId, baseTarget, win, supervision, resolvedCwds.singleCwd, blockMcp, launchPlan?.single ?? null);
-          // Issue #540: a claude launch the CLI refused (a daemon-held conversation, a missing conversation) leaves the pane
+          // Issue #639: a claude launch the CLI refused (a daemon-held conversation, a missing conversation) leaves the pane
           // silently back at a shell — say so in the log and the notification. Single-pane windows only; a layout restore
           // of several panes is the known limit this check does not cover. Reports only: nothing is rolled back, so a
-          // misjudged "not running" cannot destroy a window whose worker was just slow to start.
+          // misjudged "not running" cannot destroy a window whose worker was just slow to start. The check itself runs
+          // AFTER this try (outside the rollback span): it waits up to ~6s, which must not hold the task lock while a
+          // DB error could still close the window.
           if (win.workerType === 'claude' && task && unitId !== null) {
-            await this.verifyWorkerStarted(respawnServer, paneId, task.id, unitId);
+            verifyPaneHandle = paneId;
           }
         }
       } catch (err) {
@@ -655,6 +660,12 @@ export class WindowRespawnService {
       persistNewWindow(true);
       // After pane restoration so every pane of the window (including the split ones) is labelled.
       await labelRegisteredWindow(restoreDriver, respawnServer, newRef, { windowId, ...(task ? { taskId: task.id } : {}) });
+
+      // Issue #639 post-launch verification: runs after the rollback span above has closed (the window is done and
+      // persisted), so its ~6s of waits never hold the task's execution lock while a DB error could still close it.
+      if (verifyPaneHandle !== null && task && unitId !== null) {
+        await this.verifyWorkerStarted(respawnServer, verifyPaneHandle, task.id, unitId);
+      }
 
       return { tmuxTarget: dbTarget };
     };
@@ -906,7 +917,7 @@ export class WindowRespawnService {
   }
 
   /**
-   * Issue #540: records why a daemon check could not be asked — once per respawn, in the execution log when the
+   * Issue #639: records why a daemon check could not be asked — once per respawn, in the execution log when the
    * window's task has a unit, on the console otherwise (a window with no task has no execution log to write to).
    */
   private logDaemonCheckUnavailable(launchPlan: { single: AgentLaunchPlan | null; panes: Map<number, AgentLaunchPlan> } | null, task: Task | null, unitId: number | null): void {
@@ -925,12 +936,12 @@ export class WindowRespawnService {
   }
 
   /**
-   * Issue #540: after a claude launch line was typed into a pane, checks the worker actually came up — the CLI can
+   * Issue #639: after a claude launch line was typed into a pane, checks the worker actually came up — the CLI can
    * refuse a launch (a `--resume` of a daemon-held conversation, a missing conversation) and leave the pane silently
    * back at a shell. Reports only: nothing is killed, no status is changed, so a false "not running" leaves the
-   * window exactly as it is. The pane screen's tail (the CLI's refusal message) and a notification through the
-   * existing status_change bridge (the task's CURRENT status with the reason, not a status transition) carry the
-   * why to the operator.
+   * window exactly as it is. The pane screen's tail (the CLI's refusal message) goes into the execution log, and the
+   * notification goes out through the status_change bridge with a NOTIFICATION-ONLY status (`worker_launch_failed`,
+   * never a real task status — re-emitting the current one would re-announce "done" / "plan review" and so on).
    */
   private async verifyWorkerStarted(server: ServerConfig, handle: PaneHandle, taskId: number, unitId: number): Promise<void> {
     const result: VerifyLaunchedResult = await verifyLaunchedWorker({
@@ -938,6 +949,7 @@ export class WindowRespawnService {
       server,
       handle,
       listProcesses: () => this.transportFactory.getTransport(server).listProcesses(),
+      ...(this.verifySleep ? { sleep: this.verifySleep } : {}),
     });
     if (result.unverifiableReason) {
       appendLogAndEmit(this.logRepo, this.events, taskId, unitId, 'command', { type: 'worker_launch_unverified', reason: result.unverifiableReason });
@@ -946,13 +958,8 @@ export class WindowRespawnService {
     if (result.running) return;
     const message = 'The claude worker did not come up after the respawn (the CLI likely refused the launch — see the pane for its message). The window was left as it is.';
     appendLogAndEmit(this.logRepo, this.events, taskId, unitId, 'command', { type: 'worker_launch_failed', message, ...(result.screenTail ? { screen: result.screenTail } : {}) });
-    // A status_change so the existing NotificationBus bridge announces it; the status itself is the task's current
-    // one — this verification never transitions anything (a wrong "not running" must not fail a working task). A task
-    // row that vanished mid-respawn has no status to announce, so only the log line above stays.
-    const task = this.taskRepo.findById(taskId);
-    if (task) {
-      appendLogAndEmit(this.logRepo, this.events, taskId, unitId, 'status_change', { status: task.status, reason: message });
-    }
+    // Notification-only status_change: the task's actual status is never read nor changed here.
+    appendLogAndEmit(this.logRepo, this.events, taskId, unitId, 'status_change', { status: 'worker_launch_failed', reason: message });
   }
 
   /** Before a Claude worker is started on `server` (see {@link prepareClaudeLaunch}); reported in the execution log of the task's unit when there is one. */
@@ -1071,24 +1078,27 @@ export class WindowRespawnService {
       const legacyDriver = this.resolveDriver(server);
       const legacyRef: MuxRef = created.ref ?? { kind: legacyDriver.kind, workspace: tmuxSession, window: created.windowName };
       const windowTarget = muxWindowTarget(legacyRef);
+      let verifyPaneHandle: PaneHandle | null = null;
       try {
         const paneId = await legacyDriver.resolvePane(server, legacyRef, 1);
-        // Issue #540: this path is claude-only, so the daemon check is asked before the launch line is decided — a conversation
+        // Issue #639: this path is claude-only, so the daemon check is asked before the launch line is decided — a conversation
         // the Claude Code daemon holds is opened with `claude attach <id>`, everything else keeps `claude --resume <id>`. A
-        // legacy task records no CLAUDE_CONFIG_DIR of its own, so the check runs against the host's default one.
-        const daemonVerdict = await this.daemonSessionChecker.check(server, legacySessionId, null);
-        if (daemonVerdict.status === 'unknown') {
-          if (unitId !== null) {
-            appendLogAndEmit(this.logRepo, this.events, task.id, unitId, 'command', { type: 'daemon_check_unavailable', reason: daemonVerdict.reason });
-          } else {
-            console.warn(`[WindowRespawnService] daemon_check_unavailable: ${daemonVerdict.reason}`);
-          }
-        }
+        // legacy task records no CLAUDE_CONFIG_DIR of its own, so the check runs against the host's default one. A host that
+        // starts workers as programs (win32) skips the check deliberately — an npm claude there is a .cmd shim the CommandSpec
+        // cannot spawn, so the check would only ever log `daemon_check_unavailable` on every recovery; the plain resume is kept.
         let resumeLaunch: WorkerLaunch;
-        if (daemonVerdict.status === 'attach') {
-          resumeLaunch = buildClaudeAttachLaunch(daemonVerdict.attachId);
-        } else {
+        if (this.startsWorkerAsProgram(server)) {
           resumeLaunch = buildClaudeLaunch({ model: null, extraArgs: null }, task.agentSessionId);
+        } else {
+          const daemonVerdict = await this.daemonSessionChecker.check(server, legacySessionId, null);
+          if (daemonVerdict.status === 'unknown') {
+            if (unitId !== null) {
+              appendLogAndEmit(this.logRepo, this.events, task.id, unitId, 'command', { type: 'daemon_check_unavailable', reason: daemonVerdict.reason });
+            } else {
+              console.warn(`[WindowRespawnService] daemon_check_unavailable: ${daemonVerdict.reason}`);
+            }
+          }
+          resumeLaunch = daemonVerdict.status === 'attach' ? buildClaudeAttachLaunch(daemonVerdict.attachId) : buildClaudeLaunch({ model: null, extraArgs: null }, task.agentSessionId);
         }
         const resumeCommand = renderLaunchLine({ ...resumeLaunch, env: undefined }, this.dialectOf(server));
         const isSupervised = shouldSupervise(server.type, 'agent', legacyRef.kind);
@@ -1114,10 +1124,10 @@ export class WindowRespawnService {
             })
           : renderLaunchLine(resumeLaunch, this.dialectOf(server));
         await legacyDriver.sendKeysToHandle(server, paneId, [sendCmd, 'Enter']);
-        // Issue #540: same post-launch verification as respawn() — reports a refused launch, never tears anything down.
-        if (unitId !== null) {
-          await this.verifyWorkerStarted(server, paneId, task.id, unitId);
-        }
+        // Issue #639: same post-launch verification as respawn() — reports a refused launch, never tears anything
+        // down. Runs AFTER this try (outside the rollback span): it waits up to ~6s, which must not hold the task
+        // lock while a DB error could still close the window.
+        verifyPaneHandle = paneId;
       } catch (err) {
         // resolvePaneId()/sendKeys() failing after createRotatedWindow already
         // succeeded used to leave an untracked window (tmuxWindow never
@@ -1152,6 +1162,9 @@ export class WindowRespawnService {
       // primary row carrying the ref would be read as a tmux window by everything that reads stored data (#313).
       this.registerLegacyPrimaryWindow(task, server.name, legacyRef, created.label ?? created.windowName, unitId);
       this.taskRepo.update(taskId, { tmuxWindow: created.windowName } as Partial<Task>);
+      if (verifyPaneHandle !== null && unitId !== null) {
+        await this.verifyWorkerStarted(server, verifyPaneHandle, task.id, unitId);
+      }
       return { windowName: created.windowName };
     });
     return { windowName };
@@ -1311,7 +1324,7 @@ export class WindowRespawnService {
   /**
    * The session each worker pane of the window starts with, decided before the window is destroyed: the recorded id (the first pane
    * also takes the window's, or the one found by a scan of the host when none was recorded) and how its conversation is opened —
-   * `resume` (it exists), `new` (it never was written) or `attach` (the Claude Code daemon holds it running; #540). The
+   * `resume` (it exists), `new` (it never was written) or `attach` (the Claude Code daemon holds it running; #639). The
    * conversation is looked up by its id in the server's conversation logs, not by the directory of the window; one that cannot be
    * looked up is a ConversationCheckError. A claude conversation is first asked of the daemon checker: one the daemon holds has no
    * transcript on disk to probe, so the probe's answer would be wrong — the probe runs only when the check answered `resume` or
@@ -1328,10 +1341,14 @@ export class WindowRespawnService {
       if (!sessionId) return { sessionId: null, conversation: 'resume' };
       const agentType = this.sessionStrategyFactory.create(workerType).conversationLogAgentType;
       if (agentType === null) return { sessionId, conversation: 'resume' };
-      const probeConfigDir = (recorded === sessionId ? configDir : null) ?? null;
+      // The daemon check only runs with the config dir when the window recorded it EXPLICITLY (#639): a window whose launch
+      // line drops the dir (`claudeConfigDirExplicit === false`, the withoutEnv path) runs its conversation under the host's
+      // default one, so asking the checker with the recorded dir would query a different daemon registry than the
+      // conversation lives in. Same rule for the probe, which answers the same question from the same place.
+      const probeConfigDir = (recorded === sessionId && configDirExplicit === true ? configDir : null) ?? null;
       const planConfigDir = server.type === 'local' && !this.startsWorkerAsProgram(server) && agentType === 'claude' && recorded === sessionId ? configDir : null;
       const planConfigDirExplicit = planConfigDir ? configDirExplicit : null;
-      if (agentType === 'claude') {
+      if (agentType === 'claude' && !this.startsWorkerAsProgram(server)) {
         const verdict: DaemonSessionVerdict = await this.daemonSessionChecker.check(server, sessionId, probeConfigDir);
         if (verdict.status === 'attach') {
           return { sessionId, conversation: 'attach', attachId: verdict.attachId, configDir: planConfigDir, configDirExplicit: planConfigDirExplicit };

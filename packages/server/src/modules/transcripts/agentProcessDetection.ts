@@ -149,7 +149,7 @@ export function findAgentProcessStartMs(entries: ProcessEntry[], rootPid: number
  * （supervisor 経由の起動でファイル作成がプロセス起動に先行し得る）に左右されない。トークン単位の
  * 完全一致で比較する（部分一致による誤検出を避けるため、argsContainAgentBinary と同じ方針）。
  *
- * daemon 保持の会話を `claude attach <短いid>` で開いた窓もこれに当てる（Issue #540）: attach の client は
+ * daemon 保持の会話を `claude attach <短いid>` で開いた窓もこれに当てる（Issue #639）: attach の client は
  * 完全 UUID を持たず、CLI が付けた短い id（先頭 8 文字。`claude agents --json` の `id`）だけを引数に持つ。
  * 短い id もトークン単位の完全一致に限る。トレードオフとして、同じcwd の別の会話の短い id と偶然一致
  * （先頭 8 hex = 32bit）すれば誤検出しうるが、部分一致と違い何の接頭辞でも一致しないため実用上は稀で、

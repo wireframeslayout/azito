@@ -209,7 +209,7 @@ export interface PushNotificationModule {
 export interface ApplicationServices {
   sessionStrategyFactory: SessionStrategyFactory;
   sessionCaptureService: SessionCaptureService;
-  /** Issue #540: whether the Claude Code daemon holds a conversation — shared by respawn, follow-up restarts and task restore. */
+  /** Issue #639: whether the Claude Code daemon holds a conversation — shared by respawn and follow-up restarts. */
   daemonSessionChecker: DaemonSessionChecker;
   transcriptSourceProvider: TranscriptSourceProvider;
   windowSessionResolver: WindowSessionResolver;
@@ -504,8 +504,9 @@ function buildApplicationServices(infra: SharedInfra, repos: Repositories, uiTok
   const taskPaneEnvironmentService = new TaskPaneEnvironmentService(repos.taskTokenRepo, repos.projectSecretRepo, uiToken, scopedAuthEnabled, repos.auditLogService);
   const uiTokenEnvFn = (server: ServerConfig) => uiTokenEnvForServer(uiToken, server);
   const transcriptSourceProvider = new HostTranscriptSourceProvider(TRANSCRIPT_SOURCES, infra.transportFactory);
-  // Issue #540: whether the Claude Code daemon holds a conversation — shared by the respawn path (WindowRespawnService),
-  // the follow-up restarts (ExecuteTaskUseCase) and the archived-task restore (TaskRestoreService).
+  // Issue #639: whether the Claude Code daemon holds a conversation — shared by the respawn path (WindowRespawnService)
+  // and the follow-up restarts (ExecuteTaskUseCase). Task restore does not need it: restore only restarts the worker
+  // on a program host (win32), where the check is skipped deliberately.
   const daemonSessionChecker = new DaemonSessionChecker(infra.transportFactory);
   const windowRespawnService = new WindowRespawnService(repos.windowRepo, infra.muxDriverRegistry, sessionStrategyFactory, repos.taskRepo, repos.unitRepo, infra.supervisorRegistry, repos.projectServerRepo, repos.projectRepo, infra.transportFactory, repos.logRepo, infra.unitTypeLoader, infra.sidekickPackageLoader, repos.serverRepo, repos.projectSecretRepo, taskEvents, taskPaneEnvironmentService, infra.serverIsolationMutex, scopedAuthEnabled, uiTokenEnvFn, harnessPrefix, new TranscriptConversationProbe(transcriptSourceProvider), daemonSessionChecker, sessionCaptureService);
   const windowSleepService = new WindowSleepService(repos.windowRepo, infra.muxDriverRegistry, sessionStrategyFactory, repos.serverRepo);
@@ -532,7 +533,6 @@ function buildApplicationServices(infra: SharedInfra, repos: Repositories, uiTok
     fetchDistributionService,
     distributionStateRepo,
     hubGitIdentity,
-    daemonSessionChecker,
   });
   // windowSessionResolver / windowActivityStatusService: shared by transcriptsRoutes
   // (session resolution), windowsRoutes (GET /api/windows/activity-status, diagnostics)

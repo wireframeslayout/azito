@@ -160,9 +160,9 @@ describe('ClaudeSessionStrategy', () => {
     expect(cmd).toBe("CLAUDE_CODE_ENABLE_PROMPT_SUGGESTION='false' claude --dangerously-skip-permissions");
   });
 
-  it('builds the attach command as the daemon client, bare (Issue #540)', () => {
+  it('builds the attach command as the daemon client, bare (Issue #639)', () => {
     const cmd = renderLaunchLine(strategy.buildRespawnLaunch(SESSION_ID, 'sonnet', null, true, 'attach', '71f25140'), posixDialect);
-    expect(cmd).toBe('claude attach 71f25140');
+    expect(cmd).toBe("CLAUDE_CODE_ENABLE_PROMPT_SUGGESTION='false' claude attach 71f25140");
   });
 
   it('the attach launch falls back to the first 8 characters of the session id when no attach id was printed', () => {

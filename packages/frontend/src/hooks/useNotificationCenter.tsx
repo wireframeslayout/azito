@@ -24,7 +24,7 @@ const AGENT_DEDUPE_SCAN_LIMIT = 50;
 // プロジェクト跨ぎナビゲーション後、Workspace が onOpenTask を再登録しない場合に保留を破棄するTTL
 const PENDING_OPEN_TASK_TTL_MS = 5000;
 
-const FAILED_STATUSES = new Set(['error', 'send_error', 'worker_not_ready', 'codex_error', 'stopped_by_user']);
+const FAILED_STATUSES = new Set(['error', 'send_error', 'worker_not_ready', 'worker_launch_failed', 'codex_error', 'stopped_by_user']);
 
 const NOTIFICATION_KINDS: readonly AppNotificationKind[] = [
   'qa', 'plan_approval', 'execution_approval', 'task_done', 'task_failed', 'agent_finished', 'server_firewall',
@@ -120,14 +120,14 @@ function agentLabelOf(payload: AgentActivityPayload): string {
 function buildTaskNotification(
   kind: AppNotificationKind,
   messageKey: string,
-  payload: { taskId: number; status: string; title?: string; projectId?: number },
+  payload: { taskId: number; status: string; title?: string; projectId?: number; reason?: string },
   taskTitle: string,
 ): AppNotification {
   return {
     id: makeId(),
     kind,
     messageKey,
-    messageParams: { title: taskTitle },
+    messageParams: payload.reason ? { title: taskTitle, reason: payload.reason } : { title: taskTitle },
     taskId: payload.taskId,
     projectId: payload.projectId,
     read: false,
@@ -253,7 +253,7 @@ export function NotificationCenterProvider({ children }: { children: React.React
       const { diagnosis } = payload;
       pushNotification({ id: makeId(), kind: 'server_firewall', title: t('firewall.title', { serverName: payload.serverName }), body: t(`firewall.${diagnosis.state}`, { rules: diagnosis.blockedBy.join(', ') }) + (diagnosis.commands.length ? `\n${diagnosis.commands.join('\n')}` : ''), serverName: payload.serverName, read: false, createdAt: Date.now() });
     }, [pushNotification, t]),
-    onTaskStatus: useCallback((payload: { taskId: number; status: string; title?: string; projectId?: number }) => {
+    onTaskStatus: useCallback((payload: { taskId: number; status: string; title?: string; projectId?: number; reason?: string }) => {
       const taskTitle = taskTitleOf(payload.title, payload.taskId, t('fallbackTaskTitle', { taskId: payload.taskId }));
       switch (payload.status) {
         case 'waiting_for_human':
@@ -267,6 +267,10 @@ export function NotificationCenterProvider({ children }: { children: React.React
           break;
         case 'done':
           pushNotification(buildTaskNotification('task_done', 'notifications:kinds.taskDone', payload, taskTitle));
+          break;
+        case 'worker_launch_failed':
+          // #639: NOT a real task status — the respawn's post-launch check found no worker. Shows its reason.
+          pushNotification(buildTaskNotification('task_failed', 'notifications:kinds.taskLaunchFailed', payload, taskTitle));
           break;
         default:
           if (FAILED_STATUSES.has(payload.status)) {

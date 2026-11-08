@@ -46,7 +46,7 @@ describe('planResumeWorkerLaunch', () => {
 });
 
 describe('planResumeWorkerLaunchDaemonAware', () => {
-  it('attaches when the daemon holds the conversation (Issue #540)', async () => {
+  it('attaches when the daemon holds the conversation (Issue #639)', async () => {
     const checker = checkerOf({ status: 'attach', attachId: '14b46fcb' });
     const plan = await planResumeWorkerLaunchDaemonAware(unit(), SESSION_ID, factoryOf(strategyOf()), checker, server);
     expect(launchArgv(plan!.launch)).toEqual(['claude', 'attach', '14b46fcb']);
@@ -89,6 +89,15 @@ describe('planResumeWorkerLaunchDaemonAware', () => {
     const checker = checkerOf({ status: 'attach', attachId: '14b46fcb' });
     const plan = await planResumeWorkerLaunchDaemonAware(unit(), SESSION_ID, factoryOf(strategyOf({ supportsSession: false })), checker, server);
     expect(launchArgv(plan!.launch)).toEqual(claudeBaseArgv());
+    expect((checker.check as ReturnType<typeof vi.fn>)).not.toHaveBeenCalled();
+  });
+
+  it('skips the check on a win32 host without logging anything (an npm claude there is a .cmd shim the spec cannot spawn)', async () => {
+    const checker = checkerOf({ status: 'unknown', reason: 'spawn claude ENOENT' });
+    const winServer = { name: 'win-server', type: 'agent', hostProfile: { platform: 'win32', arch: 'x64' } } as unknown as ServerConfig;
+    const plan = await planResumeWorkerLaunchDaemonAware(unit(), SESSION_ID, factoryOf(strategyOf()), checker, winServer);
+    expect(launchArgv(plan!.launch)).toEqual([...claudeBaseArgv(), '--resume', SESSION_ID]);
+    expect(plan!.daemonCheckUnknownReason).toBe('');
     expect((checker.check as ReturnType<typeof vi.fn>)).not.toHaveBeenCalled();
   });
 });

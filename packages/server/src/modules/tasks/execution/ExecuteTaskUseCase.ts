@@ -196,7 +196,7 @@ export class ExecuteTaskUseCase {
     private harnessPrefix: string,
     private hubGitIdentity: GitIdentity | null,
     private localHomes: LocalAgentHomes,
-    // Issue #540: asked before a follow-up restarts a Claude worker whether the daemon holds the conversation (an
+    // Issue #639: asked before a follow-up restarts a Claude worker whether the daemon holds the conversation (an
     // attach launch then, instead of a --resume the CLI would refuse). Same singleton the respawn path uses.
     private daemonSessionChecker: DaemonSessionChecker,
   ) {
@@ -1817,13 +1817,14 @@ export class ExecuteTaskUseCase {
         // `windowName` once creation is confirmed to have actually
         // succeeded.
         // The window starts in the directory the worker runs in, so a host that starts the worker as a program decides both first.
+        // A program host is win32, where the daemon check is skipped deliberately (an npm claude is a .cmd shim the CommandSpec
+        // cannot spawn) — the plain resume plan is enough here: this only sizes the argv (launchArgv).
         let program: PaneProgram | undefined;
         if (startedAsProgram) {
-          const resumePlan = await planResumeWorkerLaunchDaemonAware(unit, task.agentSessionId, this.sessionStrategyFactory, this.daemonSessionChecker, server);
-          if (resumePlan?.daemonCheckUnknownReason) this.appendLog(taskId, unitId, 'command', { type: 'daemon_check_unavailable', reason: resumePlan.daemonCheckUnknownReason });
-          if (resumePlan?.launch) {
+          const resumeLaunch = planResumeWorkerLaunch(unit, task.agentSessionId, this.sessionStrategyFactory);
+          if (resumeLaunch) {
             const dir = await this.resolveFollowUpDirectory(server, task, serverName, unitId);
-            program = await programFor(resumePlan.launch, dir, () => this.transportFactory.getFileOps(server));
+            program = await programFor(resumeLaunch, dir, () => this.transportFactory.getFileOps(server));
           }
         }
         const created = await createRotatedWindow(this.paneEnvService, this.serverIsolationLock, server, currentTask, 'followup_create_failed', async (freshServer, env) => {
@@ -1928,12 +1929,13 @@ export class ExecuteTaskUseCase {
         }
       }
 
-      // Issue #540: daemon-aware — a conversation the Claude Code daemon holds is reopened with `claude attach <id>`
+      // Issue #639: daemon-aware — a conversation the Claude Code daemon holds is reopened with `claude attach <id>`
       // (a `--resume` of it is refused and would leave the fresh window back at a shell), everything else as before.
-      // The check runs with the primary window's recorded CLAUDE_CONFIG_DIR when there is one: the daemon registers
-      // background sessions under the config directory that started them.
+      // The check runs with the primary window's recorded CLAUDE_CONFIG_DIR only when the window recorded it
+      // EXPLICITLY: the daemon registers background sessions under the config directory that started them, and a
+      // window whose launch line drops the dir runs its conversation under the host's default one.
       const followUpPrimaryWin = this.windowRepo.findByTask(taskId).find((w) => w.isPrimary);
-      const effectiveFollowUpPlan: ResumeWorkerLaunchPlan | null = await planResumeWorkerLaunchDaemonAware(unit, task.agentSessionId, this.sessionStrategyFactory, this.daemonSessionChecker, server, followUpPrimaryWin?.claudeConfigDir ?? null);
+      const effectiveFollowUpPlan: ResumeWorkerLaunchPlan | null = await planResumeWorkerLaunchDaemonAware(unit, task.agentSessionId, this.sessionStrategyFactory, this.daemonSessionChecker, server, followUpPrimaryWin?.claudeConfigDirExplicit === true ? followUpPrimaryWin?.claudeConfigDir ?? null : null);
       if (effectiveFollowUpPlan?.daemonCheckUnknownReason) this.appendLog(taskId, unitId, 'command', { type: 'daemon_check_unavailable', reason: effectiveFollowUpPlan.daemonCheckUnknownReason });
       const effectiveFollowUpLaunch = effectiveFollowUpPlan?.launch ?? null;
       if (effectiveFollowUpLaunch) {

@@ -4,7 +4,7 @@ import type { WorkerLaunch } from './WorkerLaunch';
 /**
  * How a respawn starts the conversation it has an id for: `resume` the existing one, `new` = start it fresh under the
  * same id, or `attach` = the Claude Code daemon already holds it running and the launch opens it as the daemon's
- * client (`claude attach <id>`, Issue #540 — a `--resume` of a daemon-held conversation is refused).
+ * client (`claude attach <id>`, Issue #639 — a `--resume` of a daemon-held conversation is refused).
  */
 export type RespawnConversation = 'resume' | 'new' | 'attach';
 
