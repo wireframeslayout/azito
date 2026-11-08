@@ -127,7 +127,9 @@ function buildTaskNotification(
     id: makeId(),
     kind,
     messageKey,
-    messageParams: payload.reason ? { title: taskTitle, reason: payload.reason } : { title: taskTitle },
+    // The message is the i18n's job alone; a `reason` in the payload is a short server-side code, never interpolated
+    // into the sentence (#639 review round 2 — a fixed English string would surface untranslated on the ja UI).
+    messageParams: { title: taskTitle },
     taskId: payload.taskId,
     projectId: payload.projectId,
     read: false,

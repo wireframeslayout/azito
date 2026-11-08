@@ -18,7 +18,7 @@
     "executionApproval": "実行承認待ち: {{title}}",
     "taskDone": "タスク完了: {{title}}",
     "taskFailed": "タスク失敗: {{title}}",
-    "taskLaunchFailed": "worker が起動しません: {{title}} — {{reason}}",
+    "taskLaunchFailed": "worker が起動しません: {{title}}",
     "agentFinished": "エージェント終了: {{label}}",
     "agentApiError": "{{label}} が API エラーで停止しました"
   },

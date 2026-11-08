@@ -41,7 +41,7 @@ import { resolveEnvelopeHost } from './AzitoctlPath';
 import type { LocalAgentHomes } from '../../agents/agentHomes';
 import { createTaskWorktree, TaskWorktreeError, type TaskWorktreeDeps } from './TaskWorktreeSetup';
 import { planNewWorkerLaunch, planResumeWorkerLaunch, planResumeWorkerLaunchDaemonAware, type ResumeWorkerLaunchPlan } from './WorkerLaunchPlan';
-import { DaemonSessionChecker } from '../../agents/claude/DaemonSessionChecker';
+import type { DaemonSessionChecker } from '../../agents/claude/DaemonSessionChecker';
 import { shellDialectFor, type ShellDialect } from '../../../shared/os/shellDialect';
 import { expandTemplate } from './PromptExpander';
 import type { UnitTypeLoader } from '../../sidekicks/UnitTypeLoader';
@@ -1931,11 +1931,12 @@ export class ExecuteTaskUseCase {
 
       // Issue #639: daemon-aware — a conversation the Claude Code daemon holds is reopened with `claude attach <id>`
       // (a `--resume` of it is refused and would leave the fresh window back at a shell), everything else as before.
-      // The check runs with the primary window's recorded CLAUDE_CONFIG_DIR only when the window recorded it
-      // EXPLICITLY: the daemon registers background sessions under the config directory that started them, and a
-      // window whose launch line drops the dir runs its conversation under the host's default one.
+      // The check runs with the primary window's recorded CLAUDE_CONFIG_DIR when there is one: the recorded dir is
+      // where the conversation lives, explicit or not (for a `claudeConfigDirExplicit === false` window it IS the
+      // pane-side default the withoutEnv launch line runs under), and the env override also keeps the check from
+      // inheriting the hub's own CLAUDE_CONFIG_DIR.
       const followUpPrimaryWin = this.windowRepo.findByTask(taskId).find((w) => w.isPrimary);
-      const effectiveFollowUpPlan: ResumeWorkerLaunchPlan | null = await planResumeWorkerLaunchDaemonAware(unit, task.agentSessionId, this.sessionStrategyFactory, this.daemonSessionChecker, server, followUpPrimaryWin?.claudeConfigDirExplicit === true ? followUpPrimaryWin?.claudeConfigDir ?? null : null);
+      const effectiveFollowUpPlan: ResumeWorkerLaunchPlan | null = await planResumeWorkerLaunchDaemonAware(unit, task.agentSessionId, this.sessionStrategyFactory, this.daemonSessionChecker, server, followUpPrimaryWin?.claudeConfigDir ?? null);
       if (effectiveFollowUpPlan?.daemonCheckUnknownReason) this.appendLog(taskId, unitId, 'command', { type: 'daemon_check_unavailable', reason: effectiveFollowUpPlan.daemonCheckUnknownReason });
       const effectiveFollowUpLaunch = effectiveFollowUpPlan?.launch ?? null;
       if (effectiveFollowUpLaunch) {

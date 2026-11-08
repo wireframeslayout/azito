@@ -2332,7 +2332,7 @@ describe('WindowRespawnService.respawn — duplicate session guard (Issue #274)'
     await expect(service.respawn(1, makeServer())).rejects.toMatchObject({ windowId: 999 });
   });
 
-  it('wakes a secondary window with its own session while the primary runs the task session (Issue #639)', async () => {
+  it('wakes a secondary window with its own session while the primary runs the task session (Issue #540)', async () => {
     const taskSession = 'aaaaaaaa-1111-4111-8111-111111111111';
     const ownSession = 'bbbbbbbb-2222-4222-8222-222222222222';
     const task = makeTask({ id: 5, unitId: 10, agentSessionId: taskSession });
@@ -2357,7 +2357,7 @@ describe('WindowRespawnService.respawn — duplicate session guard (Issue #274)'
     expect(resumed).toEqual([ownSession]);
   });
 
-  it('rejects waking a secondary window whose own session runs in another window, naming window and conversation (Issue #639)', async () => {
+  it('rejects waking a secondary window whose own session runs in another window, naming window and conversation (Issue #540)', async () => {
     const ownSession = 'bbbbbbbb-2222-4222-8222-222222222222';
     const task = makeTask({ id: 5, unitId: 10, agentSessionId: 'aaaaaaaa-1111-4111-8111-111111111111' });
     const unit = makeUnit({ id: 10 });
@@ -2380,7 +2380,7 @@ describe('WindowRespawnService.respawn — duplicate session guard (Issue #274)'
     });
   });
 
-  it('does not check duplicates for a secondary window without a session of its own (Issue #639)', async () => {
+  it('does not check duplicates for a secondary window without a session of its own (Issue #540)', async () => {
     const taskSession = 'aaaaaaaa-1111-4111-8111-111111111111';
     const task = makeTask({ id: 5, unitId: 10, agentSessionId: taskSession });
     const unit = makeUnit({ id: 10 });
@@ -2728,9 +2728,10 @@ describe('WindowRespawnService.respawn — a conversation that was never written
     const probe = { exists: vi.fn(async () => true) };
     const { tmux, sentCommands, outcome } = await respawnWith(makeWindow({ agentSessionId: SESSION, claudeConfigDir: directory, claudeConfigDirExplicit: false }), probe);
     expect(outcome).toBeNull();
-    // The launch line drops the dir (withoutEnv), so the conversation ran under the host's DEFAULT one — the probe
-    // (and the daemon checker of #639) look there, not at the recorded-but-dropped dir (#639 review).
-    expect(probe.exists).toHaveBeenCalledWith(expect.anything(), 'claude', SESSION, null);
+    // The launch line drops the dir (withoutEnv), but the recorded dir IS the pane-side default the conversation
+    // actually ran under ($HOME/.claude resolved by the session hook) — the probe (#542) and the daemon checker of
+    // #639 both look there.
+    expect(probe.exists).toHaveBeenCalledWith(expect.anything(), 'claude', SESSION, directory);
     const options = tmux.openWindow.mock.calls[0][3] as unknown as { extraEnv: Record<string, string> };
     expect(options.extraEnv.AZITO_RESUME_CLAUDE_CONFIG_DIR).toBeUndefined();
     expect(sentCommands.join('\n')).toContain('(unset CLAUDE_CONFIG_DIR; ');
@@ -3047,16 +3048,21 @@ describe('WindowRespawnService.respawn — a conversation the Claude Code daemon
     expect(sentCommands.join('\n')).toContain(`--resume ${SESSION}`);
   });
 
-  it('does not hand the checker a config dir the window launch line drops (configDirExplicit false)', async () => {
+  it('runs the daemon check AND the probe with the recorded dir even when the launch line drops it (configDirExplicit false)', async () => {
+    // The recorded dir of an explicit:false window IS the pane-side default the conversation ran under
+    // ($HOME/.claude resolved by the session hook) — the checker must ask THAT registry (never inheriting the
+    // hub's own CLAUDE_CONFIG_DIR) and the probe must find the transcript there (#639 review round 2).
     const daemonChecker = { check: vi.fn(async () => ({ status: 'resume' })) };
+    const probe = { exists: vi.fn(async () => true) };
     const { service, sentCommands } = buildService({
       window: makeWindow({ agentSessionId: SESSION, claudeConfigDir: '/tmp/claude-dropped', claudeConfigDirExplicit: false }),
       strategyFactory: claudeFactory,
-      conversationProbe: { exists: vi.fn(async () => true) },
+      conversationProbe: probe,
       daemonChecker: daemonChecker as any,
     });
     await service.respawn(1, makeServer());
-    expect(daemonChecker.check).toHaveBeenCalledWith(expect.anything(), SESSION, null);
+    expect(daemonChecker.check).toHaveBeenCalledWith(expect.anything(), SESSION, '/tmp/claude-dropped');
+    expect(probe.exists).toHaveBeenCalledWith(expect.anything(), 'claude', SESSION, '/tmp/claude-dropped');
     expect(sentCommands.join('\n')).toContain(`--resume ${SESSION}`);
   });
 
@@ -3076,22 +3082,58 @@ describe('WindowRespawnService.respawn — a conversation the Claude Code daemon
       daemonChecker: { check: vi.fn(async () => ({ status: 'attach', attachId: '14b46fcb' })) } as any,
       transportFactory,
     });
-    (tmux as any).panePidByHandle = vi.fn(async () => 1234);
+    const panePid = vi.fn(async () => 1234);
+    (tmux as any).panePidByHandle = panePid;
     (tmux as any).captureScreen = vi.fn(async () => ({ stdout: 'That session is running in the background (14b46fcb)', stderr: '', code: 0 }));
     const emitted: Array<{ type: string; content: Record<string, unknown> }> = [];
     events.on('log', (entry: { type: string; content: Record<string, unknown> }) => emitted.push(entry));
 
     await service.respawn(1, makeServer());
 
-    // Two looks: wait -> look, wait -> confirm. The worker never stands.
-    expect(listProcesses).toHaveBeenCalledTimes(2);
+    // The verification is fire-and-forget after the task lock — wait for its report (a failing worker is judged
+    // on the FIRST look, so waiting for a second one would never happen).
+    await vi.waitFor(() => expect(emitted.some((e) => e.type === 'status_change')).toBe(true));
     const failed = logRepo.append.mock.calls.find(([, , , content]: unknown[]) => (content as { type?: string })?.type === 'worker_launch_failed');
     expect(failed).toBeTruthy();
     const statusChange = emitted.find((e) => e.type === 'status_change');
-    expect(statusChange?.content).toMatchObject({ status: 'worker_launch_failed', reason: expect.stringContaining('did not come up') });
+    // The reason is a short CODE: the sentence the operator sees is the frontend i18n's job (#639 review round 2).
+    expect(statusChange?.content).toMatchObject({ status: 'worker_launch_failed', reason: 'not_running' });
     // The task's REAL status is untouched (the notification status is not a transition).
     const statuses = logRepo.append.mock.calls.map(([, , , content]: unknown[]) => (content as { status?: string })?.status).filter(Boolean);
     expect(statuses).toEqual(['worker_launch_failed']);
+  });
+
+  it('runs the launch verification after the task lock is released, fire-and-forget', async () => {
+    // The verification waits on a gate that never opens while respawn() is awaited: if the wait ran inside
+    // runExclusiveForTask, respawn() itself could not resolve (the lock would be held by the wait).
+    let release!: () => void;
+    const gated = new Promise<void>((resolve) => { release = resolve; });
+    const listProcesses = vi.fn(async () => [
+      { pid: 1234, ppid: 1, startMs: 1000, executable: null, commandLine: 'bash', rssBytes: null },
+    ]);
+    const transportFactory = { getTransport: vi.fn(() => ({ listProcesses })), getFileOps: vi.fn(() => hostFiles), hostProfileFor: vi.fn(() => null) } as any;
+    const task = makeTask({ id: 5, unitId: 10 });
+    const unit = makeUnit({ id: 10 });
+    const { service, tmux } = buildService({
+      window: makeWindow({ taskId: 5, agentSessionId: SESSION }),
+      task,
+      unit,
+      strategyFactory: claudeFactory,
+      conversationProbe: { exists: vi.fn(async () => true) },
+      daemonChecker: { check: vi.fn(async () => ({ status: 'attach', attachId: '14b46fcb' })) } as any,
+      transportFactory,
+      verifySleep: () => gated,
+    });
+    const panePid = vi.fn(async () => 1234);
+    (tmux as any).panePidByHandle = panePid;
+
+    await service.respawn(1, makeServer());
+
+    // respawn() has returned while the verification is still in its first wait — the lock is free (panePidByHandle
+    // is only read by the verification; listProcesses is also read by the duplicate-session check of #540).
+    expect(panePid).not.toHaveBeenCalled();
+    release();
+    await vi.waitFor(() => expect(panePid).toHaveBeenCalledTimes(1));
   });
 
   it('logs nothing when the attach launch left a running worker', async () => {
@@ -3111,10 +3153,13 @@ describe('WindowRespawnService.respawn — a conversation the Claude Code daemon
       daemonChecker: { check: vi.fn(async () => ({ status: 'attach', attachId: '14b46fcb' })) } as any,
       transportFactory,
     });
-    (tmux as any).panePidByHandle = vi.fn(async () => 1234);
+    const panePid = vi.fn(async () => 1234);
+    (tmux as any).panePidByHandle = panePid;
 
     await service.respawn(1, makeServer());
 
+    // The verification is fire-and-forget after the task lock — let its two looks finish before judging the logs.
+    await vi.waitFor(() => expect(panePid).toHaveBeenCalledTimes(2));
     const failed = logRepo.append.mock.calls.find(([, , , content]: unknown[]) => (content as { type?: string })?.type === 'worker_launch_failed');
     expect(failed).toBeUndefined();
     const unverified = logRepo.append.mock.calls.find(([, , , content]: unknown[]) => (content as { type?: string })?.type === 'worker_launch_unverified');

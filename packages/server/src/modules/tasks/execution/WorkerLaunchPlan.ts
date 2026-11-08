@@ -4,7 +4,7 @@ import { buildWorkerLaunch } from '../../agents/LaunchCommand';
 import type { ISessionStrategy, ISessionStrategyFactory } from '../../agents/SessionStrategy';
 import { withFlags, type WorkerLaunch } from '../../agents/WorkerLaunch';
 import { buildClaudeAttachLaunch } from '../../agents/claude/launchCommand';
-import { DaemonSessionChecker } from '../../agents/claude/DaemonSessionChecker';
+import type { DaemonSessionChecker } from '../../agents/claude/DaemonSessionChecker';
 import { workerStartsAsProgram } from '../../../shared/os/hostFeature';
 import type { ServerConfig } from '../../servers/Server';
 

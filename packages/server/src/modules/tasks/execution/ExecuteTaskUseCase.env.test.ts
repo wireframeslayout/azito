@@ -870,6 +870,30 @@ describe('ExecuteTaskUseCase execution-env resolution', () => {
     expect(sentCommand[0]).not.toContain('--dangerously-skip-permissions');
   });
 
+  it('followUp() asks the daemon check with the primary window’s recorded CLAUDE_CONFIG_DIR, explicit or not (Issue #639)', async () => {
+    // A `claudeConfigDirExplicit === false` window's recorded dir IS the pane-side default the conversation ran
+    // under ($HOME/.claude resolved by the session hook) — the check must ask THAT registry, never inheriting the
+    // hub's own CLAUDE_CONFIG_DIR (#639 review round 2).
+    const SESSION = '14b46fcb-1234-4def-8abc-000000000001';
+    const unit = makeUnit({ id: 49, workerType: 'claude', workerModel: 'opus', workerExecutionMode: 'http-signal' });
+    const task = makeTask({ id: 4, serverName: 'local-server', unitId: 49, tmuxWindow: 'task-4', agentSessionId: SESSION });
+    const daemonChecker = { check: vi.fn(async () => ({ status: 'resume' })) };
+    const { useCase, windowRepo } = buildUseCase({
+      task,
+      project: makeProject({ defaultUnitId: null }),
+      units: [unit],
+      daemonChecker,
+      sessionStrategyFactory: { create: () => new ClaudeSessionStrategy(null as never, { claudeConfigDir: null, codexHome: null }) },
+    });
+    (windowRepo.findByTask as ReturnType<typeof vi.fn>).mockReturnValue([
+      { id: 10, ownerType: 'task', isPrimary: true, taskId: 4, serverName: 'local-server', tmuxTarget: 'azito:task-4.1', label: 'task-4', projectId: null, windowType: 'agent', workerType: 'claude', workerModel: 'opus', agentSessionId: SESSION, launchCommand: null, workingDirectory: null, paneLayout: null, claudeConfigDir: '/home/user/.claude', claudeConfigDirExplicit: false, createdAt: '2026-01-01T00:00:00Z' },
+    ]);
+
+    await useCase.followUp(49, 4, 'please continue');
+
+    expect(daemonChecker.check).toHaveBeenCalledWith(expect.anything(), SESSION, '/home/user/.claude');
+  });
+
   it('wraps the worker launch sendKeysToHandle command for an agent window on a local server (http-signal mode)', async () => {
     const unit = makeUnit({ id: 47, workerType: 'claude', workerModel: 'opus', workerExecutionMode: 'http-signal' });
     const task = makeTask({ id: 3, serverName: 'local-server', unitId: 47 });

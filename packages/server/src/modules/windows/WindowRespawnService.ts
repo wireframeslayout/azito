@@ -266,12 +266,12 @@ export class WindowRespawnService {
       unitId = this.enforceExecutionGate(task, server, 'respawn', windowId, buildRespawnManifestInput(win), respawnBaseBranch);
     }
 
-    // Issue #274 / #639: duplicate session detection — the conversation this
+    // Issue #274 / #540: duplicate session detection — the conversation this
     // window will resume (win.agentSessionId, which is what the launch of its
     // first pane resumes) must not already be running in a DIFFERENT window of
     // the task. A window with no session of its own falls back to the task's
     // session only when it is the task's primary window; any other window has
-    // nothing to collide with. Known limit, older than #639 and left as is: a
+    // nothing to collide with. Known limit, older than #540 and left as is: a
     // window with several panes is checked for this one session only, not for
     // the conversation of each pane.
     if (task) {
@@ -403,7 +403,7 @@ export class WindowRespawnService {
     // before the next queued rotation for that task can begin. A window with
     // no owning task has no generation to protect and no concurrent rotation
     // to race, so it still runs unlocked.
-    const run = async (): Promise<{ tmuxTarget: string }> => {
+    const run = async (): Promise<{ tmuxTarget: string; verifyPaneHandle: PaneHandle | null; respawnServer: ServerConfig }> => {
       // Re-read the window's CURRENT tmuxTarget from the DB inside the lock
       // (mirrors ExecuteTaskUseCase's `currentTask` re-read — see its own
       // comment on the TOCTOU this closes): a prior queued rotation for this
@@ -629,9 +629,8 @@ export class WindowRespawnService {
           // Issue #639: a claude launch the CLI refused (a daemon-held conversation, a missing conversation) leaves the pane
           // silently back at a shell — say so in the log and the notification. Single-pane windows only; a layout restore
           // of several panes is the known limit this check does not cover. Reports only: nothing is rolled back, so a
-          // misjudged "not running" cannot destroy a window whose worker was just slow to start. The check itself runs
-          // AFTER this try (outside the rollback span): it waits up to ~6s, which must not hold the task lock while a
-          // DB error could still close the window.
+          // misjudged "not running" cannot destroy a window whose worker was just slow to start. The check itself only
+          // RECORDS the pane here: it runs after runExclusiveForTask has released the task lock (see below).
           if (win.workerType === 'claude' && task && unitId !== null) {
             verifyPaneHandle = paneId;
           }
@@ -661,16 +660,20 @@ export class WindowRespawnService {
       // After pane restoration so every pane of the window (including the split ones) is labelled.
       await labelRegisteredWindow(restoreDriver, respawnServer, newRef, { windowId, ...(task ? { taskId: task.id } : {}) });
 
-      // Issue #639 post-launch verification: runs after the rollback span above has closed (the window is done and
-      // persisted), so its ~6s of waits never hold the task's execution lock while a DB error could still close it.
-      if (verifyPaneHandle !== null && task && unitId !== null) {
-        await this.verifyWorkerStarted(respawnServer, verifyPaneHandle, task.id, unitId);
-      }
-
-      return { tmuxTarget: dbTarget };
+      return { tmuxTarget: dbTarget, verifyPaneHandle, respawnServer };
     };
 
-    return task ? await runExclusiveForTask(task.id, run) : await run();
+    const { tmuxTarget, verifyPaneHandle, respawnServer: verifiedServer } = task ? await runExclusiveForTask(task.id, run) : await run();
+    // Issue #639 post-launch verification: runs AFTER runExclusiveForTask has released the task lock — it waits up to
+    // ~6s, which must not block this task's execute / follow-up / restore behind the lock, nor hold it while a DB
+    // error could still close the window. Fire-and-forget: an exception (a vanished transport, an unreadable screen)
+    // is logged, never propagated — the window is done and persisted either way.
+    if (verifyPaneHandle !== null && task && unitId !== null) {
+      void this.verifyWorkerStarted(verifiedServer, verifyPaneHandle, task.id, unitId).catch((err: unknown) => {
+        console.error(`[WindowRespawnService] post-launch verification of task ${task.id} failed:`, err);
+      });
+    }
+    return { tmuxTarget };
   }
 
   /**
@@ -958,8 +961,9 @@ export class WindowRespawnService {
     if (result.running) return;
     const message = 'The claude worker did not come up after the respawn (the CLI likely refused the launch — see the pane for its message). The window was left as it is.';
     appendLogAndEmit(this.logRepo, this.events, taskId, unitId, 'command', { type: 'worker_launch_failed', message, ...(result.screenTail ? { screen: result.screenTail } : {}) });
-    // Notification-only status_change: the task's actual status is never read nor changed here.
-    appendLogAndEmit(this.logRepo, this.events, taskId, unitId, 'status_change', { status: 'worker_launch_failed', reason: message });
+    // Notification-only status_change: the task's actual status is never read nor changed here. The reason is a
+    // short CODE, not this English sentence — the notification text is the frontend's i18n's job (#639 review round 2).
+    appendLogAndEmit(this.logRepo, this.events, taskId, unitId, 'status_change', { status: 'worker_launch_failed', reason: 'not_running' });
   }
 
   /** Before a Claude worker is started on `server` (see {@link prepareClaudeLaunch}); reported in the execution log of the task's unit when there is one. */
@@ -1022,7 +1026,7 @@ export class WindowRespawnService {
     // (design v3 §2 — see runExclusiveForTask's doc comment in
     // WindowRotation.ts) so a concurrent rotation for this task cannot
     // revoke this generation out from under it.
-    const { windowName } = await runExclusiveForTask(taskId, async () => {
+    const { windowName, verifyPaneHandle } = await runExclusiveForTask(taskId, async () => {
       const created = await createRotatedWindow(this.paneEnvService, this.serverIsolationLock, server, task, 'resume_legacy_create_failed', async (freshServer, env) => {
           const d = this.resolveDriver(freshServer);
           await this.prepareClaudeLaunchFor(freshServer, task.id, unitId);
@@ -1125,8 +1129,8 @@ export class WindowRespawnService {
           : renderLaunchLine(resumeLaunch, this.dialectOf(server));
         await legacyDriver.sendKeysToHandle(server, paneId, [sendCmd, 'Enter']);
         // Issue #639: same post-launch verification as respawn() — reports a refused launch, never tears anything
-        // down. Runs AFTER this try (outside the rollback span): it waits up to ~6s, which must not hold the task
-        // lock while a DB error could still close the window.
+        // down. The check itself only RECORDS the pane here: it runs after runExclusiveForTask has released the
+        // task lock (see below).
         verifyPaneHandle = paneId;
       } catch (err) {
         // resolvePaneId()/sendKeys() failing after createRotatedWindow already
@@ -1162,11 +1166,16 @@ export class WindowRespawnService {
       // primary row carrying the ref would be read as a tmux window by everything that reads stored data (#313).
       this.registerLegacyPrimaryWindow(task, server.name, legacyRef, created.label ?? created.windowName, unitId);
       this.taskRepo.update(taskId, { tmuxWindow: created.windowName } as Partial<Task>);
-      if (verifyPaneHandle !== null && unitId !== null) {
-        await this.verifyWorkerStarted(server, verifyPaneHandle, task.id, unitId);
-      }
-      return { windowName: created.windowName };
+      return { windowName: created.windowName, verifyPaneHandle };
     });
+    // Issue #639 post-launch verification: runs AFTER runExclusiveForTask has released the task lock — its ~6s of
+    // waits must not block this task's execute / follow-up / restore behind the lock. Fire-and-forget: an exception
+    // is logged, never propagated — the window is done and persisted either way.
+    if (verifyPaneHandle !== null && unitId !== null) {
+      void this.verifyWorkerStarted(server, verifyPaneHandle, task.id, unitId).catch((err: unknown) => {
+        console.error(`[WindowRespawnService] post-launch verification of task ${task.id} failed:`, err);
+      });
+    }
     return { windowName };
   }
 
@@ -1341,11 +1350,14 @@ export class WindowRespawnService {
       if (!sessionId) return { sessionId: null, conversation: 'resume' };
       const agentType = this.sessionStrategyFactory.create(workerType).conversationLogAgentType;
       if (agentType === null) return { sessionId, conversation: 'resume' };
-      // The daemon check only runs with the config dir when the window recorded it EXPLICITLY (#639): a window whose launch
-      // line drops the dir (`claudeConfigDirExplicit === false`, the withoutEnv path) runs its conversation under the host's
-      // default one, so asking the checker with the recorded dir would query a different daemon registry than the
-      // conversation lives in. Same rule for the probe, which answers the same question from the same place.
-      const probeConfigDir = (recorded === sessionId && configDirExplicit === true ? configDir : null) ?? null;
+      // The recorded dir is where the conversation lives, explicit or not (#639 review round 2): for an
+      // `claudeConfigDirExplicit === false` window it IS the pane-side default ($HOME/.claude resolved by the session
+      // hook), the same place the withoutEnv launch line runs the conversation under — so the daemon checker asked with
+      // it queries the registry the conversation actually registers in (never inheriting the hub's own CLAUDE_CONFIG_DIR),
+      // and the probe (#542) finds the transcript. A window whose recorded id is not this session's own (a scanned
+      // session, another pane) has no dir of its own to ask with. Both lookups take the same value: they answer the
+      // same question from the same place.
+      const probeConfigDir = (recorded === sessionId ? configDir : null) ?? null;
       const planConfigDir = server.type === 'local' && !this.startsWorkerAsProgram(server) && agentType === 'claude' && recorded === sessionId ? configDir : null;
       const planConfigDirExplicit = planConfigDir ? configDirExplicit : null;
       if (agentType === 'claude' && !this.startsWorkerAsProgram(server)) {
