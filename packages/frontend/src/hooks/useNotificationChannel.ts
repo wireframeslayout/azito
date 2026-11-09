@@ -13,6 +13,7 @@ export interface NotificationHandlers {
   onBrowserOpened?: (payload: BrowserOpenedPayload) => void;
   onSupervisorReady?: (payload: { serverName: string; target: string; taskId?: number }) => void;
   onWorkspaceRefresh?: () => void;
+  onOrchestrationUpdated?: (payload: { windowId: number }) => void;
   onSubagentsUpdated?: (payload: { windowId: number; sessionId: string }) => void;
   /** Fired on every WebSocket (re)connect — use to re-fetch snapshot state. */
   onConnected?: () => void;
@@ -117,6 +118,9 @@ export function useNotificationChannel(handlers: NotificationHandlers): void {
           break;
         case 'supervisor:ready':
           h.onSupervisorReady?.(event.payload);
+          break;
+        case 'orchestration:updated':
+          h.onOrchestrationUpdated?.(event.payload);
           break;
         case 'subagents:updated':
           h.onSubagentsUpdated?.(event.payload);

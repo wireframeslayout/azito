@@ -1292,3 +1292,8 @@ input[aria-invalid="true"]:focus-visible { outline-color: var(--danger) !importa
   .lookout-toast-main, .lookout-toast-action, .lookout-toast-close { min-height: calc(var(--space-6) + var(--space-5)); }
   .lookout-toast-close { min-width: calc(var(--space-6) + var(--space-5)); display: flex; align-items: center; justify-content: center; }
 }
+
+@media (max-width: 768px) {
+  .task-sidebar-child { min-height: calc(var(--space-6) + var(--space-5)); }
+  .task-sidebar-window-toggle { min-width: calc(var(--space-6) + var(--space-5)); min-height: calc(var(--space-6) + var(--space-5)); }
+}
