@@ -1,6 +1,8 @@
 import { useState } from 'react';
 import type { ReactNode } from 'react';
 import { useTranslation } from 'react-i18next';
+import { useLongPress } from '../../hooks/useLongPress';
+import ContextMenu, { useContextMenu } from '../ContextMenu';
 import { useWorkspaceCatalog } from '../../hooks/useWorkspaceCatalog';
 import { useAgentActivity } from '../../hooks/useAgentActivity';
 import { useOrchestrators } from '../../hooks/useOrchestrators';
@@ -19,6 +21,9 @@ export function OrchestrationSidebar({ selectedId, onSelect, onRemove }: Orchest
   const { allProjects } = useWorkspaceCatalog();
   const { activityStatus, snapshotStatus, retrySnapshot } = useAgentActivity();
   const [search, setSearch] = useState('');
+  const contextMenu = useContextMenu();
+  const bindLongPress = useLongPress();
+  const menuItems = (id: number) => onRemove ? [{ label: t('orchestration.removeRole'), onClick: () => onRemove(id) }] : [];
   const [closed, setClosed] = useState<Set<number>>(new Set());
   const matches = (node: OrchestrationNode): boolean => `${node.window.label ?? ''} ${node.window.tmuxTarget} ${node.window.serverName}`.toLowerCase().includes(search.toLowerCase()) || node.children.some(matches);
   const renderNode = (node: OrchestrationNode, depth: number): ReactNode => {
@@ -27,7 +32,7 @@ export function OrchestrationSidebar({ selectedId, onSelect, onRemove }: Orchest
     return <div key={node.window.id} role="treeitem" aria-level={depth + 1} aria-expanded={node.children.length ? expanded : undefined} aria-selected={selectedId === node.window.id}>
       <div style={{ display: 'flex', paddingLeft: `calc(var(--space-3) * ${depth})` }}>
         {node.children.length > 0 && <button aria-label={expanded ? t('orchestration.collapse') : t('orchestration.expand')} onClick={() => setClosed((previous) => { const next = new Set(previous); if (next.has(node.window.id)) next.delete(node.window.id); else next.add(node.window.id); return next; })}>{expanded ? '−' : '+'}</button>}
-        <button data-orchestration-row onKeyDown={(event) => {
+        <button data-orchestration-row onContextMenu={(event) => { if (onRemove) contextMenu.show(event, menuItems(node.window.id)); }} {...(onRemove ? bindLongPress((x, y) => contextMenu.showAt(x, y, menuItems(node.window.id))) : {})} onKeyDown={(event) => {
           if (event.key === 'ArrowRight' && node.children.length) {
             event.preventDefault();
             if (expanded) event.currentTarget.closest('[role="treeitem"]')?.querySelector<HTMLButtonElement>(':scope > [role="group"] [data-orchestration-row]')?.focus();
@@ -58,5 +63,5 @@ export function OrchestrationSidebar({ selectedId, onSelect, onRemove }: Orchest
   return <><input aria-label={t('orchestration.search')} value={search} onChange={(event) => setSearch(event.target.value)} /><div role="tree">{states.map((state) => {
     const nodes = tree.filter((node) => orchestratorState(node.window, activityStatus(node.window.serverName, node.window.tmuxTarget)) === state && matches(node));
     return nodes.length ? <div key={state} role="group" aria-label={t(`orchestration.${state}`)}><h3>{t(`orchestration.${state}`)}</h3>{nodes.map((node) => renderNode(node, 0))}</div> : null;
-  })}</div></>;
+  })}</div>{contextMenu.menu && <ContextMenu menu={contextMenu.menu} onClose={contextMenu.hide} />}</>;
 }

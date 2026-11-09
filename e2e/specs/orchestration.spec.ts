@@ -35,3 +35,12 @@ test('スマホのナビシートから一覧を開いて窓を選ぶ', async ({
   await expect(app.getByRole('dialog', { name: 'ナビゲーションメニュー' })).toHaveCount(0);
   expect(await app.evaluate(() => document.documentElement.scrollWidth <= document.documentElement.clientWidth)).toBe(true);
 });
+
+test('空画面からオーケストレーターを作成する', async ({ app, harness }) => {
+  await app.goto(`${harness.baseUrl}/orchestration`);
+  await app.getByRole('button', { name: 'オーケストレーターを作成', exact: true }).click();
+  const dialog = app.getByRole('dialog', { name: 'オーケストレーターを作成' });
+  await dialog.getByLabel('作業ディレクトリ').fill(harness.rootDir);
+  await dialog.getByRole('button', { name: 'オーケストレーターを作成' }).click();
+  await expect(app).toHaveURL(/\/orchestration\/\d+$/);
+});

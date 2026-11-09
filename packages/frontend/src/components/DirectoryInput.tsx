@@ -5,6 +5,7 @@ import { useServerPath } from '../hooks/useServerPath';
 import { typedDirectoryPrefix, withTrailingSeparator } from '../lib/serverPath';
 
 interface DirectoryInputProps {
+  id?: string;
   value: string;
   onChange: (value: string) => void;
   serverName: string;
@@ -12,7 +13,7 @@ interface DirectoryInputProps {
   style?: React.CSSProperties;
 }
 
-export default function DirectoryInput({ value, onChange, serverName, placeholder, style }: DirectoryInputProps) {
+export default function DirectoryInput({ id, value, onChange, serverName, placeholder, style }: DirectoryInputProps) {
   const pathApi = useServerPath(serverName);
   const [suggestions, setSuggestions] = useState<string[]>([]);
   const [open, setOpen] = useState(false);
@@ -150,6 +151,7 @@ export default function DirectoryInput({ value, onChange, serverName, placeholde
   return (
     <div ref={wrapperRef} style={{ position: 'relative' }}>
       <input
+        id={id}
         value={value}
         onChange={handleChange}
         onKeyDown={handleKeyDown}

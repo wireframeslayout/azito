@@ -37,6 +37,13 @@ describe('OrchestrationSidebar', () => {
     fireEvent.keyDown(child, { key: 'ArrowLeft' });
     expect(document.activeElement).toBe(parent);
   });
+  it('opens the role action from the context menu', () => {
+    const remove = vi.fn();
+    render(<OrchestrationSidebar onSelect={vi.fn()} onRemove={remove} />);
+    fireEvent.contextMenu(screen.getByText(/Parent/));
+    fireEvent.click(screen.getAllByText('orchestration.removeRole').at(-1)!);
+    expect(remove).toHaveBeenCalledWith(1);
+  });
   it('collapses children', () => {
     render(<OrchestrationSidebar onSelect={vi.fn()} />);
     fireEvent.click(screen.getByRole('button', { name: 'orchestration.collapse' }));
