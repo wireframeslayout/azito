@@ -8,7 +8,7 @@ import type { WindowSessionResolver } from '../transcripts/WindowSessionResolver
 import type { TranscriptSourceProvider } from '../transcripts/sources/TranscriptSourceProvider';
 import { configDirForSession } from '../transcripts/windowConfigDir';
 import { buildLookoutPrompt, normalizeLookoutSummary } from './lookoutPrompt';
-import { runLookoutLlm } from './LlmClientFactory';
+import { runLookoutLlm } from './lookoutLlm';
 import type { SqliteLookoutSettingsRepository, LookoutSettings } from './SqliteLookoutSettingsRepository';
 
 export type LookoutState = 'blocked' | 'working' | 'finished';
@@ -19,6 +19,8 @@ interface Job { key: string; base: string; windowId: number; prompt: string; set
 
 export class LookoutSummaryService {
   private readonly cache = new Map<string, Cached>();
+  private readonly failures = new Map<string, { reason: CliFailureReason; retryAt: number }>();
+  private readonly providerFailures = new Map<string, { reason: CliFailureReason; retryAt: number }>();
   private readonly lastStart = new Map<number, number>();
   private readonly queue: Job[] = [];
   private readonly latest = new Map<number, string>();
@@ -38,6 +40,8 @@ export class LookoutSummaryService {
   invalidate(): void {
     this.generation++;
     this.cache.clear();
+    this.failures.clear();
+    this.providerFailures.clear();
     this.latest.clear();
     this.lastReady.clear();
     this.resolutions.clear();
@@ -98,6 +102,8 @@ export class LookoutSummaryService {
   }
 
   private getCached(windowId: number, key: string, base: string, prompt: string, settings: LookoutSettings): SummaryResult {
+    const failure = this.providerFailures.get(settings.provider) ?? this.failures.get(base);
+    if (failure && failure.retryAt > Date.now()) return { windowId, status: 'unavailable', reason: failure.reason };
     this.latest.set(windowId, key);
     for (let i = this.queue.length - 1; i >= 0; i--) {
       if (this.queue[i].windowId === windowId && this.queue[i].key !== key) {
@@ -130,6 +136,8 @@ export class LookoutSummaryService {
       if (index < 0) return;
       const [job] = this.queue.splice(index, 1);
       if (!this.cache.has(job.key) || job.generation !== this.generation) continue;
+      const failure = this.providerFailures.get(job.settings.provider) ?? this.failures.get(job.base);
+      if (failure && failure.retryAt > Date.now()) { this.cache.delete(job.key); continue; }
       this.active++; this.activeWindows.add(job.windowId); this.lastStart.delete(job.windowId); this.lastStart.set(job.windowId, Date.now());
       while (this.lastStart.size > 200) this.lastStart.delete(this.lastStart.keys().next().value!);
       void this.run(job.settings, job.prompt).then((output) => {
@@ -142,7 +150,13 @@ export class LookoutSummaryService {
         }
         if (job.generation === this.generation && this.latest.get(job.windowId) === job.key && this.cache.has(job.key)) this.cache.set(job.key, { status: 'ready', text: summary });
       }).catch((error: unknown) => {
-        if (job.generation === this.generation && this.latest.get(job.windowId) === job.key && this.cache.has(job.key)) this.cache.set(job.key, { status: 'unavailable', reason: error instanceof HeadlessCliError ? error.reason : 'failed', retryAt: Date.now() + 30_000 });
+        if (job.generation !== this.generation) return;
+        const reason = error instanceof HeadlessCliError ? error.reason : 'failed';
+        const failure = { reason, retryAt: Date.now() + 30_000 };
+        this.failures.delete(job.base); this.failures.set(job.base, failure);
+        while (this.failures.size > 200) this.failures.delete(this.failures.keys().next().value!);
+        if (reason === 'cli_not_found' || reason === 'not_logged_in') this.providerFailures.set(job.settings.provider, failure);
+        this.cache.delete(job.key);
       }).finally(() => {
         if (job.generation === this.generation && this.latest.get(job.windowId) !== job.key && this.cache.get(job.key)?.status === 'pending') this.cache.delete(job.key);
         this.active--; this.activeWindows.delete(job.windowId); this.drain();

@@ -303,6 +303,17 @@
     "probe": "試しに要約",
     "probing": "試行中…",
     "probeFailed": "選択した CLI を試行できませんでした。",
-    "detected": "CLI が利用できます（{{version}}）"
+    "detected": "CLI が利用できます（{{version}}）",
+    "reasons": {
+      "cli_not_found": "CLI が見つかりません",
+      "not_logged_in": "ログインしていません",
+      "timeout": "時間切れになりました",
+      "failed": "要約に失敗しました"
+    },
+    "hints": {
+      "version": "CLI のインストールを確認してください",
+      "login": "CLI にログインしてください",
+      "summary": "モデルへのアクセスと CLI 設定を確認してください"
+    }
   }
 }

@@ -1,7 +1,7 @@
 import type { FastifyPluginCallback } from 'fastify';
 import { z } from 'zod';
 import { requireOperator } from '../../shared/auth/requireOperator';
-import { probeLookoutLlm } from './LlmClientFactory';
+import { probeLookoutLlm } from './lookoutLlm';
 import type { LookoutSummaryService } from './LookoutSummaryService';
 import type { SqliteLookoutSettingsRepository } from './SqliteLookoutSettingsRepository';
 

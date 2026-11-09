@@ -9,7 +9,7 @@ describe('Lookout settings', () => {
     try {
       up(db);
       const repo = new SqliteLookoutSettingsRepository(db);
-      expect(repo.get()).toMatchObject({ enabled: false, provider: 'claude', model: 'claude-sonnet-4-6' });
+      expect(repo.get()).toMatchObject({ enabled: false, provider: 'claude', model: 'haiku' });
       expect(repo.update({ enabled: true, provider: 'codex', model: 'gpt-6' })).toMatchObject({ enabled: true, provider: 'codex', model: 'gpt-6' });
       expect(() => db.prepare('INSERT INTO lookout_settings (id) VALUES (2)').run()).toThrow();
     } finally { db.close(); }

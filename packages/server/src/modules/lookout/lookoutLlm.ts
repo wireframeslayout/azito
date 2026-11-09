@@ -1,4 +1,5 @@
-import { mkdtempSync, readFileSync, rmSync, statSync } from 'fs';
+import { mkdtempSync, rmSync } from 'fs';
+import { runCodexLookout } from '../llm/runCodexLookout';
 import { tmpdir } from 'os';
 import { join } from 'path';
 import type { LookoutSettings } from './SqliteLookoutSettingsRepository';
@@ -8,18 +9,10 @@ import { ClaudeExecClient } from '../llm/ClaudeExecClient';
 
 export async function runLookoutLlm(settings: LookoutSettings, prompt: string): Promise<string> {
   if (settings.provider === 'claude') return new ClaudeExecClient(settings.model).exec(prompt);
-  const cwd = mkdtempSync(join(tmpdir(), 'azito-lookout-'));
-  try {
-    const outputFile = join(cwd, 'output');
-    await runHeadlessCommand('codex', ['exec', '--sandbox', 'read-only', '--ignore-user-config', '--skip-git-repo-check', '--ephemeral', '--disable', 'shell_tool', '--disable', 'unified_exec', '--disable', 'apps', '--disable', 'browser_use', '--disable', 'computer_use', '--disable', 'sleep_tool', '-c', 'web_search=\"disabled\"', '-m', settings.model, '-o', outputFile, '-'], cwd, prompt);
-    if (statSync(outputFile).size > 1_000_000) throw new Error('cli_failed');
-    return readFileSync(outputFile, 'utf8');
-  } finally {
-    rmSync(cwd, { recursive: true, force: true });
-  }
+  return runCodexLookout(settings.model, prompt);
 }
 
-export async function probeLookoutLlm(settings: LookoutSettings): Promise<{ ok: boolean; cli: { found: boolean; version: string | null }; reason?: CliFailureReason; hint?: string }> {
+export async function probeLookoutLlm(settings: LookoutSettings): Promise<{ ok: boolean; cli: { found: boolean; version: string | null }; reason?: CliFailureReason; stage?: 'version' | 'login' | 'summary' }> {
   const cwd = mkdtempSync(join(tmpdir(), 'azito-lookout-probe-'));
   let version: string | null = null;
   let stage: 'version' | 'login' | 'summary' = 'version';
@@ -38,8 +31,7 @@ export async function probeLookoutLlm(settings: LookoutSettings): Promise<{ ok: 
     return { ok: true, cli: { found: true, version } };
   } catch (error) {
     const reason = error instanceof HeadlessCliError ? error.reason : 'failed';
-    const hint = stage === 'version' ? 'Check CLI installation.' : stage === 'login' ? 'Check CLI login status.' : 'Check model access and CLI configuration.';
-    return { ok: false, cli: { found: reason !== 'cli_not_found', version }, reason, hint };
+    return { ok: false, cli: { found: reason !== 'cli_not_found', version }, reason, stage };
   } finally {
     rmSync(cwd, { recursive: true, force: true });
   }

@@ -8,7 +8,7 @@ export function up(db: Database): void {
     id INTEGER PRIMARY KEY CHECK (id = 1),
     enabled INTEGER NOT NULL DEFAULT 0 CHECK (enabled IN (0, 1)),
     provider TEXT NOT NULL DEFAULT 'claude' CHECK (provider IN ('claude', 'codex')),
-    model TEXT NOT NULL DEFAULT 'claude-sonnet-4-6',
+    model TEXT NOT NULL DEFAULT 'haiku',
     updated_at TEXT NOT NULL DEFAULT (datetime('now'))
   ); INSERT INTO lookout_settings (id) VALUES (1);`);
 }

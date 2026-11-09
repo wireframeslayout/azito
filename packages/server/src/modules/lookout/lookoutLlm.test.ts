@@ -2,7 +2,7 @@ import { mkdtempSync, readFileSync, rmSync, writeFileSync, chmodSync } from 'fs'
 import { tmpdir } from 'os';
 import { join } from 'path';
 import { afterEach, describe, expect, it } from 'vitest';
-import { probeLookoutLlm, runLookoutLlm } from './LlmClientFactory';
+import { probeLookoutLlm, runLookoutLlm } from './lookoutLlm';
 
 const originalPath = process.env.PATH;
 const originalSecret = process.env.AZITO_UI_TOKEN;
@@ -69,7 +69,7 @@ if [ "$1" = '--version' ]; then echo 'claude 1.0'; else echo '{"loggedIn":false}
 `);
     chmodSync(executable, 0o755);
     process.env.PATH = `${dir}:${originalPath}`;
-    expect(await probeLookoutLlm({ enabled: true, provider: 'claude', model: 'sonnet', updatedAt: '' })).toEqual({ ok: false, cli: { found: true, version: 'claude 1.0' }, reason: 'not_logged_in', hint: 'Check CLI login status.' });
+    expect(await probeLookoutLlm({ enabled: true, provider: 'claude', model: 'sonnet', updatedAt: '' })).toEqual({ ok: false, cli: { found: true, version: 'claude 1.0' }, reason: 'not_logged_in', stage: 'login' });
   });
 
 });

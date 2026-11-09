@@ -303,6 +303,17 @@
     "probe": "Try a summary",
     "probing": "Testing…",
     "probeFailed": "Could not test the selected CLI.",
-    "detected": "CLI available ({{version}})"
+    "detected": "CLI available ({{version}})",
+    "reasons": {
+      "cli_not_found": "CLI not found",
+      "not_logged_in": "Not signed in",
+      "timeout": "Timed out",
+      "failed": "Summary failed"
+    },
+    "hints": {
+      "version": "Check CLI installation.",
+      "login": "Sign in to the CLI.",
+      "summary": "Check model access and CLI configuration."
+    }
   }
 }
