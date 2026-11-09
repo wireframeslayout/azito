@@ -1,11 +1,12 @@
 import { useState } from 'react';
 import type { ReactNode } from 'react';
 import { useTranslation } from 'react-i18next';
+import { useWorkspaceCatalog } from '../../hooks/useWorkspaceCatalog';
 import { useAgentActivity } from '../../hooks/useAgentActivity';
 import { useOrchestrators } from '../../hooks/useOrchestrators';
 import { buildOrchestrationTree, orchestratorState, type OrchestrationNode, type OrchestratorState } from '../../lib/orchestrationModel';
 import { formatRelativeTime } from '../../utils/time';
-import { LoadingState } from '../ui';
+import { LoadingState, WindowIdChip } from '../ui';
 
 export interface OrchestrationSidebarProps {
   selectedId?: number;
@@ -15,6 +16,7 @@ export interface OrchestrationSidebarProps {
 export function OrchestrationSidebar({ selectedId, onSelect, onRemove }: OrchestrationSidebarProps): ReactNode {
   const { t } = useTranslation('workspace');
   const { windows, status, refresh } = useOrchestrators();
+  const { allProjects } = useWorkspaceCatalog();
   const { activityStatus, snapshotStatus, retrySnapshot } = useAgentActivity();
   const [search, setSearch] = useState('');
   const [closed, setClosed] = useState<Set<number>>(new Set());
@@ -34,7 +36,7 @@ export function OrchestrationSidebar({ selectedId, onSelect, onRemove }: Orchest
             const index = rows.indexOf(event.currentTarget) + (event.key === 'ArrowDown' ? 1 : -1);
             rows[index]?.focus();
           }
-        }} onClick={() => onSelect(node.window.id)} style={{ flex: 1, minWidth: 0, textAlign: 'left', padding: 'var(--space-2)', background: selectedId === node.window.id ? 'var(--purple-a15)' : 'transparent', color: 'var(--text)', border: 0, cursor: 'pointer' }}>{node.window.label || node.window.tmuxTarget} · {node.window.serverName} · {t(`orchestration.${orchestratorState(node.window, activityStatus(node.window.serverName, node.window.tmuxTarget))}`)} · {node.window.links.total}{node.window.lastInteractionAt && ` · ${formatRelativeTime(node.window.lastInteractionAt)}`}</button>
+        }} onClick={() => onSelect(node.window.id)} style={{ flex: 1, minWidth: 0, textAlign: 'left', padding: 'var(--space-2)', background: selectedId === node.window.id ? 'var(--purple-a15)' : 'transparent', color: 'var(--text)', border: 0, cursor: 'pointer' }}><WindowIdChip id={node.window.id} /> {node.window.label || node.window.tmuxTarget} · {node.window.serverName} · {t(`orchestration.${orchestratorState(node.window, activityStatus(node.window.serverName, node.window.tmuxTarget))}`)} · {t('orchestration.links', { count: node.window.links.total })}{node.window.links.projectIds.map((id) => allProjects.find((project) => project.id === id)?.name).filter(Boolean).map((name) => ` · ${name}`)}{node.window.links.serverNames.filter((name) => name !== node.window.serverName).map((name) => ` · ${name}`)}{node.window.lastInteractionAt && ` · ${formatRelativeTime(node.window.lastInteractionAt)}`}</button>
         {onRemove && <button onClick={() => onRemove(node.window.id)} aria-label={t('orchestration.removeRole')}>×</button>}
       </div>
       {expanded && node.children.length > 0 && <div role="group">{node.children.map((child) => renderNode(child, depth + 1))}</div>}

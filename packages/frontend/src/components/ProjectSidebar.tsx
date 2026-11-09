@@ -12,7 +12,7 @@ import { useProjectRail } from '../hooks/useProjectRail';
 import ContextMenu, { useContextMenu } from './ContextMenu';
 import { ProjectSearchPopover } from './ProjectSearchPopover';
 import { useSystemUpdate } from '../hooks/useSystemUpdate';
-import { GLOBAL_NAV_ITEMS as GLOBAL_ITEMS } from './workspace/globalNavItems';
+import { GLOBAL_NAV_ITEMS as GLOBAL_ITEMS, ORCHESTRATION_NAV_ITEM } from './workspace/globalNavItems';
 
 interface ProjectItem {
   id: number;
@@ -283,7 +283,7 @@ export default function ProjectSidebar() {
       )}
 
 
-      <button onClick={() => navigate(paths.orchestration())} title={t('sidebar.orchestration')} aria-label={t('sidebar.orchestration')} style={{ ...globalButtonStyle(location.pathname.startsWith('/orchestration')), color: 'var(--purple)', background: location.pathname.startsWith('/orchestration') ? 'var(--purple-a15)' : 'transparent' }}><Icon name="operations" size={20} /></button>
+      <button onClick={() => navigate(ORCHESTRATION_NAV_ITEM.path)} title={t(ORCHESTRATION_NAV_ITEM.labelKey)} aria-label={t(ORCHESTRATION_NAV_ITEM.labelKey)} style={{ ...globalButtonStyle(location.pathname.startsWith('/orchestration')), color: 'var(--purple)', background: location.pathname.startsWith('/orchestration') ? 'var(--purple-a15)' : 'transparent' }}><Icon name={ORCHESTRATION_NAV_ITEM.icon} size={20} /></button>
       <div style={{ display: 'flex', flexDirection: 'column', gap: 2, flexShrink: 0 }}>
         {GLOBAL_ITEMS.map((item) => {
           const active = isActiveGlobalPath(item.path);

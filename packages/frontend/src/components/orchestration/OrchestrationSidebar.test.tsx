@@ -3,10 +3,11 @@ import { fireEvent, render, screen } from '@testing-library/react';
 import { describe, expect, it, vi } from 'vitest';
 import { OrchestrationSidebar } from './OrchestrationSidebar';
 
+vi.mock('../../hooks/useWorkspaceCatalog', () => ({ useWorkspaceCatalog: () => ({ allProjects: [] }) }));
 vi.mock('../../hooks/useAgentActivity', () => ({ useAgentActivity: () => ({ activityStatus: () => null, snapshotStatus: 'ready', retrySnapshot: vi.fn() }) }));
 vi.mock('../../hooks/useOrchestrators', () => ({ useOrchestrators: () => ({ status: 'ready', refresh: vi.fn(), windows: [
-  { id: 1, parentWindowId: null, label: 'Parent', tmuxTarget: 's:p', serverName: 'local', links: { total: 0 } },
-  { id: 2, parentWindowId: 1, label: 'Child', tmuxTarget: 's:c', serverName: 'local', links: { total: 0 } },
+  { id: 1, parentWindowId: null, label: 'Parent', tmuxTarget: 's:p', serverName: 'local', links: { total: 0, projectIds: [], serverNames: [] } },
+  { id: 2, parentWindowId: 1, label: 'Child', tmuxTarget: 's:c', serverName: 'local', links: { total: 0, projectIds: [], serverNames: [] } },
 ] }) }));
 vi.mock('react-i18next', async (importOriginal) => ({ ...await importOriginal<typeof import('react-i18next')>(), useTranslation: () => ({ t: (key: string) => key }) }));
 
