@@ -1,3 +1,5 @@
+import { lookoutRoutes } from '../modules/lookout/routes';
+import { LookoutSummaryService } from '../modules/lookout/LookoutSummaryService';
 import { muxSwitchSettingsRoutes } from '../modules/windows/muxSwitchSettingsRoutes';
 import { formatWindowTitleLine, resolveWindowTitle } from '@azito/shared';
 // ─── Fastify instance assembly ───
@@ -610,6 +612,8 @@ export async function buildServer(app: FastifyInstance, wiring: Wiring, port: nu
       });
     },
   });
+  const lookoutService = new LookoutSummaryService(wiring.lookoutSettingsRepo, windowRepo, serverRepo, windowSessionResolver, transcriptSourceProvider);
+  await app.register(lookoutRoutes, { settings: wiring.lookoutSettingsRepo, service: lookoutService });
   await app.register(muxSwitchSettingsRoutes, { settingsRepo: wiring.muxSwitchSettingsRepo, serverRepo, muxDriverRegistry });
   await app.register(windowsRoutes, {
     windowRepo, projectRepo, taskRepo, tmux: tmuxClient, muxDriverRegistry, serverRepo, transportFactory, paneHandleResolver: wiring.paneHandleResolver,

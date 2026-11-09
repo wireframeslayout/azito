@@ -1,0 +1,78 @@
+import { afterEach, describe, expect, it, vi } from 'vitest';
+import { LookoutSummaryService } from './LookoutSummaryService';
+import { buildLookoutPrompt, normalizeLookoutSummary } from './lookoutPrompt';
+
+const settings = { enabled: true, provider: 'claude', model: 'test', updatedAt: '' } as const;
+const entry = { uuid: '1', type: 'user', timestamp: null, blocks: [{ kind: 'text', text: 'hello' }] } as const;
+function setup(run: () => Promise<string>) {
+  const repo = { get: () => settings };
+  const windows = { findById: (id: number) => ({ id, serverName: 'local' }) };
+  const servers = { findByName: () => ({ name: 'local' }) };
+  const resolver = { resolve: async () => ({ resolved: true, sessionId: 'session', agentType: 'claude' }) };
+  const source = { agentType: 'claude', readSession: async () => ({ entries: [entry], startOffset: 0, hasOlder: false }) };
+  return new LookoutSummaryService(repo as never, windows as never, servers as never, resolver as never, { forServer: () => [source] } as never, run);
+}
+const request = [{ windowId: 1, state: 'working' as const }];
+
+afterEach(() => vi.useRealTimers());
+describe('Lookout summaries', () => {
+  it('limits input and normalizes output', () => {
+    const prompt = buildLookoutPrompt([entry as never]);
+    expect(prompt).toContain('user: hello');
+    expect(normalizeLookoutSummary('one\ntwo\u0000' + 'x'.repeat(100))).toHaveLength(80);
+  });
+  it('deduplicates the same request and caches the result', async () => {
+    let finish!: (value: string) => void;
+    const run = vi.fn(() => new Promise<string>((resolve) => { finish = resolve; }));
+    const service = setup(run);
+    expect((await service.getSummaries(request))[0].status).toBe('pending');
+    expect((await service.getSummaries(request))[0].status).toBe('pending');
+    expect(run).toHaveBeenCalledTimes(1);
+    finish('done');
+    await vi.waitFor(async () => expect((await service.getSummaries(request))[0]).toMatchObject({ status: 'ready', summary: 'done' }));
+  });
+  it('does not retry failures on each poll', async () => {
+    const run = vi.fn(async () => { throw new Error('failure'); });
+    const service = setup(run);
+    await service.getSummaries(request);
+    await vi.waitFor(async () => expect((await service.getSummaries(request))[0].status).toBe('unavailable'));
+    await service.getSummaries(request);
+    expect(run).toHaveBeenCalledTimes(1);
+  });
+  it('invalidates running results when settings change', async () => {
+    let finish!: (value: string) => void;
+    const service = setup(() => new Promise<string>((resolve) => { finish = resolve; }));
+    await service.getSummaries(request);
+    service.invalidate();
+    finish('obsolete');
+    await Promise.resolve();
+    expect((await service.getSummaries(request))[0].status).toBe('pending');
+  });
+  it('limits simultaneous executions to two', async () => {
+    const releases: Array<(value: string) => void> = [];
+    const run = vi.fn(() => new Promise<string>((resolve) => { releases.push(resolve); }));
+    const service = setup(run);
+    await service.getSummaries([1, 2, 3].map((windowId) => ({ windowId, state: 'working' as const })));
+    expect(run).toHaveBeenCalledTimes(2);
+    releases[0]('first');
+    await vi.waitFor(() => expect(run).toHaveBeenCalledTimes(3));
+    releases[1]('second'); releases[2]('third');
+  });
+  it('waits at least 30 seconds between starts for one window', async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date('2026-01-01T00:00:00Z'));
+    const run = vi.fn(async () => 'done');
+    const service = setup(run);
+    await service.getSummaries(request);
+    await vi.advanceTimersByTimeAsync(0);
+    await service.getSummaries([{ windowId: 1, state: 'blocked' }]);
+    expect(run).toHaveBeenCalledTimes(1);
+    await vi.advanceTimersByTimeAsync(29_999);
+    await service.getSummaries([{ windowId: 1, state: 'blocked' }]);
+    expect(run).toHaveBeenCalledTimes(1);
+    await vi.advanceTimersByTimeAsync(1);
+    await service.getSummaries([{ windowId: 1, state: 'blocked' }]);
+    expect(run).toHaveBeenCalledTimes(2);
+  });
+
+});

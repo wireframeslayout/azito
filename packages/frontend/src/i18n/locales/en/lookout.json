@@ -29,7 +29,8 @@
     "off": "Summary unavailable",
     "pending": "Preparing summary",
     "error": "Summary unavailable",
-    "ready": "Summary"
+    "ready": "Summary",
+    "label": "Summary"
   },
   "attentionCount": "{{count}} need attention",
   "updated": "Updated {{time}}",

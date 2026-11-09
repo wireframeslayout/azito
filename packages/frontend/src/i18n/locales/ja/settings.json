@@ -290,5 +290,19 @@
       "24時間",
       "7日"
     ]
+  },
+  "lookout": {
+    "title": "Lookout",
+    "enabled": "要約を使う",
+    "description": "会話ログの末尾を１行にまとめます。オフでも件数と状態は表示します。",
+    "provider": "使う LLM",
+    "model": "モデル",
+    "save": "保存",
+    "saving": "保存中…",
+    "saveFailed": "Lookout 設定の読み込みまたは保存に失敗しました。",
+    "probe": "試しに要約",
+    "probing": "試行中…",
+    "probeFailed": "選択した CLI を試行できませんでした。",
+    "detected": "CLI が利用できます（{{version}}）"
   }
 }

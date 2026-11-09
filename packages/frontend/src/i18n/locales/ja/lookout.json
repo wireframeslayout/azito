@@ -29,7 +29,8 @@
     "off": "要約は利用できません",
     "pending": "要約を準備中",
     "error": "要約を取得できません",
-    "ready": "要約"
+    "ready": "要約",
+    "label": "要約"
   },
   "attentionCount": "要対応 {{count}} 件",
   "updated": "更新 {{time}}",

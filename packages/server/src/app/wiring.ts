@@ -1,3 +1,4 @@
+import { SqliteLookoutSettingsRepository } from '../modules/lookout/SqliteLookoutSettingsRepository';
 import { isLaunchdHub } from '../modules/servers/launchdHub';
 // ─── Dependency wiring ───
 //
@@ -197,6 +198,7 @@ export interface Repositories {
   projectSecretRepo: SqliteProjectSecretRepository;
   storageSettingsRepo: SqliteStorageSettingsRepository;
   muxSwitchSettingsRepo: SqliteMuxSwitchSettingsRepository;
+  lookoutSettingsRepo: SqliteLookoutSettingsRepository;
   pushSubRepo: SqlitePushSubscriptionRepository;
   agentTurnRepo: SqliteAgentTurnRepository;
   agentWatchRepo: SqliteAgentWatchRepository;
@@ -385,6 +387,7 @@ function buildRepositories(db: SqliteDatabase, hubHost: HostProfile | null): Rep
   const projectSecretRepo = new SqliteProjectSecretRepository(db);
   const storageSettingsRepo = new SqliteStorageSettingsRepository(db);
   const muxSwitchSettingsRepo = new SqliteMuxSwitchSettingsRepository(db);
+  const lookoutSettingsRepo = new SqliteLookoutSettingsRepository(db);
   const pushSubRepo = new SqlitePushSubscriptionRepository(db);
   const agentTurnRepo = new SqliteAgentTurnRepository(db);
   const agentWatchRepo = new SqliteAgentWatchRepository(db);
@@ -407,6 +410,7 @@ function buildRepositories(db: SqliteDatabase, hubHost: HostProfile | null): Rep
     projectSecretRepo,
     storageSettingsRepo,
     muxSwitchSettingsRepo,
+    lookoutSettingsRepo,
     pushSubRepo,
     agentTurnRepo,
     agentWatchRepo,

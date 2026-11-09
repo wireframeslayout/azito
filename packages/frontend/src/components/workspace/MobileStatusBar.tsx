@@ -8,6 +8,8 @@ import { openActivityTarget } from '../../lib/activityOpen';
 import { openLookoutItem } from '../../lib/lookoutOpen';
 import { useOpenTerminalTarget } from '../../hooks/useTerminalTargetOpener';
 import type { ConnectPaneFn } from '../../lib/terminalRef';
+import { useLookoutSummaries } from '../../hooks/useLookoutSummaries';
+import { LookoutSummaryText } from '../lookout/LookoutSummaryText';
 import { useLookout } from '../../hooks/useLookout';
 import type { LookoutItem } from '../../lib/lookoutSummary';
 import { MOBILE_STATUS_BAR_HEIGHT } from '../../lib/mobileChrome';
@@ -97,6 +99,8 @@ export function MobileStatusBar({ openTask, connectPane }: MobileStatusBarProps)
   const memTextColor = worstHealth === 'critical' ? 'var(--danger)' : worstHealth === 'warning' ? 'var(--warning)' : 'var(--text-dim)';
 
   const workingGroups = [...sections.attention, ...sections.active];
+  const visibleFinished = rows.filter(row => row.status === 'finished' && (row.seenAt == null || historyOpen)).map((row): LookoutItem => ({ key: row.key, title: row.title, status: 'finished', primaryRow: row, projectId: row.projectId, activeWindows: 0, totalWindows: 1, windowNames: [row.title], hasBlocked: false }));
+  const summaries = useLookoutSummaries([...workingGroups, ...visibleFinished], open);
 
   const finishedRows = useMemo(() => rows.filter((r) => r.status === 'finished'), [rows]);
 
@@ -165,7 +169,7 @@ export function MobileStatusBar({ openTask, connectPane }: MobileStatusBarProps)
                   style={rowButtonStyle}
                 >
                   {group.status !== 'working' ? <BlockedDot /> : <BrailleSpinner />}
-                  <span style={rowTitleStyle}>{group.title}</span>
+                  <span style={{ ...rowTitleStyle, whiteSpace: 'normal' }}><span>{group.title}</span><LookoutSummaryText summary={summaries.get(group.key)} /></span>
                   {group.status !== 'working' && (
                     <span style={{ flexShrink: 0, fontSize: 'var(--font-2xs)', color: 'var(--text-dim)' }}>
                       {t(`lookout:status.${group.status}`)}
@@ -179,7 +183,7 @@ export function MobileStatusBar({ openTask, connectPane }: MobileStatusBarProps)
             <section>
               <div style={sectionHeaderStyle}>{t('workspace:activityPill.finishedSection', { count: unreadRows.length })}</div>
               {unreadRows.map((row) => <button key={row.key} type="button" className="row-hover" onClick={() => handleFinishedRowOpen(row)} style={rowButtonStyle}>
-                <FinishedIndicator /><span style={rowTitleStyle}>{row.title}</span>
+                <FinishedIndicator /><span style={{ ...rowTitleStyle, whiteSpace: 'normal' }}>{row.title}<LookoutSummaryText summary={summaries.get(row.key)} /></span>
                 {row.finishedAt != null && <span style={{ color: 'var(--success)', fontSize: 'var(--font-2xs)' }}>{t('workspace:activeWindows.done')} · {formatRelativeTime(row.finishedAt)}</span>}
               </button>)}
             </section>
@@ -194,7 +198,7 @@ export function MobileStatusBar({ openTask, connectPane }: MobileStatusBarProps)
                 <div key={row.key} style={{ display: 'flex', alignItems: 'center' }}>
                   <button type="button" className="row-hover" onClick={() => handleFinishedRowOpen(row)} style={rowButtonStyle}>
                     <FinishedIndicator seen={row.seenAt != null} />
-                    <span style={{ ...rowTitleStyle, color: 'var(--text-dim)' }}>{row.title}</span>
+                    <span style={{ ...rowTitleStyle, color: 'var(--text-dim)', whiteSpace: 'normal' }}>{row.title}<LookoutSummaryText summary={summaries.get(row.key)} /></span>
                     {row.finishedAt != null && <span style={{ color: 'var(--text-dim)', fontSize: 'var(--font-2xs)' }}>{t('workspace:activeWindows.done')} · {formatRelativeTime(row.finishedAt)}</span>}
                   </button>
                   <IconButton type="button" aria-label={t('workspace:activeWindows.deleteHistory')} onClick={() => dismissFinished(row.serverName, row.target, row.windowId)} style={{ minWidth: 44, minHeight: 44 }}><Icon name="close" size={14} /></IconButton>

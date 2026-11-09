@@ -290,5 +290,19 @@
       "24 hours",
       "7 days"
     ]
+  },
+  "lookout": {
+    "title": "Lookout",
+    "enabled": "Use summaries",
+    "description": "Summarize the end of conversations in one line. Counts and status remain available when off.",
+    "provider": "LLM provider",
+    "model": "Model",
+    "save": "Save",
+    "saving": "Saving…",
+    "saveFailed": "Could not load or save Lookout settings.",
+    "probe": "Try a summary",
+    "probing": "Testing…",
+    "probeFailed": "Could not test the selected CLI.",
+    "detected": "CLI available ({{version}})"
   }
 }
