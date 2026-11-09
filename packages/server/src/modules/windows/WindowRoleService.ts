@@ -12,8 +12,8 @@ export class WindowRoleService {
       const affected = this.db.prepare('SELECT DISTINCT source_window_id AS id FROM window_links WHERE target_window_id=? AND unlinked_at IS NULL').all(id) as Array<{ id: number }>;
       if (role) {
         if (win.ownerType === 'task') return 'task_owned_window';
-        if (affected.length > 1) return 'already_nested';
         if (win.windowType !== 'agent' || !win.workerType) return 'not_agent_window';
+        if (affected.length > 1) return 'already_nested';
         this.db.prepare("UPDATE windows SET role='orchestrator', origin_project_id=project_id, project_id=NULL, owner_type='server' WHERE id=?").run(id);
       } else {
         const project = win.originProjectId === null ? undefined : this.db.prepare('SELECT id FROM projects WHERE id=?').get(win.originProjectId);

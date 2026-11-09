@@ -50,10 +50,32 @@ async function setup(defaultMux: 'tmux' | 'misao' = 'misao', has: { tmux: string
   } as never);
   await app.ready();
   const post = (url: string, payload: Record<string, unknown>) => app.inject({ method: 'POST', url, payload: { server_name: 'local-misao', ...payload } });
-  return { repo, projectId, taskId, post, app };
+  return { db, repo, projectId, taskId, post, app };
 }
 
 describe('window registration routes share one row per physical misao window (real repository)', () => {
+  it('moves an existing project window when registered in another project, including by session', async () => {
+    const { db, repo, projectId, post, app } = await setup();
+    const otherId = insertProject(db, 'Other');
+    const first = await post(`/api/projects/${projectId}/windows`, { ref: formatMuxRef(MISAO_REF) });
+    const id = first.json().id;
+    expect((await post(`/api/projects/${otherId}/windows`, { ref: formatMuxRef(MISAO_REF) })).statusCode).toBe(200);
+    expect(repo.findById(id)?.projectId).toBe(otherId);
+    expect((await post(`/api/projects/${projectId}/windows/session`, { session: 'azito' })).statusCode).toBe(200);
+    expect(repo.findById(id)?.projectId).toBe(projectId);
+    await app.close();
+  });
+
+  it('rejects a role request for an already registered non-orchestrator window', async () => {
+    const { repo, projectId, post, app } = await setup();
+    const first = await post(`/api/projects/${projectId}/windows`, { ref: formatMuxRef(MISAO_REF) });
+    const id = first.json().id;
+    const result = await post('/api/windows', { ref: formatMuxRef(MISAO_REF), window_type: 'agent', worker_type: 'claude', role: 'orchestrator' });
+    expect(result.statusCode).toBe(409);
+    expect(result.json()).toEqual({ error: 'already_registered', windowId: id });
+    expect(repo.findById(id)).toMatchObject({ ownerType: 'project', projectId, role: null });
+    await app.close();
+  });
   it('ref-only registration, then named tmux_target + ref, adopts the same row', async () => {
     const { repo, projectId, taskId, post } = await setup();
     const first = await post(`/api/projects/${projectId}/windows`, { ref: formatMuxRef(MISAO_REF) });

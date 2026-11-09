@@ -255,7 +255,14 @@ const windowsRoutes: FastifyPluginCallback<WindowsRouteOptions> = (fastify, opts
       const role = id === null ? serverWindowBody.parse(request.body).role ?? null : null;
       if (role && (body.window_type !== 'agent' || !body.worker_type)) return reply.status(409).send({ error: 'not_agent_window' });
       const existing = findExistingWindow(serverName, tmuxTarget, givenRef);
-      if (existing) return { ok: true, id: existing.id };
+      if (existing) {
+        if (role && existing.role !== role) return reply.status(409).send({ error: 'already_registered', windowId: existing.id });
+        if (id !== null && existing.ownerType !== 'server' && existing.projectId !== id) {
+          windowRepo.update(existing.id, { projectId: id });
+          notifyWindowsChanged(serverName);
+        }
+        return { ok: true, id: existing.id };
+      }
 
       const workerType = body.worker_type || null;
       const workerModel = body.worker_model || null;
@@ -327,6 +334,10 @@ const windowsRoutes: FastifyPluginCallback<WindowsRouteOptions> = (fastify, opts
         const winTarget = win.ref?.kind === 'misao' ? muxWindowTarget(win.ref) : `${session}:${win.name}`;
         const existing = findExistingWindow(serverName, winTarget, win.ref);
         if (existing) {
+          if (existing.ownerType !== 'server' && existing.projectId !== id) {
+            windowRepo.update(existing.id, { projectId: id });
+            notifyWindowsChanged(serverName);
+          }
           addedIds.push(existing.id);
           continue;
         }
