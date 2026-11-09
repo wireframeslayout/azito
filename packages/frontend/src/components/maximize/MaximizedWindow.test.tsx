@@ -6,7 +6,8 @@ import { MaximizedWindowProvider, useMaximizedWindow } from '../../hooks/useMaxi
 import { MaximizedWindow } from './MaximizedWindow';
 import type { Window } from '../../pages/workspace/types';
 
-vi.mock('../../hooks/useOrchestrationModel', () => ({ useOrchestrationModel: () => ({ tree: [] }) }));
+const orchestrationState = vi.hoisted(() => ({ tree: [] as unknown[] }));
+vi.mock('../../hooks/useOrchestrationModel', () => ({ useOrchestrationModel: () => ({ tree: orchestrationState.tree }) }));
 const linkedState = vi.hoisted(() => ({ links: [] as unknown[], error: null as Error | null, refresh: vi.fn() }));
 vi.mock('../../hooks/useOrchestrationLinks', () => ({ useOrchestrationLinks: (id: number | null) => ({ links: id === null ? [] : linkedState.links, loading: false, error: id === null ? null : linkedState.error, refresh: linkedState.refresh }) }));
 vi.mock('../../hooks/useIsMobile', () => ({ useIsMobile: () => false }));
@@ -90,6 +91,41 @@ describe('maximized window', () => {
     fireEvent.click(screen.getByText('Launch'));
     fireEvent.click(await screen.findByRole('treeitem', { name: /Linked/ }));
     await waitFor(() => expect(mounts.connect).toHaveBeenLastCalledWith(42));
+    linkedState.links = [];
+  });
+
+  it('shows child orchestrators with their label and icon', async () => {
+    const child = { ...second, id: 7, label: 'Coordinator', role: 'orchestrator' };
+    orchestrationState.tree = [{ window: first, children: [{ window: child, children: [] }] }];
+    render(<HotkeyProvider><MaximizedWindowProvider><Workspace /><MaximizedWindow /></MaximizedWindowProvider></HotkeyProvider>);
+    fireEvent.click(screen.getByText('Launch'));
+    const row = await screen.findByRole('treeitem', { name: /Coordinator/ });
+    expect(row).toHaveTextContent('Child');
+    expect(row.querySelector('svg')).toHaveStyle({ color: 'var(--purple)' });
+    orchestrationState.tree = [];
+  });
+  it('resolves a linked window reached by Alt navigation', async () => {
+    const linked = { ...second, id: 42, label: 'Linked', projectId: null, taskId: null, role: null };
+    linkedState.links = [{ id: 10, kind: 'orchestration', unlinkedAt: null, sourceWindowId: 1, targetWindowId: 42, taskId: null, resolvedTaskId: null, resolvedWindowId: 42, resolvedWindow: linked, lastInteractionAt: null }];
+    render(<HotkeyProvider><MaximizedWindowProvider><Workspace /><MaximizedWindow /></MaximizedWindowProvider></HotkeyProvider>);
+    fireEvent.click(screen.getByText('Launch'));
+    await screen.findByRole('treeitem', { name: /Linked/ });
+    fireEvent.keyDown(screen.getByRole('dialog'), { key: 'ArrowUp', altKey: true });
+    await waitFor(() => expect(mounts.connect).toHaveBeenLastCalledWith(42));
+    expect(screen.queryByText('Window not found')).not.toBeInTheDocument();
+    linkedState.links = [];
+  });
+
+  it('keeps the linked sequence after selection and navigates to another resolved target', async () => {
+    const makeLink = (id: number) => ({ id, kind: 'orchestration', unlinkedAt: null, sourceWindowId: 1, targetWindowId: id, taskId: null, resolvedTaskId: null, resolvedWindowId: id, resolvedWindow: { ...second, id, label: `Linked ${id}`, projectId: null, taskId: null, role: null }, lastInteractionAt: null });
+    linkedState.links = [makeLink(42), makeLink(43)];
+    render(<HotkeyProvider><MaximizedWindowProvider><Workspace /><MaximizedWindow /></MaximizedWindowProvider></HotkeyProvider>);
+    fireEvent.click(screen.getByText('Launch'));
+    fireEvent.click(await screen.findByRole('treeitem', { name: /Linked 42/ }));
+    await waitFor(() => expect(mounts.connect).toHaveBeenLastCalledWith(42));
+    fireEvent.keyDown(screen.getByRole('dialog'), { key: 'ArrowDown', altKey: true });
+    await waitFor(() => expect(mounts.connect).toHaveBeenLastCalledWith(43));
+    expect(screen.queryByText('Window not found')).not.toBeInTheDocument();
     linkedState.links = [];
   });
 

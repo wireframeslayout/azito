@@ -7,6 +7,7 @@ export type MaximizeTab = { kind: 'task'; taskId: number } | { kind: 'window'; w
 export interface MaximizeWindowRow {
   kind: 'window';
   attention?: boolean;
+  isChildOrchestrator?: boolean;
   key: string;
   window: Window;
   children: MaximizeWindowRow[];
@@ -74,7 +75,7 @@ export function buildLinkedTree(items: readonly import('./linkedWindowsModel').L
   const convert = (node: import('./orchestrationModel').OrchestratorNode): MaximizeWindowRow | null => {
     if (seen.has(node.window.id)) return null;
     seen.add(node.window.id);
-    return { kind: 'window', attention: items.some(item => item.window?.id === node.window.id && item.status === 'attention'), key: `linked:orchestrator:${node.window.id}`, window: node.window, children: node.children.map(convert).filter((child): child is MaximizeWindowRow => child !== null) };
+    return { kind: 'window', isChildOrchestrator: true, attention: items.some(item => item.window?.id === node.window.id && item.status === 'attention'), key: `linked:orchestrator:${node.window.id}`, window: node.window, children: node.children.map(convert).filter((child): child is MaximizeWindowRow => child !== null) };
   };
   const nodes = children.map(convert).filter((child): child is MaximizeWindowRow => child !== null);
   const rows: MaximizeTreeRow[] = [];

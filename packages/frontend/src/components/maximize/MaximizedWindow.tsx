@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from 'react';
 import type { Window } from '../../pages/workspace/types';
 import { useTranslation } from 'react-i18next';
 import { Overlay, Button, WindowIdChip, Notice } from '../ui';
+import { Icon } from '../ui/Icon';
 import { ProjectAvatar } from '../ui/ProjectAvatar';
 import WindowActivityIndicator from '../ui/WindowActivityIndicator';
 import { useAgentActivity } from '../../hooks/useAgentActivity';
@@ -36,6 +37,7 @@ export function MaximizedWindow() {
   const [narrow, setNarrow] = useState(() => globalThis.matchMedia('(max-width: 1100px)').matches);
   useEffect(() => { const query = globalThis.matchMedia('(max-width: 1100px)'); const change = (event: MediaQueryListEvent) => setNarrow(event.matches); query.addEventListener('change', change); return () => query.removeEventListener('change', change); }, []);
   const [inputFocused, setInputFocused] = useState(false);
+  const [linkedSource, setLinkedSource] = useState<Window | null>(null);
   const { bindings } = useHotkeyBindings();
   const previousWindowId = useRef<number | null>(null);
   const treeRef = useRef<HTMLDivElement>(null);
@@ -46,10 +48,12 @@ export function MaximizedWindow() {
   const links = useOperationLinks(open ? allTasks.map(task => task.id) : []);
   const rows = buildOpenTabsTree(workspace?.tabs ?? [], allTasks, workspace?.windows ?? new Map(), links.parents);
   const window = selectedWindowId === null ? undefined : workspace?.windows.get(selectedWindowId) ?? extraWindows.get(selectedWindowId);
-  const orchestration = useOrchestrationLinks(open && window?.role === 'orchestrator' ? window.id : null);
-  const findNode = (nodes: typeof orchestrators): (typeof orchestrators)[number] | undefined => { for (const node of nodes) { if (node.window.id === window?.id) return node; const found = findNode(node.children); if (found) return found; } };
+  const source = window?.role === 'orchestrator' ? window : linkedSource;
+  useEffect(() => { if (!open) setLinkedSource(null); else if (window?.role === 'orchestrator') setLinkedSource(window); }, [open, window]);
+  const orchestration = useOrchestrationLinks(open && source ? source.id : null);
+  const findNode = (nodes: typeof orchestrators): (typeof orchestrators)[number] | undefined => { for (const node of nodes) { if (node.window.id === source?.id) return node; const found = findNode(node.children); if (found) return found; } };
   const linkedItems = resolveLinkedWindows(orchestration.links, [...(workspace?.windows.values() ?? []), ...extraWindows.values()], allTasks, allProjects, buildAttentionContext(entries, allTasks));
-  const linkedRows = window?.role === 'orchestrator' ? buildLinkedTree(linkedItems, findNode(orchestrators)?.children ?? []) : [];
+  const linkedRows = source ? buildLinkedTree(linkedItems, findNode(orchestrators)?.children ?? []) : [];
   const visible = visibleMaximizeWindows([...rows, ...linkedRows], expanded);
   const task = window ? allTasks.find(item => item.windows?.some(w => w.id === window.id)) : undefined;
   const project = window ? allProjects.find(item => item.id === (task?.projectId ?? window.projectId)) : undefined;
@@ -93,11 +97,23 @@ export function MaximizedWindow() {
     const timer = globalThis.setTimeout(() => terminalRef.current?.querySelector<HTMLElement>('.xterm-helper-textarea, [data-maximize-input]')?.focus(), 0);
     return () => globalThis.clearTimeout(timer);
   }, [selectedWindowId]);
+  const selectWindow = (id: number) => {
+    const findWindow = (items: readonly MaximizeTreeRow[]): Window | undefined => {
+      for (const row of items) {
+        if (row.kind === 'window' && row.window.id === id) return row.window;
+        const child = findWindow(row.children);
+        if (child) return child;
+      }
+    };
+    const target = findWindow(allRows);
+    if (target) rememberWindow(target);
+    select(id);
+  };
   const move = (delta: number) => {
     if (!visible.length) return;
     const index = selectedWindowId === null ? -1 : visible.indexOf(selectedWindowId);
     const next = visible[(index + delta + visible.length) % visible.length];
-    select(next);
+    selectWindow(next);
   };
   // Overlay owns its stack entry; local shortcuts are registered inside it below.
   return <Overlay open={open} onClose={close} labelledBy="maximize-title" fallbackFocusTo={fallbackFocus} toggleAction="maximize.open" surface="solid" maxWidth="min(1400px, 96vw)" maxHeight="96vh" style={{ width: '96vw', height: '96vh', display: 'flex', flexDirection: 'column', padding: 0 }} onPrevious={() => move(-1)} onNext={() => move(1)} shouldCloseOnEscape={event => !(event.target instanceof HTMLElement && (event.target.closest('.xterm') || event.target.closest('[data-maximize-input]')))}>
@@ -117,14 +133,14 @@ export function MaximizedWindow() {
         <div ref={treeRef} role="tree" aria-label={t('maximize.openTabs')} onFocusCapture={event => { if (event.target instanceof HTMLElement && event.target.getAttribute('role') === 'treeitem') lastTreeFocus.current = event.target; }} onKeyDown={event => handleRovingTreeKeyDown(event, treeRef.current, key => setExpanded(previous => { const next = new Set(previous); next.has(key) ? next.delete(key) : next.add(key); return next; }))}>
           {rows.map(row => <TreeRow key={row.key} row={row} expanded={expanded} focused={focused ?? rows[0]?.key} selected={selectedWindowId} onFocus={setFocused} onSelect={id => { select(id); setTreeOpen(false); }} onToggle={key => setExpanded(previous => { const next = new Set(previous); next.has(key) ? next.delete(key) : next.add(key); return next; })} />)}
         </div>
-        {window?.role === 'orchestrator' && <section aria-label={t('maximize.linkedTitle', { name: window.label ?? window.tmuxTarget })}>
-          <strong>{t('maximize.linkedTitle', { name: window.label ?? window.tmuxTarget })}</strong>
+        {source && <section aria-label={t('maximize.linkedTitle', { name: source.label ?? source.tmuxTarget })}>
+          <strong>{t('maximize.linkedTitle', { name: source.label ?? source.tmuxTarget })}</strong>
           {orchestration.loading && <p role="status">{t('linkedPanel.loading')}</p>}
           {orchestration.error && <Notice tone="danger" role="alert" action={<Button size="sm" onClick={() => void orchestration.refresh()}>{t('maximize.retry')}</Button>}>{t('maximize.linksError')}</Notice>}
           {!orchestration.loading && !orchestration.error && orchestration.links.length === 0 && linkedRows.length === 0 && <p>{t('maximize.linkedEmpty')}</p>}
           {!orchestration.error && linkedItems.some(item => !item.window && !item.task) && <p role="status">{t('linkedPanel.windowUnavailable')}</p>}
-          <div role="tree" aria-label={t('maximize.linkedTitle', { name: window.label ?? window.tmuxTarget })} onKeyDown={event => handleRovingTreeKeyDown(event, event.currentTarget, key => setExpanded(previous => { const next = new Set(previous); next.has(key) ? next.delete(key) : next.add(key); return next; }))}>
-            {linkedRows.map(row => <TreeRow key={row.key} row={row} expanded={expanded} focused={focused?.startsWith('linked:') ? focused : linkedRows[0]?.key ?? null} selected={selectedWindowId} onFocus={setFocused} onSelect={id => { const item = linkedItems.find(linked => linked.window?.id === id); if (item?.window) rememberWindow(item.window); const child = findNode(orchestrators); const findChild = (nodes: typeof orchestrators): Window | undefined => { for (const node of nodes) { if (node.window.id === id) return node.window; const found = findChild(node.children); if (found) return found; } }; const target = child && findChild(child.children); if (target) rememberWindow(target); select(id); setTreeOpen(false); }} onToggle={key => setExpanded(previous => { const next = new Set(previous); next.has(key) ? next.delete(key) : next.add(key); return next; })} />)}
+          <div role="tree" aria-label={t('maximize.linkedTitle', { name: source.label ?? source.tmuxTarget })} onKeyDown={event => handleRovingTreeKeyDown(event, event.currentTarget, key => setExpanded(previous => { const next = new Set(previous); next.has(key) ? next.delete(key) : next.add(key); return next; }))}>
+            {linkedRows.map(row => <TreeRow key={row.key} row={row} expanded={expanded} focused={focused?.startsWith('linked:') ? focused : linkedRows[0]?.key ?? null} selected={selectedWindowId} onFocus={setFocused} onSelect={id => { selectWindow(id); setTreeOpen(false); }} onToggle={key => setExpanded(previous => { const next = new Set(previous); next.has(key) ? next.delete(key) : next.add(key); return next; })} />)}
           </div>
         </section>}
       </GlassPopoverSurface>
@@ -143,7 +159,7 @@ function TreeRow({ row, expanded, focused, selected, onFocus, onSelect, onToggle
   const label = row.kind === 'task' ? row.task.title : row.window.label || row.window.tmuxTarget;
   const hasChildren = row.children.length > 0;
   return <div role="treeitem" aria-level={level} tabIndex={focused === row.key ? 0 : -1} data-key={row.key} aria-selected={id !== null && id === selected} aria-expanded={hasChildren ? expanded.has(row.key) : undefined} onFocus={event => { if (event.target === event.currentTarget) onFocus(row.key); }} onClick={event => { event.stopPropagation(); if (id !== null) onSelect(id); }} style={{ padding: 'var(--space-1)', cursor: id === null ? 'default' : 'pointer', background: id !== null && id === selected ? 'var(--selected-bg-strong)' : undefined }}>
-    <div style={{ display: 'flex', alignItems: 'center', gap: 'var(--space-1)', minWidth: 0 }}>{row.kind === 'task' ? <TaskTreeRowContent task={row.task} expanded={expanded.has(row.key)} onToggle={() => onToggle(row.key)} /> : <>{hasChildren && <button tabIndex={-1} aria-label={t(expanded.has(row.key) ? 'maximize.collapse' : 'maximize.expand')} onClick={event => { event.stopPropagation(); onToggle(row.key); }}>{expanded.has(row.key) ? '▾' : '▸'}</button>}<span style={{ flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{label}</span><span style={{ color: 'var(--text-dim)', fontSize: 'var(--font-2xs)' }}>W-{row.window.id}</span></>}{row.attention && <span style={{ color: 'var(--warning)', fontSize: 'var(--font-2xs)' }}>{t('linkedPanel.attention')}</span>}</div>
+    <div style={{ display: 'flex', alignItems: 'center', gap: 'var(--space-1)', minWidth: 0 }}>{row.kind === 'task' ? <TaskTreeRowContent task={row.task} expanded={expanded.has(row.key)} onToggle={() => onToggle(row.key)} /> : <>{hasChildren && <button tabIndex={-1} aria-label={t(expanded.has(row.key) ? 'maximize.collapse' : 'maximize.expand')} onClick={event => { event.stopPropagation(); onToggle(row.key); }}>{expanded.has(row.key) ? '▾' : '▸'}</button>}{row.isChildOrchestrator && <Icon name="orchestration" size={14} style={{ color: 'var(--purple)' }} />}<span style={{ flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{label}</span>{row.isChildOrchestrator && <span style={{ color: 'var(--purple)', fontSize: 'var(--font-2xs)' }}>{t('maximize.childOrchestrator')}</span>}<span style={{ color: 'var(--text-dim)', fontSize: 'var(--font-2xs)' }}>W-{row.window.id}</span></>}{row.attention && <span style={{ color: 'var(--warning)', fontSize: 'var(--font-2xs)' }}>{t('linkedPanel.attention')}</span>}</div>
     {hasChildren && expanded.has(row.key) && <div role="group" style={{ paddingLeft: 'var(--space-3)' }}>{row.children.map(child => <TreeRow key={child.key} row={child} expanded={expanded} focused={focused} selected={selected} onFocus={onFocus} onSelect={onSelect} onToggle={onToggle} level={level + 1} />)}</div>}
   </div>;
 }
