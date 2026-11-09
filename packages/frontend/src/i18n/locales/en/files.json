@@ -151,6 +151,8 @@
       "charts": "charts"
     },
     "saveError": "Unable to save the file. Try again.",
-    "tooLarge": "This file exceeds the preview size or archive limits. Download it to open it."
+    "tooLarge": "This file exceeds the preview size or archive limits. Download it to open it.",
+    "xlsxWarning": "Editing may remove formatting, drawings, charts, and pivot tables. Formulas may require recalculation.",
+    "xlsxMobile": "XLSX editing is unavailable on narrow screens. Open this file on a larger screen to edit it."
   }
 }

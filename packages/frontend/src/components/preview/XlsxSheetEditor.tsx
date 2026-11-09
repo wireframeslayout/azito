@@ -27,6 +27,14 @@ export function XlsxSheetEditor({ backend, path, onDirtyChange }: Props) {
   const [error, setError] = useState<'large' | 'invalid' | null>(null);
   const [exportError, setExportError] = useState(false);
   const [changed, setChanged] = useState(false);
+  const [isMobile, setIsMobile] = useState(() => window.matchMedia('(max-width: 767px)').matches);
+  useEffect(() => {
+    const query = window.matchMedia('(max-width: 767px)');
+    const onChange = (event: MediaQueryListEvent) => { setIsMobile(event.matches); if (event.matches) setConfirm(false); };
+    setIsMobile(query.matches);
+    query.addEventListener('change', onChange);
+    return () => query.removeEventListener('change', onChange);
+  }, []);
   useEffect(() => { if (document.saved) { setChanged(false); onDirtyChange?.(false); } }, [document.saved, onDirtyChange]);
   useEffect(() => {
     if (!document.bytes) return;
@@ -71,14 +79,16 @@ export function XlsxSheetEditor({ backend, path, onDirtyChange }: Props) {
   if (document.loading || !sheets) return <p role="status">{t('preview.loading')}</p>;
   return <section style={{ display: 'flex', flexDirection: 'column', height: '100%', minHeight: 0 }}>
     {(document.error || exportError) && <p role="alert">{t('office.saveError')}</p>}
+    <p style={{ padding: 'var(--space-2)', color: 'var(--text)' }}>{t('office.xlsxWarning')}</p>
+    {isMobile && <p role="status" style={{ padding: 'var(--space-2)', color: 'var(--text)' }}>{t('office.xlsxMobile')}</p>}
     <div style={{ display: 'flex', flexWrap: 'wrap', gap: 'var(--space-2)', padding: 'var(--space-2)' }}>
-      <Button disabled={editing || truncated || window.matchMedia('(max-width: 767px)').matches} onClick={() => setConfirm(true)}>{t('office.edit')}</Button>
+      <Button disabled={editing || truncated || isMobile} onClick={() => setConfirm(true)}>{t('office.edit')}</Button>
       <Button disabled={!editing || !changed || truncated || oversized || document.saving} onClick={() => void save()}>{t('office.save')}</Button>
       {changed && <span role="status">{t('office.unsaved')}</span>}
       {(truncated || oversized) && <span role="status">{t('office.truncated')}</span>}
     </div>
     <ConfirmDialog open={confirm} title={t('office.edit')} message={`${t('office.formatWarning')} ${losses.map((loss) => t(`office.loss.${loss}`)).join(', ')}`} confirmLabel={t('office.edit')} confirmVariant="primary" onConfirm={() => { if (workbook.current) setSheets(workbook.current.getAllSheets().map((sheet) => ({ ...sheet, celldata: sheet.data?.flatMap((row, r) => row.flatMap((cell, c) => cell ? [{ r, c, v: cell }] : [])) }))); baseline.current = null; setEditing(true); setConfirm(false); }} onCancel={() => setConfirm(false)} />
     {document.conflict !== undefined && <div role="alert">{t('office.conflict')} <Button onClick={() => void document.reload()}>{t('office.reload')}</Button><Button disabled={truncated || oversized} onClick={() => void save(true)}>{t('office.overwrite')}</Button></div>}
-    {sheets && <div style={{ flex: 1, minHeight: '40vh' }}><Workbook key={`${key}-${editing}`} ref={workbook} data={sheets} allowEdit={editing} onChange={(next) => { setSheets(next); setOversized(next.some((sheet) => sheet.data?.some((row, r) => row.some((cell, c) => cell != null && (r >= 5000 || c >= 100))))); if (editing) { const snapshot = JSON.stringify(next); if (baseline.current === null) baseline.current = snapshot; else if (baseline.current !== snapshot) { setChanged(true); onDirtyChange?.(true); } } }} /></div>}
+    {sheets && <div style={{ flex: 1, minHeight: '40vh' }}><Workbook key={`${key}-${editing}`} ref={workbook} data={sheets} allowEdit={editing && !isMobile} onChange={(next) => { setSheets(next); setOversized(next.some((sheet) => sheet.data?.some((row, r) => row.some((cell, c) => cell != null && (r >= 5000 || c >= 100))))); if (editing) { const snapshot = JSON.stringify(next); if (baseline.current === null) baseline.current = snapshot; else if (baseline.current !== snapshot) { setChanged(true); onDirtyChange?.(true); } } }} /></div>}
   </section>;
 }

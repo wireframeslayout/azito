@@ -55,6 +55,12 @@ test('XLSX save retains numbers, formulas and other sheets', async ({ app, harne
   await app.goto(`${harness.baseUrl}/workspace/${project}`);
   await app.getByTitle('ファイル', { exact: true }).click();
   await app.getByText('sample.xlsx', { exact: true }).click();
+  await expect(app.getByText(/数式の再計算が必要な場合があります/).first()).toBeVisible();
+  await app.setViewportSize({ width: 600, height: 800 });
+  await expect(app.getByText(/狭い画面では XLSX を編集できません/)).toBeVisible();
+  await expect(app.getByRole('button', { name: '編集', exact: true })).toBeDisabled();
+  await app.setViewportSize({ width: 1280, height: 800 });
+  await expect(app.getByText(/狭い画面では XLSX を編集できません/)).toHaveCount(0);
   await app.getByRole('button', { name: '編集', exact: true }).click();
   await app.getByRole('alertdialog').getByRole('button', { name: '編集', exact: true }).click();
   await app.locator('.luckysheet-cell-sheettable').click({ position: { x: 220, y: 20 } });

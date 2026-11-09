@@ -61,7 +61,7 @@ export function CsvTableEditor({ backend, path, onDirtyChange }: Props) {
     {parseError && <p role="alert">{t('preview.loadError')}</p>}
     <div style={{ display: 'flex', flexWrap: 'wrap', gap: 'var(--space-2)', alignItems: 'center' }}>
       <Button onClick={() => setMode(mode === 'table' ? 'text' : 'table')}>{t(mode === 'table' ? 'office.textView' : 'office.tableView')}</Button>
-      <label>{t('office.delimiter')} <select value={table.delimiter} onChange={(event) => { if (document.bytes) void parseCsv(document.bytes, event.target.value).then(setTable); }}><option value=",">,</option><option value="\t">{t('office.tab')}</option><option value=";">;</option><option value="|">|</option></select></label>
+      <label>{t('office.delimiter')} <select value={table.delimiter} disabled={table.truncated || parsing || parseError} onChange={(event) => void update({ ...table, delimiter: event.target.value })}><option value=",">,</option><option value={'\t'}>{t('office.tab')}</option><option value=";">;</option><option value="|">|</option></select></label>
       <Button disabled={!document.dirty || document.saving || table.truncated || parseError || parsing} onClick={() => { if (canSave.current) void document.save(); }}>{t('office.save')}</Button>
       {document.dirty && <span role="status">{t('office.unsaved')}</span>}
     </div>
