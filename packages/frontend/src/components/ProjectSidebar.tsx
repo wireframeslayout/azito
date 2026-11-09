@@ -101,7 +101,7 @@ export default function ProjectSidebar() {
 
   const wsMatch = matchWorkspacePath(location.pathname);
   const storedProjectId = localStorage.getItem('workspace-active-project');
-  const currentProjectId = wsMatch
+  const currentProjectId = location.pathname.startsWith('/orchestration') ? null : wsMatch
     ? parseInt(wsMatch.id, 10)
     : storedProjectId ? parseInt(storedProjectId, 10) : null;
   const visibleProjects = rail.getVisibleProjects(projects);
@@ -283,6 +283,7 @@ export default function ProjectSidebar() {
       )}
 
 
+      <button onClick={() => navigate(paths.orchestration())} title={t('sidebar.orchestration')} aria-label={t('sidebar.orchestration')} style={{ ...globalButtonStyle(location.pathname.startsWith('/orchestration')), color: 'var(--purple)', background: location.pathname.startsWith('/orchestration') ? 'var(--purple-a15)' : 'transparent' }}><Icon name="operations" size={20} /></button>
       <div style={{ display: 'flex', flexDirection: 'column', gap: 2, flexShrink: 0 }}>
         {GLOBAL_ITEMS.map((item) => {
           const active = isActiveGlobalPath(item.path);

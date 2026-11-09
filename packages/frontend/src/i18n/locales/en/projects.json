@@ -22,6 +22,7 @@
     "moveDown": "Move down"
   },
   "sidebar": {
+    "orchestration": "Orchestration",
     "servers": "Servers",
     "sidekicks": "Sidekicks",
     "units": "Units",

@@ -4,6 +4,7 @@ export const paths = {
   root: () => '/',
   workspace: (id: string | number, mode?: string) =>
     mode ? `/workspace/${id}/${mode}` : `/workspace/${id}`,
+  orchestration: (id?: number) => id === undefined ? '/orchestration' : `/orchestration/${id}`,
   servers: () => '/servers',
   server: (name: string, section?: string) =>
     section ? `/servers/${encodeURIComponent(name)}/${section}` : `/servers/${encodeURIComponent(name)}`,
@@ -72,6 +73,8 @@ export const ROUTE_PATHS = [
   '/',
   '/workspace/:id',
   '/workspace/:id/:mode',
+  '/orchestration',
+  '/orchestration/:id',
   '/servers',
   '/servers/:name',
   '/servers/:name/:section',
