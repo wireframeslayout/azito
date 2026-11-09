@@ -40,6 +40,15 @@ export interface Window {
   paneLayout?: WindowPaneLayout;
   sleeping?: boolean;
 }
+export interface WindowLinkView {
+  id: number; sourceWindowId: number; targetWindowId: number | null; taskId: number | null;
+  kind: 'orchestration' | 'operation'; source: 'auto' | 'manual'; createdAt: string;
+  lastInteractionAt: string | null; unlinkedAt: string | null; resolvedWindowId: number | null;
+}
+export interface OrchestratorSummary extends Window {
+  links: { total: number; projectIds: number[]; serverNames: string[] };
+  parentWindowId: number | null;
+}
 export interface Repository { id: number; url: string; name?: string; provider?: string; owner?: string; repoName?: string; }
 export interface ProjectListItem {
   id: number;

@@ -1,7 +1,9 @@
 import type { Database } from 'better-sqlite3';
 import type { NotificationBus } from '../notifications/NotificationBus';
-import type { IWindowRepository, Window } from '../windows/Window';
+import type { IWindowRepository } from '../windows/Window';
 import type { ITaskRepository } from '../tasks/Task';
+import { SqliteWindowLinkRepository } from './SqliteWindowLinkRepository';
+import type { WindowLinkView, OrchestratorSummary } from './WindowLink';
 
 type Subject = { windowId: number } | { taskId: number };
 type Rejection = 'not_linkable' | 'self_link' | 'already_nested' | 'cycle' | 'not_found';
@@ -9,7 +11,8 @@ interface LinkRow { id: number; source_window_id: number; target_window_id: numb
 
 export class OrchestrationLinkService {
   private lastWrites = new Map<number, number>();
-  constructor(private db: Database, private windows: IWindowRepository, private tasks: ITaskRepository, private bus: NotificationBus) {}
+  private linkRepo: SqliteWindowLinkRepository;
+  constructor(private db: Database, private windows: IWindowRepository, private tasks: ITaskRepository, private bus: NotificationBus) { this.linkRepo = new SqliteWindowLinkRepository(db); }
 
   private pruneWrites(now: number): void {
     for (const [key, time] of this.lastWrites) if (now - time >= 5000) this.lastWrites.delete(key);
@@ -22,7 +25,7 @@ export class OrchestrationLinkService {
       OR (source_window_id IN (SELECT id FROM windows WHERE (?='window' AND id=?) OR (?='task' AND task_id=?) OR (?='project' AND (project_id=? OR task_id IN (SELECT id FROM tasks WHERE project_id=?)))))
     )`).all(kind, id, kind, id, kind, id, id, kind, id, kind, id, kind, id, kind, id, kind, id, id) as Array<{ id: number }>;
     for (const row of rows) this.notify(row.id);
-    if (kind === 'window') this.notify(id);
+    if (kind === 'window' && (rows.length > 0 || this.windows.findById(id)?.role === 'orchestrator')) this.notify(id);
     if (kind === 'project') {
       const origins = this.db.prepare('SELECT id FROM windows WHERE origin_project_id=?').all(id) as Array<{ id: number }>;
       for (const origin of origins) this.notify(origin.id);
@@ -96,27 +99,28 @@ export class OrchestrationLinkService {
     const row = this.db.prepare("SELECT source_window_id FROM window_links WHERE target_window_id=? AND kind='orchestration' AND unlinked_at IS NULL LIMIT 1").get(windowId) as { source_window_id: number } | undefined;
     return row?.source_window_id ?? null;
   }
-  list(source: number, includeUnlinked = false, kind?: 'operation' | 'orchestration'): object[] {
-    const rows = this.db.prepare(`SELECT * FROM window_links WHERE source_window_id=? ${includeUnlinked ? '' : 'AND unlinked_at IS NULL'} ${kind ? 'AND kind=?' : ''} ORDER BY id`).all(...(kind ? [source, kind] : [source])) as LinkRow[];
-    return rows.map(r => ({ id: r.id, sourceWindowId: r.source_window_id, targetWindowId: r.target_window_id, taskId: r.task_id, kind: r.kind, source: r.source, createdAt: r.created_at, lastInteractionAt: r.last_interaction_at, unlinkedAt: r.unlinked_at, resolvedWindowId: r.task_id === null ? r.target_window_id : this.windows.findByTask(r.task_id).find(w => w.isPrimary)?.id ?? null }));
+  incomingSources(windowId: number): number[] { return this.linkRepo.incomingSources(windowId); }
+  unlinkAllFrom(windowId: number): void {
+    for (const link of this.linkRepo.activeFrom(windowId)) this.unlink(windowId, link.id);
   }
-  orchestrators(): object[] {
-    return this.windows.findAll().filter(w => w.role === 'orchestrator').map(w => {
-      const rows = this.db.prepare('SELECT * FROM window_links WHERE source_window_id=? AND unlinked_at IS NULL').all(w.id) as LinkRow[];
-      const projects = new Set<number>(); const servers = new Set<string>();
-      for (const row of rows) {
-        const target: Window | undefined = row.target_window_id === null ? undefined : this.windows.findById(row.target_window_id);
-        const task = row.task_id === null ? undefined : this.tasks.findById(row.task_id);
-        const project = target?.projectId ?? task?.projectId;
-        if (project != null) projects.add(project);
-        if (target) servers.add(target.serverName);
-        if (task) {
-          const primary = this.windows.findByTask(task.id).find(window => window.isPrimary);
-          if (primary) servers.add(primary.serverName);
-          else if (task.serverName) servers.add(task.serverName);
-        }
-      }
-      return { ...w, links: { total: rows.length, projectIds: [...projects], serverNames: [...servers] }, parentWindowId: this.parentOf(w.id) };
+  list(source: number, includeUnlinked = false, kind?: WindowLinkView['kind']): WindowLinkView[] {
+    return this.linkRepo.list(source, includeUnlinked, kind);
+  }
+  orchestrators(): OrchestratorSummary[] {
+    const rows = this.linkRepo.activeForOrchestrators();
+    const grouped = new Map<number, typeof rows>();
+    const parents = new Map<number, number>();
+    for (const row of rows) {
+      const group = grouped.get(row.source_window_id) ?? [];
+      group.push(row); grouped.set(row.source_window_id, group);
+      if (row.kind === 'orchestration' && row.target_window_id !== null && !parents.has(row.target_window_id)) parents.set(row.target_window_id, row.source_window_id);
+    }
+    return this.windows.findOrchestrators().map(w => {
+      const links = grouped.get(w.id) ?? [];
+      return { ...w, links: { total: links.length,
+        projectIds: [...new Set(links.flatMap(row => row.project_id === null ? [] : [row.project_id]))],
+        serverNames: [...new Set(links.flatMap(row => row.server_name === null ? [] : [row.server_name]))],
+      }, parentWindowId: parents.get(w.id) ?? null };
     });
   }
 }

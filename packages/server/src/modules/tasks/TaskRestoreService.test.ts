@@ -145,7 +145,7 @@ function makeDeps(overrides: Partial<TaskRestoreDeps> = {}): TaskRestoreDeps {
     },
     windowRepo: {
       add: vi.fn(() => 100),
-      adoptForTask: vi.fn(),
+      adoptForTask: vi.fn(), findOrchestrators: vi.fn(() => []),
       findAll: vi.fn(() => []),
       findById: vi.fn(() => undefined),
       findByProject: vi.fn(() => []),

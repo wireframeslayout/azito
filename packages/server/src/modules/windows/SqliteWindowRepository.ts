@@ -148,6 +148,10 @@ export class SqliteWindowRepository implements IWindowRepository {
     return rows.map((r) => this.toWindow(r));
   }
 
+  findOrchestrators(): Window[] {
+    return (this.db.prepare("SELECT * FROM windows WHERE role = 'orchestrator'").all() as WindowRow[]).map(r => this.toWindow(r));
+  }
+
   findById(id: number): Window | undefined {
     const row = this.findByIdStmt.get(id) as WindowRow | undefined;
     return row ? this.toWindow(row) : undefined;

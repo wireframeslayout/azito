@@ -817,7 +817,7 @@ export async function buildWiring(db: SqliteDatabase, publicUrl: string, localUr
 
   return {
     orchestrationLinks,
-    windowRoles: new WindowRoleService(db, repos.windowRepo, infra.notificationBus),
+    windowRoles: new WindowRoleService(db, repos.windowRepo, infra.notificationBus, repos.projectRepo, orchestrationLinks),
     uiToken,
     webhookToken,
     storageStatusService,

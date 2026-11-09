@@ -194,7 +194,7 @@ function buildService(opts: {
 }) {
   const windowRepo: IWindowRepository = {
     add: vi.fn(() => 1),
-    adoptForTask: vi.fn(),
+    adoptForTask: vi.fn(), findOrchestrators: vi.fn(() => []),
     findAll: vi.fn(() => []),
     findById: vi.fn(() => opts.window),
     findByProject: vi.fn(() => []),
@@ -1740,7 +1740,7 @@ describe('WindowRespawnService.respawn — concurrent respawns for the same task
     let windowRow: Window = makeWindow({ id: 1, taskId: 1, ownerType: 'task', role: null, originProjectId: null, isPrimary: true, tmuxTarget: 'sess:win-0' });
     const windowRepo: IWindowRepository = {
       add: vi.fn(() => 1),
-      adoptForTask: vi.fn(),
+      adoptForTask: vi.fn(), findOrchestrators: vi.fn(() => []),
       findAll: vi.fn(() => []),
       findById: vi.fn(() => windowRow),
       findByProject: vi.fn(() => []),

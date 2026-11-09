@@ -88,6 +88,7 @@ export function isPrimaryTaskWindow(win: Pick<Window, 'ownerType' | 'isPrimary'>
 export interface IWindowRepository {
   add(window: Omit<Window, 'id' | 'createdAt' | 'labelSource'>): number;
   findAll(): Window[];
+  findOrchestrators(): Window[];
   findById(id: number): Window | undefined;
   findByProject(projectId: number): Window[];
   findByTask(taskId: number): Window[];

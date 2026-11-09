@@ -1,29 +1,30 @@
 import type { Database } from 'better-sqlite3';
 import type { IWindowRepository } from './Window';
+import type { IProjectRepository } from '../projects/Project';
 import type { NotificationBus } from '../notifications/NotificationBus';
 
+export interface RoleLinks { incomingSources(windowId: number): number[]; unlinkAllFrom(windowId: number): void }
+
 export class WindowRoleService {
-  constructor(private db: Database, private windows: IWindowRepository, private bus: NotificationBus) {}
+  constructor(private db: Database, private windows: IWindowRepository, private bus: NotificationBus, private projects: Pick<IProjectRepository, 'findById'>, private links: RoleLinks) {}
   set(id: number, role: 'orchestrator' | null): 'not_found' | 'not_agent_window' | 'task_owned_window' | 'already_nested' | 'ok' {
     return this.db.transaction(() => {
       const win = this.windows.findById(id);
       if (!win) return 'not_found';
       if (win.role === role) return 'ok';
-      const affected = this.db.prepare('SELECT DISTINCT source_window_id AS id FROM window_links WHERE target_window_id=? AND unlinked_at IS NULL').all(id) as Array<{ id: number }>;
+      const affected = this.links.incomingSources(id);
       if (role) {
         if (win.ownerType === 'task') return 'task_owned_window';
         if (win.windowType !== 'agent' || !win.workerType) return 'not_agent_window';
         if (affected.length > 1) return 'already_nested';
         this.db.prepare("UPDATE windows SET role='orchestrator', origin_project_id=project_id, project_id=NULL, owner_type='server' WHERE id=?").run(id);
       } else {
-        const project = win.originProjectId === null ? undefined : this.db.prepare('SELECT id FROM projects WHERE id=?').get(win.originProjectId);
+        const project = win.originProjectId === null ? undefined : this.projects.findById(win.originProjectId);
         this.db.prepare('UPDATE windows SET role=NULL, origin_project_id=NULL, project_id=?, owner_type=? WHERE id=?').run(project ? win.originProjectId : null, project ? 'project' : 'server', id);
-        const children = this.db.prepare('SELECT DISTINCT target_window_id AS id FROM window_links WHERE source_window_id=? AND target_window_id IS NOT NULL AND unlinked_at IS NULL').all(id) as Array<{ id: number }>;
-        this.db.prepare("UPDATE window_links SET unlinked_at=datetime('now') WHERE source_window_id=? AND unlinked_at IS NULL").run(id);
-        for (const child of children) this.bus.emit({ type: 'orchestration:updated', payload: { windowId: child.id } });
+        this.links.unlinkAllFrom(id);
       }
       this.bus.emit({ type: 'orchestration:updated', payload: { windowId: id } });
-      for (const source of affected) this.bus.emit({ type: 'orchestration:updated', payload: { windowId: source.id } });
+      for (const source of affected) this.bus.emit({ type: 'orchestration:updated', payload: { windowId: source } });
       return 'ok';
     })();
   }

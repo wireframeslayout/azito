@@ -185,7 +185,7 @@ function makeOpts(
     windowRepo: {
       findByTaskIds: vi.fn(() => new Map()),
       add: vi.fn(() => 100),
-      adoptForTask: vi.fn(),
+      adoptForTask: vi.fn(), findOrchestrators: vi.fn(() => []),
       findAll: vi.fn(() => []),
       findById: vi.fn(() => undefined),
       findByProject: vi.fn(() => []),

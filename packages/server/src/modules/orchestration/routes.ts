@@ -21,7 +21,7 @@ const routes: FastifyPluginCallback<Options> = (app, { links, windows }, done) =
     if (!body.success) return reply.status(400).send({ error: 'invalid_target' });
     const result = links.add(id, 'targetWindowId' in body.data ? { windowId: body.data.targetWindowId } : { taskId: body.data.taskId }, 'manual');
     if (typeof result === 'string') return reply.status(result === 'not_found' ? 404 : result === 'already_nested' || result === 'cycle' ? 409 : 422).send({ error: result });
-    return links.list(id, true).find((link) => (link as { id: number }).id === result.id);
+    return links.list(id, true).find((link) => link.id === result.id);
   });
   app.delete<{ Params: { id: string; linkId: string } }>('/api/windows/:id/links/:linkId', async (req, reply) => {
     const id = parseWindowId(req.params.id); const linkId = parseWindowId(req.params.linkId);

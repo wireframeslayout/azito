@@ -259,6 +259,8 @@ const windowsRoutes: FastifyPluginCallback<WindowsRouteOptions> = (fastify, opts
       const existing = findExistingWindow(serverName, tmuxTarget, givenRef);
       if (existing) {
         if (role && existing.role !== role) return reply.status(409).send({ error: 'already_registered', windowId: existing.id });
+        if (id !== null && existing.ownerType === 'server') return reply.status(409).send({ error: 'server_owned_window', windowId: existing.id });
+        if (id === null && existing.ownerType !== 'server') return reply.status(409).send({ error: 'project_owned_window', windowId: existing.id });
         if (id !== null && existing.ownerType !== 'server' && existing.projectId !== id) {
           windowRepo.update(existing.id, { projectId: id });
           notifyWindowsChanged(serverName);
@@ -331,6 +333,11 @@ const windowsRoutes: FastifyPluginCallback<WindowsRouteOptions> = (fastify, opts
         return reply.status(404).send({ error: `Session '${session}' not found on server '${serverName}'` });
 
       const addedIds: number[] = [];
+      for (const win of targetSession.windows) {
+        const target = win.ref?.kind === 'misao' ? muxWindowTarget(win.ref) : `${session}:${win.name}`;
+        const existing = findExistingWindow(serverName, target, win.ref);
+        if (existing?.ownerType === 'server') return reply.status(409).send({ error: 'server_owned_window', windowId: existing.id });
+      }
       for (const win of targetSession.windows) {
         // tmux: the window name; misao: the window id (a display name is not an identity, M-023).
         const winTarget = win.ref?.kind === 'misao' ? muxWindowTarget(win.ref) : `${session}:${win.name}`;

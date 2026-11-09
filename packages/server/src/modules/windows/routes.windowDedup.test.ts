@@ -3,6 +3,8 @@ import Fastify from 'fastify';
 import { formatMuxRef } from '@azito/shared';
 import windowsRoutes from './routes';
 import { WindowRoleService } from './WindowRoleService';
+import { OrchestrationLinkService } from '../orchestration/OrchestrationLinkService';
+import type { ITaskRepository } from '../tasks/Task';
 import { NotificationBus } from '../notifications/NotificationBus';
 import { SqliteWindowRepository } from './SqliteWindowRepository';
 import { buildSeededDb, insertProject, insertTask } from './windowTestDb';
@@ -37,10 +39,12 @@ async function setup(defaultMux: 'tmux' | 'misao' = 'misao', has: { tmux: string
     }],
   } as unknown as IMuxClient, () => (misaoUp ? { available: true } : { available: false, reason: 'daemon_unreachable' }));
   const app = Fastify();
+  const bus = new NotificationBus();
+  const links = new OrchestrationLinkService(db, repo, { findById: () => undefined } as unknown as ITaskRepository, bus);
   const invalidateSessionCache = vi.fn();
   await app.register(windowsRoutes, {
     invalidateSessionCache,
-    attribution: { recordInteraction: vi.fn() }, windowRoles: new WindowRoleService(db, repo, new NotificationBus()),
+    attribution: { recordInteraction: vi.fn() }, windowRoles: new WindowRoleService(db, repo, bus, { findById: id => db.prepare('SELECT id FROM projects WHERE id=?').get(id) as never }, links),
       paneHandleResolver: {} as never,
     muxSwitchSettingsRepo: {} as never, auditLogService: {} as never, agentActivityMonitor: {} as never,
     windowRepo: repo,
@@ -76,6 +80,9 @@ describe('window registration routes share one row per physical misao window (re
     expect(result.statusCode).toBe(409);
     expect(result.json()).toEqual({ error: 'already_registered', windowId: id });
     expect(repo.findById(id)).toMatchObject({ ownerType: 'project', projectId, role: null });
+    const serverRegistration = await post('/api/windows', { ref: formatMuxRef(MISAO_REF) });
+    expect(serverRegistration.statusCode).toBe(409);
+    expect(serverRegistration.json()).toEqual({ error: 'project_owned_window', windowId: id });
     await app.close();
   });
   it('ref-only registration, then named tmux_target + ref, adopts the same row', async () => {
@@ -204,7 +211,8 @@ describe('server-owned orchestrator registration', () => {
     const id = created.json().id;
     expect(repo.findById(id)).toMatchObject({ ownerType: 'server', projectId: null, role: 'orchestrator' });
     expect((await post(`/api/tasks/${taskId}/windows`, { ref: formatMuxRef(MISAO_REF) })).json()).toEqual({ error: 'orchestrator_window' });
-    expect((await post(`/api/projects/${projectId}/windows`, { ref: formatMuxRef(MISAO_REF) })).json().id).toBe(id);
+    expect((await post(`/api/projects/${projectId}/windows`, { ref: formatMuxRef(MISAO_REF) })).json()).toEqual({ error: 'server_owned_window', windowId: id });
+    expect((await post(`/api/projects/${projectId}/windows/session`, { session: 'azito' })).json()).toEqual({ error: 'server_owned_window', windowId: id });
     expect(repo.findById(id)).toMatchObject({ ownerType: 'server', projectId: null });
     const cleared = await app.inject({ method: 'PUT', url: `/api/windows/${id}/role`, payload: { role: null } });
     expect(cleared.statusCode).toBe(200);
