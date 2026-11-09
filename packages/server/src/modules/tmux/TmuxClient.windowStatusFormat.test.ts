@@ -3,6 +3,9 @@ import { TmuxClient } from './TmuxClient';
 import type { ServerConfig } from '../servers/Server';
 import type { TransportFactory } from '../servers/transport/TransportFactory';
 
+// tmux's `-e NAME=value` argument, not any `-e` inside text: generated window names such as `win--ebmp` contain one.
+const TMUX_ENV_FLAG = /(?:^|[\s"'[,])-e(?=[\s"',\]]|$)/;
+
 const srv: ServerConfig = { name: 'local', type: 'local' } as ServerConfig;
 const PUBLIC_URL = 'http://100.64.1.42:3001';
 const LOCAL_URL = 'http://127.0.0.1:3001';
@@ -98,6 +101,6 @@ it('does not log environment values from a failed tmux command', async () => {
     const logged = JSON.stringify(warn.mock.calls);
     expect(logged).not.toContain('ui-secret');
     expect(logged).not.toContain('webhook-secret');
-    expect(logged).not.toContain('-e');
+    expect(logged).not.toMatch(TMUX_ENV_FLAG);
   } finally { warn.mockRestore(); }
 });
