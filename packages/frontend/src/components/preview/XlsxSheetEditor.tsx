@@ -24,20 +24,28 @@ export function XlsxSheetEditor({ backend, path, onDirtyChange }: Props) {
   const [truncated, setTruncated] = useState(false);
   const [oversized, setOversized] = useState(false);
   const [losses, setLosses] = useState<string[]>([]);
-  const [error, setError] = useState(false);
+  const [error, setError] = useState<'large' | 'invalid' | null>(null);
   const [exportError, setExportError] = useState(false);
   const [changed, setChanged] = useState(false);
   useEffect(() => { if (document.saved) { setChanged(false); onDirtyChange?.(false); } }, [document.saved, onDirtyChange]);
   useEffect(() => {
     if (!document.bytes) return;
     let active = true;
-    setSheets(null); setEditing(false); setError(false); setChanged(false); setOversized(false);
+    setSheets(null); setEditing(false); setError(null); setChanged(false); setOversized(false);
     void (async () => {
       const prepared = await prepareXlsx(document.bytes!.slice().buffer);
       if (!active) return;
       setTruncated(prepared.truncated); setLosses(prepared.losses);
-      await transformExcelToFortune(new File([prepared.data], 'workbook.xlsx'), (value: Sheets) => { if (active) setSheets(value); }, setKey, workbook);
-    })().catch(() => { if (active) setError(true); });
+      await transformExcelToFortune(new File([prepared.data], 'workbook.xlsx'), (value: Sheets) => {
+        if (!active) return;
+        setSheets(value.map((sheet) => ({ ...sheet, celldata: sheet.celldata?.map((cell) => {
+          if (!cell.v) return cell;
+          const original = prepared.values[sheet.name]?.[`${cell.r}:${cell.c}`];
+          const normalized = original !== undefined && (typeof original === 'boolean' || !cell.v.ct) ? { ...cell.v, v: original } : cell.v;
+          return { ...cell, v: normalized.f && normalized.v == null ? { ...normalized, v: 0 } : normalized };
+        }) })));
+      }, setKey, workbook);
+    })().catch((reason: unknown) => { if (active) setError(reason instanceof Error && /limit|too many entries/i.test(reason.message) ? 'large' : 'invalid'); });
     return () => { active = false; };
   }, [document.document]);
   const save = async (force = false) => {
@@ -59,8 +67,8 @@ export function XlsxSheetEditor({ backend, path, onDirtyChange }: Props) {
     window.addEventListener('keydown', handler);
     return () => window.removeEventListener('keydown', handler);
   });
-  if (document.loading || (!sheets && !error)) return <p role="status">{t('preview.loading')}</p>;
-  if (error || (document.error && !sheets)) return <p role="alert">{t('preview.loadError')}</p>;
+  if (error || (document.error && !sheets)) return <p role="alert">{t(error === 'large' || document.error === 'preview_too_large' ? 'office.tooLarge' : 'preview.loadError')}</p>;
+  if (document.loading || !sheets) return <p role="status">{t('preview.loading')}</p>;
   return <section style={{ display: 'flex', flexDirection: 'column', height: '100%', minHeight: 0 }}>
     {(document.error || exportError) && <p role="alert">{t('office.saveError')}</p>}
     <div style={{ display: 'flex', flexWrap: 'wrap', gap: 'var(--space-2)', padding: 'var(--space-2)' }}>

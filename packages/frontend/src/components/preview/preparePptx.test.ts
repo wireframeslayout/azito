@@ -32,4 +32,15 @@ describe('preparePptx', () => {
     expect(await zip.file('ppt/presentation.xml')!.async('string')).not.toContain('rId51');
     expect(await zip.file('ppt/_rels/presentation.xml.rels')!.async('string')).not.toContain('rId51');
   });
+  it('rejects a presentation containing a corrupt slide entry', async () => {
+    const zip = new JSZip();
+    zip.file('ppt/slides/slide1.xml', '<slide>first</slide>');
+    zip.file('ppt/slides/slide2.xml', '<slide>broken</slide>');
+    const bytes = new Uint8Array(await zip.generateAsync({ type: 'arraybuffer', compression: 'STORE' }));
+    const marker = new TextEncoder().encode('<slide>broken</slide>');
+    const offset = bytes.findIndex((_, i) => marker.every((value, j) => bytes[i + j] === value));
+    expect(offset).toBeGreaterThan(0);
+    bytes[offset] ^= 1;
+    await expect(preparePptx(bytes.buffer)).rejects.toThrow('checksum');
+  });
 });

@@ -13,6 +13,16 @@ describe('inspectOfficeZip', () => {
     expect((await inspectOfficeZip(await archive({ 'ppt/presentation.xml': '<presentation/>' }))).file('ppt/presentation.xml')).not.toBeNull();
     await expect(inspectOfficeZip(new Uint8Array([1, 2, 3]).buffer)).rejects.toThrow();
   });
+  it('rejects a changed entry even if its compressed length is intact', async () => {
+    const zip = new JSZip();
+    zip.file('document.xml', 'unique-text');
+    const bytes = new Uint8Array(await zip.generateAsync({ type: 'arraybuffer', compression: 'STORE' }));
+    const needle = new TextEncoder().encode('unique-text');
+    const offset = bytes.findIndex((_, i) => needle.every((value, j) => bytes[i + j] === value));
+    expect(offset).toBeGreaterThan(0);
+    bytes[offset] ^= 1;
+    await expect(inspectOfficeZip(bytes.buffer)).rejects.toThrow('checksum');
+  });
   it('rejects an entry that expands past the limit', async () => {
     const zip = await archive({ 'large.xml': new Uint8Array(OFFICE_ZIP_LIMITS.entryBytes + 1) });
     await expect(inspectOfficeZip(zip)).rejects.toThrow('size limit');
@@ -34,5 +44,15 @@ describe('inspectOfficeZip', () => {
     const zip = new JSZip();
     for (let i = 0; i <= OFFICE_ZIP_LIMITS.entries; i++) zip.file(`${i}`, '');
     await expect(inspectOfficeZip(await zip.generateAsync({ type: 'arraybuffer' }))).rejects.toThrow('too many entries');
+  });
+  it('counts central-directory records even when the declared count is falsified', async () => {
+    const zip = new JSZip();
+    for (let i = 0; i <= OFFICE_ZIP_LIMITS.entries; i++) zip.file(`${i}`, '');
+    const data = await zip.generateAsync({ type: 'arraybuffer' });
+    const view = new DataView(data);
+    const end = data.byteLength - 22;
+    view.setUint16(end + 8, 1, true);
+    view.setUint16(end + 10, 1, true);
+    await expect(inspectOfficeZip(data)).rejects.toThrow('too many entries');
   });
 });

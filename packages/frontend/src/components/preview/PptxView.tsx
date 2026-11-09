@@ -6,20 +6,20 @@ interface Props { bytes: Uint8Array }
 export function PptxView({ bytes }: Props) {
   const { t } = useTranslation('files');
   const [result, setResult] = useState<{ slides: string[]; truncated: boolean } | null>(null);
-  const [error, setError] = useState(false);
+  const [error, setError] = useState<'large' | 'invalid' | null>(null);
   const [slide, setSlide] = useState(0);
   useEffect(() => {
     let active = true;
-    setResult(null); setError(false); setSlide(0);
+    setResult(null); setError(null); setSlide(0);
     void (async () => {
       const prepared = await preparePptx(bytes.slice().buffer);
       const [{ pptxToHtml }, { default: DOMPurify }] = await Promise.all([import('@jvmr/pptx-to-html'), import('dompurify')]);
       const slides = await pptxToHtml(prepared.data);
       return { slides: slides.map((html) => DOMPurify.sanitize(html, { FORBID_TAGS: ['script', 'iframe', 'object', 'embed'], FORBID_ATTR: ['href', 'xlink:href'] })), truncated: prepared.truncated };
-    })().then((value) => { if (active) setResult(value); }).catch(() => { if (active) setError(true); });
+    })().then((value) => { if (active) setResult(value); }).catch((reason: unknown) => { if (active) setError(reason instanceof Error && /limit|too many entries/i.test(reason.message) ? 'large' : 'invalid'); });
     return () => { active = false; };
   }, [bytes]);
-  if (error) return <p role="alert">{t('preview.loadError')}</p>;
+  if (error) return <div role="alert"><p>{t(error === 'large' ? 'office.tooLarge' : 'preview.loadError')}</p><p>{t('office.pptxLimit')}</p></div>;
   if (!result) return <p role="status">{t('preview.loading')}</p>;
   if (!result.slides.length) return <p>{t('office.empty')}</p>;
   const html = `<!doctype html><html><head><meta http-equiv="Content-Security-Policy" content="default-src 'none'; img-src data: blob:; style-src 'unsafe-inline'; font-src 'none'; base-uri 'none'; form-action 'none'"></head><body>${result.slides[slide]}</body></html>`;

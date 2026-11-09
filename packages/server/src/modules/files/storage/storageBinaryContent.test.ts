@@ -25,4 +25,10 @@ describe('storage binary content', () => {
     send.mockResolvedValueOnce({ ETag: '"a"', ContentLength: 1, Body: Readable.from([Buffer.alloc(20 * 1024 * 1024 + 1)]) });
     await expect(client.read('x.xlsx')).rejects.toMatchObject({ code: 'too_large' });
   });
+  it('binds a streamed range to the inspected ETag', async () => {
+    const { client, send } = setup(Buffer.from('0123456789'));
+    const body = await client.streamMedia('video.mp4', '"a"', 'bytes=2-4');
+    expect(body).toBeDefined();
+    expect((send.mock.calls[0][0] as GetObjectCommand).input).toMatchObject({ IfMatch: '"a"', Range: 'bytes=2-4' });
+  });
 });

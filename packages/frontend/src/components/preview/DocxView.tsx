@@ -7,12 +7,12 @@ export function DocxView({ bytes }: Props) {
   const frame = useRef<HTMLIFrameElement>(null);
   const [ready, setReady] = useState(false);
   const [rendered, setRendered] = useState(false);
-  const [error, setError] = useState(false);
+  const [error, setError] = useState<'large' | 'invalid' | null>(null);
   const { t } = useTranslation('files');
   useEffect(() => {
     if (!ready || !frame.current?.contentDocument) return;
     let active = true;
-    setRendered(false);
+    setRendered(false); setError(null);
     const doc = frame.current.contentDocument;
     void (async () => {
       await inspectOfficeZip(bytes.slice().buffer);
@@ -41,10 +41,10 @@ export function DocxView({ bytes }: Props) {
         if (!doc.defaultView) throw new Error('Preview frame is unavailable');
         const sanitize = DOMPurify(doc.defaultView);
         doc.body.innerHTML = sanitize.sanitize(doc.body.innerHTML, { FORBID_TAGS: ['iframe', 'object', 'embed', 'script'], FORBID_ATTR: ['href', 'xlink:href'] });
-        setError(false); setRendered(true);
+        setError(null); setRendered(true);
       }
-    })().catch(() => { if (active) setError(true); });
+    })().catch((reason: unknown) => { if (active) setError(reason instanceof Error && /limit|too many entries/i.test(reason.message) ? 'large' : 'invalid'); });
     return () => { active = false; };
   }, [bytes, ready]);
-  return <>{error && <p role="alert">{t('preview.loadError')}</p>}{!rendered && !error && <p role="status">{t('preview.loading')}</p>}<iframe ref={frame} title={t('office.document')} sandbox="allow-same-origin" onLoad={() => setReady(true)} srcDoc={'<!doctype html><html><head><meta http-equiv="Content-Security-Policy" content="default-src \'none\'; img-src data: blob:; style-src \'unsafe-inline\'; font-src \'none\'; base-uri \'none\'; form-action \'none\'"></head><body></body></html>'} style={{ width: '100%', minHeight: '60vh', border: 0, display: rendered ? 'block' : 'none' }} /></>;
+  return <>{error && <p role="alert">{t(error === 'large' ? 'office.tooLarge' : 'preview.loadError')}</p>}{!rendered && !error && <p role="status">{t('preview.loading')}</p>}<iframe ref={frame} title={t('office.document')} sandbox="allow-same-origin" onLoad={() => setReady(true)} srcDoc={'<!doctype html><html><head><meta http-equiv="Content-Security-Policy" content="default-src \'none\'; img-src data: blob:; style-src \'unsafe-inline\'; font-src \'none\'; base-uri \'none\'; form-action \'none\'"></head><body></body></html>'} style={{ width: '100%', minHeight: '60vh', border: 0, display: rendered ? 'block' : 'none' }} /></>;
 }

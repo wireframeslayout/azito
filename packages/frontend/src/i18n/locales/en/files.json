@@ -150,6 +150,7 @@
       "pivotTables": "pivot tables",
       "charts": "charts"
     },
-    "saveError": "Unable to save the file. Try again."
+    "saveError": "Unable to save the file. Try again.",
+    "tooLarge": "This file exceeds the preview size or archive limits. Download it to open it."
   }
 }

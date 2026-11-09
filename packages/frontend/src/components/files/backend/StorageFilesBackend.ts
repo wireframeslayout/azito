@@ -131,7 +131,7 @@ export class StorageFilesBackend implements FilesBackend {
   download(path: string): Promise<Blob> { return fetchBlob(`${this.root}/${encodeURIComponent(path)}/raw?download=true`); }
   async readBinary(path: string) {
     const { status, body } = await apiWithStatus<StorageResponse>(`${this.root}/object?${new URLSearchParams({ key: this.key(path) })}`);
-    if (status >= 400 || typeof body.content !== 'string' || typeof body.etag !== 'string') throw new Error(body.error || 'Invalid file response');
+    if (status >= 400 || typeof body.content !== 'string' || typeof body.etag !== 'string') throw new Error(body.code === 'too_large' ? 'preview_too_large' : (body.error || 'Invalid file response'));
     return { bytes: decodeBase64(body.content), version: body.etag };
   }
   async saveBinary(path: string, bytes: Uint8Array, version: string, force: boolean) {

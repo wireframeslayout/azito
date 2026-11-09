@@ -53,7 +53,7 @@ export class ServerFilesBackend implements FilesBackend {
   async readBinary(path: string) {
     if (this.projectId == null) throw new Error('projectId is required');
     const { status, body } = await apiWithStatus<ResponseBody>(`${this.root}/binary?${new URLSearchParams({ path, projectId: String(this.projectId) })}`);
-    if (status >= 400 || typeof body.content !== 'string' || typeof body.mtime !== 'number' || typeof body.hash !== 'string') throw new Error(body.error || 'Invalid file response');
+    if (status >= 400 || typeof body.content !== 'string' || typeof body.mtime !== 'number' || typeof body.hash !== 'string') throw new Error(body.code === 'too_large' ? 'preview_too_large' : (body.error || 'Invalid file response'));
     return { bytes: decodeBase64(body.content), version: JSON.stringify({ mtime: body.mtime, hash: body.hash }) };
   }
   async saveBinary(path: string, bytes: Uint8Array, version: string, force: boolean) {
