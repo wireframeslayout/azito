@@ -8,7 +8,7 @@ import { MisaoServiceError } from './MisaoServiceError';
 /**
  * The targets a hub release carries a misao binary for. A hub runs on linux x64 / arm64 and darwin arm64 and installs its
  * own misao from the same bundle; the rest keeps the bundle one shape for every hub and covers an agent host of another
- * OS / architecture (AZITO's own agent installer currently accepts x86_64 only). The Windows build is installed by
+ * OS / architecture. The Windows build is installed by
  * `MisaoWindowsInstaller` (a logon task), on the hub's own machine and, through the agent, on a Windows agent host.
  */
 export const MISAO_TARGETS = [

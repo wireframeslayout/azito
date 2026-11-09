@@ -3,7 +3,7 @@ import { api } from '../api/client';
 import { useLeftBehind } from './useLeftBehind';
 import type { Server } from './useServerManagement';
 import {
-  deletionReducer, hostRemovalSupport, IDLE_DELETION, isDeletionBusy, runDeletion, runEntryOnly,
+  canRemoveFromHost, deletionReducer, hostRemovalSupport, IDLE_DELETION, isDeletionBusy, runDeletion, runEntryOnly,
   type DeletionCalls, type DeletionEvent, type DeletionState, type HostRemovalSupport,
 } from '../lib/serverDeletion';
 
@@ -39,7 +39,8 @@ export function useServerDeletion(server: Pick<Server, 'name' | 'type' | 'hostPr
     dispatch(event);
     if (event.type === 'result' && event.result.kind === 'deleted') {
       // What the host removal left in place on purpose is shown in a dialog that outlives this page (the row, and so the page, are gone).
-      if (event.result.left.length > 0) showLeftBehind(server.name, event.result.left);
+      // Steps exist only after a host removal, which only a removable host has.
+      if (event.result.left.length > 0 && canRemoveFromHost(support)) showLeftBehind(server.name, event.result.left, support);
       onDeleted();
     }
   };

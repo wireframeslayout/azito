@@ -70,6 +70,12 @@ function currentCounts(): Record<string, number> {
 }
 
 describe('exec(<shell string>) ratchet', () => {
+  it('keeps the Mac bootstrap shell on SSH, which is available while the agent is down', () => {
+    const source = fs.readFileSync(path.join(SRC_ROOT, 'modules/servers/agent-deploy/macAgentLaunchd.ts'), 'utf8');
+    expect(source).toMatch(/private execPosix\(command: string\)[\s\S]*?this\.ssh\.execIsolated\(this\.host, posixRemoteCommand\(command\)\)/);
+    expect(source).not.toMatch(/\b(?:transport|target)\.exec\(/);
+  });
+
   it('counts only calls on a transport', () => {
     expect(countCalls('await transport.exec(cmd);\nawait this.transportFactory.getTransport(srv).exec(cmd);\nthis.exec(a); target.exec(b); this.out(c);')).toBe(5);
     expect(countCalls('db.exec(sql); re.exec(s); this.llmClient.exec(p);\n// transport.exec(x)\n * transport.exec(y)')).toBe(0);

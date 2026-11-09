@@ -6,7 +6,10 @@ import { Client as Ssh2Client } from 'ssh2';
 import type { SshClient } from '../ssh/SshClient';
 import type { AgentBundler } from './AgentBundler';
 import { AgentTransport } from '../transport/AgentTransport';
-import { HOST_PROBE_COMMAND, HostProfileError, parseHostProbe, type HostProfile } from '../../../shared/os/hostProfile';
+import { HostProfileError, parseHostProbe, type HostProfile } from '../../../shared/os/hostProfile';
+import { posixRemoteCommand } from './posixRemoteCommand';
+import { MacAgentLaunchd } from './macAgentLaunchd';
+import { POSIX_ENVIRONMENT_COMMAND, parsePosixAgentEnvironment } from './posixAgentEnvironment';
 import { HOST_OS_PROBE_COMMAND, parseHostOsProbe } from './hostOsProbe';
 import { buildWindowsPreflightCommand, checkWindowsPreflight, parseWindowsPreflight, type WindowsPreflightInfo } from './windowsPreflight';
 import { buildSha256VerifyCommand, buildSafeExtractCommand, readSha256FromSumsFile } from './integrityVerifier';
@@ -54,7 +57,7 @@ export interface InstallResult {
   token: string;
   version: string;
   /** `taskscheduler`: a Windows agent (a logon task). */
-  startMethod: 'systemd' | 'nohup' | 'taskscheduler';
+  startMethod: 'systemd' | 'nohup' | 'launchd' | 'taskscheduler';
   steps: InstallProgress[];
   error?: string;
   code?: string;
@@ -92,7 +95,14 @@ const CLEANUP_GUARD_COMMAND = buildCleanupGuardScript();
 /** The mark of a cleanup is on the host: no install, update or recovery may start until a person has looked and removed it. */
 class CleanupMarkError extends Error {}
 
-/** The error for a host that has no tmux and no misao: the same text is the API's `error` and what the UI shows. */
+/** A Mac this release manages with launchd: Apple Silicon running arm64 Node. */
+function isLaunchdMac(profile: HostProfile | null | undefined): boolean {
+  return profile?.platform === 'darwin' && profile.arch === 'arm64';
+}
+
+const INTEL_MAC_REASON = 'Intel Mac / x64 Node is outside v0.13.0 support; use an arm64 Node for Apple Silicon';
+
+/** The error for a host that has no tmux and no misao. */
 function noMuxMessage(host: string, misaoError: string | undefined): string {
   return `no mux is available on ${host}: tmux is not installed and misao could not be installed (${misaoError ?? 'this hub has no misao to install'}).`;
 }
@@ -121,7 +131,9 @@ export class AgentInstaller {
     private bundler: AgentBundler,
     /** Task name, folder and port of an agent installed on a Windows host (resolved at the entry point). */
     private windowsAgent: WindowsAgentOptions,
-    /** Absent for a hub that cannot install misao (no bundled copy): the agent is installed without it. */
+    /** Removal is available even when this hub has no bundle to install. */
+    private misaoUninstaller: { uninstallMac(transport: AgentTransport): Promise<'absent' | 'skipped'> },
+    /** Absent for a hub that cannot install misao (no bundled copy). */
     private misaoInstaller?: AgentMisaoInstaller,
     private harnessPrefix = '',
   ) {
@@ -181,6 +193,7 @@ export class AgentInstaller {
     // ── Transfer & deploy ──
     report('transfer', 'running', 'Transferring agent bundle...');
     try {
+      if (isLaunchdMac(preflight.hostProfile)) await (await MacAgentLaunchd.connect(this.sshClient, sshHost)).assertOwned();
       await this.transferAndDeploy(sshHost, version);
       await this.writeInstallId(sshHost, installId);
       report('transfer', 'ok', 'Agent deployed');
@@ -191,13 +204,13 @@ export class AgentInstaller {
     }
 
     // ── Stop existing agent (if any) ──
-    await this.stopAgent(sshHost);
+    await this.stopAgent(sshHost, isLaunchdMac(preflight.hostProfile));
 
     // ── Start agent ──
     report('start', 'running', 'Starting agent...');
-    let startMethod: 'systemd' | 'nohup';
+    let startMethod: 'systemd' | 'nohup' | 'launchd';
     try {
-      startMethod = await this.startAgent(sshHost, preflight.tailscaleIp, token, muxRuntime);
+      startMethod = await this.startAgent(sshHost, preflight.tailscaleIp, token, muxRuntime, preflight.hostProfile);
       report('start', 'ok', `Started via ${startMethod}`);
     } catch (err) {
       const msg = (err as Error).message;
@@ -246,9 +259,17 @@ export class AgentInstaller {
    * place, where the Windows install sets them aside for its commit / rollback): that is outside this change. Removing it would take
    * away an agent the hub may still be using.
    */
-  private async discardUnregisteredAgent(sshHost: string, install: { hadAgent: boolean; installId: string; startMethod: 'systemd' | 'nohup'; nohupSighting: NohupSighting | undefined }): Promise<string> {
+  private async discardUnregisteredAgent(sshHost: string, install: { hadAgent: boolean; installId: string; startMethod: 'systemd' | 'nohup' | 'launchd'; nohupSighting: NohupSighting | undefined }): Promise<string> {
     if (install.hadAgent) {
       return `An agent was already installed on this host before this install; it was replaced by the new one and left running, nothing was removed. The new agent holds a new token that the hub does not store: run the install again once a mux is available. To remove it by hand: ${MANUAL_STEPS_ANY_START}`;
+    }
+    if (install.startMethod === 'launchd') {
+      try {
+        await (await MacAgentLaunchd.connect(this.sshClient, sshHost)).cleanup(install.installId);
+        return 'The agent this install started was stopped and removed.';
+      } catch (err) {
+        return `The launchd agent could not be safely removed: ${(err as Error).message}`;
+      }
     }
     if (install.startMethod === 'nohup') {
       return `The agent this install started runs as a plain process (nohup), which is not stopped automatically, so it and ~/.azito/agent were left in place on ${sshHost}. To stop it and remove it: ${nohupManualSteps(install.nohupSighting)}`;
@@ -281,14 +302,18 @@ export class AgentInstaller {
   }
 
   private async writeInstallId(sshHost: string, installId: string): Promise<void> {
-    const result = await this.sshClient.execIsolated(sshHost, `mkdir -p ~/.azito/agent && printf %s ${installId} > ${INSTALL_ID_FILE}`);
+    const result = await this.execPosix(sshHost, `mkdir -p ~/.azito/agent && printf %s ${installId} > ${INSTALL_ID_FILE}`);
     if (result.code !== 0) throw new Error(`install id write failed: ${result.stderr}`);
   }
 
-  /** One command over SSH as a value: a failed command or connection is `ok: false` with the reason (the caller reports it, never hides it). */
+  private execPosix(host: string, command: string, timeoutMs?: number): ReturnType<SshClient['execIsolated']> {
+    return this.sshClient.execIsolated(host, posixRemoteCommand(command), timeoutMs);
+  }
+
+  /** One command over SSH as a value, with errors returned to the caller. */
   private async runOnHost(sshHost: string, command: string, timeoutMs?: number): Promise<{ ok: true; stdout: string } | { ok: false; error: string }> {
     try {
-      const result = await this.sshClient.execIsolated(sshHost, command, timeoutMs);
+      const result = await this.execPosix(sshHost, command, timeoutMs);
       return result.code === 0 ? { ok: true, stdout: result.stdout } : { ok: false, error: result.stderr.trim() || `exit ${result.code}` };
     } catch (err) {
       return { ok: false, error: (err as Error).message };
@@ -300,7 +325,7 @@ export class AgentInstaller {
    * guess. Throws {@link CleanupMarkError} while the mark of a cleanup is on the host.
    */
   private async hostHasAgent(sshHost: string): Promise<boolean> {
-    const result = await this.sshClient.execIsolated(sshHost, AGENT_PRESENCE_COMMAND);
+    const result = await this.execPosix(sshHost, AGENT_PRESENCE_COMMAND);
     if (result.code !== 0) return true;
     const mark = parseCleanupGuard(result.stdout, (line) => line === 'AZITO_AGENT_PRESENT' || line === 'AZITO_AGENT_ABSENT');
     if (mark) throw new CleanupMarkError(cleanupMarkMessage(sshHost, mark));
@@ -309,7 +334,7 @@ export class AgentInstaller {
 
   /** Throws {@link CleanupMarkError} while the mark of a cleanup is on the host. The first shell command of an update or a recovery. */
   private async assertNoCleanupRunning(sshHost: string): Promise<void> {
-    const result = await this.sshClient.execIsolated(sshHost, CLEANUP_GUARD_COMMAND);
+    const result = await this.execPosix(sshHost, CLEANUP_GUARD_COMMAND);
     if (result.code !== 0) throw new Error(`could not check the host for a running cleanup: ${result.stderr.trim() || `exit ${result.code}`}`);
     const mark = parseCleanupGuard(result.stdout, (line) => line === 'AZITO_CLEANUP_IDLE');
     if (mark) throw new CleanupMarkError(cleanupMarkMessage(sshHost, mark));
@@ -416,11 +441,42 @@ export class AgentInstaller {
     }
   }
 
-  /**
-   * Redeploys the agent over SSH: a Windows host (`hostProfile`) takes the install's transaction ({@link updateOnWindows}); any
-   * other host (null = a Unix agent registered before the OS was recorded) takes the Unix bootstrap (tar, nohup, systemd).
-   * `warning` is set when the update worked but left something on the host that a person should know about.
-   */
+  /** Removes the managed Mac agent and, when requested and safe, its independent misao. */
+  uninstallFromMacHost(sshHost: string, choice: WindowsUninstallChoice, agent: { host: string | null; port: number | null; token: string | null }): Promise<WindowsUninstallResult> {
+    return this.hostLocks.withLock(this.lockKey(sshHost), async () => {
+      const manager = await MacAgentLaunchd.connect(this.sshClient, sshHost);
+      const steps: WindowsUninstallResult['steps'] = [];
+      let id: string | undefined;
+      try {
+        await manager.assertOwned();
+        id = await manager.readInstallId();
+      } catch (err) {
+        return { ok: false, steps: [{ id: 'task', outcome: 'failed', detail: (err as Error).message }, { id: 'folder', outcome: 'skipped' }, { id: 'misaoFolder', outcome: 'skipped', detail: 'Agent ownership could not be verified.' }] };
+      }
+      if (choice.removeMisao) {
+        try {
+          const uninstaller = this.misaoUninstaller;
+          if (!agent.host || !agent.port || !agent.token) throw new Error('Agent address or token is missing; misao was left in place');
+          const transport = new AgentTransport(agent.host, agent.port, agent.token, 'system', agent.host, { platform: 'darwin', arch: 'arm64' });
+          const outcome = await uninstaller.uninstallMac(transport);
+          steps.push({ id: 'misaoFolder', outcome, ...(outcome === 'skipped' ? { detail: 'The hub may share this misao; it was left in place.' } : {}) });
+        } catch (err) {
+          steps.push({ id: 'misaoFolder', outcome: 'failed', detail: (err as Error).message });
+        }
+      } else steps.push({ id: 'misaoFolder', outcome: 'skipped', detail: 'misao removal was not requested.' });
+      try {
+        if (id === undefined) steps.push({ id: 'task', outcome: 'absent' }, { id: 'folder', outcome: 'absent' });
+        else {
+          await manager.cleanup(id);
+          steps.push({ id: 'task', outcome: 'done' }, { id: 'folder', outcome: 'done' });
+        }
+      } catch (err) {
+        steps.push({ id: 'task', outcome: 'failed', detail: (err as Error).message }, { id: 'folder', outcome: 'skipped', detail: 'The agent could not be safely stopped or verified.' });
+      }
+      return { ok: steps.every((step) => step.outcome !== 'failed'), steps };
+    });
+  }
+
   update(sshHost: string, tailscaleIp: string, existingToken: string, hostProfile: HostProfile | null, muxRuntime?: string): Promise<AgentUpdateResult> {
     return this.hostLocks.withLock(this.lockKey(sshHost), () => this.updateLocked(sshHost, tailscaleIp, existingToken, hostProfile, muxRuntime));
   }
@@ -430,6 +486,8 @@ export class AgentInstaller {
     const version = this.bundler.getBundleHash();
 
     if (hostProfile?.platform === 'win32') return this.updateOnWindows(sshHost, tailscaleIp, existingToken, version);
+    const unsupported = this.unsupportedPosixHostReason(hostProfile);
+    if (unsupported) return { success: false, version, error: `unsupported_host: ${unsupported}` };
 
     try {
       await this.assertNoCleanupRunning(sshHost);
@@ -437,24 +495,40 @@ export class AgentInstaller {
       return { success: false, version, error: (err as Error).message };
     }
 
+    let mac: MacAgentLaunchd | undefined;
+    let previous: string | null = null;
     try {
+      if (isLaunchdMac(hostProfile)) {
+        mac = await MacAgentLaunchd.connect(this.sshClient, sshHost);
+        await mac.assertOwned();
+        previous = await mac.readCurrent();
+        if (previous === null) throw new Error('The Mac agent current link is absent; it cannot be updated');
+      }
       await this.transferAndDeploy(sshHost, version);
     } catch (err) {
       return { success: false, version, error: `Transfer failed: ${(err as Error).message}` };
     }
 
-    await this.stopAgent(sshHost);
-
+    if (!mac) await this.stopAgent(sshHost);
+    let stage = 'Start';
     try {
-      await this.startAgent(sshHost, tailscaleIp, existingToken, muxRuntime);
-    } catch (err) {
-      return { success: false, version, error: `Start failed: ${(err as Error).message}` };
-    }
-
-    try {
+      await this.startAgent(sshHost, tailscaleIp, existingToken, muxRuntime, hostProfile);
+      stage = 'Health check';
       await this.healthCheck(tailscaleIp, AGENT_PORT, version);
     } catch (err) {
-      return { success: false, version, error: `Health check failed: ${(err as Error).message}` };
+      let error = `${stage} failed: ${(err as Error).message}`;
+      if (mac) {
+        try {
+          await mac.restoreCurrent(previous, version);
+          if (previous === null) throw new Error('The previous agent link is missing');
+          await mac.start(tailscaleIp, AGENT_PORT, existingToken, muxRuntime || 'system');
+          await this.healthCheck(tailscaleIp, AGENT_PORT, undefined);
+          error += '; the previous agent was restored';
+        } catch (rollbackError) {
+          error += `; rollback failed: ${(rollbackError as Error).message}`;
+        }
+      }
+      return { success: false, version, error };
     }
 
     return { success: true, version };
@@ -492,7 +566,15 @@ export class AgentInstaller {
   private async preflight(sshHost: string): Promise<PreflightInfo> {
     // The login shell of the target is unknown (sh, cmd.exe or PowerShell): the OS is read first, then the matching probes run.
     const osProbe = await this.sshClient.execIsolated(sshHost, HOST_OS_PROBE_COMMAND);
-    if (parseHostOsProbe(osProbe.stdout, osProbe.stderr, osProbe.code).os === 'windows') return this.preflightWindows(sshHost);
+    let os: 'posix' | 'windows';
+    try {
+      os = parseHostOsProbe(osProbe.stdout, osProbe.stderr, osProbe.code).os;
+    } catch (err) {
+      const posix = await this.execPosix(sshHost, 'printf AZITO_POSIX_SHELL');
+      if (posix.code !== 0 || posix.stdout.trim() !== 'AZITO_POSIX_SHELL') throw err;
+      os = 'posix';
+    }
+    if (os === 'windows') return this.preflightWindows(sshHost);
     return this.preflightPosix(sshHost);
   }
 
@@ -518,24 +600,19 @@ export class AgentInstaller {
   private async preflightPosix(sshHost: string): Promise<PreflightInfo> {
     const missing: string[] = [];
 
-    const nodeResult = await this.sshClient.execIsolated(sshHost, 'node --version');
-    const nodeVersionRaw = nodeResult.stdout.trim().replace(/^v/, '');
+    const result = await this.execPosix(sshHost, POSIX_ENVIRONMENT_COMMAND);
+    if (result.code !== 0) throw new Error('Preflight failed: login shell could not resolve the agent environment; check $SHELL and its startup files.');
+    const environment = parsePosixAgentEnvironment(result.stdout);
+    const nodeVersionRaw = environment.nodeVersion.replace(/^v/, '');
     const nodeMajor = parseInt(nodeVersionRaw.split('.')[0], 10);
     if (isNaN(nodeMajor) || nodeMajor < 24) {
-      missing.push(`Node.js v24+ required (found: ${nodeResult.stdout.trim() || 'not installed'})`);
+      missing.push(`Node.js v24+ required (searched login shell PATH; found: ${environment.nodeVersion || 'not installed'})`);
     }
-
-    // Without node the probe cannot run; the Node requirement above already says so.
-    const hostProfile = nodeMajor >= 24 ? await this.probeHostProfile(sshHost, missing) : undefined;
-
-    // tmux is optional: the pane server this hub installs is misao.
-    const tmuxResult = await this.sshClient.execIsolated(sshHost, 'tmux -V');
-    const tmuxVersion = tmuxResult.stdout.trim();
-
-    const tsResult = await this.sshClient.execIsolated(sshHost, 'tailscale ip -4');
-    const tailscaleIp = tsResult.stdout.trim().split('\n')[0];
-    if (!tailscaleIp || !tailscaleIp.match(/^\d+\.\d+\.\d+\.\d+$/)) {
-      missing.push(`Tailscale IP not found (got: ${tailscaleIp || 'empty'})`);
+    const hostProfile = nodeMajor >= 24 ? this.parsePosixHostProfile(environment.nodeHost, missing) : undefined;
+    const tmuxVersion = environment.tmuxVersion;
+    const tailscaleIp = environment.tailscaleIp;
+    if (!tailscaleIp.match(/^\d+\.\d+\.\d+\.\d+$/)) {
+      missing.push(`Tailscale IP not found (searched login shell PATH and /Applications/Tailscale.app/Contents/MacOS/Tailscale; got: ${tailscaleIp || 'empty'})`);
     }
 
     if (missing.length > 0) {
@@ -546,27 +623,34 @@ export class AgentInstaller {
     return { tailscaleIp, nodeVersion: nodeVersionRaw, hostProfile: hostProfile!, tmuxVersion };
   }
 
-  /**
-   * Reads the host's OS / architecture with node itself (the same text under sh, cmd and PowerShell). The hosts this installer
-   * accepts are unchanged: x64 only. A Windows host never gets here (`preflight` sends it to `preflightWindows` by the OS probe),
-   * so a win32 answer is refused as `unsupported_os`; an OS or architecture AZITO does not know is `unsupported_host`. A reason
-   * is added to `missing` for a host that is refused.
-   */
-  private async probeHostProfile(sshHost: string, missing: string[]): Promise<HostProfile | undefined> {
-    const probe = await this.sshClient.execIsolated(sshHost, HOST_PROBE_COMMAND);
+  private parsePosixHostProfile(output: string, missing: string[]): HostProfile | undefined {
     let profile: HostProfile;
     try {
-      profile = parseHostProbe(probe.stdout);
+      profile = parseHostProbe(output);
     } catch (err) {
       missing.push(err instanceof HostProfileError ? `${err.code}: ${err.message}` : (err as Error).message);
       return undefined;
     }
     if (profile.platform === 'win32') {
       missing.push('unsupported_os: this host answered as Windows to the Unix preflight; a Windows host is installed through the Windows preflight');
-    } else if (profile.arch !== 'x64') {
-      missing.push(`x86_64 architecture required (found: ${profile.arch})`);
+    } else {
+      const unsupported = this.unsupportedPosixHostReason(profile);
+      if (unsupported) missing.push(`unsupported_host: ${unsupported}`);
     }
     return profile;
+  }
+
+  /**
+   * Why this hub cannot install or update an agent on a Unix host, or null. An Intel Mac / x64 Node is outside support, and a
+   * Linux host needs the node-pty of its architecture in this hub's bundle (a source hub may build without arm64).
+   * `null` = a Unix agent registered before the OS was recorded: Linux x64, which every bundle carries.
+   */
+  private unsupportedPosixHostReason(profile: HostProfile | null): string | null {
+    if (profile?.platform === 'darwin' && profile.arch !== 'arm64') return INTEL_MAC_REASON;
+    if (profile?.platform === 'linux' && !this.bundler.getLinuxArches().includes(profile.arch)) {
+      return `this hub's agent bundle has no Linux ${profile.arch} node-pty; set AZITO_AGENT_NODE_PTY_LINUX${profile.arch === 'arm64' ? '_ARM64' : ''} to a node-pty folder built on Linux ${profile.arch} and restart the hub so the bundle is rebuilt`;
+    }
+    return null;
   }
 
   private async transferAndDeploy(sshHost: string, version: string): Promise<void> {
@@ -581,22 +665,22 @@ export class AgentInstaller {
     const expectedHash = readSha256FromSumsFile(this.bundler.getSha256sumsPath(), 'azito-agent.tar.gz');
 
     const verifyCmd = buildSha256VerifyCommand(remoteTmp);
-    const shaResult = await this.sshClient.execIsolated(sshHost, verifyCmd);
+    const shaResult = await this.execPosix(sshHost, verifyCmd);
     const actualHash = shaResult.stdout.trim();
     if (actualHash !== expectedHash) {
-      await this.sshClient.execIsolated(sshHost, `rm -f "${remoteTmp}"`);
+      await this.execPosix(sshHost, `rm -f "${remoteTmp}"`);
       throw new Error(`SHA256 mismatch: expected ${expectedHash}, got ${actualHash}`);
     }
 
     const deployDir = `~/.azito/agent/${version}`;
     const extractCmd = buildSafeExtractCommand(remoteTmp, deployDir);
-    const extractResult = await this.sshClient.execIsolated(sshHost, extractCmd);
+    const extractResult = await this.execPosix(sshHost, extractCmd);
     if (extractResult.code !== 0) {
       throw new Error(`Deploy failed: ${extractResult.stderr}`);
     }
 
     const linkCmd = `ln -sfn ~/.azito/agent/${version} ~/.azito/agent/current`;
-    await this.sshClient.execIsolated(sshHost, linkCmd);
+    await this.execPosix(sshHost, linkCmd);
   }
 
   private async startAgent(
@@ -604,7 +688,12 @@ export class AgentInstaller {
     tailscaleIp: string,
     token: string,
     muxRuntime?: string,
-  ): Promise<'systemd' | 'nohup'> {
+    hostProfile?: HostProfile | null,
+  ): Promise<'systemd' | 'nohup' | 'launchd'> {
+    if (isLaunchdMac(hostProfile)) {
+      await (await MacAgentLaunchd.connect(this.sshClient, sshHost)).start(tailscaleIp, AGENT_PORT, token, muxRuntime || 'system');
+      return 'launchd';
+    }
     // Try systemd first
     try {
       return await this.startSystemd(sshHost, tailscaleIp, token, muxRuntime);
@@ -624,7 +713,7 @@ export class AgentInstaller {
       'ENV_EOF',
       ')',
     ].join('\n');
-    const envResult = await this.sshClient.execIsolated(sshHost, writeEnv);
+    const envResult = await this.execPosix(sshHost, writeEnv);
     if (envResult.code !== 0) {
       throw new Error('agent env file write failed: ' + envResult.stderr);
     }
@@ -653,7 +742,7 @@ export class AgentInstaller {
     ].join('\n');
 
     const writeUnit = `mkdir -p ~/.config/systemd/user && cat > ~/.config/systemd/user/azito-agent.service << 'UNIT_EOF'\n${unitContent}\nUNIT_EOF`;
-    const writeResult = await this.sshClient.execIsolated(sshHost, writeUnit);
+    const writeResult = await this.execPosix(sshHost, writeUnit);
     if (writeResult.code !== 0) {
       throw new Error(`systemd unit write failed: ${writeResult.stderr}`);
     }
@@ -662,9 +751,9 @@ export class AgentInstaller {
     // an active login session — otherwise the agent only starts once someone SSHes in
     // after a machine/WSL restart. Not fatal if the platform doesn't support linger
     // (e.g. no polkit) — fall back to the current session-scoped behavior.
-    await this.sshClient.execIsolated(sshHost, 'loginctl enable-linger "$(whoami)" || true');
+    await this.execPosix(sshHost, 'loginctl enable-linger "$(whoami)" || true');
 
-    const enableResult = await this.sshClient.execIsolated(
+    const enableResult = await this.execPosix(
       sshHost,
       'systemctl --user daemon-reload && systemctl --user enable azito-agent && systemctl --user restart azito-agent',
     );
@@ -676,7 +765,7 @@ export class AgentInstaller {
   }
 
   private async startNohup(sshHost: string, tailscaleIp: string, token: string, muxRuntime?: string): Promise<void> {
-    await this.sshClient.execIsolated(
+    await this.execPosix(
       sshHost,
       'test -f ~/.azito/agent/agent.pid && kill $(cat ~/.azito/agent/agent.pid) 2>/dev/null; true',
     );
@@ -688,7 +777,7 @@ export class AgentInstaller {
       'ENV_EOF',
       ')',
     ].join('\n');
-    const envResult = await this.sshClient.execIsolated(sshHost, writeEnv);
+    const envResult = await this.execPosix(sshHost, writeEnv);
     if (envResult.code !== 0) {
       throw new Error('agent env file write failed: ' + envResult.stderr);
     }
@@ -704,7 +793,7 @@ export class AgentInstaller {
       'echo $! > ~/.azito/agent/agent.pid',
     ].join(' ');
 
-    await this.sshClient.execIsolated(sshHost, cmd);
+    await this.execPosix(sshHost, cmd);
   }
 
   /** Reads (never changes) the Windows Firewall policy that decides whether the hub reaches the agent of the recognised task. */
@@ -721,11 +810,11 @@ export class AgentInstaller {
    * (e.g. SSH connection failure) — the caller is expected to catch and re-check health
    * afterward regardless of outcome.
    */
-  recoverAgent(sshHost: string, tailscaleIp: string, token: string, hostProfile: HostProfile | null, muxRuntime?: string, force = false): Promise<'systemd' | 'nohup' | 'taskscheduler' | 'disabled' | 'starting'> {
+  recoverAgent(sshHost: string, tailscaleIp: string, token: string, hostProfile: HostProfile | null, muxRuntime?: string, force = false): Promise<'systemd' | 'nohup' | 'launchd' | 'taskscheduler' | 'disabled' | 'starting' | 'absent'> {
     return this.hostLocks.withLock(this.lockKey(sshHost), () => this.recoverAgentLocked(sshHost, tailscaleIp, token, hostProfile, muxRuntime, force));
   }
 
-  private async recoverAgentLocked(sshHost: string, tailscaleIp: string, token: string, hostProfile: HostProfile | null, muxRuntime?: string, force = false): Promise<'systemd' | 'nohup' | 'taskscheduler' | 'disabled' | 'starting'> {
+  private async recoverAgentLocked(sshHost: string, tailscaleIp: string, token: string, hostProfile: HostProfile | null, muxRuntime?: string, force = false): Promise<'systemd' | 'nohup' | 'launchd' | 'taskscheduler' | 'disabled' | 'starting' | 'absent'> {
     if (hostProfile?.platform === 'win32') {
       // The settings and the task are already on the host: ask it who it is, then restart the logon task.
       const probe = await this.sshClient.execIsolated(sshHost, buildWindowsPreflightCommand());
@@ -733,13 +822,21 @@ export class AgentInstaller {
       return outcome === 'restarted' ? 'taskscheduler' : outcome;
     }
     await this.assertNoCleanupRunning(sshHost);
-    return this.startAgent(sshHost, tailscaleIp, token, muxRuntime);
+    if (isLaunchdMac(hostProfile)) {
+      // A recovery only restarts an installation that is still there: writing the launchd job again for an agent removed from
+      // the host (its folder and install id gone) would bring a deleted agent back.
+      const mac = await MacAgentLaunchd.connect(this.sshClient, sshHost);
+      if (!(await mac.hasInstallation())) return 'absent';
+      await mac.start(tailscaleIp, AGENT_PORT, token, muxRuntime || 'system');
+      return 'launchd';
+    }
+    return this.startAgent(sshHost, tailscaleIp, token, muxRuntime, hostProfile);
   }
 
-  private async stopAgent(sshHost: string): Promise<void> {
-    await this.sshClient.execIsolated(
+  private async stopAgent(sshHost: string, mac = false): Promise<void> {
+    await this.execPosix(
       sshHost,
-      'systemctl --user disable --now azito-agent 2>/dev/null; test -f ~/.azito/agent/agent.pid && kill $(cat ~/.azito/agent/agent.pid) 2>/dev/null; pkill -f azito-agent.cjs 2>/dev/null; sleep 1; true',
+      `${mac ? '' : 'systemctl --user disable --now azito-agent 2>/dev/null; '}test -f ~/.azito/agent/agent.pid && kill $(cat ~/.azito/agent/agent.pid) 2>/dev/null; pkill -f azito-agent.cjs 2>/dev/null; sleep 1; true`,
     );
   }
 
