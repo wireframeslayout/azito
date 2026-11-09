@@ -29,6 +29,7 @@
     "empty": "オーケストレーターはまだありません",
     "connected": "連携中 {{count}}",
     "connectedUnknown": "連携中",
+    "returnToProject": "プロジェクトの窓に戻す（元: {{name}}）",
     "selectWindow": "左の一覧から選んでください",
     "originCount": "オーケストレーター {{count}} 件はレールから"
   },

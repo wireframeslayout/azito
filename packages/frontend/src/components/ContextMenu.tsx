@@ -4,6 +4,7 @@ import type { ReactNode } from 'react';
 import { useClickOutside } from '../hooks/useClickOutside';
 
 export interface ContextMenuItem {
+  kind?: string;
   label: string;
   icon?: string | ReactNode;
   danger?: boolean;

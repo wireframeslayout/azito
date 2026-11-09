@@ -124,6 +124,7 @@
      対になっていない生rgba項）を分離したもの — 変数化しないと wired 側で消せない */
   --panel-radius: 12px;
   --right-panel-width: 300px;
+  --orchestration-sidebar-width: 260px;
   --panel-shadow: 0 2px 10px rgba(0, 0, 0, 0.25);
   --tray-inset: inset 0 2px 4px rgba(0, 0, 0, 0.35);
 

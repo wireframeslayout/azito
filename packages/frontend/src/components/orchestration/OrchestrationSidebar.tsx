@@ -17,6 +17,11 @@ import WindowActivityIndicator from '../ui/WindowActivityIndicator';
 import ObjectSection from '../workspace/objects/ObjectSection';
 import { Icon } from '../ui/Icon';
 
+function RowContent({ children, onMenu, onMenuAt }: { children: ReactNode; onMenu: (event: React.MouseEvent) => void; onMenuAt: (x: number, y: number) => void }) {
+  const bindLongPress = useLongPress();
+  return <div style={{ display: 'flex', alignItems: 'center' }} onContextMenu={onMenu} {...bindLongPress(onMenuAt)}>{children}</div>;
+}
+
 export interface OrchestrationSidebarProps {
   selectedId?: number;
   onSelect: (id: number) => void;
@@ -28,7 +33,6 @@ export function OrchestrationSidebar({ selectedId, onSelect }: OrchestrationSide
   const { activityStatus, snapshotStatus, retrySnapshot } = useAgentActivity();
   const [search, setSearch] = useState('');
   const contextMenu = useContextMenu();
-  const bindLongPress = useLongPress();
   const actions = useWindowActions(undefined, refresh, { showContextMenu: contextMenu.show, showContextMenuAt: contextMenu.showAt, findTaskByTarget: () => null, openTask: () => {}, tabs: [], closeTab: () => {} });
   const [closed, setClosed] = useState<Set<number>>(new Set());
   const [sectionClosed, setSectionClosed] = useState<Set<string>>(new Set());
@@ -49,19 +53,20 @@ export function OrchestrationSidebar({ selectedId, onSelect }: OrchestrationSide
     const window = node.window;
     const expanded = !closed.has(window.id) || !!search;
     const toggle = (): void => setClosed((previous) => { const next = new Set(previous); if (next.has(window.id)) next.delete(window.id); else next.add(window.id); return next; });
-    const items = () => actions.getWindowMenuItems(window, { online: !window.sleeping }).filter((item) => item.label !== t('windows.detachFromProject') && (window.originProjectId != null || item.label !== t('orchestration.removeRole')));
+    const origin = allProjects.find((project) => project.id === window.originProjectId);
+    const items = () => actions.getWindowMenuItems(window, { online: !window.sleeping }).filter((item) => ['rename-label', 'sleep', 'delete-window'].includes(item.kind ?? '') || (item.kind === 'change-role' && origin !== undefined)).map((item) => item.kind === 'change-role' ? { ...item, label: t('orchestration.returnToProject', { name: origin!.name }) } : item);
     const projects = window.links.projectIds.map((id) => allProjects.find((project) => project.id === id)).filter((project) => project !== undefined);
-    return <div key={window.id} id={`orchestration-row-${window.id}`} role="treeitem" aria-label={window.label || window.tmuxTarget} tabIndex={activeFocus === window.id ? 0 : -1} aria-level={depth + 1} aria-expanded={node.children.length ? expanded : undefined} aria-selected={selectedId === window.id} onFocus={(event) => { if (event.target === event.currentTarget) setFocusedId(window.id); }} onClick={(event) => { if ((event.target as HTMLElement).closest('[role=treeitem]') === event.currentTarget && (event.target === event.currentTarget || (event.target as HTMLElement).closest('.list-row'))) onSelect(window.id); }} onContextMenu={(event) => contextMenu.show(event, items())} {...bindLongPress((x, y) => contextMenu.showAt(x, y, items()))} onKeyDown={(event) => {
+    return <div key={window.id} id={`orchestration-row-${window.id}`} role="treeitem" aria-label={window.label || window.tmuxTarget} aria-describedby={`orchestration-description-${window.id}`} tabIndex={activeFocus === window.id ? 0 : -1} aria-level={depth + 1} aria-expanded={node.children.length ? expanded : undefined} aria-selected={selectedId === window.id} onFocus={(event) => { if (event.target === event.currentTarget) setFocusedId(window.id); }} onClick={(event) => { if ((event.target as HTMLElement).closest('[role=treeitem]') === event.currentTarget && (event.target === event.currentTarget || (event.target as HTMLElement).closest('.list-row'))) onSelect(window.id); }} onKeyDown={(event) => {
       if (event.target !== event.currentTarget) return;
       if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); onSelect(window.id); }
       if (event.key === 'ArrowDown' || event.key === 'ArrowUp') { event.preventDefault(); focus(visible[visible.indexOf(window.id) + (event.key === 'ArrowDown' ? 1 : -1)]); }
       if (event.key === 'ArrowRight' && node.children.length) { event.preventDefault(); if (!expanded) toggle(); else focus(node.children.find(matches)?.window.id); }
       if (event.key === 'ArrowLeft') { event.preventDefault(); if (expanded && node.children.length) toggle(); else focus(window.parentWindowId ?? undefined); }
     }} style={{ paddingLeft: `calc(var(--space-3) * ${depth})` }}>
-      <div style={{ display: 'flex', alignItems: 'center' }}>
+      <RowContent onMenu={(event) => contextMenu.show(event, items())} onMenuAt={(x, y) => contextMenu.showAt(x, y, items())}>
         {node.children.length > 0 && <IconButton tabIndex={-1} aria-label={expanded ? t('orchestration.collapse') : t('orchestration.expand')} onClick={(event) => { event.stopPropagation(); toggle(); }}><Icon name="chevron-right" rotate={expanded ? 90 : 0} size={14} /></IconButton>}
-        <ListRow size="sm" selected={selectedId === window.id} title={<><WindowIdChip id={window.id} /> {window.label || window.tmuxTarget}</>} chips={<WindowActivityIndicator status={activityStatus(window.serverName, window.tmuxTarget)} />} description={<span style={{ display: 'flex', alignItems: 'center', gap: 'var(--space-1)', flexWrap: 'wrap' }}>{projects.slice(0, 3).map((project) => <ProjectAvatar key={project.id} project={project} size={18} />)}{projects.length > 3 && `+${projects.length - 3}`} {t('orchestration.links', { count: window.links.total })} {window.links.serverNames.filter((name) => name !== window.serverName).join(', ')} {window.lastInteractionAt && formatRelativeTime(window.lastInteractionAt)}</span>} style={{ flex: 1, minWidth: 0, listStyle: 'none' }} />
-      </div>
+        <ListRow as="div" size="sm" selected={selectedId === window.id} title={<><WindowIdChip id={window.id} /> {window.label || window.tmuxTarget}</>} chips={<WindowActivityIndicator status={activityStatus(window.serverName, window.tmuxTarget)} />} description={<span id={`orchestration-description-${window.id}`} style={{ display: 'flex', alignItems: 'center', gap: 'var(--space-1)', flexWrap: 'wrap' }}>{projects.slice(0, 3).map((project) => <ProjectAvatar key={project.id} project={project} size={18} />)}{projects.length > 3 && `+${projects.length - 3}`} {t(`orchestration.${orchestratorState(window, activityStatus(window.serverName, window.tmuxTarget))}`)} · {t('orchestration.links', { count: window.links.total })} {window.links.serverNames.filter((name) => name !== window.serverName).join(', ')} {window.lastInteractionAt && formatRelativeTime(window.lastInteractionAt)}</span>} style={{ flex: 1, minWidth: 0, listStyle: 'none' }} />
+      </RowContent>
       {expanded && node.children.length > 0 && <div role="group">{node.children.map((child) => renderNode(child, depth + 1))}</div>}
     </div>;
   };

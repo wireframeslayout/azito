@@ -298,6 +298,7 @@ export function useWindowActions(
       'delete-window': { icon: <Icon name="trash" size={16} />, run: () => void handleDeleteWindow(w.serverName, w.tmuxTarget, w.id) },
     };
     const items: ContextMenuItem[] = descriptors.map((d) => ({
+      kind: d.kind,
       label: t(d.labelKey),
       icon: actions[d.kind].icon,
       danger: d.danger,
@@ -307,7 +308,7 @@ export function useWindowActions(
     }));
     if (w.windowType === 'agent' && w.ownerType !== 'task' && w.ownerType !== undefined) {
       const role = w.role === 'orchestrator' ? null : 'orchestrator';
-      items.push({ label: t(role ? 'orchestration.makeOrchestrator' : 'orchestration.removeRole'), onClick: () => { void changeRole(w.id, role); } });
+      items.push({ kind: 'change-role', label: t(role ? 'orchestration.makeOrchestrator' : 'orchestration.removeRole'), onClick: () => { void changeRole(w.id, role); } });
     }
     items.push(
       { label: '', separator: true, onClick: () => {} },

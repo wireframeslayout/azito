@@ -16,7 +16,7 @@ test('エージェント窓をオーケストレーターに変換して一覧�
   await expect(app.getByRole('menu', { name: 'オーケストレーション' })).toBeVisible();
   await app.getByRole('button', { name: 'オーケストレーション一覧を展開' }).click();
   await app.getByRole('treeitem').first().click({ button: 'right' });
-  await app.getByRole('button', { name: 'オーケストレーターの役割を解除' }).click();
+  await app.getByRole('button', { name: /プロジェクトの窓に戻す（元:/ }).click();
   await expect.poll(async () => (await harness.api<Array<{ id: number }>>('/orchestrators')).some((window) => window.id === id)).toBe(false);
   await app.getByRole('button', { name: '元に戻す', exact: true }).click();
   await expect.poll(async () => (await harness.api<Array<{ id: number }>>('/orchestrators')).some((window) => window.id === id)).toBe(true);
@@ -33,6 +33,7 @@ test('スマホのナビシートから一覧を開いて窓を選ぶ', async ({
   await app.getByRole('button', { name: /オーケストレーション/ }).click();
   await app.getByRole('treeitem').click();
   await expect(app).toHaveURL(new RegExp(`/orchestration/${id}$`));
+  await expect(app.getByRole('button', { name: 'オーケストレーション一覧を収納' })).toHaveCount(0);
   await expect(app.getByRole('dialog', { name: 'ナビゲーションメニュー' })).toHaveCount(0);
   expect(await app.evaluate(() => document.documentElement.scrollWidth <= document.documentElement.clientWidth)).toBe(true);
 });
@@ -56,7 +57,7 @@ test('役割解除のエラーを表示し一覧を維持する', async ({ app, 
   await app.route(`**/api/windows/${id}/role`, (route) => route.fulfill({ status: 409, json: { error: 'conflict' } }));
   await app.goto(`${harness.baseUrl}/orchestration/${id}`);
   await app.getByRole('treeitem').first().click({ button: 'right' });
-  await app.getByRole('button', { name: 'オーケストレーターの役割を解除' }).click();
+  await app.getByRole('button', { name: /プロジェクトの窓に戻す（元:/ }).click();
   await expect(app.getByText('窓の役割を変更できませんでした')).toBeVisible();
   await expect(app.getByRole('treeitem')).toHaveCount(1);
 });

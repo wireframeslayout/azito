@@ -1,16 +1,16 @@
 // @vitest-environment jsdom
-import { fireEvent, render, screen } from '@testing-library/react';
+import { act, fireEvent, render, screen } from '@testing-library/react';
 import { describe, expect, it, vi } from 'vitest';
 import { OrchestrationSidebar } from './OrchestrationSidebar';
 
 vi.mock('../../hooks/useIsMobile', () => ({ useIsMobile: () => false }));
 const removeRole = vi.fn();
-vi.mock('../../hooks/useWindowActions', () => ({ useWindowActions: () => ({ getWindowMenuItems: () => [{ label: 'orchestration.removeRole', onClick: removeRole }], confirmDialog: null, respawnResourceWarning: null }) }));
+vi.mock('../../hooks/useWindowActions', () => ({ useWindowActions: () => ({ getWindowMenuItems: (window: { id: number }) => [{ kind: 'change-role', label: 'orchestration.removeRole', onClick: () => removeRole(window.id) }], confirmDialog: null, respawnResourceWarning: null }) }));
 vi.mock('../../hooks/useWorkspaceCatalog', () => ({ useWorkspaceCatalog: () => ({ allProjects: [{ id: 10, name: 'Project Alpha' }] }) }));
 vi.mock('../../hooks/useAgentActivity', () => ({ useAgentActivity: () => ({ activityStatus: () => null, snapshotStatus: 'ready', retrySnapshot: vi.fn() }) }));
 vi.mock('../../hooks/useOrchestrators', () => ({ useOrchestrators: () => ({ status: 'ready', refresh: vi.fn(), windows: [
   { id: 1, originProjectId: 10, parentWindowId: null, label: 'Parent', tmuxTarget: 's:p', serverName: 'local', links: { total: 0, projectIds: [], serverNames: [] } },
-  { id: 2, parentWindowId: 1, label: 'Child', tmuxTarget: 's:c', serverName: 'local', links: { total: 0, projectIds: [10], serverNames: [] } },
+  { id: 2, originProjectId: 10, parentWindowId: 1, label: 'Child', tmuxTarget: 's:c', serverName: 'local', links: { total: 0, projectIds: [10], serverNames: [] } },
 ] }) }));
 vi.mock('react-i18next', async (importOriginal) => ({ ...await importOriginal<typeof import('react-i18next')>(), useTranslation: () => ({ t: (key: string) => key }) }));
 
@@ -49,12 +49,35 @@ describe('OrchestrationSidebar', () => {
   it('opens the role action from the context menu', () => {
     render(<OrchestrationSidebar onSelect={vi.fn()} />);
     fireEvent.contextMenu(screen.getByText(/Parent/));
-    fireEvent.click(screen.getAllByText('orchestration.removeRole').at(-1)!);
-    expect(removeRole).toHaveBeenCalled();
+    fireEvent.click(screen.getAllByText('orchestration.returnToProject').at(-1)!);
+    expect(removeRole).toHaveBeenCalledWith(1);
   });
   it('collapses children', () => {
     render(<OrchestrationSidebar onSelect={vi.fn()} />);
     fireEvent.click(screen.getByRole('button', { name: 'orchestration.collapse' }));
     expect(screen.queryByText(/Child/)).toBeNull();
   });
+  it('opens the child menu on long press, never the parent menu', () => {
+    vi.useFakeTimers();
+    render(<OrchestrationSidebar onSelect={vi.fn()} />);
+    const child = screen.getByText(/Child/);
+    fireEvent.touchStart(child, { touches: [{ clientX: 30, clientY: 40 }] });
+    act(() => vi.advanceTimersByTime(501));
+    fireEvent.touchEnd(child, { changedTouches: [{ clientX: 30, clientY: 40 }] });
+    fireEvent.click(screen.getByText('orchestration.returnToProject'));
+    expect(removeRole).toHaveBeenLastCalledWith(2);
+    vi.useRealTimers();
+  });
+  it('does not open a menu on a short child tap', () => {
+    vi.useFakeTimers();
+    render(<OrchestrationSidebar onSelect={vi.fn()} />);
+    const child = screen.getByText(/Child/);
+    fireEvent.touchStart(child, { touches: [{ clientX: 30, clientY: 40 }] });
+    act(() => vi.advanceTimersByTime(100));
+    fireEvent.touchEnd(child, { changedTouches: [{ clientX: 30, clientY: 40 }] });
+    act(() => vi.advanceTimersByTime(500));
+    expect(screen.queryByText('orchestration.returnToProject')).toBeNull();
+    vi.useRealTimers();
+  });
+
 });
