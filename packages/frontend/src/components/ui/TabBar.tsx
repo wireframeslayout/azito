@@ -33,6 +33,7 @@ export interface TabBarProps {
   onReorder?: (fromIndex: number, toIndex: number) => void;
   draggable?: boolean;
   renderTab?: (tab: TabItem, isActive: boolean) => React.ReactNode;
+  onTabDoubleClick?: (tabId: string) => void;
   onTabContextMenu?: (e: React.MouseEvent, tabId: string) => void;
   onTabLongPress?: (x: number, y: number, tabId: string) => void;
   /** Action area rendered between the tab strip and the ▾ tab-list button (e.g. pane-mode split/close buttons). */
@@ -49,7 +50,7 @@ export interface TabBarProps {
   onTabDragEnd?: () => void;
 }
 
-export function TabBar({ tabs, activeId, onSelect, onClose, onReorder, draggable = false, renderTab, onTabContextMenu, onTabLongPress, trailing, onTabDragStart, onTabDragEnd }: TabBarProps) {
+export function TabBar({ tabs, activeId, onSelect, onClose, onReorder, draggable = false, renderTab, onTabDoubleClick, onTabContextMenu, onTabLongPress, trailing, onTabDragStart, onTabDragEnd }: TabBarProps) {
   const html5Draggable = onTabDragStart !== undefined || onTabDragEnd !== undefined;
   const { attachRef: attachScrollRef, elRef: tabBarRef } = useTabStripScrolling(activeId);
   const bindLongPress = useLongPress();
@@ -137,6 +138,7 @@ export function TabBar({ tabs, activeId, onSelect, onClose, onReorder, draggable
         <div
           key={tab.id}
           data-tab-id={tab.id}
+          onDoubleClick={() => onTabDoubleClick?.(tab.id)}
           className={tab.className || ''}
           onMouseDown={draggable ? (e) => { if (e.button === 0) startTabDrag(tab.id, e); } : undefined}
           {...html5DragProps}
@@ -154,6 +156,7 @@ export function TabBar({ tabs, activeId, onSelect, onClose, onReorder, draggable
       <div
         key={tab.id}
         data-tab-id={tab.id}
+        onDoubleClick={() => onTabDoubleClick?.(tab.id)}
         className={tab.className || ''}
         onMouseDown={draggable ? (e) => { if (e.button === 0) startTabDrag(tab.id, e); } : undefined}
         onContextMenu={onTabContextMenu ? (e) => { e.preventDefault(); onTabContextMenu(e, tab.id); } : undefined}
@@ -183,7 +186,7 @@ export function TabBar({ tabs, activeId, onSelect, onClose, onReorder, draggable
         </span>
         {tab.extra}
         {tab.closable !== false && onClose && (
-          <span onClick={() => onClose(tab.id)} className="icon-btn" style={{ color: 'var(--text-dim)', cursor: 'pointer', padding: '3px 4px', flexShrink: 0, display: 'inline-flex' }}><Icon name="close" size={14} /></span>
+          <span onDoubleClick={event => event.stopPropagation()} onClick={() => onClose(tab.id)} className="icon-btn" style={{ color: 'var(--text-dim)', cursor: 'pointer', padding: '3px 4px', flexShrink: 0, display: 'inline-flex' }}><Icon name="close" size={14} /></span>
         )}
       </div>
     );

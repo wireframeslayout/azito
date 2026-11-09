@@ -29,6 +29,8 @@ interface ConfirmDialog {
 type WindowMenuExtra = Pick<WindowMenuParams, 'online' | 'stale' | 'windowName' | 'paneOrdinal' | 'paneHandle'> & { paneTarget?: string; paneTitle?: string };
 
 interface WindowActionDeps {
+  maximizeWindow?: (windowId: number) => void;
+  resolveTabWindow?: (tab: PersistedTab) => number | null;
   showContextMenu: (e: React.MouseEvent, items: ContextMenuItem[]) => void;
   showContextMenuAt: (x: number, y: number, items: ContextMenuItem[]) => void;
   findTaskByTarget: (target: string) => Task | null;
@@ -180,7 +182,7 @@ export function useWindowActions(
     refreshWorkspace();
   }, [refreshWorkspace]);
 
-  const handleRespawnWindow = useCallback(async function perform(windowId: number, serverName?: string, force = false, chosenMux?: MuxDriverKind, offerTmuxRetry = false, title?: string) {
+  const handleRespawnWindow = useCallback(async function perform(windowId: number, serverName?: string, force = false, chosenMux?: MuxDriverKind, offerTmuxRetry = false, title?: string, reconnect = true) {
     setRespawningWindowIds((prev) => new Set(prev).add(windowId));
     let mux: MuxDriverKind | null | undefined = chosenMux;
     // Waking a sleeping tmux window into misao can be retried in tmux; an awake window is never offered that (it would be killed).
@@ -212,7 +214,7 @@ export function useWindowActions(
       }
       refreshWorkspace();
       await refreshSessions?.();
-      if (serverName) {
+      if (serverName && reconnect) {
         await reconnectWindow?.({ serverName, windowId, tmuxTarget: result.tmuxTarget });
       }
     } catch (err) {
@@ -303,12 +305,13 @@ export function useWindowActions(
       description: d.disabledReasonKey ? t(d.disabledReasonKey) : undefined,
       onClick: () => actions[d.kind].run(d),
     }));
+    if (deps.maximizeWindow) items.unshift({ label: t('maximize.action'), onClick: () => deps.maximizeWindow?.(w.id) });
     items.push(
       { label: '', separator: true, onClick: () => {} },
       { label: windowMenuInfo(w), disabled: true, onClick: () => {} },
     );
     return items;
-  }, [handleRenameLabel, handleRenameWindow, handleRenamePane, handleDetachWindow, handleDeleteWindow, handleDeletePane, handleRespawnWindow, handleSleepWindow, handleCapturePanes, findTaskByTarget, openTask, activityStatus, wake.choose, showToast, t, misaoServers]);
+  }, [handleRenameLabel, handleRenameWindow, handleRenamePane, handleDetachWindow, handleDeleteWindow, handleDeletePane, handleRespawnWindow, handleSleepWindow, handleCapturePanes, findTaskByTarget, openTask, activityStatus, wake.choose, showToast, t, misaoServers, deps.maximizeWindow]);
 
   const showWindowContextMenu = useCallback((e: React.MouseEvent, w: { id: number; serverName: string; tmuxTarget: string; label?: string; muxRef?: MuxRef }, extra?: WindowMenuExtra) => {
     showContextMenu(e, getWindowMenuItems(w, extra));
@@ -322,6 +325,8 @@ export function useWindowActions(
     const tab = tabs.find((t) => t.id === tabId);
     if (!tab) return [];
     const items: ContextMenuItem[] = [];
+    const windowId = deps.resolveTabWindow?.(tab);
+    if (windowId != null && deps.maximizeWindow) items.push({ label: t('maximize.action'), onClick: () => deps.maximizeWindow?.(windowId) });
     if (tab.type === 'terminal' && tab.target) {
       const linkedTask = findTaskByTarget(tab.target);
       if (linkedTask) {
@@ -337,7 +342,7 @@ export function useWindowActions(
     }
     items.push({ label: t('windows.closeTab'), icon: '✕', onClick: () => closeTab(tabId) });
     return items;
-  }, [tabs, closeTab, findTaskByTarget, openTask, togglePin]);
+  }, [tabs, closeTab, findTaskByTarget, openTask, togglePin, deps.resolveTabWindow, deps.maximizeWindow]);
 
   const handleTabContextMenu = useCallback((e: React.MouseEvent, tabId: string) => {
     const items = getTabMenuItems(tabId);

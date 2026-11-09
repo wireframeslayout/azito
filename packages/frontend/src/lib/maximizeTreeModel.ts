@@ -60,6 +60,7 @@ export function visibleMaximizeWindows(rows: readonly MaximizeTreeRow[], expande
   function visit(row: MaximizeTreeRow): void {
     if (row.kind === 'window') result.push(row.window.id);
     if (expanded.has(row.key)) row.children.forEach(visit);
+    else if (row.kind === 'task' && row.windowId !== null) result.push(row.windowId);
   }
   rows.forEach(visit);
   return result;

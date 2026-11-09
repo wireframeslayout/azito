@@ -28,6 +28,8 @@ import { findWindowTerminalTabs } from '../lib/retargetTab';
 import { resolveActiveTabAfterPaneClose } from '../lib/paneCloseActiveTab';
 import { fetchSessionsOrUndefined } from '../lib/fetchServerSessions';
 import { useWindowActions } from '../hooks/useWindowActions';
+import { useMaximizedWindow } from '../hooks/useMaximizedWindow';
+import type { MaximizeTab } from '../lib/maximizeTreeModel';
 import { useAddWindowModal } from '../hooks/useAddWindowModal';
 
 import { useDragUpload } from '../hooks/useDragUpload';
@@ -813,7 +815,18 @@ function WorkspaceInner() {
     refreshWorkspace();
   }, [refreshWorkspace]);
 
+  const { setWorkspace: setMaximizeWorkspace, open: openMaximized } = useMaximizedWindow();
+  const resolveTabWindow = useCallback((tab: PersistedTab): number | null => {
+    if (tab.type === 'task') return allTasks.find(task => task.id === tab.entityId)?.windows?.find(w => w.isPrimary)?.id ?? null;
+    if (tab.type !== 'terminal') return null;
+    for (const w of windowById.values()) {
+      if (findWindowTerminalTabs([tab], w.serverName, w.id, sessionData[w.serverName]).length) return w.id;
+    }
+    return null;
+  }, [allTasks, windowById, sessionData]);
   const windowActions = useWindowActions(id, refreshWorkspace, {
+    maximizeWindow: mobile ? undefined : openMaximized,
+    resolveTabWindow,
     // Pane-aware close: the tab context menu's "Close tab" item (used by both
     // the pane TabBar via buildPaneTabMenuItems' base and mobile's single
     // TabBar) must go through the same pane-successor/focus handling as the
@@ -830,6 +843,30 @@ function WorkspaceInner() {
       retargetWindowTabs(win.serverName, win.windowId, await fetchSessionsOrUndefined(win.serverName));
     },
   });
+
+  useEffect(() => {
+    const resolvedTabs: MaximizeTab[] = [];
+    for (const tab of tabs) {
+      if (tab.type === 'task' && tab.entityId != null) resolvedTabs.push({ kind: 'task', taskId: tab.entityId });
+      else {
+        const windowId = resolveTabWindow(tab);
+        if (windowId != null) resolvedTabs.push({ kind: 'window', windowId });
+      }
+    }
+    const active = tabs.find(tab => tab.id === focusedActiveTabId);
+    setMaximizeWorkspace({
+      tabs: resolvedTabs,
+      activeWindowId: active?.type === 'task' && focus.taskId === active.entityId && focus.windowId != null ? focus.windowId : active ? resolveTabWindow(active) : null,
+      activeTabId: focusedActiveTabId,
+      windows: windowById,
+      openWindowTab: windowId => {
+        const window = windowById.get(windowId);
+        if (window) connectPane({ kind: 'windowId', serverName: window.serverName, windowId, pane: 1 }, window.projectId);
+      },
+      wakeWindow: async windowId => { const window = windowById.get(windowId); if (window) await windowActions.handleRespawnWindow(windowId, window.serverName, false, undefined, false, undefined, false); },
+    });
+    return () => setMaximizeWorkspace(null);
+  }, [tabs, focusedActiveTabId, focus.taskId, focus.windowId, resolveTabWindow, windowById, connectPane, windowActions.handleRespawnWindow, setMaximizeWorkspace]);
 
   const handleWindowAddedToTask = useCallback(async (
     taskId: number,
@@ -1157,12 +1194,13 @@ function WorkspaceInner() {
         draggable
         onTabDragStart={(tabId) => setPaneDrag({ tabId, fromPaneId: pane.id })}
         onTabDragEnd={() => setPaneDrag(null)}
+        onTabDoubleClick={(tabId) => { const tab = tabs.find(item => item.id === tabId); const windowId = tab?.type === 'terminal' ? resolveTabWindow(tab) : null; if (!mobile && windowId != null) openMaximized(windowId); }}
         onTabContextMenu={(e, tabId) => showContextMenu(e, buildPaneTabMenuItems(pane, tabId))}
         onTabLongPress={(x, y, tabId) => showContextMenuAt(x, y, buildPaneTabMenuItems(pane, tabId))}
         trailing={renderPaneTrailing(pane)}
       />
     );
-  }, [tabs, buildTabItem, handlePaneSelectTab, handlePaneCloseTab, buildPaneTabMenuItems, showContextMenu, showContextMenuAt, renderPaneTrailing]);
+  }, [tabs, buildTabItem, handlePaneSelectTab, handlePaneCloseTab, buildPaneTabMenuItems, showContextMenu, showContextMenuAt, renderPaneTrailing, resolveTabWindow, mobile, openMaximized]);
 
   // タブ未選択時のホーム（Issue #69 Phase F-2）: ワークスペース全体にタブが1つも
   // 無い唯一のペインの空状態だけをアクティビティフィードに置き換える。分割操作で

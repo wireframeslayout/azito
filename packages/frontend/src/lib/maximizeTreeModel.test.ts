@@ -11,7 +11,7 @@ describe('open tabs maximize tree', () => {
     const rows = buildOpenTabsTree([{ kind: 'window', windowId: 3 }, { kind: 'window', windowId: 2 }, { kind: 'task', taskId: 4 }], [task], new Map([[3, three]]), new Map([[2, 1]]));
     expect(rows.map(row => row.key)).toEqual(['window:3', 'task:4']);
     expect(visibleMaximizeWindows(rows, new Set(['task:4', 'window:1']))).toEqual([3, 1, 2]);
-    expect(visibleMaximizeWindows(rows, new Set())).toEqual([3]);
+    expect(visibleMaximizeWindows(rows, new Set())).toEqual([3, 1]);
   });
   it('omits unresolved windows and leaves a task without a primary unselectable', () => {
     const task = { id: 4, windows: [win(2)] } as Task;

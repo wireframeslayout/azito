@@ -394,6 +394,7 @@ export default function PromptInputBar({ readOnlyReason, windowId, paneId, draft
       {readOnlyReason && <div role="note" style={{ color: 'var(--text-dim)', fontSize: 'var(--font-xs)', marginBottom: 'var(--space-1)' }}>{readOnlyReason}</div>}
       <div style={{ display: 'flex', gap: 8, alignItems: 'flex-end' }}>
         <textarea
+          data-maximize-input
           ref={textareaRef}
           value={text}
           onChange={(e) => {
