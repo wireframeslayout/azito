@@ -5,6 +5,7 @@ import type { IStorageSettingsRepository } from '../SqliteStorageSettingsReposit
 import type { MinioStorageClient } from './MinioStorageClient';
 import { StorageOperationError, validateStoragePath } from './storageOperations';
 import { classifyStorageError } from './storageErrors';
+import { isBase64 } from '../validateBase64';
 
 const path = z.string();
 const paths = z.array(path).max(1000);
@@ -34,8 +35,8 @@ export function registerStorageOperationRoutes(fastify: FastifyInstance, opts: S
     const relative = key.slice(rootKey.length);
     return validateStoragePath(relative, false);
   };
-  function route<S extends z.ZodType>(method: 'GET' | 'POST' | 'PATCH' | 'PUT', suffix: string, schema: S, action: (input: z.output<S>, id: number, reply: FastifyReply) => Promise<unknown>): void {
-    fastify.route({ method, url: root + suffix, handler: async (request, reply) => {
+  function route<S extends z.ZodType>(method: 'GET' | 'POST' | 'PATCH' | 'PUT', suffix: string, schema: S, action: (input: z.output<S>, id: number, reply: FastifyReply) => Promise<unknown>, bodyLimit?: number): void {
+    fastify.route({ method, url: root + suffix, ...(bodyLimit ? { bodyLimit } : {}), handler: async (request, reply) => {
       const id = Number((request.params as { id: string }).id);
       if (!Number.isSafeInteger(id) || !opts.projectRepo.findById(id)) return reply.status(404).send({ error: 'Project not found' });
       const parsed = schema.safeParse(method === 'GET' ? request.query : request.body);
@@ -52,6 +53,15 @@ export function registerStorageOperationRoutes(fastify: FastifyInstance, opts: S
     route(method, suffix, schema, (input, id) => action(opts.storageClient.operations(opts.storageSettingsRepo.get(), id), input, id));
   }
   const textContent = (id: number) => opts.storageClient.textContent(opts.storageSettingsRepo.get(), id);
+  const binaryContent = (id: number) => opts.storageClient.binaryContent(opts.storageSettingsRepo.get(), id);
+  route('GET', '/object', contentQuery, async (q: z.infer<typeof contentQuery>, id) => {
+    const result = await binaryContent(id).read(relativeKey(q.key, id));
+    return { content: result.data.toString('base64'), etag: result.etag };
+  });
+  route('PUT', '/object', contentBody, async (body: z.infer<typeof contentBody>, id) => {
+    if (!isBase64(body.content)) throw new StorageOperationError(400, 'invalid_request', 'Invalid binary content');
+    return binaryContent(id).write(relativeKey(body.key, id), Buffer.from(body.content, 'base64'), body.force ? undefined : body.baseEtag);
+  }, 28 * 1024 * 1024);
   route('GET', '/content', contentQuery, (q: z.infer<typeof contentQuery>, id) => textContent(id).read(relativeKey(q.key, id)));
   route('PUT', '/content', contentBody, async (b: z.infer<typeof contentBody>, id, reply) => {
     const text = textContent(id);

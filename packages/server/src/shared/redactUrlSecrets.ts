@@ -4,6 +4,7 @@ const SECRET_QUERY_KEYS = new Set(['token']);
 const REDACTED = '[REDACTED]';
 
 export function redactUrlSecrets(url: string): string {
+  url = url.replace(/^(\/api\/media\/)[^/?#]+/, `$1${REDACTED}`);
   const qIndex = url.indexOf('?');
   if (qIndex === -1) return url;
   const hashIndex = url.indexOf('#', qIndex);

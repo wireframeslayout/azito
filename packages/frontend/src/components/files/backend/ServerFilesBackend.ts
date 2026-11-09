@@ -1,7 +1,8 @@
 import { apiWithStatus, fetchBlob } from '../../../api/client';
 import { unavailableFrom, type FileEntry, type FileReadResult, type FileSaveResult, type FilesBackend } from './FilesBackend';
+import { decodeBase64, encodeBase64 } from './binaryCodec';
 
-interface ResponseBody { error?: string; code?: string; content?: string; language?: string; mtime?: number; hash?: string; type?: string }
+interface ResponseBody { error?: string; code?: string; content?: string; language?: string; mtime?: number; hash?: string; type?: string; url?: string }
 
 export class ServerFilesBackend implements FilesBackend {
   constructor(private readonly serverName: string, private readonly projectId?: number) {}
@@ -49,4 +50,24 @@ export class ServerFilesBackend implements FilesBackend {
   rename(path: string, newName: string): Promise<void> { return this.mutate('PATCH', { path, newName }); }
   delete(path: string): Promise<void> { return this.mutate('DELETE', { path }); }
   download(path: string): Promise<Blob> { return fetchBlob(`${this.root}/download?path=${encodeURIComponent(path)}`); }
+  async readBinary(path: string) {
+    if (this.projectId == null) throw new Error('projectId is required');
+    const { status, body } = await apiWithStatus<ResponseBody>(`${this.root}/binary?${new URLSearchParams({ path, projectId: String(this.projectId) })}`);
+    if (status >= 400 || typeof body.content !== 'string' || typeof body.mtime !== 'number' || typeof body.hash !== 'string') throw new Error(body.code === 'too_large' ? 'preview_too_large' : (body.error || 'Invalid file response'));
+    return { bytes: decodeBase64(body.content), version: JSON.stringify({ mtime: body.mtime, hash: body.hash }) };
+  }
+  async saveBinary(path: string, bytes: Uint8Array, version: string, force: boolean) {
+    if (this.projectId == null) throw new Error('projectId is required');
+    const base = JSON.parse(version) as { mtime: number; hash: string };
+    const { status, body } = await apiWithStatus<ResponseBody>(`${this.root}/binary`, { method: 'PUT', body: JSON.stringify({ path, projectId: this.projectId, content: encodeBase64(bytes), force, ...(force ? {} : { baseMtime: base.mtime, baseHash: base.hash }) }) });
+    if (status === 409) return { kind: 'conflict' as const };
+    if (status >= 400 || typeof body.mtime !== 'number' || typeof body.hash !== 'string') throw new Error(body.error || 'Invalid save response');
+    return { kind: 'saved' as const, version: JSON.stringify({ mtime: body.mtime, hash: body.hash }) };
+  }
+  async mediaUrl(path: string): Promise<string> {
+    if (this.projectId == null) throw new Error('projectId is required');
+    const { status, body } = await apiWithStatus<ResponseBody>(`${this.root}/media-url?${new URLSearchParams({ path, projectId: String(this.projectId) })}`);
+    if (status >= 400 || typeof body.url !== 'string') throw new Error(body.error || 'Invalid media response');
+    return body.url;
+  }
 }

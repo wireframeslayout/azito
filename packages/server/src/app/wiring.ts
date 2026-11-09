@@ -10,6 +10,7 @@ import { isLaunchdHub } from '../modules/servers/launchdHub';
 // main.ts; grouped into per-module factory functions for readability.
 
 import { execFileSync } from 'child_process';
+import { hkdfSync } from 'node:crypto';
 import { getDistributionInfo } from '../shared/distributionInfo';
 import { resolveStorageOnboarding } from '../modules/files/storageOnboarding';
 import { StorageStatusService } from '../modules/files/storage/StorageStatusService';
@@ -260,6 +261,7 @@ export interface Wiring extends SharedInfra, Repositories, PushNotificationModul
   windowRoles: WindowRoleService;
   storageStatusService: StorageStatusService;
   uiToken: string;
+  mediaSigningKey: Buffer;
   webhookToken: string;
   agentBundler: AgentBundler;
   agentUpdater: AgentUpdater;
@@ -832,6 +834,7 @@ export async function buildWiring(db: SqliteDatabase, publicUrl: string, localUr
     orchestrationLinks,
     windowRoles: new WindowRoleService(db, repos.windowRepo, infra.notificationBus, repos.projectRepo, orchestrationLinks),
     uiToken,
+    mediaSigningKey: Buffer.from(hkdfSync('sha256', uiToken, 'azito', 'media-url', 32)),
     webhookToken,
     storageStatusService,
     agentBundler,

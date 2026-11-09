@@ -11,6 +11,7 @@ export function useTextFileDocument(backend: FilesBackend, path: string, onDirty
   const [unavailable, setUnavailable] = useState<TextUnavailable | null>(null);
   const [saving, setSaving] = useState(false);
   const [saved, setSaved] = useState(false);
+  const [loadRevision, setLoadRevision] = useState(0);
   const [conflict, setConflict] = useState<FileReadResult | null | undefined>(undefined);
   const contentRef = useRef(content);
   const generation = useRef(0);
@@ -30,7 +31,7 @@ export function useTextFileDocument(backend: FilesBackend, path: string, onDirty
       const result = await backendRef.current.read(path);
       if (generation.current !== current) return;
       if (result.kind === 'unavailable') { setDocument(null); setUnavailable(result); }
-      else { setDocument(result); contentRef.current = result.content; setContent(result.content); }
+      else { setDocument(result); contentRef.current = result.content; setContent(result.content); setLoadRevision((revision) => revision + 1); }
       setConflict(undefined);
     } catch (err) {
       if (generation.current === current) setError(err instanceof Error ? err.message : String(err));
@@ -53,5 +54,5 @@ export function useTextFileDocument(backend: FilesBackend, path: string, onDirty
       if (generation.current === current) setError(err instanceof Error ? err.message : String(err));
     } finally { if (savingRef.current === current) savingRef.current = null; if (generation.current === current) setSaving(false); }
   }, [path, document]);
-  return { document, content, loading, error, unavailable, saving, saved, dirty, conflict, change, save, reload: load };
+  return { document, content, loading, error, unavailable, saving, saved, dirty, conflict, change, save, reload: load, loadRevision };
 }

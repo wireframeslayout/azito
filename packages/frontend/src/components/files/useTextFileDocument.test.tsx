@@ -9,6 +9,17 @@ function backend(save: FilesBackend['save'], source = 'test'): FilesBackend {
 }
 
 describe('useTextFileDocument', () => {
+  it('changes the load revision on reload but not on save', async () => {
+    const instance = backend(vi.fn().mockResolvedValue({ kind: 'saved', version: 'v2' }));
+    const { result } = renderHook(() => useTextFileDocument(instance, 'file'));
+    await waitFor(() => expect(result.current.document).not.toBeNull());
+    const revision = result.current.loadRevision;
+    act(() => result.current.change('updated'));
+    await act(async () => { await result.current.save(); });
+    expect(result.current.loadRevision).toBe(revision);
+    await act(async () => { await result.current.reload(); });
+    expect(result.current.loadRevision).toBe(revision + 1);
+  });
   it('retains edits made while a save is in flight', async () => {
     let finish!: (result: FileSaveResult) => void;
     const save = vi.fn(() => new Promise<FileSaveResult>((resolve) => { finish = resolve; }));

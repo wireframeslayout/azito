@@ -1,5 +1,6 @@
 import { apiWithStatus, fetchBlob, uploadFile } from '../../../api/client';
 import { unavailableFrom, type FileEntry, type FileReadResult, type FileSaveResult, type FilesBackend } from './FilesBackend';
+import { decodeBase64, encodeBase64 } from './binaryCodec';
 
 interface StorageResponse {
   error?: string;
@@ -10,6 +11,7 @@ interface StorageResponse {
   contentType?: string;
   latest?: StorageResponse | null;
   file?: { key: string };
+  url?: string;
 }
 interface ListResponse extends StorageResponse {
   folders: Array<{ name: string; prefix: string }>;
@@ -127,4 +129,20 @@ export class StorageFilesBackend implements FilesBackend {
     return this.mutate('/move', 'POST', { keys: type === 'file' ? [this.key(path)] : [], prefixes: type === 'directory' ? [path] : [], destPrefix: destination });
   }
   download(path: string): Promise<Blob> { return fetchBlob(`${this.root}/${encodeURIComponent(path)}/raw?download=true`); }
+  async readBinary(path: string) {
+    const { status, body } = await apiWithStatus<StorageResponse>(`${this.root}/object?${new URLSearchParams({ key: this.key(path) })}`);
+    if (status >= 400 || typeof body.content !== 'string' || typeof body.etag !== 'string') throw new Error(body.code === 'too_large' ? 'preview_too_large' : (body.error || 'Invalid file response'));
+    return { bytes: decodeBase64(body.content), version: body.etag };
+  }
+  async saveBinary(path: string, bytes: Uint8Array, version: string, force: boolean) {
+    const { status, body } = await apiWithStatus<StorageResponse>(`${this.root}/object`, { method: 'PUT', body: JSON.stringify({ key: this.key(path), content: encodeBase64(bytes), baseEtag: force ? undefined : version, force }) });
+    if (status === 409) return { kind: 'conflict' as const };
+    if (status >= 400 || typeof body.etag !== 'string') throw new Error(body.error || 'Invalid save response');
+    return { kind: 'saved' as const, version: body.etag };
+  }
+  async mediaUrl(path: string): Promise<string> {
+    const { status, body } = await apiWithStatus<StorageResponse>(`${this.root}/media-url?${new URLSearchParams({ key: this.key(path) })}`);
+    if (status >= 400 || typeof body.url !== 'string') throw new Error(body.error || 'Invalid media response');
+    return body.url;
+  }
 }

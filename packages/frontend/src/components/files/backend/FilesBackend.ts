@@ -26,6 +26,9 @@ export type FileSaveResult =
   | { kind: 'saved'; version: string }
   | { kind: 'conflict'; latest: FileReadResult | null };
 
+export interface BinaryFile { bytes: Uint8Array; version: string }
+export type BinarySaveResult = { kind: 'saved'; version: string } | { kind: 'conflict' };
+
 export interface FilesBackend {
   /** Identifies where documents live; a new backend instance with the same source reads the same files. */
   readonly source: string;
@@ -37,4 +40,10 @@ export interface FilesBackend {
   delete(path: string, type: 'file' | 'directory'): Promise<void>;
   download(path: string): Promise<Blob>;
   move?(path: string, type: 'file' | 'directory', destination: string): Promise<void>;
+}
+
+export interface BinaryFilesBackend extends FilesBackend {
+  readBinary(path: string): Promise<BinaryFile>;
+  saveBinary(path: string, bytes: Uint8Array, version: string, force: boolean): Promise<BinarySaveResult>;
+  mediaUrl(path: string): Promise<string>;
 }

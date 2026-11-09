@@ -4,6 +4,25 @@ import storageRoutes, { type StorageRouteOptions } from '../routes';
 import { StorageOperationError } from './storageOperations';
 
 describe('storage operation routes', () => {
+  it('accepts multi-megabyte base64 for conditional storage writes', async () => {
+    const bytes = Buffer.alloc(4 * 1024 * 1024, 0x5a);
+    const write = vi.fn(async () => ({ etag: 'next' }));
+    const app = Fastify();
+    await app.register(storageRoutes, {
+      projectRepo: { findById: () => ({ id: 1 }) },
+      storageSettingsRepo: { get: () => ({}) }, storageClient: { binaryContent: () => ({ write }) },
+      storageStatusService: {},
+    } as unknown as StorageRouteOptions);
+    try {
+      const response = await app.inject({ method: 'PUT', url: '/api/projects/1/storage/object', payload: { key: 'projects/1/file.xlsx', content: bytes.toString('base64'), baseEtag: 'v1' } });
+      expect(response.statusCode).toBe(200);
+      expect(write).toHaveBeenCalledTimes(1);
+      const [path, data, etag] = write.mock.calls[0] as unknown as [string, Buffer, string];
+      expect(path).toBe('file.xlsx');
+      expect(data.equals(bytes)).toBe(true);
+      expect(etag).toBe('v1');
+    } finally { await app.close(); }
+  }, 30000);
   it('creates a bucket and safely classifies errors', async () => {
     const createBucket = vi.fn(async () => {});
     const app = Fastify();

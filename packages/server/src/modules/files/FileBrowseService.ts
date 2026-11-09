@@ -243,6 +243,21 @@ export class FileBrowseService {
     if (Buffer.byteLength(content, 'utf-8') > MAX_FILE_SIZE) {
       throw new FileBrowseError(`Content too large. Maximum is 500KB.`, 400);
     }
+    return this.writeBytes(srv, filePath, Buffer.from(content, 'utf-8'), baseMtime, baseHash);
+  }
+
+  async readBinary(srv: ServerConfig, filePath: string): Promise<{ data: Buffer; mtime: number; hash: string }> {
+    const { data, stat } = await browsing(() => this.ops(srv).read(filePath, { maxBytes: 20 * 1024 * 1024 }));
+    if (data.length > 20 * 1024 * 1024) throw new FileBrowseError('File too large', 400, 'too_large');
+    return { data, mtime: stat.mtimeMs, hash: sha256Hex(data) };
+  }
+
+  async writeBinary(srv: ServerConfig, filePath: string, data: Buffer, baseMtime?: number, baseHash?: string): Promise<{ mtime: number; hash: string }> {
+    if (data.length > 20 * 1024 * 1024) throw new FileBrowseError('File too large', 400, 'too_large');
+    return this.writeBytes(srv, filePath, data, baseMtime, baseHash);
+  }
+
+  private async writeBytes(srv: ServerConfig, filePath: string, data: Buffer, baseMtime?: number, baseHash?: string): Promise<{ mtime: number; hash: string }> {
     // Serialize the mtime-check-then-replace sequence per (server, path) so two concurrent saves
     // against the same baseMtime can't both pass the conflict check — see withWriteLock above.
     return this.withWriteLock(`${srv.name}:${filePath}`, async () => {
@@ -250,7 +265,7 @@ export class FileBrowseService {
       // caller that sends neither asked for `force`. The conflict carries the mtime the file has now.
       const expect = baseMtime !== undefined || baseHash !== undefined ? { mtimeMs: baseMtime, sha256: baseHash } : undefined;
       try {
-        const result = await this.ops(srv).write(filePath, Buffer.from(content, 'utf-8'), { expect });
+        const result = await this.ops(srv).write(filePath, data, { expect });
         return { mtime: result.mtimeMs, hash: result.sha256 };
       } catch (err) {
         if (err instanceof FileOpsError && err.code === 'CONFLICT') {
