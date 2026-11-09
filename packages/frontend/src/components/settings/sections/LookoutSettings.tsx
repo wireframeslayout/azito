@@ -2,7 +2,8 @@ import { useEffect, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { apiOk as request } from '../../../api/apiOk';
 import { notifyLookoutSettingsChanged } from '../../../lib/lookoutSettingsEvents';
-import { LOOKOUT_NOTIFY_INTERVAL_CHANGED, LOOKOUT_NOTIFY_INTERVAL_KEY, readLookoutNotifyInterval, writeLookoutNotifyInterval, type LookoutNotifyInterval } from '../../../lib/lookoutNotifyInterval';
+import { writeLookoutNotifyInterval, type LookoutNotifyInterval } from '../../../lib/lookoutNotifyInterval';
+import { useLookoutNotifyInterval } from '../../../lib/useLookoutNotifyInterval';
 import { Button, LoadingState, Notice, SegmentedToggle } from '../../ui';
 import { ModelSelect } from '../../ui/ModelSelect';
 import { InlineToggle } from '../../ui/InlineToggle';
@@ -14,14 +15,7 @@ interface Model { id: string; label: string }
 
 export function LookoutSettings() {
   const { t } = useTranslation('settings');
-  const [interval, setInterval] = useState<LookoutNotifyInterval>(readLookoutNotifyInterval);
-  useEffect(() => {
-    const onChange = (event: Event) => setInterval((event as CustomEvent<LookoutNotifyInterval>).detail);
-    const onStorage = (event: StorageEvent) => { if (event.key === LOOKOUT_NOTIFY_INTERVAL_KEY || event.key === null) setInterval(readLookoutNotifyInterval()); };
-    window.addEventListener(LOOKOUT_NOTIFY_INTERVAL_CHANGED, onChange);
-    window.addEventListener('storage', onStorage);
-    return () => { window.removeEventListener(LOOKOUT_NOTIFY_INTERVAL_CHANGED, onChange); window.removeEventListener('storage', onStorage); };
-  }, []);
+  const interval = useLookoutNotifyInterval();
   const [settings, setSettings] = useState<Settings | null>(null);
   const [models, setModels] = useState<Record<Provider, Model[]> | null>(null);
   const [error, setError] = useState(false);
@@ -53,7 +47,7 @@ export function LookoutSettings() {
   return <section style={{ background: 'var(--bg-card)', border: '1px solid var(--border)', borderRadius: 'var(--radius-md)', padding: 'var(--space-4)', marginBottom: 'var(--space-4)', display: 'grid', gap: 'var(--space-3)' }}>
     <h3 style={{ fontSize: 'var(--font-base)', margin: 0 }}>{t('lookout.title')}</h3>
     <span>{t('lookout.interval')}</span>
-    <SegmentedToggle wrap ariaLabel={t('lookout.interval')} value={interval} onChange={(value: LookoutNotifyInterval) => { setInterval(value); writeLookoutNotifyInterval(value); }} options={[{ value: 'immediate', label: t('lookout.intervalImmediate') }, { value: '5min', label: t('lookout.interval5min') }, { value: '15min', label: t('lookout.interval15min') }, { value: 'off', label: t('lookout.intervalOff') }]} />
+    <SegmentedToggle wrap ariaLabel={t('lookout.interval')} value={interval} onChange={(value: LookoutNotifyInterval) => { writeLookoutNotifyInterval(value); }} options={[{ value: 'immediate', label: t('lookout.intervalImmediate') }, { value: '5min', label: t('lookout.interval5min') }, { value: '15min', label: t('lookout.interval15min') }, { value: 'off', label: t('lookout.intervalOff') }]} />
     {error && <Notice tone="danger">{t('lookout.saveFailed')}</Notice>}
     {!settings || !models ? !error && <LoadingState /> : <>
       <label style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 'var(--space-3)' }}><span>{t('lookout.enabled')}<br /><small style={{ color: 'var(--text-dim)' }}>{t('lookout.description')}</small></span><InlineToggle active={settings.enabled} title={t('lookout.enabled')} onClick={() => { setSettings({ ...settings, enabled: !settings.enabled }); setDirty(true); }}>{settings.enabled ? '✓' : ''}</InlineToggle></label>

@@ -101,8 +101,17 @@ export class LookoutSummaryService {
     }
   }
 
+  private activeFailure(provider: string, base: string): { reason: CliFailureReason; retryAt: number } | undefined {
+    const now = Date.now();
+    const providerFailure = this.providerFailures.get(provider);
+    const windowFailure = this.failures.get(base);
+    if (providerFailure && providerFailure.retryAt <= now) this.providerFailures.delete(provider);
+    if (windowFailure && windowFailure.retryAt <= now) this.failures.delete(base);
+    return [providerFailure, windowFailure].find((failure) => failure && failure.retryAt > now);
+  }
+
   private getCached(windowId: number, key: string, base: string, prompt: string, settings: LookoutSettings): SummaryResult {
-    const failure = this.providerFailures.get(settings.provider) ?? this.failures.get(base);
+    const failure = this.activeFailure(settings.provider, base);
     if (failure && failure.retryAt > Date.now()) return { windowId, status: 'unavailable', reason: failure.reason };
     this.latest.set(windowId, key);
     for (let i = this.queue.length - 1; i >= 0; i--) {
@@ -136,13 +145,14 @@ export class LookoutSummaryService {
       if (index < 0) return;
       const [job] = this.queue.splice(index, 1);
       if (!this.cache.has(job.key) || job.generation !== this.generation) continue;
-      const failure = this.providerFailures.get(job.settings.provider) ?? this.failures.get(job.base);
+      const failure = this.activeFailure(job.settings.provider, job.base);
       if (failure && failure.retryAt > Date.now()) { this.cache.delete(job.key); continue; }
       this.active++; this.activeWindows.add(job.windowId); this.lastStart.delete(job.windowId); this.lastStart.set(job.windowId, Date.now());
       while (this.lastStart.size > 200) this.lastStart.delete(this.lastStart.keys().next().value!);
       void this.run(job.settings, job.prompt).then((output) => {
         const summary = normalizeLookoutSummary(output);
         if (!summary) throw new Error('empty_summary');
+        if (job.generation === this.generation) this.providerFailures.delete(job.settings.provider);
         if (job.generation === this.generation) {
           this.lastReady.delete(job.windowId);
           this.lastReady.set(job.windowId, { base: job.base, text: summary });
