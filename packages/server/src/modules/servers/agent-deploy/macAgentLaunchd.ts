@@ -29,12 +29,12 @@ export class MacAgentLaunchd {
     return new MacAgentLaunchd(ssh, host, home, plist, new LaunchdJobOperations(run, LABEL, Number(lines[1]), plist, DEFAULT_LAUNCHD_TIMING));
   }
 
-  private exec(command: string): ReturnType<SshClient['execIsolated']> {
+  private execPosix(command: string): ReturnType<SshClient['execIsolated']> {
     return this.ssh.execIsolated(this.host, posixRemoteCommand(command));
   }
 
   async assertOwned(): Promise<void> {
-    const definition = await this.exec(`if [ -f ${shellQuote(this.plist)} ]; then cat ${shellQuote(this.plist)}; else printf AZITO_NO_PLIST; fi`);
+    const definition = await this.execPosix(`if [ -f ${shellQuote(this.plist)} ]; then cat ${shellQuote(this.plist)}; else printf AZITO_NO_PLIST; fi`);
     if (definition.code !== 0) throw new Error('Could not inspect the agent launchd definition');
     if (definition.stdout !== 'AZITO_NO_PLIST' && (!definition.stdout.includes(`<key>Label</key><string>${LABEL}</string>`) || !definition.stdout.includes(xml(`${this.home}/.azito/agent/current/run.sh`)))) {
       throw new Error(`${LABEL} definition is not the managed agent; it was left unchanged`);
@@ -56,7 +56,7 @@ export class MacAgentLaunchd {
 
   async readCurrent(): Promise<string | null> {
     const current = `${this.home}/.azito/agent/current`;
-    const result = await this.exec(`if [ -L ${shellQuote(current)} ]; then readlink ${shellQuote(current)}; elif [ -e ${shellQuote(current)} ]; then exit 1; else printf AZITO_ABSENT; fi`);
+    const result = await this.execPosix(`if [ -L ${shellQuote(current)} ]; then readlink ${shellQuote(current)}; elif [ -e ${shellQuote(current)} ]; then exit 1; else printf AZITO_ABSENT; fi`);
     if (result.code !== 0) throw new Error('The agent current path is not a symlink');
     const target = result.stdout.trim();
     if (target === 'AZITO_ABSENT') return null;
@@ -68,13 +68,13 @@ export class MacAgentLaunchd {
     const current = `${this.home}/.azito/agent/current`;
     const expected = `${this.home}/.azito/agent/${version}`;
     const change = previous === null ? `rm -f ${shellQuote(current)}` : `ln -sfn ${shellQuote(previous)} ${shellQuote(current)}`;
-    const result = await this.exec(`[ "$(readlink ${shellQuote(current)})" = ${shellQuote(expected)} ] && ${change}`);
+    const result = await this.execPosix(`[ "$(readlink ${shellQuote(current)})" = ${shellQuote(expected)} ] && ${change}`);
     if (result.code !== 0) throw new Error('Agent current link changed or could not be restored');
   }
 
   async readInstallId(): Promise<string | undefined> {
     const idFile = `${this.home}/.azito/agent/install.id`;
-    const result = await this.exec(`if [ -f ${shellQuote(idFile)} ]; then cat ${shellQuote(idFile)}; elif [ -e ${shellQuote(`${this.home}/.azito/agent`)} ]; then exit 2; else printf AZITO_ABSENT; fi`);
+    const result = await this.execPosix(`if [ -f ${shellQuote(idFile)} ]; then cat ${shellQuote(idFile)}; elif [ -e ${shellQuote(`${this.home}/.azito/agent`)} ]; then exit 2; else printf AZITO_ABSENT; fi`);
     if (result.code !== 0) throw new Error('The agent folder has no installation id; it was left unchanged');
     const id = result.stdout.trim();
     if (id === 'AZITO_ABSENT') {
@@ -95,16 +95,16 @@ export class MacAgentLaunchd {
   async cleanup(installId: string): Promise<void> {
     const lock = `${this.home}/.azito/agent-cleanup.lock`;
     const idFile = `${this.home}/.azito/agent/install.id`;
-    const acquire = await this.exec(`mkdir ${shellQuote(lock)} && date +%s > ${shellQuote(`${lock}/started`)}`);
+    const acquire = await this.execPosix(`mkdir ${shellQuote(lock)} && date +%s > ${shellQuote(`${lock}/started`)}`);
     if (acquire.code !== 0) throw new Error('Could not acquire the cleanup lock or verify the installation id');
     try {
-      const owner = await this.exec(`[ "$(cat ${shellQuote(idFile)} 2>/dev/null)" = ${shellQuote(installId)} ]`);
+      const owner = await this.execPosix(`[ "$(cat ${shellQuote(idFile)} 2>/dev/null)" = ${shellQuote(installId)} ]`);
       if (owner.code !== 0) throw new Error('Installation id changed');
       await this.stop();
-      const remove = await this.exec(`[ "$(cat ${shellQuote(idFile)} 2>/dev/null)" = ${shellQuote(installId)} ] && rm -f ${shellQuote(this.plist)} && rm -rf ${shellQuote(`${this.home}/.azito/agent`)}`);
+      const remove = await this.execPosix(`[ "$(cat ${shellQuote(idFile)} 2>/dev/null)" = ${shellQuote(installId)} ] && rm -f ${shellQuote(this.plist)} && rm -rf ${shellQuote(`${this.home}/.azito/agent`)}`);
       if (remove.code !== 0) throw new Error('Installation id changed or agent files could not be removed');
     } finally {
-      const release = await this.exec(`rm -rf ${shellQuote(lock)}`);
+      const release = await this.execPosix(`rm -rf ${shellQuote(lock)}`);
       if (release.code !== 0) throw new Error('Could not release the agent cleanup lock');
     }
   }
@@ -114,7 +114,7 @@ export class MacAgentLaunchd {
     const jobs = (await this.jobs.printJobs()).filter((job) => job.result.code === 0);
     if (jobs.length > 1) throw new Error(`${LABEL} is loaded in both user and gui domains`);
     const envFile = `${this.home}/.azito/agent/agent.env`;
-    const backupResult = await this.exec(`mkdir -p ${shellQuote(`${this.home}/.azito`)} && backup=$(mktemp -d ${shellQuote(`${this.home}/.azito/agent-launchd-backup.XXXXXX`)}) && { [ ! -f ${shellQuote(this.plist)} ] || cp -p ${shellQuote(this.plist)} "$backup/plist"; } && { [ ! -f ${shellQuote(envFile)} ] || cp -p ${shellQuote(envFile)} "$backup/env"; } && printf '%s\\n' "$backup"`);
+    const backupResult = await this.execPosix(`mkdir -p ${shellQuote(`${this.home}/.azito`)} && backup=$(mktemp -d ${shellQuote(`${this.home}/.azito/agent-launchd-backup.XXXXXX`)}) && { [ ! -f ${shellQuote(this.plist)} ] || cp -p ${shellQuote(this.plist)} "$backup/plist"; } && { [ ! -f ${shellQuote(envFile)} ] || cp -p ${shellQuote(envFile)} "$backup/env"; } && printf '%s\\n' "$backup"`);
     const backup = backupResult.stdout.trim();
     if (backupResult.code !== 0 || !backup.startsWith(`${this.home}/.azito/agent-launchd-backup.`) || backup.includes('\n')) throw new Error('Could not save the previous launchd definition');
     let stopped = false;
@@ -123,11 +123,11 @@ export class MacAgentLaunchd {
       if (jobs.length === 1) { await this.jobs.bootout(jobs[0].domain); stopped = true; }
       const env = `AZITO_AGENT_TOKEN=${shellQuote(token)}\n`;
       const script = `mkdir -p ${shellQuote(`${this.home}/.azito/agent`)} ${shellQuote(`${this.home}/Library/LaunchAgents`)} && (umask 077; printf %s ${shellQuote(env)} > ${shellQuote(envFile)}) && printf %s ${shellQuote(renderMacAgentPlist(this.home, bind, port, mux))} > ${shellQuote(this.plist)}`;
-      const write = await this.exec(script);
+      const write = await this.execPosix(script);
       if (write.code !== 0) throw new Error(`Could not write the agent launchd definition: ${write.stderr}`);
       await this.jobs.bootstrap('user');
     } catch (err) {
-      const restore = await this.exec(`if [ -f ${shellQuote(`${backup}/plist`)} ]; then cp -p ${shellQuote(`${backup}/plist`)} ${shellQuote(this.plist)}; else rm -f ${shellQuote(this.plist)}; fi && if [ -f ${shellQuote(`${backup}/env`)} ]; then cp -p ${shellQuote(`${backup}/env`)} ${shellQuote(envFile)}; else rm -f ${shellQuote(envFile)}; fi`);
+      const restore = await this.execPosix(`if [ -f ${shellQuote(`${backup}/plist`)} ]; then cp -p ${shellQuote(`${backup}/plist`)} ${shellQuote(this.plist)}; else rm -f ${shellQuote(this.plist)}; fi && if [ -f ${shellQuote(`${backup}/env`)} ]; then cp -p ${shellQuote(`${backup}/env`)} ${shellQuote(envFile)}; else rm -f ${shellQuote(envFile)}; fi`);
       if (restore.code !== 0) { keepBackup = true; throw new Error(`Agent launchd start failed and restoring its definition failed; backup left at ${backup}`); }
       if (stopped) {
         try { await this.jobs.bootstrap(jobs[0].domain); }
@@ -136,7 +136,7 @@ export class MacAgentLaunchd {
       throw err;
     } finally {
       if (!keepBackup) {
-        const remove = await this.exec(`rm -rf ${shellQuote(backup)}`);
+        const remove = await this.execPosix(`rm -rf ${shellQuote(backup)}`);
         if (remove.code !== 0) throw new Error(`Could not remove launchd backup ${backup}`);
       }
     }
