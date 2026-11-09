@@ -20,7 +20,8 @@ interface NotifierEvent extends PendingEvent {
   action?: 'mux' | 'firewall';
 }
 
-const FAILED = new Set(['error', 'send_error', 'worker_not_ready', 'codex_error', 'stopped_by_user']);
+// worker_launch_failed (v0.12.1 #639) is not a stored task status: the respawn found no worker after the launch.
+const FAILED = new Set(['error', 'send_error', 'worker_not_ready', 'worker_launch_failed', 'codex_error', 'stopped_by_user']);
 let oldHistoryRemoved = false;
 const ATTENTION = new Set(['waiting_for_human', 'phase_review', 'pending_approval']);
 const intervalMs = (interval: LookoutNotifyInterval) => interval === '5min' ? 300_000 : 900_000;

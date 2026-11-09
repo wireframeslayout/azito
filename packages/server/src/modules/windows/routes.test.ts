@@ -252,7 +252,7 @@ describe('POST /api/windows/:id/launch-agent', () => {
 
 
 
-  it('sends the plain command for terminal windows', async () => {
+  it('starts Claude with suggestions disabled in terminal windows', async () => {
     window = makeWindow({ windowType: 'terminal' });
     const res = await app.inject({
       method: 'POST',
@@ -262,7 +262,7 @@ describe('POST /api/windows/:id/launch-agent', () => {
     expect(res.statusCode).toBe(200);
     expect(res.json()).toMatchObject({ ok: true, supervised: false });
     const [, , keys] = sendKeys.mock.calls[0];
-    expect(keys[0]).toMatch(/^export AZITO_WINDOW_ID=\d+; claude --model opus --session-id [0-9a-f-]{36}$/);
+    expect(keys[0]).toMatch(/^export AZITO_WINDOW_ID=\d+; CLAUDE_CODE_ENABLE_PROMPT_SUGGESTION='false' claude --model opus --session-id [0-9a-f-]{36}$/);
   });
 
   it('gives AZITO_WINDOW_ID to every part of a compound command', async () => {

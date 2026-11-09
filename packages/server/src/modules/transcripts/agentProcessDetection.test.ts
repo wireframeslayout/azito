@@ -178,4 +178,24 @@ describe('argsContainSessionId', () => {
   it('returns false for an empty sessionId', () => {
     expect(argsContainSessionId([proc(300, 1, 10, 'claude --resume ' + SESSION_ID)], [300], '')).toBe(false);
   });
+
+  it('matches the short attach id token of the session (Issue #639: `claude attach <short id>` carries no full UUID)', () => {
+    expect(argsContainSessionId([proc(300, 1, 10, 'claude attach 019fea40')], [300], SESSION_ID)).toBe(true);
+  });
+
+  it('still matches the full UUID when the attach client is named by it', () => {
+    expect(argsContainSessionId([proc(300, 1, 10, `claude attach ${SESSION_ID}`)], [300], SESSION_ID)).toBe(true);
+  });
+
+  it('does not match a short id of a DIFFERENT session (a short id is only ever an exact token)', () => {
+    expect(argsContainSessionId([proc(300, 1, 10, 'claude attach 019fea41')], [300], SESSION_ID)).toBe(false);
+  });
+
+  it('does not match when the short id only appears inside another token', () => {
+    expect(argsContainSessionId([proc(300, 1, 10, 'claude attach 019fea40-extra')], [300], SESSION_ID)).toBe(false);
+  });
+
+  it('does not derive a short id from a non-UUID session id (codex ids stay full-token only)', () => {
+    expect(argsContainSessionId([proc(300, 1, 10, 'codex resume 019fea40')], [300], '019fea40-abc')).toBe(false);
+  });
 });

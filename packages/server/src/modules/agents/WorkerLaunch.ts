@@ -1,5 +1,6 @@
 import { HostProfileError } from '../../shared/os/hostProfile';
 import type { ShellDialect } from '../../shared/os/shellDialect';
+import { CLAUDE_LAUNCH_ENV, isClaudeCommand } from './claude/suggestionEnv';
 
 /**
  * How a worker (claude / codex / a generic command) is started in a pane, written once and turned into either of the two ways a
@@ -28,12 +29,14 @@ export interface ProgramLaunch {
   readonly kind: 'program';
   readonly file: string;
   readonly args: readonly LaunchArg[];
+  readonly env?: Readonly<Record<string, string>>;
 }
 
 /** A command the user wrote as one line (a generic worker, a manually launched window): typed as it is on a POSIX host, split into arguments on a Windows one. */
 export interface CommandLineLaunch {
   readonly kind: 'commandLine';
   readonly line: string;
+  readonly env?: Readonly<Record<string, string>>;
 }
 
 export type WorkerLaunch = ProgramLaunch | CommandLineLaunch;
@@ -44,20 +47,20 @@ export function extraArgValues(extraArgs: string | null | undefined): LaunchArg[
 }
 
 export function commandLineLaunch(line: string): CommandLineLaunch {
-  return { kind: 'commandLine', line };
+  return { kind: 'commandLine', line, ...(isClaudeCommand(line) ? { env: CLAUDE_LAUNCH_ENV } : {}) };
 }
 
 /** `launch` with these flags after its own arguments (a session id: `--session-id <id>`, `resume <id>`). Each is a bare word the caller wrote or validated. */
 export function withFlags(launch: WorkerLaunch, flags: readonly string[]): WorkerLaunch {
   if (flags.length === 0) return launch;
-  if (launch.kind === 'commandLine') return commandLineLaunch([launch.line, ...flags].join(' '));
+  if (launch.kind === 'commandLine') return { ...launch, line: [launch.line, ...flags].join(' ') };
   return { ...launch, args: [...launch.args, ...flags.map(flag)] };
 }
 
 /** The line that starts `launch` in a pane running `dialect`'s shell. */
 export function renderLaunchLine(launch: WorkerLaunch, dialect: ShellDialect): string {
-  if (launch.kind === 'commandLine') return launch.line;
-  return [launch.file, ...launch.args.map((arg) => (arg.kind === 'value' ? dialect.quote(arg.text) : arg.text))].join(' ');
+  const line = launch.kind === 'commandLine' ? launch.line : [launch.file, ...launch.args.map((arg) => (arg.kind === 'value' ? dialect.quote(arg.text) : arg.text))].join(' ');
+  return launch.env ? dialect.withEnv(launch.env, line) : line;
 }
 
 /**

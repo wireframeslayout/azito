@@ -8,6 +8,12 @@ describe('pushKeyForLogEntry', () => {
     expect(pushKeyForLogEntry({ type: 'status_change', content: { status: 'send_error' } })).toBe('task.sendError');
   });
 
+  it('notifies a launch the CLI refused (worker_launch_failed, #639) with its own message, without it being a task status', () => {
+    expect(pushKeyForLogEntry({ type: 'status_change', content: { status: 'worker_launch_failed' } })).toBe('task.workerLaunchFailed');
+    // The notification-only status is distinct from every real task status.
+    expect(STATUS_TO_PUSH_KEY).not.toHaveProperty('done', 'task.workerLaunchFailed');
+  });
+
   it('has a message in both languages for every status it maps', () => {
     for (const key of new Set(Object.values(STATUS_TO_PUSH_KEY))) {
       for (const lang of ['en', 'ja'] as const) expect(getPushMessage(lang, key, { taskTitle: 'T' }).title).not.toBe('');

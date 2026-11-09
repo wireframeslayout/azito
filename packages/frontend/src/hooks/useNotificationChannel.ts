@@ -7,7 +7,7 @@ export interface NotificationHandlers {
   onMuxWake?: (payload: { windowId: number; serverName: string; title?: string; taskId?: number; reason: 'ask' | 'misao_unavailable' }) => void;
   onServerFirewall?: (payload: { serverName: string; diagnosis: FirewallDiagnosis }) => void;
   onSessionsUpdated?: (serverName: string) => void;
-  onTaskStatus?: (payload: { taskId: number; status: string; title?: string; projectId?: number }) => void;
+  onTaskStatus?: (payload: { taskId: number; status: string; title?: string; projectId?: number; reason?: string }) => void;
   onPaneExited?: (serverName: string) => void;
   onAgentActivity?: (payload: AgentActivityPayload) => void;
   onBrowserOpened?: (payload: BrowserOpenedPayload) => void;

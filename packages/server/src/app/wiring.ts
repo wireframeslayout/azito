@@ -127,6 +127,7 @@ import { WindowSnapshotService } from '../modules/windows/WindowSnapshotService'
 import { WindowSessionResolver } from '../modules/transcripts/WindowSessionResolver';
 import { TRANSCRIPT_SOURCES } from '../modules/transcripts/sources/registry';
 import { TranscriptConversationProbe } from '../modules/transcripts/TranscriptConversationProbe';
+import { DaemonSessionChecker } from '../modules/agents/claude/DaemonSessionChecker';
 import { HostTranscriptSourceProvider, type TranscriptSourceProvider } from '../modules/transcripts/sources/TranscriptSourceProvider';
 import { TaskRestoreService } from '../modules/tasks/TaskRestoreService';
 import type { GitIdentity } from '../modules/git/ensureGitIdentity';
@@ -219,6 +220,8 @@ export interface PushNotificationModule {
 export interface ApplicationServices {
   sessionStrategyFactory: SessionStrategyFactory;
   sessionCaptureService: SessionCaptureService;
+  /** Issue #639: whether the Claude Code daemon holds a conversation — shared by respawn and follow-up restarts. */
+  daemonSessionChecker: DaemonSessionChecker;
   transcriptSourceProvider: TranscriptSourceProvider;
   windowSessionResolver: WindowSessionResolver;
   windowActivityStatusService: WindowActivityStatusService;
@@ -520,7 +523,11 @@ function buildApplicationServices(infra: SharedInfra, repos: Repositories, uiTok
   const taskPaneEnvironmentService = new TaskPaneEnvironmentService(repos.taskTokenRepo, repos.projectSecretRepo, uiToken, scopedAuthEnabled, repos.auditLogService);
   const uiTokenEnvFn = (server: ServerConfig) => uiTokenEnvForServer(uiToken, server);
   const transcriptSourceProvider = new HostTranscriptSourceProvider(TRANSCRIPT_SOURCES, infra.transportFactory);
-  const windowRespawnService = new WindowRespawnService(repos.windowRepo, infra.muxDriverRegistry, sessionStrategyFactory, repos.taskRepo, repos.unitRepo, infra.supervisorRegistry, repos.projectServerRepo, repos.projectRepo, infra.transportFactory, repos.logRepo, infra.unitTypeLoader, infra.sidekickPackageLoader, repos.serverRepo, repos.projectSecretRepo, taskEvents, taskPaneEnvironmentService, infra.serverIsolationMutex, scopedAuthEnabled, uiTokenEnvFn, harnessPrefix, new TranscriptConversationProbe(transcriptSourceProvider), { settings: repos.muxSwitchSettingsRepo, notifications: infra.notificationBus, audit: repos.auditLogService }, sessionCaptureService);
+  // Issue #639: whether the Claude Code daemon holds a conversation — shared by the respawn path (WindowRespawnService)
+  // and the follow-up restarts (ExecuteTaskUseCase). Task restore does not need it: restore only restarts the worker
+  // on a program host (win32), where the check is skipped deliberately.
+  const daemonSessionChecker = new DaemonSessionChecker(infra.transportFactory);
+  const windowRespawnService = new WindowRespawnService(repos.windowRepo, infra.muxDriverRegistry, sessionStrategyFactory, repos.taskRepo, repos.unitRepo, infra.supervisorRegistry, repos.projectServerRepo, repos.projectRepo, infra.transportFactory, repos.logRepo, infra.unitTypeLoader, infra.sidekickPackageLoader, repos.serverRepo, repos.projectSecretRepo, taskEvents, taskPaneEnvironmentService, infra.serverIsolationMutex, scopedAuthEnabled, uiTokenEnvFn, harnessPrefix, new TranscriptConversationProbe(transcriptSourceProvider), { settings: repos.muxSwitchSettingsRepo, notifications: infra.notificationBus, audit: repos.auditLogService }, daemonSessionChecker, sessionCaptureService);
   const windowSleepService = new WindowSleepService(repos.windowRepo, infra.muxDriverRegistry, sessionStrategyFactory, repos.serverRepo);
   const taskRestoreService = new TaskRestoreService({
     taskRepo: repos.taskRepo,
@@ -556,7 +563,7 @@ function buildApplicationServices(infra: SharedInfra, repos: Repositories, uiTok
   const usageService = new UsageService(infra.agentRegistry);
   const agentSignalService = new AgentSignalService(repos.agentTurnRepo, infra.turnSignalHub, repos.logRepo, repos.auditLogService);
   return {
-    sessionStrategyFactory, sessionCaptureService, transcriptSourceProvider, windowSessionResolver, windowActivityStatusService, windowSnapshotService,
+    sessionStrategyFactory, sessionCaptureService, daemonSessionChecker, transcriptSourceProvider, windowSessionResolver, windowActivityStatusService, windowSnapshotService,
     windowRespawnService, windowSleepService, taskRestoreService, usageService, agentSignalService, taskEvents,
     originationService, taskPaneEnvironmentService,
   };
@@ -627,6 +634,7 @@ function buildExecuteTaskUseCase(
     harnessPrefix,
     hubGitIdentity,
     localAgentHomesFromEnv(process.env),
+    appServices.daemonSessionChecker,
   );
 }
 
