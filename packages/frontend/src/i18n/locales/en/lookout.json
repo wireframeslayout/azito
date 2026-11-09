@@ -32,8 +32,8 @@
     "ready": "Summary",
     "label": "Summary",
     "reasons": {
-      "not_installed": "Summary unavailable: CLI not installed",
-      "not_authenticated": "Summary unavailable: CLI not logged in",
+      "cli_not_found": "Summary unavailable: CLI not installed",
+      "not_logged_in": "Summary unavailable: CLI not logged in",
       "timeout": "Summary unavailable: request timed out",
       "failed": "Summary unavailable: request failed"
     }

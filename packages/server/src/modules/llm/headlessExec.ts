@@ -1,12 +1,12 @@
 import { spawn } from 'child_process';
 import { buildAllowedEnv } from './execEnv';
 
-export type CliFailureReason = 'not_installed' | 'not_authenticated' | 'timeout' | 'failed';
+export type CliFailureReason = 'cli_not_found' | 'not_logged_in' | 'timeout' | 'failed';
 export class HeadlessCliError extends Error {
   constructor(readonly reason: CliFailureReason) { super(reason); }
 }
 export function classifyCliFailure(text: string): CliFailureReason {
-  return /(?:not logged in|not authenticated|please (?:log|sign) in|authentication required|invalid api key|unauthorized|http 401)/i.test(text) ? 'not_authenticated' : 'failed';
+  return /(?:not logged in|not authenticated|please (?:log|sign) in|authentication required|invalid api key|unauthorized|http 401)/i.test(text) ? 'not_logged_in' : 'failed';
 }
 
 const PLATFORM_ENV_KEYS = ['USERPROFILE', 'SystemRoot', 'ComSpec', 'TEMP', 'TMP'] as const;
@@ -36,7 +36,7 @@ export async function runHeadlessCommand(binary: string, args: string[], cwd: st
     proc.stderr.on('data', (chunk: Buffer) => { if (stderr.length < 16_384) stderr += chunk.toString().slice(0, 16_384 - stderr.length); });
     proc.stdin.on('error', () => {});
     proc.stdin.end(input);
-    proc.on('error', (error: NodeJS.ErrnoException) => { clearTimeout(timer); reject(new HeadlessCliError(error.code === 'ENOENT' ? 'not_installed' : 'failed')); });
+    proc.on('error', (error: NodeJS.ErrnoException) => { clearTimeout(timer); reject(new HeadlessCliError(error.code === 'ENOENT' ? 'cli_not_found' : 'failed')); });
     proc.on('close', (code) => { clearTimeout(timer); code === 0 && !reason ? resolve(stdout) : reject(new HeadlessCliError(reason ?? classifyCliFailure(`${stderr} ${stdout.slice(0, 16_384)}`))); });
   });
 }

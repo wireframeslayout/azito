@@ -30,7 +30,7 @@ export async function probeLookoutLlm(settings: LookoutSettings): Promise<{ ok: 
     const auth = await runHeadlessCommand(settings.provider, settings.provider === 'claude' ? ['auth', 'status', '--json'] : ['login', 'status'], cwd, '');
     if (settings.provider === 'claude') {
       const parsed: unknown = JSON.parse(auth);
-      if (typeof parsed !== 'object' || parsed === null || !('loggedIn' in parsed) || parsed.loggedIn !== true) throw new HeadlessCliError('not_authenticated');
+      if (typeof parsed !== 'object' || parsed === null || !('loggedIn' in parsed) || parsed.loggedIn !== true) throw new HeadlessCliError('not_logged_in');
     }
     stage = 'summary';
     const output = await runLookoutLlm(settings, 'Reply with OK on one line.');
@@ -39,7 +39,7 @@ export async function probeLookoutLlm(settings: LookoutSettings): Promise<{ ok: 
   } catch (error) {
     const reason = error instanceof HeadlessCliError ? error.reason : 'failed';
     const hint = stage === 'version' ? 'Check CLI installation.' : stage === 'login' ? 'Check CLI login status.' : 'Check model access and CLI configuration.';
-    return { ok: false, cli: { found: reason !== 'not_installed', version }, reason, hint };
+    return { ok: false, cli: { found: reason !== 'cli_not_found', version }, reason, hint };
   } finally {
     rmSync(cwd, { recursive: true, force: true });
   }

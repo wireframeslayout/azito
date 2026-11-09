@@ -32,8 +32,8 @@
     "ready": "要約",
     "label": "要約",
     "reasons": {
-      "not_installed": "要約を利用できません: CLI が見つかりません",
-      "not_authenticated": "要約を利用できません: CLI にログインしていません",
+      "cli_not_found": "要約を利用できません: CLI が見つかりません",
+      "not_logged_in": "要約を利用できません: CLI にログインしていません",
       "timeout": "要約を利用できません: 時間切れ",
       "failed": "要約を利用できません: 実行に失敗しました"
     }

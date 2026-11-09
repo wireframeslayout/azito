@@ -77,9 +77,9 @@ describe('Lookout summaries', () => {
   });
 
   it('returns the classified failure without exposing process output', async () => {
-    const service = setup(async () => { throw new HeadlessCliError('not_authenticated'); });
+    const service = setup(async () => { throw new HeadlessCliError('not_logged_in'); });
     await service.getSummaries(request);
-    await vi.waitFor(async () => expect((await service.getSummaries(request))[0]).toEqual({ windowId: 1, status: 'unavailable', reason: 'not_authenticated' }));
+    await vi.waitFor(async () => expect((await service.getSummaries(request))[0]).toEqual({ windowId: 1, status: 'unavailable', reason: 'not_logged_in' }));
   });
 
 });

@@ -11,7 +11,7 @@ import type { LookoutItem } from '../lib/lookoutSummary';
 import type { LookoutSummary } from '../components/lookout/LookoutRow';
 
 interface RequestWindow { windowId: number; state: 'blocked' | 'working' | 'finished' }
-interface ResponseSummary { windowId: number; status: 'ready' | 'pending' | 'off' | 'unavailable' | 'none'; text?: string; reason?: 'not_installed' | 'not_authenticated' | 'timeout' | 'failed' }
+interface ResponseSummary { windowId: number; status: 'ready' | 'pending' | 'off' | 'unavailable' | 'none'; text?: string; reason?: 'cli_not_found' | 'not_logged_in' | 'timeout' | 'failed' }
 
 export function useLookoutSummaries(items: LookoutItem[], enabled: boolean): ReadonlyMap<string, LookoutSummary> {
   const requests = new Map<number, RequestWindow>();
