@@ -44,7 +44,7 @@ export function XlsxSheetEditor({ backend, path, onDirtyChange }: Props) {
           const normalized = original !== undefined && (typeof original === 'boolean' || !cell.v.ct) ? { ...cell.v, v: original } : cell.v;
           return { ...cell, v: normalized.f && normalized.v == null ? { ...normalized, v: 0 } : normalized };
         }) })));
-      }, setKey, workbook);
+      }, setKey, { current: null });
     })().catch((reason: unknown) => { if (active) setError(reason instanceof Error && /limit|too many entries/i.test(reason.message) ? 'large' : 'invalid'); });
     return () => { active = false; };
   }, [document.document]);
