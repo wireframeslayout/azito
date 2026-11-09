@@ -12,7 +12,7 @@ async function request(path, options = {}) {
   let response;
   try {
     response = await fetch(new URL(path, process.env.AZITO_URL), {
-      ...options, headers: { Authorization: `Bearer ${process.env.AZITO_TASK_TOKEN || process.env.AZITO_UI_TOKEN}`, ...options.headers },
+      ...options, headers: { Authorization: `Bearer ${process.env.AZITO_TASK_TOKEN || process.env.AZITO_UI_TOKEN}`, ...(process.env.AZITO_WINDOW_ID ? { "X-Azito-Window-Id": process.env.AZITO_WINDOW_ID } : {}), ...options.headers },
       signal: AbortSignal.timeout(120000),
     });
   } catch (error) { if (options.method === "POST" && (error.name === "TimeoutError" || error.name === "AbortError")) fail("timed out; message may have been delivered (do not retry)"); fail(`request failed: ${error.message}`); }

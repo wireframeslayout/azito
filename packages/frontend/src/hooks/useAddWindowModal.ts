@@ -3,7 +3,7 @@ import { useTranslation } from 'react-i18next';
 import type { TFunction } from 'i18next';
 import { api } from '../api/client';
 import type { MuxDriverKind } from '@azito/shared';
-import type { Project, Server, Session } from '../pages/workspace/types';
+import type { Project, Server, Session, SessionWindowRegistrationResult } from '../pages/workspace/types';
 import type { ResourceStatus } from '../components/ResourceWarningDialog';
 import { resolveWindowRegistrationRef, registeredWindowTerminalRef, taskWindowRegistration, type TerminalRef } from '../lib/terminalRef';
 import { useAgentDefinitions, type AgentDefinition } from './useAgentDefinitions';
@@ -298,7 +298,7 @@ export function useAddWindowModal(
         const sess = findSessionByKey(awSessionData[awServer] || [], awSelectedSession);
         if (!sess) throw new Error(`session ${awSelectedSession} is not listed on ${awServer}`);
         const sessionKind = sessionKindOf(sess);
-        await api(`/projects/${effectiveProjectId}/windows/session`, { method: 'POST', body: JSON.stringify({ server_name: awServer, session: sess.name, kind: sessionKind }) });
+        await api<SessionWindowRegistrationResult>(`/projects/${effectiveProjectId}/windows/session`, { method: 'POST', body: JSON.stringify({ server_name: awServer, session: sess.name, kind: sessionKind }) });
         if (sess.windows.length > 0) {
           if (awTaskId != null) {
             try {

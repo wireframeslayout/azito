@@ -900,7 +900,7 @@ describe('RecoverStuckTasksUseCase', () => {
     mocks.turnRepo.findLatestByTaskPhase.mockReturnValue(
       makeAgentTurn({ id: 22, taskId: 43, phase: 'implementing', status: 'completed' }),
     );
-    const staleRow = { isPrimary: true, ownerType: 'task', tmuxTarget: 'other:stale', muxRef: { kind: 'tmux', workspace: 'other', window: 'stale' } };
+    const staleRow = { isPrimary: true, ownerType: 'task', role: null, originProjectId: null, tmuxTarget: 'other:stale', muxRef: { kind: 'tmux', workspace: 'other', window: 'stale' } };
 
     await createUseCase(mocks, undefined, [staleRow]).run();
 

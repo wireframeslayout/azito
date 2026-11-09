@@ -5,7 +5,7 @@ import type { Window } from '../pages/workspace/types';
 function makeWindow(overrides: Partial<Window> & { serverName: string; tmuxTarget: string }): Window {
   return {
     id: 1,
-    ownerType: 'project',
+    ownerType: 'project', role: null, originProjectId: null,
     isPrimary: false,
     windowType: 'terminal',
     ...overrides,
@@ -16,7 +16,7 @@ describe('buildObjectSections', () => {
   it('separates ownerType=task into operationWindows', () => {
     const windows = [
       makeWindow({ id: 1, serverName: 'srv1', tmuxTarget: 'main:1', ownerType: 'project' }),
-      makeWindow({ id: 2, serverName: 'srv1', tmuxTarget: 'main:2', ownerType: 'task', taskId: 10 }),
+      makeWindow({ id: 2, serverName: 'srv1', tmuxTarget: 'main:2', ownerType: 'task', role: null, originProjectId: null, taskId: 10 }),
     ];
     const result = buildObjectSections(windows, [], [], {}, ['srv1']);
     expect(result.windows).toHaveLength(1);
@@ -44,7 +44,7 @@ describe('buildObjectSections', () => {
       makeWindow({ id: 1, serverName: 'srv1', tmuxTarget: 'main:1', ownerType: 'project' }),
     ];
     const taskOwnedWindows = [
-      makeWindow({ id: 2, serverName: 'srv1', tmuxTarget: 'agent:1', ownerType: 'task', taskId: 30 }),
+      makeWindow({ id: 2, serverName: 'srv1', tmuxTarget: 'agent:1', ownerType: 'task', role: null, originProjectId: null, taskId: 30 }),
     ];
     const result = buildObjectSections(projectWindows, [], taskOwnedWindows, {}, ['srv1']);
     expect(result.windows).toHaveLength(1);
@@ -60,7 +60,7 @@ describe('buildObjectSections', () => {
     ];
     const taskWindows = [{ serverName: 'srv1', tmuxTarget: 'agent:1', taskId: 40 }];
     const taskOwnedWindows = [
-      makeWindow({ id: 2, serverName: 'srv1', tmuxTarget: 'agent:1', ownerType: 'task', taskId: 40, workerType: 'claude' }),
+      makeWindow({ id: 2, serverName: 'srv1', tmuxTarget: 'agent:1', ownerType: 'task', role: null, originProjectId: null, taskId: 40, workerType: 'claude' }),
     ];
     const result = buildObjectSections(projectWindows, taskWindows, taskOwnedWindows, {}, ['srv1']);
     expect(result.operationWindows).toHaveLength(1);
@@ -70,8 +70,8 @@ describe('buildObjectSections', () => {
 
   it('dedupes a task-owned window against a pane-suffixed target (pane suffix stripped for comparison)', () => {
     const taskOwnedWindows = [
-      makeWindow({ id: 1, serverName: 'srv1', tmuxTarget: 'agent:1.1', ownerType: 'task', taskId: 50 }),
-      makeWindow({ id: 2, serverName: 'srv1', tmuxTarget: 'agent:1', ownerType: 'task', taskId: 50 }),
+      makeWindow({ id: 1, serverName: 'srv1', tmuxTarget: 'agent:1.1', ownerType: 'task', role: null, originProjectId: null, taskId: 50 }),
+      makeWindow({ id: 2, serverName: 'srv1', tmuxTarget: 'agent:1', ownerType: 'task', role: null, originProjectId: null, taskId: 50 }),
     ];
     const result = buildObjectSections([], [], taskOwnedWindows, {}, ['srv1']);
     expect(result.operationWindows).toHaveLength(1);
@@ -82,8 +82,8 @@ describe('buildObjectSections', () => {
     // register a row against the same physical tmux window. Dedup must key on taskId too, or
     // the later-inserted row silently wins and clicks/context-menus resolve to the wrong task.
     const taskOwnedWindows = [
-      makeWindow({ id: 1, serverName: 'srv1', tmuxTarget: 'agent:1', ownerType: 'task', taskId: 60, workerType: 'claude' }),
-      makeWindow({ id: 2, serverName: 'srv1', tmuxTarget: 'agent:1', ownerType: 'task', taskId: 61, workerType: 'codex' }),
+      makeWindow({ id: 1, serverName: 'srv1', tmuxTarget: 'agent:1', ownerType: 'task', role: null, originProjectId: null, taskId: 60, workerType: 'claude' }),
+      makeWindow({ id: 2, serverName: 'srv1', tmuxTarget: 'agent:1', ownerType: 'task', role: null, originProjectId: null, taskId: 61, workerType: 'codex' }),
     ];
     const result = buildObjectSections([], [], taskOwnedWindows, {}, ['srv1']);
     expect(result.operationWindows).toHaveLength(2);
@@ -102,7 +102,7 @@ describe('buildObjectSections', () => {
     ];
     const taskWindows = [{ serverName: 'srv1', tmuxTarget: 'agent:1', taskId: 70 }];
     const taskOwnedWindows = [
-      makeWindow({ id: 2, serverName: 'srv1', tmuxTarget: 'agent:1', ownerType: 'task', taskId: 71 }),
+      makeWindow({ id: 2, serverName: 'srv1', tmuxTarget: 'agent:1', ownerType: 'task', role: null, originProjectId: null, taskId: 71 }),
     ];
     const result = buildObjectSections(projectWindows, taskWindows, taskOwnedWindows, {}, ['srv1']);
     expect(result.operationWindows).toHaveLength(2);
@@ -112,9 +112,9 @@ describe('buildObjectSections', () => {
 
   it('sorts operationWindows by taskId then label then id for a stable order', () => {
     const taskOwnedWindows = [
-      makeWindow({ id: 3, serverName: 'srv1', tmuxTarget: 'agent:3', ownerType: 'task', taskId: 20, label: 'b' }),
-      makeWindow({ id: 1, serverName: 'srv1', tmuxTarget: 'agent:1', ownerType: 'task', taskId: 10, label: 'z' }),
-      makeWindow({ id: 2, serverName: 'srv1', tmuxTarget: 'agent:2', ownerType: 'task', taskId: 20, label: 'a' }),
+      makeWindow({ id: 3, serverName: 'srv1', tmuxTarget: 'agent:3', ownerType: 'task', role: null, originProjectId: null, taskId: 20, label: 'b' }),
+      makeWindow({ id: 1, serverName: 'srv1', tmuxTarget: 'agent:1', ownerType: 'task', role: null, originProjectId: null, taskId: 10, label: 'z' }),
+      makeWindow({ id: 2, serverName: 'srv1', tmuxTarget: 'agent:2', ownerType: 'task', role: null, originProjectId: null, taskId: 20, label: 'a' }),
     ];
     const result = buildObjectSections([], [], taskOwnedWindows, {}, ['srv1']);
     expect(result.operationWindows.map((w) => w.id)).toEqual([1, 2, 3]);
@@ -133,7 +133,7 @@ describe('buildObjectSections', () => {
   it('computes totalCount as sum of all three sections', () => {
     const windows = [
       makeWindow({ id: 1, serverName: 'srv1', tmuxTarget: 'main:1', ownerType: 'project' }),
-      makeWindow({ id: 2, serverName: 'srv1', tmuxTarget: 'main:2', ownerType: 'task', taskId: 5 }),
+      makeWindow({ id: 2, serverName: 'srv1', tmuxTarget: 'main:2', ownerType: 'task', role: null, originProjectId: null, taskId: 5 }),
     ];
     const browserGroups = {
       srv1: [{ groupId: 'g1', pageCount: 1, urls: ['https://x.com'] }],

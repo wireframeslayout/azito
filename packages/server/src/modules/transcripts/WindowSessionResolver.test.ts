@@ -45,7 +45,7 @@ const noAgentTransports = {
 function buildWindow(overrides: Partial<Window> = {}): Window {
   return {
     id: 42,
-    ownerType: 'task',
+    ownerType: 'task', role: null, originProjectId: null,
     projectId: 1,
     taskId: null,
     serverName: 'local',

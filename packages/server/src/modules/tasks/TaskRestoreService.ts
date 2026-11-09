@@ -699,7 +699,7 @@ export class TaskRestoreService {
       }
 
       windowRowId = windowRepo.add({
-        ownerType: 'task',
+        ownerType: 'task', role: null, originProjectId: null,
         projectId: null,
         taskId: task.id,
         serverName,

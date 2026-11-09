@@ -39,7 +39,7 @@ function makeWindow(overrides: Partial<Window> = {}): Window {
   const colonIdx = tmuxTarget.indexOf(':');
   return {
     id: 1,
-    ownerType: 'project',
+    ownerType: 'project', role: null, originProjectId: null,
     projectId: 1,
     taskId: null,
     serverName: 'local-server',
@@ -115,6 +115,7 @@ describe('POST /api/windows/:id/launch-agent', () => {
 
     app = Fastify();
     await app.register(windowsRoutes, {
+    attribution: { recordInteraction: vi.fn() }, windowRoles: {} as never,
       paneHandleResolver: {} as never,
       muxSwitchSettingsRepo: {} as never, auditLogService: {} as never, agentActivityMonitor: {} as never,
       harnessPrefix: '',
@@ -348,6 +349,7 @@ describe('POST /api/windows/:id/launch-agent', () => {
     window = makeWindow({ workerType: 'codex' });
     const codexApp = Fastify();
     await codexApp.register(windowsRoutes, {
+    attribution: { recordInteraction: vi.fn() }, windowRoles: {} as never,
       paneHandleResolver: {} as never,
       muxSwitchSettingsRepo: {} as never, auditLogService: {} as never, agentActivityMonitor: {} as never,
       harnessPrefix: '',
@@ -415,6 +417,7 @@ describe('GET /api/windows/pane-loading-state', () => {
     };
     const instance = Fastify();
     await instance.register(windowsRoutes, {
+    attribution: { recordInteraction: vi.fn() }, windowRoles: {} as never,
       paneHandleResolver: {} as never,
       muxSwitchSettingsRepo: {} as never, auditLogService: {} as never, agentActivityMonitor: {} as never,
       harnessPrefix: '',
@@ -542,6 +545,7 @@ describe('POST /api/windows/:id/respawn — execution gate (Issue #328 second-ro
     // The hub's own error mapping, so a host-OS refusal is answered as it is in the app.
     instance.setErrorHandler((err, _request, reply) => { const mapped = mapAppError(err); if (!mapped) throw err; return reply.status(mapped.status).send(mapped.body); });
     await instance.register(windowsRoutes, {
+    attribution: { recordInteraction: vi.fn() }, windowRoles: {} as never,
       paneHandleResolver: {} as never,
       muxSwitchSettingsRepo: {} as never, auditLogService: {} as never, agentActivityMonitor: {} as never,
       harnessPrefix: '',
@@ -649,6 +653,7 @@ describe('resource check in the answers of launch-agent and respawn (#531)', () 
     };
     const instance = Fastify();
     await instance.register(windowsRoutes, {
+    attribution: { recordInteraction: vi.fn() }, windowRoles: {} as never,
       paneHandleResolver: {} as never,
       muxSwitchSettingsRepo: {} as never, auditLogService: {} as never, agentActivityMonitor: {} as never,
       harnessPrefix: '',
@@ -711,6 +716,7 @@ describe('GET /api/windows/activity-status (Issue #338 フォロー: process-bas
     ];
     const app = Fastify();
     await app.register(windowsRoutes, {
+    attribution: { recordInteraction: vi.fn() }, windowRoles: {} as never,
       paneHandleResolver: {} as never,
       muxSwitchSettingsRepo: {} as never, auditLogService: {} as never, agentActivityMonitor: {} as never,
       harnessPrefix: '',
@@ -745,6 +751,7 @@ describe('POST /api/windows/:id/sleep', () => {
     const sleepFn = opts.sleepFn ?? vi.fn(async () => {});
     const app = Fastify();
     app.register(windowsRoutes, {
+    attribution: { recordInteraction: vi.fn() }, windowRoles: {} as never,
       paneHandleResolver: {} as never,
       muxSwitchSettingsRepo: {} as never, auditLogService: {} as never, agentActivityMonitor: {} as never,
       harnessPrefix: '',
@@ -809,6 +816,7 @@ describe('PUT /api/windows/:id/rename', () => {
     const emit = vi.fn();
     const app = Fastify();
     await app.register(windowsRoutes, {
+    attribution: { recordInteraction: vi.fn() }, windowRoles: {} as never,
       paneHandleResolver: {} as never,
       notificationBus: { emit } as never,
       muxSwitchSettingsRepo: {} as never, auditLogService: {} as never, agentActivityMonitor: {} as never,
@@ -841,6 +849,7 @@ describe('window label source', () => {
   async function buildApp(win: Window, update: ReturnType<typeof vi.fn>, adoptForTask = vi.fn()) {
     const app = Fastify();
     await app.register(windowsRoutes, {
+    attribution: { recordInteraction: vi.fn() }, windowRoles: {} as never,
       paneHandleResolver: {} as never,
       muxSwitchSettingsRepo: {} as never, auditLogService: {} as never, agentActivityMonitor: {} as never,
       harnessPrefix: '',
@@ -870,7 +879,7 @@ describe('window label source', () => {
   }
 
   it('keeps a user label when a task adopts the window', async () => {
-    const win = makeWindow({ ownerType: 'project', taskId: null, label: 'mine', labelSource: 'user' });
+    const win = makeWindow({ ownerType: 'project', role: null, originProjectId: null, taskId: null, label: 'mine', labelSource: 'user' });
     const update = vi.fn();
     const adoptForTask = vi.fn();
     const app = await buildApp(win, update, adoptForTask);
@@ -882,7 +891,7 @@ describe('window label source', () => {
   });
 
   it('replaces an automatic label when a task adopts the window', async () => {
-    const win = makeWindow({ ownerType: 'project', taskId: null, label: 'auto-name', labelSource: 'auto' });
+    const win = makeWindow({ ownerType: 'project', role: null, originProjectId: null, taskId: null, label: 'auto-name', labelSource: 'auto' });
     const update = vi.fn();
     const app = await buildApp(win, update);
     const res = await app.inject({ method: 'POST', url: '/api/tasks/7/windows', payload: adoptPayload(win) });
@@ -914,6 +923,7 @@ describe('respawn mux API', () => {
     const record = vi.fn(() => { throw new Error('audit failed'); });
     const registry = { availabilityFor: vi.fn(() => ({ available: true } as { available: true } | { available: false; reason: 'daemon_unreachable' })), supportedKinds: () => ['tmux', 'misao'] };
     await app.register(windowsRoutes, {
+    attribution: { recordInteraction: vi.fn() }, windowRoles: {} as never,
       paneHandleResolver: {} as never,
       harnessPrefix: '', windowRepo: { findById: () => win } as any,
       projectRepo: {} as any, taskRepo: {} as any, tmux: {} as any,

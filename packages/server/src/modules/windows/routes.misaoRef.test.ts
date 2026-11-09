@@ -19,6 +19,7 @@ async function buildApp(defaultMux: ServerConfig['defaultMux'], registerMisao = 
   if (registerMisao) muxDriverRegistry.register('misao', { kind: 'misao', supportsPaneLabels: false } as unknown as IMuxClient);
   const app = Fastify();
   await app.register(windowsRoutes, {
+    attribution: { recordInteraction: vi.fn() }, windowRoles: {} as never,
       paneHandleResolver: {} as never,
     muxSwitchSettingsRepo: {} as never, auditLogService: {} as never, agentActivityMonitor: {} as never,
     windowRepo: windowRepo as unknown as IWindowRepository,
@@ -87,6 +88,7 @@ describe('window registration labels by the window\'s own mux, not the server de
     muxDriverRegistry.register('misao', { kind: 'misao', supportsPaneLabels: true, labelWindowPanes: misaoLabel } as unknown as IMuxClient);
     const app = Fastify();
     await app.register(windowsRoutes, {
+    attribution: { recordInteraction: vi.fn() }, windowRoles: {} as never,
       paneHandleResolver: {} as never,
       muxSwitchSettingsRepo: {} as never, auditLogService: {} as never, agentActivityMonitor: {} as never,
       windowRepo: windowRepo as unknown as IWindowRepository,

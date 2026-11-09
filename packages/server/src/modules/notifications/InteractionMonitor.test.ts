@@ -5,7 +5,7 @@ import type { IWindowRepository, Window } from '../windows/Window';
 function makeWindow(overrides: Partial<Window> = {}): Window {
   return {
     id: 1,
-    ownerType: 'project',
+    ownerType: 'project', role: null, originProjectId: null,
     projectId: 1,
     taskId: null,
     serverName: 'local',
@@ -132,8 +132,8 @@ describe('InteractionMonitor', () => {
     // row" behavior).
     function makeSiblingWindows(): Window[] {
       return [
-        makeWindow({ id: 1, ownerType: 'project', tmuxTarget: 'azito:agent-1.1' }),
-        makeWindow({ id: 2, ownerType: 'task', taskId: 5, tmuxTarget: 'azito:agent-1.1' }),
+        makeWindow({ id: 1, ownerType: 'project', role: null, originProjectId: null, tmuxTarget: 'azito:agent-1.1' }),
+        makeWindow({ id: 2, ownerType: 'task', role: null, originProjectId: null, taskId: 5, tmuxTarget: 'azito:agent-1.1' }),
       ];
     }
 
@@ -314,7 +314,7 @@ describe('InteractionMonitor', () => {
     });
 
     it('同じ tmux ターゲットを指す兄弟ウィンドウ行もまとめて消費する', () => {
-      findAll.mockReturnValue([makeWindow(), makeWindow({ id: 2, ownerType: 'task', taskId: 5 })]);
+      findAll.mockReturnValue([makeWindow(), makeWindow({ id: 2, ownerType: 'task', role: null, originProjectId: null, taskId: 5 })]);
       findById.mockImplementation((id) => makeWindow({ id }));
       monitor.recordSignal(makeSignal({ timestamp: now(), content }));
       expect(monitor.consumePendingAnswer(1, claimFor(now()))).toBe(true);

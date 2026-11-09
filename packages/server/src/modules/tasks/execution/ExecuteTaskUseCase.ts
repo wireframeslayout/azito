@@ -604,7 +604,7 @@ export class ExecuteTaskUseCase {
       if (w.ownerType === 'task' && w.isPrimary) this.windowRepo.remove(w.id);
     }
     this.windowRepo.add({
-      ownerType: 'task',
+      ownerType: 'task', role: null, originProjectId: null,
       projectId: null,
       taskId,
       serverName,
@@ -1337,7 +1337,7 @@ export class ExecuteTaskUseCase {
       });
     } else {
       windowRowId = this.windowRepo.add({
-        ownerType: 'task',
+        ownerType: 'task', role: null, originProjectId: null,
         projectId: null,
         taskId,
         serverName,
@@ -1844,7 +1844,7 @@ export class ExecuteTaskUseCase {
           if (created.ref) await labelRegisteredWindow(this.resolveDriver(created.server), created.server, created.ref, { windowId: freshPrimary.id, taskId });
         } else {
           const followUpWindowId = this.windowRepo.add({
-            ownerType: 'task',
+            ownerType: 'task', role: null, originProjectId: null,
             projectId: null,
             taskId,
             serverName,

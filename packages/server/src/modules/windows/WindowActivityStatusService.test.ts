@@ -25,7 +25,7 @@ const AGENT_SERVER: ServerConfig = { ...LOCAL_SERVER, name: 'remote', type: 'age
 function buildWindow(overrides: Partial<Window> = {}): Window {
   return {
     id: 1,
-    ownerType: 'project',
+    ownerType: 'project', role: null, originProjectId: null,
     projectId: 1,
     taskId: null,
     serverName: 'local',
@@ -107,8 +107,8 @@ describe('WindowActivityStatusService', () => {
 
   it('dedups multiple DB rows pointing at the same server+target, preferring the task-owned row', async () => {
     const windows = [
-      buildWindow({ id: 1, ownerType: 'project', projectId: 5, taskId: null, tmuxTarget: 'main:0' }),
-      buildWindow({ id: 2, ownerType: 'task', projectId: null, taskId: 9, tmuxTarget: 'main:0' }),
+      buildWindow({ id: 1, ownerType: 'project', role: null, originProjectId: null, projectId: 5, taskId: null, tmuxTarget: 'main:0' }),
+      buildWindow({ id: 2, ownerType: 'task', role: null, originProjectId: null, projectId: null, taskId: 9, tmuxTarget: 'main:0' }),
     ];
     const { windowRepo, serverRepo, windowSessionResolver, getActivityStatus } = buildDeps(windows, [LOCAL_SERVER], new Map([[2, 'idle']]));
     const service = new WindowActivityStatusService(windowRepo, serverRepo, windowSessionResolver);
@@ -130,8 +130,8 @@ describe('WindowActivityStatusService', () => {
     // even after the underlying tmux window was gone, that duplicate's own key
     // stuck around independently of the primary (AgentActivityMonitor) source.
     const windows = [
-      buildWindow({ id: 1, ownerType: 'project', projectId: 5, taskId: null, tmuxTarget: 'test:win--1m1u' }),
-      buildWindow({ id: 2, ownerType: 'task', projectId: null, taskId: 9, tmuxTarget: 'test:win--1m1u' }),
+      buildWindow({ id: 1, ownerType: 'project', role: null, originProjectId: null, projectId: 5, taskId: null, tmuxTarget: 'test:win--1m1u' }),
+      buildWindow({ id: 2, ownerType: 'task', role: null, originProjectId: null, projectId: null, taskId: 9, tmuxTarget: 'test:win--1m1u' }),
     ];
     const { windowRepo, serverRepo, windowSessionResolver, getActivityStatus } = buildDeps(windows, [LOCAL_SERVER], new Map([[2, 'offline']]));
     const service = new WindowActivityStatusService(windowRepo, serverRepo, windowSessionResolver);
@@ -153,8 +153,8 @@ describe('WindowActivityStatusService', () => {
     // `WindowSessionResolver.splitWindowTarget()` strips unconditionally
     // downstream, so it protected nothing.
     const windows = [
-      buildWindow({ id: 1, ownerType: 'project', projectId: 5, taskId: null, tmuxTarget: 'main:agent-1' }),
-      buildWindow({ id: 2, ownerType: 'project', projectId: 6, taskId: null, tmuxTarget: 'main:agent-1' }),
+      buildWindow({ id: 1, ownerType: 'project', role: null, originProjectId: null, projectId: 5, taskId: null, tmuxTarget: 'main:agent-1' }),
+      buildWindow({ id: 2, ownerType: 'project', role: null, originProjectId: null, projectId: 6, taskId: null, tmuxTarget: 'main:agent-1' }),
     ];
     const { windowRepo, serverRepo, windowSessionResolver, getActivityStatus } = buildDeps(windows, [LOCAL_SERVER], new Map([[1, 'idle'], [2, 'working']]));
     const service = new WindowActivityStatusService(windowRepo, serverRepo, windowSessionResolver);
@@ -267,7 +267,7 @@ describe('WindowActivityStatusService', () => {
     });
 
     it('does not resolve a task-owned window (its session comes from the task row)', async () => {
-      const windows = [buildWindow({ id: 1, ownerType: 'task', projectId: null, taskId: 7 })];
+      const windows = [buildWindow({ id: 1, ownerType: 'task', role: null, originProjectId: null, projectId: null, taskId: 7 })];
       const deps = buildDeps(windows, [LOCAL_SERVER], new Map([[1, 'idle']]));
       const service = new WindowActivityStatusService(deps.windowRepo, deps.serverRepo, deps.windowSessionResolver);
 

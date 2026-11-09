@@ -1112,7 +1112,7 @@ export class WindowRespawnService {
     }
     const unit = unitId === null ? null : this.unitRepo.findById(unitId);
     this.windowRepo.add({
-      ownerType: 'task',
+      ownerType: 'task', role: null, originProjectId: null,
       projectId: null,
       taskId: task.id,
       serverName,

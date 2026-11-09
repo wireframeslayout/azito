@@ -1,11 +1,13 @@
 import type { MuxDriverKind, MuxRef } from '@azito/shared';
 
 export type WindowType = 'terminal' | 'agent';
-export type OwnerType = 'project' | 'task';
+export type OwnerType = 'project' | 'task' | 'server';
 
 export interface Window {
   id: number;
   ownerType: OwnerType;
+  role: 'orchestrator' | null;
+  originProjectId: number | null;
   projectId: number | null;
   taskId: number | null;
   serverName: string;
@@ -86,6 +88,7 @@ export function isPrimaryTaskWindow(win: Pick<Window, 'ownerType' | 'isPrimary'>
 export interface IWindowRepository {
   add(window: Omit<Window, 'id' | 'createdAt' | 'labelSource'>): number;
   findAll(): Window[];
+  findOrchestrators(): Window[];
   findById(id: number): Window | undefined;
   findByProject(projectId: number): Window[];
   findByTask(taskId: number): Window[];

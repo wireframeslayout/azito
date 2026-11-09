@@ -7,7 +7,7 @@ import type { Window, IWindowRepository } from './Window';
 
 const makeWindow = (overrides: Partial<Window> = {}): Window => ({
   id: 1,
-  ownerType: 'project',
+  ownerType: 'project', role: null, originProjectId: null,
   projectId: 1,
   taskId: null,
   serverName: 'local',
