@@ -1,3 +1,4 @@
+import { OrchestratorsProvider } from '../hooks/useOrchestrators';
 import { GlobalSearchProvider } from './search/GlobalSearch';
 import { WorkspaceCatalogProvider } from '../hooks/useWorkspaceCatalog';
 import { CrossProjectNavigationProvider } from '../hooks/useCrossProjectNavigation';
@@ -16,7 +17,7 @@ import { HotkeyProvider } from '../hooks/useHotkeys';
 import { LeftBehindProvider } from '../hooks/useLeftBehind';
 import { TerminalThemeProvider } from '../hooks/useTerminalTheme';
 import TerminalBackdrop from './TerminalBackdrop';
-import { isGlobalPagePath } from '../paths';
+import { isGlobalPagePath, isOrchestrationPath } from '../paths';
 import { StatusBar } from './StatusBar';
 import { useServerResources, ServerResourcesProvider } from '../hooks/useServerResources';
 import { ServerStatusProvider } from '../hooks/useServerStatuses';
@@ -26,11 +27,13 @@ import { UpdateOverlay } from './system/UpdateOverlay';
 import { LoadingState } from './ui';
 import { MOBILE_SHELL_SLOT_ID, MOBILE_STATUS_SLOT_ID } from '../hooks/useMobileShellPortalNode';
 
+const OrchestrationPage = lazy(() => import('./orchestration/OrchestrationPage'));
 const Workspace = lazy(() => import('../pages/Workspace'));
 const GlobalPageShell = lazy(() => import('./global/GlobalPageShell'));
 
 export default function Layout() {
   const location = useLocation();
+  const isOrchestration = isOrchestrationPath(location.pathname);
   const isGlobal = isGlobalPagePath(location.pathname);
   const { data: resourceData } = useServerResources(30000);
   const servers = resourceData?.servers ?? [];
@@ -42,6 +45,7 @@ export default function Layout() {
     <HotkeyProvider>
     <ConfirmProvider>
     <LeftBehindProvider>
+    <OrchestratorsProvider>
     <WorkspaceCatalogProvider>
     <WorkspaceTargetsProvider>
     <MaximizedWindowProvider>
@@ -74,11 +78,12 @@ export default function Layout() {
                 ため z-index 不要 — 各シート側が自身の z-index で正しく前面に出る。 */}
             <div id={MOBILE_SHELL_SLOT_ID} style={{ flexShrink: 0, position: 'relative' }} />
             <div style={{ flex: 1, minHeight: 0, position: 'relative' }}>
-              <div style={{ display: isGlobal ? 'none' : 'contents' }}>
+              <div style={{ display: isGlobal || isOrchestration ? 'none' : 'contents' }}>
                 <Suspense fallback={<LoadingState />}>
                   <Workspace />
                 </Suspense>
               </div>
+              {isOrchestration && <Suspense fallback={<LoadingState />}><OrchestrationPage /></Suspense>}
               {isGlobal && (
                 <Suspense fallback={<LoadingState />}>
                   <GlobalPageShell />
@@ -124,6 +129,7 @@ export default function Layout() {
         </MaximizedWindowProvider>
     </WorkspaceTargetsProvider>
     </WorkspaceCatalogProvider>
+    </OrchestratorsProvider>
     </LeftBehindProvider>
     </ConfirmProvider>
     </HotkeyProvider>

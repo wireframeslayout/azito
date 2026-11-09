@@ -6,13 +6,14 @@ import AzitoLogoShort from './AzitoLogoShort';
 import { usePwaInstall } from '../hooks/usePwaInstall';
 import UsageDropdown from './UsageDropdown';
 import { PROJECTS_CHANGED_EVENT } from '../lib/projectsChanged';
-import { paths, matchWorkspacePath } from '../paths';
+import { isOrchestrationPath, paths, matchWorkspacePath } from '../paths';
 import { Icon } from './ui/Icon';
+import { useOrchestrationModel } from '../hooks/useOrchestrationModel';
 import { useProjectRail } from '../hooks/useProjectRail';
 import ContextMenu, { useContextMenu } from './ContextMenu';
 import { ProjectSearchPopover } from './ProjectSearchPopover';
 import { useSystemUpdate } from '../hooks/useSystemUpdate';
-import { GLOBAL_NAV_ITEMS as GLOBAL_ITEMS } from './workspace/globalNavItems';
+import { GLOBAL_NAV_ITEMS as GLOBAL_ITEMS, ORCHESTRATION_NAV_ITEM } from './workspace/globalNavItems';
 
 interface ProjectItem {
   id: number;
@@ -46,8 +47,10 @@ export default function ProjectSidebar() {
   const navigate = useNavigate();
   const location = useLocation();
   const rail = useProjectRail();
+  const { attention } = useOrchestrationModel();
   const [projects, setProjects] = useState<ProjectItem[]>([]);
   const [menuOpen, setMenuOpen] = useState(false);
+  const [orchestrationPulse, setOrchestrationPulse] = useState(false);
   const [searchOpen, setSearchOpen] = useState(false);
   const [dragProjectId, setDragProjectId] = useState<number | null>(null);
   const [dropTarget, setDropTarget] = useState<{ id: number; position: 'before' | 'after' } | null>(null);
@@ -99,9 +102,24 @@ export default function ProjectSidebar() {
     setSearchOpen(false);
   }, [location.pathname]);
 
+  useEffect(() => {
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    let frame: number | undefined;
+    const pulse = () => {
+      if (window.matchMedia('(prefers-reduced-motion: reduce)').matches) return;
+      setOrchestrationPulse(false);
+      if (frame !== undefined) cancelAnimationFrame(frame);
+      frame = requestAnimationFrame(() => setOrchestrationPulse(true));
+      clearTimeout(timer);
+      timer = setTimeout(() => setOrchestrationPulse(false), 1000);
+    };
+    window.addEventListener('orchestration:moved', pulse);
+    return () => { window.removeEventListener('orchestration:moved', pulse); clearTimeout(timer); if (frame !== undefined) cancelAnimationFrame(frame); };
+  }, []);
+
   const wsMatch = matchWorkspacePath(location.pathname);
   const storedProjectId = localStorage.getItem('workspace-active-project');
-  const currentProjectId = wsMatch
+  const currentProjectId = isOrchestrationPath(location.pathname) ? null : wsMatch
     ? parseInt(wsMatch.id, 10)
     : storedProjectId ? parseInt(storedProjectId, 10) : null;
   const visibleProjects = rail.getVisibleProjects(projects);
@@ -308,6 +326,8 @@ export default function ProjectSidebar() {
           );
         })}
       </div>
+
+      <button className={`orchestration-rail-button${orchestrationPulse ? " orchestration-rail-pulse" : ""}`} onClick={() => navigate(ORCHESTRATION_NAV_ITEM.path)} title={t(ORCHESTRATION_NAV_ITEM.labelKey)} aria-current={isOrchestrationPath(location.pathname) ? 'page' : undefined} aria-label={attention ? t('workspace:orchestration.railAttention', { count: attention }) : t(ORCHESTRATION_NAV_ITEM.labelKey)} style={{ position: 'relative', ...globalButtonStyle(isOrchestrationPath(location.pathname)), color: 'var(--purple)', background: isOrchestrationPath(location.pathname) ? 'var(--purple-a15)' : 'transparent', boxShadow: isOrchestrationPath(location.pathname) ? 'inset 0 0 0 1px var(--purple)' : undefined }}><Icon name={ORCHESTRATION_NAV_ITEM.icon} size={20} />{attention !== null && attention > 0 && <span aria-hidden="true" style={{ position: 'absolute', top: 2, right: 2, width: 9, height: 9, borderRadius: '50%', background: 'var(--warning)' }} />}</button>
 
       <div
         style={{

@@ -30,7 +30,7 @@ export { isPrimaryTaskWindow } from './Window';
 // without importing across the layer boundary.
 export type { Window, IWindowRepository } from './Window';
 
-interface WindowRow {
+export interface WindowRow {
   id: number;
   owner_type: string;
   role: Window['role'];
@@ -145,26 +145,26 @@ export class SqliteWindowRepository implements IWindowRepository {
 
   findAll(): Window[] {
     const rows = this.findAllStmt.all() as WindowRow[];
-    return rows.map((r) => this.toWindow(r));
+    return rows.map((r) => toWindow(r));
   }
 
   findOrchestrators(): Window[] {
-    return (this.db.prepare("SELECT * FROM windows WHERE role = 'orchestrator'").all() as WindowRow[]).map(r => this.toWindow(r));
+    return (this.db.prepare("SELECT * FROM windows WHERE role = 'orchestrator'").all() as WindowRow[]).map(r => toWindow(r));
   }
 
   findById(id: number): Window | undefined {
     const row = this.findByIdStmt.get(id) as WindowRow | undefined;
-    return row ? this.toWindow(row) : undefined;
+    return row ? toWindow(row) : undefined;
   }
 
   findByProject(projectId: number): Window[] {
     const rows = this.findByProjectStmt.all(projectId) as WindowRow[];
-    return rows.map((r) => this.toWindow(r));
+    return rows.map((r) => toWindow(r));
   }
 
   findByTask(taskId: number): Window[] {
     const rows = this.findByTaskStmt.all(taskId) as WindowRow[];
-    return rows.map((r) => this.toWindow(r));
+    return rows.map((r) => toWindow(r));
   }
 
   findByTaskIds(taskIds: number[]): Map<number, Window[]> {
@@ -177,7 +177,7 @@ export class SqliteWindowRepository implements IWindowRepository {
       .prepare(`SELECT * FROM windows WHERE owner_type = 'task' AND task_id IN (${placeholders}) ORDER BY is_primary DESC, created_at ASC`)
       .all(...taskIds) as WindowRow[];
     for (const row of rows) {
-      const window = this.toWindow(row);
+      const window = toWindow(row);
       const taskId = row.task_id as number;
       const existing = byTask.get(taskId);
       if (existing) existing.push(window);
@@ -193,7 +193,7 @@ export class SqliteWindowRepository implements IWindowRepository {
 
   findByServer(serverName: string): Window[] {
     const rows = this.findByServerStmt.all(serverName) as WindowRow[];
-    return rows.map((r) => this.toWindow(r));
+    return rows.map((r) => toWindow(r));
   }
 
   findByServerAndTarget(serverName: string, tmuxTarget: string): Window | undefined {
@@ -207,18 +207,18 @@ export class SqliteWindowRepository implements IWindowRepository {
     // runtime info (launchCommand, agentSessionId) that callers like pane-loading-state need.
     // Supervised-or-not is now derived from windowType, so the choice doesn't affect that.
     const row = matches.find((r) => r.task_id !== null) ?? matches[0];
-    return this.toWindow(row);
+    return toWindow(row);
   }
 
   findByServerAndRef(serverName: string, ref: MuxRef): Window | undefined {
     const row = this.findByServerAndRefStmt.get(serverName, formatMuxRef(ref)) as WindowRow | undefined;
-    return row ? this.toWindow(row) : undefined;
+    return row ? toWindow(row) : undefined;
   }
 
   findByServerAndSession(serverName: string, sessionName: string, kind: MuxDriverKind): Window[] {
     const rows = this.findByServerStmt.all(serverName) as WindowRow[];
     const prefix = `${sessionName}:`;
-    return rows.filter((r) => r.tmux_target.startsWith(prefix) && rowKind(r) === kind).map((r) => this.toWindow(r));
+    return rows.filter((r) => r.tmux_target.startsWith(prefix) && rowKind(r) === kind).map((r) => toWindow(r));
   }
 
   adoptForTask(id: number, taskId: number): void {
@@ -346,7 +346,9 @@ export class SqliteWindowRepository implements IWindowRepository {
     this.updatePaneLayoutStmt.run(JSON.stringify({ ...layout, panes }), id);
   }
 
-  private toWindow(row: WindowRow): Window {
+}
+
+export function toWindow(row: WindowRow): Window {
     let paneLayout: PaneLayout | null = null;
     if (row.pane_layout) {
       try {
@@ -383,4 +385,3 @@ export class SqliteWindowRepository implements IWindowRepository {
       createdAt: row.created_at,
     };
   }
-}

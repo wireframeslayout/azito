@@ -22,6 +22,7 @@
     "moveDown": "下へ移動"
   },
   "sidebar": {
+    "orchestration": "オーケストレーション",
     "servers": "サーバー",
     "sidekicks": "サイドキック",
     "units": "ユニット",

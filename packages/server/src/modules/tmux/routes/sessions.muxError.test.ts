@@ -14,6 +14,9 @@ import { KeyedMutex } from '../../../shared/keyedMutex';
 import type { IMuxClient } from '../IMuxClient';
 import type { MuxDriverRegistry } from '../MuxDriverRegistry';
 
+// tmux's `-e NAME=value` argument, not any `-e` inside text: generated window names such as `win--ebmp` contain one.
+const TMUX_ENV_FLAG = /(?:^|[\s"'[,])-e(?=[\s"',\]]|$)/;
+
 const srv: ServerConfig = { name: 'srv1', type: 'local', defaultMux: 'tmux', isolationIntent: false } as ServerConfig;
 const paneHandle = '%0';
 
@@ -204,11 +207,11 @@ it.skipIf(process.platform === 'win32')('does not expose pane tokens when local 
   expect(response.body).toContain('new-window failed');
   expect(response.body).not.toContain('ui-token-test-123');
   expect(response.body).not.toContain('webhook-token-test-456');
-  expect(response.body).not.toContain('-e');
+  expect(response.body).not.toMatch(TMUX_ENV_FLAG);
   await app.close();
   expect(logs).not.toContain('ui-token-test-123');
   expect(logs).not.toContain('webhook-token-test-456');
-  expect(logs).not.toContain('-e');
+  expect(logs).not.toMatch(TMUX_ENV_FLAG);
 });
 
 

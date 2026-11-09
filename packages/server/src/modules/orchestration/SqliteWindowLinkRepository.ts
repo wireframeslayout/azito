@@ -1,3 +1,4 @@
+import { toWindow, type WindowRow } from '../windows/SqliteWindowRepository';
 import type { Database } from 'better-sqlite3';
 import type { WindowLinkView } from './WindowLink';
 
@@ -8,7 +9,10 @@ interface Row {
   id: number; source_window_id: number; target_window_id: number | null; task_id: number | null;
   kind: WindowLinkView['kind']; source: WindowLinkView['source']; created_at: string;
   last_interaction_at: string | null; unlinked_at: string | null; resolved_window_id: number | null;
-  project_id: number | null; server_name: string | null;
+  project_id: number | null; server_name: string | null; resolved_task_id: number | null;
+  window_worker_type: string | null; window_worker_model: string | null; window_agent_session_id: string | null; window_claude_config_dir: string | null; window_claude_config_dir_explicit: number | null; window_claude_pane_sessions: string | null; window_launch_command: string | null; window_working_directory: string | null; window_pane_layout: string | null; window_created_at: string | null;
+  window_owner_type: 'task' | 'project' | 'server' | null;
+  window_role: 'orchestrator' | null; window_origin_project_id: number | null; window_project_id: number | null; window_task_id: number | null; window_server_name: string | null; window_tmux_target: string | null; window_mux_ref: string | null; window_label: string | null; window_label_source: 'auto' | 'user' | null; window_is_primary: number | null; window_type: 'terminal' | 'agent' | null; window_sleeping: number | null;
 }
 
 export class SqliteWindowLinkRepository {
@@ -57,20 +61,37 @@ export class SqliteWindowLinkRepository {
     return row;
   }
   private select(where: string, args: unknown[]): Row[] {
-    return this.db.prepare(`SELECT l.*, COALESCE(l.target_window_id, primary_window.id) AS resolved_window_id,
+    return this.db.prepare(`SELECT l.*, COALESCE(l.target_window_id, primary_window.id) AS resolved_window_id, COALESCE(l.task_id, target.task_id) AS resolved_task_id,
       CASE WHEN l.target_window_id IS NOT NULL THEN target.project_id ELSE task.project_id END AS project_id,
       CASE WHEN l.target_window_id IS NOT NULL THEN target.server_name ELSE COALESCE(primary_window.server_name, task.server_name) END AS server_name
+      , resolved.owner_type AS window_owner_type, resolved.role AS window_role, resolved.origin_project_id AS window_origin_project_id,
+      resolved.project_id AS window_project_id, resolved.task_id AS window_task_id, resolved.server_name AS window_server_name,
+      resolved.tmux_target AS window_tmux_target, resolved.mux_ref AS window_mux_ref, resolved.label AS window_label,
+      resolved.label_source AS window_label_source, resolved.is_primary AS window_is_primary, resolved.window_type AS window_type, resolved.sleeping AS window_sleeping,
+      resolved.worker_type AS window_worker_type, resolved.worker_model AS window_worker_model, resolved.agent_session_id AS window_agent_session_id,
+      resolved.claude_config_dir AS window_claude_config_dir, resolved.claude_config_dir_explicit AS window_claude_config_dir_explicit, resolved.claude_pane_sessions AS window_claude_pane_sessions,
+      resolved.launch_command AS window_launch_command, resolved.working_directory AS window_working_directory, resolved.pane_layout AS window_pane_layout, resolved.created_at AS window_created_at
       FROM window_links l
       LEFT JOIN windows target ON target.id = l.target_window_id
       LEFT JOIN tasks task ON task.id = l.task_id
       LEFT JOIN windows primary_window ON primary_window.id = (SELECT id FROM windows WHERE owner_type='task' AND task_id=l.task_id AND is_primary=1 ORDER BY created_at ASC, id ASC LIMIT 1)
+      LEFT JOIN windows resolved ON resolved.id=COALESCE(l.target_window_id, primary_window.id)
       WHERE ${where} ORDER BY l.id`).all(...args) as Row[];
   }
   list(source: number, includeUnlinked: boolean, kind?: WindowLinkView['kind']): WindowLinkView[] {
     return this.select(`l.source_window_id=? ${includeUnlinked ? '' : 'AND l.unlinked_at IS NULL'} ${kind ? 'AND l.kind=?' : ''}`, kind ? [source, kind] : [source]).map(r => ({
       id: r.id, sourceWindowId: r.source_window_id, targetWindowId: r.target_window_id, taskId: r.task_id,
       kind: r.kind, source: r.source, createdAt: r.created_at, lastInteractionAt: r.last_interaction_at,
-      unlinkedAt: r.unlinked_at, resolvedWindowId: r.resolved_window_id,
+      unlinkedAt: r.unlinked_at, resolvedWindowId: r.resolved_window_id, resolvedTaskId: r.resolved_task_id,
+      resolvedWindow: r.window_owner_type === null ? null : linkWindow(toWindow({
+        id: r.resolved_window_id, owner_type: r.window_owner_type, role: r.window_role, origin_project_id: r.window_origin_project_id,
+        project_id: r.window_project_id, task_id: r.window_task_id, server_name: r.window_server_name, tmux_target: r.window_tmux_target,
+        mux_ref: r.window_mux_ref, label: r.window_label, label_source: r.window_label_source, is_primary: r.window_is_primary,
+        window_type: r.window_type, sleeping: r.window_sleeping, worker_type: r.window_worker_type, worker_model: r.window_worker_model,
+        agent_session_id: r.window_agent_session_id, claude_config_dir: r.window_claude_config_dir, claude_config_dir_explicit: r.window_claude_config_dir_explicit,
+        claude_pane_sessions: r.window_claude_pane_sessions, launch_command: r.window_launch_command, working_directory: r.window_working_directory,
+        pane_layout: r.window_pane_layout, created_at: r.window_created_at,
+      } as WindowRow)),
     }));
   }
   activeForOrchestrators(): Row[] {
@@ -82,4 +103,9 @@ export class SqliteWindowLinkRepository {
   activeFrom(id: number): Array<{ id: number; targetWindowId: number | null }> {
     return this.db.prepare('SELECT id, target_window_id AS targetWindowId FROM window_links WHERE source_window_id=? AND unlinked_at IS NULL').all(id) as Array<{ id: number; targetWindowId: number | null }>;
   }
+}
+
+function linkWindow(window: ReturnType<typeof toWindow>): NonNullable<WindowLinkView['resolvedWindow']> {
+  const { id, ownerType, role, originProjectId, projectId, taskId, serverName, tmuxTarget, muxRef, label, labelSource, isPrimary, windowType, sleeping } = window;
+  return { id, ownerType, role, originProjectId, projectId, taskId, serverName, tmuxTarget, muxRef, label, labelSource, isPrimary, windowType, sleeping };
 }

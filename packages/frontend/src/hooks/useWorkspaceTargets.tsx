@@ -2,6 +2,8 @@ import { createContext, useCallback, useContext, useState } from 'react';
 import type { TerminalOpenTarget } from '../lib/terminalTargetOpen';
 
 interface WorkspaceTargetsContextValue {
+  linkedSheetOpen: boolean;
+  setLinkedSheetOpen: (open: boolean) => void;
   onOpenInTerminal: ((req: TerminalOpenTarget) => void) | null;
   setOnOpenInTerminal: (cb: ((req: TerminalOpenTarget) => void) | null) => void;
   onOpenTask: ((taskId: number) => void) | null;
@@ -18,6 +20,7 @@ interface WorkspaceTargetsContextValue {
 }
 
 const defaultValue: WorkspaceTargetsContextValue = {
+  linkedSheetOpen: false, setLinkedSheetOpen: () => {},
   onOpenInTerminal: null,
   setOnOpenInTerminal: () => {},
   onOpenTask: null,
@@ -35,6 +38,7 @@ const WorkspaceTargetsContext = createContext<WorkspaceTargetsContextValue>(defa
 
 
 export function WorkspaceTargetsProvider({ children }: { children: React.ReactNode }) {
+  const [linkedSheetOpen, setLinkedSheetOpen] = useState(false);
   const [onOpenInTerminal, setOnOpenInTerminal] = useState<((req: TerminalOpenTarget) => void) | null>(null);
   const [onOpenTask, setOnOpenTask] = useState<((taskId: number) => void) | null>(null);
   const [activeTabId, setActiveTabId] = useState<string | null>(null);
@@ -59,7 +63,7 @@ export function WorkspaceTargetsProvider({ children }: { children: React.ReactNo
   }, []);
 
   return (
-    <WorkspaceTargetsContext.Provider value={{ onOpenInTerminal, setOnOpenInTerminal: setOnOpenInTerminalCb, onOpenTask, setOnOpenTask: setOnOpenTaskCb, activeTabId, setActiveTabId, focusedTarget, focusedTargetDisplay, setFocusedTarget, onOpenTabSwitcher, setOnOpenTabSwitcher: setOnOpenTabSwitcherCb }}>
+    <WorkspaceTargetsContext.Provider value={{ linkedSheetOpen, setLinkedSheetOpen, onOpenInTerminal, setOnOpenInTerminal: setOnOpenInTerminalCb, onOpenTask, setOnOpenTask: setOnOpenTaskCb, activeTabId, setActiveTabId, focusedTarget, focusedTargetDisplay, setFocusedTarget, onOpenTabSwitcher, setOnOpenTabSwitcher: setOnOpenTabSwitcherCb }}>
       {children}
     </WorkspaceTargetsContext.Provider>
   );

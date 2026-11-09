@@ -71,3 +71,4 @@ describe('buildNewWindowLaunch', () => {
     expect(buildNewWindowLaunch('win32', 'none', '', '')).toBeUndefined();
   });
 });
+

@@ -15,17 +15,30 @@ describe('orchestration routes', () => {
     db.exec("INSERT INTO windows (id,owner_type,server_name,tmux_target,window_type,worker_type,role) VALUES (1,'server','local','s:a','agent','claude','orchestrator'), (2,'server','local','s:b','agent','claude','orchestrator')");
     const windows = new SqliteWindowRepository(db); const bus = new NotificationBus();
     const links = new OrchestrationLinkService(new SqliteWindowLinkRepository(db), windows, { findById: vi.fn() } as unknown as ITaskRepository, bus);
-    const app = Fastify(); await app.register(routes, { links, windows });
+    const app = Fastify(); app.addHook('onRequest', async request => { request.principal = { class: 'operator' }; }); await app.register(routes, { links, windows });
     const request = (method: 'GET' | 'POST' | 'DELETE', url: string, payload?: object) => app.inject({ method, url, payload });
     expect((await request('POST', '/api/windows/1/links', { targetWindowId: 2, taskId: 1 })).statusCode).toBe(400);
     const add = await request('POST', '/api/windows/1/links', { targetWindowId: 2 });
     expect(add.statusCode).toBe(200); const id = add.json().id;
-    expect((await request('GET', '/api/windows/1/links')).json()).toHaveLength(1);
+    expect((await request('GET', '/api/windows/1/links')).json()).toMatchObject([{ resolvedWindow: { id: 2, ownerType: 'server', serverName: 'local', tmuxTarget: 's:b', sleeping: false } }]);
     expect((await request('DELETE', `/api/windows/1/links/${id}`)).statusCode).toBe(200);
     expect((await request('GET', '/api/windows/1/links')).json()).toHaveLength(0);
     expect((await request('GET', '/api/windows/1/links?includeUnlinked=1')).json()).toHaveLength(1);
     expect((await request('POST', '/api/windows/1/links', { targetWindowId: 2 })).json().id).toBe(id);
     expect((await request('GET', '/api/orchestrators')).json()).toHaveLength(2);
+    await app.close(); bus.destroy(); db.close();
+  });
+  it('returns the resolved task id for both task and window links', async () => {
+    const db = openDatabase(':memory:');
+    db.exec("INSERT INTO projects (id,name,slug) VALUES (1,'P','p'); INSERT INTO tasks (id,project_id,title) VALUES (1,1,'T'); INSERT INTO windows (id,owner_type,server_name,tmux_target,window_type,worker_type,role) VALUES (1,'server','local','s:a','agent','claude','orchestrator'); INSERT INTO windows (id,owner_type,task_id,project_id,server_name,tmux_target,is_primary) VALUES (2,'task',1,1,'local','s:b',1)");
+    db.prepare('UPDATE windows SET sleeping=1 WHERE id=2').run();
+    const windows = new SqliteWindowRepository(db); const bus = new NotificationBus();
+    const links = new OrchestrationLinkService(new SqliteWindowLinkRepository(db), windows, { findById: () => ({ id: 1 }) } as unknown as ITaskRepository, bus);
+    const app = Fastify(); app.addHook('onRequest', async request => { request.principal = { class: 'operator' }; }); await app.register(routes, { links, windows });
+    await app.inject({ method: 'POST', url: '/api/windows/1/links', payload: { targetWindowId: 2 } });
+    await app.inject({ method: 'POST', url: '/api/windows/1/links', payload: { taskId: 1 } });
+    const result = await app.inject({ url: '/api/windows/1/links' });
+    expect(result.json()).toMatchObject([{ taskId: null, resolvedWindowId: 2, resolvedTaskId: 1, resolvedWindow: { id: 2, sleeping: true } }, { taskId: 1, resolvedWindowId: 2, resolvedTaskId: 1, resolvedWindow: { id: 2, sleeping: true } }]);
     await app.close(); bus.destroy(); db.close();
   });
   it('validates the batched operation query and requires an operator', async () => {
@@ -42,10 +55,20 @@ describe('orchestration routes', () => {
     expect(operationLinks).toHaveBeenCalledWith([1, 2]);
     await app.close();
   });
+  it('rejects task principals on link reads and creation even without scoped auth', async () => {
+    const app = Fastify();
+    app.addHook('onRequest', async request => { request.principal = { class: 'task', id: 1 }; });
+    await app.register(routes, { links: {} as OrchestrationLinkService, windows: {} as SqliteWindowRepository });
+    expect((await app.inject({ url: '/api/windows/1/links' })).statusCode).toBe(403);
+    expect((await app.inject({ method: 'POST', url: '/api/windows/1/links', payload: { targetWindowId: 2 } })).statusCode).toBe(403);
+    expect((await app.inject({ method: 'DELETE', url: '/api/windows/1/links/2' })).statusCode).toBe(403);
+    await app.close();
+  });
   it('keeps every link route operator-only', async () => {
     const app = Fastify();
     app.addHook('onRequest', async (request, reply) => {
       const principal = request.headers.authorization === 'operator' ? { class: 'operator' as const } : { class: 'task' as const, id: 1 };
+      request.principal = principal;
       if (!evaluateRouteAuth(principal, request).allowed) return reply.status(403).send();
     });
     await app.register(routes, { links: { orchestrators: () => [], list: () => [], add: () => 'not_found', unlink: () => false } as unknown as OrchestrationLinkService, windows: { findById: () => ({ id: 1 }) } as unknown as SqliteWindowRepository });

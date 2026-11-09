@@ -124,6 +124,7 @@
      対になっていない生rgba項）を分離したもの — 変数化しないと wired 側で消せない */
   --panel-radius: 12px;
   --right-panel-width: 300px;
+  --orchestration-sidebar-width: 260px;
   --panel-shadow: 0 2px 10px rgba(0, 0, 0, 0.25);
   --tray-inset: inset 0 2px 4px rgba(0, 0, 0, 0.35);
 
@@ -1293,7 +1294,18 @@ input[aria-invalid="true"]:focus-visible { outline-color: var(--danger) !importa
   .lookout-toast-close { min-width: calc(var(--space-6) + var(--space-5)); display: flex; align-items: center; justify-content: center; }
 }
 
+@media (prefers-reduced-motion: reduce) { .bottom-sheet { transition: none !important; } }
+@keyframes orchestration-rail-pulse { 50% { box-shadow: 0 0 0 var(--space-2) var(--purple-a35); } }
+.orchestration-rail-pulse { animation: orchestration-rail-pulse 1s ease-out; }
+
+.orchestration-rail-button:not([aria-current]):hover { background: var(--purple-a08) !important; }
+.orchestration-rail-button:focus-visible { outline: 2px solid var(--purple); outline-offset: 2px; }
 @media (max-width: 768px) {
   .task-sidebar-child { min-height: calc(var(--space-6) + var(--space-5)); }
   .task-sidebar-window-toggle { min-width: calc(var(--space-6) + var(--space-5)); min-height: calc(var(--space-6) + var(--space-5)); }
 }
+
+
+.linked-window-card-open { background: none; border: 0; color: inherit; font: inherit; padding: 0; text-align: left; cursor: pointer; }
+.linked-window-card-open::after { content: ""; position: absolute; inset: 0; }
+.linked-window-card-open:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }

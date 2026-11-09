@@ -1,0 +1,24 @@
+import { useState } from 'react';
+import { SectionHeader } from '../ui/SectionHeader';
+import { ListRow, ListRowGroup } from '../ui/ListRow';
+import { FormInput } from '../ui/FormInput';
+import { GlassPopover } from '../ui/GlassPopover';
+import type { LinkTarget } from '../../hooks/useOrchestrationLinks';
+
+export interface LinkCandidate { key: string; label: string; target: LinkTarget; group: string; disabled?: boolean }
+interface Props { open: boolean; onClose: () => void; candidates: LinkCandidate[]; searchLabel: string; emptyLabel: string; error?: string | null; excludedWindowIds?: number[]; linkedTargets?: LinkTarget[]; onAdd: (target: LinkTarget) => void }
+export function AddLinkPopover({ open, onClose, candidates, searchLabel, emptyLabel, error, excludedWindowIds = [], linkedTargets = [], onAdd }: Props) {
+  const [query, setQuery] = useState('');
+  const matches = candidates.filter(candidate => {
+    const target = candidate.target;
+    if ('targetWindowId' in target && excludedWindowIds.includes(target.targetWindowId)) return false;
+    if (linkedTargets.some(linked => 'targetWindowId' in target && 'targetWindowId' in linked ? target.targetWindowId === linked.targetWindowId : 'taskId' in target && 'taskId' in linked && target.taskId === linked.taskId)) return false;
+    return candidate.label.toLocaleLowerCase().includes(query.toLocaleLowerCase());
+  });
+  const groups = [...new Set(matches.map(candidate => candidate.group))];
+  return <GlassPopover open={open} onClose={onClose} ariaLabel={searchLabel}>
+    <FormInput aria-label={searchLabel} value={query} onChange={event => setQuery(event.target.value)} />
+    {error && <p role="alert">{error}</p>}
+    {matches.length === 0 ? <p>{emptyLabel}</p> : groups.map(group => <section key={group}><SectionHeader>{group}</SectionHeader><ListRowGroup>{matches.filter(candidate => candidate.group === group).map(candidate => <ListRow key={candidate.key} title={candidate.label} disabled={candidate.disabled} onClick={() => onAdd(candidate.target)} />)}</ListRowGroup></section>)}
+  </GlassPopover>;
+}

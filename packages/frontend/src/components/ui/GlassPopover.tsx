@@ -15,9 +15,12 @@ export interface GlassPopoverProps {
   open: boolean;
   onClose: () => void;
   label?: string;
-  items: GlassPopoverItem[];
+  items?: GlassPopoverItem[];
+  children?: React.ReactNode;
   align?: 'left' | 'right' | 'center';
   ariaLabel?: string;
+  solid?: boolean;
+  anchorRef?: React.RefObject<HTMLElement | null>;
 }
 
 /**
@@ -25,13 +28,14 @@ export interface GlassPopoverProps {
  * 汎用コンポーネント。外側タップ / Esc で閉じる。prefers-reduced-motion 時はアニメーション
  * 無効（global.css）。
  */
-export function GlassPopover({ open, onClose, label, items, align = 'left', ariaLabel }: GlassPopoverProps) {
+export function GlassPopover({ open, onClose, label, items = [], children, align = 'left', ariaLabel, solid = false, anchorRef }: GlassPopoverProps) {
   const ref = useRef<HTMLDivElement>(null);
   const { id, isTop } = useOverlayStack(open, ref);
   useHotkey({ action: 'local:overlay-close', spec: parseKeySpec('Escape'), scope: 'overlay', overlayId: id, handler: onClose }, open);
 
 
-  const horizontal: React.CSSProperties = align === 'right'
+  const anchor = open ? anchorRef?.current?.getBoundingClientRect() : undefined;
+  const horizontal: React.CSSProperties = anchor ? { left: anchor.right, top: anchor.top, bottom: 'auto' } : align === 'right'
     ? { right: 14 }
     : align === 'center'
       ? { left: '50%', transform: open ? 'translate(-50%, 0) scale(1)' : 'translate(-50%, 6px) scale(0.98)' }
@@ -42,14 +46,14 @@ export function GlassPopover({ open, onClose, label, items, align = 'left', aria
       ref={ref}
       open={open && isTop}
       onOutside={onClose}
-      role="menu"
+      role={children ? "dialog" : "menu"}
       aria-label={ariaLabel}
       inert={!open}
       style={{
         position: 'fixed',
         bottom: 'calc(76px + env(safe-area-inset-bottom))',
         borderRadius: 'var(--radius-lg)',
-        background: 'rgba(22, 27, 34, 0.86)',
+        background: solid ? 'var(--bg-elevated)' : 'rgba(22, 27, 34, 0.86)',
         border: '1px solid rgba(139, 148, 158, 0.25)',
         backdropFilter: 'blur(16px) saturate(1.3)',
         WebkitBackdropFilter: 'blur(16px) saturate(1.3)',
@@ -71,6 +75,7 @@ export function GlassPopover({ open, onClose, label, items, align = 'left', aria
           {label}
         </div>
       )}
+      {children}
       {items.map((item) => (
         <button
           key={item.key}
