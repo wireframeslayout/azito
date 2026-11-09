@@ -20,7 +20,8 @@ export function resolveLinkedWindows(links: WindowLinkView[], windows: Window[],
   return links.filter(link => link.kind === 'orchestration' && link.unlinkedAt === null).map(link => {
     const task = tasks.find(item => item.id === link.resolvedTaskId) ?? null;
     const resolvedId = link.resolvedWindowId ?? link.targetWindowId;
-    const window = windows.find(item => item.id === resolvedId) ?? (task ? windows.find(item => item.taskId === task.id && item.isPrimary) ?? task.windows?.find(item => item.isPrimary) : undefined) ?? null;
+    const resolvedWindow = link.resolvedWindow && { ...link.resolvedWindow, projectId: link.resolvedWindow.projectId ?? undefined, taskId: link.resolvedWindow.taskId ?? undefined, label: link.resolvedWindow.label ?? undefined };
+    const window = resolvedWindow ?? windows.find(item => item.id === resolvedId) ?? (task ? windows.find(item => item.taskId === task.id && item.isPrimary) ?? task.windows?.find(item => item.isPrimary) : undefined) ?? null;
     const projectId = task?.projectId ?? window?.projectId;
     const project = projects.find(item => item.id === projectId);
     const serverName = window?.serverName ?? task?.serverName;

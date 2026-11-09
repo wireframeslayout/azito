@@ -96,7 +96,7 @@ export function LinkedPanel({ windowId, enabled, onOpen, onExpand, onProject, ex
       if (!mux) return;
       const result = await api<{ ok: boolean; tmuxTarget?: string }>(`/windows/${window.id}/respawn`, { method: 'POST', body: JSON.stringify({ force: false, mux }) });
       if (!result.tmuxTarget) throw new Error('wake_failed');
-      await refreshCatalog();
+      await Promise.all([refreshCatalog(), refresh()]);
     } catch { setWakeError(true); } finally { setWaking(null); }
   };
   return <div style={{ display: 'flex', flexDirection: 'column', height: '100%', minHeight: 0 }}>

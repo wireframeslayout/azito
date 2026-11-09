@@ -1,3 +1,4 @@
+import { parseMuxRef, muxRefFromTmuxTarget } from '@azito/shared';
 import type { Database } from 'better-sqlite3';
 import type { WindowLinkView } from './WindowLink';
 
@@ -9,6 +10,8 @@ interface Row {
   kind: WindowLinkView['kind']; source: WindowLinkView['source']; created_at: string;
   last_interaction_at: string | null; unlinked_at: string | null; resolved_window_id: number | null;
   project_id: number | null; server_name: string | null; resolved_task_id: number | null;
+  window_owner_type: 'task' | 'project' | 'server' | null;
+  window_role: 'orchestrator' | null; window_origin_project_id: number | null; window_project_id: number | null; window_task_id: number | null; window_server_name: string | null; window_tmux_target: string | null; window_mux_ref: string | null; window_label: string | null; window_label_source: 'auto' | 'user' | null; window_is_primary: number | null; window_type: 'terminal' | 'agent' | null; window_sleeping: number | null;
 }
 
 export class SqliteWindowLinkRepository {
@@ -60,10 +63,15 @@ export class SqliteWindowLinkRepository {
     return this.db.prepare(`SELECT l.*, COALESCE(l.target_window_id, primary_window.id) AS resolved_window_id, COALESCE(l.task_id, target.task_id) AS resolved_task_id,
       CASE WHEN l.target_window_id IS NOT NULL THEN target.project_id ELSE task.project_id END AS project_id,
       CASE WHEN l.target_window_id IS NOT NULL THEN target.server_name ELSE COALESCE(primary_window.server_name, task.server_name) END AS server_name
+      , resolved.owner_type AS window_owner_type, resolved.role AS window_role, resolved.origin_project_id AS window_origin_project_id,
+      resolved.project_id AS window_project_id, resolved.task_id AS window_task_id, resolved.server_name AS window_server_name,
+      resolved.tmux_target AS window_tmux_target, resolved.mux_ref AS window_mux_ref, resolved.label AS window_label,
+      resolved.label_source AS window_label_source, resolved.is_primary AS window_is_primary, resolved.window_type AS window_type, resolved.sleeping AS window_sleeping
       FROM window_links l
       LEFT JOIN windows target ON target.id = l.target_window_id
       LEFT JOIN tasks task ON task.id = l.task_id
       LEFT JOIN windows primary_window ON primary_window.id = (SELECT id FROM windows WHERE owner_type='task' AND task_id=l.task_id AND is_primary=1 ORDER BY created_at ASC, id ASC LIMIT 1)
+      LEFT JOIN windows resolved ON resolved.id=COALESCE(l.target_window_id, primary_window.id)
       WHERE ${where} ORDER BY l.id`).all(...args) as Row[];
   }
   list(source: number, includeUnlinked: boolean, kind?: WindowLinkView['kind']): WindowLinkView[] {
@@ -71,6 +79,12 @@ export class SqliteWindowLinkRepository {
       id: r.id, sourceWindowId: r.source_window_id, targetWindowId: r.target_window_id, taskId: r.task_id,
       kind: r.kind, source: r.source, createdAt: r.created_at, lastInteractionAt: r.last_interaction_at,
       unlinkedAt: r.unlinked_at, resolvedWindowId: r.resolved_window_id, resolvedTaskId: r.resolved_task_id,
+      resolvedWindow: r.window_owner_type === null ? null : {
+        id: r.resolved_window_id!, ownerType: r.window_owner_type, role: r.window_role, originProjectId: r.window_origin_project_id,
+        projectId: r.window_project_id, taskId: r.window_task_id, serverName: r.window_server_name!, tmuxTarget: r.window_tmux_target!,
+        muxRef: r.window_mux_ref ? parseMuxRef(r.window_mux_ref) : muxRefFromTmuxTarget(r.window_tmux_target!), label: r.window_label,
+        labelSource: r.window_label_source!, isPrimary: r.window_is_primary === 1, windowType: r.window_type!, sleeping: r.window_sleeping === 1,
+      },
     }));
   }
   activeForOrchestrators(): Row[] {
