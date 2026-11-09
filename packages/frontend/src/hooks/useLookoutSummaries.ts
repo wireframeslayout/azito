@@ -1,12 +1,6 @@
 import { useEffect, useState } from 'react';
-import { apiWithStatus } from '../api/client';
+import { apiOk as request } from '../api/apiOk';
 import { subscribeLookoutSettingsChanged } from '../lib/lookoutSettingsEvents';
-
-async function request<T>(path: string, options?: RequestInit): Promise<T> {
-  const { status, body } = await apiWithStatus<T>(path, options);
-  if (status < 200 || status >= 300) throw new Error('Request failed');
-  return body;
-}
 import type { LookoutItem } from '../lib/lookoutSummary';
 import type { LookoutSummary } from '../components/lookout/LookoutRow';
 
@@ -45,7 +39,9 @@ export function useLookoutSummaries(items: LookoutItem[], enabled: boolean): Rea
           timer = setTimeout(fetchSummaries, pendingWithoutText ? 3000 : 120000);
         }
       } catch {
-        if (!cancelled) setResponse({ key, results: windows.map(({ windowId }) => ({ windowId, status: 'unavailable' })) });
+        if (cancelled) return;
+        setResponse({ key, results: windows.map(({ windowId }) => ({ windowId, status: 'unavailable' })) });
+        timer = setTimeout(fetchSummaries, 30000);
       }
     };
     void fetchSummaries();

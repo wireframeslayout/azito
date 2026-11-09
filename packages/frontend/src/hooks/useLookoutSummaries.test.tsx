@@ -66,4 +66,14 @@ describe('useLookoutSummaries', () => {
     const { result } = renderHook(() => useLookoutSummaries([item], true));
     await waitFor(() => expect(result.current.get('one')).toEqual({ status: 'error' }));
   });
+  it('retries after a failed HTTP request', async () => {
+    vi.useFakeTimers();
+    api.mockResolvedValueOnce({ status: 500, body: {} })
+      .mockResolvedValueOnce({ status: 200, body: { summaries: [{ windowId: 7, status: 'ready', text: 'Back' }] } });
+    const { result } = renderHook(() => useLookoutSummaries([item], true));
+    await act(async () => {});
+    expect(result.current.get('one')).toEqual({ status: 'error' });
+    await act(async () => { await vi.advanceTimersByTimeAsync(30000); });
+    expect(result.current.get('one')).toEqual({ status: 'ready', text: 'Back' });
+  });
 });

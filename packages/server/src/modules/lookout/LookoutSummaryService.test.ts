@@ -77,6 +77,18 @@ describe('Lookout summaries', () => {
     expect(run).toHaveBeenCalledTimes(2);
   });
 
+  it('reports a window that cannot be resolved as failed without failing the others', async () => {
+    const service = setup(async () => 'done');
+    const resolver = (service as unknown as { resolver: { resolve: (window: { id: number }) => Promise<unknown> } }).resolver;
+    const resolve = resolver.resolve;
+    resolver.resolve = async (window) => { if (window.id === 2) throw new Error('mux down'); return resolve(window); };
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const results = await service.getSummaries([{ windowId: 1, state: 'working' }, { windowId: 2, state: 'working' }]);
+    expect(results[0].status).toBe('pending');
+    expect(results[1]).toEqual({ windowId: 2, status: 'unavailable', reason: 'failed' });
+    warn.mockRestore();
+  });
+
   it('returns the classified failure without exposing process output', async () => {
     const service = setup(async () => { throw new HeadlessCliError('not_logged_in'); });
     await service.getSummaries(request);

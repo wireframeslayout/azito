@@ -47,7 +47,11 @@ export class LookoutSummaryService {
   async getSummaries(requests: SummaryRequest[]): Promise<SummaryResult[]> {
     const settings = this.settings.get();
     const generation = this.generation;
-    return Promise.all(requests.map((request) => this.getSummary(request, settings, generation)));
+    return Promise.all(requests.map((request) => this.getSummary(request, settings, generation).catch((error: unknown) => {
+      // One window that cannot be read (its mux daemon down, an unreadable log) must not fail the other windows' summaries.
+      console.warn(`[Lookout] summary for window ${request.windowId} failed: ${error instanceof Error ? error.name : 'unknown error'}`);
+      return { windowId: request.windowId, status: 'unavailable', reason: 'failed' } satisfies SummaryResult;
+    })));
   }
 
   private async getSummary(request: SummaryRequest, settings: LookoutSettings, generation: number): Promise<SummaryResult> {

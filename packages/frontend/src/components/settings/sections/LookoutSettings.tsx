@@ -1,13 +1,7 @@
 import { useEffect, useState } from 'react';
 import { useTranslation } from 'react-i18next';
-import { apiWithStatus } from '../../../api/client';
+import { apiOk as request } from '../../../api/apiOk';
 import { notifyLookoutSettingsChanged } from '../../../lib/lookoutSettingsEvents';
-
-async function request<T>(path: string, options?: RequestInit): Promise<T> {
-  const { status, body } = await apiWithStatus<T>(path, options);
-  if (status < 200 || status >= 300) throw new Error('Request failed');
-  return body;
-}
 import { Button, LoadingState, Notice, SegmentedToggle } from '../../ui';
 import { ModelSelect } from '../../ui/ModelSelect';
 
