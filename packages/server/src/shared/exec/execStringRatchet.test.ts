@@ -40,6 +40,10 @@ const REMAINING: Record<string, number> = {
   // the sentinel wrapper for the remaining remote git commands (the distribution bundle code), and the shell route of a recorded-host-less agent's run()
   'modules/git/execWithSentinel.ts': 2,
   'modules/servers/transport/AgentTransport.ts': 1,
+  // SSH bootstrap / recovery / removal on a Mac: the agent may not be installed or reachable, so transport.run and
+  // agent IFileOps cannot be used. These scripts also keep ownership checks with their conditional file changes.
+  // The private wrapper sends each script to SshClient.execIsolated, never to a transport's exec endpoint.
+  'modules/servers/agent-deploy/macAgentLaunchd.ts': 12,
 };
 
 function listSourceFiles(dir: string): string[] {
@@ -70,6 +74,12 @@ function currentCounts(): Record<string, number> {
 }
 
 describe('exec(<shell string>) ratchet', () => {
+  it('keeps the Mac bootstrap shell on SSH, which is available while the agent is down', () => {
+    const source = fs.readFileSync(path.join(SRC_ROOT, 'modules/servers/agent-deploy/macAgentLaunchd.ts'), 'utf8');
+    expect(source).toMatch(/private exec\(command: string\)[\s\S]*?this\.ssh\.execIsolated\(this\.host, posixRemoteCommand\(command\)\)/);
+    expect(source).not.toMatch(/\b(?:transport|target)\.exec\(/);
+  });
+
   it('counts only calls on a transport', () => {
     expect(countCalls('await transport.exec(cmd);\nawait this.transportFactory.getTransport(srv).exec(cmd);\nthis.exec(a); target.exec(b); this.out(c);')).toBe(5);
     expect(countCalls('db.exec(sql); re.exec(s); this.llmClient.exec(p);\n// transport.exec(x)\n * transport.exec(y)')).toBe(0);

@@ -4,7 +4,7 @@ import path from 'path';
 import { execFile } from 'child_process';
 import type { MisaoServiceState } from '@azito/shared';
 import type { HostEnv } from '../../shared/os/hostEnv';
-import { LaunchdJobOperations, limitToBackgroundSession, DEFAULT_LAUNCHD_TIMING, type CommandResult, type CommandRunner, type LaunchdDomain, type LaunchdTiming } from '../../shared/os/launchd';
+import { LaunchdJobOperations, limitToBackgroundSession, DEFAULT_LAUNCHD_TIMING, mustSucceed, type CommandResult, type CommandRunner, type LaunchdDomain, type LaunchdTiming } from '../../shared/os/launchd';
 export { limitToBackgroundSession, DEFAULT_LAUNCHD_TIMING } from '../../shared/os/launchd';
 export type { CommandResult, CommandRunner, LaunchdDomain, LaunchdTiming } from '../../shared/os/launchd';
 
@@ -97,15 +97,6 @@ export interface ServiceManager {
 
 function readIfExists(file: string): string | undefined {
   return fs.existsSync(file) ? fs.readFileSync(file, 'utf-8') : undefined;
-}
-
-async function mustSucceed(run: CommandRunner, file: string, args: string[], what: string): Promise<CommandResult> {
-  const result = await run(file, args);
-  if (result.code !== 0) {
-    const detail = (result.stderr || result.stdout).trim();
-    throw new Error(`${what} failed (exit ${result.code})${detail ? `: ${detail}` : ''}`);
-  }
-  return result;
 }
 
 export class SystemdServiceManager implements ServiceManager {

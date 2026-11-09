@@ -9,7 +9,7 @@ export interface CommandResult {
 /** Runs a command and reports its exit code; only a failure to spawn rejects. */
 export type CommandRunner = (file: string, args: string[]) => Promise<CommandResult>;
 
-async function mustSucceed(run: CommandRunner, file: string, args: string[], what: string): Promise<CommandResult> {
+export async function mustSucceed(run: CommandRunner, file: string, args: string[], what: string): Promise<CommandResult> {
   const result = await run(file, args);
   if (result.code !== 0) {
     const detail = (result.stderr || result.stdout).trim();

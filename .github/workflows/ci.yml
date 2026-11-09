@@ -223,11 +223,15 @@ jobs:
           name: node-pty-linux-arm64
           path: ${{ runner.temp }}/node-pty-linux-arm64
 
-      - name: Without a Linux node-pty the build refuses instead of making a broken bundle
+      - name: Without either Linux node-pty the build refuses instead of making a broken bundle
+        env:
+          AZITO_TEST_NODE_PTY_LINUX: ${{ runner.temp }}/node-pty-linux
+          AZITO_TEST_NODE_PTY_LINUX_ARM64: ${{ runner.temp }}/node-pty-linux-arm64
         run: |
-          if npx -w packages/server tsx scripts/build-agent.ts > refuse.log 2>&1; then echo "build-agent must fail on a Windows host without --node-pty-linux" >&2; exit 1; fi
-          grep -q "cannot run on a Linux x86-64 agent" refuse.log
-          cat refuse.log | tail -n 5
+          if env -u AZITO_AGENT_NODE_PTY_LINUX AZITO_AGENT_NODE_PTY_LINUX_ARM64="$AZITO_TEST_NODE_PTY_LINUX_ARM64" npx -w packages/server tsx scripts/build-agent.ts > refuse-x64.log 2>&1; then echo "build-agent must fail without Linux x64 node-pty" >&2; exit 1; fi
+          grep -q -- "Pass --node-pty-linux <dir>" refuse-x64.log
+          if env -u AZITO_AGENT_NODE_PTY_LINUX_ARM64 AZITO_AGENT_NODE_PTY_LINUX="$AZITO_TEST_NODE_PTY_LINUX" npx -w packages/server tsx scripts/build-agent.ts > refuse-arm64.log 2>&1; then echo "build-agent must fail without Linux arm64 node-pty" >&2; exit 1; fi
+          grep -q -- "Pass --node-pty-linux-arm64 <dir>" refuse-arm64.log
 
       - name: Build the agent bundle on Windows
         env:
