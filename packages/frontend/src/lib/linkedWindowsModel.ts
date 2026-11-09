@@ -8,6 +8,7 @@ export interface LinkedWindow {
   window: Window | null;
   task: Task | null;
   status: LinkedStatus;
+  lastActivityAt?: string;
   groupKey: string;
   groupLabel: string;
 }
@@ -35,7 +36,7 @@ export function groupLinkedWindows(items: LinkedWindow[], filter: LinkedFilter):
     group.items.push(item);
     groups.set(item.groupKey, group);
   }
-  const compare = (a: LinkedWindow, b: LinkedWindow): number => rank[a.status] - rank[b.status] || (b.link.lastInteractionAt ?? '').localeCompare(a.link.lastInteractionAt ?? '') || a.link.id - b.link.id;
+  const compare = (a: LinkedWindow, b: LinkedWindow): number => rank[a.status] - rank[b.status] || (b.link.lastInteractionAt ?? b.lastActivityAt ?? '').localeCompare(a.link.lastInteractionAt ?? a.lastActivityAt ?? '') || a.link.id - b.link.id;
   for (const group of groups.values()) group.items.sort(compare);
   return [...groups.values()].sort((a, b) => rank[a.items[0].status] - rank[b.items[0].status] || a.label.localeCompare(b.label) || a.key.localeCompare(b.key));
 }

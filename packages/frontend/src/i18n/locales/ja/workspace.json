@@ -417,6 +417,18 @@
     "snapshotError": "写しを取得できませんでした",
     "back": "連携一覧に戻る",
     "previous": "前へ",
-    "next": "次へ"
+    "next": "次へ",
+    "empty_all": "該当する連携はありません",
+    "empty_attention": "要対応の連携はありません",
+    "empty_running": "稼働中の連携はありません",
+    "empty_completed": "完了した連携はありません",
+    "attentionAnnouncement": "{{name}}（窓・タスク {{id}}）が要対応になりました: {{reason}}",
+    "loadError": "窓の一覧を取得できませんでした",
+    "reason_waiting_input": "回答待ち",
+    "reason_waiting_for_human": "人の操作待ち",
+    "reason_phase_review": "レビュー待ち",
+    "reason_pending_approval": "承認待ち",
+    "reason_failed": "失敗",
+    "reason_blocked": "入力待ち"
   }
 }

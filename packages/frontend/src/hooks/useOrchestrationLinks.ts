@@ -14,7 +14,7 @@ export function useOrchestrationLinks(windowId: number | null): {
   unlink: (link: WindowLinkView) => Promise<LinkTarget>; undo: (target: LinkTarget) => Promise<void>;
 } {
   const [links, setLinks] = useState<WindowLinkView[]>([]);
-  const [loading, setLoading] = useState(false);
+  const [loading, setLoading] = useState(windowId !== null);
   const [error, setError] = useState<Error | null>(null);
   const generation = useRef(0);
   const currentWindow = useRef(windowId);
