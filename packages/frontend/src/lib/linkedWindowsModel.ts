@@ -1,3 +1,4 @@
+import { isAttentionTarget, type AttentionContext } from './orchestrationModel';
 import type { ProjectListItem, Task, Window, WindowLinkView } from '../pages/workspace/types';
 
 export type LinkedStatus = 'attention' | 'running' | 'completed';
@@ -14,15 +15,15 @@ export interface LinkedGroup { key: string; label: string; items: LinkedWindow[]
 
 const rank: Record<LinkedStatus, number> = { attention: 0, running: 1, completed: 2 };
 
-export function resolveLinkedWindows(links: WindowLinkView[], windows: Window[], tasks: Task[], projects: ProjectListItem[], classify: (link: WindowLinkView, window: Window | null, task: Task | null) => LinkedStatus): LinkedWindow[] {
+export function resolveLinkedWindows(links: WindowLinkView[], windows: Window[], tasks: Task[], projects: ProjectListItem[], context: AttentionContext): LinkedWindow[] {
   return links.filter(link => link.kind === 'orchestration' && link.unlinkedAt === null).map(link => {
-    const task = tasks.find(item => item.id === link.taskId) ?? null;
+    const task = tasks.find(item => item.id === link.resolvedTaskId) ?? null;
     const resolvedId = link.resolvedWindowId ?? link.targetWindowId;
     const window = windows.find(item => item.id === resolvedId) ?? (task ? windows.find(item => item.taskId === task.id && item.isPrimary) ?? task.windows?.find(item => item.isPrimary) : undefined) ?? null;
     const projectId = task?.projectId ?? window?.projectId;
     const project = projects.find(item => item.id === projectId);
     const serverName = window?.serverName ?? task?.serverName;
-    return { link, window, task, status: classify(link, window, task), groupKey: projectId != null ? `project:${projectId}` : `server:${serverName ?? ''}`, groupLabel: project?.name ?? (projectId != null ? String(projectId) : serverName ?? '') };
+    return { link, window, task, status: isAttentionTarget({ windowId: link.resolvedWindowId, taskId: link.resolvedTaskId, kind: link.kind }, context) ? 'attention' : task && ['completed', 'done'].includes(task.status) ? 'completed' : 'running', groupKey: projectId != null ? `project:${projectId}` : `server:${serverName ?? ''}`, groupLabel: project?.name ?? (projectId != null ? String(projectId) : serverName ?? '') };
   });
 }
 
