@@ -36,6 +36,7 @@ export function ListRowGroup({ children }: ListRowGroupProps) {
 }
 
 interface ListRowProps {
+  as?: 'li' | 'div';
   icon?: ReactNode;
   title: ReactNode;
   description?: ReactNode;
@@ -68,7 +69,7 @@ const rowInnerSmStyle: CSSProperties = {
   gap: 8,
 };
 
-export function ListRow({ icon, title, description, chips, rightActions, selected, accentColor, size = 'md', onClick, href, showChevron, disabled, ariaLabel, style }: ListRowProps) {
+export function ListRow({ as: Container = 'li', icon, title, description, chips, rightActions, selected, accentColor, size = 'md', onClick, href, showChevron, disabled, ariaLabel, style }: ListRowProps) {
   const isSm = size === 'sm';
   const isMobile = useIsMobile();
   const iconSize = isSm ? 24 : 30;
@@ -194,7 +195,7 @@ export function ListRow({ icon, title, description, chips, rightActions, selecte
   );
 
   return (
-    <li style={style}>
+    <Container style={style}>
       {href ? (
         <a href={href} target="_blank" rel="noopener noreferrer" className={className} aria-label={ariaLabel}
           style={{ ...baseStyle, color: 'inherit', textDecoration: 'none' }}>
@@ -223,6 +224,6 @@ export function ListRow({ icon, title, description, chips, rightActions, selecte
           {content}
         </div>
       )}
-    </li>
+    </Container>
   );
 }

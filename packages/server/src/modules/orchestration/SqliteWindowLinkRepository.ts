@@ -8,7 +8,7 @@ interface Row {
   id: number; source_window_id: number; target_window_id: number | null; task_id: number | null;
   kind: WindowLinkView['kind']; source: WindowLinkView['source']; created_at: string;
   last_interaction_at: string | null; unlinked_at: string | null; resolved_window_id: number | null;
-  project_id: number | null; server_name: string | null;
+  project_id: number | null; server_name: string | null; resolved_task_id: number | null;
 }
 
 export class SqliteWindowLinkRepository {
@@ -57,7 +57,7 @@ export class SqliteWindowLinkRepository {
     return row;
   }
   private select(where: string, args: unknown[]): Row[] {
-    return this.db.prepare(`SELECT l.*, COALESCE(l.target_window_id, primary_window.id) AS resolved_window_id,
+    return this.db.prepare(`SELECT l.*, COALESCE(l.target_window_id, primary_window.id) AS resolved_window_id, COALESCE(l.task_id, target.task_id) AS resolved_task_id,
       CASE WHEN l.target_window_id IS NOT NULL THEN target.project_id ELSE task.project_id END AS project_id,
       CASE WHEN l.target_window_id IS NOT NULL THEN target.server_name ELSE COALESCE(primary_window.server_name, task.server_name) END AS server_name
       FROM window_links l
@@ -70,7 +70,7 @@ export class SqliteWindowLinkRepository {
     return this.select(`l.source_window_id=? ${includeUnlinked ? '' : 'AND l.unlinked_at IS NULL'} ${kind ? 'AND l.kind=?' : ''}`, kind ? [source, kind] : [source]).map(r => ({
       id: r.id, sourceWindowId: r.source_window_id, targetWindowId: r.target_window_id, taskId: r.task_id,
       kind: r.kind, source: r.source, createdAt: r.created_at, lastInteractionAt: r.last_interaction_at,
-      unlinkedAt: r.unlinked_at, resolvedWindowId: r.resolved_window_id,
+      unlinkedAt: r.unlinked_at, resolvedWindowId: r.resolved_window_id, resolvedTaskId: r.resolved_task_id,
     }));
   }
   activeForOrchestrators(): Row[] {

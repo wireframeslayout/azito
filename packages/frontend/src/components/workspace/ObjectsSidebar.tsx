@@ -24,6 +24,7 @@ import { resolveWindowTitle } from '@azito/shared';
 import { buildWindowSearchText } from './objects/windowRowTitle';
 import ObjectSection from './objects/ObjectSection';
 import BrowserSection from './objects/BrowserSection';
+import { OrchestrationOrigins } from '../orchestration/OrchestrationOrigins';
 import { RUNNING_STATUSES } from '../task/StatusDropdown';
 
 const COLLAPSE_STORAGE_KEY = 'workspace-objects-collapsed-v2';
@@ -566,6 +567,7 @@ export default function ObjectsSidebar({
           </span>
         </div>
 
+        <OrchestrationOrigins projectId={project.id} onSelect={mobile ? onCloseMobileSidebar : undefined} />
         {objectsLoading ? (
           <ObjectsLoadingSkeleton />
         ) : sections.totalCount === 0 ? (

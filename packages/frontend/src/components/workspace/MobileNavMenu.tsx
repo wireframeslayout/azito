@@ -2,7 +2,7 @@ import type { CSSProperties } from 'react';
 import { useTranslation } from 'react-i18next';
 import { Icon, type IconName } from '../ui/Icon';
 import { ProjectAvatar } from '../ui/ProjectAvatar';
-import { GLOBAL_NAV_ITEMS, SETTINGS_NAV_ITEM } from './globalNavItems';
+import { GLOBAL_NAV_ITEMS, SETTINGS_NAV_ITEM, ORCHESTRATION_NAV_ITEM } from './globalNavItems';
 import type { SidebarMode } from '../../pages/workspace/types';
 
 interface ProjectModeRow {
@@ -44,6 +44,7 @@ interface MobileNavMenuProps {
   onOpenActiveWindows?: () => void;
   activeWindowsCount?: number;
   activeWindowsBlockedCount?: number;
+  attentionCount?: number;
 }
 
 // モック（S6/M1）は行高36〜40px・節間の余白も詰まっている。タップターゲットは本来44pxが
@@ -148,6 +149,7 @@ export function MobileNavMenu({
   onOpenActiveWindows,
   activeWindowsCount,
   activeWindowsBlockedCount,
+  attentionCount,
 }: MobileNavMenuProps) {
   const { t } = useTranslation(['workspace', 'projects', 'common']);
 
@@ -182,6 +184,9 @@ export function MobileNavMenu({
       </div>
 
       <div style={sectionLabelStyle}>{t('workspace:mobileNav.sectionGlobal')}</div>
+      <button type="button" onClick={() => onNavigateGlobal(ORCHESTRATION_NAV_ITEM.path)} style={{ ...rowStyle, minHeight: 44, color: 'var(--purple)' }} className="glass-popover-item">
+        <Icon name={ORCHESTRATION_NAV_ITEM.icon} size={16} /><span style={rowLabelStyle}>{t(ORCHESTRATION_NAV_ITEM.labelKey)}</span>{attentionCount !== undefined && attentionCount > 0 && <span aria-label={t('workspace:orchestration.railAttention', { count: attentionCount })} style={rowMetaStyle}>{attentionCount}</span>}
+      </button>
       {GLOBAL_NAV_ITEMS.map((item) => (
         <button key={item.path} type="button" onClick={() => onNavigateGlobal(item.path)} style={rowStyle} className="glass-popover-item">
           <Icon name={item.icon} size={16} style={rowIconStyle} />

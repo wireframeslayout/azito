@@ -3,7 +3,7 @@ import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { createPortal } from 'react-dom';
 import { useTranslation } from 'react-i18next';
 import { useNavigate, useLocation, matchPath } from 'react-router-dom';
-import { paths, matchWorkspacePath, isGlobalPagePath } from '../paths';
+import { paths, matchWorkspacePath, isGlobalPagePath, isOrchestrationPath } from '../paths';
 import { useMobileShellPortalNode, useMobileStatusPortalNode } from '../hooks/useMobileShellPortalNode';
 import { api } from '../api/client';
 import ContextMenu, { useContextMenu, type ContextMenuItem } from '../components/ContextMenu';
@@ -236,7 +236,7 @@ function WorkspaceInner() {
     // 表示中にタブを選択したときは、そのタブの内容を表示できるワークスペースルートへ
     // navigate する（グローバルページ表示中は Workspace 自身のコンテンツ領域が
     // display:none で隠れているため、setActiveTabId だけでは何も見えない）。
-    if (isGlobalPagePath(location.pathname)) {
+    if (isGlobalPagePath(location.pathname) || isOrchestrationPath(location.pathname)) {
       const targetProjectId = tab?.projectId ?? (Number.isFinite(currentProjectId) && currentProjectId > 0 ? currentProjectId : undefined);
       if (targetProjectId != null) navigate(paths.workspace(targetProjectId));
       return;

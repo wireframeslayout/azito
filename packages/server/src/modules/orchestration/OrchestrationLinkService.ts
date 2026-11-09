@@ -100,11 +100,14 @@ export class OrchestrationLinkService {
       if (row.kind === 'orchestration' && row.target_window_id !== null && !parents.has(row.target_window_id)) parents.set(row.target_window_id, row.source_window_id);
     }
     return this.windows.findOrchestrators().map(w => {
-      const links = grouped.get(w.id) ?? [];
-      return { ...w, links: { total: links.length,
+      const links = (grouped.get(w.id) ?? []).filter((link) => link.kind === 'orchestration');
+      const targets = new Set(links.map((link) => link.resolved_window_id !== null ? `window:${link.resolved_window_id}` : `task:${link.task_id}`));
+      return { ...w, links: { total: targets.size,
         projectIds: [...new Set(links.flatMap(row => row.project_id === null ? [] : [row.project_id]))],
         serverNames: [...new Set(links.flatMap(row => row.server_name === null ? [] : [row.server_name]))],
-      }, parentWindowId: parents.get(w.id) ?? null };
+        targets: links.map(row => ({ windowId: row.resolved_window_id, taskId: row.resolved_task_id })),
+      }, parentWindowId: parents.get(w.id) ?? null,
+      lastInteractionAt: links.reduce<string | null>((latest, link) => link.last_interaction_at && (!latest || link.last_interaction_at > latest) ? link.last_interaction_at : latest, null) };
     });
   }
 }

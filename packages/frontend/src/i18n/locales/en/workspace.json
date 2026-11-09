@@ -1,6 +1,48 @@
 {
-  "rightPanel": {"title": "Linked windows", "open": "Open linked windows panel", "close": "Close linked windows panel"},
-  "navigation": { "taskOpenFailed": "Could not open the task." },
+  "orchestration": {
+    "links": "{{count}} linked",
+    "showSidebar": "Expand orchestration list",
+    "hideSidebar": "Collapse orchestration list",
+    "origin": "{{name}} is now in orchestration",
+    "idle": "Idle",
+    "sleeping": "Sleeping",
+    "create": "Create orchestrator",
+    "agent": "Agent",
+    "directory": "Working directory",
+    "fieldsRequired": "Select a server and working directory",
+    "createError": "Could not create orchestrator",
+    "collapse": "Collapse",
+    "expand": "Expand",
+    "moved": "Moved to orchestration",
+    "restored": "Orchestrator role removed",
+    "open": "Open",
+    "undo": "Undo",
+    "roleError": "Could not change the window role",
+    "makeOrchestrator": "Move to orchestration",
+    "removeRole": "Remove orchestrator role",
+    "title": "Orchestration",
+    "search": "Search orchestrators",
+    "notFound": "Orchestrator not found",
+    "loadError": "Could not load orchestrators",
+    "retry": "Retry",
+    "empty": "No orchestrators yet",
+    "connected": "Linked {{count}}",
+    "connectedUnknown": "Linked",
+    "attention": "{{count}} need attention",
+    "railAttention": "Orchestration, {{count}} need attention",
+    "active": "Running",
+    "returnToProject": "Return to project windows (from: {{name}})",
+    "selectWindow": "Select a window from the list",
+    "originCount": "{{count}} orchestrators are in the rail"
+  },
+  "rightPanel": {
+    "title": "Linked windows",
+    "open": "Open linked windows panel",
+    "close": "Close linked windows panel"
+  },
+  "navigation": {
+    "taskOpenFailed": "Could not open the task."
+  },
   "tab": {
     "closeDirtyTitle": "Close tab with unsaved changes?",
     "closeDirtyMessage": "\"{{name}}\" has unsaved changes. Closing this tab will discard them.",
@@ -99,6 +141,7 @@
     "switchMisaoStale": "Unavailable while the server cannot be reached."
   },
   "addWindow": {
+    "serverOwnedWindowsSkipped": "Skipped {{count}} server-owned windows.",
     "title": "Add Window",
     "createAndAdd": "Create & Add",
     "addAllWindows": "Add All Windows",

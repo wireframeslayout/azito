@@ -43,11 +43,12 @@ export interface Window {
 export interface WindowLinkView {
   id: number; sourceWindowId: number; targetWindowId: number | null; taskId: number | null;
   kind: 'orchestration' | 'operation'; source: 'auto' | 'manual'; createdAt: string;
-  lastInteractionAt: string | null; unlinkedAt: string | null; resolvedWindowId: number | null;
+  lastInteractionAt: string | null; unlinkedAt: string | null; resolvedWindowId: number | null; resolvedTaskId: number | null;
 }
 export interface OrchestratorSummary extends Window {
-  links: { total: number; projectIds: number[]; serverNames: string[] };
+  links: { total: number; projectIds: number[]; serverNames: string[]; targets: Array<{ windowId: number | null; taskId: number | null }> };
   parentWindowId: number | null;
+  lastInteractionAt: string | null;
 }
 export interface SessionWindowRegistrationResult {
   ok: true; count: number; ids: number[];
