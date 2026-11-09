@@ -34,6 +34,20 @@ it('ignores a response for a superseded task set', async () => {
   expect(result.current.parents.has(2)).toBe(false);
 });
 
+it('keeps the existing hierarchy during a reload and clears it on failure', async () => {
+  api.mockReset();
+  api.mockResolvedValueOnce({ status: 200, body: [{ sourceWindowId: 1, targetWindowId: 2 }] });
+  let resolveReload!: (value: unknown) => void;
+  api.mockImplementationOnce(() => new Promise(resolve => { resolveReload = resolve; }));
+  const { result } = renderHook(() => useOperationLinks([1]));
+  await waitFor(() => expect(result.current.parents.get(2)).toBe(1));
+  act(() => result.current.reload());
+  expect(result.current.parents.get(2)).toBe(1);
+  await act(async () => { resolveReload({ status: 500, body: {} }); });
+  expect(result.current.error).toBe(true);
+  expect(result.current.parents.size).toBe(0);
+});
+
 it('splits large task sets and reloads on task status and explicit request', async () => {
   api.mockReset();
   api.mockResolvedValue({ status: 200, body: [] });

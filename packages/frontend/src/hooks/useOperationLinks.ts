@@ -13,7 +13,9 @@ export function useOperationLinks(taskIds: number[]): { parents: ReadonlyMap<num
   useNotificationChannel({ onOrchestrationUpdated: reload, onTaskStatus: reload, onConnected: reload });
   useEffect(() => {
     let current = true;
-    setState({ key, parents: new Map(), error: false });
+    setState(previous => previous.key === key
+      ? { ...previous, error: false }
+      : { key, parents: new Map(), error: false });
     if (!key) return () => { current = false; };
     const ids = key.split(',');
     const requests = [];

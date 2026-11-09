@@ -233,7 +233,7 @@ export default function TasksSidebar({
               parents={parents}
               windowExpanded={windowExpanded}
               toggleWindow={toggleWindow}
-              activityRows={allActivityRows}
+              activityRows={activityRows}
               showGroupLabel={!isSearching}
               t={t}
             />
