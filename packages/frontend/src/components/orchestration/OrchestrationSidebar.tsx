@@ -9,6 +9,8 @@ import { useWindowActions } from '../../hooks/useWindowActions';
 import { useWorkspaceCatalog } from '../../hooks/useWorkspaceCatalog';
 import { useAgentActivity } from '../../hooks/useAgentActivity';
 import { useOrchestrationModel } from '../../hooks/useOrchestrationModel';
+import { useOptionalMaximizedWindow } from '../../hooks/useMaximizedWindow';
+import { useIsMobile } from '../../hooks/useIsMobile';
 import { useOrchestrators } from '../../hooks/useOrchestrators';
 import { countAttention, orchestratorStatus, type OrchestratorNode, type OrchestratorStatus } from '../../lib/orchestrationModel';
 import { formatRelativeTime } from '../../utils/time';
@@ -35,7 +37,9 @@ export function OrchestrationSidebar({ selectedId, onSelect }: OrchestrationSide
   const { tree, activity } = useOrchestrationModel();
   const [search, setSearch] = useState('');
   const contextMenu = useContextMenu();
-  const actions = useWindowActions(undefined, refresh, { showContextMenu: contextMenu.show, showContextMenuAt: contextMenu.showAt, findTaskByTarget: () => null, openTask: () => {}, tabs: [], closeTab: () => {} });
+  const maximized = useOptionalMaximizedWindow();
+  const isMobile = useIsMobile();
+  const actions = useWindowActions(undefined, refresh, { maximizeWindow: isMobile || !maximized ? undefined : id => maximized.open(id, windows.find(window => window.id === id)), showContextMenu: contextMenu.show, showContextMenuAt: contextMenu.showAt, findTaskByTarget: () => null, openTask: () => {}, tabs: [], closeTab: () => {} });
   const [closed, setClosed] = useState<Set<number>>(new Set());
   const [sectionClosed, setSectionClosed] = useState<Set<string>>(new Set());
   const [focusedId, setFocusedId] = useState<number | null>(null);
@@ -55,7 +59,7 @@ export function OrchestrationSidebar({ selectedId, onSelect }: OrchestrationSide
     const expanded = !closed.has(window.id) || !!search;
     const toggle = (): void => setClosed((previous) => { const next = new Set(previous); if (next.has(window.id)) next.delete(window.id); else next.add(window.id); return next; });
     const origin = allProjects.find((project) => project.id === window.originProjectId);
-    const items = () => actions.getWindowMenuItems(window, { online: !window.sleeping }).filter((item) => ['rename-label', 'sleep', 'delete-window'].includes(item.kind ?? '') || (item.kind === 'change-role' && origin !== undefined)).map((item) => item.kind === 'change-role' ? { ...item, label: t('orchestration.returnToProject', { name: origin!.name }) } : item);
+    const items = () => actions.getWindowMenuItems(window, { online: !window.sleeping }).filter((item) => ['maximize', 'rename-label', 'sleep', 'delete-window'].includes(item.kind ?? '') || (item.kind === 'change-role' && origin !== undefined)).map((item) => item.kind === 'change-role' ? { ...item, label: t('orchestration.returnToProject', { name: origin!.name }) } : item);
     const projects = window.links.projectIds.map((id) => allProjects.find((project) => project.id === id)).filter((project) => project !== undefined);
     return <div key={window.id} id={`orchestration-row-${window.id}`} role="treeitem" aria-label={window.label || window.tmuxTarget} aria-describedby={`orchestration-description-${window.id}`} tabIndex={activeFocus === window.id ? 0 : -1} aria-level={depth + 1} aria-expanded={node.children.length ? expanded : undefined} aria-selected={selectedId === window.id} onFocus={(event) => { if (event.target === event.currentTarget) setFocusedId(window.id); }} onClick={(event) => { if ((event.target as HTMLElement).closest('[role=treeitem]') === event.currentTarget && (event.target === event.currentTarget || (event.target as HTMLElement).closest('.list-row'))) onSelect(window.id); }} onKeyDown={(event) => {
       if (event.target !== event.currentTarget) return;

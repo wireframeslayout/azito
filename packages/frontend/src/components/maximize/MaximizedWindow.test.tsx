@@ -6,6 +6,9 @@ import { MaximizedWindowProvider, useMaximizedWindow } from '../../hooks/useMaxi
 import { MaximizedWindow } from './MaximizedWindow';
 import type { Window } from '../../pages/workspace/types';
 
+vi.mock('../../hooks/useOrchestrationModel', () => ({ useOrchestrationModel: () => ({ tree: [] }) }));
+const linkedState = vi.hoisted(() => ({ links: [] as unknown[], error: null as Error | null, refresh: vi.fn() }));
+vi.mock('../../hooks/useOrchestrationLinks', () => ({ useOrchestrationLinks: (id: number | null) => ({ links: id === null ? [] : linkedState.links, loading: false, error: id === null ? null : linkedState.error, refresh: linkedState.refresh }) }));
 vi.mock('../../hooks/useIsMobile', () => ({ useIsMobile: () => false }));
 vi.mock('../../hooks/useWorkspaceCatalog', () => ({ useWorkspaceCatalog: () => ({ allTasks: [], allProjects: [], refresh: vi.fn() }) }));
 vi.mock('../../hooks/useWorkspaceTargets', () => ({ useWorkspaceTargets: () => ({ onOpenTask: null }) }));
@@ -16,7 +19,7 @@ vi.mock('../TerminalContainer', () => ({ TerminalContainer: ({ registeredWindow 
   return <div className="xterm"><textarea aria-label="terminal" /></div>;
 } }));
 beforeAll(() => { Object.defineProperty(globalThis, 'matchMedia', { configurable: true, value: () => ({ matches: false, addEventListener: vi.fn(), removeEventListener: vi.fn() }) }); });
-const first = { id: 1, serverName: 'host', tmuxTarget: 'one', label: 'One' } as Window;
+const first = { id: 1, serverName: 'host', tmuxTarget: 'one', label: 'One', role: 'orchestrator' } as Window;
 const second = { id: 2, serverName: 'host', tmuxTarget: 'two', label: 'Two' } as Window;
 function Workspace() {
   const { setWorkspace, open } = useMaximizedWindow();
@@ -67,6 +70,27 @@ describe('maximized window', () => {
     fireEvent.click(screen.getByText('Change tabs'));
     await waitFor(() => expect(screen.queryByRole('treeitem', { name: /Two/ })).not.toBeInTheDocument());
     await waitFor(() => expect(firstRow).toHaveFocus());
+  });
+
+  it('shows linked targets and retries a failed link request without closing the terminal', async () => {
+    linkedState.error = new Error('offline'); linkedState.refresh.mockClear();
+    render(<HotkeyProvider><MaximizedWindowProvider><Workspace /><MaximizedWindow /></MaximizedWindowProvider></HotkeyProvider>);
+    fireEvent.click(screen.getByText('Launch'));
+    expect(await screen.findByRole('alert')).toHaveTextContent('Could not load window hierarchy');
+    fireEvent.click(screen.getByRole('button', { name: 'Retry' }));
+    expect(linkedState.refresh).toHaveBeenCalledOnce();
+    expect(screen.getByLabelText('terminal')).toBeInTheDocument();
+    linkedState.error = null;
+  });
+
+  it('opens a resolved linked window absent from the workspace catalog', async () => {
+    const linked = { ...second, id: 42, label: 'Linked', projectId: null, taskId: null, role: null };
+    linkedState.links = [{ id: 10, kind: 'orchestration', unlinkedAt: null, sourceWindowId: 1, targetWindowId: 42, taskId: null, resolvedTaskId: null, resolvedWindowId: 42, resolvedWindow: linked, lastInteractionAt: null }];
+    render(<HotkeyProvider><MaximizedWindowProvider><Workspace /><MaximizedWindow /></MaximizedWindowProvider></HotkeyProvider>);
+    fireEvent.click(screen.getByText('Launch'));
+    fireEvent.click(await screen.findByRole('treeitem', { name: /Linked/ }));
+    await waitFor(() => expect(mounts.connect).toHaveBeenLastCalledWith(42));
+    linkedState.links = [];
   });
 
 });

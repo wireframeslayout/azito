@@ -308,7 +308,7 @@ export function useWindowActions(
       description: d.disabledReasonKey ? t(d.disabledReasonKey) : undefined,
       onClick: () => actions[d.kind].run(d),
     }));
-    if (deps.maximizeWindow) items.unshift({ label: t('maximize.action'), onClick: () => deps.maximizeWindow?.(w.id) });
+    if (deps.maximizeWindow) items.unshift({ kind: 'maximize', label: t('maximize.action'), onClick: () => deps.maximizeWindow?.(w.id) });
     if (w.windowType === 'agent' && w.ownerType !== 'task' && w.ownerType !== undefined) {
       const role = w.role === 'orchestrator' ? null : 'orchestrator';
       items.push({ kind: 'change-role', label: t(role ? 'orchestration.makeOrchestrator' : 'orchestration.removeRole'), onClick: () => { void changeRole(w.id, role); } });

@@ -20,3 +20,14 @@ describe('open tabs maximize tree', () => {
     expect(rows[0].kind === 'task' && rows[0].windowId).toBeNull();
   });
 });
+
+it('preserves child orchestrator hierarchy when a link names the same child', async () => {
+  const { buildLinkedTree } = await import('./maximizeTreeModel');
+  const child = { ...win(7), role: 'orchestrator', parentWindowId: 6, links: { total: 0, projectIds: [], serverNames: [], targets: [] } };
+  const grandchild = { ...win(8), role: 'orchestrator', parentWindowId: 7, links: { total: 0, projectIds: [], serverNames: [], targets: [] } };
+  const node = (window: typeof child, children: unknown[]) => ({ window, children, linkCount: 0, projectIds: [], attention: 0, attentionIds: [] });
+  const linked = { link: { id: 5 }, window: child, task: null, status: 'running', groupKey: '', groupLabel: '' };
+  const rows = buildLinkedTree([linked] as never, [node(child, [node(grandchild, [])])] as never);
+  expect(rows).toHaveLength(1);
+  expect(rows[0].children[0].window.id).toBe(8);
+});

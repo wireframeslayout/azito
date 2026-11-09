@@ -6,6 +6,7 @@ export type MaximizeTab = { kind: 'task'; taskId: number } | { kind: 'window'; w
 
 export interface MaximizeWindowRow {
   kind: 'window';
+  attention?: boolean;
   key: string;
   window: Window;
   children: MaximizeWindowRow[];
@@ -13,6 +14,7 @@ export interface MaximizeWindowRow {
 
 export interface MaximizeTaskRow {
   kind: 'task';
+  attention?: boolean;
   key: string;
   task: Task;
   windowId: number | null;
@@ -64,4 +66,25 @@ export function visibleMaximizeWindows(rows: readonly MaximizeTreeRow[], expande
   }
   rows.forEach(visit);
   return result;
+}
+
+/** Linked rows have their own keys because a window may also be present in the tab tree. */
+export function buildLinkedTree(items: readonly import('./linkedWindowsModel').LinkedWindow[], children: readonly import('./orchestrationModel').OrchestratorNode[]): MaximizeTreeRow[] {
+  const seen = new Set<number>();
+  const convert = (node: import('./orchestrationModel').OrchestratorNode): MaximizeWindowRow | null => {
+    if (seen.has(node.window.id)) return null;
+    seen.add(node.window.id);
+    return { kind: 'window', attention: items.some(item => item.window?.id === node.window.id && item.status === 'attention'), key: `linked:orchestrator:${node.window.id}`, window: node.window, children: node.children.map(convert).filter((child): child is MaximizeWindowRow => child !== null) };
+  };
+  const nodes = children.map(convert).filter((child): child is MaximizeWindowRow => child !== null);
+  const rows: MaximizeTreeRow[] = [];
+  for (const item of items) {
+    const window = item.window;
+    if (window && seen.has(window.id)) continue;
+    if (window) seen.add(window.id);
+    if (item.task) {
+      rows.push({ kind: 'task', attention: item.status === 'attention', key: `linked:task:${item.link.id}`, task: item.task, windowId: window?.id ?? null, children: window ? [{ kind: 'window', key: `linked:window:${item.link.id}`, window, children: [] }] : [] });
+    } else if (window) rows.push({ kind: 'window', attention: item.status === 'attention', key: `linked:window:${item.link.id}`, window, children: [] });
+  }
+  return [...rows, ...nodes];
 }
