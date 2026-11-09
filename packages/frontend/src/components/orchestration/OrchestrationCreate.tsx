@@ -39,6 +39,6 @@ export function OrchestrationCreate({ showButton }: { showButton: boolean }) {
       <FormField label={t('orchestration.agent')} htmlFor="orchestration-agent"><FormSelect id="orchestration-agent" value={modal.awAgent} onChange={(e) => { void modal.handleAgentChange(e.target.value); }}><option value="claude">Claude</option><option value="codex">Codex</option></FormSelect></FormField>
       <FormField label={t('orchestration.directory')} htmlFor="orchestration-directory"><DirectoryInput id="orchestration-directory" serverName={modal.awServer} value={modal.awWorkDir} onChange={modal.setAwWorkDir} /></FormField>
     </Modal>
-    <ResourceWarningDialog open={modal.awResourceWarning !== null} title={t('addWindow.title')} resources={modal.awResourceWarning?.resources ?? null} actionLabel={t('addWindow.createAndAdd')} onCancel={() => modal.setAwResourceWarning(null)} onForce={() => modal.awResourceWarning?.retry()} />
+    <ResourceWarningDialog open={modal.awResourceWarning !== null} title={t('orchestration.create')} resources={modal.awResourceWarning?.resources ?? null} actionLabel={t('orchestration.create')} onCancel={() => modal.setAwResourceWarning(null)} onForce={() => modal.awResourceWarning?.retry()} />
   </>;
 }

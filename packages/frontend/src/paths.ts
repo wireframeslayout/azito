@@ -55,6 +55,10 @@ export function matchServerPath(pathname: string): { name: string; section?: str
   return null;
 }
 
+export function isOrchestrationPath(pathname: string): boolean {
+  return pathname === '/orchestration' || pathname.startsWith('/orchestration/');
+}
+
 export function isGlobalPagePath(pathname: string): boolean {
   return (
     pathname === '/servers' ||

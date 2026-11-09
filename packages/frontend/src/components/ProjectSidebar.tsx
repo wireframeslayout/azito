@@ -6,7 +6,7 @@ import AzitoLogoShort from './AzitoLogoShort';
 import { usePwaInstall } from '../hooks/usePwaInstall';
 import UsageDropdown from './UsageDropdown';
 import { PROJECTS_CHANGED_EVENT } from '../lib/projectsChanged';
-import { paths, matchWorkspacePath } from '../paths';
+import { isOrchestrationPath, paths, matchWorkspacePath } from '../paths';
 import { Icon } from './ui/Icon';
 import { useProjectRail } from '../hooks/useProjectRail';
 import ContextMenu, { useContextMenu } from './ContextMenu';
@@ -117,7 +117,7 @@ export default function ProjectSidebar() {
 
   const wsMatch = matchWorkspacePath(location.pathname);
   const storedProjectId = localStorage.getItem('workspace-active-project');
-  const currentProjectId = location.pathname.startsWith('/orchestration') ? null : wsMatch
+  const currentProjectId = isOrchestrationPath(location.pathname) ? null : wsMatch
     ? parseInt(wsMatch.id, 10)
     : storedProjectId ? parseInt(storedProjectId, 10) : null;
   const visibleProjects = rail.getVisibleProjects(projects);
@@ -299,7 +299,6 @@ export default function ProjectSidebar() {
       )}
 
 
-      <button className={orchestrationPulse ? "orchestration-rail-pulse" : undefined} onClick={() => navigate(ORCHESTRATION_NAV_ITEM.path)} title={t(ORCHESTRATION_NAV_ITEM.labelKey)} aria-label={t(ORCHESTRATION_NAV_ITEM.labelKey)} style={{ ...globalButtonStyle(location.pathname.startsWith('/orchestration')), color: 'var(--purple)', background: location.pathname.startsWith('/orchestration') ? 'var(--purple-a15)' : 'transparent' }}><Icon name={ORCHESTRATION_NAV_ITEM.icon} size={20} /></button>
       <div style={{ display: 'flex', flexDirection: 'column', gap: 2, flexShrink: 0 }}>
         {GLOBAL_ITEMS.map((item) => {
           const active = isActiveGlobalPath(item.path);
@@ -325,6 +324,8 @@ export default function ProjectSidebar() {
           );
         })}
       </div>
+
+      <button className={`orchestration-rail-button${orchestrationPulse ? " orchestration-rail-pulse" : ""}`} onClick={() => navigate(ORCHESTRATION_NAV_ITEM.path)} title={t(ORCHESTRATION_NAV_ITEM.labelKey)} aria-label={t(ORCHESTRATION_NAV_ITEM.labelKey)} style={{ ...globalButtonStyle(isOrchestrationPath(location.pathname)), color: 'var(--purple)', background: isOrchestrationPath(location.pathname) ? 'var(--purple-a15)' : 'transparent' }}><Icon name={ORCHESTRATION_NAV_ITEM.icon} size={20} /></button>
 
       <div
         style={{

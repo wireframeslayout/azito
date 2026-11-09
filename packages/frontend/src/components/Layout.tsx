@@ -15,7 +15,7 @@ import { HotkeyProvider } from '../hooks/useHotkeys';
 import { LeftBehindProvider } from '../hooks/useLeftBehind';
 import { TerminalThemeProvider } from '../hooks/useTerminalTheme';
 import TerminalBackdrop from './TerminalBackdrop';
-import { isGlobalPagePath } from '../paths';
+import { isGlobalPagePath, isOrchestrationPath } from '../paths';
 import { StatusBar } from './StatusBar';
 import { useServerResources, ServerResourcesProvider } from '../hooks/useServerResources';
 import { ServerStatusProvider } from '../hooks/useServerStatuses';
@@ -31,7 +31,7 @@ const GlobalPageShell = lazy(() => import('./global/GlobalPageShell'));
 
 export default function Layout() {
   const location = useLocation();
-  const isOrchestration = location.pathname === '/orchestration' || location.pathname.startsWith('/orchestration/');
+  const isOrchestration = isOrchestrationPath(location.pathname);
   const isGlobal = isGlobalPagePath(location.pathname);
   const { data: resourceData } = useServerResources(30000);
   const servers = resourceData?.servers ?? [];

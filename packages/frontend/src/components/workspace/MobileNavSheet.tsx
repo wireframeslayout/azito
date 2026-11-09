@@ -10,7 +10,6 @@ import { MobileNavMenu } from './MobileNavMenu';
 import { MobileActiveWindowsPanel } from './MobileActiveWindowsPanel';
 import type { ConnectPaneFn } from '../../lib/terminalRef';
 import { useOrchestrators } from '../../hooks/useOrchestrators';
-import { useOrchestratorRole } from '../../hooks/useOrchestratorRole';
 import { useActiveWindowRows } from '../../hooks/useActiveWindowRows';
 import { paths } from '../../paths';
 import type { SidebarMode } from '../../pages/workspace/types';
@@ -89,7 +88,6 @@ export function MobileNavSheet({
   const [activeWindowsOpen, setActiveWindowsOpen] = useState(false);
 
   const orchestrators = useOrchestrators();
-  const changeRole = useOrchestratorRole();
   const { totalCount: awCount, blockedCount: awBlockedCount } = useActiveWindowRows(titleData);
   const currentProjectItem = allProjects.find((p) => p.id === project?.id) ?? null;
 
@@ -198,7 +196,7 @@ export function MobileNavSheet({
                   activeWindowsBlockedCount={awBlockedCount}
                 />
               )}
-              {top === 'orchestration' && <OrchestrationSidebar onSelect={(id) => { navigate(paths.orchestration(id)); onClose(); }} onRemove={(id) => { void changeRole(id, null); }} />}
+              {top === 'orchestration' && <OrchestrationSidebar onSelect={(id) => { navigate(paths.orchestration(id)); onClose(); }} />}
               {top === 'mode' && sidebarContent}
               {top === 'projectSwitch' && (
                 <MobileProjectSwitchList

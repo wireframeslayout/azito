@@ -155,9 +155,6 @@ export function MobileNavMenu({
 
   return (
     <div style={{ padding: '0 4px 16px' }}>
-      <button type="button" onClick={() => onNavigateGlobal(ORCHESTRATION_NAV_ITEM.path)} style={{ ...rowStyle, minHeight: 44, color: 'var(--purple)' }} className="glass-popover-item">
-        <Icon name={ORCHESTRATION_NAV_ITEM.icon} size={16} /><span style={rowLabelStyle}>{t(ORCHESTRATION_NAV_ITEM.labelKey)}</span>{orchestratorCount !== undefined && <span style={rowMetaStyle}>{orchestratorCount}</span>}
-      </button>
       <button type="button" style={{ ...rowStyle, minHeight: 44 }} className="glass-popover-item" onClick={onOpenSearch}><Icon name="search" size={16} /><span style={rowLabelStyle}>{t('navigation:globalSearch.title')}</span></button>
       <div style={projectCardStyle}>
         <button type="button" onClick={onOpenProjectSwitch} style={selectionRowStyle} className="glass-popover-item">
@@ -187,6 +184,9 @@ export function MobileNavMenu({
       </div>
 
       <div style={sectionLabelStyle}>{t('workspace:mobileNav.sectionGlobal')}</div>
+      <button type="button" onClick={() => onNavigateGlobal(ORCHESTRATION_NAV_ITEM.path)} style={{ ...rowStyle, minHeight: 44, color: 'var(--purple)' }} className="glass-popover-item">
+        <Icon name={ORCHESTRATION_NAV_ITEM.icon} size={16} /><span style={rowLabelStyle}>{t(ORCHESTRATION_NAV_ITEM.labelKey)}</span>{orchestratorCount !== undefined && <span style={rowMetaStyle}>{orchestratorCount}</span>}
+      </button>
       {GLOBAL_NAV_ITEMS.map((item) => (
         <button key={item.path} type="button" onClick={() => onNavigateGlobal(item.path)} style={rowStyle} className="glass-popover-item">
           <Icon name={item.icon} size={16} style={rowIconStyle} />

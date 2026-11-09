@@ -145,6 +145,7 @@ const ICONS = {
   link: Link,
   units: UnitsSquad,
   operations: Activity,
+  orchestration: Activity,
   sidekicks: SidekickBot,
   'git-commit': GitCommitHorizontal,
   lock: Lock,

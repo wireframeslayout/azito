@@ -11,9 +11,7 @@ export function OrchestrationOrigins({ projectId, onSelect }: { projectId: numbe
   if (status !== 'ready') return null;
   const origins = windows.filter((window) => window.originProjectId === projectId);
   if (!origins.length) return null;
-  return <div>
-    {origins.map((window) => <button key={window.id} type="button" className="glass-popover-item" onClick={() => { navigate(paths.orchestration(window.id)); onSelect?.(); }} style={{ display: 'flex', alignItems: 'center', gap: 'var(--space-2)', width: '100%', padding: 'var(--space-3)', background: 'var(--bg-elevated)', color: 'var(--purple)', border: 0, borderRadius: 'var(--radius-md)', cursor: 'pointer', textAlign: 'left' }}>
-      <Icon name="operations" size={16} /><span>{t('orchestration.origin', { name: window.label || window.tmuxTarget })}</span>
-    </button>)}
-  </div>;
+  return <button type="button" className="glass-popover-item" onClick={() => { navigate(paths.orchestration(origins[0].id)); onSelect?.(); }} style={{ display: 'flex', alignItems: 'center', gap: 'var(--space-2)', width: '100%', padding: 'var(--space-3)', background: 'var(--bg-elevated)', color: 'var(--purple)', border: 0, borderRadius: 'var(--radius-md)', cursor: 'pointer', textAlign: 'left' }}>
+    <Icon name="orchestration" size={16} /><span>{t('orchestration.originCount', { count: origins.length })}</span>
+  </button>;
 }
