@@ -19,15 +19,16 @@ export function CsvTableEditor({ backend, path, onDirtyChange }: Props) {
   const [parsing, setParsing] = useState(false);
   const canSave = useRef(false);
   const parseGeneration = useRef(0);
+  const parsedPath = useRef(path);
   const [selected, setSelected] = useState({ row: 0, column: 0 });
   useEffect(() => {
     if (!document.bytes) return;
     let active = true;
-    setTable(null);
+    if (parsedPath.current !== path) { setTable(null); parsedPath.current = path; }
     const delimiter = /\.tsv$/i.test(path) ? '\t' : undefined;
     parseCsv(document.bytes, delimiter).then((parsed) => { if (active) { setTable(parsed); setParseError(false); setInvalidUtf8(false); canSave.current = !parsed.truncated; } }).catch((error: unknown) => { if (active) { setParseError(true); setInvalidUtf8(error instanceof InvalidCsvEncodingError); canSave.current = false; } });
     return () => { active = false; };
-  }, [document.document, path]);
+  }, [document.loadRevision, path]);
   const onKeyDown = (event: React.KeyboardEvent<HTMLElement>) => {
     if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === 's') {
       event.preventDefault();

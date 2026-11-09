@@ -88,3 +88,19 @@ it('saves only the editor containing the shortcut', async () => {
   window.dispatchEvent(outside);
   expect(outside.defaultPrevented).toBe(false);
 });
+
+
+it('keeps the edited cell focused after saving with Ctrl+S', async () => {
+  const saveBinary = vi.fn(async () => ({ kind: 'saved' as const, version: 'v2' }));
+  const backend = { source: 'test', readBinary: async () => ({ bytes: new TextEncoder().encode('a,b'), version: 'v1' }), saveBinary } as unknown as BinaryFilesBackend;
+  render(<CsvTableEditor backend={backend} path="a.csv" />);
+  const cell = await screen.findByLabelText('1, 1');
+  cell.focus();
+  fireEvent.change(cell, { target: { value: 'updated' } });
+  await waitFor(() => expect(screen.getByRole('button', { name: 'office.save' })).toBeEnabled());
+  fireEvent.keyDown(cell, { key: 's', ctrlKey: true });
+  await waitFor(() => expect(screen.getByRole('button', { name: 'office.save' })).toBeDisabled());
+  expect(saveBinary).toHaveBeenCalledTimes(1);
+  expect(cell).toHaveFocus();
+  expect(screen.getByLabelText('1, 1')).toBe(cell);
+});

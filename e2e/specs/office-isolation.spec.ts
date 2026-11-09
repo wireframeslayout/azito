@@ -55,6 +55,7 @@ test('XLSX save retains numbers, formulas and other sheets', async ({ app, harne
   fs.writeFileSync(csv, 'a,b\nc,d');
   const project = await harness.createProject('xlsx-preview');
   await harness.api(`/projects/${project}/servers/local`, { method: 'PUT', body: JSON.stringify({ working_directory: dir }) });
+  await app.addInitScript(() => { localStorage.setItem('azito-terminal-theme', JSON.stringify({ version: 1, global: { palette: { background: '#ffffff', foreground: '#111111' }, background: { scope: 'app' } }, customThemes: {}, projectOverrides: {} })); });
   await app.goto(`${harness.baseUrl}/workspace/${project}`);
   const before = await app.evaluate(() => { const label = document.createElement('label'); label.id = 'outside-workbook-label'; label.textContent = 'Outside'; document.body.append(label); return getComputedStyle(label).cursor; });
   await app.getByTitle('ファイル', { exact: true }).click();
@@ -63,7 +64,9 @@ test('XLSX save retains numbers, formulas and other sheets', async ({ app, harne
   await app.getByText('タブをピン留め', { exact: true }).click();
   await expect(app.getByText(/数式の再計算が必要な場合があります/).first()).toBeVisible();
   expect(await app.locator('#outside-workbook-label').evaluate((label) => getComputedStyle(label).cursor)).toBe(before);
-  const contrast = await app.locator('.fortune-container').evaluate((element) => {
+  await expect(app.locator('html')).toHaveAttribute('data-bg-scope', 'app');
+  expect(await app.locator('html').evaluate((element) => element.style.getPropertyValue('--surface-base'))).toBe('#ffffff');
+  const contrast = await app.locator('.fortune-toolbar').evaluate((element) => {
     const style = getComputedStyle(element);
     const luminance = (color: string) => {
       const values = color.match(/[\d.]+/g)!.slice(0, 3).map(Number).map((value) => { const s = value / 255; return s <= 0.04045 ? s / 12.92 : ((s + 0.055) / 1.055) ** 2.4; });
