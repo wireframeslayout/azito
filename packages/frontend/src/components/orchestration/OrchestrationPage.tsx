@@ -60,6 +60,7 @@ export default function OrchestrationPage({ rightPanel }: OrchestrationPageProps
       const response = await apiWithStatus(`/windows/${windowId}/role`, { method: 'PUT', body: JSON.stringify({ role: 'orchestrator' }) });
       if (response.status !== 200) throw new Error('role change failed');
       refresh();
+      window.dispatchEvent(new Event('orchestration:moved'));
       showToast(t('orchestration.moved'), [{ label: t('orchestration.open'), onClick: () => navigate(paths.orchestration(windowId)) }]);
     } catch { showToast(t('orchestration.roleError')); }
   };

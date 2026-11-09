@@ -27,6 +27,16 @@ describe('OrchestrationSidebar', () => {
     fireEvent.keyDown(parent, { key: 'ArrowDown' });
     expect(document.activeElement).toBe(screen.getByText(/Child/));
   });
+  it('moves between parent and child with left and right', () => {
+    render(<OrchestrationSidebar onSelect={vi.fn()} />);
+    const parent = screen.getByText(/Parent/);
+    const child = screen.getByText(/Child/);
+    parent.focus();
+    fireEvent.keyDown(parent, { key: 'ArrowRight' });
+    expect(document.activeElement).toBe(child);
+    fireEvent.keyDown(child, { key: 'ArrowLeft' });
+    expect(document.activeElement).toBe(parent);
+  });
   it('collapses children', () => {
     render(<OrchestrationSidebar onSelect={vi.fn()} />);
     fireEvent.click(screen.getByRole('button', { name: 'orchestration.collapse' }));

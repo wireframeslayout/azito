@@ -313,6 +313,7 @@ export function useWindowActions(
           const response = await apiWithStatus(`/windows/${w.id}/role`, { method: 'PUT', body: JSON.stringify({ role: nextRole }) });
           if (response.status !== 200) throw new Error('role change failed');
           refreshWorkspace();
+          if (nextRole) window.dispatchEvent(new Event('orchestration:moved'));
           showToast(t(nextRole ? 'orchestration.moved' : 'orchestration.restored'), [
             ...(nextRole ? [{ label: t('orchestration.open'), onClick: () => navigate(paths.orchestration(w.id)) }] : []),
             { label: t('orchestration.undo'), onClick: () => { void changeRole(nextRole ? null : 'orchestrator'); } },

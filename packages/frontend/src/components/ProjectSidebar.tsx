@@ -48,6 +48,7 @@ export default function ProjectSidebar() {
   const rail = useProjectRail();
   const [projects, setProjects] = useState<ProjectItem[]>([]);
   const [menuOpen, setMenuOpen] = useState(false);
+  const [orchestrationPulse, setOrchestrationPulse] = useState(false);
   const [searchOpen, setSearchOpen] = useState(false);
   const [dragProjectId, setDragProjectId] = useState<number | null>(null);
   const [dropTarget, setDropTarget] = useState<{ id: number; position: 'before' | 'after' } | null>(null);
@@ -98,6 +99,21 @@ export default function ProjectSidebar() {
     setMenuOpen(false);
     setSearchOpen(false);
   }, [location.pathname]);
+
+  useEffect(() => {
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    let frame: number | undefined;
+    const pulse = () => {
+      if (window.matchMedia('(prefers-reduced-motion: reduce)').matches) return;
+      setOrchestrationPulse(false);
+      if (frame !== undefined) cancelAnimationFrame(frame);
+      frame = requestAnimationFrame(() => setOrchestrationPulse(true));
+      clearTimeout(timer);
+      timer = setTimeout(() => setOrchestrationPulse(false), 1000);
+    };
+    window.addEventListener('orchestration:moved', pulse);
+    return () => { window.removeEventListener('orchestration:moved', pulse); clearTimeout(timer); if (frame !== undefined) cancelAnimationFrame(frame); };
+  }, []);
 
   const wsMatch = matchWorkspacePath(location.pathname);
   const storedProjectId = localStorage.getItem('workspace-active-project');
@@ -283,7 +299,7 @@ export default function ProjectSidebar() {
       )}
 
 
-      <button onClick={() => navigate(ORCHESTRATION_NAV_ITEM.path)} title={t(ORCHESTRATION_NAV_ITEM.labelKey)} aria-label={t(ORCHESTRATION_NAV_ITEM.labelKey)} style={{ ...globalButtonStyle(location.pathname.startsWith('/orchestration')), color: 'var(--purple)', background: location.pathname.startsWith('/orchestration') ? 'var(--purple-a15)' : 'transparent' }}><Icon name={ORCHESTRATION_NAV_ITEM.icon} size={20} /></button>
+      <button className={orchestrationPulse ? "orchestration-rail-pulse" : undefined} onClick={() => navigate(ORCHESTRATION_NAV_ITEM.path)} title={t(ORCHESTRATION_NAV_ITEM.labelKey)} aria-label={t(ORCHESTRATION_NAV_ITEM.labelKey)} style={{ ...globalButtonStyle(location.pathname.startsWith('/orchestration')), color: 'var(--purple)', background: location.pathname.startsWith('/orchestration') ? 'var(--purple-a15)' : 'transparent' }}><Icon name={ORCHESTRATION_NAV_ITEM.icon} size={20} /></button>
       <div style={{ display: 'flex', flexDirection: 'column', gap: 2, flexShrink: 0 }}>
         {GLOBAL_ITEMS.map((item) => {
           const active = isActiveGlobalPath(item.path);

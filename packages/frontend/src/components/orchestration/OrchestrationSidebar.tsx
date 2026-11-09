@@ -28,8 +28,16 @@ export function OrchestrationSidebar({ selectedId, onSelect, onRemove }: Orchest
       <div style={{ display: 'flex', paddingLeft: `calc(var(--space-3) * ${depth})` }}>
         {node.children.length > 0 && <button aria-label={expanded ? t('orchestration.collapse') : t('orchestration.expand')} onClick={() => setClosed((previous) => { const next = new Set(previous); if (next.has(node.window.id)) next.delete(node.window.id); else next.add(node.window.id); return next; })}>{expanded ? '−' : '+'}</button>}
         <button data-orchestration-row onKeyDown={(event) => {
-          if (event.key === 'ArrowRight' && node.children.length) { event.preventDefault(); setClosed((previous) => { const next = new Set(previous); next.delete(node.window.id); return next; }); }
-          if (event.key === 'ArrowLeft' && node.children.length) { event.preventDefault(); setClosed((previous) => new Set(previous).add(node.window.id)); }
+          if (event.key === 'ArrowRight' && node.children.length) {
+            event.preventDefault();
+            if (expanded) event.currentTarget.closest('[role="treeitem"]')?.querySelector<HTMLButtonElement>(':scope > [role="group"] [data-orchestration-row]')?.focus();
+            else setClosed((previous) => { const next = new Set(previous); next.delete(node.window.id); return next; });
+          }
+          if (event.key === 'ArrowLeft') {
+            event.preventDefault();
+            if (expanded && node.children.length) setClosed((previous) => new Set(previous).add(node.window.id));
+            else event.currentTarget.closest('[role="treeitem"]')?.parentElement?.closest('[role="treeitem"]')?.querySelector<HTMLButtonElement>('[data-orchestration-row]')?.focus();
+          }
           if (event.key === 'ArrowUp' || event.key === 'ArrowDown') {
             event.preventDefault();
             const rows = Array.from(event.currentTarget.closest('[role="tree"]')?.querySelectorAll<HTMLButtonElement>('[data-orchestration-row]') ?? []);

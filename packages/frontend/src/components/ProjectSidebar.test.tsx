@@ -1,4 +1,4 @@
-import { render, screen, waitFor } from '@testing-library/react';
+import { act, render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import ProjectSidebar from './ProjectSidebar';
@@ -31,6 +31,15 @@ describe('project rail actions', () => {
     expect(mocks.navigate).toHaveBeenCalledWith('/projects/new');
     await user.click(more);
     expect(screen.getByRole('dialog')).toHaveTextContent('Project search');
+  });
+
+  it('does not animate when reduced motion is preferred', () => {
+    mocks.api.mockResolvedValue([]);
+    vi.stubGlobal('matchMedia', () => ({ matches: true }));
+    render(<ProjectSidebar />);
+    act(() => window.dispatchEvent(new Event('orchestration:moved')));
+    expect(screen.getByRole('button', { name: 'projects:sidebar.orchestration' })).not.toHaveClass('orchestration-rail-pulse');
+    vi.unstubAllGlobals();
   });
 
   it('opens project creation with the keyboard', async () => {
