@@ -36,7 +36,12 @@ it('opens the operation group and navigates to its child without opening the par
   expect(openWindow).toHaveBeenCalledTimes(1);
   expect(openWindow).toHaveBeenCalledWith(7, 'Task', { serverName: 's', target: 's:2' });
   fireEvent.keyDown(child, { key: 'ArrowLeft' });
-  expect(parent).toHaveFocus();
+  expect(child).toHaveFocus();
+  fireEvent.keyDown(child, { key: ' ' });
+  expect(openWindow).toHaveBeenCalledTimes(1);
+  expect(parent).toHaveClass('row-selected');
+  expect(parent.parentElement?.querySelector('[role="group"]')).not.toBeNull();
+  expect(parent.querySelector('[role="group"]')).toBeNull();
 });
 
 it('opens a group by default when a child is running and honors an explicitly saved closed state', () => {
@@ -55,10 +60,31 @@ it('shows a notice when operation links cannot be loaded', () => {
   state.error = true;
   render(<TasksSidebar titleData={{} as never} tasks={[]} onOpenTask={vi.fn()} onOpenAllTasks={vi.fn()} onCreateTask={vi.fn()} onOpenTaskWindow={vi.fn()} onOpenTaskBrowser={vi.fn()} />);
   expect(screen.getByRole('status')).toHaveTextContent('sidebar.operationLinksError');
+  expect(screen.getByRole('tree')).not.toContainElement(screen.getByRole('status'));
 });
 
 it('fetches links only for displayed tasks', () => {
   const tasks = [{ id: 7, title: 'Visible', status: 'open' }, { id: 8, title: 'Archived', status: 'archived' }] as Task[];
   render(<TasksSidebar titleData={{} as never} tasks={tasks} onOpenTask={vi.fn()} onOpenAllTasks={vi.fn()} onCreateTask={vi.fn()} onOpenTaskWindow={vi.fn()} onOpenTaskBrowser={vi.fn()} />);
   expect(state.ids).toEqual([7]);
+});
+
+
+it('keeps the task ID set stable while searching', () => {
+  const tasks = [{ id: 7, title: 'Visible', status: 'open' }, { id: 9, title: 'Another', status: 'open' }] as Task[];
+  render(<TasksSidebar titleData={{} as never} tasks={tasks} onOpenTask={vi.fn()} onOpenAllTasks={vi.fn()} onCreateTask={vi.fn()} onOpenTaskWindow={vi.fn()} onOpenTaskBrowser={vi.fn()} />);
+  fireEvent.change(screen.getByPlaceholderText('sidebar.searchPlaceholder'), { target: { value: 'Visible' } });
+  expect(state.ids).toEqual([7, 9]);
+});
+
+it('handles invalid saved expansion and removes closed window IDs', () => {
+  const task = { id: 7, title: 'Task', status: 'open', windows: [{ id: 1, isPrimary: true, tmuxTarget: 's:1', serverName: 's' }, { id: 2, isPrimary: false, tmuxTarget: 's:2', serverName: 's' }] } as Task;
+  const props = { titleData: {} as never, tasks: [task], onOpenTask: vi.fn(), onOpenAllTasks: vi.fn(), onCreateTask: vi.fn(), onOpenTaskWindow: vi.fn(), onOpenTaskBrowser: vi.fn() };
+  localStorage.setItem('tasks-sidebar-expanded-windows', 'null');
+  const view = render(<TasksSidebar {...props} />);
+  expect(document.querySelector('[data-window-id="1"]')).toHaveAttribute('aria-expanded', 'false');
+  view.unmount();
+  localStorage.setItem('tasks-sidebar-expanded-windows', '{"1":true,"999":false}');
+  render(<TasksSidebar {...props} />);
+  expect(JSON.parse(localStorage.getItem('tasks-sidebar-expanded-windows')!)).toEqual({ '1': true });
 });

@@ -23,7 +23,11 @@ const EXPAND_STORAGE_KEY = 'tasks-sidebar-expanded';
 const WINDOW_EXPAND_STORAGE_KEY = 'tasks-sidebar-expanded-windows';
 
 function loadWindowExpanded(): Record<string, boolean> {
-  try { return JSON.parse(localStorage.getItem(WINDOW_EXPAND_STORAGE_KEY) || '{}'); } catch { return {}; }
+  try {
+    const value: unknown = JSON.parse(localStorage.getItem(WINDOW_EXPAND_STORAGE_KEY) || '{}');
+    if (!value || typeof value !== 'object' || Array.isArray(value)) return {};
+    return Object.fromEntries(Object.entries(value).filter(([key, v]) => /^[1-9]\d*$/.test(key) && typeof v === 'boolean'));
+  } catch { return {}; }
 }
 
 function loadExpandedIds(): Set<number> {
@@ -79,7 +83,8 @@ export default function TasksSidebar({
   const [expandedIds, setExpandedIds] = useState<Set<number>>(loadExpandedIds);
   const [windowExpanded, setWindowExpanded] = useState<Record<string, boolean>>(loadWindowExpanded);
   const toggleWindow = (id: number, current: boolean) => setWindowExpanded(previous => {
-    const next = { ...previous, [id]: !current };
+    const validIds = new Set(tasks.flatMap(task => (task.windows ?? []).map(window => String(window.id))));
+    const next = { ...Object.fromEntries(Object.entries(previous).filter(([key]) => validIds.has(key))), [id]: !current };
     try { localStorage.setItem(WINDOW_EXPAND_STORAGE_KEY, JSON.stringify(next)); } catch { /* best-effort */ }
     return next;
   });
@@ -95,7 +100,19 @@ export default function TasksSidebar({
     [tasks, activityRows, query, openedAt],
   );
 
-  const { parents, error: linksError } = useOperationLinks(loading ? [] : groups.flatMap(group => group.rows.map(row => row.task.id)));
+  const { parents, error: linksError } = useOperationLinks(loading ? [] : tasks.filter(task => task.status !== 'archived').map(task => task.id));
+
+  useEffect(() => {
+    if (loading) return;
+    const validIds = new Set(tasks.flatMap(task => (task.windows ?? []).map(window => String(window.id))));
+    setWindowExpanded(previous => {
+      const entries = Object.entries(previous).filter(([key]) => validIds.has(key));
+      if (entries.length === Object.keys(previous).length) return previous;
+      const next = Object.fromEntries(entries);
+      try { localStorage.setItem(WINDOW_EXPAND_STORAGE_KEY, JSON.stringify(next)); } catch { /* best-effort */ }
+      return next;
+    });
+  }, [tasks, loading]);
 
   const totalVisible = groups.reduce((n, g) => n + g.rows.length, 0);
   const nonArchivedCount = tasks.filter((t) => t.status !== 'archived').length;
@@ -201,6 +218,7 @@ export default function TasksSidebar({
       </div>
 
 
+      {linksError && <Notice tone="warning">{t('sidebar.operationLinksError')}</Notice>}
       <div
         ref={treeRef}
         role="tree"
@@ -208,7 +226,6 @@ export default function TasksSidebar({
         onKeyDown={e => handleTreeKeyDown(e, treeRef.current, expandedIds, toggleExpanded, toggleWindow)}
         style={{ flex: 1, overflowY: 'auto', padding: '0 4px 4px' }}
       >
-        {linksError && <Notice tone="warning">{t('sidebar.operationLinksError')}</Notice>}
         {loading ? (
           <SkeletonRows />
         ) : totalVisible === 0 ? (
@@ -565,21 +582,20 @@ function ChildRow({ child, taskId, taskTitle, onOpenTaskWindow, onOpenTaskBrowse
     const label = taskChildWindowTitle(w, taskTitle, activity);
     const isExpanded = windowExpanded[w.id] ?? child.children.some(c => findWindowActivity(activityRows, c.window.serverName, c.window.tmuxTarget)?.status === 'running');
     return (
+      <>
       <div
         role="treeitem"
         data-window-id={w.id}
         aria-selected={w.id === selectedWindowId}
         onContextMenu={showWindowContextMenu ? e => { e.stopPropagation(); showWindowContextMenu(e, w); } : undefined}
         {...(showWindowContextMenuAt ? bindLongPress((x, y) => showWindowContextMenuAt(x, y, w)) : {})}
-        data-parent-task-id={taskId}
         aria-expanded={child.children.length ? isExpanded : undefined}
-        onKeyDown={e => { if (e.target === e.currentTarget && e.key === ' ') { e.preventDefault(); if (child.children.length) toggleWindow(w.id, isExpanded); else onOpenTaskWindow(taskId, taskTitle, { serverName: w.serverName, target: w.tmuxTarget }); } }}
+        onKeyDown={e => { if (e.target === e.currentTarget && e.key === ' ' && child.children.length) { e.preventDefault(); toggleWindow(w.id, isExpanded); } }}
         tabIndex={0}
         onClick={e => { e.stopPropagation(); onOpenTaskWindow(taskId, taskTitle, { serverName: w.serverName, target: w.tmuxTarget }); }}
-        className="row-hover task-sidebar-child"
+        className={`row-hover task-sidebar-child${w.id === selectedWindowId ? ' row-selected' : ''}`}
         style={{
           display: 'flex',
-          flexWrap: 'wrap',
           alignItems: 'center',
           gap: 6,
           padding: '4px 8px',
@@ -587,11 +603,10 @@ function ChildRow({ child, taskId, taskTitle, onOpenTaskWindow, onOpenTaskBrowse
           cursor: 'pointer',
           fontSize: 'var(--font-sm)',
           color: 'var(--text)',
-          background: w.id === selectedWindowId ? 'var(--bg-hover)' : undefined,
           ...longPressStyle,
         }}
       >
-        {child.children.length > 0 && <button type="button" tabIndex={-1} aria-hidden="true" onClick={e => { e.stopPropagation(); toggleWindow(w.id, isExpanded); }} style={{ background: 'none', border: 0, color: 'var(--text-dim)', cursor: 'pointer' }}><Icon name="chevron-right" size={14} rotate={isExpanded ? 90 : 0} /></button>}
+        {child.children.length > 0 && <button className="task-sidebar-window-toggle" type="button" tabIndex={-1} aria-hidden="true" onClick={e => { e.stopPropagation(); toggleWindow(w.id, isExpanded); }} style={{ background: 'none', border: 0, color: 'var(--text-dim)', cursor: 'pointer' }}><Icon name="chevron-right" size={14} rotate={isExpanded ? 90 : 0} /></button>}
         <Icon name="terminal" size={14} style={{ color: 'var(--text-dim)', flexShrink: 0 }} />
         <span style={{ flex: 1, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
           {label}
@@ -604,8 +619,9 @@ function ChildRow({ child, taskId, taskTitle, onOpenTaskWindow, onOpenTaskBrowse
             primary
           </span>
         )}
-        {isExpanded && child.children.length > 0 && <div role="group" onTouchStart={e => e.stopPropagation()} onTouchEnd={e => e.stopPropagation()} onTouchMove={e => e.stopPropagation()} style={{ flexBasis: '100%', paddingLeft: 20 }}>{subRows}</div>}
       </div>
+      {isExpanded && child.children.length > 0 && <div role="group" style={{ paddingLeft: 20 }}>{subRows}</div>}
+      </>
     );
   }
 

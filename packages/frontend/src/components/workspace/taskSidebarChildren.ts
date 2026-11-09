@@ -31,7 +31,7 @@ export function buildTaskWindowTree(task: Task, parents: ReadonlyMap<number, num
     return (a.label || a.tmuxTarget).localeCompare(b.label || b.tmuxTarget);
   });
   const primaryIds = new Set(sorted.filter(w => w.isPrimary).map(w => w.id));
-  return sorted.filter(w => !parents.has(w.id) || !primaryIds.has(parents.get(w.id)!)).map(window => ({
+  return sorted.filter(w => w.isPrimary || !parents.has(w.id) || !primaryIds.has(parents.get(w.id)!)).map(window => ({
     kind: 'window', window,
     children: window.isPrimary ? sorted.filter(w => parents.get(w.id) === window.id && !w.isPrimary).map(w => ({ kind: 'window', window: w })) : [],
   }));

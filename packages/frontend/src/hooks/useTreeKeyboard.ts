@@ -36,7 +36,6 @@ export function handleTreeKeyDown(e: React.KeyboardEvent, tree: HTMLElement | nu
         } else {
           const parentItem = items[idx].closest('[role="group"]')?.closest('[role="treeitem"]') as HTMLElement | null;
           if (parentItem) parentItem.focus();
-          else if (items[idx].dataset.parentTaskId) tree.querySelector<HTMLElement>(`[data-task-id="${items[idx].dataset.parentTaskId}"]`)?.focus();
         }
         break;
       }
