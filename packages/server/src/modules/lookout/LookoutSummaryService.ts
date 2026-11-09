@@ -1,3 +1,4 @@
+import { HeadlessCliError, type CliFailureReason } from '../llm/headlessExec';
 import { AgentUnreachableError } from '../servers/transport/AgentUnreachableError';
 import { TranscriptAgentBadResponseError, TranscriptAgentOutdatedError } from '../transcripts/sources/AgentTranscriptSource';
 import { createHash } from 'crypto';
@@ -10,10 +11,10 @@ import { buildLookoutPrompt, normalizeLookoutSummary } from './lookoutPrompt';
 import { runLookoutLlm } from './LlmClientFactory';
 import type { SqliteLookoutSettingsRepository, LookoutSettings } from './SqliteLookoutSettingsRepository';
 
-export type LookoutState = 'blocked' | 'working' | 'completed';
+export type LookoutState = 'blocked' | 'working' | 'finished';
 export interface SummaryRequest { windowId: number; state: LookoutState }
-export interface SummaryResult { windowId: number; status: 'ready' | 'pending' | 'off' | 'unavailable' | 'none'; summary?: string }
-interface Cached { status: 'pending' | 'ready' | 'unavailable'; summary?: string; retryAt?: number }
+export interface SummaryResult { windowId: number; status: 'ready' | 'pending' | 'off' | 'unavailable' | 'none'; text?: string; reason?: CliFailureReason }
+interface Cached { status: 'pending' | 'ready' | 'unavailable'; text?: string; reason?: CliFailureReason; retryAt?: number }
 interface Job { key: string; windowId: number; prompt: string; settings: LookoutSettings; generation: number }
 
 export class LookoutSummaryService {
@@ -89,7 +90,7 @@ export class LookoutSummaryService {
     if (cached && !(cached.status === 'unavailable' && Date.now() >= (cached.retryAt ?? 0))) {
       this.cache.delete(key); this.cache.set(key, cached);
       if (cached.status === 'pending') this.drain();
-      return { windowId, status: cached.status, ...(cached.summary ? { summary: cached.summary } : {}) };
+      return { windowId, status: cached.status, ...(cached.text ? { text: cached.text } : {}), ...(cached.reason ? { reason: cached.reason } : {}) };
     }
     this.cache.set(key, { status: 'pending' });
     while (this.cache.size > 200) this.cache.delete(this.cache.keys().next().value!);
@@ -108,9 +109,9 @@ export class LookoutSummaryService {
       void this.run(job.settings, job.prompt).then((output) => {
         const summary = normalizeLookoutSummary(output);
         if (!summary) throw new Error('empty_summary');
-        if (job.generation === this.generation && this.latest.get(job.windowId) === job.key && this.cache.has(job.key)) this.cache.set(job.key, { status: 'ready', summary });
-      }).catch(() => {
-        if (job.generation === this.generation && this.latest.get(job.windowId) === job.key && this.cache.has(job.key)) this.cache.set(job.key, { status: 'unavailable', retryAt: Date.now() + 30_000 });
+        if (job.generation === this.generation && this.latest.get(job.windowId) === job.key && this.cache.has(job.key)) this.cache.set(job.key, { status: 'ready', text: summary });
+      }).catch((error: unknown) => {
+        if (job.generation === this.generation && this.latest.get(job.windowId) === job.key && this.cache.has(job.key)) this.cache.set(job.key, { status: 'unavailable', reason: error instanceof HeadlessCliError ? error.reason : 'failed', retryAt: Date.now() + 30_000 });
       }).finally(() => {
         if (job.generation === this.generation && this.latest.get(job.windowId) !== job.key && this.cache.get(job.key)?.status === 'pending') this.cache.delete(job.key);
         this.active--; this.activeWindows.delete(job.windowId); this.drain();

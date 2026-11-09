@@ -13,7 +13,7 @@ import { ModelSelect } from '../../ui/ModelSelect';
 
 type Provider = 'claude' | 'codex';
 interface Settings { enabled: boolean; provider: Provider; model: string; updatedAt: string }
-interface Probe { ok: boolean; version: string | null; reason: string | null; remedy: string | null }
+interface Probe { ok: boolean; cli: { found: boolean; version: string | null }; reason?: string; hint?: string }
 interface Model { id: string; label: string }
 
 export function LookoutSettings() {
@@ -43,7 +43,7 @@ export function LookoutSettings() {
   const runProbe = async () => {
     setProbing(true); setProbe(null);
     try { setProbe(await request<Probe>('/settings/lookout/probe', { method: 'POST' })); }
-    catch { setProbe({ ok: false, version: null, reason: t('lookout.probeFailed'), remedy: null }); }
+    catch { setProbe({ ok: false, cli: { found: false, version: null }, reason: t('lookout.probeFailed') }); }
     finally { setProbing(false); }
   };
   return <section style={{ background: 'var(--bg-card)', border: '1px solid var(--border)', borderRadius: 'var(--radius-md)', padding: 'var(--space-4)', marginBottom: 'var(--space-4)', display: 'grid', gap: 'var(--space-3)' }}>
@@ -56,7 +56,7 @@ export function LookoutSettings() {
       <span id="lookout-model-label">{t('lookout.model')}</span>
       <div role="group" aria-labelledby="lookout-model-label"><ModelSelect ariaLabel={t('lookout.model')} models={models[settings.provider]} value={settings.model} disabled={!settings.enabled || saving} onChange={model => { setSettings({ ...settings, model }); setDirty(true); }} onValidityChange={setValid} /></div>
       <div style={{ display: 'flex', flexWrap: 'wrap', gap: 'var(--space-2)' }}><Button onClick={save} disabled={!valid || !settings.model} loading={saving} loadingLabel={t('lookout.saving')}>{t('lookout.save')}</Button><Button onClick={runProbe} disabled={!settings.enabled || saving || dirty} loading={probing} loadingLabel={t('lookout.probing')}>{t('lookout.probe')}</Button></div>
-      {probe && <Notice tone={probe.ok ? 'success' : 'warning'} sub={probe.remedy}>{probe.ok ? t('lookout.detected', { version: probe.version }) : probe.reason || t('lookout.probeFailed')}</Notice>}
+      {probe && <Notice tone={probe.ok ? 'success' : 'warning'} sub={probe.hint}>{probe.ok ? t('lookout.detected', { version: probe.cli.version }) : probe.reason || t('lookout.probeFailed')}</Notice>}
     </>}
   </section>;
 }

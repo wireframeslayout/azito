@@ -4,7 +4,7 @@ import { formatRelativeTime } from '../../utils/time';
 import { Badge } from '../ui/Badge';
 import { LookoutSummaryText } from './LookoutSummaryText';
 
-export type LookoutSummary = { status: 'off' | 'pending' | 'error' } | { status: 'ready'; text: string };
+export type LookoutSummary = { status: 'off' | 'pending' } | { status: 'error'; reason?: 'not_installed' | 'not_authenticated' | 'timeout' | 'failed' } | { status: 'ready'; text: string };
 interface Props { item: LookoutItem; onOpen: (item: LookoutItem) => void; summary?: LookoutSummary }
 export function LookoutRow({ item, onOpen, summary = { status: 'off' } }: Props) {
   const { t } = useTranslation('lookout');

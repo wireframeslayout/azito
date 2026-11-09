@@ -30,7 +30,13 @@
     "pending": "要約を準備中",
     "error": "要約を取得できません",
     "ready": "要約",
-    "label": "要約"
+    "label": "要約",
+    "reasons": {
+      "not_installed": "要約を利用できません: CLI が見つかりません",
+      "not_authenticated": "要約を利用できません: CLI にログインしていません",
+      "timeout": "要約を利用できません: 時間切れ",
+      "failed": "要約を利用できません: 実行に失敗しました"
+    }
   },
   "attentionCount": "要対応 {{count}} 件",
   "updated": "更新 {{time}}",

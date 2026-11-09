@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
+import { HeadlessCliError } from '../llm/headlessExec';
 import { LookoutSummaryService } from './LookoutSummaryService';
 import { buildLookoutPrompt, normalizeLookoutSummary } from './lookoutPrompt';
 
@@ -29,7 +30,7 @@ describe('Lookout summaries', () => {
     expect((await service.getSummaries(request))[0].status).toBe('pending');
     expect(run).toHaveBeenCalledTimes(1);
     finish('done');
-    await vi.waitFor(async () => expect((await service.getSummaries(request))[0]).toMatchObject({ status: 'ready', summary: 'done' }));
+    await vi.waitFor(async () => expect((await service.getSummaries(request))[0]).toMatchObject({ status: 'ready', text: 'done' }));
   });
   it('does not retry failures on each poll', async () => {
     const run = vi.fn(async () => { throw new Error('failure'); });
@@ -73,6 +74,12 @@ describe('Lookout summaries', () => {
     await vi.advanceTimersByTimeAsync(1);
     await service.getSummaries([{ windowId: 1, state: 'blocked' }]);
     expect(run).toHaveBeenCalledTimes(2);
+  });
+
+  it('returns the classified failure without exposing process output', async () => {
+    const service = setup(async () => { throw new HeadlessCliError('not_authenticated'); });
+    await service.getSummaries(request);
+    await vi.waitFor(async () => expect((await service.getSummaries(request))[0]).toEqual({ windowId: 1, status: 'unavailable', reason: 'not_authenticated' }));
   });
 
 });

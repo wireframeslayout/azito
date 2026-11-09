@@ -30,7 +30,13 @@
     "pending": "Preparing summary",
     "error": "Summary unavailable",
     "ready": "Summary",
-    "label": "Summary"
+    "label": "Summary",
+    "reasons": {
+      "not_installed": "Summary unavailable: CLI not installed",
+      "not_authenticated": "Summary unavailable: CLI not logged in",
+      "timeout": "Summary unavailable: request timed out",
+      "failed": "Summary unavailable: request failed"
+    }
   },
   "attentionCount": "{{count}} need attention",
   "updated": "Updated {{time}}",
