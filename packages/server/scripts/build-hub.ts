@@ -238,6 +238,8 @@ function assertStageContents(platform: Args['platform']): void {
     'version.txt',
     ...(isWin32 ? ['node.exe', 'run.ps1', 'node_modules/better-sqlite3/build/Release/better_sqlite3.node'] : UNIX_ONLY_FILES),
     'public/index.html',
+    'THIRD-PARTY-LICENSES.txt',
+    'NOTICE',
     'harness/chat-commands.json',
     // The Windows route of the harness install (setup.mjs, the Node hook and the modules setup.mjs imports).
     'harness/setup.mjs',
@@ -382,6 +384,9 @@ async function main(): Promise<void> {
   const publicDir = path.join(REPO_ROOT, 'public');
   if (fs.existsSync(publicDir)) {
     copyDir(publicDir, path.join(STAGE, 'public'));
+  }
+  for (const name of ['THIRD-PARTY-LICENSES.txt', 'NOTICE']) {
+    fs.copyFileSync(path.join(REPO_ROOT, name), path.join(STAGE, name));
   }
 
   // 5. Stage harness/

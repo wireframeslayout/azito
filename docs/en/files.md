@@ -205,3 +205,11 @@ Text editing accepts UTF-8 files up to 500 KiB. When a save conflicts with anoth
 A tab with unsaved changes asks before it closes, and before opening any other tab (a file, task, settings, terminal or any other kind) replaces it. Cancelling opens nothing and keeps the tab and its edits. Pinned tabs are never replaced.
 
 On a phone, Markdown offers source and preview modes; the split view remains available on larger screens. The Markdown key row appears above the on-screen keyboard while editing.
+
+### Office and media previews
+
+CSV and TSV files open as a table or text. Select a delimiter, edit cells, and add or remove rows and columns. UTF-8, the byte-order mark, and the original line ending are preserved. Save checks for changes made elsewhere; reload or explicitly overwrite when a conflict is reported.
+
+XLSX opens read-only. Editing requires confirmation because some formatting, drawings, charts, and pivot tables may be lost and formulas may need recalculation. XLSX editing is unavailable on narrow screens. DOCX and PPTX are read-only; PPTX rendering is simplified and a damaged slide can prevent the presentation from opening. Older DOC, XLS, and PPT files must be downloaded.
+
+Office previews are limited to 20 MiB. Tables are limited to 5,000 rows and 100 columns, and presentations to the first 50 slides. A truncated table cannot be saved. Office archives are also subject to decompression and entry-count limits. Audio and video use the browser's supported codecs; server files retain the 50 MiB download limit.
