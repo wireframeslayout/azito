@@ -2,6 +2,9 @@ import { useMemo } from 'react';
 import { useTranslation } from 'react-i18next';
 import { Icon } from '../ui/Icon';
 import { Chip, WindowActivityIndicator, Button } from '../ui';
+import { useLookoutSummaries } from '../../hooks/useLookoutSummaries';
+import { LookoutSummaryText } from '../lookout/LookoutSummaryText';
+import type { LookoutSummary } from '../lookout/LookoutRow';
 import { useLookout } from '../../hooks/useLookout';
 import type { LookoutItem } from '../../lib/lookoutSummary';
 import { LookoutSection } from '../lookout/LookoutSection';
@@ -39,6 +42,7 @@ export default function HomeFeed({ allProjects, openTask, connectPane, onAddWind
 
   const projectById = useMemo(() => new Map(allProjects.map((p) => [p.id, p])), [allProjects]);
   const attentionEntries = sections.attention;
+  const summaries = useLookoutSummaries([...sections.attention, ...sections.active], true);
   const handleItemClick = (item: LookoutItem) => openLookoutItem(item, openTask, openTerminal);
 
   return (
@@ -54,11 +58,11 @@ export default function HomeFeed({ allProjects, openTask, connectPane, onAddWind
         <LookoutSection name="attention" items={attentionEntries} renderItem={(entry) => (
           <AttentionCard key={entry.key} entry={entry}
             project={entry.projectId != null ? projectById.get(entry.projectId) : undefined}
-            onClick={() => handleItemClick(entry)} t={t} />
+            onClick={() => handleItemClick(entry)} summary={summaries.get(entry.key)} t={t} />
         )} />
         <LookoutSection name="active" items={sections.active} renderItem={(item) => <ActiveGroupCard key={item.key} group={item}
             project={item.projectId != null ? projectById.get(item.projectId) : undefined}
-            onClick={() => handleItemClick(item)} t={t} />} empty={<div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 'var(--space-3)',
+            onClick={() => handleItemClick(item)} summary={summaries.get(item.key)} t={t} />} empty={<div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 'var(--space-3)',
           padding: 'var(--space-5) var(--space-4)', background: 'var(--bg-card)', borderRadius: 'var(--radius-lg)', textAlign: 'center' }}>
           <span style={{ color: 'var(--text-dim)', fontSize: 'var(--font-md)' }}>{t('workspace:home.noActive')}</span>
           <Button size="sm" onClick={onAddWindow}><Icon name="plus" size={14} />{t('workspace:windows.addWindow')}</Button>
@@ -91,11 +95,12 @@ function ProjectMeta({ project }: { project?: ProjectSummary }) {
 interface AttentionCardProps {
   entry: LookoutItem;
   project?: ProjectSummary;
+  summary?: LookoutSummary;
   onClick: () => void;
   t: (key: string, opts?: Record<string, unknown>) => string;
 }
 
-function AttentionCard({ entry, project, onClick, t }: AttentionCardProps) {
+function AttentionCard({ entry, project, summary, onClick, t }: AttentionCardProps) {
   return (
     <button
       type="button"
@@ -116,6 +121,7 @@ function AttentionCard({ entry, project, onClick, t }: AttentionCardProps) {
           {project && <span aria-hidden="true">·</span>}
           <span style={{ flexShrink: 0 }}>{entry.task && formatRelativeTime(new Date(entry.task.updatedAt).getTime())}</span>
         </div>
+        <LookoutSummaryText summary={summary} />
       </div>
       <Chip tone="orange" style={{ flexShrink: 0 }}>
         {t(`lookout:status.${entry.status}`)}
@@ -127,13 +133,14 @@ function AttentionCard({ entry, project, onClick, t }: AttentionCardProps) {
 interface ActiveGroupCardProps {
   group: LookoutItem;
   project?: ProjectSummary;
+  summary?: LookoutSummary;
   onClick: () => void;
   t: (key: string, opts?: Record<string, unknown>) => string;
 }
 
 const MAX_GLYPHS = 4;
 
-function ActiveGroupCard({ group, project, onClick, t }: ActiveGroupCardProps) {
+function ActiveGroupCard({ group, project, summary, onClick, t }: ActiveGroupCardProps) {
   const shown = group.windowNames.slice(0, MAX_GLYPHS);
   const overflowCount = group.windowNames.length - shown.length;
 
@@ -168,6 +175,7 @@ function ActiveGroupCard({ group, project, onClick, t }: ActiveGroupCardProps) {
             <Chip tone="default" style={{ fontSize: 'var(--font-2xs)' }}>{t('workspace:home.moreWindows', { count: overflowCount })}</Chip>
           )}
         </div>
+        <LookoutSummaryText summary={summary} />
       </div>
       <Icon name="chevron-right" size={16} />
     </button>
