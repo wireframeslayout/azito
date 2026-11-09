@@ -47,14 +47,14 @@ export interface FirewallDiagnosis {
 const MAX_CONCURRENT_LOOKS = 4;
 
 /**
- * Brings back a Windows agent (and the misao it hosts) that died, for as long as the hub runs.
+ * Brings back a Windows or Apple Silicon Mac agent that died, for as long as the hub runs. Only Windows misao is revived.
  *
  * Why the hub does it: the agent's logon task runs `conhost.exe --headless node.exe ...`, and conhost reports exit code 0 whatever
  * its child did, and RestartOnFailure does not fire for a non-zero exit code either (measured on Windows CI, see
  * `shared/os/taskScheduler/restartOnFailure.windows.test.ts`; a repeating trigger was tried and left out: it needs the task disabled
  * for every stop on purpose and the state of that was too easy to leave wrong). Nothing restarts them while the hub is down.
  *
- * Only Windows agents: a Unix agent is a systemd unit with `Restart=`, and the one started with nohup is still brought back only by
+ * Linux agents use systemd or nohup and are brought back only by
  * the version check at the hub's start (`AgentUpdater`).
  *
  * Each server is looked at on its own (a look still going on makes the next tick skip that server, and at most
@@ -113,13 +113,13 @@ export class AgentRecoveryWatchdog {
   }
 
   /**
-   * Starts a look at the Windows agent servers that are not being looked at (at most `MAX_CONCURRENT_LOOKS` going on at once, going
+   * Starts a look at the supported agent servers that are not being looked at (at most `MAX_CONCURRENT_LOOKS` going on at once, going
    * round the list from where the last tick stopped), and resolves when the looks it started are over (the timer does not wait for
    * that: the next tick starts its own).
    */
   async tick(): Promise<void> {
     if (this.stopped) return;
-    const servers = this.deps.listServers().filter(isWindowsAgent);
+    const servers = this.deps.listServers().filter(isRecoverableAgent);
     const names = new Set(servers.map((s) => s.name));
     for (const name of this.firewall.keys()) if (!names.has(name)) this.firewall.delete(name);
     for (const name of this.firewallNotified.keys()) if (!names.has(name)) this.firewallNotified.delete(name);
@@ -170,6 +170,7 @@ export class AgentRecoveryWatchdog {
     this.agents.delete(server.name);
     this.firewall.delete(server.name);
     this.firewallNotified.delete(server.name);
+    if (!isWindowsAgent(server)) { this.misaos.delete(server.name); return; }
     let down: boolean;
     try {
       down = await this.deps.isMisaoDown(server);
@@ -213,13 +214,13 @@ export class AgentRecoveryWatchdog {
       await this.deps.lock.withLock(server.name, async () => {
         // The server may have been edited while this waited for the lock: what is acted on is what is registered now.
         const current = this.deps.listServers().find((s) => s.name === server.name);
-        if (this.stopped || current === undefined || !isWindowsAgent(current)) return;
+        if (this.stopped || current === undefined || !isRecoverableAgent(current)) return;
         if (identityOf(current) !== identity) {
           this.reset(server.name);
           return;
         }
         if (!(await stillDown(current)) || this.stopped) return; // after the stop: not begun, so not begun
-        if (what === 'agent' && (await this.firewallBlocks(current, identity))) {
+        if (what === 'agent' && isWindowsAgent(current) && (await this.firewallBlocks(current, identity))) {
           outcome = 'firewall_blocked';
           return;
         }
@@ -232,6 +233,11 @@ export class AgentRecoveryWatchdog {
     if (waits.get(server.name) !== wait) return; // reset while waiting for the lock
     if (outcome === 'firewall_blocked') {
       waits.set(server.name, { ...wait, nextAt: this.deps.now() + this.timing.maxMs });
+      return;
+    }
+    if (outcome === 'absent') {
+      this.deps.logger.info(`${server.name}: the agent is absent from the host; recovery has stopped`);
+      waits.set(server.name, { ...wait, nextAt: Number.POSITIVE_INFINITY });
       return;
     }
     if (outcome === 'busy') return; // another operation holds the misao folder: not an attempt, looked at again next tick
@@ -301,9 +307,13 @@ function describe(err: unknown): string {
 
 /** What a recovery depends on: where the agent is, how it is reached and what it runs on. */
 function identityOf(server: ServerConfig): string {
-  return JSON.stringify([server.host, server.agentPort, server.agentToken, server.sshHost, server.hostProfile?.platform, server.muxRuntime]);
+  return JSON.stringify([server.host, server.agentPort, server.agentToken, server.sshHost, server.hostProfile?.platform, server.hostProfile?.arch, server.muxRuntime]);
 }
 
 function isWindowsAgent(server: ServerConfig): boolean {
   return server.type === 'agent' && server.hostProfile?.platform === 'win32';
+}
+
+function isRecoverableAgent(server: ServerConfig): boolean {
+  return isWindowsAgent(server) || (server.type === 'agent' && server.hostProfile?.platform === 'darwin' && server.hostProfile.arch === 'arm64');
 }

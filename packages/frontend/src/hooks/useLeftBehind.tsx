@@ -4,14 +4,15 @@ import { useTranslation } from 'react-i18next';
 import Modal from '../components/Modal';
 import { Button, CopyableCommand, DocsLink } from '../components/ui';
 import { UninstallStepList } from '../components/servers/UninstallStepList';
-import { commandsOf, type UninstallStep } from '../lib/serverDeletion';
+import { commandsOf, type RemovableHostOs, type UninstallStep } from '../lib/serverDeletion';
 
 interface LeftBehind {
   serverName: string;
   steps: UninstallStep[];
+  hostOs: RemovableHostOs;
 }
 
-type ShowLeftBehind = (serverName: string, steps: UninstallStep[]) => void;
+type ShowLeftBehind = (serverName: string, steps: UninstallStep[], hostOs: RemovableHostOs) => void;
 
 const LeftBehindContext = createContext<ShowLeftBehind | null>(null);
 
@@ -29,7 +30,7 @@ export function useLeftBehind(): ShowLeftBehind {
 export function LeftBehindProvider({ children }: { children: ReactNode }) {
   const { t } = useTranslation('servers');
   const [shown, setShown] = useState<LeftBehind | null>(null);
-  const show = useCallback<ShowLeftBehind>((serverName, steps) => setShown({ serverName, steps }), []);
+  const show = useCallback<ShowLeftBehind>((serverName, steps, hostOs) => setShown({ serverName, steps, hostOs }), []);
   const close = useCallback(() => setShown(null), []);
   const commands = shown === null ? [] : commandsOf(shown.steps);
   return (
@@ -45,7 +46,7 @@ export function LeftBehindProvider({ children }: { children: ReactNode }) {
       >
         <div role="status" style={{ display: 'flex', flexDirection: 'column', gap: 'var(--space-3)' }}>
           <p style={{ margin: 0, fontSize: 'var(--font-sm)', color: 'var(--text-dim)', lineHeight: 'var(--leading-body)' }}>{t('danger.leftBehind.intro')}</p>
-          {shown !== null && <UninstallStepList steps={shown.steps} />}
+          {shown !== null && <UninstallStepList steps={shown.steps} hostOs={shown.hostOs} />}
           {commands.length > 0 && (
             <div style={{ display: 'flex', flexDirection: 'column', gap: 'var(--space-2)' }}>
               <p style={{ margin: 0, fontSize: 'var(--font-sm)', color: 'var(--text-dim)', lineHeight: 'var(--leading-body)' }}>{t('danger.leftBehind.harmless')}</p>
@@ -53,7 +54,7 @@ export function LeftBehindProvider({ children }: { children: ReactNode }) {
               {commands.map((command) => <CopyableCommand key={command} command={command} />)}
             </div>
           )}
-          <div style={{ fontSize: 'var(--font-xs)' }}><DocsLink page="windows-agent" label={t('danger.hostRemoval.manualSteps')} /></div>
+          <div style={{ fontSize: 'var(--font-xs)' }}><DocsLink page={shown?.hostOs === 'macos' ? 'posix-agent' : 'windows-agent'} label={t('danger.hostRemoval.manualSteps')} /></div>
         </div>
       </Modal>
     </LeftBehindContext.Provider>

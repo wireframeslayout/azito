@@ -10,9 +10,13 @@ describe('hostRemovalSupport', () => {
     expect(hostRemovalSupport({ type: 'agent', hostProfile: { platform: 'win32', arch: 'x64' } })).toBe('windows');
   });
 
+  it('an Apple Silicon Mac agent can be removed from its host', () => {
+    expect(hostRemovalSupport({ type: 'agent', hostProfile: { platform: 'darwin', arch: 'arm64' } })).toBe('macos');
+  });
+
   it.each([
     ['a Linux agent', { type: 'agent', hostProfile: { platform: 'linux', arch: 'x64' } }],
-    ['a macOS agent', { type: 'agent', hostProfile: { platform: 'darwin', arch: 'arm64' } }],
+    ['an Intel Mac agent (outside support)', { type: 'agent', hostProfile: { platform: 'darwin', arch: 'x64' } }],
     ['an agent whose OS was never recorded', { type: 'agent', hostProfile: null }],
     ['an agent with no host profile field', { type: 'agent' }],
   ] as const)('%s is not supported in this release (#499)', (_label, server) => {
@@ -32,6 +36,12 @@ describe('the default choice', () => {
   it('sends the uninstall request for a Windows agent, with the misao choice', () => {
     expect(uninstallRequestFor('windows', DEFAULT_HOST_REMOVAL)).toEqual({ removeMisao: false });
     expect(uninstallRequestFor('windows', { removeFromHost: true, removeMisao: true })).toEqual({ removeMisao: true });
+  });
+
+  it('sends the uninstall request for an Apple Silicon Mac agent, with the misao choice', () => {
+    expect(uninstallRequestFor('macos', DEFAULT_HOST_REMOVAL)).toEqual({ removeMisao: false });
+    expect(uninstallRequestFor('macos', { removeFromHost: true, removeMisao: true })).toEqual({ removeMisao: true });
+    expect(uninstallRequestFor('macos', { removeFromHost: false, removeMisao: false })).toBeNull();
   });
 
   it('sends nothing (only the row is deleted) when the host is not to be touched, or cannot be', () => {
@@ -159,6 +169,15 @@ describe('runDeletion', () => {
     expect(s.history[0]).toMatchObject({ phase: 'removingHost' });
     expect(s.history[1]).toMatchObject({ phase: 'confirming', deletingRow: true });
     expect(s.state).toEqual(IDLE_DELETION);
+    expect(c.uninstallHost).toHaveBeenCalledWith({ removeMisao: false });
+    expect(c.deleteRow).toHaveBeenCalledOnce();
+  });
+
+  it('removes a Mac agent from the host before the row, like a Windows one', async () => {
+    const c = calls();
+    const s = screen(deletionReducer(IDLE_DELETION, { type: 'open' }));
+    await runDeletion(c, 'macos', DEFAULT_HOST_REMOVAL, s.dispatch);
+    expect(s.events.map((e) => e.type)).toEqual(['removingHost', 'deletingRow', 'result']);
     expect(c.uninstallHost).toHaveBeenCalledWith({ removeMisao: false });
     expect(c.deleteRow).toHaveBeenCalledOnce();
   });

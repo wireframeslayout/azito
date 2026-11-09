@@ -164,6 +164,15 @@ describe.skipIf(process.platform === 'win32')('the guard an install, update or r
     expect(fs.existsSync(lock())).toBe(true);
   });
 
+  it('keeps a Mac cleanup mark safe both before and after its deadline', () => {
+    fs.mkdirSync(lock());
+    fs.writeFileSync(path.join(lock(), 'started'), String(Math.floor(Date.now() / 1000)));
+    expect(guard()).toBe('AZITO_CLEANUP_MARK:deadline:alive');
+    fs.writeFileSync(path.join(lock(), 'started'), String(Math.floor(Date.now() / 1000) - 121));
+    expect(guard()).toBe('AZITO_CLEANUP_MARK:none:unknown');
+    expect(fs.existsSync(lock())).toBe(true);
+  });
+
   it('stops, on the safe side, for a mark that has no pid yet', () => {
     fs.mkdirSync(lock());
     expect(guard()).toBe('AZITO_CLEANUP_MARK:none:unknown');
