@@ -42,6 +42,7 @@
     "close": "通知を閉じる",
     "task": "タスク #{{id}}",
     "mux": "mux の切り替え: {{name}}",
+    "muxUnavailable": "mux を切り替えられません: {{name}}",
     "firewall": "ファイアウォール: {{name}}"
   }
 }

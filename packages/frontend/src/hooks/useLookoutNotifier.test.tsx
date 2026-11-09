@@ -31,7 +31,7 @@ it('delivers mux and firewall actions with their destinations', () => {
   fireEvent.click(screen.getByRole('button', { name: 'toast.mux: Window →' }));
   expect(state.terminal).toHaveBeenCalledWith({ serverName: 's', windowId: 3, target: '' }, undefined);
   fireEvent.click(screen.getByRole('button', { name: 'toast.firewall: s →' }));
-  expect(state.navigate).toHaveBeenCalledWith('/servers/s/setup');
+  expect(state.navigate).toHaveBeenCalledWith('/servers/s');
 });
 it('filters watched windows again when the batch flushes', () => {
   state.rows = [{ key: 'x', title: 'x', status: 'running', taskId: 1, serverName: 's', target: 'x', windowId: 2 }];
@@ -49,7 +49,7 @@ it('deduplicates immediate events, shows one toast, and dismisses with Escape', 
   expect(screen.getByRole('status')).toHaveTextContent('One · Two');
   act(() => vi.advanceTimersByTime(9000));
   expect(screen.getByRole('status')).toBeInTheDocument();
-  fireEvent.keyDown(window, { key: 'Escape' });
+  fireEvent.keyDown(screen.getByRole('button', { name: 'toast.close' }), { key: 'Escape' });
   expect(screen.queryByRole('status')).toBeNull();
 });
 it('clears pending events when notifications are disabled', () => {
@@ -104,4 +104,14 @@ it('suppresses an event already being watched', () => {
   state.watched = false;
   act(() => vi.advanceTimersByTime(300000));
   expect(screen.queryByRole('status')).toBeNull();
+});
+it('retains actionable alerts when Lookout opens or is already open', () => {
+  const view = render(<LookoutNotifier>content</LookoutNotifier>);
+  act(() => state.handlers.onMuxWake?.({ serverName: 's', windowId: 3, reason: 'misao_unavailable' }));
+  state.open = true;
+  view.rerender(<LookoutNotifier>content</LookoutNotifier>);
+  act(() => state.handlers.onServerFirewall?.({ serverName: 's', diagnosis: { state: 'blocked', blockedBy: [], commands: [], checkedAt: 0, networkCategory: null } }));
+  act(() => vi.advanceTimersByTime(300000));
+  expect(screen.getByRole('status')).toHaveTextContent('toast.muxUnavailable');
+  expect(screen.getByRole('status')).toHaveTextContent('toast.firewall');
 });

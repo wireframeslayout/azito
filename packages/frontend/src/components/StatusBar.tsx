@@ -186,7 +186,7 @@ export function StatusBar({ servers }: StatusBarProps) {
         className="status-bar-desktop"
         role="status"
         style={{
-          height: 26,
+          height: 'var(--status-bar-height)',
           borderTop: '1px solid var(--border)',
           background: 'var(--bg-card)',
           display: 'flex',

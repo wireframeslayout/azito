@@ -113,7 +113,6 @@ export function MobileStatusBar({ openTask, connectPane }: MobileStatusBarProps)
     if (open) {
       closePanel();
     } else {
-      openedUnread.current = unreadRows;
       openDrawer();
     }
   };

@@ -42,6 +42,7 @@
     "close": "Dismiss notification",
     "task": "Task #{{id}}",
     "mux": "Switch mux: {{name}}",
+    "muxUnavailable": "Mux unavailable: {{name}}",
     "firewall": "Firewall: {{name}}"
   }
 }

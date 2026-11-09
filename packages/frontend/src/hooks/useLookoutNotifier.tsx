@@ -55,7 +55,7 @@ export function LookoutNotifier({ children }: { children: React.ReactNode }) {
   const accept = (input: Omit<NotifierEvent, 'at'>) => {
     const event: NotifierEvent = { ...input, at: Date.now() };
     const setting = latest.current.interval;
-    if (setting === 'off' || latest.current.lookout.open || watched(event)) return;
+    if (setting === 'off' || (latest.current.lookout.open && !event.action) || watched(event)) return;
     if (setting === 'immediate') {
       const now = Date.now();
       for (const [key, time] of recent.current) if (now - time >= 8000) recent.current.delete(key);
@@ -76,7 +76,7 @@ export function LookoutNotifier({ children }: { children: React.ReactNode }) {
       if (payload.running || (payload.reason !== 'api_error' && (payload.reason !== 'completed' || payload.operation))) return;
       accept({ key: `agent:${payload.serverName}:${payload.windowId ?? payload.target}:${payload.reason}`, kind: payload.reason === 'api_error' ? 'failed' : 'finished', title: payload.label ?? payload.target, serverName: payload.serverName, target: payload.target, windowId: payload.windowId });
     },
-    onMuxWake: payload => accept({ key: `mux:${payload.serverName}:${payload.windowId}`, kind: 'attention', title: t('toast.mux', { name: payload.title ?? `#${payload.windowId}` }), serverName: payload.serverName, windowId: payload.windowId, taskId: payload.taskId, action: 'mux' }),
+    onMuxWake: payload => accept({ key: `mux:${payload.serverName}:${payload.windowId}`, kind: 'attention', title: t(payload.reason === 'ask' ? 'toast.mux' : 'toast.muxUnavailable', { name: payload.title ?? `#${payload.windowId}` }), serverName: payload.serverName, windowId: payload.windowId, taskId: payload.taskId, action: 'mux' }),
     onServerFirewall: payload => accept({ key: `firewall:${payload.serverName}`, kind: 'attention', title: t('toast.firewall', { name: payload.serverName }), serverName: payload.serverName, action: 'firewall' }),
   });
   useEffect(() => {
@@ -100,9 +100,8 @@ export function LookoutNotifier({ children }: { children: React.ReactNode }) {
   }, [interval]);
   useEffect(() => {
     if (!lookout.open) return;
-    pending.current = [];
-    if (timer.current) clearTimeout(timer.current);
-    timer.current = null;
+    pending.current = pending.current.filter(event => event.action);
+    if (!pending.current.length && timer.current) { clearTimeout(timer.current); timer.current = null; }
   }, [lookout.open]);
   useEffect(() => {
     if (!toast.length || toast.some(event => event.kind === 'attention')) return;
@@ -111,7 +110,7 @@ export function LookoutNotifier({ children }: { children: React.ReactNode }) {
   }, [toast]);
   const dismiss = () => updateToast([]);
   const action = (event: NotifierEvent) => {
-    if (event.action === 'firewall' && event.serverName) navigate(paths.server(event.serverName, 'setup'));
+    if (event.action === 'firewall' && event.serverName) navigate(paths.server(event.serverName));
     if (event.action === 'mux' && event.serverName && event.windowId != null) {
       const row = lookout.rows.find(item => item.windowId === event.windowId && item.serverName === event.serverName);
       const project = allProjects.find(item => item.windows?.some(window => window.id === event.windowId));
