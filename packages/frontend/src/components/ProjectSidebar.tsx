@@ -325,7 +325,7 @@ export default function ProjectSidebar() {
         })}
       </div>
 
-      <button className={`orchestration-rail-button${orchestrationPulse ? " orchestration-rail-pulse" : ""}`} onClick={() => navigate(ORCHESTRATION_NAV_ITEM.path)} title={t(ORCHESTRATION_NAV_ITEM.labelKey)} aria-label={t(ORCHESTRATION_NAV_ITEM.labelKey)} style={{ ...globalButtonStyle(isOrchestrationPath(location.pathname)), color: 'var(--purple)', background: isOrchestrationPath(location.pathname) ? 'var(--purple-a15)' : 'transparent' }}><Icon name={ORCHESTRATION_NAV_ITEM.icon} size={20} /></button>
+      <button className={`orchestration-rail-button${orchestrationPulse ? " orchestration-rail-pulse" : ""}`} onClick={() => navigate(ORCHESTRATION_NAV_ITEM.path)} title={t(ORCHESTRATION_NAV_ITEM.labelKey)} aria-current={isOrchestrationPath(location.pathname) ? 'page' : undefined} aria-label={t(ORCHESTRATION_NAV_ITEM.labelKey)} style={{ ...globalButtonStyle(isOrchestrationPath(location.pathname)), color: 'var(--purple)', background: isOrchestrationPath(location.pathname) ? 'var(--purple-a15)' : 'transparent', boxShadow: isOrchestrationPath(location.pathname) ? 'inset 0 0 0 1px var(--purple)' : undefined }}><Icon name={ORCHESTRATION_NAV_ITEM.icon} size={20} /></button>
 
       <div
         style={{

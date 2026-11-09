@@ -56,7 +56,7 @@ export class OrchestrationLinkService {
           if (!this.lastWrites.has(old.id)) {
             this.linkRepo.touch(old.id);
             this.lastWrites.set(old.id, now);
-            this.notify(sourceWindowId);
+            this.bus.emit({ type: 'orchestration:updated', payload: { windowId: sourceWindowId, kind: 'interaction' } });
           }
         }
         return this.linkRepo.find(sourceWindowId, subject)!;

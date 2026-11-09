@@ -53,7 +53,7 @@ describe('orchestration links and roles', () => {
   it('throttles existing links individually while creating new links immediately', () => {
     const db = openDatabase(':memory:');
     db.exec("INSERT INTO windows (id,owner_type,server_name,tmux_target,window_type,worker_type,role) VALUES (1,'server','local','s:a','agent','claude','orchestrator'), (2,'server','local','s:b','agent','claude',NULL), (3,'server','local','s:c','agent','claude',NULL)");
-    const bus = new NotificationBus();
+    const bus = new NotificationBus(); const notify = vi.fn(); bus.on(notify);
     const links = new OrchestrationLinkService(new SqliteWindowLinkRepository(db), new SqliteWindowRepository(db), { findById: () => undefined } as unknown as ITaskRepository, bus);
     const clock = vi.spyOn(Date, 'now').mockReturnValue(10000);
     links.recordInteraction(1, { windowId: 2 });
@@ -65,7 +65,9 @@ describe('orchestration links and roles', () => {
     expect(db.prepare('SELECT last_interaction_at FROM window_links WHERE target_window_id=2').get()).toEqual({ last_interaction_at: 'sentinel' });
     expect(links.list(1)).toHaveLength(2);
     clock.mockReturnValue(15000);
+    notify.mockClear();
     links.recordInteraction(1, { windowId: 2 });
+    expect(notify).toHaveBeenCalledWith({ type: 'orchestration:updated', payload: { windowId: 1, kind: 'interaction' } });
     expect(db.prepare('SELECT last_interaction_at FROM window_links WHERE target_window_id=2').get()).not.toEqual({ last_interaction_at: 'sentinel' });
     clock.mockRestore(); bus.destroy(); db.close();
   });

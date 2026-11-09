@@ -9,7 +9,6 @@ import { OrchestrationSidebar } from '../orchestration/OrchestrationSidebar';
 import { MobileNavMenu } from './MobileNavMenu';
 import { MobileActiveWindowsPanel } from './MobileActiveWindowsPanel';
 import type { ConnectPaneFn } from '../../lib/terminalRef';
-import { useOrchestrators } from '../../hooks/useOrchestrators';
 import { useActiveWindowRows } from '../../hooks/useActiveWindowRows';
 import { paths } from '../../paths';
 import type { SidebarMode } from '../../pages/workspace/types';
@@ -87,7 +86,6 @@ export function MobileNavSheet({
   const [stack, setStack] = useState<StackEntry[]>(['menu']);
   const [activeWindowsOpen, setActiveWindowsOpen] = useState(false);
 
-  const orchestrators = useOrchestrators();
   const { totalCount: awCount, blockedCount: awBlockedCount } = useActiveWindowRows(titleData);
   const currentProjectItem = allProjects.find((p) => p.id === project?.id) ?? null;
 
@@ -191,7 +189,6 @@ export function MobileNavSheet({
                   onSelectMode={handleSelectMode}
                   onNavigateGlobal={(path) => { if (path === paths.orchestration()) push('orchestration'); else { navigate(path); onClose(); } }}
                   onOpenActiveWindows={handleOpenActiveWindows}
-                  orchestratorCount={orchestrators.status === 'ready' ? orchestrators.windows.length : undefined}
                   activeWindowsCount={awCount}
                   activeWindowsBlockedCount={awBlockedCount}
                 />
