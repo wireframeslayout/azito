@@ -314,6 +314,11 @@
       "version": "CLI のインストールを確認してください",
       "login": "CLI にログインしてください",
       "summary": "モデルへのアクセスと CLI 設定を確認してください"
-    }
+    },
+    "interval": "知らせる間隔",
+    "intervalImmediate": "すぐ",
+    "interval5min": "5 分",
+    "interval15min": "15 分",
+    "intervalOff": "知らせない"
   }
 }

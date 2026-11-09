@@ -314,6 +314,11 @@
       "version": "Check CLI installation.",
       "login": "Sign in to the CLI.",
       "summary": "Check model access and CLI configuration."
-    }
+    },
+    "interval": "Notification interval",
+    "intervalImmediate": "Immediately",
+    "interval5min": "5 minutes",
+    "interval15min": "15 minutes",
+    "intervalOff": "Off"
   }
 }
