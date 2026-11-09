@@ -118,6 +118,25 @@ export function TabBar({ tabs, activeId, onSelect, onClose, onReorder, draggable
     document.addEventListener('mouseup', handleUp);
   }, [tabs, onReorder, draggable, html5Draggable]);
 
+  const handleTabKeyDown = (event: React.KeyboardEvent, tabId: string) => {
+    if (event.target !== event.currentTarget || event.altKey || event.ctrlKey || event.metaKey || event.shiftKey) return;
+    if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); onSelect(tabId); return; }
+    const index = tabs.findIndex(tab => tab.id === tabId);
+    if (index < 0) return;
+    let next: number;
+    switch (event.key) {
+      case 'ArrowRight': next = (index + 1) % tabs.length; break;
+      case 'ArrowLeft': next = (index + tabs.length - 1) % tabs.length; break;
+      case 'Home': next = 0; break;
+      case 'End': next = tabs.length - 1; break;
+      default: return;
+    }
+    event.preventDefault();
+    onSelect(tabs[next].id);
+    const elements = tabBarRef.current?.querySelectorAll<HTMLElement>('[role="tab"]');
+    elements?.[next]?.focus();
+  };
+
   const renderSingleTab = (tab: TabItem, isDragging: boolean, showDropBefore: boolean) => {
     const isActive = tab.id === activeId;
 
@@ -140,10 +159,10 @@ export function TabBar({ tabs, activeId, onSelect, onClose, onReorder, draggable
         <div
           key={tab.id}
           data-tab-id={tab.id}
-          tabIndex={0}
+          tabIndex={isActive ? 0 : -1}
           role="tab"
           aria-selected={isActive}
-          onKeyDown={event => { if (event.target === event.currentTarget && (event.key === 'Enter' || event.key === ' ')) { event.preventDefault(); onSelect(tab.id); } }}
+          onKeyDown={event => handleTabKeyDown(event, tab.id)}
           onDoubleClick={() => onTabDoubleClick?.(tab.id)}
           className={tab.className || ''}
           onMouseDown={draggable ? (e) => { if (e.button === 0) startTabDrag(tab.id, e); } : undefined}
@@ -164,10 +183,10 @@ export function TabBar({ tabs, activeId, onSelect, onClose, onReorder, draggable
       <div
         key={tab.id}
         data-tab-id={tab.id}
-        tabIndex={0}
+        tabIndex={isActive ? 0 : -1}
         role="tab"
         aria-selected={isActive}
-        onKeyDown={event => { if (event.target === event.currentTarget && (event.key === 'Enter' || event.key === ' ')) { event.preventDefault(); onSelect(tab.id); } }}
+        onKeyDown={event => handleTabKeyDown(event, tab.id)}
         onDoubleClick={() => onTabDoubleClick?.(tab.id)}
         className={tab.className || ''}
         onMouseDown={draggable ? (e) => { if (e.button === 0) startTabDrag(tab.id, e); } : undefined}
