@@ -145,7 +145,7 @@ function makeDeps(overrides: Partial<TaskRestoreDeps> = {}): TaskRestoreDeps {
     },
     windowRepo: {
       add: vi.fn(() => 100),
-      adoptForTask: vi.fn(),
+      adoptForTask: vi.fn(), findOrchestrators: vi.fn(() => []),
       findAll: vi.fn(() => []),
       findById: vi.fn(() => undefined),
       findByProject: vi.fn(() => []),
@@ -306,7 +306,7 @@ describe('TaskRestoreService', () => {
       { extraEnv: expect.objectContaining({ AZITO_TASK_TOKEN: expect.any(String), AZITO_TASK_ID: '1' }) },
     );
     expect(deps.windowRepo.add).toHaveBeenCalledWith(expect.objectContaining({
-      ownerType: 'task',
+      ownerType: 'task', role: null, originProjectId: null,
       taskId: 1,
       isPrimary: true,
       tmuxTarget: 'azito:task-1',

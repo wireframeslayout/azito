@@ -44,7 +44,7 @@ function program(file: string, args: string[]): ProgramLaunch {
 function makeWindow(overrides: Partial<Window> = {}): Window {
   return {
     id: 1,
-    ownerType: 'task',
+    ownerType: 'task', role: null, originProjectId: null,
     projectId: null,
     taskId: null,
     serverName: 'local-server',
@@ -194,7 +194,7 @@ function buildService(opts: {
 }) {
   const windowRepo: IWindowRepository = {
     add: vi.fn(() => 1),
-    adoptForTask: vi.fn(),
+    adoptForTask: vi.fn(), findOrchestrators: vi.fn(() => []),
     findAll: vi.fn(() => []),
     findById: vi.fn(() => opts.window),
     findByProject: vi.fn(() => []),
@@ -1553,7 +1553,7 @@ describe('WindowRespawnService.resumeLegacySession (Issue #328 fourth-round revi
 
     await service.resumeLegacySession(7, makeServer());
 
-    expect(windowRepo.add).toHaveBeenCalledWith(expect.objectContaining({ ownerType: 'task', taskId: 7, isPrimary: true, muxRef: misaoRef, tmuxTarget: 'azito:w_01M3XFD8H97JCPKS5Y5BH3JZQH' }));
+    expect(windowRepo.add).toHaveBeenCalledWith(expect.objectContaining({ ownerType: 'task', role: null, originProjectId: null, taskId: 7, isPrimary: true, muxRef: misaoRef, tmuxTarget: 'azito:w_01M3XFD8H97JCPKS5Y5BH3JZQH' }));
     const addOrder = (windowRepo.add as ReturnType<typeof vi.fn>).mock.invocationCallOrder[0];
     const updateOrder = (taskRepo.update as ReturnType<typeof vi.fn>).mock.invocationCallOrder.at(-1)!;
     expect(addOrder).toBeLessThan(updateOrder);
@@ -1737,10 +1737,10 @@ describe('WindowRespawnService.respawn — concurrent respawns for the same task
     // which always returns the SAME static object regardless of update()
     // calls. This test specifically needs the second queued respawn's fresh
     // re-read to observe what the first one just persisted.
-    let windowRow: Window = makeWindow({ id: 1, taskId: 1, ownerType: 'task', isPrimary: true, tmuxTarget: 'sess:win-0' });
+    let windowRow: Window = makeWindow({ id: 1, taskId: 1, ownerType: 'task', role: null, originProjectId: null, isPrimary: true, tmuxTarget: 'sess:win-0' });
     const windowRepo: IWindowRepository = {
       add: vi.fn(() => 1),
-      adoptForTask: vi.fn(),
+      adoptForTask: vi.fn(), findOrchestrators: vi.fn(() => []),
       findAll: vi.fn(() => []),
       findById: vi.fn(() => windowRow),
       findByProject: vi.fn(() => []),

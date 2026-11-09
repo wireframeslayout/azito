@@ -21,7 +21,7 @@ import {
 
 function makeWindow(overrides: Partial<Window> = {}): Window {
   return {
-    id: 1, ownerType: 'task', serverName: 'local', tmuxTarget: 'sess:1.0',
+    id: 1, ownerType: 'task', role: null, originProjectId: null, serverName: 'local', tmuxTarget: 'sess:1.0',
     isPrimary: true, windowType: 'terminal',
     ...overrides,
   };

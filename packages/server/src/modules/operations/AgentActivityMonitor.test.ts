@@ -15,7 +15,7 @@ type RunningMap = Record<number, Array<{ taskId: number; target: string; serverN
 function makeWindow(overrides: Partial<Window>): Window {
   return {
     id: 1,
-    ownerType: 'project',
+    ownerType: 'project', role: null, originProjectId: null,
     projectId: 1,
     taskId: null,
     serverName: 'local',
@@ -1529,8 +1529,8 @@ describe('AgentActivityMonitor', () => {
 
     it('deduplicates project-owned and task-owned rows into one entry and prefers taskId', async () => {
       findAll.mockReturnValue([
-        makeWindow({ id: 1, ownerType: 'project', taskId: null, tmuxTarget: 'azito:win--2sg1', serverName: 'local' }),
-        makeWindow({ id: 2, ownerType: 'task', taskId: 42, tmuxTarget: 'azito:win--2sg1', serverName: 'local' }),
+        makeWindow({ id: 1, ownerType: 'project', role: null, originProjectId: null, taskId: null, tmuxTarget: 'azito:win--2sg1', serverName: 'local' }),
+        makeWindow({ id: 2, ownerType: 'task', role: null, originProjectId: null, taskId: 42, tmuxTarget: 'azito:win--2sg1', serverName: 'local' }),
       ]);
       listSessions.mockResolvedValue(makeSessions('azito', 'win--2sg1', 5, nowSec));
 
@@ -1591,8 +1591,8 @@ describe('AgentActivityMonitor', () => {
 
     it('hook and supervisor signals with different pane suffixes converge to the same entry', async () => {
       findAll.mockReturnValue([
-        makeWindow({ id: 1, ownerType: 'project', taskId: null, tmuxTarget: 'azito:win--2sg1', serverName: 'local' }),
-        makeWindow({ id: 2, ownerType: 'task', taskId: 42, tmuxTarget: 'azito:win--2sg1', serverName: 'local' }),
+        makeWindow({ id: 1, ownerType: 'project', role: null, originProjectId: null, taskId: null, tmuxTarget: 'azito:win--2sg1', serverName: 'local' }),
+        makeWindow({ id: 2, ownerType: 'task', role: null, originProjectId: null, taskId: 42, tmuxTarget: 'azito:win--2sg1', serverName: 'local' }),
       ]);
       listSessions.mockResolvedValue(makeSessions('azito', 'win--2sg1', 5, nowSec));
 
@@ -1619,7 +1619,7 @@ describe('AgentActivityMonitor', () => {
 
     it('running→finished transition uses the same normalized target so frontend dedup works', async () => {
       findAll.mockReturnValue([
-        makeWindow({ id: 1, ownerType: 'task', taskId: 42, tmuxTarget: 'azito:win--2sg1', serverName: 'local' }),
+        makeWindow({ id: 1, ownerType: 'task', role: null, originProjectId: null, taskId: 42, tmuxTarget: 'azito:win--2sg1', serverName: 'local' }),
       ]);
       listSessions.mockResolvedValue(makeSessions('azito', 'win--2sg1', 5, nowSec));
 

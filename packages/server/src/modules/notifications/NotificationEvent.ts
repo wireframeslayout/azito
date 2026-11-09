@@ -13,6 +13,7 @@ export type AgentActivityStopReason = 'completed' | 'interrupted' | 'deleted' | 
 import type { FirewallDiagnosis } from '../servers/agent-deploy/AgentRecoveryWatchdog';
 
 export type NotificationEvent =
+  | { type: 'orchestration:updated'; payload: { windowId: number } }
   | { type: 'window:mux_switch_suggested'; payload: { windowId: number; serverName: string; title?: string; taskId?: number; reason: 'ask' | 'misao_unavailable' } }
   | { type: 'server:firewall'; payload: { serverName: string; diagnosis: FirewallDiagnosis } }
   | { type: 'subagents:updated'; payload: { windowId: number; sessionId: string } }

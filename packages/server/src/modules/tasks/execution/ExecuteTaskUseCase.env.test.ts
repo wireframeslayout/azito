@@ -783,7 +783,7 @@ describe('ExecuteTaskUseCase execution-env resolution', () => {
     });
     // followUp reads the window's supervised flag
     (windowRepo.findByTask as ReturnType<typeof vi.fn>).mockReturnValue([
-      { id: 10, ownerType: 'task', isPrimary: true, taskId: 4, serverName: 'local-server', tmuxTarget: 'azito:task-4.1', label: 'task-4', projectId: null, windowType: 'agent', workerType: 'claude', workerModel: 'opus', agentSessionId: null, launchCommand: null, workingDirectory: null, paneLayout: null, createdAt: '2026-01-01T00:00:00Z' },
+      { id: 10, ownerType: 'task', role: null, originProjectId: null, isPrimary: true, taskId: 4, serverName: 'local-server', tmuxTarget: 'azito:task-4.1', label: 'task-4', projectId: null, windowType: 'agent', workerType: 'claude', workerModel: 'opus', agentSessionId: null, launchCommand: null, workingDirectory: null, paneLayout: null, createdAt: '2026-01-01T00:00:00Z' },
     ]);
 
     await useCase.followUp(49, 4, 'please continue');
@@ -2135,7 +2135,7 @@ describe('ExecuteTaskUseCase window-rotation rollback safety (Issue #28 third-pa
     await useCase.execute(36, 48);
 
     const addCall = (windowRepo.add as ReturnType<typeof vi.fn>).mock.calls[0][0];
-    expect(addCall).toMatchObject({ ownerType: 'task', taskId: 48, isPrimary: true, muxRef: misaoRef });
+    expect(addCall).toMatchObject({ ownerType: 'task', role: null, originProjectId: null, taskId: 48, isPrimary: true, muxRef: misaoRef });
     const addOrder = (windowRepo.add as ReturnType<typeof vi.fn>).mock.invocationCallOrder[0];
     const taskWrite = (taskRepo.update as ReturnType<typeof vi.fn>).mock.calls.findIndex(([, data]) => (data as { tmuxWindow?: string }).tmuxWindow === misaoRef.window);
     expect(taskWrite).toBeGreaterThanOrEqual(0);
@@ -2153,7 +2153,7 @@ describe('ExecuteTaskUseCase window-rotation rollback safety (Issue #28 third-pa
       (built.tmux as { kind: string }).kind = 'misao';
       // The old window's primary row carries its misao ref (stored data without a ref is tmux).
       (built.windowRepo.findByTask as ReturnType<typeof vi.fn>).mockReturnValue([
-        { id: 90, ownerType: 'task', taskId: 46, isPrimary: true, tmuxTarget: 'azito:w_01M3XFD8H97JCPKS5Y5BH3JZQH', muxRef: misaoRef('azito', 'w_01M3XFD8H97JCPKS5Y5BH3JZQH') },
+        { id: 90, ownerType: 'task', role: null, originProjectId: null, taskId: 46, isPrimary: true, tmuxTarget: 'azito:w_01M3XFD8H97JCPKS5Y5BH3JZQH', muxRef: misaoRef('azito', 'w_01M3XFD8H97JCPKS5Y5BH3JZQH') },
       ]);
       (built.tmux.listWorkspaces as ReturnType<typeof vi.fn>).mockResolvedValue(workspaces);
       await built.useCase.execute(36, 46);
@@ -2205,7 +2205,7 @@ describe('ExecuteTaskUseCase window-rotation rollback safety (Issue #28 third-pa
     const NEW_ID = 'w_01M3XFD8H97JCPKS5Y5BH3JZQJ';
     const misaoRef = (window: string) => ({ kind: 'misao' as const, workspace: 'azito', window });
     const primaryRow = (over: Record<string, unknown> = {}) => ({
-      id: 10, ownerType: 'task', isPrimary: true, taskId: 4, serverName: 'local-server', tmuxTarget: `azito:${OLD_ID}`, muxRef: misaoRef(OLD_ID),
+      id: 10, ownerType: 'task', role: null, originProjectId: null, isPrimary: true, taskId: 4, serverName: 'local-server', tmuxTarget: `azito:${OLD_ID}`, muxRef: misaoRef(OLD_ID),
       label: 'task-4--ab12', projectId: null, windowType: 'agent', workerType: 'claude', workerModel: 'opus', agentSessionId: null,
       launchCommand: null, workingDirectory: null, paneLayout: null, sleeping: false, createdAt: '2026-01-01T00:00:00Z', ...over,
     });
@@ -3118,7 +3118,7 @@ describe('ExecuteTaskUseCase stale window cleanup', () => {
 
   function makeWindowRow(overrides: Record<string, unknown> = {}) {
     return {
-      id: 100, ownerType: 'task', projectId: null, taskId: 1,
+      id: 100, ownerType: 'task', role: null, originProjectId: null, projectId: null, taskId: 1,
       serverName: 'local-server', tmuxTarget: 'azito:w1.1',
       label: 'w1', isPrimary: false, windowType: 'agent',
       workerType: 'claude', workerModel: 'opus', agentSessionId: null,
@@ -4864,7 +4864,7 @@ describe('ExecuteTaskUseCase.followUp — primary window wake (Issue #274)', () 
     // A new primary window was registered.
     expect(windowRepo.add).toHaveBeenCalledWith(expect.objectContaining({
       isPrimary: true,
-      ownerType: 'task',
+      ownerType: 'task', role: null, originProjectId: null,
       taskId: 6,
     }));
   });

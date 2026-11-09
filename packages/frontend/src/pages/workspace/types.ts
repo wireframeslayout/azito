@@ -20,8 +20,9 @@ export interface WindowPaneLayout {
 
 export interface Window {
   id: number;
-  ownerType: 'project' | 'task';
-  role?: string;
+  ownerType: 'project' | 'task' | 'server';
+  role: 'orchestrator' | null;
+  originProjectId: number | null;
   projectId?: number;
   taskId?: number;
   serverName: string;
@@ -38,6 +39,19 @@ export interface Window {
   workingDirectory?: string;
   paneLayout?: WindowPaneLayout;
   sleeping?: boolean;
+}
+export interface WindowLinkView {
+  id: number; sourceWindowId: number; targetWindowId: number | null; taskId: number | null;
+  kind: 'orchestration' | 'operation'; source: 'auto' | 'manual'; createdAt: string;
+  lastInteractionAt: string | null; unlinkedAt: string | null; resolvedWindowId: number | null;
+}
+export interface OrchestratorSummary extends Window {
+  links: { total: number; projectIds: number[]; serverNames: string[] };
+  parentWindowId: number | null;
+}
+export interface SessionWindowRegistrationResult {
+  ok: true; count: number; ids: number[];
+  skipped: Array<{ windowId: number; reason: 'server_owned_window' }>;
 }
 export interface Repository { id: number; url: string; name?: string; provider?: string; owner?: string; repoName?: string; }
 export interface ProjectListItem {

@@ -1,3 +1,4 @@
+import orchestrationRoutes from '../modules/orchestration/routes';
 import { muxSwitchSettingsRoutes } from '../modules/windows/muxSwitchSettingsRoutes';
 import { formatWindowTitleLine, resolveWindowTitle } from '@azito/shared';
 // ─── Fastify instance assembly ───
@@ -597,7 +598,9 @@ export async function buildServer(app: FastifyInstance, wiring: Wiring, port: nu
   await app.register(unitsRoutes, { unitRepo, taskRepo, logRepo, executeTaskUseCase, projectRepo, projectServerRepo, serverRepo, sidekickLoader: sidekickPackageLoader, unitTypeLoader, muxDriverRegistry });
   await app.register(operationsRoutes, { executeTaskUseCase, agentActivityMonitor, supervisorRegistry, windowRepo, paneHandleResolver });
   await app.register(auditLogRoutes, { auditLogService });
+  await app.register(orchestrationRoutes, { links: wiring.orchestrationLinks, windows: windowRepo });
   await app.register(tasksRoutes, {
+    attribution: wiring.orchestrationLinks,
     muxDriverRegistry,
     taskRepo, auditLogService, projectRepo, projectServerRepo, logRepo, executeTaskUseCase, unitRepo, serverRepo, worktreeServiceFactory, transportFactory, windowRepo, respawnService: windowRespawnService, taskRestoreService, unitTypeLoader, sidekickLoader: sidekickPackageLoader, projectSecretRepo, originationService, taskTokenRepo, scopedAuthEnabled, taskTempFiles: wiring.taskTempFiles,
     destroyPrimaryTaskWindow: (taskId, windowName, serverName, target, reason, kill, onDestroyed) => {
@@ -612,6 +615,7 @@ export async function buildServer(app: FastifyInstance, wiring: Wiring, port: nu
   });
   await app.register(muxSwitchSettingsRoutes, { settingsRepo: wiring.muxSwitchSettingsRepo, serverRepo, muxDriverRegistry });
   await app.register(windowsRoutes, {
+    attribution: wiring.orchestrationLinks, windowRoles: wiring.windowRoles,
     windowRepo, projectRepo, taskRepo, tmux: tmuxClient, muxDriverRegistry, serverRepo, transportFactory, paneHandleResolver: wiring.paneHandleResolver,
     muxSwitchSettingsRepo: wiring.muxSwitchSettingsRepo, auditLogService, agentActivityMonitor,
     misaoVersion: async (server) => {

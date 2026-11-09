@@ -8,7 +8,7 @@ import type { ISessionStrategyFactory, ISessionStrategy } from '../agents/Sessio
 function makeWindow(overrides?: Partial<Window>): Window {
   return {
     id: 1,
-    ownerType: 'project',
+    ownerType: 'project', role: null, originProjectId: null,
     projectId: 1,
     taskId: null,
     serverName: 'local',

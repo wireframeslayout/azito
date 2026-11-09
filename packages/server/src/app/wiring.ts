@@ -1,3 +1,6 @@
+import { SqliteWindowLinkRepository } from '../modules/orchestration/SqliteWindowLinkRepository';
+import { OrchestrationLinkService } from '../modules/orchestration/OrchestrationLinkService';
+import { WindowRoleService } from '../modules/windows/WindowRoleService';
 import { isLaunchdHub } from '../modules/servers/launchdHub';
 // ─── Dependency wiring ───
 //
@@ -248,6 +251,8 @@ export interface SystemUpdateModule {
 }
 
 export interface Wiring extends SharedInfra, Repositories, PushNotificationModule, ApplicationServices, SystemUpdateModule {
+  orchestrationLinks: OrchestrationLinkService;
+  windowRoles: WindowRoleService;
   storageStatusService: StorageStatusService;
   uiToken: string;
   webhookToken: string;
@@ -776,6 +781,10 @@ export async function buildWiring(db: SqliteDatabase, publicUrl: string, localUr
   // '' = no prefix. Resolved once here and handed to everything that names the harness folder (install, prompt azitoctl path).
   const harnessPrefix = resolveHarnessPrefix(process.env.AZITO_HARNESS_PREFIX);
   const infra = buildSharedInfra(agentBundler, publicUrl, localUrl, dataPaths, uiToken, webhookToken, scopedAuthEnabled, harnessPrefix, misaoRuntime, hostEnv, secretFileGuard, hubHost, resolveWindowsAgentOptions(process.env), (name) => repos.serverRepo.findByName(name), db, fingerprintStore, repos.auditLogService);
+  const orchestrationLinks = new OrchestrationLinkService(new SqliteWindowLinkRepository(db), repos.windowRepo, repos.taskRepo, infra.notificationBus);
+  repos.windowRepo.setDeletionObserver(id => orchestrationLinks.notifyDeletion('window', id));
+  repos.taskRepo.setDeletionObserver(id => orchestrationLinks.notifyDeletion('task', id));
+  repos.projectRepo.setDeletionObserver(id => orchestrationLinks.notifyDeletion('project', id));
   const storageStatusService = new StorageStatusService(repos.storageSettingsRepo, infra.storageClient, resolveStorageOnboarding(getDistributionInfo()));
   const pushNotification = buildPushNotificationModule(repos.pushSubRepo);
   const agentHostRecorder = new AgentHostRecorder(repos.serverRepo, infra.transportFactory, Date.now, console);
@@ -808,6 +817,8 @@ export async function buildWiring(db: SqliteDatabase, publicUrl: string, localUr
   const systemUpdateModule = buildSystemUpdateModule(dataPaths, repos, infra.misao, hostEnv, secretFileGuard, launchedByTaskScheduler);
 
   return {
+    orchestrationLinks,
+    windowRoles: new WindowRoleService(db, repos.windowRepo, infra.notificationBus, repos.projectRepo, orchestrationLinks),
     uiToken,
     webhookToken,
     storageStatusService,

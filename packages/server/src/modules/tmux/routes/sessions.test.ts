@@ -232,7 +232,7 @@ describe('DELETE /api/servers/:name/windows/:target', () => {
     it('revokes the owning task token when the killed window belongs to a task', async () => {
       const windowRepo = makeWindowRepo();
       (windowRepo.findByServerAndTarget as ReturnType<typeof vi.fn>).mockReturnValue({
-        id: 5, ownerType: 'task', taskId: 42, projectId: null, serverName: 'srv1', tmuxTarget: 'session:2', isPrimary: true,
+        id: 5, ownerType: 'task', role: null, originProjectId: null, taskId: 42, projectId: null, serverName: 'srv1', tmuxTarget: 'session:2', isPrimary: true,
       });
       const tmux: Partial<TmuxClient> = {
         getWindowIdentity: vi.fn(async () => null),
@@ -250,7 +250,7 @@ describe('DELETE /api/servers/:name/windows/:target', () => {
     it('does NOT revoke when the killed window is project-owned (not a task window)', async () => {
       const windowRepo = makeWindowRepo();
       (windowRepo.findByServerAndTarget as ReturnType<typeof vi.fn>).mockReturnValue({
-        id: 5, ownerType: 'project', taskId: null, projectId: 1, serverName: 'srv1', tmuxTarget: 'session:2',
+        id: 5, ownerType: 'project', role: null, originProjectId: null, taskId: null, projectId: 1, serverName: 'srv1', tmuxTarget: 'session:2',
       });
       const tmux: Partial<TmuxClient> = {
         getWindowIdentity: vi.fn(async () => null),
@@ -273,7 +273,7 @@ describe('DELETE /api/servers/:name/windows/:target', () => {
     it('does NOT revoke when the killed window is a SECONDARY task window (not the primary worker window)', async () => {
       const windowRepo = makeWindowRepo();
       (windowRepo.findByServerAndTarget as ReturnType<typeof vi.fn>).mockReturnValue({
-        id: 5, ownerType: 'task', taskId: 42, projectId: null, serverName: 'srv1', tmuxTarget: 'session:2', isPrimary: false,
+        id: 5, ownerType: 'task', role: null, originProjectId: null, taskId: 42, projectId: null, serverName: 'srv1', tmuxTarget: 'session:2', isPrimary: false,
       });
       const tmux: Partial<TmuxClient> = {
         getWindowIdentity: vi.fn(async () => null),
@@ -291,7 +291,7 @@ describe('DELETE /api/servers/:name/windows/:target', () => {
     it('does NOT revoke when kill-window fails for a reason other than "already gone" (window may still be alive)', async () => {
       const windowRepo = makeWindowRepo();
       (windowRepo.findByServerAndTarget as ReturnType<typeof vi.fn>).mockReturnValue({
-        id: 5, ownerType: 'task', taskId: 42, projectId: null, serverName: 'srv1', tmuxTarget: 'session:2', isPrimary: true,
+        id: 5, ownerType: 'task', role: null, originProjectId: null, taskId: 42, projectId: null, serverName: 'srv1', tmuxTarget: 'session:2', isPrimary: true,
       });
       const tmux: Partial<TmuxClient> = {
         getWindowIdentity: vi.fn(async () => null),
@@ -314,7 +314,7 @@ describe('DELETE /api/servers/:name/windows/:target', () => {
     it('still revokes when kill-window reports the window already gone ("can\'t find")', async () => {
       const windowRepo = makeWindowRepo();
       (windowRepo.findByServerAndTarget as ReturnType<typeof vi.fn>).mockReturnValue({
-        id: 5, ownerType: 'task', taskId: 42, projectId: null, serverName: 'srv1', tmuxTarget: 'session:2', isPrimary: true,
+        id: 5, ownerType: 'task', role: null, originProjectId: null, taskId: 42, projectId: null, serverName: 'srv1', tmuxTarget: 'session:2', isPrimary: true,
       });
       const tmux: Partial<TmuxClient> = {
         getWindowIdentity: vi.fn(async () => null),
@@ -348,10 +348,10 @@ describe('DELETE /api/servers/:name/sessions/:session', () => {
   it('revokes every PRIMARY task-owned window in the session, cleans up all window rows, and does not revoke a secondary task window (Issue #28 multi-window token collision fix)', async () => {
     const windowRepo = makeWindowRepo();
     windowRepo.findByServerAndSession.mockReturnValue([
-      { id: 1, ownerType: 'task', taskId: 42, projectId: null, serverName: 'srv1', tmuxTarget: 'session:task-42', isPrimary: true },
-      { id: 2, ownerType: 'task', taskId: 43, projectId: null, serverName: 'srv1', tmuxTarget: 'session:task-43', isPrimary: true },
-      { id: 3, ownerType: 'project', taskId: null, projectId: 1, serverName: 'srv1', tmuxTarget: 'session:extra', isPrimary: false },
-      { id: 4, ownerType: 'task', taskId: 44, projectId: null, serverName: 'srv1', tmuxTarget: 'session:task-44-secondary', isPrimary: false },
+      { id: 1, ownerType: 'task', role: null, originProjectId: null, taskId: 42, projectId: null, serverName: 'srv1', tmuxTarget: 'session:task-42', isPrimary: true },
+      { id: 2, ownerType: 'task', role: null, originProjectId: null, taskId: 43, projectId: null, serverName: 'srv1', tmuxTarget: 'session:task-43', isPrimary: true },
+      { id: 3, ownerType: 'project', role: null, originProjectId: null, taskId: null, projectId: 1, serverName: 'srv1', tmuxTarget: 'session:extra', isPrimary: false },
+      { id: 4, ownerType: 'task', role: null, originProjectId: null, taskId: 44, projectId: null, serverName: 'srv1', tmuxTarget: 'session:task-44-secondary', isPrimary: false },
     ]);
     const tmux: Partial<TmuxClient> = {
       killSession: vi.fn(async () => ({ stdout: '', stderr: '', code: 0 })),
@@ -385,7 +385,7 @@ describe('DELETE /api/servers/:name/sessions/:session', () => {
     const windowRepo = makeWindowRepo();
     // Pre-kill snapshot: one project window at "session:extra" (row id 3).
     windowRepo.findByServerAndSession.mockReturnValue([
-      { id: 3, ownerType: 'project', taskId: null, projectId: 1, serverName: 'srv1', tmuxTarget: 'session:extra', isPrimary: false },
+      { id: 3, ownerType: 'project', role: null, originProjectId: null, taskId: null, projectId: 1, serverName: 'srv1', tmuxTarget: 'session:extra', isPrimary: false },
     ]);
     const tmux: Partial<TmuxClient> = {
       killSession: vi.fn(async () => ({ stdout: '', stderr: '', code: 0 })),
@@ -407,7 +407,7 @@ describe('DELETE /api/servers/:name/sessions/:session', () => {
   it('does not revoke or clean up when kill-session fails for a reason other than "already gone"', async () => {
     const windowRepo = makeWindowRepo();
     windowRepo.findByServerAndSession.mockReturnValue([
-      { id: 1, ownerType: 'task', taskId: 42, projectId: null, serverName: 'srv1', tmuxTarget: 'session:task-42', isPrimary: true },
+      { id: 1, ownerType: 'task', role: null, originProjectId: null, taskId: 42, projectId: null, serverName: 'srv1', tmuxTarget: 'session:task-42', isPrimary: true },
     ]);
     const tmux: Partial<TmuxClient> = {
       killSession: vi.fn(async () => ({ stdout: '', stderr: 'some other tmux error', code: 1 })),
@@ -427,7 +427,7 @@ describe('DELETE /api/servers/:name/sessions/:session', () => {
   it('still revokes and cleans up when kill-session reports the session already gone', async () => {
     const windowRepo = makeWindowRepo();
     windowRepo.findByServerAndSession.mockReturnValue([
-      { id: 1, ownerType: 'task', taskId: 42, projectId: null, serverName: 'srv1', tmuxTarget: 'session:task-42', isPrimary: true },
+      { id: 1, ownerType: 'task', role: null, originProjectId: null, taskId: 42, projectId: null, serverName: 'srv1', tmuxTarget: 'session:task-42', isPrimary: true },
     ]);
     const tmux: Partial<TmuxClient> = {
       killSession: vi.fn(async () => ({ stdout: '', stderr: "can't find session: session", code: 1 })),
@@ -465,11 +465,11 @@ describe('DELETE /api/servers/:name/sessions/:session', () => {
     // killStartedAt, so it must be cleaned up too.
     windowRepo.findByServerAndSession
       .mockReturnValueOnce([
-        { id: 1, ownerType: 'task', taskId: 42, projectId: null, serverName: 'srv1', tmuxTarget: 'session:task-42', isPrimary: true, createdAt: '2026-01-01 00:00:00' },
+        { id: 1, ownerType: 'task', role: null, originProjectId: null, taskId: 42, projectId: null, serverName: 'srv1', tmuxTarget: 'session:task-42', isPrimary: true, createdAt: '2026-01-01 00:00:00' },
       ])
       .mockReturnValueOnce([
-        { id: 1, ownerType: 'task', taskId: 42, projectId: null, serverName: 'srv1', tmuxTarget: 'session:task-42', isPrimary: true, createdAt: '2026-01-01 00:00:00' },
-        { id: 9, ownerType: 'project', taskId: null, projectId: 3, serverName: 'srv1', tmuxTarget: 'session:extra-late', isPrimary: false, createdAt: '2026-01-01 00:00:02' },
+        { id: 1, ownerType: 'task', role: null, originProjectId: null, taskId: 42, projectId: null, serverName: 'srv1', tmuxTarget: 'session:task-42', isPrimary: true, createdAt: '2026-01-01 00:00:00' },
+        { id: 9, ownerType: 'project', role: null, originProjectId: null, taskId: null, projectId: 3, serverName: 'srv1', tmuxTarget: 'session:extra-late', isPrimary: false, createdAt: '2026-01-01 00:00:02' },
       ]);
     const tmux: Partial<TmuxClient> = {
       killSession: vi.fn(async () => ({ stdout: '', stderr: '', code: 0 })),
@@ -496,7 +496,7 @@ describe('DELETE /api/servers/:name/sessions/:session', () => {
     windowRepo.findByServerAndSession
       .mockReturnValueOnce([])
       .mockReturnValueOnce([
-        { id: 10, ownerType: 'project', taskId: null, projectId: 3, serverName: 'srv1', tmuxTarget: 'session:brand-new', isPrimary: false, createdAt: '2026-01-01 00:00:09' },
+        { id: 10, ownerType: 'project', role: null, originProjectId: null, taskId: null, projectId: 3, serverName: 'srv1', tmuxTarget: 'session:brand-new', isPrimary: false, createdAt: '2026-01-01 00:00:09' },
       ]);
     const tmux: Partial<TmuxClient> = {
       killSession: vi.fn(async () => ({ stdout: '', stderr: '', code: 0 })),
@@ -538,8 +538,8 @@ describe('DELETE /api/servers/:name/sessions/:session', () => {
   it('falls back to a plain kill + full row cleanup (including primary task windows) when destroySessionWindows is not wired', async () => {
     const windowRepo = makeWindowRepo();
     windowRepo.findByServerAndSession.mockReturnValue([
-      { id: 1, ownerType: 'task', taskId: 42, projectId: null, serverName: 'srv1', tmuxTarget: 'session:task-42', isPrimary: true },
-      { id: 2, ownerType: 'project', taskId: null, projectId: 1, serverName: 'srv1', tmuxTarget: 'session:extra', isPrimary: false },
+      { id: 1, ownerType: 'task', role: null, originProjectId: null, taskId: 42, projectId: null, serverName: 'srv1', tmuxTarget: 'session:task-42', isPrimary: true },
+      { id: 2, ownerType: 'project', role: null, originProjectId: null, taskId: null, projectId: 1, serverName: 'srv1', tmuxTarget: 'session:extra', isPrimary: false },
     ]);
     const tmux: Partial<TmuxClient> = {
       killSession: vi.fn(async () => ({ stdout: '', stderr: '', code: 0 })),
@@ -572,7 +572,7 @@ describe('POST /api/servers/:name/sessions/:session/windows/:window/panes', () =
   it('rejects with 409 when the target is a task\'s PRIMARY window (no way to hand the new pane the live, unrotated token)', async () => {
     const windowRepo = makeWindowRepo();
     (windowRepo.findByServerAndTarget as ReturnType<typeof vi.fn>).mockReturnValue({
-      id: 5, ownerType: 'task', taskId: 42, projectId: null, serverName: 'srv1', tmuxTarget: 'session:2', isPrimary: true,
+      id: 5, ownerType: 'task', role: null, originProjectId: null, taskId: 42, projectId: null, serverName: 'srv1', tmuxTarget: 'session:2', isPrimary: true,
     });
     const splitPane = vi.fn(async () => ({ stdout: '', stderr: '', code: 0 }));
     const tmux: Partial<TmuxClient> = {
@@ -592,7 +592,7 @@ describe('POST /api/servers/:name/sessions/:session/windows/:window/panes', () =
   it('splits with the masked secondary-window env when the target is a SECONDARY task window', async () => {
     const windowRepo = makeWindowRepo();
     (windowRepo.findByServerAndTarget as ReturnType<typeof vi.fn>).mockReturnValue({
-      id: 5, ownerType: 'task', taskId: 42, projectId: null, serverName: 'srv1', tmuxTarget: 'session:2', isPrimary: false,
+      id: 5, ownerType: 'task', role: null, originProjectId: null, taskId: 42, projectId: null, serverName: 'srv1', tmuxTarget: 'session:2', isPrimary: false,
     });
     const splitPane = vi.fn(async () => ({ stdout: '', stderr: '', code: 0 }));
     const tmux: Partial<TmuxClient> = {
@@ -977,7 +977,7 @@ describe('POST /api/servers/:name/mux/windows/:ref/panes/open', () => {
   function taskWindowRepo(isPrimary: boolean): SqliteWindowRepository {
     const windowRepo = makeWindowRepo();
     (windowRepo.findByServerAndRef as ReturnType<typeof vi.fn>).mockReturnValue({
-      id: 5, ownerType: 'task', taskId: 42, projectId: null, serverName: 'misao1', tmuxTarget: 'ws-a:main', isPrimary,
+      id: 5, ownerType: 'task', role: null, originProjectId: null, taskId: 42, projectId: null, serverName: 'misao1', tmuxTarget: 'ws-a:main', isPrimary,
     });
     return windowRepo;
   }
@@ -1021,7 +1021,7 @@ describe('POST /api/servers/:name/mux/windows/:ref/panes/open', () => {
   it('labels the pane of a registered non-task window with its windowId', async () => {
     const windowRepo = makeWindowRepo();
     (windowRepo.findByServerAndRef as ReturnType<typeof vi.fn>).mockReturnValue({
-      id: 7, ownerType: 'project', taskId: null, projectId: 1, serverName: 'misao1', tmuxTarget: 'ws-a:main', isPrimary: false,
+      id: 7, ownerType: 'project', role: null, originProjectId: null, taskId: null, projectId: 1, serverName: 'misao1', tmuxTarget: 'ws-a:main', isPrimary: false,
     });
     await build(vi.fn(), { windowRepo });
     const res = await app.inject({ method: 'POST', url });
@@ -1286,7 +1286,7 @@ describe('mux creation routes hand the new pane its env inside the per-server lo
   it('POST /mux/windows/:ref/panes (split) gives a secondary task window its own masked env', async () => {
     const windowRepo = makeWindowRepo();
     (windowRepo.findByServerAndRef as ReturnType<typeof vi.fn>).mockReturnValue({
-      id: 5, ownerType: 'task', taskId: 42, projectId: null, serverName: 'misao1', tmuxTarget: 'ws-a:main', isPrimary: false,
+      id: 5, ownerType: 'task', role: null, originProjectId: null, taskId: 42, projectId: null, serverName: 'misao1', tmuxTarget: 'ws-a:main', isPrimary: false,
     });
     const taskEnv = { AZITO_TASK_ID: '42', ...MASKED };
     const buildSecondaryWindowEnv = vi.fn(() => taskEnv);
@@ -1300,7 +1300,7 @@ describe('mux creation routes hand the new pane its env inside the per-server lo
   it('POST /mux/windows/:ref/panes (split) still refuses a task primary window', async () => {
     const windowRepo = makeWindowRepo();
     (windowRepo.findByServerAndRef as ReturnType<typeof vi.fn>).mockReturnValue({
-      id: 5, ownerType: 'task', taskId: 42, projectId: null, serverName: 'misao1', tmuxTarget: 'ws-a:main', isPrimary: true,
+      id: 5, ownerType: 'task', role: null, originProjectId: null, taskId: 42, projectId: null, serverName: 'misao1', tmuxTarget: 'ws-a:main', isPrimary: true,
     });
     await build(normal, { windowRepo });
     const res = await app.inject({ method: 'POST', url: `/api/servers/misao1/mux/windows/${refParam}/panes`, payload: {} });

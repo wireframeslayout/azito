@@ -105,6 +105,7 @@ function buildApp(scopedAuthEnabled: boolean, db: SqliteDatabase, createCalls: R
   const originationService = new TaskOriginationService(taskRepo as unknown as ITaskRepository, auditLogService);
 
   const opts: TasksRouteOptions = {
+    attribution: { recordInteraction: vi.fn() },
     taskRepo,
     projectRepo: { findAll: vi.fn(() => []), findById: vi.fn(() => ({ id: 10, name: 'P', slug: 'p' })), create: vi.fn(), update: vi.fn(), delete: vi.fn(), addRepository: vi.fn(), findRepositoryById: vi.fn(() => null), removeRepository: vi.fn(), findRepositoryCredentialsByIds: vi.fn(() => []) } as unknown as TasksRouteOptions['projectRepo'],
     projectServerRepo: { findByProject: vi.fn(() => []), findByProjects: vi.fn(() => new Map()), findByServer: vi.fn(() => []), find: vi.fn(() => null), upsert: vi.fn(), remove: vi.fn() },
@@ -115,7 +116,7 @@ function buildApp(scopedAuthEnabled: boolean, db: SqliteDatabase, createCalls: R
     serverRepo: { findAll: vi.fn(() => []), findByName: vi.fn(() => null), create: vi.fn(), update: vi.fn(), updateAgentVersion: vi.fn(), updateHostProfile: vi.fn(), updateFingerprint: vi.fn(), clearFingerprint: vi.fn(), updateIsolationIntent: vi.fn(), findMetaByNames: vi.fn(() => []), delete: vi.fn() },
     worktreeServiceFactory: {} as unknown as TasksRouteOptions['worktreeServiceFactory'],
     transportFactory: {} as unknown as TasksRouteOptions['transportFactory'],
-    windowRepo: { findByTaskIds: vi.fn(() => new Map()), add: vi.fn(), adoptForTask: vi.fn(), findAll: vi.fn(() => []), findById: vi.fn(), findByProject: vi.fn(() => []), findByTask: vi.fn(() => []), findAgentSessionIdsByServer: vi.fn(() => new Set<string>()), findByServer: vi.fn(() => []), findByServerAndTarget: vi.fn(), findByServerAndRef: vi.fn(() => undefined), findByServerAndSession: vi.fn(() => []), update: vi.fn(), updateAgentSessionIdByWindow: vi.fn(), updateClaudeSessionByPane: vi.fn(), remove: vi.fn(), removeByServerAndTarget: vi.fn(() => 0), updatePaneLayout: vi.fn(), now: vi.fn(() => '2026-01-01 00:00:00') },
+    windowRepo: { findByTaskIds: vi.fn(() => new Map()), add: vi.fn(), adoptForTask: vi.fn(), findOrchestrators: vi.fn(() => []), findAll: vi.fn(() => []), findById: vi.fn(), findByProject: vi.fn(() => []), findByTask: vi.fn(() => []), findAgentSessionIdsByServer: vi.fn(() => new Set<string>()), findByServer: vi.fn(() => []), findByServerAndTarget: vi.fn(), findByServerAndRef: vi.fn(() => undefined), findByServerAndSession: vi.fn(() => []), update: vi.fn(), updateAgentSessionIdByWindow: vi.fn(), updateClaudeSessionByPane: vi.fn(), remove: vi.fn(), removeByServerAndTarget: vi.fn(() => 0), updatePaneLayout: vi.fn(), now: vi.fn(() => '2026-01-01 00:00:00') },
     respawnService: {} as unknown as TasksRouteOptions['respawnService'],
     taskRestoreService: {} as unknown as TasksRouteOptions['taskRestoreService'],
     unitTypeLoader: {} as unknown as TasksRouteOptions['unitTypeLoader'],

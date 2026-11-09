@@ -81,6 +81,8 @@ import * as m074 from '../../shared/db/migrations/074_herdr_navigation_lock';
 import * as m077 from '../../shared/db/migrations/077_server_default_mux';
 import * as m081 from '../../shared/db/migrations/081_window_label_source';
 import * as m083 from '../../shared/db/migrations/083_window_claude_config_dir';
+import * as m085 from '../../shared/db/migrations/085_window_role';
+import * as m086 from '../../shared/db/migrations/086_window_links';
 
 interface Migration {
   version: number;
@@ -95,10 +97,10 @@ const ALL_MIGRATIONS: Migration[] = [
   m041, m042, m043, m044, m045, m046, m047, m048, m049, m050, m051,
   m052, m053, m054, m055, m056, m057, m058, m059, m060, m061, m062,
   m063, m064, m065, m066, m067, m068, m069,
-  m070, m071, m072, m073, m074, m077, m081, m083,
+  m070, m071, m072, m073, m074, m077, m081, m083, m085, m086,
 ];
 
-const MIGRATIONS_REQUIRING_TABLE_REBUILD = new Set([36, 37, 42, 46, 68]);
+const MIGRATIONS_REQUIRING_TABLE_REBUILD = new Set([36, 37, 42, 46, 68, 85]);
 
 export function buildSeededDb(): Database.Database {
   const db = new Database(':memory:');

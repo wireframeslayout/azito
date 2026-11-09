@@ -29,6 +29,7 @@ async function buildApp(labelWindowPanes = vi.fn(async () => undefined)) {
   muxDriverRegistry.register('misao', driver);
   const app = Fastify();
   await app.register(windowsRoutes, {
+    attribution: { recordInteraction: vi.fn() }, windowRoles: {} as never,
       paneHandleResolver: {} as never,
     muxSwitchSettingsRepo: {} as never, auditLogService: {} as never, agentActivityMonitor: {} as never,
     windowRepo: windowRepo as unknown as IWindowRepository,

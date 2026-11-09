@@ -72,7 +72,7 @@ describe('killWindowCore with a misao window', () => {
   });
 
   it('hands a primary task window to destroyPrimaryTaskWindow under its window id, not the tmux_target form', async () => {
-    const dbWindow = { id: 3, taskId: 9, isPrimary: true, ownerType: 'task', tmuxTarget: 'renamed:w_01J9Z8Y7X6W5V4T3S2R1Q0P9N8', muxRef: MISAO_REF } as unknown as Window;
+    const dbWindow = { id: 3, taskId: 9, isPrimary: true, ownerType: 'task', role: null, originProjectId: null, tmuxTarget: 'renamed:w_01J9Z8Y7X6W5V4T3S2R1Q0P9N8', muxRef: MISAO_REF } as unknown as Window;
     const destroyPrimaryTaskWindow = vi.fn(async () => ({ success: true, alreadyGone: false, result: ok }));
 
     await killWindowCore(

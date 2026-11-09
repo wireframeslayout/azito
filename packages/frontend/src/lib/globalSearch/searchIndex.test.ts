@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { buildSearchIndex, searchIndex } from './searchIndex';
 import type { ProjectListItem, Task } from '../../pages/workspace/types';
 
-const projects: ProjectListItem[] = [{ id: 1, name: 'Alpha', windows: [{ id: 806, ownerType: 'project', projectId: 1, serverName: 'host', tmuxTarget: 'a:1', label: 'Editor', labelSource: 'user', isPrimary: true, windowType: 'terminal' }] }];
+const projects: ProjectListItem[] = [{ id: 1, name: 'Alpha', windows: [{ id: 806, ownerType: 'project', role: null, originProjectId: null, projectId: 1, serverName: 'host', tmuxTarget: 'a:1', label: 'Editor', labelSource: 'user', isPrimary: true, windowType: 'terminal' }] }];
 const tasks: Task[] = [{ id: 371, title: 'Fix Search', status: 'running', projectId: 1, unitId: null, priority: 0, sourceRef: 'GH-42', createdAt: '', updatedAt: '' }];
 
 describe('global search index', () => {
