@@ -3,11 +3,11 @@ import { fireEvent, render, screen } from '@testing-library/react';
 import { describe, expect, it, vi } from 'vitest';
 import { OrchestrationSidebar } from './OrchestrationSidebar';
 
-vi.mock('../../hooks/useWorkspaceCatalog', () => ({ useWorkspaceCatalog: () => ({ allProjects: [] }) }));
+vi.mock('../../hooks/useWorkspaceCatalog', () => ({ useWorkspaceCatalog: () => ({ allProjects: [{ id: 10, name: 'Project Alpha' }] }) }));
 vi.mock('../../hooks/useAgentActivity', () => ({ useAgentActivity: () => ({ activityStatus: () => null, snapshotStatus: 'ready', retrySnapshot: vi.fn() }) }));
 vi.mock('../../hooks/useOrchestrators', () => ({ useOrchestrators: () => ({ status: 'ready', refresh: vi.fn(), windows: [
   { id: 1, parentWindowId: null, label: 'Parent', tmuxTarget: 's:p', serverName: 'local', links: { total: 0, projectIds: [], serverNames: [] } },
-  { id: 2, parentWindowId: 1, label: 'Child', tmuxTarget: 's:c', serverName: 'local', links: { total: 0, projectIds: [], serverNames: [] } },
+  { id: 2, parentWindowId: 1, label: 'Child', tmuxTarget: 's:c', serverName: 'local', links: { total: 0, projectIds: [10], serverNames: [] } },
 ] }) }));
 vi.mock('react-i18next', async (importOriginal) => ({ ...await importOriginal<typeof import('react-i18next')>(), useTranslation: () => ({ t: (key: string) => key }) }));
 
@@ -19,6 +19,12 @@ describe('OrchestrationSidebar', () => {
     expect(screen.getByText(/Parent/)).toBeTruthy();
     fireEvent.click(screen.getByText(/Child/));
     expect(select).toHaveBeenCalledWith(2);
+  });
+  it('finds a child by linked project name', () => {
+    render(<OrchestrationSidebar onSelect={vi.fn()} />);
+    fireEvent.change(screen.getByRole('textbox'), { target: { value: 'Project Alpha' } });
+    expect(screen.getByText(/Parent/)).toBeTruthy();
+    expect(screen.getByText(/Child/)).toBeTruthy();
   });
   it('moves focus between rows with arrow keys', () => {
     render(<OrchestrationSidebar onSelect={vi.fn()} />);

@@ -44,6 +44,7 @@ interface MobileNavMenuProps {
   onOpenActiveWindows?: () => void;
   activeWindowsCount?: number;
   activeWindowsBlockedCount?: number;
+  orchestratorCount?: number;
 }
 
 // モック（S6/M1）は行高36〜40px・節間の余白も詰まっている。タップターゲットは本来44pxが
@@ -148,13 +149,14 @@ export function MobileNavMenu({
   onOpenActiveWindows,
   activeWindowsCount,
   activeWindowsBlockedCount,
+  orchestratorCount,
 }: MobileNavMenuProps) {
   const { t } = useTranslation(['workspace', 'projects', 'common']);
 
   return (
     <div style={{ padding: '0 4px 16px' }}>
       <button type="button" onClick={() => onNavigateGlobal(ORCHESTRATION_NAV_ITEM.path)} style={{ ...rowStyle, minHeight: 44, color: 'var(--purple)' }} className="glass-popover-item">
-        <Icon name={ORCHESTRATION_NAV_ITEM.icon} size={16} /><span style={rowLabelStyle}>{t(ORCHESTRATION_NAV_ITEM.labelKey)}</span>
+        <Icon name={ORCHESTRATION_NAV_ITEM.icon} size={16} /><span style={rowLabelStyle}>{t(ORCHESTRATION_NAV_ITEM.labelKey)}</span>{orchestratorCount !== undefined && <span style={rowMetaStyle}>{orchestratorCount}</span>}
       </button>
       <button type="button" style={{ ...rowStyle, minHeight: 44 }} className="glass-popover-item" onClick={onOpenSearch}><Icon name="search" size={16} /><span style={rowLabelStyle}>{t('navigation:globalSearch.title')}</span></button>
       <div style={projectCardStyle}>

@@ -9,6 +9,9 @@ import { OrchestrationSidebar } from '../orchestration/OrchestrationSidebar';
 import { MobileNavMenu } from './MobileNavMenu';
 import { MobileActiveWindowsPanel } from './MobileActiveWindowsPanel';
 import type { ConnectPaneFn } from '../../lib/terminalRef';
+import { apiWithStatus } from '../../api/client';
+import { useToast } from '../../hooks/useToast';
+import { useOrchestrators } from '../../hooks/useOrchestrators';
 import { useActiveWindowRows } from '../../hooks/useActiveWindowRows';
 import { paths } from '../../paths';
 import type { SidebarMode } from '../../pages/workspace/types';
@@ -86,6 +89,18 @@ export function MobileNavSheet({
   const [stack, setStack] = useState<StackEntry[]>(['menu']);
   const [activeWindowsOpen, setActiveWindowsOpen] = useState(false);
 
+  const orchestrators = useOrchestrators();
+  const { showToast } = useToast();
+  const setOrchestratorRole = async (id: number, role: 'orchestrator' | null): Promise<void> => {
+    try {
+      const result = await apiWithStatus(`/windows/${id}/role`, { method: 'PUT', body: JSON.stringify({ role }) });
+      if (result.status !== 200) throw new Error('role change failed');
+      orchestrators.refresh();
+      showToast(t(role ? 'workspace:orchestration.moved' : 'workspace:orchestration.restored'), [
+        { label: t('workspace:orchestration.undo'), onClick: () => { void setOrchestratorRole(id, role ? null : 'orchestrator'); } },
+      ]);
+    } catch { showToast(t('workspace:orchestration.roleError')); }
+  };
   const { totalCount: awCount, blockedCount: awBlockedCount } = useActiveWindowRows(titleData);
   const currentProjectItem = allProjects.find((p) => p.id === project?.id) ?? null;
 
@@ -189,11 +204,12 @@ export function MobileNavSheet({
                   onSelectMode={handleSelectMode}
                   onNavigateGlobal={(path) => { if (path === paths.orchestration()) push('orchestration'); else { navigate(path); onClose(); } }}
                   onOpenActiveWindows={handleOpenActiveWindows}
+                  orchestratorCount={orchestrators.status === 'ready' ? orchestrators.windows.length : undefined}
                   activeWindowsCount={awCount}
                   activeWindowsBlockedCount={awBlockedCount}
                 />
               )}
-              {top === 'orchestration' && <OrchestrationSidebar onSelect={(id) => { navigate(paths.orchestration(id)); onClose(); }} />}
+              {top === 'orchestration' && <OrchestrationSidebar onSelect={(id) => { navigate(paths.orchestration(id)); onClose(); }} onRemove={(id) => { void setOrchestratorRole(id, null); }} />}
               {top === 'mode' && sidebarContent}
               {top === 'projectSwitch' && (
                 <MobileProjectSwitchList

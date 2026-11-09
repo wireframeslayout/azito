@@ -25,7 +25,10 @@ export function OrchestrationSidebar({ selectedId, onSelect, onRemove }: Orchest
   const bindLongPress = useLongPress();
   const menuItems = (id: number) => onRemove ? [{ label: t('orchestration.removeRole'), onClick: () => onRemove(id) }] : [];
   const [closed, setClosed] = useState<Set<number>>(new Set());
-  const matches = (node: OrchestrationNode): boolean => `${node.window.label ?? ''} ${node.window.tmuxTarget} ${node.window.serverName}`.toLowerCase().includes(search.toLowerCase()) || node.children.some(matches);
+  const matches = (node: OrchestrationNode): boolean => {
+    const projects = node.window.links.projectIds.map((id) => allProjects.find((project) => project.id === id)?.name).filter(Boolean).join(' ');
+    return `${node.window.label ?? ''} ${node.window.tmuxTarget} ${node.window.serverName} ${projects}`.toLowerCase().includes(search.toLowerCase()) || node.children.some(matches);
+  };
   const renderNode = (node: OrchestrationNode, depth: number): ReactNode => {
     if (!matches(node)) return null;
     const expanded = !closed.has(node.window.id) || !!search;
