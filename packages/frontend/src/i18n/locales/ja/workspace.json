@@ -45,6 +45,8 @@
     "taskOpenFailed": "タスクを開けませんでした。"
   },
   "tab": {
+    "pinnedState": "ピン留め",
+    "dirtyState": "未保存",
     "closeDirtyTitle": "未保存の変更があるタブを閉じますか？",
     "closeDirtyMessage": "「{{name}}」には未保存の変更があります。このタブを閉じると変更は破棄されます。",
     "closeDirtyConfirm": "破棄して閉じる",

@@ -200,7 +200,12 @@ describe('maximized window', () => {
     fireEvent.click(screen.getByText('Launch'));
     const toggle = document.querySelector<HTMLButtonElement>('.maximize-tree-toggle')!;
     await waitFor(() => expect(toggle).toHaveAttribute('aria-expanded', 'true'));
-    fireEvent.keyDown(screen.getByRole('dialog'), { key: 'Escape' });
+    const terminal = screen.getByLabelText('terminal');
+    terminal.focus();
+    fireEvent.keyDown(terminal, { key: 'Escape' });
+    expect(terminal).toHaveFocus();
+    expect(toggle).toHaveAttribute('aria-expanded', 'true');
+    fireEvent.keyDown(screen.getByRole('tree', { name: 'Open tabs' }), { key: 'Escape' });
     await waitFor(() => expect(toggle).toHaveAttribute('aria-expanded', 'false'));
     expect(screen.getByRole('dialog')).toBeInTheDocument();
     fireEvent.keyDown(screen.getByRole('dialog'), { key: 'Escape' });

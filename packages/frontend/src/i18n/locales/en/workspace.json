@@ -45,6 +45,8 @@
     "taskOpenFailed": "Could not open the task."
   },
   "tab": {
+    "pinnedState": "Pinned",
+    "dirtyState": "Unsaved",
     "closeDirtyTitle": "Close tab with unsaved changes?",
     "closeDirtyMessage": "\"{{name}}\" has unsaved changes. Closing this tab will discard them.",
     "closeDirtyConfirm": "Discard and close",

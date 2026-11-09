@@ -1,6 +1,7 @@
 import { test, expect } from '../fixtures/test';
 
 test('switches registered windows and releases the extra terminal connection', async ({ app, harness }) => {
+  await app.setViewportSize({ width: 1000, height: 800 });
   const project = await harness.createProject('maximize-e2e');
   const firstAgent = await harness.startFakeAgent('maximize-first', 'agent', { supervised: false });
   const secondAgent = await harness.startFakeAgent('maximize-second', 'agent', { supervised: false });
@@ -34,6 +35,12 @@ test('switches registered windows and releases the extra terminal connection', a
   const dialog = app.getByRole('dialog');
   await expect(dialog.locator('header')).toContainText(`W-${second}`);
   await expect.poll(() => connections.size).toBe(baseline + 1);
+  const toggle = dialog.getByRole('button', { name: '開いているタブ' });
+  await expect(toggle).toHaveAttribute('aria-expanded', 'true');
+  await toggle.click();
+  await expect(toggle).toHaveAttribute('aria-expanded', 'false');
+  await toggle.click();
+  await expect(toggle).toHaveAttribute('aria-expanded', 'true');
   await dialog.getByRole('treeitem', { name: new RegExp(`W-${first}`) }).click();
   await expect(dialog.locator('header')).toContainText(`W-${first}`);
   await expect.poll(() => connections.size).toBe(baseline + 1);

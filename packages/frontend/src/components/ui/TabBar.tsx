@@ -1,3 +1,4 @@
+import { useTranslation } from 'react-i18next';
 import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { Icon } from './Icon';
 import { useLongPress, longPressStyle } from '../../hooks/useLongPress';
@@ -51,6 +52,7 @@ export interface TabBarProps {
 }
 
 export function TabBar({ tabs, activeId, onSelect, onClose, onReorder, draggable = false, renderTab, onTabDoubleClick, onTabContextMenu, onTabLongPress, trailing, onTabDragStart, onTabDragEnd }: TabBarProps) {
+  const { t } = useTranslation('workspace');
   const html5Draggable = onTabDragStart !== undefined || onTabDragEnd !== undefined;
   const { attachRef: attachScrollRef, elRef: tabBarRef } = useTabStripScrolling(activeId);
   const bindLongPress = useLongPress();
@@ -139,8 +141,8 @@ export function TabBar({ tabs, activeId, onSelect, onClose, onReorder, draggable
           key={tab.id}
           data-tab-id={tab.id}
           tabIndex={0}
-          role="button"
-          aria-label={tab.label}
+          role="tab"
+          aria-selected={isActive}
           onKeyDown={event => { if (event.target === event.currentTarget && (event.key === 'Enter' || event.key === ' ')) { event.preventDefault(); onSelect(tab.id); } }}
           onDoubleClick={() => onTabDoubleClick?.(tab.id)}
           className={tab.className || ''}
@@ -152,6 +154,8 @@ export function TabBar({ tabs, activeId, onSelect, onClose, onReorder, draggable
           }}
         >
           {renderTab(tab, isActive)}
+          {tab.pinned && <span className="sr-only">{t('tab.pinnedState')}</span>}
+          {tab.dirty && <span className="sr-only">{t('tab.dirtyState')}</span>}
         </div>
       );
     }
@@ -161,8 +165,8 @@ export function TabBar({ tabs, activeId, onSelect, onClose, onReorder, draggable
         key={tab.id}
         data-tab-id={tab.id}
         tabIndex={0}
-        role="button"
-        aria-label={tab.label}
+        role="tab"
+        aria-selected={isActive}
         onKeyDown={event => { if (event.target === event.currentTarget && (event.key === 'Enter' || event.key === ' ')) { event.preventDefault(); onSelect(tab.id); } }}
         onDoubleClick={() => onTabDoubleClick?.(tab.id)}
         className={tab.className || ''}
@@ -189,8 +193,10 @@ export function TabBar({ tabs, activeId, onSelect, onClose, onReorder, draggable
       >
         <span onClick={() => onSelect(tab.id)} title={tab.title} style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
           {tab.pinned && <span style={{ display: 'inline-flex', opacity: 0.6, marginRight: 2, verticalAlign: '-1px' }}><Icon name="pin" size={14} /></span>}
-          {tab.dirty && <span style={{ color: 'var(--text-dim)', marginRight: 2 }}>●</span>}
+          {tab.dirty && <span aria-hidden="true" style={{ color: 'var(--text-dim)', marginRight: 2 }}>●</span>}
           {tab.icon != null && <>{tab.icon} </>}{tab.label}
+          {tab.pinned && <span className="sr-only"> {t('tab.pinnedState')}</span>}
+          {tab.dirty && <span className="sr-only"> {t('tab.dirtyState')}</span>}
         </span>
         {tab.extra}
         {tab.closable !== false && onClose && (
@@ -202,7 +208,7 @@ export function TabBar({ tabs, activeId, onSelect, onClose, onReorder, draggable
 
   return (
     <div className="ws-surface" style={{ display: 'flex', alignItems: 'center', borderBottom: '1px solid var(--border)', background: 'var(--ws-surface-card)', minHeight: 44, position: 'relative' }}>
-      <div ref={attachScrollRef} style={{ display: 'flex', flex: 1, overflowX: 'auto', scrollbarWidth: 'none' }}>
+      <div ref={attachScrollRef} role="tablist" style={{ display: 'flex', flex: 1, overflowX: 'auto', scrollbarWidth: 'none' }}>
         {tabs.map((tab, idx) => {
           const isDragging = dragTabId === tab.id;
           const showDropBefore = dropIndex === idx && dragTabId !== null && dragTabId !== tab.id;
