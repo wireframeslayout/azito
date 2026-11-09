@@ -6,7 +6,7 @@ import type { TransportFactory } from '../servers/transport/TransportFactory';
 import type { IStorageSettingsRepository } from './SqliteStorageSettingsRepository';
 import type { MinioStorageClient } from './storage/MinioStorageClient';
 import { validateStoragePath } from './storage/storageOperations';
-import { FileBrowseService } from './FileBrowseService';
+import { FileBrowseService, MAX_DOWNLOAD_SIZE } from './FileBrowseService';
 import { isHostPathContained } from '../../shared/os/hostPath';
 import { signUrlToken, verifyUrlToken } from '../../shared/auth/signedUrl';
 
@@ -55,7 +55,13 @@ export class MediaService {
   async issue(target: MediaTarget): Promise<string> {
     await this.validate(target);
     if (target.kind === 'storage') await this.storage(target.projectId).statMedia(this.storagePath(target));
-    else await this.serverFile(target);
+    else {
+      const server = this.deps.serverRepo.findByName(target.server);
+      if (!server) throw new Error('Server not found');
+      const ops = this.deps.transportFactory.getFileOps(server);
+      const stat = await ops.stat(await ops.realpath(target.path));
+      if (!stat || stat.kind !== 'file' || stat.size > MAX_DOWNLOAD_SIZE) throw new Error('Invalid media file');
+    }
     return `/api/media/${signUrlToken(this.deps.key, 'media', JSON.stringify(target), Date.now() + 600_000)}`;
   }
 

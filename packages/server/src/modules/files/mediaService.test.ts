@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { MediaService, type MediaDependencies } from './mediaService';
 
 function setup(): MediaService {
-  const ops = { realpath: async (path: string) => path, platform: 'linux' };
+  const ops = { realpath: async (path: string) => path, stat: async () => ({ kind: 'file', size: 1 }), platform: 'linux' };
   const deps = {
     key: Buffer.alloc(32, 1),
     projectRepo: { findById: (id: number) => id === 1 ? {} : null },
@@ -24,5 +24,11 @@ describe('media target validation', () => {
   });
   it('rejects server paths outside the associated project', async () => {
     await expect(setup().validate({ kind: 'server', projectId: 1, server: 'local', path: '/outside/file.mp4' })).rejects.toThrow();
+  });
+  it('issues a URL for a server file using metadata without reading its content', async () => {
+    const service = setup();
+    const target = { kind: 'server' as const, projectId: 1, server: 'local', path: '/project/file.mp4' };
+    const url = await service.issue(target);
+    expect(service.parse(url.split('/').pop()!)).toEqual(target);
   });
 });

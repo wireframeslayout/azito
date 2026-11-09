@@ -69,8 +69,17 @@ test('XLSX save retains numbers, formulas and other sheets', async ({ app, harne
   const saved = app.waitForResponse((response) => response.request().method() === 'PUT' && response.url().endsWith('/files/binary'));
   await app.getByRole('button', { name: '保存', exact: true }).click();
   expect((await saved).ok()).toBe(true);
+  await expect(app.getByText('未保存', { exact: true })).toHaveCount(0);
+  await expect(app.getByRole('button', { name: '編集', exact: true })).toBeDisabled();
+  await app.locator('.luckysheet-cell-sheettable').click({ position: { x: 310, y: 60 } });
+  await app.keyboard.type('10');
+  await app.keyboard.press('Enter');
+  const savedAgain = app.waitForResponse((response) => response.request().method() === 'PUT' && response.url().endsWith('/files/binary'));
+  await app.getByRole('button', { name: '保存', exact: true }).click();
+  expect((await savedAgain).ok()).toBe(true);
   const result = await JSZip.loadAsync(fs.readFileSync(file));
   const first = await result.file('xl/worksheets/sheet1.xml')!.async('string');
+  expect(first).toMatch(/<c r="E3"[^>]*><v>10<\/v><\/c>/);
   expect(first).toMatch(/<c r="A1"[^>]*><v>3<\/v><\/c>/);
   expect(first).toContain('<f>A1*2</f>');
   expect(await result.file('xl/workbook.xml')!.async('string')).toContain('Sheet2');

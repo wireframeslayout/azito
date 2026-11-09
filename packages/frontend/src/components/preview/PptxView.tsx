@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { preparePptx } from './preparePptx';
+import { Button } from '../ui';
 
 interface Props { bytes: Uint8Array }
 export function PptxView({ bytes }: Props) {
@@ -23,5 +24,5 @@ export function PptxView({ bytes }: Props) {
   if (!result) return <p role="status">{t('preview.loading')}</p>;
   if (!result.slides.length) return <p>{t('office.empty')}</p>;
   const html = `<!doctype html><html><head><meta http-equiv="Content-Security-Policy" content="default-src 'none'; img-src data: blob:; style-src 'unsafe-inline'; font-src 'none'; base-uri 'none'; form-action 'none'"></head><body>${result.slides[slide]}</body></html>`;
-  return <section><p>{t('office.pptxLimit')}</p>{result.truncated && <p role="status">{t('office.slidesTruncated')}</p>}<iframe title={`${t('office.slide')} ${slide + 1}`} sandbox="" srcDoc={html} style={{ width: '100%', minHeight: '60vh', border: 0 }} /><div><button disabled={slide === 0} onClick={() => setSlide(slide - 1)}>{t('office.previous')}</button> {slide + 1} / {result.slides.length} <button disabled={slide + 1 >= result.slides.length} onClick={() => setSlide(slide + 1)}>{t('office.next')}</button></div></section>;
+  return <section><p>{t('office.pptxLimit')}</p>{result.truncated && <p role="status">{t('office.slidesTruncated')}</p>}<iframe title={`${t('office.slide')} ${slide + 1}`} sandbox="" srcDoc={html} style={{ width: '100%', minHeight: '60vh', border: 0 }} /><div><Button disabled={slide === 0} onClick={() => setSlide(slide - 1)}>{t('office.previous')}</Button> {slide + 1} / {result.slides.length} <Button disabled={slide + 1 >= result.slides.length} onClick={() => setSlide(slide + 1)}>{t('office.next')}</Button></div></section>;
 }
