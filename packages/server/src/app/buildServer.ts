@@ -35,6 +35,8 @@ import tasksRoutes from '../modules/tasks/routes';
 import providersRoutes from '../modules/agents/routes';
 import phasePromptsRoutes from '../modules/prompt/routes';
 import storageRoutes, { fileBrowseRoutes } from '../modules/files/routes';
+import { MediaService } from '../modules/files/mediaService';
+import { registerMediaRoutes } from '../modules/files/mediaRoutes';
 import { FileSearchService } from '../modules/files/FileSearchService';
 import notificationRoutes from '../modules/notifications/routes';
 import usageRoutes from '../modules/usage/routes';
@@ -133,6 +135,7 @@ export async function buildServer(app: FastifyInstance, wiring: Wiring, port: nu
   // ─── UI token (resolved by main.ts, passed through wiring) ───
 
   const verifyUiToken = createTokenVerifier(wiring.uiToken);
+  const mediaService = new MediaService({ projectRepo, projectServerRepo, serverRepo, transportFactory, storageSettingsRepo, storageClient, key: wiring.mediaSigningKey });
 
   const { harnessPrefix } = wiring;
 
@@ -415,6 +418,11 @@ export async function buildServer(app: FastifyInstance, wiring: Wiring, port: nu
     if (request.url.startsWith('/api/webhooks/')) return;
     if (request.url.startsWith('/api/hooks/')) return;
     if (request.url.startsWith('/api/agent-signal')) return;
+    if (request.method === 'GET' && request.routeOptions.url === '/api/media/:token') {
+      const token = (request.params as { token: string }).token;
+      if (mediaService.parse(token)) return;
+      return reply.status(401).send({ error: 'Unauthorized' });
+    }
 
     const principal = resolvePrincipal(request.headers.authorization, { verifyUiToken, taskTokenRepo });
     if (!principal) {
@@ -595,6 +603,7 @@ export async function buildServer(app: FastifyInstance, wiring: Wiring, port: nu
   });
   const fileSearchService = new FileSearchService(transportFactory);
   await app.register(fileBrowseRoutes, { serverRepo, projectServerRepo, transportFactory, searchService: fileSearchService });
+  registerMediaRoutes(app, mediaService);
   await app.register(gitRoutes, { serverRepo, transportFactory, taskRepo, projectServerRepo, worktreeServiceFactory, projectRepo, gitProvider });
   await app.register(projectsRoutes, { projectRepo, projectServerRepo, taskRepo, gitProvider, tmux: tmuxClient, muxDriverRegistry, serverRepo, transportFactory, projectSecretRepo, originationService, serverIsolationMutex, repoDiscovery, localRepoCloneService, distributionStateRepo, fetchDistributionService });
   await app.register(unitsRoutes, { unitRepo, taskRepo, logRepo, executeTaskUseCase, projectRepo, projectServerRepo, serverRepo, sidekickLoader: sidekickPackageLoader, unitTypeLoader, muxDriverRegistry });

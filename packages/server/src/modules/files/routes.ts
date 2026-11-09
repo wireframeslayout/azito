@@ -296,6 +296,29 @@ export const fileBrowseRoutes: FastifyPluginCallback<FileBrowseRouteOptions> = (
   );
 
   // ── GET /api/servers/:name/files/download ──
+  fastify.get<{ Params: { name: string }; Querystring: { path?: string; projectId?: string } }>(
+    '/api/servers/:name/files/binary', async (request, reply) => {
+      const srv = serverRepo.findByName(request.params.name);
+      if (!srv) return reply.status(404).send({ error: 'Server not found' });
+      const path = request.query.path;
+      const projectId = Number(request.query.projectId);
+      if (!path || /[\x00-\x1f]/.test(path) || !Number.isSafeInteger(projectId) || projectId <= 0) return reply.status(400).send({ error: 'Invalid path or project' });
+      const projectServer = projectServerRepo.find(projectId, srv.name);
+      if (!projectServer?.workingDirectory) return reply.status(400).send({ error: 'Project server has no working directory' });
+      try {
+        const ops = transportFactory.getFileOps(srv);
+        const target = await ops.realpath(path);
+        const root = await ops.realpath(projectServer.workingDirectory);
+        if (!isHostPathContained(ops.platform, { target, allowedRoot: root })) return reply.status(400).send({ error: 'target path escapes the allowed directory' });
+        const result = await fileBrowseService.readBinary(srv, target);
+        return { content: result.data.toString('base64'), mtime: result.mtime, hash: result.hash };
+      } catch (err: unknown) {
+        if (err instanceof FileBrowseError) return reply.status(err.status).send({ error: err.message, code: err.code });
+        return reply.status(500).send({ error: 'Unable to read file' });
+      }
+    },
+  );
+
   fastify.get<{ Params: { name: string }; Querystring: { path?: string } }>(
     '/api/servers/:name/files/download',
     async (request, reply) => {
@@ -319,8 +342,9 @@ export const fileBrowseRoutes: FastifyPluginCallback<FileBrowseRouteOptions> = (
   );
 
   // ── PUT /api/servers/:name/files/content ──
-  fastify.put<{ Params: { name: string } }>(
-    '/api/servers/:name/files/content',
+  for (const kind of ['content', 'binary'] as const) fastify.put<{ Params: { name: string } }>(
+    `/api/servers/:name/files/${kind}`,
+    { bodyLimit: kind === 'binary' ? 28 * 1024 * 1024 : 1024 * 1024 },
     async (request, reply) => {
       const srv = serverRepo.findByName(request.params.name);
       if (!srv) return reply.status(404).send({ error: 'Server not found' });
@@ -330,6 +354,9 @@ export const fileBrowseRoutes: FastifyPluginCallback<FileBrowseRouteOptions> = (
       if (/[\x00-\x1f]/.test(filePath)) return reply.status(400).send({ error: 'Invalid path' });
       if (typeof body.content !== 'string') return reply.status(400).send({ error: 'content is required' });
       const content = body.content;
+      if (kind === 'binary' && (!/^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/.test(content) || content.length > 28 * 1024 * 1024)) {
+        return reply.status(400).send({ error: 'Invalid binary content' });
+      }
       const force = body.force === true;
       // Optimistic-lock inputs are required unless the caller explicitly opts into `force`. Previously
       // any missing/malformed baseMtime or baseHash silently became `undefined` (typeof-narrowing to
@@ -398,13 +425,9 @@ export const fileBrowseRoutes: FastifyPluginCallback<FileBrowseRouteOptions> = (
       }
 
       try {
-        const result = await fileBrowseService.writeFileContent(
-          srv,
-          writeTargetPath,
-          content,
-          baseMtime,
-          baseHash,
-        );
+        const result = kind === 'binary'
+          ? await fileBrowseService.writeBinary(srv, writeTargetPath, Buffer.from(content, 'base64'), baseMtime, baseHash)
+          : await fileBrowseService.writeFileContent(srv, writeTargetPath, content, baseMtime, baseHash);
         return { ok: true, mtime: result.mtime, hash: result.hash };
       } catch (err: unknown) {
         if (err instanceof FileBrowseError) {
