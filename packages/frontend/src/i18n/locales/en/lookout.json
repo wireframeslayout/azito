@@ -34,5 +34,15 @@
   "attentionCount": "{{count}} need attention",
   "updated": "Updated {{time}}",
   "emptyAttention": "Nothing needs your attention right now.",
-  "emptyActive": "Nothing is currently running."
+  "emptyActive": "Nothing is currently running.",
+  "toast": {
+    "attention": "{{count}} need attention",
+    "finished": "{{count}} completed",
+    "failed": "{{count}} failed",
+    "close": "Dismiss notification",
+    "task": "Task #{{id}}",
+    "mux": "{{name}} on {{serverName}} reopened with tmux. Use its menu to switch to misao.",
+    "muxUnavailable": "misao is unavailable on {{serverName}}; {{name}} reopened with tmux.",
+    "firewall": "Firewall: {{name}}"
+  }
 }
