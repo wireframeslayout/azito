@@ -28,8 +28,8 @@ describe('useOrchestratorRole', () => {
     mocks.apiWithStatus.mockResolvedValue({ status: 200, body: { ok: true } });
     renderAt('/orchestration/5', 5);
     await userEvent.click(screen.getByRole('button', { name: 'remove' }));
+    expect(await screen.findByText('orchestration.restored')).toBeVisible();
     expect(screen.getByTestId('path')).toHaveTextContent(/^\/orchestration$/);
-    expect(screen.getByText('orchestration.restored')).toBeVisible();
     await userEvent.click(screen.getByRole('button', { name: 'orchestration.undo' }));
     expect(mocks.apiWithStatus).toHaveBeenLastCalledWith('/windows/5/role', expect.objectContaining({ body: JSON.stringify({ role: 'orchestrator' }) }));
   });
@@ -38,8 +38,8 @@ describe('useOrchestratorRole', () => {
     mocks.apiWithStatus.mockResolvedValue({ status: 409, body: { error: 'conflict' } });
     renderAt('/orchestration/7', 5);
     await userEvent.click(screen.getByRole('button', { name: 'remove' }));
+    expect(await screen.findByText('orchestration.roleError')).toBeVisible();
     expect(screen.getByTestId('path')).toHaveTextContent('/orchestration/7');
-    expect(screen.getByText('orchestration.roleError')).toBeVisible();
     expect(mocks.refresh).not.toHaveBeenCalled();
   });
 
