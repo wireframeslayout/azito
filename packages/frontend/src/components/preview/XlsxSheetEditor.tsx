@@ -1,0 +1,76 @@
+import { useEffect, useRef, useState } from 'react';
+import { useTranslation } from 'react-i18next';
+import { Workbook, type WorkbookInstance } from '@fortune-sheet/react';
+import '@fortune-sheet/react/dist/index.css';
+import { transformExcelToFortune, transformFortuneToExcel } from '@corbe30/fortune-excel';
+import type { ComponentProps } from 'react';
+import { Button } from '../ui';
+import ConfirmDialog from '../ConfirmDialog';
+import type { BinaryFilesBackend } from '../files/backend/FilesBackend';
+import { useBinaryFileDocument } from './useBinaryFileDocument';
+import { prepareXlsx } from './prepareXlsx';
+
+type Sheets = ComponentProps<typeof Workbook>['data'];
+interface Props { backend: BinaryFilesBackend; path: string; onDirtyChange?: (dirty: boolean) => void }
+export function XlsxSheetEditor({ backend, path, onDirtyChange }: Props) {
+  const { t } = useTranslation('files');
+  const document = useBinaryFileDocument(backend, path, onDirtyChange);
+  const workbook = useRef<WorkbookInstance>(null);
+  const baseline = useRef<string | null>(null);
+  const [sheets, setSheets] = useState<Sheets | null>(null);
+  const [key, setKey] = useState(0);
+  const [editing, setEditing] = useState(false);
+  const [confirm, setConfirm] = useState(false);
+  const [truncated, setTruncated] = useState(false);
+  const [oversized, setOversized] = useState(false);
+  const [losses, setLosses] = useState<string[]>([]);
+  const [error, setError] = useState(false);
+  const [exportError, setExportError] = useState(false);
+  const [changed, setChanged] = useState(false);
+  useEffect(() => { if (document.saved) { setChanged(false); onDirtyChange?.(false); } }, [document.saved, onDirtyChange]);
+  useEffect(() => {
+    if (!document.bytes) return;
+    let active = true;
+    setSheets(null); setEditing(false); setError(false); setChanged(false); setOversized(false);
+    void (async () => {
+      const prepared = await prepareXlsx(document.bytes!.slice().buffer);
+      if (!active) return;
+      setTruncated(prepared.truncated); setLosses(prepared.losses);
+      await transformExcelToFortune(new File([prepared.data], 'workbook.xlsx'), (value: Sheets) => { if (active) setSheets(value); }, setKey, workbook);
+    })().catch(() => { if (active) setError(true); });
+    return () => { active = false; };
+  }, [document.document]);
+  const save = async (force = false) => {
+    if (!workbook.current || truncated || oversized) return;
+    try {
+      setExportError(false);
+      const blob = await transformFortuneToExcel(workbook, undefined, false);
+      document.changeBytes(new Uint8Array(await blob.arrayBuffer()));
+      await document.save(force);
+    } catch { setExportError(true); }
+  };
+  useEffect(() => {
+    const handler = (event: KeyboardEvent) => {
+      if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === 's') {
+        event.preventDefault();
+        if (editing && changed && !truncated && !oversized) void save();
+      }
+    };
+    window.addEventListener('keydown', handler);
+    return () => window.removeEventListener('keydown', handler);
+  });
+  if (document.loading || (!sheets && !error)) return <p role="status">{t('preview.loading')}</p>;
+  if (error || (document.error && !sheets)) return <p role="alert">{t('preview.loadError')}</p>;
+  return <section style={{ display: 'flex', flexDirection: 'column', height: '100%', minHeight: 0 }}>
+    {(document.error || exportError) && <p role="alert">{t('office.saveError')}</p>}
+    <div style={{ display: 'flex', flexWrap: 'wrap', gap: 'var(--space-2)', padding: 'var(--space-2)' }}>
+      <Button disabled={editing || truncated || window.matchMedia('(max-width: 767px)').matches} onClick={() => setConfirm(true)}>{t('office.edit')}</Button>
+      <Button disabled={!editing || !changed || truncated || oversized || document.saving} onClick={() => void save()}>{t('office.save')}</Button>
+      {changed && <span role="status">{t('office.unsaved')}</span>}
+      {(truncated || oversized) && <span role="status">{t('office.truncated')}</span>}
+    </div>
+    <ConfirmDialog open={confirm} title={t('office.edit')} message={`${t('office.formatWarning')} ${losses.map((loss) => t(`office.loss.${loss}`)).join(', ')}`} confirmLabel={t('office.edit')} confirmVariant="primary" onConfirm={() => { if (workbook.current) setSheets(workbook.current.getAllSheets().map((sheet) => ({ ...sheet, celldata: sheet.data?.flatMap((row, r) => row.flatMap((cell, c) => cell ? [{ r, c, v: cell }] : [])) }))); baseline.current = null; setEditing(true); setConfirm(false); }} onCancel={() => setConfirm(false)} />
+    {document.conflict !== undefined && <div role="alert">{t('office.conflict')} <Button onClick={() => void document.reload()}>{t('office.reload')}</Button><Button disabled={truncated || oversized} onClick={() => void save(true)}>{t('office.overwrite')}</Button></div>}
+    {sheets && <div style={{ flex: 1, minHeight: '40vh' }}><Workbook key={`${key}-${editing}`} ref={workbook} data={sheets} allowEdit={editing} onChange={(next) => { setSheets(next); setOversized(next.some((sheet) => sheet.data?.some((row, r) => row.some((cell, c) => cell != null && (r >= 5000 || c >= 100))))); if (editing) { const snapshot = JSON.stringify(next); if (baseline.current === null) baseline.current = snapshot; else if (baseline.current !== snapshot) { setChanged(true); onDirtyChange?.(true); } } }} /></div>}
+  </section>;
+}
