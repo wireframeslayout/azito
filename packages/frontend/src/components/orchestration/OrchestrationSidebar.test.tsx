@@ -4,8 +4,8 @@ import { describe, expect, it, vi } from 'vitest';
 import { OrchestrationSidebar } from './OrchestrationSidebar';
 
 vi.mock('../../hooks/useOrchestrators', () => ({ useOrchestrators: () => ({ status: 'ready', refresh: vi.fn(), windows: [
-  { id: 1, parentWindowId: null, label: 'Parent', tmuxTarget: 's:p', serverName: 'local' },
-  { id: 2, parentWindowId: 1, label: 'Child', tmuxTarget: 's:c', serverName: 'local' },
+  { id: 1, parentWindowId: null, label: 'Parent', tmuxTarget: 's:p', serverName: 'local', links: { total: 0 } },
+  { id: 2, parentWindowId: 1, label: 'Child', tmuxTarget: 's:c', serverName: 'local', links: { total: 0 } },
 ] }) }));
 vi.mock('react-i18next', async (importOriginal) => ({ ...await importOriginal<typeof import('react-i18next')>(), useTranslation: () => ({ t: (key: string) => key }) }));
 
@@ -17,6 +17,13 @@ describe('OrchestrationSidebar', () => {
     expect(screen.getByText(/Parent/)).toBeTruthy();
     fireEvent.click(screen.getByText(/Child/));
     expect(select).toHaveBeenCalledWith(2);
+  });
+  it('moves focus between rows with arrow keys', () => {
+    render(<OrchestrationSidebar onSelect={vi.fn()} />);
+    const parent = screen.getByText(/Parent/);
+    parent.focus();
+    fireEvent.keyDown(parent, { key: 'ArrowDown' });
+    expect(document.activeElement).toBe(screen.getByText(/Child/));
   });
   it('collapses children', () => {
     render(<OrchestrationSidebar onSelect={vi.fn()} />);

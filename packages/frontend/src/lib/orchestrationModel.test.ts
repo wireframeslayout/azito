@@ -3,7 +3,7 @@ import { buildOrchestrationTree, countAttention, orchestratorState } from './orc
 import type { OrchestratorSummary } from '../pages/workspace/types';
 
 function window(id: number, parentWindowId: number | null): OrchestratorSummary {
-  return { id, parentWindowId, ownerType: 'server', role: 'orchestrator', originProjectId: null, serverName: 'local', tmuxTarget: 's:w', isPrimary: false, windowType: 'agent', links: { total: 0, projectIds: [], serverNames: [] } };
+  return { id, parentWindowId, lastInteractionAt: null, ownerType: 'server', role: 'orchestrator', originProjectId: null, serverName: 'local', tmuxTarget: 's:w', isPrimary: false, windowType: 'agent', links: { total: 0, projectIds: [], serverNames: [] } };
 }
 
 describe('orchestration model', () => {

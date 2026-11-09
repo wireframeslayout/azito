@@ -3,6 +3,8 @@ import type { ReactNode } from 'react';
 import { useTranslation } from 'react-i18next';
 import { useLocation, useNavigate } from 'react-router-dom';
 import { apiWithStatus } from '../../api/client';
+import { useAgentActivity } from '../../hooks/useAgentActivity';
+import { orchestratorState, buildOrchestrationTree } from '../../lib/orchestrationModel';
 import { useOrchestrators } from '../../hooks/useOrchestrators';
 import { useRightPanelState } from '../../hooks/useRightPanelState';
 import { useToast } from '../../hooks/useToast';
@@ -19,6 +21,7 @@ export interface OrchestrationPageProps { rightPanel?: ReactNode }
 export default function OrchestrationPage({ rightPanel }: OrchestrationPageProps): ReactNode {
   const { t } = useTranslation('workspace');
   const { windows, status, refresh } = useOrchestrators();
+  const { activityStatus, snapshotStatus } = useAgentActivity();
   const { pathname, state } = useLocation();
   const navigate = useNavigate();
   const { showToast } = useToast();
@@ -28,12 +31,17 @@ export default function OrchestrationPage({ rightPanel }: OrchestrationPageProps
   const selected = windows.find((window) => String(window.id) === id);
   useEffect(() => {
     if (status !== 'ready') return;
-    if (!id && windows.length && !state?.missing) navigate(paths.orchestration(windows[0].id), { replace: true });
+    if (!id && windows.length && !state?.missing && snapshotStatus === 'ready') {
+      const roots = buildOrchestrationTree(windows);
+      const order = { running: 0, idle: 1, sleeping: 2 };
+      roots.sort((a, b) => order[orchestratorState(a.window, activityStatus(a.window.serverName, a.window.tmuxTarget))] - order[orchestratorState(b.window, activityStatus(b.window.serverName, b.window.tmuxTarget))]);
+      navigate(paths.orchestration(roots[0].window.id), { replace: true });
+    }
     else if (id && !selected) {
       showToast(t('orchestration.notFound'));
       navigate(paths.orchestration(), { replace: true, state: { missing: true } });
     }
-  }, [status, id, selected, windows, navigate, showToast, t, state]);
+  }, [status, id, selected, windows, navigate, showToast, t, state, snapshotStatus, activityStatus]);
   const removeRole = async (windowId: number): Promise<void> => {
     try {
       const response = await apiWithStatus(`/windows/${windowId}/role`, { method: 'PUT', body: JSON.stringify({ role: null }) });

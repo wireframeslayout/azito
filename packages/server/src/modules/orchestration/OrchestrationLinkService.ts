@@ -56,6 +56,7 @@ export class OrchestrationLinkService {
           if (!this.lastWrites.has(old.id)) {
             this.linkRepo.touch(old.id);
             this.lastWrites.set(old.id, now);
+            this.notify(sourceWindowId);
           }
         }
         return this.linkRepo.find(sourceWindowId, subject)!;
@@ -100,7 +101,8 @@ export class OrchestrationLinkService {
       return { ...w, links: { total: links.length,
         projectIds: [...new Set(links.flatMap(row => row.project_id === null ? [] : [row.project_id]))],
         serverNames: [...new Set(links.flatMap(row => row.server_name === null ? [] : [row.server_name]))],
-      }, parentWindowId: parents.get(w.id) ?? null };
+      }, parentWindowId: parents.get(w.id) ?? null,
+      lastInteractionAt: links.reduce<string | null>((latest, link) => link.last_interaction_at && (!latest || link.last_interaction_at > latest) ? link.last_interaction_at : latest, null) };
     });
   }
 }

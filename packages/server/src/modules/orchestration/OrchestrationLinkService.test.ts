@@ -81,7 +81,7 @@ describe('orchestration links and roles', () => {
     const byId = vi.spyOn(windows, 'findById');
     const all = vi.spyOn(windows, 'findAll');
     expect(links.list(1)).toMatchObject([{ taskId: 1, resolvedWindowId: 2 }]);
-    expect(links.orchestrators()).toMatchObject([{ links: { total: 1, projectIds: [1], serverNames: ['local'] } }]);
+    expect(links.orchestrators()).toMatchObject([{ links: { total: 1, projectIds: [1], serverNames: ['local'] }, lastInteractionAt: expect.any(String) }]);
     expect(byTask).not.toHaveBeenCalled();
     expect(byId).not.toHaveBeenCalled();
     expect(all).not.toHaveBeenCalled();
