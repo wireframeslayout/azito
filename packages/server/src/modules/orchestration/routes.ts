@@ -12,7 +12,6 @@ const routes: FastifyPluginCallback<Options> = (app, { links, windows }, done) =
     if (!query.success) return reply.status(400).send({ error: 'invalid_query' });
     return links.operationLinks(query.data.taskIds);
   });
-  app.get('/api/orchestration/windows', { preHandler: requireOperator('orchestration.windows') }, async () => windows.findAll().filter(window => window.ownerType === 'server'));
   app.get('/api/orchestrators', async () => links.orchestrators());
   app.get<{ Params: { id: string }; Querystring: { includeUnlinked?: string; kind?: string } }>('/api/windows/:id/links', async (req, reply) => {
     const id = parseWindowId(req.params.id);

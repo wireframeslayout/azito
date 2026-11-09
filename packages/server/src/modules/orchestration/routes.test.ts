@@ -7,7 +7,6 @@ import type { ITaskRepository } from '../tasks/Task';
 import { NotificationBus } from '../notifications/NotificationBus';
 import { OrchestrationLinkService } from './OrchestrationLinkService';
 import routes from './routes';
-import { OPERATOR_PRINCIPAL } from '../../shared/auth/Principal';
 import { evaluateRouteAuth } from '../../shared/auth/routeAuth';
 
 describe('orchestration routes', () => {
@@ -16,13 +15,12 @@ describe('orchestration routes', () => {
     db.exec("INSERT INTO windows (id,owner_type,server_name,tmux_target,window_type,worker_type,role) VALUES (1,'server','local','s:a','agent','claude','orchestrator'), (2,'server','local','s:b','agent','claude','orchestrator')");
     const windows = new SqliteWindowRepository(db); const bus = new NotificationBus();
     const links = new OrchestrationLinkService(new SqliteWindowLinkRepository(db), windows, { findById: vi.fn() } as unknown as ITaskRepository, bus);
-    const app = Fastify(); app.addHook('onRequest', async request => { request.principal = OPERATOR_PRINCIPAL; }); await app.register(routes, { links, windows });
+    const app = Fastify(); await app.register(routes, { links, windows });
     const request = (method: 'GET' | 'POST' | 'DELETE', url: string, payload?: object) => app.inject({ method, url, payload });
     expect((await request('POST', '/api/windows/1/links', { targetWindowId: 2, taskId: 1 })).statusCode).toBe(400);
     const add = await request('POST', '/api/windows/1/links', { targetWindowId: 2 });
     expect(add.statusCode).toBe(200); const id = add.json().id;
     expect((await request('GET', '/api/windows/1/links')).json()).toHaveLength(1);
-    expect((await request('GET', '/api/orchestration/windows')).json()).toHaveLength(2);
     expect((await request('DELETE', `/api/windows/1/links/${id}`)).statusCode).toBe(200);
     expect((await request('GET', '/api/windows/1/links')).json()).toHaveLength(0);
     expect((await request('GET', '/api/windows/1/links?includeUnlinked=1')).json()).toHaveLength(1);

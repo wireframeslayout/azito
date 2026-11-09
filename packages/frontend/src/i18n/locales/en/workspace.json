@@ -423,12 +423,13 @@
     "empty_running": "No running items",
     "empty_completed": "No completed items",
     "attentionAnnouncement": "{{name}} (window or task {{id}}) needs attention: {{reason}}",
-    "loadError": "Could not load windows",
     "reason_waiting_input": "Waiting for input",
     "reason_waiting_for_human": "Waiting for a person",
     "reason_phase_review": "Review required",
     "reason_pending_approval": "Approval required",
     "reason_failed": "Failed",
-    "reason_blocked": "Input required"
+    "reason_blocked": "Input required",
+    "windowUnavailable": "Window information is unavailable",
+    "candidateError": "Could not load windows from some servers"
   }
 }
