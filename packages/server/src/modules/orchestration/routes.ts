@@ -8,11 +8,9 @@ import type { IWindowRepository } from '../windows/Window';
 interface Options { links: OrchestrationLinkService; windows: IWindowRepository }
 const routes: FastifyPluginCallback<Options> = (app, { links, windows }, done) => {
   app.get('/api/window-links', { preHandler: requireOperator('window-links.list') }, async (req, reply) => {
-    const query = z.object({ kind: z.literal('operation'), taskIds: z.string().regex(/^[1-9]\d*(,[1-9]\d*)*$/) }).strict().safeParse(req.query);
+    const query = z.object({ kind: z.literal('operation'), taskIds: z.string().regex(/^[1-9]\d*(,[1-9]\d*)*$/).transform(value => value.split(',').map(Number)).pipe(z.array(z.number().int().positive().safe()).min(1).max(500)) }).strict().safeParse(req.query);
     if (!query.success) return reply.status(400).send({ error: 'invalid_query' });
-    const ids = query.data.taskIds.split(',').map(Number);
-    if (ids.length > 500 || ids.some(id => !Number.isSafeInteger(id))) return reply.status(400).send({ error: 'invalid_query' });
-    return links.operationLinks(ids);
+    return links.operationLinks(query.data.taskIds);
   });
   app.get('/api/orchestrators', async () => links.orchestrators());
   app.get<{ Params: { id: string }; Querystring: { includeUnlinked?: string; kind?: string } }>('/api/windows/:id/links', async (req, reply) => {

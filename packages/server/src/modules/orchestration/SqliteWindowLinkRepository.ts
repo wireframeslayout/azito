@@ -37,13 +37,13 @@ export class SqliteWindowLinkRepository {
       AND source.owner_type='task' AND source.is_primary=1 AND target.owner_type='task' AND target.is_primary=0
       AND source.task_id=target.task_id LIMIT 1`).get(id, exceptSource) as { id: number } | undefined)?.id ?? null;
   }
-  operationLinks(taskIds: number[]): Array<{ sourceWindowId: number; targetWindowId: number }> {
+  operationLinks(taskIds: number[]): Array<{ taskId: number; sourceWindowId: number; targetWindowId: number }> {
     if (taskIds.length === 0) return [];
-    return this.db.prepare(`SELECT l.source_window_id AS sourceWindowId, l.target_window_id AS targetWindowId
+    return this.db.prepare(`SELECT source.task_id AS taskId, l.source_window_id AS sourceWindowId, l.target_window_id AS targetWindowId
       FROM window_links l JOIN windows source ON source.id=l.source_window_id JOIN windows target ON target.id=l.target_window_id
       WHERE l.kind='operation' AND l.unlinked_at IS NULL AND source.owner_type='task' AND source.is_primary=1
       AND target.owner_type='task' AND target.is_primary=0 AND source.task_id=target.task_id
-      AND source.task_id IN (${taskIds.map(() => '?').join(',')})`).all(...taskIds) as Array<{ sourceWindowId: number; targetWindowId: number }>;
+      AND source.task_id IN (${taskIds.map(() => '?').join(',')})`).all(...taskIds) as Array<{ taskId: number; sourceWindowId: number; targetWindowId: number }>;
   }
   restore(id: number, kind: LinkRow['kind']): void { this.db.prepare("UPDATE window_links SET unlinked_at=NULL, source='manual', kind=? WHERE id=?").run(kind, id); }
   touch(id: number): void { this.db.prepare("UPDATE window_links SET last_interaction_at=datetime('now') WHERE id=?").run(id); }

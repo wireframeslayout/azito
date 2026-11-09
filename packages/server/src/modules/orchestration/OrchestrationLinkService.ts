@@ -89,7 +89,7 @@ export class OrchestrationLinkService {
   list(source: number, includeUnlinked = false, kind?: WindowLinkView['kind']): WindowLinkView[] {
     return this.linkRepo.list(source, includeUnlinked, kind);
   }
-  operationLinks(taskIds: number[]): Array<{ sourceWindowId: number; targetWindowId: number }> { return this.linkRepo.operationLinks(taskIds); }
+  operationLinks(taskIds: number[]): Array<{ taskId: number; sourceWindowId: number; targetWindowId: number }> { return this.linkRepo.operationLinks(taskIds); }
   orchestrators(): OrchestratorSummary[] {
     const rows = this.linkRepo.activeForOrchestrators();
     const grouped = new Map<number, typeof rows>();

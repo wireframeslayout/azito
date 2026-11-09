@@ -53,7 +53,7 @@ describe('orchestration links and roles', () => {
     links.recordInteraction(1, { windowId: 2 });
     links.recordInteraction(1, { windowId: 2 });
     expect(links.add(3, { windowId: 2 }, 'auto')).toBe('already_nested');
-    expect(links.operationLinks([1])).toEqual([{ sourceWindowId: 1, targetWindowId: 2 }]);
+    expect(links.operationLinks([1])).toEqual([{ taskId: 1, sourceWindowId: 1, targetWindowId: 2 }]);
     db.exec('UPDATE windows SET task_id=2 WHERE id=2');
     expect(links.operationLinks([1, 2])).toEqual([]);
     bus.destroy(); db.close();

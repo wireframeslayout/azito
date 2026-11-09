@@ -20,7 +20,7 @@ import { listTaskChildren, taskChildWindowTitle, type TaskChild } from './taskSi
 import type { Task, Window } from '../../pages/workspace/types';
 
 const EXPAND_STORAGE_KEY = 'tasks-sidebar-expanded';
-const WINDOW_EXPAND_STORAGE_KEY = 'tasks-sidebar-window-expanded';
+const WINDOW_EXPAND_STORAGE_KEY = 'tasks-sidebar-expanded-windows';
 
 function loadWindowExpanded(): Record<string, boolean> {
   try { return JSON.parse(localStorage.getItem(WINDOW_EXPAND_STORAGE_KEY) || '{}'); } catch { return {}; }
@@ -78,7 +78,6 @@ export default function TasksSidebar({
   const { focus } = useGlobalFocus();
   const [expandedIds, setExpandedIds] = useState<Set<number>>(loadExpandedIds);
   const [windowExpanded, setWindowExpanded] = useState<Record<string, boolean>>(loadWindowExpanded);
-  const { parents, error: linksError } = useOperationLinks(tasks.map(task => task.id));
   const toggleWindow = (id: number, current: boolean) => setWindowExpanded(previous => {
     const next = { ...previous, [id]: !current };
     try { localStorage.setItem(WINDOW_EXPAND_STORAGE_KEY, JSON.stringify(next)); } catch { /* best-effort */ }
@@ -95,6 +94,8 @@ export default function TasksSidebar({
     () => buildTaskSidebarGroups(tasks, activityRows, query, openedAt),
     [tasks, activityRows, query, openedAt],
   );
+
+  const { parents, error: linksError } = useOperationLinks(loading ? [] : groups.flatMap(group => group.rows.map(row => row.task.id)));
 
   const totalVisible = groups.reduce((n, g) => n + g.rows.length, 0);
   const nonArchivedCount = tasks.filter((t) => t.status !== 'archived').length;
@@ -492,6 +493,7 @@ function TaskRow({ row, expanded, toggleExpanded, onOpenTask, onOpenTaskWindow, 
           {children.map((child) => (
             <ChildRow
               key={childKey(child)}
+              subRows={child.kind === 'window' ? child.children.map(sub => <ChildRow key={sub.window.id} child={{ ...sub, children: [] }} isSubagent selectedWindowId={selectedWindowId} showWindowContextMenu={showWindowContextMenu} showWindowContextMenuAt={showWindowContextMenuAt} taskId={task.id} taskTitle={task.title} onOpenTaskWindow={onOpenTaskWindow} onOpenTaskBrowser={onOpenTaskBrowser} activity={findWindowActivity(activityRows, sub.window.serverName, sub.window.tmuxTarget)} activityRows={activityRows} windowExpanded={windowExpanded} toggleWindow={toggleWindow} t={t} />) : undefined}
               child={child}
               taskId={task.id}
               taskTitle={task.title}
@@ -549,13 +551,14 @@ interface ChildRowProps {
   windowExpanded: Record<string, boolean>;
   toggleWindow: (id: number, current: boolean) => void;
   isSubagent?: boolean;
+  subRows?: React.ReactNode;
   selectedWindowId?: number | null;
   showWindowContextMenu?: (e: React.MouseEvent, w: Window) => void;
   showWindowContextMenuAt?: (x: number, y: number, w: Window) => void;
   t: (key: string, opts?: Record<string, unknown>) => string;
 }
 
-function ChildRow({ child, taskId, taskTitle, onOpenTaskWindow, onOpenTaskBrowser, activity, activityRows, windowExpanded, toggleWindow, isSubagent, selectedWindowId, showWindowContextMenu, showWindowContextMenuAt, t }: ChildRowProps) {
+function ChildRow({ child, taskId, taskTitle, onOpenTaskWindow, onOpenTaskBrowser, activity, activityRows, windowExpanded, toggleWindow, isSubagent, subRows, selectedWindowId, showWindowContextMenu, showWindowContextMenuAt, t }: ChildRowProps) {
   const bindLongPress = useLongPress();
   if (child.kind === 'window') {
     const w = child.window;
@@ -601,7 +604,7 @@ function ChildRow({ child, taskId, taskTitle, onOpenTaskWindow, onOpenTaskBrowse
             primary
           </span>
         )}
-        {isExpanded && child.children.length > 0 && <div role="group" onTouchStart={e => e.stopPropagation()} onTouchEnd={e => e.stopPropagation()} onTouchMove={e => e.stopPropagation()} style={{ flexBasis: '100%', paddingLeft: 20 }}>{child.children.map(sub => <ChildRow key={sub.window.id} child={{ ...sub, children: [] }} isSubagent selectedWindowId={selectedWindowId} showWindowContextMenu={showWindowContextMenu} showWindowContextMenuAt={showWindowContextMenuAt} taskId={taskId} taskTitle={taskTitle} onOpenTaskWindow={onOpenTaskWindow} onOpenTaskBrowser={onOpenTaskBrowser} activity={findWindowActivity(activityRows, sub.window.serverName, sub.window.tmuxTarget)} activityRows={activityRows} windowExpanded={windowExpanded} toggleWindow={toggleWindow} t={t} />)}</div>}
+        {isExpanded && child.children.length > 0 && <div role="group" onTouchStart={e => e.stopPropagation()} onTouchEnd={e => e.stopPropagation()} onTouchMove={e => e.stopPropagation()} style={{ flexBasis: '100%', paddingLeft: 20 }}>{subRows}</div>}
       </div>
     );
   }

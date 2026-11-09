@@ -34,7 +34,7 @@ describe('orchestration routes', () => {
     const operationLinks = vi.fn(() => []);
     await app.register(routes, { links: { operationLinks } as unknown as OrchestrationLinkService, windows: {} as SqliteWindowRepository });
     expect((await app.inject({ url: '/api/window-links?kind=operation&taskIds=1', headers: { authorization: 'task' } })).statusCode).toBe(403);
-    for (const query of ['', '?kind=operation&taskIds=', '?kind=operation&taskIds=1,x', '?kind=orchestration&taskIds=1']) {
+    for (const query of ['', '?kind=operation&taskIds=', '?kind=operation&taskIds=1,x', '?kind=orchestration&taskIds=1', `?kind=operation&taskIds=${Array.from({ length: 501 }, (_, i) => i + 1).join(',')}`]) {
       expect((await app.inject({ url: `/api/window-links${query}`, headers: { authorization: 'operator' } })).statusCode).toBe(400);
     }
     const response = await app.inject({ url: '/api/window-links?kind=operation&taskIds=1,2', headers: { authorization: 'operator' } });

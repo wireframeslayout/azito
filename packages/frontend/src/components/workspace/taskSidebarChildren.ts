@@ -25,8 +25,8 @@ export interface TaskChildBrowser {
 
 export type TaskChild = TaskChildWindow | TaskChildBrowser;
 
-export function buildTaskWindowTree(windows: Window[], parents: ReadonlyMap<number, number>): TaskChildWindow[] {
-  const sorted = windows.slice().sort((a, b) => {
+export function buildTaskWindowTree(task: Task, parents: ReadonlyMap<number, number>): TaskChildWindow[] {
+  const sorted = (task.windows ?? []).slice().sort((a, b) => {
     if (a.isPrimary !== b.isPrimary) return a.isPrimary ? -1 : 1;
     return (a.label || a.tmuxTarget).localeCompare(b.label || b.tmuxTarget);
   });
@@ -44,7 +44,7 @@ export function listTaskChildren(
 ): TaskChild[] {
   const children: TaskChild[] = [];
 
-  children.push(...buildTaskWindowTree(task.windows ?? [], parents));
+  children.push(...buildTaskWindowTree(task, parents));
 
   const seen = new Set<string>();
   const browserTabIds = listPersistedBrowserTabIds(task.id);
