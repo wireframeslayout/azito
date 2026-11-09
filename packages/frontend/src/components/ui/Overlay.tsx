@@ -19,19 +19,20 @@ interface OverlayProps {
   busy?: boolean;
   toggleAction?: HotkeyAction;
   fallbackFocusTo?: HTMLElement | null;
+  shouldCloseOnEscape?: (event: KeyboardEvent) => boolean;
   maxWidth?: number | string;
   maxHeight?: string;
   style?: CSSProperties;
 }
 
-export function Overlay({ open, onClose, labelledBy, children, variant = 'dialog', surface = 'elevated', initialFocusRef, dismissOnBackdrop = true, closeDisabled = false, busy = false, toggleAction, fallbackFocusTo, maxWidth = 500, maxHeight = '90vh', style }: OverlayProps) {
+export function Overlay({ open, onClose, labelledBy, children, variant = 'dialog', surface = 'elevated', initialFocusRef, dismissOnBackdrop = true, closeDisabled = false, busy = false, toggleAction, fallbackFocusTo, shouldCloseOnEscape, maxWidth = 500, maxHeight = '90vh', style }: OverlayProps) {
   const ref = useRef<HTMLDivElement>(null);
   const { id, isTop } = useOverlayStack(open, ref, true, fallbackFocusTo);
   const { bindings } = useHotkeyBindings();
   const spec = toggleAction ? bindings[toggleAction] : null;
   const spaceChord = spec?.steps.length === 2 && spec.steps.every(step => step.key === 'space');
   useHotkey({ action: toggleAction ?? 'local:disabled-toggle', scope: 'overlay', overlayId: id, when: spaceChord ? 'not-editable' : 'always', handler: () => onClose() }, open && !!toggleAction);
-  useHotkey({ action: 'local:overlay-close', spec: parseKeySpec('Escape'), scope: 'overlay', overlayId: id, handler: event => { if (shouldCloseOnKey(event)) onClose(); } }, open && !closeDisabled && !busy);
+  useHotkey({ action: 'local:overlay-close', spec: parseKeySpec('Escape'), scope: 'overlay', overlayId: id, match: shouldCloseOnEscape, handler: event => { if (shouldCloseOnKey(event)) onClose(); } }, open && !closeDisabled && !busy);
 
   useEffect(() => {
     if (!open) return;

@@ -121,3 +121,15 @@ describe('Overlay', () => {
     await waitFor(() => expect(screen.getByText('Open nested')).toHaveFocus());
   });
 });
+
+it('passes Escape through when the overlay predicate rejects it', async () => {
+  const close = vi.fn();
+  render(<HotkeyProvider><Overlay open labelledBy="escape-test" onClose={close} shouldCloseOnEscape={event => !(event.target instanceof HTMLInputElement)}><h2 id="escape-test">Escape test</h2><input aria-label="terminal" /><button>Other</button></Overlay></HotkeyProvider>);
+  const event = new KeyboardEvent('keydown', { key: 'Escape', bubbles: true, cancelable: true });
+  screen.getByLabelText('terminal').dispatchEvent(event);
+  await new Promise(resolve => setTimeout(resolve));
+  expect(event.defaultPrevented).toBe(false);
+  expect(close).not.toHaveBeenCalled();
+  fireEvent.keyDown(screen.getByText('Other'), { key: 'Escape' });
+  await waitFor(() => expect(close).toHaveBeenCalledOnce());
+});

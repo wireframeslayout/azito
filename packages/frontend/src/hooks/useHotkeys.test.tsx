@@ -78,3 +78,20 @@ it('prevents Ctrl+R only when the configured shortcut is handled', () => {
   expect(global.defaultPrevented).toBe(true);
   expect(handler).toHaveBeenCalledOnce();
 });
+
+it('does not consume a rejected match and clears its pending chord', () => {
+  const handler = vi.fn();
+  function Conditional() {
+    useHotkey({ action: 'local:conditional', spec: parseKeySpec('Space Space'), scope: 'global', match: e => e.target !== screen.getByLabelText('rejected'), handler });
+    return <><input aria-label="allowed" /><input aria-label="rejected" /></>;
+  }
+  render(<HotkeyProvider><Conditional /></HotkeyProvider>);
+  fireEvent.keyDown(screen.getByLabelText('allowed'), { key: ' ' });
+  const rejected = new KeyboardEvent('keydown', { key: ' ', bubbles: true, cancelable: true });
+  screen.getByLabelText('rejected').dispatchEvent(rejected);
+  expect(rejected.defaultPrevented).toBe(false);
+  fireEvent.keyDown(screen.getByLabelText('allowed'), { key: ' ' });
+  expect(handler).not.toHaveBeenCalled();
+  fireEvent.keyDown(screen.getByLabelText('allowed'), { key: ' ' });
+  expect(handler).toHaveBeenCalledOnce();
+});
