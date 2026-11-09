@@ -3,7 +3,7 @@ import { useTranslation } from 'react-i18next';
 import { apiOk as request } from '../../../api/apiOk';
 import { notifyLookoutSettingsChanged } from '../../../lib/lookoutSettingsEvents';
 import { writeLookoutNotifyInterval, type LookoutNotifyInterval } from '../../../lib/lookoutNotifyInterval';
-import { useLookoutNotifyInterval } from '../../../lib/useLookoutNotifyInterval';
+import { useLookoutNotifyInterval } from '../../../hooks/useLookoutNotifyInterval';
 import { Button, LoadingState, Notice, SegmentedToggle } from '../../ui';
 import { ModelSelect } from '../../ui/ModelSelect';
 import { InlineToggle } from '../../ui/InlineToggle';

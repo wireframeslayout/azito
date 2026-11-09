@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { LOOKOUT_NOTIFY_INTERVAL_CHANGED, LOOKOUT_NOTIFY_INTERVAL_KEY, readLookoutNotifyInterval, type LookoutNotifyInterval } from './lookoutNotifyInterval';
+import { LOOKOUT_NOTIFY_INTERVAL_CHANGED, LOOKOUT_NOTIFY_INTERVAL_KEY, readLookoutNotifyInterval, type LookoutNotifyInterval } from '../lib/lookoutNotifyInterval';
 
 export function useLookoutNotifyInterval(): LookoutNotifyInterval {
   const [interval, setNotifyInterval] = useState(readLookoutNotifyInterval);

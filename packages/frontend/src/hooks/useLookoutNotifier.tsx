@@ -4,7 +4,7 @@ import { useTranslation } from 'react-i18next';
 import { LookoutToast } from '../components/lookout/LookoutToast';
 import { addEvent, type PendingEvent } from '../lib/lookoutBatch';
 import type { LookoutNotifyInterval } from '../lib/lookoutNotifyInterval';
-import { useLookoutNotifyInterval } from '../lib/useLookoutNotifyInterval';
+import { useLookoutNotifyInterval } from './useLookoutNotifyInterval';
 import { paths } from '../paths';
 import { useAgentActivity } from './useAgentActivity';
 import { useCrossProjectNavigation } from './useCrossProjectNavigation';
