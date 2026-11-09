@@ -22,11 +22,18 @@ import type { Task, Window } from '../../pages/workspace/types';
 const EXPAND_STORAGE_KEY = 'tasks-sidebar-expanded';
 const WINDOW_EXPAND_STORAGE_KEY = 'tasks-sidebar-expanded-windows';
 
-function loadWindowExpanded(): Record<string, boolean> {
+type WindowExpansionByProject = Record<string, Record<string, boolean>>;
+
+function loadWindowExpanded(): WindowExpansionByProject {
   try {
     const value: unknown = JSON.parse(localStorage.getItem(WINDOW_EXPAND_STORAGE_KEY) || '{}');
     if (!value || typeof value !== 'object' || Array.isArray(value)) return {};
-    return Object.fromEntries(Object.entries(value).filter(([key, v]) => /^[1-9]\d*$/.test(key) && typeof v === 'boolean'));
+    const result: WindowExpansionByProject = {};
+    for (const [projectId, entries] of Object.entries(value)) {
+      if (!/^[1-9]\d*$/.test(projectId) || !entries || typeof entries !== 'object' || Array.isArray(entries)) continue;
+      result[projectId] = Object.fromEntries(Object.entries(entries).filter((entry): entry is [string, boolean] => /^[1-9]\d*$/.test(entry[0]) && typeof entry[1] === 'boolean'));
+    }
+    return result;
   } catch { return {}; }
 }
 
@@ -48,6 +55,7 @@ function saveExpandedIds(ids: Set<number>): void {
 
 interface TasksSidebarProps {
   titleData: ActivityTitleData;
+  projectId: number;
   showWindowContextMenu?: (e: React.MouseEvent, w: Window) => void;
   showWindowContextMenuAt?: (x: number, y: number, w: Window) => void;
   tasks: Task[];
@@ -67,6 +75,7 @@ const GROUP_LABEL_KEYS: Record<TaskGroupKey, string> = {
 
 export default function TasksSidebar({
   titleData,
+  projectId,
   showWindowContextMenu,
   showWindowContextMenuAt,
   tasks,
@@ -81,10 +90,12 @@ export default function TasksSidebar({
   const [query, setQuery] = useState('');
   const { focus } = useGlobalFocus();
   const [expandedIds, setExpandedIds] = useState<Set<number>>(loadExpandedIds);
-  const [windowExpanded, setWindowExpanded] = useState<Record<string, boolean>>(loadWindowExpanded);
-  const toggleWindow = (id: number, current: boolean) => setWindowExpanded(previous => {
+  const [expansionByProject, setExpansionByProject] = useState<WindowExpansionByProject>(loadWindowExpanded);
+  const windowExpanded = expansionByProject[projectId] ?? {};
+  const toggleWindow = (id: number, current: boolean) => setExpansionByProject(previous => {
     const validIds = new Set(tasks.flatMap(task => (task.windows ?? []).map(window => String(window.id))));
-    const next = { ...Object.fromEntries(Object.entries(previous).filter(([key]) => validIds.has(key))), [id]: !current };
+    const entries = Object.entries(previous[projectId] ?? {}).filter(([key]) => validIds.has(key));
+    const next = { ...previous, [projectId]: { ...Object.fromEntries(entries), [id]: !current } };
     try { localStorage.setItem(WINDOW_EXPAND_STORAGE_KEY, JSON.stringify(next)); } catch { /* best-effort */ }
     return next;
   });
@@ -105,14 +116,15 @@ export default function TasksSidebar({
   useEffect(() => {
     if (loading) return;
     const validIds = new Set(tasks.flatMap(task => (task.windows ?? []).map(window => String(window.id))));
-    setWindowExpanded(previous => {
-      const entries = Object.entries(previous).filter(([key]) => validIds.has(key));
-      if (entries.length === Object.keys(previous).length) return previous;
-      const next = Object.fromEntries(entries);
+    setExpansionByProject(previous => {
+      const projectEntries = previous[projectId] ?? {};
+      const entries = Object.entries(projectEntries).filter(([key]) => validIds.has(key));
+      if (entries.length === Object.keys(projectEntries).length) return previous;
+      const next = { ...previous, [projectId]: Object.fromEntries(entries) };
       try { localStorage.setItem(WINDOW_EXPAND_STORAGE_KEY, JSON.stringify(next)); } catch { /* best-effort */ }
       return next;
     });
-  }, [tasks, loading]);
+  }, [tasks, loading, projectId]);
 
   const totalVisible = groups.reduce((n, g) => n + g.rows.length, 0);
   const nonArchivedCount = tasks.filter((t) => t.status !== 'archived').length;

@@ -20,7 +20,7 @@ it('opens the operation group and navigates to its child without opening the par
     { id: 1, isPrimary: true, label: 'Parent', tmuxTarget: 's:1', serverName: 's' },
     { id: 2, isPrimary: false, label: 'Child', tmuxTarget: 's:2', serverName: 's' },
   ] } as Task;
-  render(<TasksSidebar titleData={{} as never} tasks={[task]} showWindowContextMenu={showWindowContextMenu} onOpenTask={vi.fn()} onOpenAllTasks={vi.fn()} onCreateTask={vi.fn()} onOpenTaskWindow={openWindow} onOpenTaskBrowser={vi.fn()} />);
+  render(<TasksSidebar projectId={10} titleData={{} as never} tasks={[task]} showWindowContextMenu={showWindowContextMenu} onOpenTask={vi.fn()} onOpenAllTasks={vi.fn()} onCreateTask={vi.fn()} onOpenTaskWindow={openWindow} onOpenTaskBrowser={vi.fn()} />);
   const parent = document.querySelector('[data-window-id="1"]')!;
   expect(parent).toHaveAttribute('aria-expanded', 'false');
   expect(parent).toHaveAttribute('aria-selected', 'true');
@@ -47,44 +47,60 @@ it('opens the operation group and navigates to its child without opening the par
 it('opens a group by default when a child is running and honors an explicitly saved closed state', () => {
   state.rows = [{ taskId: 7, status: 'running', serverName: 's', target: 's:2', key: 's/2', title: 'Child' }];
   const task = { id: 7, title: 'Task', status: 'open', windows: [{ id: 1, isPrimary: true, tmuxTarget: 's:1', serverName: 's' }, { id: 2, isPrimary: false, tmuxTarget: 's:2', serverName: 's' }] } as Task;
-  const props = { titleData: {} as never, tasks: [task], onOpenTask: vi.fn(), onOpenAllTasks: vi.fn(), onCreateTask: vi.fn(), onOpenTaskWindow: vi.fn(), onOpenTaskBrowser: vi.fn() };
+  const props = { projectId: 10, titleData: {} as never, tasks: [task], onOpenTask: vi.fn(), onOpenAllTasks: vi.fn(), onCreateTask: vi.fn(), onOpenTaskWindow: vi.fn(), onOpenTaskBrowser: vi.fn() };
   const view = render(<TasksSidebar {...props} />);
   expect(document.querySelector('[data-window-id="1"]')).toHaveAttribute('aria-expanded', 'true');
   view.unmount();
-  localStorage.setItem('tasks-sidebar-expanded-windows', '{"1":false}');
+  localStorage.setItem('tasks-sidebar-expanded-windows', '{"10":{"1":false}}');
   render(<TasksSidebar {...props} />);
   expect(document.querySelector('[data-window-id="1"]')).toHaveAttribute('aria-expanded', 'false');
 });
 
 it('shows a notice when operation links cannot be loaded', () => {
   state.error = true;
-  render(<TasksSidebar titleData={{} as never} tasks={[]} onOpenTask={vi.fn()} onOpenAllTasks={vi.fn()} onCreateTask={vi.fn()} onOpenTaskWindow={vi.fn()} onOpenTaskBrowser={vi.fn()} />);
+  render(<TasksSidebar projectId={10} titleData={{} as never} tasks={[]} onOpenTask={vi.fn()} onOpenAllTasks={vi.fn()} onCreateTask={vi.fn()} onOpenTaskWindow={vi.fn()} onOpenTaskBrowser={vi.fn()} />);
   expect(screen.getByRole('status')).toHaveTextContent('sidebar.operationLinksError');
   expect(screen.getByRole('tree')).not.toContainElement(screen.getByRole('status'));
 });
 
 it('fetches links only for displayed tasks', () => {
   const tasks = [{ id: 7, title: 'Visible', status: 'open' }, { id: 8, title: 'Archived', status: 'archived' }] as Task[];
-  render(<TasksSidebar titleData={{} as never} tasks={tasks} onOpenTask={vi.fn()} onOpenAllTasks={vi.fn()} onCreateTask={vi.fn()} onOpenTaskWindow={vi.fn()} onOpenTaskBrowser={vi.fn()} />);
+  render(<TasksSidebar projectId={10} titleData={{} as never} tasks={tasks} onOpenTask={vi.fn()} onOpenAllTasks={vi.fn()} onCreateTask={vi.fn()} onOpenTaskWindow={vi.fn()} onOpenTaskBrowser={vi.fn()} />);
   expect(state.ids).toEqual([7]);
 });
 
 
 it('keeps the task ID set stable while searching', () => {
   const tasks = [{ id: 7, title: 'Visible', status: 'open' }, { id: 9, title: 'Another', status: 'open' }] as Task[];
-  render(<TasksSidebar titleData={{} as never} tasks={tasks} onOpenTask={vi.fn()} onOpenAllTasks={vi.fn()} onCreateTask={vi.fn()} onOpenTaskWindow={vi.fn()} onOpenTaskBrowser={vi.fn()} />);
+  render(<TasksSidebar projectId={10} titleData={{} as never} tasks={tasks} onOpenTask={vi.fn()} onOpenAllTasks={vi.fn()} onCreateTask={vi.fn()} onOpenTaskWindow={vi.fn()} onOpenTaskBrowser={vi.fn()} />);
   fireEvent.change(screen.getByPlaceholderText('sidebar.searchPlaceholder'), { target: { value: 'Visible' } });
   expect(state.ids).toEqual([7, 9]);
 });
 
 it('handles invalid saved expansion and removes closed window IDs', () => {
   const task = { id: 7, title: 'Task', status: 'open', windows: [{ id: 1, isPrimary: true, tmuxTarget: 's:1', serverName: 's' }, { id: 2, isPrimary: false, tmuxTarget: 's:2', serverName: 's' }] } as Task;
-  const props = { titleData: {} as never, tasks: [task], onOpenTask: vi.fn(), onOpenAllTasks: vi.fn(), onCreateTask: vi.fn(), onOpenTaskWindow: vi.fn(), onOpenTaskBrowser: vi.fn() };
+  const props = { projectId: 10, titleData: {} as never, tasks: [task], onOpenTask: vi.fn(), onOpenAllTasks: vi.fn(), onCreateTask: vi.fn(), onOpenTaskWindow: vi.fn(), onOpenTaskBrowser: vi.fn() };
   localStorage.setItem('tasks-sidebar-expanded-windows', 'null');
   const view = render(<TasksSidebar {...props} />);
   expect(document.querySelector('[data-window-id="1"]')).toHaveAttribute('aria-expanded', 'false');
   view.unmount();
-  localStorage.setItem('tasks-sidebar-expanded-windows', '{"1":true,"999":false}');
+  localStorage.setItem('tasks-sidebar-expanded-windows', '{"10":{"1":true,"999":false}}');
   render(<TasksSidebar {...props} />);
-  expect(JSON.parse(localStorage.getItem('tasks-sidebar-expanded-windows')!)).toEqual({ '1': true });
+  expect(JSON.parse(localStorage.getItem('tasks-sidebar-expanded-windows')!)).toEqual({ '10': { '1': true } });
+});
+
+
+it('preserves expansion when switching projects and back', () => {
+  const taskA = { id: 7, title: 'A', status: 'open', windows: [{ id: 1, isPrimary: true, tmuxTarget: 's:1', serverName: 's' }, { id: 2, isPrimary: false, tmuxTarget: 's:2', serverName: 's' }] } as Task;
+  const taskB = { id: 8, title: 'B', status: 'open', windows: [{ id: 3, isPrimary: true, tmuxTarget: 's:3', serverName: 's' }] } as Task;
+  const props = { titleData: {} as never, onOpenTask: vi.fn(), onOpenAllTasks: vi.fn(), onCreateTask: vi.fn(), onOpenTaskWindow: vi.fn(), onOpenTaskBrowser: vi.fn() };
+  const view = render(<TasksSidebar {...props} projectId={10} tasks={[taskA]} />);
+  const parent = document.querySelector('[data-window-id="1"]') as HTMLElement;
+  parent.focus();
+  fireEvent.keyDown(parent, { key: 'ArrowRight' });
+  expect(parent).toHaveAttribute('aria-expanded', 'true');
+  view.rerender(<TasksSidebar {...props} projectId={20} tasks={[taskB]} />);
+  view.rerender(<TasksSidebar {...props} projectId={10} tasks={[taskA]} />);
+  expect(document.querySelector('[data-window-id="1"]')).toHaveAttribute('aria-expanded', 'true');
+  expect(JSON.parse(localStorage.getItem('tasks-sidebar-expanded-windows')!)).toEqual({ '10': { '1': true } });
 });

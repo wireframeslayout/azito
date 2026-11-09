@@ -195,6 +195,7 @@ export default function WorkspaceSidebarContent({
       )}
       {sidebarMode === 'tasks' && project && (
         <TasksSidebar
+          projectId={project.id}
           titleData={titleData}
           showWindowContextMenu={(event, window) => {
             const extra = windowContextExtra(window, sessionData[window.serverName] ?? []);
