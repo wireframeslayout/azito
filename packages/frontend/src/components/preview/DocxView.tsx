@@ -14,6 +14,7 @@ export function DocxView({ bytes }: Props) {
     let active = true;
     setRendered(false); setError(null);
     const doc = frame.current.contentDocument;
+    let styles: HTMLDivElement | undefined;
     void (async () => {
       await inspectOfficeZip(bytes.slice().buffer);
       const [{ renderAsync }, { default: DOMPurify }] = await Promise.all([import('docx-preview'), import('dompurify')]);
@@ -34,7 +35,8 @@ export function DocxView({ bytes }: Props) {
         item.children?.forEach((child) => element.appendChild(create(child)));
         return element;
       };
-      const styles = doc.createElement('div');
+      if (!active) return;
+      styles = doc.createElement('div');
       doc.head.appendChild(styles);
       await renderAsync(bytes.slice().buffer, doc.body, styles, { h: create as never, ignoreFonts: true, renderAltChunks: false, useBase64URL: true });
       if (active) {
@@ -44,7 +46,7 @@ export function DocxView({ bytes }: Props) {
         setError(null); setRendered(true);
       }
     })().catch((reason: unknown) => { if (active) setError(reason instanceof Error && /limit|too many entries/i.test(reason.message) ? 'large' : 'invalid'); });
-    return () => { active = false; };
+    return () => { active = false; styles?.remove(); };
   }, [bytes, ready]);
   return <>{error && <p role="alert">{t(error === 'large' ? 'office.tooLarge' : 'preview.loadError')}</p>}{!rendered && !error && <p role="status">{t('preview.loading')}</p>}<iframe ref={frame} title={t('office.document')} sandbox="allow-same-origin" onLoad={() => setReady(true)} srcDoc={'<!doctype html><html><head><meta http-equiv="Content-Security-Policy" content="default-src \'none\'; img-src data: blob:; style-src \'unsafe-inline\'; font-src \'none\'; base-uri \'none\'; form-action \'none\'"></head><body></body></html>'} style={{ width: '100%', minHeight: '60vh', border: 0, display: rendered ? 'block' : 'none' }} /></>;
 }

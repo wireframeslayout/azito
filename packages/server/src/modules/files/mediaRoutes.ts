@@ -20,9 +20,10 @@ export function registerMediaRoutes(app: FastifyInstance, service: MediaService)
     const target = service.parse(request.params['*']);
     if (!target) return reply.status(401).send({ error: 'Unauthorized' });
     try {
-      await service.validate(target);
+      const realPath = await service.validate(target);
       if (target.kind === 'server') {
-        const file = await service.serverFile(target);
+        if (!realPath) throw new Error('Invalid media target');
+        const file = await service.serverFile(target, realPath);
         const range = parseMediaRange(request.headers.range, file.buffer.length);
         reply.header('Accept-Ranges', 'bytes').header('Content-Type', mediaType(target.path)).header('X-Content-Type-Options', 'nosniff').header('Cache-Control', 'no-store');
         if (range.kind === 'invalid') return reply.status(416).header('Content-Range', `bytes */${file.buffer.length}`).send();

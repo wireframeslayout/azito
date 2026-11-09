@@ -38,7 +38,7 @@ export class MediaService {
     catch { return null; }
   }
 
-  async validate(target: MediaTarget): Promise<void> {
+  async validate(target: MediaTarget): Promise<string | undefined> {
     if (!this.deps.projectRepo.findById(target.projectId)) throw new Error('Project not found');
     const path = target.kind === 'storage' ? target.key : target.path;
     const extension = path.split('.').pop()?.toLowerCase();
@@ -50,16 +50,18 @@ export class MediaService {
     const ops = this.deps.transportFactory.getFileOps(srv);
     const [real, root] = await Promise.all([ops.realpath(target.path), ops.realpath(association.workingDirectory)]);
     if (!isHostPathContained(ops.platform, { target: real, allowedRoot: root })) throw new Error('Invalid media target');
+    return real;
   }
 
   async issue(target: MediaTarget): Promise<string> {
-    await this.validate(target);
+    const realPath = await this.validate(target);
     if (target.kind === 'storage') await this.storage(target.projectId).statMedia(this.storagePath(target));
     else {
       const server = this.deps.serverRepo.findByName(target.server);
       if (!server) throw new Error('Server not found');
       const ops = this.deps.transportFactory.getFileOps(server);
-      const stat = await ops.stat(await ops.realpath(target.path));
+      if (!realPath) throw new Error('Invalid media target');
+      const stat = await ops.stat(realPath);
       if (!stat || stat.kind !== 'file' || stat.size > MAX_DOWNLOAD_SIZE) throw new Error('Invalid media file');
     }
     return `/api/media/${signUrlToken(this.deps.key, 'media', JSON.stringify(target), Date.now() + 600_000)}`;
@@ -73,10 +75,9 @@ export class MediaService {
 
   storage(projectId: number) { return this.deps.storageClient.binaryContent(this.deps.storageSettingsRepo.get(), projectId); }
 
-  async serverFile(target: Extract<MediaTarget, { kind: 'server' }>) {
+  async serverFile(target: Extract<MediaTarget, { kind: 'server' }>, realPath: string) {
     const server = this.deps.serverRepo.findByName(target.server);
     if (!server) throw new Error('Server not found');
-    const ops = this.deps.transportFactory.getFileOps(server);
-    return this.browse.downloadFile(server, await ops.realpath(target.path));
+    return this.browse.downloadFile(server, realPath);
   }
 }

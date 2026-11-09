@@ -295,7 +295,7 @@ export const fileBrowseRoutes: FastifyPluginCallback<FileBrowseRouteOptions> = (
     },
   );
 
-  // ── GET /api/servers/:name/files/download ──
+  // ── GET /api/servers/:name/files/binary ──
   fastify.get<{ Params: { name: string }; Querystring: { path?: string; projectId?: string } }>(
     '/api/servers/:name/files/binary', async (request, reply) => {
       const srv = serverRepo.findByName(request.params.name);
@@ -319,6 +319,7 @@ export const fileBrowseRoutes: FastifyPluginCallback<FileBrowseRouteOptions> = (
     },
   );
 
+  // ── GET /api/servers/:name/files/download ──
   fastify.get<{ Params: { name: string }; Querystring: { path?: string } }>(
     '/api/servers/:name/files/download',
     async (request, reply) => {
@@ -341,7 +342,7 @@ export const fileBrowseRoutes: FastifyPluginCallback<FileBrowseRouteOptions> = (
     },
   );
 
-  // ── PUT /api/servers/:name/files/content ──
+  // ── PUT /api/servers/:name/files/content or binary ──
   for (const kind of ['content', 'binary'] as const) fastify.put<{ Params: { name: string } }>(
     `/api/servers/:name/files/${kind}`,
     { bodyLimit: kind === 'binary' ? 28 * 1024 * 1024 : 1024 * 1024 },

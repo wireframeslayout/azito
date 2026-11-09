@@ -70,6 +70,9 @@ test('XLSX save retains numbers, formulas and other sheets', async ({ app, harne
   await app.getByRole('button', { name: '保存', exact: true }).click();
   expect((await saved).ok()).toBe(true);
   await expect(app.getByText('未保存', { exact: true })).toHaveCount(0);
+  await app.setViewportSize({ width: 1200, height: 800 });
+  await expect(app.getByRole('button', { name: '保存', exact: true })).toBeDisabled();
+  await expect(app.getByText('未保存', { exact: true })).toHaveCount(0);
   await expect(app.getByRole('button', { name: '編集', exact: true })).toBeDisabled();
   await app.locator('.luckysheet-cell-sheettable').click({ position: { x: 310, y: 60 } });
   await app.keyboard.type('10');

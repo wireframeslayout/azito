@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { Workbook, type WorkbookInstance } from '@fortune-sheet/react';
 import '@fortune-sheet/react/dist/index.css';
@@ -19,9 +19,12 @@ export function XlsxSheetEditor({ backend, path, onDirtyChange }: Props) {
   const dirtyCallback = useRef(onDirtyChange);
   dirtyCallback.current = onDirtyChange;
   const baseline = useRef<string | null>(null);
+  const lastSnapshot = useRef<string | null>(null);
+  const editingRef = useRef(false);
   const [sheets, setSheets] = useState<Sheets | null>(null);
   const [key, setKey] = useState(0);
   const [editing, setEditing] = useState(false);
+  editingRef.current = editing;
   const [confirm, setConfirm] = useState(false);
   const [truncated, setTruncated] = useState(false);
   const [oversized, setOversized] = useState(false);
@@ -39,7 +42,18 @@ export function XlsxSheetEditor({ backend, path, onDirtyChange }: Props) {
     query.addEventListener('change', onChange);
     return () => query.removeEventListener('change', onChange);
   }, []);
-  useEffect(() => { if (document.saved) { setChanged(false); dirtyCallback.current?.(false); } }, [document.saved]);
+  useEffect(() => { if (document.saved) { baseline.current = lastSnapshot.current; setChanged(false); dirtyCallback.current?.(false); } }, [document.saved]);
+  const onWorkbookChange = useCallback((next: Sheets) => {
+    setSheets(next);
+    setOversized(next.some((sheet) => sheet.data?.some((row, r) => row.some((cell, c) => cell != null && (r >= 5000 || c >= 100)))));
+    if (editingRef.current) {
+      const snapshot = JSON.stringify(next);
+      lastSnapshot.current = snapshot;
+      if (baseline.current === null) baseline.current = snapshot;
+      const dirty = baseline.current !== snapshot;
+      setChanged(dirty); dirtyCallback.current?.(dirty);
+    }
+  }, []);
   useEffect(() => {
     if (!document.bytes) return;
     let active = true;
@@ -95,6 +109,6 @@ export function XlsxSheetEditor({ backend, path, onDirtyChange }: Props) {
     </div>
     <ConfirmDialog open={confirm} title={t('office.edit')} message={`${t('office.formatWarning')} ${losses.map((loss) => t(`office.loss.${loss}`)).join(', ')}`} confirmLabel={t('office.edit')} confirmVariant="primary" onConfirm={() => { if (workbook.current) setSheets(workbook.current.getAllSheets().map((sheet) => ({ ...sheet, celldata: sheet.data?.flatMap((row, r) => row.flatMap((cell, c) => cell ? [{ r, c, v: cell }] : [])) }))); baseline.current = null; setEditing(true); setConfirm(false); }} onCancel={() => setConfirm(false)} />
     {document.conflict !== undefined && <div role="alert">{t('office.conflict')} <Button onClick={() => void document.reload()}>{t('office.reload')}</Button><Button disabled={truncated || oversized} onClick={() => void save(true)}>{t('office.overwrite')}</Button></div>}
-    {sheets && <div style={{ flex: 1, minHeight: '40vh' }}><Workbook key={`${key}-${editing}`} ref={workbook} data={sheets} allowEdit={editing && !isMobile && !exporting} onChange={(next) => { setSheets(next); setOversized(next.some((sheet) => sheet.data?.some((row, r) => row.some((cell, c) => cell != null && (r >= 5000 || c >= 100))))); if (editing) { const snapshot = JSON.stringify(next); if (baseline.current === null) baseline.current = snapshot; else if (baseline.current !== snapshot) { setChanged(true); onDirtyChange?.(true); } } }} /></div>}
+    {sheets && <div style={{ flex: 1, minHeight: '40vh' }}><Workbook key={`${key}-${editing}`} ref={workbook} data={sheets} allowEdit={editing && !isMobile && !exporting} onChange={onWorkbookChange} /></div>}
   </section>;
 }
