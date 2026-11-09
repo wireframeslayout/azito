@@ -12,6 +12,10 @@ it('edits a cell and saves the edited UTF-8 bytes', async () => {
   const backend = { source: 'test', readBinary: async () => ({ bytes: new TextEncoder().encode('a,b\r\nc,d'), version: 'v1' }), saveBinary } as unknown as BinaryFilesBackend;
   render(<CsvTableEditor backend={backend} path="a.csv" />);
   const input = await screen.findByLabelText('1, 1');
+  expect(screen.getByRole('grid')).toBeInTheDocument();
+  input.focus();
+  fireEvent.keyDown(input, { key: 'ArrowRight' });
+  expect(screen.getByLabelText('1, 2')).toHaveFocus();
   fireEvent.change(input, { target: { value: 'updated' } });
   await waitFor(() => expect(screen.getByRole('button', { name: 'office.save' })).not.toBeDisabled());
   fireEvent.click(screen.getByRole('button', { name: 'office.save' }));
