@@ -4,7 +4,9 @@ import { useWakeWindow } from './useWakeWindow';
 import { useState, useCallback, useEffect } from 'react';
 import { useTranslation } from 'react-i18next';
 import { formatWindowTitleLine, resolveWindowTitle, type MuxDriverKind, type MuxRef } from '@azito/shared';
-import { api } from '../api/client';
+import { api, apiWithStatus } from '../api/client';
+import { useNavigate } from 'react-router-dom';
+import { paths } from '../paths';
 import type { ContextMenuItem } from '../components/ContextMenu';
 import type { PersistedTab } from './useTabPersistence';
 import type { Task } from '../pages/workspace/types';
@@ -48,6 +50,7 @@ export function useWindowActions(
   deps: WindowActionDeps,
 ) {
   const { t } = useTranslation('workspace');
+  const navigate = useNavigate();
   const wake = useWakeWindow();
   const { activityStatus } = useAgentActivity();
   const [misaoServers, setMisaoServers] = useState<Set<string> | null>(null);
@@ -264,7 +267,7 @@ export function useWindowActions(
     });
   }, [tabs, closeTab, refreshWorkspace, refreshSessions, showToast]);
 
-  const getWindowMenuItems = useCallback((w: { id: number; serverName: string; tmuxTarget: string; label?: string; labelSource?: 'auto' | 'user'; workerType?: string; windowType?: string; agentSessionId?: string; sleeping?: boolean; muxRef?: MuxRef }, extra?: WindowMenuExtra): ContextMenuItem[] => {
+  const getWindowMenuItems = useCallback((w: { id: number; serverName: string; tmuxTarget: string; ownerType?: 'project' | 'task' | 'server'; role?: 'orchestrator' | null; label?: string; labelSource?: 'auto' | 'user'; workerType?: string; windowType?: string; agentSessionId?: string; sleeping?: boolean; muxRef?: MuxRef }, extra?: WindowMenuExtra): ContextMenuItem[] => {
     const linkedTask = findTaskByTarget(w.tmuxTarget);
     const descriptors = buildWindowMenuItems({
       online: extra?.online ?? false,
@@ -303,12 +306,29 @@ export function useWindowActions(
       description: d.disabledReasonKey ? t(d.disabledReasonKey) : undefined,
       onClick: () => actions[d.kind].run(d),
     }));
+    if (w.windowType === 'agent' && w.ownerType !== 'task' && w.ownerType !== undefined) {
+      const role = w.role === 'orchestrator' ? null : 'orchestrator';
+      const changeRole = async (nextRole: 'orchestrator' | null): Promise<void> => {
+        try {
+          const response = await apiWithStatus(`/windows/${w.id}/role`, { method: 'PUT', body: JSON.stringify({ role: nextRole }) });
+          if (response.status !== 200) throw new Error('role change failed');
+          refreshWorkspace();
+          showToast(t(nextRole ? 'orchestration.moved' : 'orchestration.restored'), [
+            ...(nextRole ? [{ label: t('orchestration.open'), onClick: () => navigate(paths.orchestration(w.id)) }] : []),
+            { label: t('orchestration.undo'), onClick: () => { void changeRole(nextRole ? null : 'orchestrator'); } },
+          ]);
+        } catch {
+          showToast(t('orchestration.roleError'));
+        }
+      };
+      items.push({ label: t(role ? 'orchestration.makeOrchestrator' : 'orchestration.removeRole'), onClick: () => { void changeRole(role); } });
+    }
     items.push(
       { label: '', separator: true, onClick: () => {} },
       { label: windowMenuInfo(w), disabled: true, onClick: () => {} },
     );
     return items;
-  }, [handleRenameLabel, handleRenameWindow, handleRenamePane, handleDetachWindow, handleDeleteWindow, handleDeletePane, handleRespawnWindow, handleSleepWindow, handleCapturePanes, findTaskByTarget, openTask, activityStatus, wake.choose, showToast, t, misaoServers]);
+  }, [handleRenameLabel, handleRenameWindow, handleRenamePane, handleDetachWindow, handleDeleteWindow, handleDeletePane, handleRespawnWindow, handleSleepWindow, handleCapturePanes, findTaskByTarget, openTask, activityStatus, wake.choose, showToast, t, misaoServers, refreshWorkspace, navigate]);
 
   const showWindowContextMenu = useCallback((e: React.MouseEvent, w: { id: number; serverName: string; tmuxTarget: string; label?: string; muxRef?: MuxRef }, extra?: WindowMenuExtra) => {
     showContextMenu(e, getWindowMenuItems(w, extra));

@@ -1,6 +1,6 @@
 import { createContext, useCallback, useContext, useEffect, useRef, useState } from 'react';
 import type { ReactNode } from 'react';
-import { api } from '../api/client';
+import { apiWithStatus } from '../api/client';
 import type { OrchestratorSummary } from '../pages/workspace/types';
 import { useNotificationChannel } from './useNotificationChannel';
 
@@ -23,9 +23,10 @@ export function OrchestratorsProvider({ children }: { children: ReactNode }): Re
   const sequence = useRef(0);
   const refresh = useCallback((): void => {
     const current = ++sequence.current;
-    api<OrchestratorSummary[]>('/orchestrators').then((result) => {
+    apiWithStatus<OrchestratorSummary[]>('/orchestrators').then(({ status: responseStatus, body }) => {
+      if (responseStatus < 200 || responseStatus >= 300 || !Array.isArray(body)) throw new Error('Could not load orchestrators');
       if (sequence.current !== current) return;
-      setWindows(result);
+      setWindows(body);
       setStatus('ready');
     }).catch(() => {
       if (sequence.current === current) setStatus('error');
@@ -35,6 +36,6 @@ export function OrchestratorsProvider({ children }: { children: ReactNode }): Re
     refresh();
     return () => { sequence.current++; };
   }, [refresh]);
-  useNotificationChannel({ onConnected: refresh, onOrchestrationUpdated: refresh, onWorkspaceRefresh: refresh });
+  useNotificationChannel({ onConnected: refresh, onOrchestrationUpdated: refresh, onWorkspaceRefresh: refresh, onSessionsUpdated: refresh });
   return <OrchestratorsContext.Provider value={{ windows, status, refresh }}>{children}</OrchestratorsContext.Provider>;
 }

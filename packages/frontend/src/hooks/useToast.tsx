@@ -2,8 +2,9 @@ import React, { createContext, useCallback, useContext, useEffect, useRef, useSt
 import { useTranslation } from 'react-i18next';
 import { OPERATOR_REQUIRED_EVENT, type OperatorRequiredEventDetail } from '../api/operatorRequired';
 
+interface ToastAction { label: string; onClick: () => void }
 interface ToastContextValue {
-  showToast: (msg: string) => void;
+  showToast: (msg: string, actions?: ToastAction[]) => void;
 }
 
 const ToastContext = createContext<ToastContextValue | null>(null);
@@ -16,10 +17,10 @@ export function useToast(): ToastContextValue {
 
 export function ToastProvider({ children }: { children: React.ReactNode }) {
   const { t } = useTranslation('common');
-  const [toast, setToast] = useState<string | null>(null);
+  const [toast, setToast] = useState<{ message: string; actions: ToastAction[] } | null>(null);
   const timerRef = useRef<ReturnType<typeof setTimeout>>(undefined);
-  const showToast = useCallback((msg: string) => {
-    setToast(msg);
+  const showToast = useCallback((msg: string, actions: ToastAction[] = []) => {
+    setToast({ message: msg, actions });
     clearTimeout(timerRef.current);
     timerRef.current = setTimeout(() => setToast(null), 3000);
   }, []);
@@ -48,7 +49,8 @@ export function ToastProvider({ children }: { children: React.ReactNode }) {
           padding: '8px 20px', fontSize: 'var(--font-md)', color: 'var(--text)', zIndex: 300,
           boxShadow: '0 4px 12px rgba(0,0,0,0.3)',
         }}>
-          {toast}
+          {toast.message}
+          {toast.actions.map((action) => <button key={action.label} onClick={() => { setToast(null); action.onClick(); }}>{action.label}</button>)}
         </div>
       )}
     </ToastContext.Provider>

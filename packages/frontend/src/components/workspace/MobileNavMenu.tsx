@@ -2,6 +2,7 @@ import type { CSSProperties } from 'react';
 import { useTranslation } from 'react-i18next';
 import { Icon, type IconName } from '../ui/Icon';
 import { ProjectAvatar } from '../ui/ProjectAvatar';
+import { paths } from '../../paths';
 import { GLOBAL_NAV_ITEMS, SETTINGS_NAV_ITEM } from './globalNavItems';
 import type { SidebarMode } from '../../pages/workspace/types';
 
@@ -153,6 +154,9 @@ export function MobileNavMenu({
 
   return (
     <div style={{ padding: '0 4px 16px' }}>
+      <button type="button" onClick={() => onNavigateGlobal(paths.orchestration())} style={{ ...rowStyle, minHeight: 44, color: 'var(--purple)' }} className="glass-popover-item">
+        <Icon name="operations" size={16} /><span style={rowLabelStyle}>{t('workspace:orchestration.title')}</span>
+      </button>
       <button type="button" style={{ ...rowStyle, minHeight: 44 }} className="glass-popover-item" onClick={onOpenSearch}><Icon name="search" size={16} /><span style={rowLabelStyle}>{t('navigation:globalSearch.title')}</span></button>
       <div style={projectCardStyle}>
         <button type="button" onClick={onOpenProjectSwitch} style={selectionRowStyle} className="glass-popover-item">
