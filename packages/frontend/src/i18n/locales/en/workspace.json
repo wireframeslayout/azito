@@ -414,6 +414,9 @@
     "sleeping": "Sleeping",
     "wake": "Wake",
     "acknowledge": "Mark completed as seen",
-    "snapshotError": "Could not load snapshot"
+    "snapshotError": "Could not load snapshot",
+    "back": "Back to links",
+    "previous": "Previous",
+    "next": "Next"
   }
 }

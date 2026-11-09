@@ -70,3 +70,21 @@ test('作業ディレクトリなしでは作成しない', async ({ app, harnes
   await expect(app.getByText('サーバーと作業ディレクトリを指定してください')).toBeVisible();
   await expect(dialog).toBeVisible();
 });
+
+test('連携した窓を右パネルから解除して元に戻す', async ({ app, harness }) => {
+  const project = await harness.createProject('orchestration-links');
+  const sourceAgent = await harness.startFakeAgent('orchestration-links', 'source', { supervised: false });
+  const targetAgent = await harness.startFakeAgent('orchestration-links', 'target', { supervised: false });
+  const source = await harness.registerAgentWindow(project, sourceAgent.target, { label: 'source' });
+  const target = await harness.registerAgentWindow(project, targetAgent.target, { label: 'linked-target' });
+  await harness.api(`/windows/${source}/role`, { method: 'PUT', body: JSON.stringify({ role: 'orchestrator' }) });
+  await harness.api(`/windows/${source}/links`, { method: 'POST', body: JSON.stringify({ targetWindowId: target }) });
+  await app.goto(`${harness.baseUrl}/orchestration/${source}`);
+  await app.getByRole('button', { name: '連携中の窓を開く' }).click();
+  const panel = app.getByRole('complementary', { name: /連携中/ });
+  await expect(panel.getByText('linked-target')).toBeVisible();
+  await panel.getByRole('button', { name: '連携を解除' }).click();
+  await expect(panel.getByText('linked-target')).not.toBeVisible();
+  await panel.getByRole('button', { name: '元に戻す' }).click();
+  await expect(panel.getByText('linked-target')).toBeVisible();
+});

@@ -67,7 +67,6 @@ export type NotificationEvent =
   | { type: 'supervisor:ready'; payload: { serverName: string; target: string; taskId?: number } }
   | { type: 'orchestration:updated'; payload: { windowId: number } }
   | { type: 'subagents:updated'; payload: { windowId: number; sessionId: string } }
-  | { type: 'orchestration:updated'; payload: { windowId: number } }
   | { type: 'workspace:refresh'; payload: Record<string, never> };
 
 export interface BrowserOpenedPayload {

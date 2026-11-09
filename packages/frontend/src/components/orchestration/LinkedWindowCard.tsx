@@ -10,7 +10,7 @@ interface Props {
   acknowledgeLabel?: string; onAcknowledge?: () => void; acknowledged?: boolean;
 }
 export function LinkedWindowCard({ title, status, detail, timestamp, snapshot, openLabel, unlinkLabel, onOpen, onUnlink, expandLabel, onExpand, attention, waitingLabel, closedLabel, sleepingLabel, wakeLabel, onWake, waking, acknowledgeLabel, onAcknowledge, acknowledged, windowId, statusTone }: Props) {
-  return <article role={onOpen ? 'button' : undefined} tabIndex={onOpen ? 0 : undefined} aria-label={onOpen ? openLabel : undefined}
+  return <article className="linked-window-card" role={onOpen ? 'button' : undefined} tabIndex={onOpen ? 0 : undefined} aria-label={onOpen ? openLabel : undefined}
     onClick={onOpen} onKeyDown={event => { if (onOpen && event.target === event.currentTarget && event.key === 'Enter') { event.preventDefault(); onOpen(); } }} style={{ background: 'var(--bg-card)', border: '1px solid var(--border)', borderRadius: 'var(--radius-md)', padding: attention ? 'var(--space-4)' : 'var(--space-3)' }}>
     <div style={{ display: 'flex', alignItems: 'center', gap: 'var(--space-2)' }}><span aria-hidden="true" style={{ color: statusTone === 'attention' ? 'var(--warning)' : statusTone === 'running' ? 'var(--success)' : 'var(--text-dim)' }}>●</span><strong style={{ flex: 1 }}>{title}</strong> <span>{status}</span>{windowId != null && <WindowIdChip id={windowId} />}</div>
     {!acknowledged && <div style={{ color: 'var(--text-dim)', fontSize: 'var(--font-xs)' }}>{detail} {timestamp}</div>}

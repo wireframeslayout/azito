@@ -125,9 +125,6 @@ export function useNotificationChannel(handlers: NotificationHandlers): void {
         case 'subagents:updated':
           h.onSubagentsUpdated?.(event.payload);
           break;
-        case 'orchestration:updated':
-          h.onOrchestrationUpdated?.(event.payload);
-          break;
         case 'workspace:refresh':
           h.onWorkspaceRefresh?.();
           break;

@@ -1,10 +1,16 @@
 import { useEffect, useRef, useState } from 'react';
+import type { Window } from '../../pages/workspace/types';
 import type { ReactNode } from 'react';
 import { useTranslation } from 'react-i18next';
 import { useLocation, useNavigate } from 'react-router-dom';
+import { useWorkspaceCatalog } from '../../hooks/useWorkspaceCatalog';
+import { buildAttentionContext } from '../../lib/orchestrationModel';
 import { useAgentActivity } from '../../hooks/useAgentActivity';
 import { orchestratorStatus, buildOrchestratorTree } from '../../lib/orchestrationModel';
 import { useOrchestrators } from '../../hooks/useOrchestrators';
+import { useWorkspaceTargets } from '../../hooks/useWorkspaceTargets';
+import { BottomSheet } from '../ui/BottomSheet';
+import { LinkedPanel } from './LinkedPanel';
 import { useIsMobile } from '../../hooks/useIsMobile';
 import { useRightPanelState } from '../../hooks/useRightPanelState';
 import { useToast } from '../../hooks/useToast';
@@ -23,8 +29,15 @@ export interface OrchestrationPageProps { rightPanel?: ReactNode }
 export default function OrchestrationPage({ rightPanel }: OrchestrationPageProps): ReactNode {
   const { t } = useTranslation('workspace');
   const isMobile = useIsMobile();
+  const { onOpenInTerminal } = useWorkspaceTargets();
+  const [sheetOpen, setSheetOpen] = useState(false);
+  const [sheetWindow, setSheetWindow] = useState<Window | null>(null);
+  const [windowOrder, setWindowOrder] = useState<Window[]>([]);
+  const [fixedOrder, setFixedOrder] = useState<Window[]>([]);
+  const touchStart = useRef<number | null>(null);
   const { windows, status, refresh } = useOrchestrators();
   const { entries, snapshotStatus } = useAgentActivity();
+  const { allTasks } = useWorkspaceCatalog();
   const { pathname, state } = useLocation();
   const navigate = useNavigate();
   const { showToast } = useToast();
@@ -35,6 +48,14 @@ export default function OrchestrationPage({ rightPanel }: OrchestrationPageProps
   const listRef = useRef<HTMLButtonElement>(null);
   const id = pathname.split('/')[2];
   const selected = windows.find((window) => String(window.id) === id);
+  const ancestors: number[] = [];
+  let parent = selected?.parentWindowId;
+  while (parent != null && !ancestors.includes(parent)) { ancestors.push(parent); parent = windows.find(window => window.id === parent)?.parentWindowId; }
+  const tree = buildOrchestratorTree(windows, buildAttentionContext(entries, allTasks));
+  const findNode = (nodes: typeof tree): (typeof tree)[number] | undefined => { for (const node of nodes) { if (node.window.id === selected?.id) return node; const found = findNode(node.children); if (found) return found; } return undefined; };
+  const openInTab = (window: Window) => { onOpenInTerminal?.({ serverName: window.serverName, target: window.tmuxTarget, windowId: window.id }); navigate(window.projectId ? paths.workspace(window.projectId) : paths.root()); };
+  const panel = selected && <LinkedPanel key={selected.id} windowId={selected.id} children={findNode(tree)?.children ?? []} onWindowOrder={setWindowOrder} onEnter={childId => navigate(paths.orchestration(childId))} enabled={isMobile ? sheetOpen : open} excludedWindowIds={[selected.id, ...ancestors]} onExpand={openInTab} onOpen={window => { if (isMobile) { setFixedOrder(windowOrder); setSheetWindow(window); return; } openInTab(window); }} onProject={projectId => navigate(paths.workspace(projectId))} />;
+  useEffect(() => { const openSheet = () => { setSheetWindow(null); setSheetOpen(true); }; window.addEventListener('azito:open-linked-sheet', openSheet); return () => window.removeEventListener('azito:open-linked-sheet', openSheet); }, []);
   useEffect(() => {
     if (status !== 'ready') return;
     if (!id && windows.length && !state?.missing && snapshotStatus === 'ready') {
@@ -48,6 +69,8 @@ export default function OrchestrationPage({ rightPanel }: OrchestrationPageProps
       navigate(paths.orchestration(), { replace: true, state: { missing: true } });
     }
   }, [status, id, selected, windows, navigate, showToast, t, state, snapshotStatus, entries]);
+  const windowIndex = fixedOrder.findIndex(window => window.id === sheetWindow?.id);
+  const stepWindow = (offset: number) => { const next = fixedOrder[windowIndex + offset]; if (next) setSheetWindow(next); };
   if (status === 'loading') return <LoadingState />;
   if (status === 'error' && !windows.length) return <Notice tone="danger" action={<Button onClick={refresh}>{t('orchestration.retry')}</Button>}>{t('orchestration.loadError')}</Notice>;
   return <div style={{ display: 'flex', height: '100%', minWidth: 0 }}>
@@ -60,9 +83,11 @@ export default function OrchestrationPage({ rightPanel }: OrchestrationPageProps
     </aside>}
     <main style={{ flex: 1, minWidth: 0, display: 'flex', flexDirection: 'column' }}>
       {status === 'error' && <Notice tone="danger" action={<Button onClick={refresh}>{t('orchestration.retry')}</Button>}>{t('orchestration.loadError')}</Notice>}
+      {selected && <nav aria-label={t('orchestration.title')}>{ancestors.slice().reverse().map(ancestorId => { const ancestor = windows.find(window => window.id === ancestorId); return ancestor && <Button key={ancestorId} size="sm" onClick={() => navigate(paths.orchestration(ancestorId))}>{ancestor.label || ancestor.tmuxTarget}</Button>; })}</nav>}
       {selected ? <TerminalContainer key={selected.id} serverName={selected.serverName} target={selected.tmuxTarget} terminalRef={{ kind: 'windowId', serverName: selected.serverName, windowId: selected.id, pane: 1 }} registeredWindow={{ id: selected.id }} /> : windows.length === 0 ? <EmptyState title={t('orchestration.empty')} action={<OrchestrationCreate showButton />} /> : <EmptyState title={t('orchestration.selectWindow')} />}
       {!isMobile && !open && <RightPanelToggle open={false} onToggle={() => setOpen(true)} controls="orchestration-right-panel" buttonRef={toggleRef} />}
     </main>
-    {!isMobile && <RightPanel id="orchestration-right-panel" title={selected ? t('orchestration.connected', { count: selected.links.total }) : t('orchestration.connectedUnknown')} open={open} onOpenChange={setOpen} toggleRef={toggleRef}>{rightPanel}</RightPanel>}
+    {!isMobile && <RightPanel id="orchestration-right-panel" title={selected ? t('orchestration.connected', { count: selected.links.total }) : t('orchestration.connectedUnknown')} open={open} onOpenChange={setOpen} toggleRef={toggleRef}>{rightPanel ?? panel}</RightPanel>}
+    {isMobile && <BottomSheet open={sheetOpen} onClose={() => { setSheetOpen(false); setSheetWindow(null); }} title={t('linkedPanel.title')} detents={[{ label: t('orchestration.expand'), height: '50dvh' }, { label: t('orchestration.collapse'), height: '95dvh' }]}>{sheetWindow ? <div style={{ height: '85%', display: 'flex', flexDirection: 'column' }} onTouchStart={event => { touchStart.current = event.touches[0]?.clientX ?? null; }} onTouchEnd={event => { if (touchStart.current !== null) { const delta = event.changedTouches[0].clientX - touchStart.current; if (Math.abs(delta) > 80) stepWindow(delta < 0 ? 1 : -1); touchStart.current = null; } }}><div style={{ display: 'flex', gap: 'var(--space-2)' }}><Button onClick={() => setSheetWindow(null)}>{t('linkedPanel.back')}</Button><Button disabled={windowIndex <= 0} onClick={() => stepWindow(-1)}>{t('linkedPanel.previous')}</Button><span>{windowIndex + 1} / {fixedOrder.length}</span><Button disabled={windowIndex >= fixedOrder.length - 1} onClick={() => stepWindow(1)}>{t('linkedPanel.next')}</Button></div><TerminalContainer key={sheetWindow.id} serverName={sheetWindow.serverName} target={sheetWindow.tmuxTarget} terminalRef={{ kind: 'windowId', serverName: sheetWindow.serverName, windowId: sheetWindow.id, pane: 1 }} registeredWindow={{ id: sheetWindow.id }} /></div> : panel}</BottomSheet>}
   </div>;
 }
