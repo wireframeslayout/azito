@@ -866,7 +866,7 @@ function WorkspaceInner() {
         const window = windowById.get(windowId);
         if (window) connectPane({ kind: 'windowId', serverName: window.serverName, windowId, pane: 1 }, window.projectId);
       },
-      wakeWindow: async windowId => { const window = windowById.get(windowId); if (window) await windowActions.handleRespawnWindow(windowId, window.serverName, false, undefined, false, undefined, false); },
+      wakeWindow: async window => { await windowActions.handleRespawnWindow(window.id, window.serverName, false, undefined, false, undefined, false); },
     });
     return () => setMaximizeWorkspace(null);
   }, [tabs, focusedActiveTabId, focus.taskId, focus.windowId, resolveTabWindow, windowById, connectPane, windowActions.handleRespawnWindow, setMaximizeWorkspace]);

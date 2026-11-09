@@ -26,7 +26,7 @@ import { buildOpenTabsTree, buildLinkedTree, visibleMaximizeWindows, type Maximi
 
 export function MaximizedWindow() {
   const { t } = useTranslation('workspace');
-  const { selectedWindowId, workspace, extraWindows, rememberWindow, select, close, isMobile } = useMaximizedWindow();
+  const { selectedWindowId, workspace, extraWindows, rememberWindow, forgetWindow, select, close, isMobile } = useMaximizedWindow();
   const { allTasks, allProjects, refresh } = useWorkspaceCatalog();
   const { onOpenTask, onOpenInTerminal } = useWorkspaceTargets();
   const { windowIndicator, entries } = useAgentActivity();
@@ -37,6 +37,7 @@ export function MaximizedWindow() {
   const [narrow, setNarrow] = useState(() => globalThis.matchMedia('(max-width: 1100px)').matches);
   useEffect(() => { const query = globalThis.matchMedia('(max-width: 1100px)'); const change = (event: MediaQueryListEvent) => setNarrow(event.matches); query.addEventListener('change', change); return () => query.removeEventListener('change', change); }, []);
   const [inputFocused, setInputFocused] = useState(false);
+  const [waking, setWaking] = useState(false);
   const [linkedSource, setLinkedSource] = useState<Window | null>(null);
   const { bindings } = useHotkeyBindings();
   const previousWindowId = useRef<number | null>(null);
@@ -53,6 +54,16 @@ export function MaximizedWindow() {
   const orchestration = useOrchestrationLinks(open && source ? source.id : null);
   const findNode = (nodes: typeof orchestrators): (typeof orchestrators)[number] | undefined => { for (const node of nodes) { if (node.window.id === source?.id) return node; const found = findNode(node.children); if (found) return found; } };
   const linkedItems = resolveLinkedWindows(orchestration.links, [...(workspace?.windows.values() ?? []), ...extraWindows.values()], allTasks, allProjects, buildAttentionContext(entries, allTasks));
+  const selectedResolved = orchestration.links.find(link => link.resolvedWindowId === selectedWindowId)?.resolvedWindow;
+  const selectedLinked = selectedResolved && { ...selectedResolved, projectId: selectedResolved.projectId ?? undefined, taskId: selectedResolved.taskId ?? undefined, label: selectedResolved.label ?? undefined };
+  useEffect(() => {
+    const saved = selectedWindowId === null ? undefined : extraWindows.get(selectedWindowId);
+    if (selectedLinked && saved && (saved.sleeping !== selectedLinked.sleeping || saved.tmuxTarget !== selectedLinked.tmuxTarget)) rememberWindow(selectedLinked);
+  }, [selectedLinked, selectedWindowId, extraWindows, rememberWindow]);
+  const unavailableLink = orchestration.links.find(link => link.targetWindowId === selectedWindowId && link.resolvedWindowId === null);
+  useEffect(() => {
+    if (!orchestration.loading && !orchestration.error && unavailableLink && selectedWindowId !== null) forgetWindow(selectedWindowId);
+  }, [orchestration.loading, orchestration.error, unavailableLink, selectedWindowId, forgetWindow]);
   const linkedRows = source ? buildLinkedTree(linkedItems, findNode(orchestrators)?.children ?? []) : [];
   const visible = visibleMaximizeWindows([...rows, ...linkedRows], expanded);
   const task = window ? allTasks.find(item => item.windows?.some(w => w.id === window.id)) : undefined;
@@ -106,7 +117,7 @@ export function MaximizedWindow() {
       }
     };
     const target = findWindow(allRows);
-    if (target) rememberWindow(target);
+    if (target && !workspace?.windows.has(id)) rememberWindow(target);
     select(id);
   };
   const move = (delta: number) => {
@@ -145,7 +156,7 @@ export function MaximizedWindow() {
         </section>}
       </GlassPopoverSurface>
       <div ref={terminalRef} style={{ order: 1, flex: 1, minWidth: 0, minHeight: 0, display: 'flex', flexDirection: 'column' }}>
-        {!window ? <p role="status">{t('maximize.missing')}</p> : window.sleeping ? <div><p>{t('maximize.sleeping')}</p><Button onClick={() => { void workspace?.wakeWindow(window.id).then(refresh); }}>{t('maximize.wake')}</Button></div> : <TerminalContainer key={window.id} registeredWindow={{ id: window.id, taskId: window.taskId }} serverName={window.serverName} target={window.tmuxTarget} terminalRef={{ kind: 'windowId', serverName: window.serverName, windowId: window.id, pane: 1 }} projectId={window.projectId ?? task?.projectId} taskId={task?.id} allTasks={allTasks} />}
+        {!window ? <p role="status">{t('maximize.missing')}</p> : window.sleeping ? <div><p>{t('maximize.sleeping')}</p><Button loading={waking} disabled={!workspace} onClick={() => { if (!workspace) return; setWaking(true); void workspace.wakeWindow(window).then(() => Promise.all([refresh(), orchestration.refresh()])).finally(() => setWaking(false)); }}>{t('maximize.wake')}</Button></div> : <TerminalContainer key={window.id} registeredWindow={{ id: window.id, taskId: window.taskId }} serverName={window.serverName} target={window.tmuxTarget} terminalRef={{ kind: 'windowId', serverName: window.serverName, windowId: window.id, pane: 1 }} projectId={window.projectId ?? task?.projectId} taskId={task?.id} allTasks={allTasks} />}
       </div>
     </div>
     <footer style={{ padding: 'var(--space-2)', color: 'var(--text-dim)', fontSize: 'var(--font-sm)' }}>{t(inputFocused ? 'maximize.inputHint' : 'maximize.hint')} {bindings['maximize.open'] && ` · ${formatKeySpec(bindings['maximize.open'])}: ${t('maximize.close')}`}</footer>

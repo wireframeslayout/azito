@@ -31,3 +31,10 @@ it('preserves child orchestrator hierarchy when a link names the same child', as
   expect(rows).toHaveLength(1);
   expect(rows[0].children[0].window.id).toBe(8);
 });
+
+
+it('visits a window only once when it appears in both trees', () => {
+  const window = win(1, true);
+  const rows = [{ kind: 'window' as const, key: 'window:1', window, children: [] }, { kind: 'window' as const, key: 'linked:window:1', window, children: [] }];
+  expect(visibleMaximizeWindows(rows, new Set())).toEqual([1]);
+});

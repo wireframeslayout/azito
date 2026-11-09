@@ -14,7 +14,7 @@ vi.mock('../../hooks/useIsMobile', () => ({ useIsMobile: () => false }));
 vi.mock('../../hooks/useWorkspaceCatalog', () => ({ useWorkspaceCatalog: () => ({ allTasks: [], allProjects: [], refresh: vi.fn() }) }));
 vi.mock('../../hooks/useWorkspaceTargets', () => ({ useWorkspaceTargets: () => ({ onOpenTask: null }) }));
 vi.mock('../../hooks/useOperationLinks', () => ({ useOperationLinks: () => ({ parents: new Map(), error: false, reload: vi.fn() }) }));
-const mounts = vi.hoisted(() => ({ connect: vi.fn(), disconnect: vi.fn() }));
+const mounts = vi.hoisted(() => ({ connect: vi.fn(), disconnect: vi.fn(), wake: vi.fn(async () => {}) }));
 vi.mock('../TerminalContainer', () => ({ TerminalContainer: ({ registeredWindow }: { registeredWindow: { id: number } }) => {
   useEffect(() => { mounts.connect(registeredWindow.id); return () => mounts.disconnect(registeredWindow.id); }, [registeredWindow.id]);
   return <div className="xterm"><textarea aria-label="terminal" /></div>;
@@ -25,7 +25,7 @@ const second = { id: 2, serverName: 'host', tmuxTarget: 'two', label: 'Two' } as
 function Workspace() {
   const { setWorkspace, open } = useMaximizedWindow();
   const [showSecond, setShowSecond] = useState(true);
-  useEffect(() => { setWorkspace({ tabs: showSecond ? [{ kind: 'window', windowId: 1 }, { kind: 'window', windowId: 2 }] : [{ kind: 'window', windowId: 1 }], activeWindowId: 1, activeTabId: null, windows: new Map([[1, first], [2, second]]), openWindowTab: vi.fn(), wakeWindow: vi.fn(async () => {}) }); return () => setWorkspace(null); }, [setWorkspace, showSecond]);
+  useEffect(() => { setWorkspace({ tabs: showSecond ? [{ kind: 'window', windowId: 1 }, { kind: 'window', windowId: 2 }] : [{ kind: 'window', windowId: 1 }], activeWindowId: 1, activeTabId: null, windows: new Map(showSecond ? [[1, first], [2, second]] : [[1, first]]), openWindowTab: vi.fn(), wakeWindow: mounts.wake }); return () => setWorkspace(null); }, [setWorkspace, showSecond]);
   return <><button onClick={() => open(1)}>Launch</button><button onClick={() => open(99)}>Missing</button><button onClick={() => setShowSecond(value => !value)}>Change tabs</button><input aria-label="outside input" /></>;
 }
 describe('maximized window', () => {
@@ -126,6 +126,41 @@ describe('maximized window', () => {
     fireEvent.keyDown(screen.getByRole('dialog'), { key: 'ArrowDown', altKey: true });
     await waitFor(() => expect(mounts.connect).toHaveBeenLastCalledWith(43));
     expect(screen.queryByText('Window not found')).not.toBeInTheDocument();
+    linkedState.links = [];
+  });
+
+  it('wakes a linked window even when it is absent from the workspace catalog', async () => {
+    const linked = { ...second, id: 42, label: 'Sleeping linked', sleeping: true, projectId: null, taskId: null, role: null };
+    linkedState.links = [{ id: 10, kind: 'orchestration', unlinkedAt: null, sourceWindowId: 1, targetWindowId: 42, taskId: null, resolvedTaskId: null, resolvedWindowId: 42, resolvedWindow: linked, lastInteractionAt: null }];
+    mounts.wake.mockClear();
+    render(<HotkeyProvider><MaximizedWindowProvider><Workspace /><MaximizedWindow /></MaximizedWindowProvider></HotkeyProvider>);
+    fireEvent.click(screen.getByText('Launch'));
+    fireEvent.click(await screen.findByRole('treeitem', { name: /Sleeping linked/ }));
+    fireEvent.click(await screen.findByRole('button', { name: 'Wake window' }));
+    await waitFor(() => expect(mounts.wake).toHaveBeenCalledWith(expect.objectContaining({ id: 42, serverName: 'host' })));
+    linkedState.links = [];
+  });
+
+  it('shows a missing window after a selected registered window is deleted', async () => {
+    render(<HotkeyProvider><MaximizedWindowProvider><Workspace /><MaximizedWindow /></MaximizedWindowProvider></HotkeyProvider>);
+    fireEvent.click(screen.getByText('Launch'));
+    fireEvent.click(await screen.findByRole('treeitem', { name: /Two/ }));
+    await waitFor(() => expect(mounts.connect).toHaveBeenLastCalledWith(2));
+    fireEvent.click(screen.getByText('Change tabs'));
+    await waitFor(() => expect(screen.getByRole('dialog')).toHaveTextContent('Window not found'));
+    expect(screen.queryByLabelText('terminal')).not.toBeInTheDocument();
+  });
+
+  it('shows missing when a previously resolved linked window is deleted', async () => {
+    const link = { id: 10, kind: 'orchestration', unlinkedAt: null, sourceWindowId: 1, targetWindowId: 42, taskId: null, resolvedTaskId: null, resolvedWindowId: 42, resolvedWindow: { ...second, id: 42, label: 'Linked', projectId: null, taskId: null, role: null }, lastInteractionAt: null };
+    linkedState.links = [link];
+    render(<HotkeyProvider><MaximizedWindowProvider><Workspace /><MaximizedWindow /></MaximizedWindowProvider></HotkeyProvider>);
+    fireEvent.click(screen.getByText('Launch'));
+    fireEvent.click(await screen.findByRole('treeitem', { name: /Linked/ }));
+    await waitFor(() => expect(mounts.connect).toHaveBeenLastCalledWith(42));
+    linkedState.links = [{ ...link, resolvedWindowId: null, resolvedWindow: null }];
+    fireEvent.click(screen.getByText('Change tabs'));
+    await waitFor(() => expect(screen.getByRole('dialog')).toHaveTextContent('Window not found'));
     linkedState.links = [];
   });
 

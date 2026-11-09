@@ -66,7 +66,7 @@ export function visibleMaximizeWindows(rows: readonly MaximizeTreeRow[], expande
     else if (row.kind === 'task' && row.windowId !== null) result.push(row.windowId);
   }
   rows.forEach(visit);
-  return result;
+  return [...new Set(result)];
 }
 
 /** Linked rows have their own keys because a window may also be present in the tab tree. */
