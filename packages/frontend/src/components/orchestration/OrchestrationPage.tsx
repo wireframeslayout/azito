@@ -29,6 +29,7 @@ export default function OrchestrationPage({ rightPanel }: OrchestrationPageProps
   const { t } = useTranslation('workspace');
   const isMobile = useIsMobile();
   const { onOpenInTerminal, linkedSheetOpen: sheetOpen, setLinkedSheetOpen: setSheetOpen } = useWorkspaceTargets();
+  useEffect(() => () => setSheetOpen(false), [setSheetOpen]);
   const [sheetWindow, setSheetWindow] = useState<Window | null>(null);
   const [windowOrder, setWindowOrder] = useState<Window[]>([]);
   const [fixedOrder, setFixedOrder] = useState<Window[]>([]);
@@ -50,7 +51,7 @@ export default function OrchestrationPage({ rightPanel }: OrchestrationPageProps
   let parent = selected?.parentWindowId;
   while (parent != null && !ancestors.includes(parent)) { ancestors.push(parent); parent = windows.find(window => window.id === parent)?.parentWindowId; }
   const findNode = (nodes: typeof tree): (typeof tree)[number] | undefined => { for (const node of nodes) { if (node.window.id === selected?.id) return node; const found = findNode(node.children); if (found) return found; } return undefined; };
-  const openInTab = (window: Window) => { onOpenInTerminal?.({ serverName: window.serverName, target: window.tmuxTarget, windowId: window.id }); navigate(window.projectId ? paths.workspace(window.projectId) : paths.root()); };
+  const openInTab = (window: Window) => { setSheetOpen(false); onOpenInTerminal?.({ serverName: window.serverName, target: window.tmuxTarget, windowId: window.id }); navigate(window.projectId ? paths.workspace(window.projectId) : paths.root()); };
   const panel = selected && <LinkedPanel key={selected.id} windowId={selected.id} children={findNode(tree)?.children ?? []} onWindowOrder={setWindowOrder} onEnter={childId => navigate(paths.orchestration(childId))} enabled={isMobile ? sheetOpen : open} excludedWindowIds={[selected.id, ...ancestors]} onExpand={openInTab} onOpen={window => { if (isMobile) { setFixedOrder(windowOrder); setSheetWindow(window); return; } openInTab(window); }} onProject={projectId => navigate(paths.workspace(projectId))} />;
   useEffect(() => {
     if (status !== 'ready') return;

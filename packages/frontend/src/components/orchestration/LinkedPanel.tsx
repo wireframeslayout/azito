@@ -117,7 +117,7 @@ export function LinkedPanel({ windowId, enabled, onOpen, onExpand, onProject, ex
     {wake.dialog}
     {wakeError && <div role="alert">{t('windows.respawnFailed')}</div>}
     {error && <div role="alert">{t('linkedPanel.loadError')} <Button size="sm" onClick={() => void refresh()}>{t('linkedPanel.retry')}</Button></div>}
-    {operationError && <div role="alert">{t(operationError.kind === 'unlink' ? 'linkedPanel.unlinkError' : 'linkedPanel.addError')} {t(`linkedPanel.${operationError.code}`, { defaultValue: '' })} <Button size="sm" onClick={operationError.retry}>{t('linkedPanel.retry')}</Button></div>}
+    {operationError && !(adding && operationError.kind === 'add') && <div role="alert">{t(operationError.kind === 'unlink' ? 'linkedPanel.unlinkError' : 'linkedPanel.addError')} {t(`linkedPanel.${operationError.code}`, { defaultValue: '' })} <Button size="sm" onClick={operationError.retry}>{t('linkedPanel.retry')}</Button></div>}
     <div ref={setRoot} onFocus={() => setFocused(true)} onBlur={event => { if (!event.currentTarget.contains(event.relatedTarget)) setFocused(false); }} style={{ overflowY: 'auto', minHeight: 0 }}>
       {(loading && links.length === 0) || !projectsLoaded ? <p role="status">{t('linkedPanel.loading')}</p> : groups.length === 0 ? <p>{t(`linkedPanel.empty_${filter}`)}</p> : groups.map(group => <LinkedGroup key={group.key} title={group.label} count={group.items.length} onProject={group.key.startsWith('project:') ? () => onProject(Number(group.key.slice(8))) : undefined} projectLabel={t('orchestration.open')}>
         {group.items.map(item => {

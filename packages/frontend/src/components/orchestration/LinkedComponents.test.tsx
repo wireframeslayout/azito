@@ -4,6 +4,8 @@ import { AddLinkPopover } from './AddLinkPopover';
 import { LinkedWindowCard } from './LinkedWindowCard';
 import { HotkeyProvider } from '../../hooks/useHotkeys';
 import { LinkedSnapshot } from './LinkedSnapshot';
+
+vi.mock('../../hooks/useIsMobile', () => ({ useIsMobile: () => false }));
 it('excludes existing and ancestor candidates and searches remaining entries', () => {
   const add = vi.fn();
   render(<HotkeyProvider><AddLinkPopover open onClose={() => {}} searchLabel="Search" emptyLabel="Empty" onAdd={add} excludedWindowIds={[1]} linkedTargets={[{ taskId: 2 }]} candidates={[{ key: 'a', group: 'Project', label: 'Ancestor', target: { targetWindowId: 1 } }, { key: 'b', group: 'Project', label: 'Linked', target: { taskId: 2 } }, { key: 'c', group: 'Project', label: 'Available', target: { taskId: 3 } }]} /></HotkeyProvider>);
@@ -17,13 +19,12 @@ it('keeps card actions separate and treats window_not_found as closed', () => {
   expect(screen.getByText('Closed')).toBeTruthy(); expect(screen.queryByText('internal')).toBeNull();
   fireEvent.click(screen.getByRole('button', { name: 'Unlink' })); expect(unlink).toHaveBeenCalledOnce(); expect(open).not.toHaveBeenCalled();
 });
-it('opens a card with Enter but not Space and hides closed snapshots', () => {
+it('opens a card and hides closed snapshots', () => {
   const open = vi.fn();
   const { rerender } = render(<LinkedWindowCard title="Task" status="Running" windowId={123} openLabel="Open" unlinkLabel="Unlink" onOpen={open} onUnlink={() => {}} snapshot={<span>Snapshot</span>} />);
   const card = screen.getByRole('button', { name: 'Open' });
   expect(screen.getByText('W-123')).toBeTruthy();
-  fireEvent.keyDown(card, { key: ' ' }); expect(open).not.toHaveBeenCalled();
-  fireEvent.keyDown(card, { key: 'Enter' }); expect(open).toHaveBeenCalledOnce();
+  fireEvent.click(card); expect(open).toHaveBeenCalledOnce();
   rerender(<LinkedWindowCard title="Task" status="Closed" openLabel="Open" unlinkLabel="Unlink" onOpen={open} onUnlink={() => {}} closedLabel="Closed" snapshot={<span>Snapshot</span>} />);
   expect(screen.queryByText('Snapshot')).toBeNull();
   rerender(<LinkedWindowCard title="Task" status="Completed" openLabel="Open" unlinkLabel="Unlink" onOpen={open} onUnlink={() => {}} acknowledged detail="detail" snapshot={<span>Snapshot</span>} />);

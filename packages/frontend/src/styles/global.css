@@ -1305,7 +1305,6 @@ input[aria-invalid="true"]:focus-visible { outline-color: var(--danger) !importa
   .task-sidebar-window-toggle { min-width: calc(var(--space-6) + var(--space-5)); min-height: calc(var(--space-6) + var(--space-5)); }
 }
 
-.linked-window-card:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 
 .linked-window-card-open { background: none; border: 0; color: inherit; font: inherit; padding: 0; text-align: left; cursor: pointer; }
 .linked-window-card-open::after { content: ""; position: absolute; inset: 0; }
