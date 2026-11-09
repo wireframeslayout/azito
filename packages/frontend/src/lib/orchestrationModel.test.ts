@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { buildOrchestratorTree, countAttention, isAttentionTarget, orchestratorStatus, type AttentionContext } from './orchestrationModel';
+import { buildAttentionContext, buildOrchestratorTree, countAttention, isAttentionTarget, orchestratorStatus, type AttentionContext } from './orchestrationModel';
 import type { OrchestratorSummary, Task } from '../pages/workspace/types';
 import type { AgentActivityInfo } from '../hooks/useAgentActivity';
 
@@ -12,6 +12,15 @@ function activity(id: number, status: 'working' | 'blocked' = 'working'): AgentA
 const ctx = (activities: AgentActivityInfo[] = [], tasks: Array<{ id: number; status: string }> = []): AttentionContext => ({ activityByWindowId: new Map(activities.map((item) => [item.windowId!, item])), taskById: new Map(tasks.map((task) => [task.id, task as Task])) });
 
 describe('orchestration model', () => {
+  it('builds a context with blocked activity preferred regardless of order', () => {
+    const blocked = activity(4, 'blocked'); const working = activity(4);
+    const task = { id: 7, status: 'failed' } as Task;
+    for (const entries of [[blocked, working], [working, blocked]]) {
+      const result = buildAttentionContext(new Map(entries.map((entry, index) => [String(index), entry])), [task]);
+      expect(result.activityByWindowId.get(4)).toBe(blocked);
+      expect(result.taskById.get(7)).toBe(task);
+    }
+  });
   it('builds nested nodes and treats missing parents as roots', () => {
     const tree = buildOrchestratorTree([window(1, null), window(2, 1), window(3, 99)], ctx());
     expect(tree.map((node) => node.window.id)).toEqual([1, 3]);

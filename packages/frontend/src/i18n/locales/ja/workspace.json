@@ -4,7 +4,6 @@
     "showSidebar": "オーケストレーション一覧を展開",
     "hideSidebar": "オーケストレーション一覧を収納",
     "origin": "{{name}} はオーケストレーションに移動しました",
-    "running": "稼働中",
     "idle": "待機中",
     "sleeping": "スリープ中",
     "create": "オーケストレーターを作成",

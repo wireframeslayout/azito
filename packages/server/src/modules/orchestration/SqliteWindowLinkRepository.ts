@@ -70,7 +70,7 @@ export class SqliteWindowLinkRepository {
     return this.select(`l.source_window_id=? ${includeUnlinked ? '' : 'AND l.unlinked_at IS NULL'} ${kind ? 'AND l.kind=?' : ''}`, kind ? [source, kind] : [source]).map(r => ({
       id: r.id, sourceWindowId: r.source_window_id, targetWindowId: r.target_window_id, taskId: r.task_id,
       kind: r.kind, source: r.source, createdAt: r.created_at, lastInteractionAt: r.last_interaction_at,
-      unlinkedAt: r.unlinked_at, resolvedWindowId: r.resolved_window_id,
+      unlinkedAt: r.unlinked_at, resolvedWindowId: r.resolved_window_id, resolvedTaskId: r.resolved_task_id,
     }));
   }
   activeForOrchestrators(): Row[] {

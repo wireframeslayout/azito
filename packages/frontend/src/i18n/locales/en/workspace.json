@@ -4,7 +4,6 @@
     "showSidebar": "Expand orchestration list",
     "hideSidebar": "Collapse orchestration list",
     "origin": "{{name}} is now in orchestration",
-    "running": "Running",
     "idle": "Idle",
     "sleeping": "Sleeping",
     "create": "Create orchestrator",

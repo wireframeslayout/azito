@@ -14,6 +14,16 @@ export interface OrchestratorNode {
   attentionIds: string[] | null;
 }
 
+export function buildAttentionContext(entries: Map<string, AgentActivityInfo>, allTasks: readonly Task[]): AttentionContext {
+  const activityByWindowId = new Map<number, AgentActivityInfo>();
+  for (const entry of entries.values()) {
+    if (entry.windowId == null) continue;
+    const previous = activityByWindowId.get(entry.windowId);
+    if (!previous || entry.status === 'blocked') activityByWindowId.set(entry.windowId, entry);
+  }
+  return { activityByWindowId, taskById: new Map(allTasks.map((task) => [task.id, task])) };
+}
+
 const ATTENTION_STATUSES = new Set(['waiting_input', 'waiting_for_human', 'phase_review', 'pending_approval', 'failed']);
 export function isAttentionTarget(target: AttentionTarget, ctx: AttentionContext): boolean {
   if (target.kind === 'operation') return false;

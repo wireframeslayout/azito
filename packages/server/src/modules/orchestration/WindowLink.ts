@@ -11,6 +11,7 @@ export interface WindowLinkView {
   lastInteractionAt: string | null;
   unlinkedAt: string | null;
   resolvedWindowId: number | null;
+  resolvedTaskId: number | null;
 }
 
 export interface OrchestratorSummary extends Window {

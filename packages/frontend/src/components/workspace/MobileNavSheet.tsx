@@ -191,7 +191,7 @@ export function MobileNavSheet({
                   onSelectMode={handleSelectMode}
                   onNavigateGlobal={(path) => { if (path === paths.orchestration()) push('orchestration'); else { navigate(path); onClose(); } }}
                   onOpenActiveWindows={handleOpenActiveWindows}
-                  orchestratorCount={orchestrationAttention ?? undefined}
+                  attentionCount={orchestrationAttention ?? undefined}
                   activeWindowsCount={awCount}
                   activeWindowsBlockedCount={awBlockedCount}
                 />
