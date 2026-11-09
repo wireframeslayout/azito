@@ -66,7 +66,7 @@ describe('TmuxClient.listSessionsForSecurityGate', () => {
     const client = makeClient(async () => {
       throw new Error('fetch failed: connect ECONNREFUSED 127.0.0.1:1');
     });
-    await expect(client.listSessionsForSecurityGate(srv)).rejects.toThrow(/ECONNREFUSED/);
+    await expect(client.listSessionsForSecurityGate(srv)).rejects.toThrow(/connection refused/);
   });
 });
 

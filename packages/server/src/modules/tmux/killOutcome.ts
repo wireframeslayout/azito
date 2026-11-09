@@ -62,6 +62,6 @@ export async function resolveKillOutcome(execTmux: Promise<ExecResult>): Promise
   const alreadyGone =
     output.includes("can't find") ||
     output.includes('no such session') ||
-    output.includes('no server running');
+    (output.includes('no server running') && !output.includes('no such socket file'));
   return { success: alreadyGone, alreadyGone, result };
 }

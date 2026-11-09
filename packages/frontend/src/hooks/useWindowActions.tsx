@@ -5,6 +5,7 @@ import { useState, useCallback, useEffect } from 'react';
 import { useTranslation } from 'react-i18next';
 import { formatWindowTitleLine, resolveWindowTitle, type MuxDriverKind, type MuxRef } from '@azito/shared';
 import { api } from '../api/client';
+import { useOrchestratorRole } from './useOrchestratorRole';
 import type { ContextMenuItem } from '../components/ContextMenu';
 import type { PersistedTab } from './useTabPersistence';
 import type { Task } from '../pages/workspace/types';
@@ -48,6 +49,7 @@ export function useWindowActions(
   deps: WindowActionDeps,
 ) {
   const { t } = useTranslation('workspace');
+  const changeRole = useOrchestratorRole(refreshWorkspace);
   const wake = useWakeWindow();
   const { activityStatus } = useAgentActivity();
   const [misaoServers, setMisaoServers] = useState<Set<string> | null>(null);
@@ -264,7 +266,7 @@ export function useWindowActions(
     });
   }, [tabs, closeTab, refreshWorkspace, refreshSessions, showToast]);
 
-  const getWindowMenuItems = useCallback((w: { id: number; serverName: string; tmuxTarget: string; label?: string; labelSource?: 'auto' | 'user'; workerType?: string; windowType?: string; agentSessionId?: string; sleeping?: boolean; muxRef?: MuxRef }, extra?: WindowMenuExtra): ContextMenuItem[] => {
+  const getWindowMenuItems = useCallback((w: { id: number; serverName: string; tmuxTarget: string; ownerType?: 'project' | 'task' | 'server'; role?: 'orchestrator' | null; label?: string; labelSource?: 'auto' | 'user'; workerType?: string; windowType?: string; agentSessionId?: string; sleeping?: boolean; muxRef?: MuxRef }, extra?: WindowMenuExtra): ContextMenuItem[] => {
     const linkedTask = findTaskByTarget(w.tmuxTarget);
     const descriptors = buildWindowMenuItems({
       online: extra?.online ?? false,
@@ -296,6 +298,7 @@ export function useWindowActions(
       'delete-window': { icon: <Icon name="trash" size={16} />, run: () => void handleDeleteWindow(w.serverName, w.tmuxTarget, w.id) },
     };
     const items: ContextMenuItem[] = descriptors.map((d) => ({
+      kind: d.kind,
       label: t(d.labelKey),
       icon: actions[d.kind].icon,
       danger: d.danger,
@@ -303,12 +306,16 @@ export function useWindowActions(
       description: d.disabledReasonKey ? t(d.disabledReasonKey) : undefined,
       onClick: () => actions[d.kind].run(d),
     }));
+    if (w.windowType === 'agent' && w.ownerType !== 'task' && w.ownerType !== undefined) {
+      const role = w.role === 'orchestrator' ? null : 'orchestrator';
+      items.push({ kind: 'change-role', label: t(role ? 'orchestration.makeOrchestrator' : 'orchestration.removeRole'), onClick: () => { void changeRole(w.id, role); } });
+    }
     items.push(
       { label: '', separator: true, onClick: () => {} },
       { label: windowMenuInfo(w), disabled: true, onClick: () => {} },
     );
     return items;
-  }, [handleRenameLabel, handleRenameWindow, handleRenamePane, handleDetachWindow, handleDeleteWindow, handleDeletePane, handleRespawnWindow, handleSleepWindow, handleCapturePanes, findTaskByTarget, openTask, activityStatus, wake.choose, showToast, t, misaoServers]);
+  }, [handleRenameLabel, handleRenameWindow, handleRenamePane, handleDetachWindow, handleDeleteWindow, handleDeletePane, handleRespawnWindow, handleSleepWindow, handleCapturePanes, findTaskByTarget, openTask, activityStatus, wake.choose, showToast, t, misaoServers, changeRole]);
 
   const showWindowContextMenu = useCallback((e: React.MouseEvent, w: { id: number; serverName: string; tmuxTarget: string; label?: string; muxRef?: MuxRef }, extra?: WindowMenuExtra) => {
     showContextMenu(e, getWindowMenuItems(w, extra));

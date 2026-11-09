@@ -41,6 +41,23 @@ describe('orchestration links and roles', () => {
     expect(notify).toHaveBeenCalledWith({ type: 'orchestration:updated', payload: { windowId: 2 } });
     db.close(); bus.destroy();
   });
+  it('records only valid same-task operation links and omits stale ownership', () => {
+    const db = openDatabase(':memory:');
+    db.exec("INSERT INTO projects (id,name,slug) VALUES (1,'P','p'); INSERT INTO tasks (id,project_id,title) VALUES (1,1,'T'), (2,1,'U'); INSERT INTO windows (id,owner_type,task_id,server_name,tmux_target,is_primary) VALUES (1,'task',1,'local','s:a',1), (2,'task',1,'local','s:b',0), (3,'task',1,'local','s:c',1), (4,'task',2,'local','s:d',0)");
+    const bus = new NotificationBus();
+    const links = new OrchestrationLinkService(new SqliteWindowLinkRepository(db), new SqliteWindowRepository(db), { findById: () => undefined } as unknown as ITaskRepository, bus);
+    expect(links.add(1, { windowId: 2 }, 'manual')).toBe('not_linkable');
+    expect(links.add(1, { windowId: 4 }, 'auto')).toBe('not_linkable');
+    expect(links.add(2, { windowId: 1 }, 'auto')).toBe('not_linkable');
+    expect(links.add(1, { windowId: 3 }, 'auto')).toBe('not_linkable');
+    links.recordInteraction(1, { windowId: 2 });
+    links.recordInteraction(1, { windowId: 2 });
+    expect(links.add(3, { windowId: 2 }, 'auto')).toBe('already_nested');
+    expect(links.operationLinks([1])).toEqual([{ taskId: 1, sourceWindowId: 1, targetWindowId: 2 }]);
+    db.exec('UPDATE windows SET task_id=2 WHERE id=2');
+    expect(links.operationLinks([1, 2])).toEqual([]);
+    bus.destroy(); db.close();
+  });
   it('rolls back the role transition if unlinking fails', () => {
     const db = openDatabase(':memory:');
     db.exec("INSERT INTO projects (id,name,slug) VALUES (1,'P','p'); INSERT INTO windows (id,owner_type,server_name,tmux_target,window_type,worker_type,role,origin_project_id) VALUES (1,'server','local','s:a','agent','claude','orchestrator',1)");
@@ -77,11 +94,12 @@ describe('orchestration links and roles', () => {
     const windows = new SqliteWindowRepository(db);
     const links = new OrchestrationLinkService(new SqliteWindowLinkRepository(db), windows, { findById: () => ({ id: 1, projectId: 1, serverName: 'local' }) } as unknown as ITaskRepository, bus);
     links.recordInteraction(1, { taskId: 1 });
+    links.add(1, { windowId: 2 }, 'manual');
     const byTask = vi.spyOn(windows, 'findByTask');
     const byId = vi.spyOn(windows, 'findById');
     const all = vi.spyOn(windows, 'findAll');
-    expect(links.list(1)).toMatchObject([{ taskId: 1, resolvedWindowId: 2 }]);
-    expect(links.orchestrators()).toMatchObject([{ links: { total: 1, projectIds: [1], serverNames: ['local'] } }]);
+    expect(links.list(1)).toMatchObject([{ taskId: 1, resolvedWindowId: 2 }, { targetWindowId: 2, resolvedWindowId: 2 }]);
+    expect(links.orchestrators()).toMatchObject([{ links: { total: 1, projectIds: [1], serverNames: ['local'], targets: [{ windowId: 2, taskId: 1 }, { windowId: 2, taskId: 1 }] }, lastInteractionAt: expect.any(String) }]);
     expect(byTask).not.toHaveBeenCalled();
     expect(byId).not.toHaveBeenCalled();
     expect(all).not.toHaveBeenCalled();
@@ -90,6 +108,17 @@ describe('orchestration links and roles', () => {
     expect(notify).toHaveBeenCalledWith({ type: 'orchestration:updated', payload: { windowId: 1 } });
     db.exec('DELETE FROM tasks WHERE id=1');
     expect(links.list(1)).toHaveLength(0);
+    bus.destroy(); db.close();
+  });
+
+  it('includes a linked task without a primary window in the batch summary', () => {
+    const db = openDatabase(':memory:');
+    db.exec("INSERT INTO projects (id,name,slug) VALUES (1,'P','p'); INSERT INTO tasks (id,project_id,title) VALUES (1,1,'T'); INSERT INTO windows (id,owner_type,server_name,tmux_target,window_type,worker_type,role) VALUES (1,'server','local','s:a','agent','claude','orchestrator')");
+    const bus = new NotificationBus();
+    const windows = new SqliteWindowRepository(db);
+    const links = new OrchestrationLinkService(new SqliteWindowLinkRepository(db), windows, { findById: () => ({ id: 1 }) } as unknown as ITaskRepository, bus);
+    links.add(1, { taskId: 1 }, 'manual');
+    expect(links.orchestrators()[0].links.targets).toEqual([{ windowId: null, taskId: 1 }]);
     bus.destroy(); db.close();
   });
 

@@ -13,9 +13,10 @@ interface ModelSelectProps {
   placeholder?: string;
   note?: string;
   disabled?: boolean;
+  ariaLabel?: string;
 }
 
-export function ModelSelect({ models, value, onChange, onValidityChange, placeholder, note, disabled }: ModelSelectProps) {
+export function ModelSelect({ models, value, onChange, onValidityChange, placeholder, note, disabled, ariaLabel }: ModelSelectProps) {
   const { t } = useTranslation('common');
   const [customMode, setCustomMode] = useState(false);
   const [localCustom, setLocalCustom] = useState('');
@@ -59,7 +60,7 @@ export function ModelSelect({ models, value, onChange, onValidityChange, placeho
 
   return (
     <div>
-      <FormSelect value={selectValue} onChange={handleSelectChange} disabled={disabled}>
+      <FormSelect aria-label={ariaLabel} value={selectValue} onChange={handleSelectChange} disabled={disabled}>
         <option value="">{placeholder ?? t('labels.default')}</option>
         {models.map((m) => (
           <option key={m.id} value={m.id}>{m.label}</option>

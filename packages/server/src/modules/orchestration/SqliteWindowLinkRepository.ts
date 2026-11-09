@@ -8,7 +8,7 @@ interface Row {
   id: number; source_window_id: number; target_window_id: number | null; task_id: number | null;
   kind: WindowLinkView['kind']; source: WindowLinkView['source']; created_at: string;
   last_interaction_at: string | null; unlinked_at: string | null; resolved_window_id: number | null;
-  project_id: number | null; server_name: string | null;
+  project_id: number | null; server_name: string | null; resolved_task_id: number | null;
 }
 
 export class SqliteWindowLinkRepository {
@@ -30,6 +30,21 @@ export class SqliteWindowLinkRepository {
   }
   children(id: number): number[] { return (this.db.prepare("SELECT target_window_id AS id FROM window_links WHERE source_window_id=? AND kind='orchestration' AND unlinked_at IS NULL AND target_window_id IS NOT NULL").all(id) as Array<{ id: number }>).map(row => row.id); }
   parentOf(id: number): number | null { return (this.db.prepare("SELECT source_window_id AS id FROM window_links WHERE target_window_id=? AND kind='orchestration' AND unlinked_at IS NULL LIMIT 1").get(id) as { id: number } | undefined)?.id ?? null; }
+  operationParentOf(id: number, exceptSource: number): number | null {
+    return (this.db.prepare(`SELECT l.source_window_id AS id FROM window_links l
+      JOIN windows source ON source.id=l.source_window_id JOIN windows target ON target.id=l.target_window_id
+      WHERE l.target_window_id=? AND l.source_window_id<>? AND l.kind='operation' AND l.unlinked_at IS NULL
+      AND source.owner_type='task' AND source.is_primary=1 AND target.owner_type='task' AND target.is_primary=0
+      AND source.task_id=target.task_id LIMIT 1`).get(id, exceptSource) as { id: number } | undefined)?.id ?? null;
+  }
+  operationLinks(taskIds: number[]): Array<{ taskId: number; sourceWindowId: number; targetWindowId: number }> {
+    if (taskIds.length === 0) return [];
+    return this.db.prepare(`SELECT source.task_id AS taskId, l.source_window_id AS sourceWindowId, l.target_window_id AS targetWindowId
+      FROM window_links l JOIN windows source ON source.id=l.source_window_id JOIN windows target ON target.id=l.target_window_id
+      WHERE l.kind='operation' AND l.unlinked_at IS NULL AND source.owner_type='task' AND source.is_primary=1
+      AND target.owner_type='task' AND target.is_primary=0 AND source.task_id=target.task_id
+      AND source.task_id IN (${taskIds.map(() => '?').join(',')})`).all(...taskIds) as Array<{ taskId: number; sourceWindowId: number; targetWindowId: number }>;
+  }
   restore(id: number, kind: LinkRow['kind']): void { this.db.prepare("UPDATE window_links SET unlinked_at=NULL, source='manual', kind=? WHERE id=?").run(kind, id); }
   touch(id: number): void { this.db.prepare("UPDATE window_links SET last_interaction_at=datetime('now') WHERE id=?").run(id); }
   insert(sourceWindowId: number, subject: LinkSubject, kind: LinkRow['kind'], source: LinkRow['source']): LinkRow {
@@ -42,7 +57,7 @@ export class SqliteWindowLinkRepository {
     return row;
   }
   private select(where: string, args: unknown[]): Row[] {
-    return this.db.prepare(`SELECT l.*, COALESCE(l.target_window_id, primary_window.id) AS resolved_window_id,
+    return this.db.prepare(`SELECT l.*, COALESCE(l.target_window_id, primary_window.id) AS resolved_window_id, COALESCE(l.task_id, target.task_id) AS resolved_task_id,
       CASE WHEN l.target_window_id IS NOT NULL THEN target.project_id ELSE task.project_id END AS project_id,
       CASE WHEN l.target_window_id IS NOT NULL THEN target.server_name ELSE COALESCE(primary_window.server_name, task.server_name) END AS server_name
       FROM window_links l
@@ -55,11 +70,11 @@ export class SqliteWindowLinkRepository {
     return this.select(`l.source_window_id=? ${includeUnlinked ? '' : 'AND l.unlinked_at IS NULL'} ${kind ? 'AND l.kind=?' : ''}`, kind ? [source, kind] : [source]).map(r => ({
       id: r.id, sourceWindowId: r.source_window_id, targetWindowId: r.target_window_id, taskId: r.task_id,
       kind: r.kind, source: r.source, createdAt: r.created_at, lastInteractionAt: r.last_interaction_at,
-      unlinkedAt: r.unlinked_at, resolvedWindowId: r.resolved_window_id,
+      unlinkedAt: r.unlinked_at, resolvedWindowId: r.resolved_window_id, resolvedTaskId: r.resolved_task_id,
     }));
   }
   activeForOrchestrators(): Row[] {
-    return this.select("l.unlinked_at IS NULL AND EXISTS (SELECT 1 FROM windows source WHERE source.id=l.source_window_id AND source.role='orchestrator')", []);
+    return this.select("l.unlinked_at IS NULL AND l.kind='orchestration' AND EXISTS (SELECT 1 FROM windows source WHERE source.id=l.source_window_id AND source.role='orchestrator')", []);
   }
   incomingSources(id: number): number[] {
     return (this.db.prepare('SELECT DISTINCT source_window_id AS id FROM window_links WHERE target_window_id=? AND unlinked_at IS NULL').all(id) as Array<{ id: number }>).map(r => r.id);

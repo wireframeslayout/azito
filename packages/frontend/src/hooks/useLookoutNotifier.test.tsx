@@ -142,3 +142,9 @@ it('removes displayed task events but retains actionable alerts when Lookout ope
   expect(screen.getByRole('status')).not.toHaveTextContent('Finished');
   expect(screen.getByRole('status')).toHaveTextContent('toast.mux: Window');
 });
+it('counts a worker that did not start as a failure', () => {
+  writeLookoutNotifyInterval('immediate');
+  render(<LookoutNotifier>content</LookoutNotifier>);
+  act(() => state.handlers.onTaskStatus?.({ taskId: 7, status: 'worker_launch_failed', title: 'Launch' }));
+  expect(screen.getByRole('status')).toHaveTextContent('toast.failed: 1');
+});

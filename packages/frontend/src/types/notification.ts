@@ -56,7 +56,7 @@ export type NotificationEvent =
   | { type: 'window:mux_switch_suggested'; payload: { windowId: number; serverName: string; title?: string; taskId?: number; reason: 'ask' | 'misao_unavailable' } }
   | { type: 'server:firewall'; payload: { serverName: string; diagnosis: FirewallDiagnosis } }
   | { type: 'sessions:updated'; payload: { serverName: string } }
-  | { type: 'task:status'; payload: { taskId: number; status: string; title?: string; projectId?: number } }
+  | { type: 'task:status'; payload: { taskId: number; status: string; title?: string; projectId?: number; reason?: string } }
   | { type: 'phase:completed'; payload: { taskId: number; unitId: number; phase: string; summary: Record<string, unknown> | null } }
   | { type: 'window:created'; payload: { serverName: string; sessionName: string; windowName: string } }
   | { type: 'window:destroyed'; payload: { serverName: string; sessionName: string; windowName: string } }
@@ -65,6 +65,7 @@ export type NotificationEvent =
   | { type: 'agent:activity'; payload: AgentActivityPayload }
   | { type: 'browser:opened'; payload: BrowserOpenedPayload }
   | { type: 'supervisor:ready'; payload: { serverName: string; target: string; taskId?: number } }
+  | { type: 'orchestration:updated'; payload: { windowId: number } }
   | { type: 'subagents:updated'; payload: { windowId: number; sessionId: string } }
   | { type: 'orchestration:updated'; payload: { windowId: number } }
   | { type: 'workspace:refresh'; payload: Record<string, never> };

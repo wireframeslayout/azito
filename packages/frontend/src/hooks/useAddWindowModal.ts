@@ -91,6 +91,7 @@ export function useAddWindowModal(
   refreshSessions?: () => Promise<void>,
   onConnect?: (refOrServerName: TerminalRef | string, targetOrProjectId?: string | number, projectId?: number) => void,
   onTaskWindowAdded?: (taskId: number, serverName: string, tmuxTarget: string, label: string, activate: boolean, extra?: TaskWindowExtra & { ref?: string }) => Promise<void>,
+  destination: 'project' | 'orchestrator' = 'project',
 ) {
   const [addWindowOpen, setAddWindowOpen] = useState(false);
   const [awMode, setAwMode] = useState<'existing' | 'session' | 'new'>('existing');
@@ -179,13 +180,13 @@ export function useAddWindowModal(
     setAwTarget(''); setAwLabel(''); setAwMode('new');
     setAwSelectedSession('');
     const ps = effectiveProjectServers.find((p) => p.serverName === firstServer);
-    setAwNewSession(effectiveProject?.slug || '');
+    setAwNewSession(destination === 'orchestrator' ? 'orchestration' : effectiveProject?.slug || '');
     setAwNewWindowName(''); setAwNewCommand('');
     setAwWorkDir(ps?.workingDirectory || effectiveProject?.workingDirectory || '');
-    setAwAgent('none'); setAwAgentModel(''); setAwWorkerModels([]);
+    setAwAgent(destination === 'orchestrator' ? 'claude' : 'none'); setAwAgentModel(''); setAwWorkerModels([]);
     setAwTaskId(taskId ?? null);
     setAddWindowOpen(true);
-  }, [servers, projectServers, project, isServerOffline, setAwServer]);
+  }, [servers, projectServers, project, isServerOffline, setAwServer, destination]);
 
   /**
    * ServerGroup のクイック追加アイコン（claude/codex/terminal）用。サーバー・エージェント種別は
@@ -298,11 +299,14 @@ export function useAddWindowModal(
         const sess = findSessionByKey(awSessionData[awServer] || [], awSelectedSession);
         if (!sess) throw new Error(`session ${awSelectedSession} is not listed on ${awServer}`);
         const sessionKind = sessionKindOf(sess);
-        await api<SessionWindowRegistrationResult>(`/projects/${effectiveProjectId}/windows/session`, { method: 'POST', body: JSON.stringify({ server_name: awServer, session: sess.name, kind: sessionKind }) });
-        if (sess.windows.length > 0) {
+        const result = await api<SessionWindowRegistrationResult>(`/projects/${effectiveProjectId}/windows/session`, { method: 'POST', body: JSON.stringify({ server_name: awServer, session: sess.name, kind: sessionKind }) });
+        const skippedIds = new Set(result.skipped.map((item) => item.windowId));
+        const eligibleWindows = sess.windows.filter((window) => window.windowId === null || !skippedIds.has(window.windowId));
+        if (result.skipped.length > 0) showToast(t('addWindow.serverOwnedWindowsSkipped', { count: result.skipped.length }));
+        if (eligibleWindows.length > 0) {
           if (awTaskId != null) {
             try {
-              for (const [index, w] of sess.windows.entries()) {
+              for (const [index, w] of eligibleWindows.entries()) {
                 const reg = taskWindowRegistration({ muxKind: sessionKind, target: `${sess.name}:${w.name}`, ref: w.ref });
                 if (!reg) throw new Error(`window ref is not resolved for ${sess.name}:${w.name}`);
                 await onTaskWindowAdded?.(awTaskId, awServer, reg.target, w.name, index === 0, reg.ref ? { ref: reg.ref } : undefined);
@@ -312,7 +316,7 @@ export function useAddWindowModal(
               return;
             }
           } else {
-            const firstWin = sess.windows[0];
+            const firstWin = eligibleWindows[0];
             const firstPane = firstWin.panes[0];
             if (firstPane) {
               // The server-reported windowId / ref identifies the window for every mux kind; no tmux ref is synthesised from the target.
@@ -394,7 +398,10 @@ export function useAddWindowModal(
           windowBody['worker_model'] = awAgentModel || undefined;
           windowBody['working_directory'] = awWorkDir.trim() || undefined;
         }
-        const created = await api<{ ok: boolean; id: number }>(`/projects/${effectiveProjectId}/windows`, { method: 'POST', body: JSON.stringify(windowBody) });
+        const registrationPath = destination === 'orchestrator' ? '/windows' : `/projects/${effectiveProjectId}/windows`;
+        if (destination === 'orchestrator') windowBody['role'] = 'orchestrator';
+        const created = await api<{ ok: boolean; id: number }>(registrationPath, { method: 'POST', body: JSON.stringify(windowBody) });
+        if (!created.ok || !created.id) throw new Error('window registration failed');
         const extra = awAgent !== 'none'
           ? { windowType: 'agent' as const, workerType: awAgent === 'custom' ? 'generic' : awAgent, workerModel: awAgentModel || undefined, workingDirectory: awWorkDir.trim() || undefined }
           : undefined;
@@ -407,11 +414,8 @@ export function useAddWindowModal(
 
         if (!newWindowLaunch) {
           if (awWorkDir.trim()) {
-            if (created.id) {
-              await api(`/windows/${created.id}/panes/1/send-keys`, { method: 'POST', body: JSON.stringify({ keys: [`cd ${awWorkDir.trim()}`, 'Enter'] }) });
-            } else {
-              await api(`/servers/${encodeURIComponent(awServer)}/mux/windows/${encodeURIComponent(newRef)}/panes/1/send-keys`, { method: 'POST', body: JSON.stringify({ keys: [`cd ${awWorkDir.trim()}`, 'Enter'] }) });
-            }
+            const cdLine = `cd ${awWorkDir.trim()}`;
+            await api(`/windows/${created.id}/panes/1/send-keys`, { method: 'POST', body: JSON.stringify({ keys: [cdLine, 'Enter'] }) });
             await new Promise((r) => setTimeout(r, 500));
           }
           if (agentCmd) {
@@ -428,7 +432,7 @@ export function useAddWindowModal(
     } finally {
       setAddWindowLoading(false);
     }
-  }, [projectId, awEffectiveProjectId, awMode, awServer, awTarget, awLabel, awSelectedSession, awNewSession, awNewWindowName, awNewCommand, awWorkDir, awAgent, awAgentModel, awSessionData, muxKindModel, agentPresets, project, refreshWorkspace, refreshSessions, addWindowLoading, awTaskId, onConnect, onTaskWindowAdded, launchAgent, showToast, t, closeQuickAddWindow, withMisaoInstall, awServerInfo]);
+  }, [projectId, awEffectiveProjectId, awMode, awServer, awTarget, awLabel, awSelectedSession, awNewSession, awNewWindowName, awNewCommand, awWorkDir, awAgent, awAgentModel, awSessionData, muxKindModel, agentPresets, project, refreshWorkspace, refreshSessions, addWindowLoading, awTaskId, onConnect, onTaskWindowAdded, launchAgent, showToast, t, closeQuickAddWindow, withMisaoInstall, awServerInfo, destination]);
 
   return {
     // State

@@ -5,9 +5,11 @@ import { useTranslation } from 'react-i18next';
 import { useNavigate } from 'react-router-dom';
 import { Icon } from '../ui/Icon';
 import { ProjectAvatar } from '../ui/ProjectAvatar';
+import { OrchestrationSidebar } from '../orchestration/OrchestrationSidebar';
 import { MobileNavMenu } from './MobileNavMenu';
 import { MobileActiveWindowsPanel } from './MobileActiveWindowsPanel';
 import type { ConnectPaneFn } from '../../lib/terminalRef';
+import { useOrchestrationModel } from '../../hooks/useOrchestrationModel';
 import { useActiveWindowRows } from '../../hooks/useActiveWindowRows';
 import { paths } from '../../paths';
 import type { SidebarMode } from '../../pages/workspace/types';
@@ -19,7 +21,7 @@ interface ProjectItem {
   color?: string | null;
 }
 
-type StackEntry = 'menu' | 'mode' | 'projectSwitch';
+type StackEntry = 'menu' | 'mode' | 'projectSwitch' | 'orchestration';
 
 const MODE_TITLE_KEY: Record<SidebarMode, string> = {
   windows: 'workspace:menu.windows',
@@ -85,6 +87,7 @@ export function MobileNavSheet({
   const [stack, setStack] = useState<StackEntry[]>(['menu']);
   const [activeWindowsOpen, setActiveWindowsOpen] = useState(false);
 
+  const { attention: orchestrationAttention } = useOrchestrationModel();
   const { totalCount: awCount, blockedCount: awBlockedCount } = useActiveWindowRows(titleData);
   const currentProjectItem = allProjects.find((p) => p.id === project?.id) ?? null;
 
@@ -117,7 +120,7 @@ export function MobileNavSheet({
   const depth = stack.length;
   const headerTitle = top === 'projectSwitch'
     ? t('workspace:mobileNav.projectSwitch')
-    : top === 'mode' ? t(MODE_TITLE_KEY[sidebarMode]) : null;
+    : top === 'mode' ? t(MODE_TITLE_KEY[sidebarMode]) : top === 'orchestration' ? t('workspace:orchestration.title') : null;
 
   return (
     <>
@@ -186,12 +189,14 @@ export function MobileNavSheet({
                   onOpenProjectSwitch={() => push('projectSwitch')}
                   objectsCount={objectsCount}
                   onSelectMode={handleSelectMode}
-                  onNavigateGlobal={(path) => { navigate(path); onClose(); }}
+                  onNavigateGlobal={(path) => { if (path === paths.orchestration()) push('orchestration'); else { navigate(path); onClose(); } }}
                   onOpenActiveWindows={handleOpenActiveWindows}
+                  attentionCount={orchestrationAttention ?? undefined}
                   activeWindowsCount={awCount}
                   activeWindowsBlockedCount={awBlockedCount}
                 />
               )}
+              {top === 'orchestration' && <OrchestrationSidebar onSelect={(id) => { navigate(paths.orchestration(id)); onClose(); }} />}
               {top === 'mode' && sidebarContent}
               {top === 'projectSwitch' && (
                 <MobileProjectSwitchList

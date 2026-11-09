@@ -12,6 +12,8 @@ export interface GlobalNavItem {
  * レール（アイコンのみ、ツールチップに labelKey を使用）と SP の `MobileNavMenu`（M1 メニュー、
  * Issue #69 T1）が同じ配列を共有する（重複定義禁止）。
  */
+export const ORCHESTRATION_NAV_ITEM: GlobalNavItem = { labelKey: 'projects:sidebar.orchestration', icon: 'orchestration', path: paths.orchestration() };
+
 export const GLOBAL_NAV_ITEMS: GlobalNavItem[] = [
   { labelKey: 'projects:sidebar.servers', icon: 'servers', path: paths.servers() },
   { labelKey: 'projects:sidebar.units', icon: 'units', path: paths.units() },

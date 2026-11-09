@@ -3,6 +3,9 @@ import { TmuxClient } from './TmuxClient';
 import type { ServerConfig } from '../servers/Server';
 import type { TransportFactory } from '../servers/transport/TransportFactory';
 
+// tmux's `-e NAME=value` argument, not any `-e` inside text: generated window names such as `win--ebmp` contain one.
+const TMUX_ENV_FLAG = /(?:^|[\s"'[,])-e(?=[\s"',\]]|$)/;
+
 const srv: ServerConfig = { name: 'local', type: 'local' } as ServerConfig;
 const PUBLIC_URL = 'http://100.64.1.42:3001';
 const LOCAL_URL = 'http://127.0.0.1:3001';
@@ -70,7 +73,7 @@ describe('TmuxClient setWindowStatusFormat (post-creation decoration is best-eff
 
     await client.createWindow(srv, 'test-session', 'win');
 
-    expect(warnSpy).toHaveBeenCalledWith(expect.stringContaining('window-status-format failed'));
+    expect(warnSpy).toHaveBeenCalledWith(expect.stringContaining('Failed to set window-status-format'));
   });
 
   it('does not attempt window-status-format at all when the window name carries no id suffix (exactName)', async () => {
@@ -84,4 +87,20 @@ describe('TmuxClient setWindowStatusFormat (post-creation decoration is best-eff
 
     expect(calls.some((c) => c[0] === 'set-window-option')).toBe(false);
   });
+});
+
+it('does not log environment values from a failed tmux command', async () => {
+  const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+  try {
+    const client = makeClient(async (args) => {
+      if (args[0] === 'set-window-option') throw new Error('Command failed: tmux -e AZITO_UI_TOKEN=ui-secret -e AZITO_WEBHOOK_TOKEN=webhook-secret');
+      return { stdout: '', stderr: '', code: 0 };
+    });
+    await client.createWindow(srv, 'test-session', 'win');
+    expect(warn).toHaveBeenCalled();
+    const logged = JSON.stringify(warn.mock.calls);
+    expect(logged).not.toContain('ui-secret');
+    expect(logged).not.toContain('webhook-secret');
+    expect(logged).not.toMatch(TMUX_ENV_FLAG);
+  } finally { warn.mockRestore(); }
 });

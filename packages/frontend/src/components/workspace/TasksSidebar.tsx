@@ -3,6 +3,11 @@ import type { ActivityTitleData } from '../../lib/windowDisplay';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { Icon } from '../ui/Icon';
+import { Notice } from '../ui/Notice';
+import { useLongPress, longPressStyle } from '../../hooks/useLongPress';
+import { useGlobalFocus } from '../../hooks/useGlobalFocus';
+import { useOperationLinks } from '../../hooks/useOperationLinks';
+import { handleTreeKeyDown } from '../../hooks/useTreeKeyboard';
 import { IconButton } from '../ui/IconButton';
 import { StatusDot } from '../StatusBadge';
 import { BrailleSpinner, BlockedDot, FinishedIndicator } from '../ui/WindowActivityIndicator';
@@ -12,9 +17,25 @@ import { useRecentTasks } from '../../hooks/useRecentTasks';
 import { useBrowserGroups } from '../../hooks/useBrowserGroups';
 import { buildTaskSidebarGroups, findWindowActivity, type TaskGroupKey, type TaskSidebarGroup, type TaskSidebarRow } from './taskSidebarModel';
 import { listTaskChildren, taskChildWindowTitle, type TaskChild } from './taskSidebarChildren';
-import type { Task } from '../../pages/workspace/types';
+import type { Task, Window } from '../../pages/workspace/types';
 
 const EXPAND_STORAGE_KEY = 'tasks-sidebar-expanded';
+const WINDOW_EXPAND_STORAGE_KEY = 'tasks-sidebar-expanded-windows';
+
+type WindowExpansionByProject = Record<string, Record<string, boolean>>;
+
+function loadWindowExpanded(): WindowExpansionByProject {
+  try {
+    const value: unknown = JSON.parse(localStorage.getItem(WINDOW_EXPAND_STORAGE_KEY) || '{}');
+    if (!value || typeof value !== 'object' || Array.isArray(value)) return {};
+    const result: WindowExpansionByProject = {};
+    for (const [projectId, entries] of Object.entries(value)) {
+      if (!/^[1-9]\d*$/.test(projectId) || !entries || typeof entries !== 'object' || Array.isArray(entries)) continue;
+      result[projectId] = Object.fromEntries(Object.entries(entries).filter((entry): entry is [string, boolean] => /^[1-9]\d*$/.test(entry[0]) && typeof entry[1] === 'boolean'));
+    }
+    return result;
+  } catch { return {}; }
+}
 
 function loadExpandedIds(): Set<number> {
   try {
@@ -34,6 +55,9 @@ function saveExpandedIds(ids: Set<number>): void {
 
 interface TasksSidebarProps {
   titleData: ActivityTitleData;
+  projectId: number;
+  showWindowContextMenu?: (e: React.MouseEvent, w: Window) => void;
+  showWindowContextMenuAt?: (x: number, y: number, w: Window) => void;
   tasks: Task[];
   loading?: boolean;
   onOpenTask: (taskId: number, title: string) => void;
@@ -51,6 +75,9 @@ const GROUP_LABEL_KEYS: Record<TaskGroupKey, string> = {
 
 export default function TasksSidebar({
   titleData,
+  projectId,
+  showWindowContextMenu,
+  showWindowContextMenuAt,
   tasks,
   loading,
   onOpenTask,
@@ -61,7 +88,17 @@ export default function TasksSidebar({
 }: TasksSidebarProps) {
   const { t } = useTranslation('tasks');
   const [query, setQuery] = useState('');
+  const { focus } = useGlobalFocus();
   const [expandedIds, setExpandedIds] = useState<Set<number>>(loadExpandedIds);
+  const [expansionByProject, setExpansionByProject] = useState<WindowExpansionByProject>(loadWindowExpanded);
+  const windowExpanded = expansionByProject[projectId] ?? {};
+  const toggleWindow = (id: number, current: boolean) => setExpansionByProject(previous => {
+    const validIds = new Set(tasks.flatMap(task => (task.windows ?? []).map(window => String(window.id))));
+    const entries = Object.entries(previous[projectId] ?? {}).filter(([key]) => validIds.has(key));
+    const next = { ...previous, [projectId]: { ...Object.fromEntries(entries), [id]: !current } };
+    try { localStorage.setItem(WINDOW_EXPAND_STORAGE_KEY, JSON.stringify(next)); } catch { /* best-effort */ }
+    return next;
+  });
   const searchRef = useRef<HTMLInputElement>(null);
   const treeRef = useRef<HTMLDivElement>(null);
 
@@ -73,6 +110,9 @@ export default function TasksSidebar({
     () => buildTaskSidebarGroups(tasks, activityRows, query, openedAt),
     [tasks, activityRows, query, openedAt],
   );
+
+  const { parents, error: linksError } = useOperationLinks(loading ? [] : tasks.filter(task => task.status !== 'archived').map(task => task.id));
+
 
   const totalVisible = groups.reduce((n, g) => n + g.rows.length, 0);
   const nonArchivedCount = tasks.filter((t) => t.status !== 'archived').length;
@@ -110,58 +150,6 @@ export default function TasksSidebar({
     return () => document.removeEventListener('keydown', handleSlash);
   }, []);
 
-  function handleTreeKeyDown(e: React.KeyboardEvent) {
-    const tree = treeRef.current;
-    if (!tree) return;
-    const items = Array.from(tree.querySelectorAll<HTMLElement>('[role="treeitem"]'));
-    const idx = items.indexOf(document.activeElement as HTMLElement);
-    if (idx < 0) return;
-
-    switch (e.key) {
-      case 'ArrowDown':
-        e.preventDefault();
-        items[Math.min(idx + 1, items.length - 1)]?.focus();
-        break;
-      case 'ArrowUp':
-        e.preventDefault();
-        items[Math.max(idx - 1, 0)]?.focus();
-        break;
-      case 'ArrowRight': {
-        e.preventDefault();
-        const taskId = Number(items[idx].dataset.taskId);
-        if (taskId && !expandedIds.has(taskId)) {
-          toggleExpanded(taskId);
-        } else {
-          const next = items[idx + 1];
-          if (next) next.focus();
-        }
-        break;
-      }
-      case 'ArrowLeft': {
-        e.preventDefault();
-        const taskId = Number(items[idx].dataset.taskId);
-        if (taskId && expandedIds.has(taskId)) {
-          toggleExpanded(taskId);
-        } else {
-          const parentItem = items[idx].closest('[role="group"]')?.closest('[role="treeitem"]') as HTMLElement | null;
-          if (parentItem) parentItem.focus();
-        }
-        break;
-      }
-      case 'Enter':
-        e.preventDefault();
-        (items[idx] as HTMLElement).click();
-        break;
-      case 'Home':
-        e.preventDefault();
-        items[0]?.focus();
-        break;
-      case 'End':
-        e.preventDefault();
-        items[items.length - 1]?.focus();
-        break;
-    }
-  }
 
   const isSearching = query.trim().length > 0;
 
@@ -230,11 +218,12 @@ export default function TasksSidebar({
       </div>
 
 
+      {linksError && <Notice tone="warning">{t('sidebar.operationLinksError')}</Notice>}
       <div
         ref={treeRef}
         role="tree"
         aria-label={t('sidebar.title')}
-        onKeyDown={handleTreeKeyDown}
+        onKeyDown={e => handleTreeKeyDown(e, treeRef.current, expandedIds, toggleExpanded, toggleWindow)}
         style={{ flex: 1, overflowY: 'auto', padding: '0 4px 4px' }}
       >
         {loading ? (
@@ -254,6 +243,13 @@ export default function TasksSidebar({
               onOpenTaskWindow={onOpenTaskWindow}
               onOpenTaskBrowser={onOpenTaskBrowser}
               browserGroups={browserGroups}
+              focusedTaskId={focus.taskId}
+              focusedWindowId={focus.windowId}
+              showWindowContextMenu={showWindowContextMenu}
+              showWindowContextMenuAt={showWindowContextMenuAt}
+              parents={parents}
+              windowExpanded={windowExpanded}
+              toggleWindow={toggleWindow}
               activityRows={activityRows}
               showGroupLabel={!isSearching}
               t={t}
@@ -336,6 +332,13 @@ interface TaskGroupProps {
   onOpenTaskWindow: (taskId: number, title: string, terminal: { serverName: string; target: string }) => void;
   onOpenTaskBrowser: (taskId: number, title: string, browser: { serverName: string; groupId: string }) => void;
   browserGroups: Record<string, import('../../hooks/useBrowserGroups').BrowserGroupInfo[]>;
+  focusedTaskId: number | null;
+  focusedWindowId: number | null;
+  showWindowContextMenu?: (e: React.MouseEvent, w: Window) => void;
+  showWindowContextMenuAt?: (x: number, y: number, w: Window) => void;
+  parents: ReadonlyMap<number, number>;
+  windowExpanded: Record<string, boolean>;
+  toggleWindow: (id: number, current: boolean) => void;
   activityRows: ActiveWindowRow[];
   showGroupLabel: boolean;
   t: (key: string, opts?: Record<string, unknown>) => string;
@@ -349,6 +352,13 @@ function TaskGroup({
   onOpenTaskWindow,
   onOpenTaskBrowser,
   browserGroups,
+  focusedTaskId,
+  focusedWindowId,
+  showWindowContextMenu,
+  showWindowContextMenuAt,
+  parents,
+  windowExpanded,
+  toggleWindow,
   activityRows,
   showGroupLabel,
   t,
@@ -379,6 +389,13 @@ function TaskGroup({
           onOpenTaskWindow={onOpenTaskWindow}
           onOpenTaskBrowser={onOpenTaskBrowser}
           browserGroups={browserGroups}
+          focusedTaskId={focusedTaskId}
+          focusedWindowId={focusedWindowId}
+          showWindowContextMenu={showWindowContextMenu}
+          showWindowContextMenuAt={showWindowContextMenuAt}
+          parents={parents}
+          windowExpanded={windowExpanded}
+          toggleWindow={toggleWindow}
           activityRows={activityRows}
           t={t}
         />
@@ -395,17 +412,25 @@ interface TaskRowProps {
   onOpenTaskWindow: (taskId: number, title: string, terminal: { serverName: string; target: string }) => void;
   onOpenTaskBrowser: (taskId: number, title: string, browser: { serverName: string; groupId: string }) => void;
   browserGroups: Record<string, import('../../hooks/useBrowserGroups').BrowserGroupInfo[]>;
+  focusedTaskId: number | null;
+  focusedWindowId: number | null;
+  showWindowContextMenu?: (e: React.MouseEvent, w: Window) => void;
+  showWindowContextMenuAt?: (x: number, y: number, w: Window) => void;
+  parents: ReadonlyMap<number, number>;
+  windowExpanded: Record<string, boolean>;
+  toggleWindow: (id: number, current: boolean) => void;
   activityRows: ActiveWindowRow[];
   t: (key: string, opts?: Record<string, unknown>) => string;
 }
 
-function TaskRow({ row, expanded, toggleExpanded, onOpenTask, onOpenTaskWindow, onOpenTaskBrowser, browserGroups, activityRows, t }: TaskRowProps) {
+function TaskRow({ row, expanded, toggleExpanded, onOpenTask, onOpenTaskWindow, onOpenTaskBrowser, browserGroups, focusedTaskId, focusedWindowId, showWindowContextMenu, showWindowContextMenuAt, parents, windowExpanded, toggleWindow, activityRows, t }: TaskRowProps) {
   const { task, activity } = row;
+  const selectedWindowId = focusedTaskId === task.id ? focusedWindowId : null;
   const hasChildren = (task.windows && task.windows.length > 0) || false;
 
   const children = useMemo(
-    () => (expanded ? listTaskChildren(task, browserGroups) : []),
-    [expanded, task, browserGroups],
+    () => (expanded ? listTaskChildren(task, browserGroups, parents) : []),
+    [expanded, task, browserGroups, parents],
   );
 
   return (
@@ -485,11 +510,18 @@ function TaskRow({ row, expanded, toggleExpanded, onOpenTask, onOpenTaskWindow, 
           {children.map((child) => (
             <ChildRow
               key={childKey(child)}
+              subRows={child.kind === 'window' ? child.children.map(sub => <ChildRow key={sub.window.id} child={{ ...sub, children: [] }} isSubagent selectedWindowId={selectedWindowId} showWindowContextMenu={showWindowContextMenu} showWindowContextMenuAt={showWindowContextMenuAt} taskId={task.id} taskTitle={task.title} onOpenTaskWindow={onOpenTaskWindow} onOpenTaskBrowser={onOpenTaskBrowser} activity={findWindowActivity(activityRows, sub.window.serverName, sub.window.tmuxTarget)} activityRows={activityRows} windowExpanded={windowExpanded} toggleWindow={toggleWindow} t={t} />) : undefined}
               child={child}
               taskId={task.id}
               taskTitle={task.title}
               onOpenTaskWindow={onOpenTaskWindow}
               onOpenTaskBrowser={onOpenTaskBrowser}
+              selectedWindowId={selectedWindowId}
+              showWindowContextMenu={showWindowContextMenu}
+              showWindowContextMenuAt={showWindowContextMenuAt}
+              windowExpanded={windowExpanded}
+              toggleWindow={toggleWindow}
+              activityRows={activityRows}
               activity={child.kind === 'window' ? findWindowActivity(activityRows, child.window.serverName, child.window.tmuxTarget) : undefined}
               t={t}
             />
@@ -532,19 +564,36 @@ interface ChildRowProps {
   onOpenTaskWindow: (taskId: number, title: string, terminal: { serverName: string; target: string }) => void;
   onOpenTaskBrowser: (taskId: number, title: string, browser: { serverName: string; groupId: string }) => void;
   activity?: ActiveWindowRow;
+  activityRows: ActiveWindowRow[];
+  windowExpanded: Record<string, boolean>;
+  toggleWindow: (id: number, current: boolean) => void;
+  isSubagent?: boolean;
+  subRows?: React.ReactNode;
+  selectedWindowId?: number | null;
+  showWindowContextMenu?: (e: React.MouseEvent, w: Window) => void;
+  showWindowContextMenuAt?: (x: number, y: number, w: Window) => void;
   t: (key: string, opts?: Record<string, unknown>) => string;
 }
 
-function ChildRow({ child, taskId, taskTitle, onOpenTaskWindow, onOpenTaskBrowser, activity, t }: ChildRowProps) {
+function ChildRow({ child, taskId, taskTitle, onOpenTaskWindow, onOpenTaskBrowser, activity, activityRows, windowExpanded, toggleWindow, isSubagent, subRows, selectedWindowId, showWindowContextMenu, showWindowContextMenuAt, t }: ChildRowProps) {
+  const bindLongPress = useLongPress();
   if (child.kind === 'window') {
     const w = child.window;
     const label = taskChildWindowTitle(w, taskTitle, activity);
+    const isExpanded = windowExpanded[w.id] ?? child.children.some(c => findWindowActivity(activityRows, c.window.serverName, c.window.tmuxTarget)?.status === 'running');
     return (
+      <>
       <div
         role="treeitem"
+        data-window-id={w.id}
+        aria-selected={w.id === selectedWindowId}
+        onContextMenu={showWindowContextMenu ? e => { e.stopPropagation(); showWindowContextMenu(e, w); } : undefined}
+        {...(showWindowContextMenuAt ? bindLongPress((x, y) => showWindowContextMenuAt(x, y, w)) : {})}
+        aria-expanded={child.children.length ? isExpanded : undefined}
+        onKeyDown={e => { if (e.target === e.currentTarget && e.key === ' ' && child.children.length) { e.preventDefault(); toggleWindow(w.id, isExpanded); } }}
         tabIndex={0}
-        onClick={() => onOpenTaskWindow(taskId, taskTitle, { serverName: w.serverName, target: w.tmuxTarget })}
-        className="row-hover"
+        onClick={e => { e.stopPropagation(); onOpenTaskWindow(taskId, taskTitle, { serverName: w.serverName, target: w.tmuxTarget }); }}
+        className={`row-hover task-sidebar-child${w.id === selectedWindowId ? ' row-selected' : ''}`}
         style={{
           display: 'flex',
           alignItems: 'center',
@@ -554,19 +603,25 @@ function ChildRow({ child, taskId, taskTitle, onOpenTaskWindow, onOpenTaskBrowse
           cursor: 'pointer',
           fontSize: 'var(--font-sm)',
           color: 'var(--text)',
+          ...longPressStyle,
         }}
       >
+        {child.children.length > 0 && <button className="task-sidebar-window-toggle" type="button" tabIndex={-1} aria-hidden="true" onClick={e => { e.stopPropagation(); toggleWindow(w.id, isExpanded); }} style={{ background: 'none', border: 0, color: 'var(--text-dim)', cursor: 'pointer' }}><Icon name="chevron-right" size={14} rotate={isExpanded ? 90 : 0} /></button>}
         <Icon name="terminal" size={14} style={{ color: 'var(--text-dim)', flexShrink: 0 }} />
         <span style={{ flex: 1, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
           {label}
         </span>
         {activity && <ActivityIndicator activity={activity} />}
+        {isSubagent && <span style={{ fontSize: 'var(--font-2xs)', color: 'var(--text-dim)' }}>{t('sidebar.subagent')}</span>}
+        <span style={{ fontSize: 'var(--font-2xs)', color: 'var(--text-dim)' }}>W-{w.id}</span>
         {w.isPrimary && (
           <span style={{ fontSize: 'var(--font-2xs)', color: 'var(--text-dim)' }}>
             primary
           </span>
         )}
       </div>
+      {isExpanded && child.children.length > 0 && <div role="group" style={{ paddingLeft: 20 }}>{subRows}</div>}
+      </>
     );
   }
 
@@ -575,7 +630,7 @@ function ChildRow({ child, taskId, taskTitle, onOpenTaskWindow, onOpenTaskBrowse
       role="treeitem"
       tabIndex={0}
       onClick={() => onOpenTaskBrowser(taskId, taskTitle, { serverName: child.serverName, groupId: child.groupId })}
-      className="row-hover"
+      className="row-hover task-sidebar-child"
       style={{
         display: 'flex',
         alignItems: 'center',

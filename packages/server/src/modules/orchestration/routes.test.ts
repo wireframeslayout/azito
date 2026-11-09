@@ -28,6 +28,32 @@ describe('orchestration routes', () => {
     expect((await request('GET', '/api/orchestrators')).json()).toHaveLength(2);
     await app.close(); bus.destroy(); db.close();
   });
+  it('returns the resolved task id for both task and window links', async () => {
+    const db = openDatabase(':memory:');
+    db.exec("INSERT INTO projects (id,name,slug) VALUES (1,'P','p'); INSERT INTO tasks (id,project_id,title) VALUES (1,1,'T'); INSERT INTO windows (id,owner_type,server_name,tmux_target,window_type,worker_type,role) VALUES (1,'server','local','s:a','agent','claude','orchestrator'); INSERT INTO windows (id,owner_type,task_id,project_id,server_name,tmux_target,is_primary) VALUES (2,'task',1,1,'local','s:b',1)");
+    const windows = new SqliteWindowRepository(db); const bus = new NotificationBus();
+    const links = new OrchestrationLinkService(new SqliteWindowLinkRepository(db), windows, { findById: () => ({ id: 1 }) } as unknown as ITaskRepository, bus);
+    const app = Fastify(); await app.register(routes, { links, windows });
+    await app.inject({ method: 'POST', url: '/api/windows/1/links', payload: { targetWindowId: 2 } });
+    await app.inject({ method: 'POST', url: '/api/windows/1/links', payload: { taskId: 1 } });
+    const result = await app.inject({ url: '/api/windows/1/links' });
+    expect(result.json()).toMatchObject([{ taskId: null, resolvedWindowId: 2, resolvedTaskId: 1 }, { taskId: 1, resolvedWindowId: 2, resolvedTaskId: 1 }]);
+    await app.close(); bus.destroy(); db.close();
+  });
+  it('validates the batched operation query and requires an operator', async () => {
+    const app = Fastify();
+    app.addHook('onRequest', async request => { request.principal = { class: request.headers.authorization === 'operator' ? 'operator' : 'task' }; });
+    const operationLinks = vi.fn(() => []);
+    await app.register(routes, { links: { operationLinks } as unknown as OrchestrationLinkService, windows: {} as SqliteWindowRepository });
+    expect((await app.inject({ url: '/api/window-links?kind=operation&taskIds=1', headers: { authorization: 'task' } })).statusCode).toBe(403);
+    for (const query of ['', '?kind=operation&taskIds=', '?kind=operation&taskIds=1,x', '?kind=orchestration&taskIds=1', `?kind=operation&taskIds=${Array.from({ length: 501 }, (_, i) => i + 1).join(',')}`]) {
+      expect((await app.inject({ url: `/api/window-links${query}`, headers: { authorization: 'operator' } })).statusCode).toBe(400);
+    }
+    const response = await app.inject({ url: '/api/window-links?kind=operation&taskIds=1,2', headers: { authorization: 'operator' } });
+    expect(response.statusCode).toBe(200);
+    expect(operationLinks).toHaveBeenCalledWith([1, 2]);
+    await app.close();
+  });
   it('keeps every link route operator-only', async () => {
     const app = Fastify();
     app.addHook('onRequest', async (request, reply) => {

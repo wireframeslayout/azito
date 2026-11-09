@@ -1462,6 +1462,13 @@ describe('GET /api/servers/:name/sessions merges the muxes a server can use (#31
     await app.close();
   });
 
+  it('reports an unreachable tmux-only agent with its reason', async () => {
+    const agent = { name: 'agent-down', type: 'agent', defaultMux: 'tmux' } as ServerConfig;
+    await build(agent, { tmux: {} }, { listSessions: vi.fn(async () => { throw new AgentUnreachableError('agent-down', 'circuit_open'); }) });
+    const res = await app.inject({ method: 'GET', url: '/api/servers/agent-down/sessions?detail=1' });
+    expect(res.json()).toMatchObject({ sessions: [], listedKinds: [], unavailable: [{ kind: 'tmux', reason: 'agent_unreachable', detail: expect.stringContaining('circuit_open') }] });
+  });
+
   it('lists an agent server that has no misao (tmux-only) exactly as before, with only the kind stamp added', async () => {
     const agent = { name: 'agent1', type: 'agent', defaultMux: 'tmux' } as ServerConfig;
     const misaoList = vi.fn();
@@ -1515,6 +1522,18 @@ describe('GET /api/servers/:name/sessions merges the muxes a server can use (#31
     // The bare array form still answers with what could be listed.
     invalidateSessionCache('local3');
     expect((await app.inject({ method: 'GET', url: '/api/servers/local3/sessions' })).json()).toHaveLength(1);
+  });
+
+  it('reports all failures in detail without caching them as a successful bare listing', async () => {
+    const local = { name: 'local5', type: 'local', defaultMux: 'misao' } as ServerConfig;
+    const tmuxClient = await build(local, {
+      tmux: { listWorkspaces: vi.fn(async () => { throw new Error('tmux broke'); }) },
+      misao: { listWorkspaces: vi.fn(async () => { throw new Error('misao broke'); }) },
+    });
+    const detailed = await app.inject({ method: 'GET', url: '/api/servers/local5/sessions?detail=1' });
+    expect(detailed.json()).toMatchObject({ sessions: [], unavailable: [{ kind: 'misao' }, { kind: 'tmux' }] });
+    expect(tmuxClient.cleanupLinkedSessions).not.toHaveBeenCalled();
+    expect((await app.inject({ method: 'GET', url: '/api/servers/local5/sessions' })).statusCode).toBe(500);
   });
 
   it('fails (not an empty list) when every mux fails', async () => {

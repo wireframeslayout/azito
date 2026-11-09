@@ -17,7 +17,7 @@ function strategies(over: Partial<ISessionStrategy>): ISessionStrategyFactory {
 describe('programFor', () => {
   it('is the argv, the UI terminal size and the directory; a ~ directory is expanded against the host home because pane.open does not', async () => {
     const { files, realpath } = hostFiles();
-    expect(await programFor(commandLineLaunch('claude --x'), '~\\repo', files)).toEqual({ argv: ['claude', '--x'], cwd: 'C:\\Users\\me\\repo', cols: 120, rows: 40 });
+    expect(await programFor(commandLineLaunch('claude --x'), '~\\repo', files)).toEqual({ argv: ['claude', '--x'], env: { CLAUDE_CODE_ENABLE_PROMPT_SUGGESTION: 'false' }, cwd: 'C:\\Users\\me\\repo', cols: 120, rows: 40 });
     expect(realpath).toHaveBeenCalledTimes(1);
   });
 
@@ -39,7 +39,7 @@ describe('planNewWindowProgram', () => {
   it('gives an agent that takes a session id at launch one of its own, appended to the command, and reports it for the window row', async () => {
     const planned = await planNewWindowProgram(claude, hostFiles().files, { command: "claude --model 'opus'", workerType: 'claude', workingDirectory: 'C:\\work' });
     expect(planned.agentSessionId).toMatch(/^[0-9a-f-]{36}$/);
-    expect(planned.program).toMatchObject({ argv: ['claude', '--model', 'opus', '--session-id', planned.agentSessionId], cwd: 'C:\\work' });
+    expect(planned.program).toMatchObject({ argv: ['claude', '--model', 'opus', '--session-id', planned.agentSessionId], cwd: 'C:\\work', env: { CLAUDE_CODE_ENABLE_PROMPT_SUGGESTION: 'false' } });
   });
 
   it('keeps a session id the command already carries (a resumed one) and adds none', async () => {
@@ -71,7 +71,21 @@ describe('planNewWindowProgram', () => {
     const codex = strategies({ supportsSession: true, needsPostLaunchScan: true });
     expect(await planNewWindowProgram(codex, hostFiles().files, { command: 'codex', workerType: 'codex', workingDirectory: null })).toMatchObject({ agentSessionId: null, program: { argv: ['codex'] } });
     expect(await planNewWindowProgram(strategies({}), hostFiles().files, { command: 'my-tool --x', workerType: 'generic', workingDirectory: null })).toMatchObject({ agentSessionId: null, program: { argv: ['my-tool', '--x'] } });
+    expect((await planNewWindowProgram(codex, hostFiles().files, { command: 'codex', workerType: 'codex', workingDirectory: null })).program.env).toBeUndefined();
+    expect((await planNewWindowProgram(strategies({}), hostFiles().files, { command: 'my-tool', workerType: 'generic', workingDirectory: null })).program.env).toBeUndefined();
   });
+
+  it('does not set the Claude environment for a Codex program in a Claude-labelled request', async () => {
+    const planned = await planNewWindowProgram(strategies({}), hostFiles().files, { command: 'codex', workerType: 'claude', workingDirectory: null });
+    expect(planned.program.env).toBeUndefined();
+  });
+
+  it.each(['claude', 'C:\\tools\\claude.cmd', "'C:\\Program Files\\Claude\\claude.exe'"])(
+    'sets the Claude environment for %s even when the window is generic', async (command) => {
+      const planned = await planNewWindowProgram(strategies({}), hostFiles().files, { command, workerType: 'generic', workingDirectory: null });
+      expect(planned.program.env).toEqual({ CLAUDE_CODE_ENABLE_PROMPT_SUGGESTION: 'false' });
+    },
+  );
 
   it('refuses a command with shell syntax as unsupported_os', async () => {
     await expect(planNewWindowProgram(strategies({}), hostFiles().files, { command: 'tool | tee x', workerType: 'generic', workingDirectory: null })).rejects.toMatchObject({ code: 'unsupported_os' });

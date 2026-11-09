@@ -16,13 +16,14 @@ interface NoticeProps {
   sub?: ReactNode;
   action?: ReactNode;
   style?: CSSProperties;
+  role?: 'status' | 'alert';
 }
 
-export function Notice({ tone, children, sub, action, style }: NoticeProps) {
+export function Notice({ tone, children, sub, action, style, role = 'status' }: NoticeProps) {
   const { token, icon } = TONE_MAP[tone];
   return (
     <div
-      role="status"
+      role={role}
       style={{
         display: 'flex',
         alignItems: 'flex-start',
