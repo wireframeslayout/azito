@@ -23,3 +23,10 @@ it('resolves task primary windows and orders groups by injected status and inter
   expect(item.window).toMatchObject({ id: 8, ownerType: 'server', sleeping: true });
   expect(item.groupLabel).toBe('local');
 });
+
+it('treats tasks in review or done as completed', () => {
+  const link = (id: number, taskId: number): WindowLinkView => ({ id, taskId, lastInteractionAt: null, sourceWindowId: 9, targetWindowId: null, kind: 'orchestration', source: 'manual', createdAt: '', unlinkedAt: null, resolvedWindowId: null, resolvedTaskId: taskId, resolvedWindow: null });
+  const tasks = [{ id: 1, projectId: 1, status: 'review' }, { id: 2, projectId: 1, status: 'done' }, { id: 3, projectId: 1, status: 'running' }] as Task[];
+  const items = resolveLinkedWindows([link(1, 1), link(2, 2), link(3, 3)], [], tasks, [], buildAttentionContext(new Map(), tasks));
+  expect(items.map(item => item.status)).toEqual(['completed', 'completed', 'running']);
+});

@@ -15,6 +15,8 @@ export interface LinkedWindow {
 export interface LinkedGroup { key: string; label: string; items: LinkedWindow[] }
 
 const rank: Record<LinkedStatus, number> = { attention: 0, running: 1, completed: 2 };
+// A task that finished successfully ends in `review` (or `done` once merged); there is no `completed` task status.
+const COMPLETED_TASK_STATUSES = new Set(['review', 'done']);
 
 export function resolveLinkedWindows(links: WindowLinkView[], windows: Window[], tasks: Task[], projects: ProjectListItem[], context: AttentionContext): LinkedWindow[] {
   return links.filter(link => link.kind === 'orchestration' && link.unlinkedAt === null).map(link => {
@@ -25,7 +27,7 @@ export function resolveLinkedWindows(links: WindowLinkView[], windows: Window[],
     const projectId = task?.projectId ?? window?.projectId;
     const project = projects.find(item => item.id === projectId);
     const serverName = window?.serverName ?? task?.serverName;
-    return { link, window, task, status: isAttentionTarget({ windowId: link.resolvedWindowId, taskId: link.resolvedTaskId, kind: link.kind }, context) ? 'attention' : task && ['completed', 'done'].includes(task.status) ? 'completed' : 'running', groupKey: projectId != null ? `project:${projectId}` : `server:${serverName ?? ''}`, groupLabel: project?.name ?? (projectId != null ? String(projectId) : serverName ?? '') };
+    return { link, window, task, status: isAttentionTarget({ windowId: link.resolvedWindowId, taskId: link.resolvedTaskId, kind: link.kind }, context) ? 'attention' : task && COMPLETED_TASK_STATUSES.has(task.status) ? 'completed' : 'running', groupKey: projectId != null ? `project:${projectId}` : `server:${serverName ?? ''}`, groupLabel: project?.name ?? (projectId != null ? String(projectId) : serverName ?? '') };
   });
 }
 
