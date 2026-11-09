@@ -19,6 +19,7 @@ export function BottomSheet({ open, onClose, title, hideTitle, children, detents
   const [shouldRender, setShouldRender] = useState(open);
   const [detent, setDetent] = useState(0);
   const startY = useRef<number | null>(null);
+  const dragged = useRef(false);
 
   useEffect(() => {
     if (open && ref.current) (ref.current.querySelector<HTMLElement>('[data-initial-focus]') ?? getFocusableElements(ref.current)[0] ?? ref.current).focus();
@@ -83,10 +84,11 @@ export function BottomSheet({ open, onClose, title, hideTitle, children, detents
       >
         {detents && detents.length > 1 && (
           <button type="button" aria-label={detents[Math.min(detent, detents.length - 1)].label}
-            onClick={() => setDetent(value => (value + 1) % detents.length)}
+            onClick={() => { if (dragged.current) { dragged.current = false; return; } setDetent(value => (value + 1) % detents.length); }}
             onKeyDown={event => { if (event.key === 'ArrowUp') { event.preventDefault(); setDetent(detents.length - 1); } else if (event.key === 'ArrowDown') { event.preventDefault(); setDetent(0); } }}
-            onTouchStart={event => { startY.current = event.touches[0].clientY; }}
-            onTouchEnd={event => { if (startY.current !== null) { const delta = event.changedTouches[0].clientY - startY.current; if (Math.abs(delta) > 30) setDetent(delta < 0 ? detents.length - 1 : 0); startY.current = null; } }}
+            onPointerDown={event => { startY.current = event.clientY; dragged.current = false; event.currentTarget.setPointerCapture(event.pointerId); }}
+            onPointerUp={event => { if (startY.current !== null) { const delta = event.clientY - startY.current; if (Math.abs(delta) > 30) { dragged.current = true; setDetent(delta < 0 ? detents.length - 1 : 0); } startY.current = null; } }}
+            onPointerCancel={() => { startY.current = null; }}
             style={{ display: 'block', width: '100%', minHeight: 44, background: 'transparent', border: 0, color: 'var(--text-dim)' }}>━</button>
         )}
         {title && !hideTitle && (
