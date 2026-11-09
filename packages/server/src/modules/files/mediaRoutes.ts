@@ -16,8 +16,8 @@ export function registerMediaRoutes(app: FastifyInstance, service: MediaService)
     try { return { url: await service.issue({ kind: 'server', projectId, server: request.params.name, path: request.query.path }) }; }
     catch { return reply.status(400).send({ error: 'Unable to open media' }); }
   });
-  app.get<{ Params: { token: string } }>('/api/media/:token', async (request, reply) => {
-    const target = service.parse(request.params.token);
+  app.get<{ Params: { '*': string } }>('/api/media/*', async (request, reply) => {
+    const target = service.parse(request.params['*']);
     if (!target) return reply.status(401).send({ error: 'Unauthorized' });
     try {
       await service.validate(target);

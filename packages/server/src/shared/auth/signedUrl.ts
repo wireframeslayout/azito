@@ -11,6 +11,7 @@ export function signUrlToken(key: Buffer, scope: string, sub: string, expiresAt:
 
 /** Returns the target only when signature, scope and expiry all match. */
 export function verifyUrlToken(key: Buffer, token: string, scope: string, now: number): string | null {
+  if (token.length > 8192) return null;
   const parts = token.split('.');
   if (parts.length !== 2 || !/^[A-Za-z0-9_-]+$/.test(parts[0]) || !/^[A-Za-z0-9_-]{43}$/.test(parts[1])) return null;
   const actual = Buffer.from(parts[1], 'base64url');

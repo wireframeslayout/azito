@@ -418,8 +418,8 @@ export async function buildServer(app: FastifyInstance, wiring: Wiring, port: nu
     if (request.url.startsWith('/api/webhooks/')) return;
     if (request.url.startsWith('/api/hooks/')) return;
     if (request.url.startsWith('/api/agent-signal')) return;
-    if (request.method === 'GET' && request.routeOptions.url === '/api/media/:token') {
-      const token = (request.params as { token: string }).token;
+    if (request.method === 'GET' && request.routeOptions.url === '/api/media/*') {
+      const token = (request.params as { '*': string })['*'];
       if (mediaService.parse(token)) return;
       return reply.status(401).send({ error: 'Unauthorized' });
     }

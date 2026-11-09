@@ -25,4 +25,12 @@ describe('media routes', () => {
     expect((await app.inject({ url: '/api/media/valid', headers: { range: 'bytes=0-1,3-4' } })).statusCode).toBe(200);
     await app.close();
   });
+  it('accepts tokens longer than Fastify\'s ordinary parameter limit', async () => {
+    const app = Fastify();
+    const mock = service();
+    vi.mocked(mock.parse).mockReturnValue({ kind: 'server', server: 'local', projectId: 1, path: '/project/file.mp4' });
+    registerMediaRoutes(app, mock);
+    expect((await app.inject({ url: `/api/media/${'x'.repeat(500)}` })).statusCode).toBe(200);
+    await app.close();
+  });
 });

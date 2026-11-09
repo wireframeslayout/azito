@@ -4,6 +4,9 @@ import { Writable } from 'node:stream';
 import { redactUrlSecrets, serializeRequestForLog } from './redactUrlSecrets';
 
 describe('redactUrlSecrets', () => {
+  it('redacts a media capability in the URL path', () => {
+    expect(redactUrlSecrets('/api/media/secret.signature?x=1')).toBe('/api/media/[REDACTED]?x=1');
+  });
   it('redacts the token value and keeps other params', () => {
     expect(redactUrlSecrets('/ws?server=local&token=abc123')).toBe('/ws?server=local&token=[REDACTED]');
   });
