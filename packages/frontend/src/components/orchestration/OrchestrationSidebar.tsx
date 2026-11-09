@@ -15,7 +15,7 @@ export interface OrchestrationSidebarProps {
 export function OrchestrationSidebar({ selectedId, onSelect, onRemove }: OrchestrationSidebarProps): ReactNode {
   const { t } = useTranslation('workspace');
   const { windows, status, refresh } = useOrchestrators();
-  const { activityStatus } = useAgentActivity();
+  const { activityStatus, snapshotStatus, retrySnapshot } = useAgentActivity();
   const [search, setSearch] = useState('');
   const [closed, setClosed] = useState<Set<number>>(new Set());
   const matches = (node: OrchestrationNode): boolean => `${node.window.label ?? ''} ${node.window.tmuxTarget} ${node.window.serverName}`.toLowerCase().includes(search.toLowerCase()) || node.children.some(matches);
@@ -40,7 +40,8 @@ export function OrchestrationSidebar({ selectedId, onSelect, onRemove }: Orchest
       {expanded && node.children.length > 0 && <div role="group">{node.children.map((child) => renderNode(child, depth + 1))}</div>}
     </div>;
   };
-  if (status === 'loading') return <LoadingState />;
+  if (status === 'loading' || snapshotStatus === 'loading') return <LoadingState />;
+  if (snapshotStatus === 'error') return <div role="alert">{t('orchestration.loadError')} <button onClick={retrySnapshot}>{t('orchestration.retry')}</button></div>;
   if (status === 'error') return <div role="alert">{t('orchestration.loadError')} <button onClick={refresh}>{t('orchestration.retry')}</button></div>;
   const tree = buildOrchestrationTree(windows);
   const states: OrchestratorState[] = ['running', 'idle', 'sleeping'];

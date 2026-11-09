@@ -7,6 +7,7 @@ test('エージェント窓をオーケストレーターに変換して一覧�
   await app.goto(`${harness.baseUrl}/workspace/${project}`);
   await app.getByText(`W-${id}`, { exact: true }).first().click({ button: 'right' });
   await app.getByText('オーケストレーションに移動', { exact: true }).click();
+  await expect(app.getByRole('button', { name: /オーケストレーションに移動しました/ })).toBeVisible();
   await app.getByRole('button', { name: '開く', exact: true }).click();
   await expect(app).toHaveURL(new RegExp(`/orchestration/${id}$`));
   await expect(app.getByRole('treeitem')).toHaveCount(1);
