@@ -23,7 +23,7 @@ vi.mock('./useMisaoInstallOffer', () => ({
   useMisaoInstallOffer: () => <T,>(_serverName: string, create: () => Promise<T>) => create(),
 }));
 
-import { buildAgentCommand, buildNewWindowLaunch, isInsufficientResources } from './useAddWindowModal';
+import { buildAgentCommand, buildCdLine, buildNewWindowLaunch, isInsufficientResources } from './useAddWindowModal';
 
 describe('buildAgentCommand', () => {
   it('returns empty for "none"', () => {
@@ -69,5 +69,15 @@ describe('buildNewWindowLaunch', () => {
     expect(buildNewWindowLaunch('linux', 'claude', 'claude', '/work')).toBeUndefined();
     expect(buildNewWindowLaunch(undefined, 'claude', 'claude', '/work')).toBeUndefined();
     expect(buildNewWindowLaunch('win32', 'none', '', '')).toBeUndefined();
+  });
+});
+
+describe('buildCdLine', () => {
+  it('quotes the directory for a POSIX shell', () => {
+    expect(buildCdLine('linux', "/work/it's here")).toBe("cd -- '/work/it'\\''s here'");
+    expect(buildCdLine(undefined, '/work')).toBe("cd -- '/work'");
+  });
+  it('types a plain cmd.exe cd on Windows', () => {
+    expect(buildCdLine('win32', 'C:\\work')).toBe('cd C:\\work');
   });
 });

@@ -65,6 +65,12 @@ export function buildNewWindowLaunch(
   return { command: agentCommand, workerType: agent === 'custom' ? 'generic' : agent, ...(workDir.trim() ? { workingDirectory: workDir.trim() } : {}) };
 }
 
+/** The line typed into a new shell pane to enter `workDir`. A Windows pane is cmd.exe, which takes neither `--` nor single quotes. */
+export function buildCdLine(hostPlatform: string | undefined, workDir: string): string {
+  if (hostPlatform === 'win32') return `cd ${workDir}`;
+  return `cd -- '${workDir.replace(/'/g, "'\\''")}'`;
+}
+
 export function buildAgentCommand(
   agent: string,
   model: string,
@@ -414,10 +420,11 @@ export function useAddWindowModal(
 
         if (!newWindowLaunch) {
           if (awWorkDir.trim()) {
+            const cdLine = buildCdLine(awServerInfo?.hostProfile?.platform, awWorkDir.trim());
             if (created.id) {
-              await api(`/windows/${created.id}/panes/1/send-keys`, { method: 'POST', body: JSON.stringify({ keys: [`cd -- '${awWorkDir.trim().replace(/'/g, "'\\''")}'`, 'Enter'] }) });
+              await api(`/windows/${created.id}/panes/1/send-keys`, { method: 'POST', body: JSON.stringify({ keys: [cdLine, 'Enter'] }) });
             } else {
-              await api(`/servers/${encodeURIComponent(awServer)}/mux/windows/${encodeURIComponent(newRef)}/panes/1/send-keys`, { method: 'POST', body: JSON.stringify({ keys: [`cd -- '${awWorkDir.trim().replace(/'/g, "'\\''")}'`, 'Enter'] }) });
+              await api(`/servers/${encodeURIComponent(awServer)}/mux/windows/${encodeURIComponent(newRef)}/panes/1/send-keys`, { method: 'POST', body: JSON.stringify({ keys: [cdLine, 'Enter'] }) });
             }
             await new Promise((r) => setTimeout(r, 500));
           }
