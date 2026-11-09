@@ -1,5 +1,6 @@
 import { LookoutDrawer } from './lookout/LookoutDrawer';
 import { useLookout } from '../hooks/useLookout';
+import { useIsMobile } from '../hooks/useIsMobile';
 import { useAgentActivity } from '../hooks/useAgentActivity';
 import { useCrossProjectNavigation } from '../hooks/useCrossProjectNavigation';
 import type { LookoutItem } from '../lib/lookoutSummary';
@@ -44,6 +45,7 @@ export function StatusBar({ servers }: StatusBarProps) {
   const { t } = useTranslation('common');
   const { t: tl } = useTranslation('lookout');
   const lookout = useLookout();
+  const isMobile = useIsMobile();
   const { snapshotStatus, retrySnapshot } = useAgentActivity();
   const { openTask, openTerminal } = useCrossProjectNavigation();
   const handleOpenLookoutItem = (item: LookoutItem) => {
@@ -220,7 +222,7 @@ export function StatusBar({ servers }: StatusBarProps) {
         ))}
       </div>
 
-      <LookoutDrawer open={lookout.open} onClose={lookout.closeDrawer} sections={lookout.sections} snapshotStatus={snapshotStatus} onRetry={retrySnapshot} onOpenItem={handleOpenLookoutItem} />
+      <LookoutDrawer open={lookout.open && !isMobile} onClose={lookout.closeDrawer} sections={lookout.sections} snapshotStatus={snapshotStatus} onRetry={retrySnapshot} onOpenItem={handleOpenLookoutItem} />
 
       {openItem && (
         <div

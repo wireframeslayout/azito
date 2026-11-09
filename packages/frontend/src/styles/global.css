@@ -596,25 +596,9 @@ button:focus-within .diff-open-btn {
   outline-offset: 1px;
 }
 
-.glass-popover-item:focus-visible,
-.notification-bell-btn:focus-visible,
-.notification-row:focus-visible,
-.notification-panel-action:focus-visible {
+.glass-popover-item:focus-visible {
   outline: 2px solid var(--accent);
   outline-offset: -2px;
-}
-.notification-bell-btn:hover {
-  background: var(--selected-bg);
-  color: var(--text);
-}
-.notification-row {
-  transition: background 0.15s ease;
-}
-.notification-row:hover {
-  background: var(--selected-bg-strong);
-}
-.notification-panel-action:hover:not(:disabled) {
-  text-decoration: underline;
 }
 .glass-popover-item {
   background: transparent;
@@ -636,19 +620,6 @@ button:focus-within .diff-open-btn {
 /* ---- Terminal loading overlay (XTermView) ---- */
 .terminal-loading-overlay {
   transition: opacity 0.45s ease;
-}
-
-/* ---- Notification toast ---- */
-@keyframes azito-toast-in {
-  from { opacity: 0; transform: translateY(8px); }
-  to { opacity: 1; transform: translateY(0); }
-}
-.notification-toast {
-  animation: azito-toast-in 0.18s ease;
-  transition: box-shadow 0.15s ease;
-}
-.notification-toast:hover {
-  box-shadow: 0 16px 40px rgba(0, 0, 0, 0.55);
 }
 
 /* ---- SP ≡ メニュー: プロジェクトカード（Issue #338 T11 G1） ---- */
@@ -681,9 +652,6 @@ button:focus-within .diff-open-btn {
   .qa-bar-transition,
   .glass-popover,
   .ui-tooltip,
-  .notification-toast,
-  .notification-bell-btn,
-  .notification-row,
   .server-health-sheet,
   .terminal-loading-overlay,
   .mobile-nav-card-body {
@@ -1285,3 +1253,36 @@ input[aria-invalid="true"]:focus-visible { outline-color: var(--danger) !importa
 .lookout-row:hover { background: var(--bg-hover); }
 .lookout-row:active { background: var(--selected-bg-strong); }
 .lookout-row:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
+
+.lookout-toast {
+  position: fixed;
+  right: var(--space-4);
+  bottom: calc(var(--space-5) + env(safe-area-inset-bottom));
+  z-index: 400;
+  width: min(calc(16 * var(--space-6)), calc(100vw - 2 * var(--space-4)));
+  max-height: 50dvh;
+  overflow-y: auto;
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+  padding: var(--space-3);
+  background: var(--bg-elevated);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-3);
+  color: var(--text);
+}
+.lookout-toast-main, .lookout-toast-action, .lookout-toast-close {
+  border: 0;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: inherit;
+  cursor: pointer;
+  font: inherit;
+}
+.lookout-toast-main { display: grid; flex: 1; min-width: 0; gap: var(--space-1); text-align: left; }
+.lookout-toast-names { color: var(--text-dim); overflow-wrap: anywhere; }
+.lookout-toast-action { width: 100%; text-align: left; color: var(--accent); }
+.lookout-toast-main:hover, .lookout-toast-action:hover, .lookout-toast-close:hover { background: var(--bg-card); }
+.lookout-toast-main:focus-visible, .lookout-toast-action:focus-visible, .lookout-toast-close:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+@media (max-width: 768px) { .lookout-toast { bottom: calc(2 * var(--space-6) + var(--space-3) + env(safe-area-inset-bottom)); } }

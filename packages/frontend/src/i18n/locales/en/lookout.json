@@ -34,5 +34,14 @@
   "attentionCount": "{{count}} need attention",
   "updated": "Updated {{time}}",
   "emptyAttention": "Nothing needs your attention right now.",
-  "emptyActive": "Nothing is currently running."
+  "emptyActive": "Nothing is currently running.",
+  "toast": {
+    "attention": "{{count}} need attention",
+    "finished": "{{count}} completed",
+    "failed": "{{count}} failed",
+    "close": "Dismiss notification",
+    "task": "Task #{{id}}",
+    "mux": "Switch mux: {{name}}",
+    "firewall": "Firewall: {{name}}"
+  }
 }

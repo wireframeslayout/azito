@@ -16,7 +16,6 @@ import enWorkspace from './locales/en/workspace.json';
 import enFiles from './locales/en/files.json';
 import enStorage from './locales/en/storage.json';
 import enGit from './locales/en/git.json';
-import enNotifications from './locales/en/notifications.json';
 import enBrowser from './locales/en/browser.json';
 import enTranscript from './locales/en/transcript.json';
 
@@ -32,7 +31,6 @@ import jaWorkspace from './locales/ja/workspace.json';
 import jaFiles from './locales/ja/files.json';
 import jaStorage from './locales/ja/storage.json';
 import jaGit from './locales/ja/git.json';
-import jaNotifications from './locales/ja/notifications.json';
 import jaBrowser from './locales/ja/browser.json';
 import jaTranscript from './locales/ja/transcript.json';
 
@@ -62,7 +60,6 @@ i18n.use(initReactI18next).init({
       files: enFiles,
       storage: enStorage,
       git: enGit,
-      notifications: enNotifications,
       browser: enBrowser,
       transcript: enTranscript,
     },
@@ -80,7 +77,6 @@ i18n.use(initReactI18next).init({
       files: jaFiles,
       storage: jaStorage,
       git: jaGit,
-      notifications: jaNotifications,
       browser: jaBrowser,
       transcript: jaTranscript,
     },
