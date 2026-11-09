@@ -4,6 +4,7 @@ import { useEffect, useState } from 'react';
 import { HotkeyProvider } from '../../hooks/useHotkeys';
 import { MaximizedWindowProvider, useMaximizedWindow } from '../../hooks/useMaximizedWindow';
 import { MaximizedWindow } from './MaximizedWindow';
+import { TabBar } from '../ui/TabBar';
 import type { Window } from '../../pages/workspace/types';
 
 const orchestrationState = vi.hoisted(() => ({ tree: [] as unknown[], read: vi.fn() }));
@@ -19,14 +20,16 @@ vi.mock('../TerminalContainer', () => ({ TerminalContainer: ({ registeredWindow 
   useEffect(() => { mounts.connect(registeredWindow.id); return () => mounts.disconnect(registeredWindow.id); }, [registeredWindow.id]);
   return <div className="xterm"><textarea aria-label="terminal" /></div>;
 } }));
-beforeAll(() => { Object.defineProperty(globalThis, 'matchMedia', { configurable: true, value: () => ({ matches: false, addEventListener: vi.fn(), removeEventListener: vi.fn() }) }); });
+const media = { narrow: false };
+beforeAll(() => { HTMLElement.prototype.scrollIntoView = vi.fn(); Object.defineProperty(globalThis, 'matchMedia', { configurable: true, value: () => ({ matches: media.narrow, addEventListener: vi.fn(), removeEventListener: vi.fn() }) }); });
 const first = { id: 1, serverName: 'host', tmuxTarget: 'one', label: 'One', role: 'orchestrator' } as Window;
 const second = { id: 2, serverName: 'host', tmuxTarget: 'two', label: 'Two' } as Window;
 function Workspace() {
   const { setWorkspace, open } = useMaximizedWindow();
   const [showSecond, setShowSecond] = useState(true);
-  useEffect(() => { setWorkspace({ tabs: showSecond ? [{ kind: 'window', windowId: 1 }, { kind: 'window', windowId: 2 }] : [{ kind: 'window', windowId: 1 }], activeWindowId: 1, activeTabId: null, windows: new Map(showSecond ? [[1, first], [2, second]] : [[1, first]]), openWindowTab: vi.fn(), wakeWindow: mounts.wake }); return () => setWorkspace(null); }, [setWorkspace, showSecond]);
-  return <><button onClick={() => open(1)}>Launch</button><button onClick={() => open(99)}>Missing</button><button onClick={() => setShowSecond(value => !value)}>Change tabs</button><input aria-label="outside input" /></>;
+  const [menu, setMenu] = useState(false);
+  useEffect(() => { setWorkspace({ tabs: showSecond ? [{ kind: 'window', windowId: 1 }, { kind: 'window', windowId: 2 }] : [{ kind: 'window', windowId: 1 }], activeWindowId: 1, activeTabId: 'tab-one', windows: new Map(showSecond ? [[1, first], [2, second]] : [[1, first]]), openWindowTab: vi.fn(), wakeWindow: mounts.wake }); return () => setWorkspace(null); }, [setWorkspace, showSecond]);
+  return <><TabBar tabs={[{ id: 'tab-one', label: 'Tab one' }]} activeId="tab-one" onSelect={() => {}} onTabContextMenu={() => setMenu(true)} />{menu && <button onClick={() => { setMenu(false); open(1); }}>Expand from menu</button>}<button onClick={() => open(1)}>Launch</button><button onClick={() => open(99)}>Missing</button><button onClick={() => setShowSecond(value => !value)}>Change tabs</button><input aria-label="outside input" /></>;
 }
 describe('maximized window', () => {
   it('switches connections and returns focus to its opener', async () => {
@@ -178,6 +181,31 @@ describe('maximized window', () => {
     orchestrationState.read.mockClear();
     fireEvent.click(screen.getByText('Change tabs'));
     expect(orchestrationState.read).not.toHaveBeenCalled();
+  });
+
+  it('restores focus to a usable tab when the menu opener disappears', async () => {
+    render(<HotkeyProvider><MaximizedWindowProvider><Workspace /><MaximizedWindow /></MaximizedWindowProvider></HotkeyProvider>);
+    fireEvent.contextMenu(screen.getByText('Tab one'));
+    const menuButton = screen.getByText('Expand from menu');
+    menuButton.focus();
+    fireEvent.click(menuButton);
+    fireEvent.keyDown(screen.getByRole('dialog'), { key: 'Escape' });
+    await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument());
+    await waitFor(() => expect(document.querySelector('[data-tab-id="tab-one"]')).toHaveFocus());
+  });
+
+  it('closes only the narrow tree popup on Escape', async () => {
+    media.narrow = true;
+    render(<HotkeyProvider><MaximizedWindowProvider><Workspace /><MaximizedWindow /></MaximizedWindowProvider></HotkeyProvider>);
+    fireEvent.click(screen.getByText('Launch'));
+    const toggle = document.querySelector<HTMLButtonElement>('.maximize-tree-toggle')!;
+    await waitFor(() => expect(toggle).toHaveAttribute('aria-expanded', 'true'));
+    fireEvent.keyDown(screen.getByRole('dialog'), { key: 'Escape' });
+    await waitFor(() => expect(toggle).toHaveAttribute('aria-expanded', 'false'));
+    expect(screen.getByRole('dialog')).toBeInTheDocument();
+    fireEvent.keyDown(screen.getByRole('dialog'), { key: 'Escape' });
+    await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument());
+    media.narrow = false;
   });
 
 });

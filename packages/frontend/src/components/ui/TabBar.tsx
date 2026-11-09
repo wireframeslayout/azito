@@ -138,6 +138,10 @@ export function TabBar({ tabs, activeId, onSelect, onClose, onReorder, draggable
         <div
           key={tab.id}
           data-tab-id={tab.id}
+          tabIndex={0}
+          role="button"
+          aria-label={tab.label}
+          onKeyDown={event => { if (event.target === event.currentTarget && (event.key === 'Enter' || event.key === ' ')) { event.preventDefault(); onSelect(tab.id); } }}
           onDoubleClick={() => onTabDoubleClick?.(tab.id)}
           className={tab.className || ''}
           onMouseDown={draggable ? (e) => { if (e.button === 0) startTabDrag(tab.id, e); } : undefined}
@@ -156,6 +160,10 @@ export function TabBar({ tabs, activeId, onSelect, onClose, onReorder, draggable
       <div
         key={tab.id}
         data-tab-id={tab.id}
+        tabIndex={0}
+        role="button"
+        aria-label={tab.label}
+        onKeyDown={event => { if (event.target === event.currentTarget && (event.key === 'Enter' || event.key === ' ')) { event.preventDefault(); onSelect(tab.id); } }}
         onDoubleClick={() => onTabDoubleClick?.(tab.id)}
         className={tab.className || ''}
         onMouseDown={draggable ? (e) => { if (e.button === 0) startTabDrag(tab.id, e); } : undefined}

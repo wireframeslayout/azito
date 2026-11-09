@@ -56,7 +56,7 @@ export function handleTreeKeyDown(e: React.KeyboardEvent, tree: HTMLElement | nu
 
 /** Roving-focus tree operations for trees keyed by strings. */
 export function handleRovingTreeKeyDown(e: React.KeyboardEvent, tree: HTMLElement | null, onToggle: (key: string) => void): void {
-  if (!tree) return;
+  if (!tree || e.altKey || e.defaultPrevented) return;
   const items = Array.from(tree.querySelectorAll<HTMLElement>('[role="treeitem"]'));
   const index = items.indexOf(document.activeElement as HTMLElement);
   if (index < 0) return;

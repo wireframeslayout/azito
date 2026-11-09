@@ -10,3 +10,12 @@ it('reports a tab double click without treating a close button as one', () => {
   fireEvent.doubleClick(screen.getByText('One').parentElement!.querySelector('.icon-btn')!);
   expect(doubleClick).toHaveBeenCalledTimes(1);
 });
+
+it('allows a focused tab to be selected with the keyboard', () => {
+  const select = vi.fn();
+  render(<TabBar tabs={[{ id: 'one', label: 'One' }]} activeId="one" onSelect={select} />);
+  const tab = screen.getByRole('button', { name: 'One' });
+  tab.focus();
+  fireEvent.keyDown(tab, { key: 'Enter' });
+  expect(select).toHaveBeenCalledWith('one');
+});

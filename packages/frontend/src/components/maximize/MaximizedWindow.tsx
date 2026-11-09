@@ -43,11 +43,15 @@ function MaximizedWindowContent() {
   const { bindings } = useHotkeyBindings();
   const previousWindowId = useRef<number | null>(null);
   const treeRef = useRef<HTMLDivElement>(null);
+  const treeToggleRef = useRef<HTMLButtonElement>(null);
   const lastTreeFocus = useRef<HTMLElement | null>(null);
   const terminalRef = useRef<HTMLDivElement>(null);
   const open = selectedWindowId !== null && !isMobile;
   const fallbackFocus = Array.from(document.querySelectorAll<HTMLElement>('[data-tab-id]')).find(element => element.dataset.tabId === workspace?.activeTabId) ?? null;
-  const links = useOperationLinks(open ? allTasks.map(task => task.id) : []);
+  const tabs = workspace?.tabs ?? [];
+  const tabTaskIds = new Set(tabs.flatMap(tab => tab.kind === 'task' ? [tab.taskId] : []));
+  const tabWindowIds = new Set(tabs.flatMap(tab => tab.kind === 'window' ? [tab.windowId] : []));
+  const links = useOperationLinks(allTasks.filter(task => tabTaskIds.has(task.id) || task.windows?.some(window => tabWindowIds.has(window.id))).map(task => task.id));
   const rows = buildOpenTabsTree(workspace?.tabs ?? [], allTasks, workspace?.windows ?? new Map(), links.parents);
   const window = selectedWindowId === null ? undefined : workspace?.windows.get(selectedWindowId) ?? extraWindows.get(selectedWindowId);
   const source = window?.role === 'orchestrator' ? window : linkedSource;
@@ -73,7 +77,8 @@ function MaximizedWindowContent() {
   const knownKeys = useRef(new Set<string>());
   const treeSelection = useRef<number | null>(null);
   const allRows = [...rows, ...linkedRows];
-  const rowSignature = JSON.stringify(allRows);
+  const rowKeys = (items: readonly MaximizeTreeRowModel[]): unknown[] => items.map(row => [row.key, rowKeys(row.children)]);
+  const rowSignature = JSON.stringify(rowKeys(allRows));
   useEffect(() => {
     if (!open) { knownKeys.current = new Set(); treeSelection.current = null; return; }
     const keys = new Set<string>();
@@ -128,11 +133,11 @@ function MaximizedWindowContent() {
     selectWindow(next);
   };
   // Overlay owns its stack entry; local shortcuts are registered inside it below.
-  return <Overlay open={open} onClose={close} labelledBy="maximize-title" fallbackFocusTo={fallbackFocus} toggleAction="maximize.open" toggleWhen="always" surface="solid" maxWidth="min(1400px, 96vw)" maxHeight="96vh" style={{ width: '96vw', height: '96vh', display: 'flex', flexDirection: 'column', padding: 0 }} onPrevious={() => move(-1)} onNext={() => move(1)} shouldCloseOnEscape={event => !(event.target instanceof HTMLElement && (event.target.closest('.xterm') || event.target.closest('[data-maximize-input]')))}>
+  return <Overlay open={open} onClose={close} labelledBy="maximize-title" fallbackFocusTo={fallbackFocus} toggleAction="maximize.open" toggleWhen="always" surface="solid" maxWidth="min(1400px, 96vw)" maxHeight="96vh" style={{ width: '96vw', height: '96vh', display: 'flex', flexDirection: 'column', padding: 0 }} onPrevious={() => move(-1)} onNext={() => move(1)} shouldCloseOnEscape={event => { if (event.key === 'Escape' && narrow && treeOpen) { setTreeOpen(false); requestAnimationFrame(() => treeToggleRef.current?.focus()); return false; } return !(event.target instanceof HTMLElement && (event.target.closest('.xterm') || event.target.closest('[data-maximize-input]'))); }}>
 
     <MaximizeHeader window={window} task={task} project={project} status={status} onFocus={() => setInputFocused(false)} onOpenTask={() => { if (task) onOpenTask?.(task.id); close(); }} onOpenTab={() => { if (window) { if (workspace?.windows.has(window.id)) workspace.openWindowTab(window.id); else onOpenInTerminal?.({ serverName: window.serverName, target: window.tmuxTarget, windowId: window.id }); } close(); }} onClose={close} />
     <div onFocusCapture={event => setInputFocused(event.target instanceof HTMLElement && !!event.target.closest('.xterm, [data-maximize-input]'))} className="maximize-content" style={{ display: 'flex', flex: 1, minHeight: 0, minWidth: 0, position: 'relative' }}>
-      <button type="button" className="maximize-tree-toggle btn" aria-expanded={treeOpen} onClick={() => setTreeOpen(value => !value)}>{t('maximize.openTabs')}</button>
+      <button ref={treeToggleRef} type="button" className="maximize-tree-toggle btn" aria-expanded={treeOpen} onClick={() => setTreeOpen(value => !value)}>{t('maximize.openTabs')}</button>
       <GlassPopoverSurface open={open && narrow && treeOpen} onOutside={event => { if (!(event.target instanceof Element && event.target.closest('.maximize-tree-toggle'))) setTreeOpen(false); }} className={`maximize-tree ${treeOpen ? 'is-open' : ''}`} style={{ order: 2, overflow: 'auto', padding: 'var(--space-2)', background: 'var(--bg-elevated)' }}>
         <strong>{t('maximize.openTabs')}</strong>
         {links.error && <div role="alert">{t('maximize.linksError')} <Button size="sm" onClick={links.reload}>{t('maximize.retry')}</Button></div>}
@@ -156,6 +161,6 @@ function MaximizedWindowContent() {
       </div>
     </div>
     <footer style={{ padding: 'var(--space-2)', color: 'var(--text-dim)', fontSize: 'var(--font-sm)' }}>{t(inputFocused ? 'maximize.inputHint' : 'maximize.hint')} {bindings['maximize.open'] && ` · ${formatKeySpec(bindings['maximize.open'])}: ${t('maximize.close')}`}</footer>
-    <style>{`.maximize-tree { width: 260px; flex-shrink: 0; } .maximize-tree-toggle { display: none; } @media (max-width: 1100px) { .maximize-tree-toggle { display: block; position: absolute; top: var(--space-2); right: var(--space-2); z-index: 1; } .maximize-tree { display: none; position: absolute; z-index: 2; top: calc(var(--space-6) * 2); right: var(--space-2); width: min(260px, 90%); max-height: 70%; border: 1px solid var(--border); } .maximize-tree.is-open { display: block; } }`}</style>
+    <style>{`.maximize-tree { width: var(--orchestration-sidebar-width); flex-shrink: 0; } .maximize-tree-toggle { display: none; } @media (max-width: 1100px) { .maximize-tree-toggle { display: block; position: absolute; top: var(--space-2); right: var(--space-2); } .maximize-tree { display: none; position: absolute; top: calc(var(--space-6) * 2); right: var(--space-2); width: min(var(--orchestration-sidebar-width), 90%); max-height: 70%; border: 1px solid var(--border); } .maximize-tree.is-open { display: block; } } .maximize-tree-row:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }`}</style>
   </Overlay>;
 }

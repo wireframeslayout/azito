@@ -29,7 +29,7 @@ import { findWindowTerminalTabs } from '../lib/retargetTab';
 import { resolveActiveTabAfterPaneClose } from '../lib/paneCloseActiveTab';
 import { fetchSessionsOrUndefined } from '../lib/fetchServerSessions';
 import { useWindowActions } from '../hooks/useWindowActions';
-import { useMaximizedWindow } from '../hooks/useMaximizedWindow';
+import { useMaximizeActions } from '../hooks/useMaximizedWindow';
 import type { MaximizeTab } from '../lib/maximizeTreeModel';
 import { useAddWindowModal } from '../hooks/useAddWindowModal';
 
@@ -67,7 +67,7 @@ import { GlobalFocusProvider, useGlobalFocus } from '../hooks/useGlobalFocus';
 import { parseTerminalTabId, terminalRefDisplayLabel, type TerminalRef } from '../lib/terminalRef';
 import { resolveWindowTitle, formatWindowTitleLine, parseMuxRef, tmuxTargetFromMuxRef } from '@azito/shared';
 import { activityKey } from '../lib/finishedWindows';
-import { buildWindowIndex, misaoRefWindowTitle } from '../lib/windowDisplay';
+import { buildWindowIndex, misaoRefWindowTitle, windowMuxKind, windowTitleInput } from '../lib/windowDisplay';
 import { findTaskByTarget as findTaskByTargetLib } from '../lib/findTaskByTarget';
 import { describeUnsupportedOs, isUnsupportedOsAnswer } from '../lib/hostFeature';
 export default function Workspace() {
@@ -818,7 +818,7 @@ function WorkspaceInner() {
     refreshWorkspace();
   }, [refreshWorkspace]);
 
-  const { setWorkspace: setMaximizeWorkspace, open: openMaximized } = useMaximizedWindow();
+  const { setWorkspace: setMaximizeWorkspace, open: openMaximized } = useMaximizeActions();
   const resolveTabWindow = useCallback((tab: PersistedTab): number | null => {
     if (tab.type === 'task') return allTasks.find(task => task.id === tab.entityId)?.windows?.find(w => w.isPrimary)?.id ?? null;
     if (tab.type !== 'terminal') return null;
@@ -848,6 +848,8 @@ function WorkspaceInner() {
     },
   });
 
+  const respawnRef = useRef(windowActions.handleRespawnWindow);
+  respawnRef.current = windowActions.handleRespawnWindow;
   useEffect(() => {
     const resolvedTabs: MaximizeTab[] = [];
     for (const tab of tabs) {
@@ -867,10 +869,10 @@ function WorkspaceInner() {
         const window = windowById.get(windowId);
         if (window) connectPane({ kind: 'windowId', serverName: window.serverName, windowId, pane: 1 }, window.projectId);
       },
-      wakeWindow: async window => { await windowActions.handleRespawnWindow(window.id, { serverName: window.serverName, reconnect: 'existing' }); },
+      wakeWindow: async window => { await respawnRef.current(window.id, { serverName: window.serverName, reconnect: 'existing', offerTmuxRetry: windowMuxKind(window) === 'tmux', title: formatWindowTitleLine(resolveWindowTitle({ ...windowTitleInput(window), tmuxTarget: window.tmuxTarget })) }); },
     });
     return () => setMaximizeWorkspace(null);
-  }, [tabs, focusedActiveTabId, focus.taskId, focus.windowId, resolveTabWindow, windowById, connectPane, windowActions.handleRespawnWindow, setMaximizeWorkspace]);
+  }, [tabs, focusedActiveTabId, focus.taskId, focus.windowId, resolveTabWindow, windowById, connectPane, setMaximizeWorkspace]);
 
   const handleWindowAddedToTask = useCallback(async (
     taskId: number,

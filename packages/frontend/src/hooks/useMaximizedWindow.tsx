@@ -1,4 +1,4 @@
-import { createContext, useCallback, useContext, useEffect, useState, type ReactNode } from 'react';
+import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import { useHotkey } from './useHotkeys';
 import { useIsMobile } from './useIsMobile';
 import type { MaximizeTab } from '../lib/maximizeTreeModel';
@@ -12,19 +12,23 @@ export interface MaximizeWorkspace {
   openWindowTab: (windowId: number) => void;
   wakeWindow: (window: Window) => Promise<void>;
 }
-interface ContextValue {
-  selectedWindowId: number | null;
-  workspace: MaximizeWorkspace | null;
+interface MaximizeActions {
   setWorkspace: (workspace: MaximizeWorkspace | null) => void;
   open: (windowId: number, window?: Window) => void;
   rememberWindow: (window: Window) => void;
   forgetWindow: (id: number) => void;
-  extraWindows: ReadonlyMap<number, Window>;
   select: (windowId: number) => void;
   close: () => void;
+}
+interface MaximizeState {
+  selectedWindowId: number | null;
+  workspace: MaximizeWorkspace | null;
+  extraWindows: ReadonlyMap<number, Window>;
   isMobile: boolean;
 }
-const Context = createContext<ContextValue | null>(null);
+type ContextValue = MaximizeActions & MaximizeState;
+const ActionsContext = createContext<MaximizeActions | null>(null);
+const StateContext = createContext<MaximizeState | null>(null);
 export function MaximizedWindowProvider({ children }: { children: ReactNode }) {
   const isMobile = useIsMobile();
   const [workspace, setWorkspace] = useState<MaximizeWorkspace | null>(null);
@@ -35,7 +39,9 @@ export function MaximizedWindowProvider({ children }: { children: ReactNode }) {
     const next = new Map(previous); next.delete(id); return next;
   }), []);
   const [selectedWindowId, setSelectedWindowId] = useState<number | null>(null);
-  const open = useCallback((id: number, window?: Window) => { if (!isMobile) { if (window && !workspace?.windows.has(id)) rememberWindow(window); setSelectedWindowId(id); } }, [isMobile, rememberWindow, workspace]);
+  const current = useRef({ isMobile, workspace });
+  current.current = { isMobile, workspace };
+  const open = useCallback((id: number, window?: Window) => { if (!current.current.isMobile) { if (window && !current.current.workspace?.windows.has(id)) rememberWindow(window); setSelectedWindowId(id); } }, [rememberWindow]);
   useEffect(() => {
     if (!workspace) return;
     setExtraWindows(previous => {
@@ -46,11 +52,19 @@ export function MaximizedWindowProvider({ children }: { children: ReactNode }) {
   const close = useCallback(() => { setSelectedWindowId(null); setExtraWindows(new Map()); }, []);
   useEffect(() => { if (isMobile) close(); }, [isMobile, close]);
   useHotkey({ action: 'maximize.open', scope: 'global', when: 'always', handler: () => { if (workspace?.activeWindowId != null) open(workspace.activeWindowId); } }, !isMobile && selectedWindowId === null && workspace?.activeWindowId != null);
-  return <Context.Provider value={{ selectedWindowId, workspace, setWorkspace, open, rememberWindow, forgetWindow, extraWindows, select: setSelectedWindowId, close, isMobile }}>{children}</Context.Provider>;
+  const actions = useMemo<MaximizeActions>(() => ({ setWorkspace, open, rememberWindow, forgetWindow, select: setSelectedWindowId, close }), [open, rememberWindow, forgetWindow, close]);
+  const state = useMemo<MaximizeState>(() => ({ selectedWindowId, workspace, extraWindows, isMobile }), [selectedWindowId, workspace, extraWindows, isMobile]);
+  return <ActionsContext.Provider value={actions}><StateContext.Provider value={state}>{children}</StateContext.Provider></ActionsContext.Provider>;
 }
-export function useOptionalMaximizedWindow(): ContextValue | null { return useContext(Context); }
-export function useMaximizedWindow(): ContextValue {
-  const value = useContext(Context);
+export function useOptionalMaximizedWindow(): MaximizeActions | null { return useContext(ActionsContext); }
+export function useMaximizeActions(): MaximizeActions {
+  const value = useContext(ActionsContext);
   if (!value) throw new Error('MaximizedWindowProvider is required');
   return value;
+}
+export function useMaximizedWindow(): ContextValue {
+  const actions = useMaximizeActions();
+  const state = useContext(StateContext);
+  if (!state) throw new Error('MaximizedWindowProvider is required');
+  return { ...actions, ...state };
 }

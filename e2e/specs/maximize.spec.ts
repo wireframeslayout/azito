@@ -61,7 +61,7 @@ test('opens a linked card in the maximize dialog', async ({ app, harness }) => {
   await dialog.getByRole('button', { name: '閉じる' }).click();
   await expect(dialog).toHaveCount(0);
   await app.getByRole('treeitem', { name: 'source', exact: true }).click({ button: 'right' });
-  await app.getByRole('button', { name: '窓を拡大' }).click();
+  await app.getByRole('button', { name: '拡大して開く' }).click();
   await expect(dialog.getByRole('tree', { name: /sourceの連携中/ })).toBeVisible();
   await dialog.getByRole('treeitem', { name: /linked-target/ }).click();
   await expect(dialog.locator('header')).toContainText(`W-${target}`);
