@@ -4,9 +4,8 @@ import { useWakeWindow } from './useWakeWindow';
 import { useState, useCallback, useEffect } from 'react';
 import { useTranslation } from 'react-i18next';
 import { formatWindowTitleLine, resolveWindowTitle, type MuxDriverKind, type MuxRef } from '@azito/shared';
-import { api, apiWithStatus } from '../api/client';
-import { useNavigate } from 'react-router-dom';
-import { paths } from '../paths';
+import { api } from '../api/client';
+import { useOrchestratorRole } from './useOrchestratorRole';
 import type { ContextMenuItem } from '../components/ContextMenu';
 import type { PersistedTab } from './useTabPersistence';
 import type { Task } from '../pages/workspace/types';
@@ -50,7 +49,7 @@ export function useWindowActions(
   deps: WindowActionDeps,
 ) {
   const { t } = useTranslation('workspace');
-  const navigate = useNavigate();
+  const changeRole = useOrchestratorRole(refreshWorkspace);
   const wake = useWakeWindow();
   const { activityStatus } = useAgentActivity();
   const [misaoServers, setMisaoServers] = useState<Set<string> | null>(null);
@@ -308,28 +307,14 @@ export function useWindowActions(
     }));
     if (w.windowType === 'agent' && w.ownerType !== 'task' && w.ownerType !== undefined) {
       const role = w.role === 'orchestrator' ? null : 'orchestrator';
-      const changeRole = async (nextRole: 'orchestrator' | null): Promise<void> => {
-        try {
-          const response = await apiWithStatus(`/windows/${w.id}/role`, { method: 'PUT', body: JSON.stringify({ role: nextRole }) });
-          if (response.status !== 200) throw new Error('role change failed');
-          refreshWorkspace();
-          if (nextRole) window.dispatchEvent(new Event('orchestration:moved'));
-          showToast(t(nextRole ? 'orchestration.moved' : 'orchestration.restored'), [
-            ...(nextRole ? [{ label: t('orchestration.open'), onClick: () => navigate(paths.orchestration(w.id)) }] : []),
-            { label: t('orchestration.undo'), onClick: () => { void changeRole(nextRole ? null : 'orchestrator'); } },
-          ]);
-        } catch {
-          showToast(t('orchestration.roleError'));
-        }
-      };
-      items.push({ label: t(role ? 'orchestration.makeOrchestrator' : 'orchestration.removeRole'), onClick: () => { void changeRole(role); } });
+      items.push({ label: t(role ? 'orchestration.makeOrchestrator' : 'orchestration.removeRole'), onClick: () => { void changeRole(w.id, role); } });
     }
     items.push(
       { label: '', separator: true, onClick: () => {} },
       { label: windowMenuInfo(w), disabled: true, onClick: () => {} },
     );
     return items;
-  }, [handleRenameLabel, handleRenameWindow, handleRenamePane, handleDetachWindow, handleDeleteWindow, handleDeletePane, handleRespawnWindow, handleSleepWindow, handleCapturePanes, findTaskByTarget, openTask, activityStatus, wake.choose, showToast, t, misaoServers, refreshWorkspace, navigate]);
+  }, [handleRenameLabel, handleRenameWindow, handleRenamePane, handleDetachWindow, handleDeleteWindow, handleDeletePane, handleRespawnWindow, handleSleepWindow, handleCapturePanes, findTaskByTarget, openTask, activityStatus, wake.choose, showToast, t, misaoServers, changeRole]);
 
   const showWindowContextMenu = useCallback((e: React.MouseEvent, w: { id: number; serverName: string; tmuxTarget: string; label?: string; muxRef?: MuxRef }, extra?: WindowMenuExtra) => {
     showContextMenu(e, getWindowMenuItems(w, extra));
