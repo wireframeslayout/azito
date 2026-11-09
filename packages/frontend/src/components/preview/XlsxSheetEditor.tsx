@@ -105,6 +105,7 @@ export function XlsxSheetEditor({ backend, path, onDirtyChange }: Props) {
     </div>
     <ConfirmDialog open={confirm} title={t('office.edit')} message={`${t('office.formatWarning')} ${losses.map((loss) => t(`office.loss.${loss}`)).join(', ')}`} confirmLabel={t('office.edit')} confirmVariant="primary" onConfirm={() => { if (workbook.current) setSheets(workbook.current.getAllSheets().map((sheet) => ({ ...sheet, celldata: sheet.data?.flatMap((row, r) => row.flatMap((cell, c) => cell ? [{ r, c, v: cell }] : [])) }))); baseline.current = null; setEditing(true); setConfirm(false); }} onCancel={() => setConfirm(false)} />
     {document.conflict !== undefined && <div role="alert">{t('office.conflict')} <Button onClick={() => void document.reload()}>{t('office.reload')}</Button><Button disabled={truncated || oversized} onClick={() => void save(true)}>{t('office.overwrite')}</Button></div>}
+    {/* Fortune-sheet assumes a white surface; theme tokens would invert it in light themes. */}
     {sheets && <div className="xlsx-workbook" style={{ flex: 1, minHeight: '40vh' }}><style>{`@scope (.xlsx-workbook) { ${fortuneStyles} .fortune-container { color: #222; background: #fff; } }`}</style><Workbook key={`${key}-${editing}`} ref={workbook} data={sheets} allowEdit={editing && !isMobile && !exporting} onChange={onWorkbookChange} /></div>}
   </section>;
 }
