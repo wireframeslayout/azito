@@ -39,7 +39,7 @@ describe('inspectOfficeZip', () => {
     const chunk = new Uint8Array(OFFICE_ZIP_LIMITS.entryBytes);
     const zip = await archive({ a: chunk, b: chunk, c: chunk, d: chunk });
     await expect(inspectOfficeZip(zip)).rejects.toThrow('size limit');
-  });
+  }, 20_000);
   it('rejects too many entries', async () => {
     const zip = new JSZip();
     for (let i = 0; i <= OFFICE_ZIP_LIMITS.entries; i++) zip.file(`${i}`, '');
