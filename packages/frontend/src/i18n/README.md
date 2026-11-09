@@ -15,7 +15,6 @@
 | workspace | Workspace / terminal area |
 | files | File browser |
 | git | Git / branch / PR related |
-| notifications | Notification center, push notification |
 | browser | CDP browser feature |
 
 ## Key Naming

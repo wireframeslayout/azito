@@ -7,7 +7,7 @@ import ProjectSidebar from './ProjectSidebar';
 import { WorkspaceTargetsProvider } from '../hooks/useWorkspaceTargets';
 import { AgentActivityProvider } from '../hooks/useAgentActivity';
 import { LookoutProvider } from '../hooks/useLookout';
-import { NotificationCenterProvider } from '../hooks/useNotificationCenter';
+import { LookoutNotifier } from '../hooks/useLookoutNotifier';
 import { ToastProvider } from '../hooks/useToast';
 import { ConfirmProvider } from '../hooks/useConfirm';
 import { HotkeyProvider } from '../hooks/useHotkeys';
@@ -45,7 +45,7 @@ export default function Layout() {
     <CrossProjectNavigationProvider>
       <AgentActivityProvider>
       <LookoutProvider>
-      <NotificationCenterProvider>
+      <LookoutNotifier>
       <GlobalSearchProvider>
       <ServerResourcesProvider servers={servers}>
       <ServerStatusProvider>
@@ -113,7 +113,7 @@ export default function Layout() {
       </ServerStatusProvider>
       </ServerResourcesProvider>
       </GlobalSearchProvider>
-      </NotificationCenterProvider>
+      </LookoutNotifier>
       </LookoutProvider>
       </AgentActivityProvider>
     </CrossProjectNavigationProvider>

@@ -1,4 +1,4 @@
-import { useMemo, useRef, useState, type CSSProperties } from 'react';
+import { useEffect, useMemo, useRef, useState, type CSSProperties } from 'react';
 import { useTranslation } from 'react-i18next';
 import type { ActiveWindowRow } from '../../hooks/useActiveWindowRows';
 import { useClickOutside } from '../../hooks/useClickOutside';
@@ -74,8 +74,7 @@ const rowTitleStyle: CSSProperties = {
 export function MobileStatusBar({ openTask, connectPane }: MobileStatusBarProps) {
   const openTerminal = useOpenTerminalTarget(connectPane);
   const { t } = useTranslation(['workspace', 'common', 'lookout']);
-  const { sections, rows, historyCount } = useLookout();
-  const [open, setOpen] = useState(false);
+  const { sections, rows, historyCount, open, openDrawer, closeDrawer } = useLookout();
   const { markFinishedSeen, dismissFinished, clearSeenFinished, retention } = useAgentActivity();
   const [historyOpen, setHistoryOpen] = useState(false);
   const [healthOpen, setHealthOpen] = useState(false);
@@ -86,7 +85,7 @@ export function MobileStatusBar({ openTask, connectPane }: MobileStatusBarProps)
       if (current) markFinishedSeen(current.serverName, current.target, current.windowId);
     }
     openedUnread.current = [];
-    setOpen(false);
+    closeDrawer();
   };
   const containerRef = useClickOutside<HTMLDivElement>(() => { if (open) closePanel(); });
 
@@ -110,12 +109,15 @@ export function MobileStatusBar({ openTask, connectPane }: MobileStatusBarProps)
 
   const workingCount = workingGroups.filter((group) => group.activeWindows > 0).length;
 
+  useEffect(() => {
+    if (open) openedUnread.current = unreadRows;
+  }, [open]);
+
   const handleToggle = () => {
     if (open) {
       closePanel();
     } else {
-      openedUnread.current = unreadRows;
-      setOpen(true);
+      openDrawer();
     }
   };
 

@@ -41,5 +41,15 @@
   "attentionCount": "要対応 {{count}} 件",
   "updated": "更新 {{time}}",
   "emptyAttention": "いま対応が要るものはありません",
-  "emptyActive": "現在稼働中のものはありません。"
+  "emptyActive": "現在稼働中のものはありません。",
+  "toast": {
+    "attention": "要対応 {{count}} 件",
+    "finished": "完了 {{count}} 件",
+    "failed": "失敗 {{count}} 件",
+    "close": "通知を閉じる",
+    "task": "タスク #{{id}}",
+    "mux": "{{serverName}} の {{name}} を tmux で起こしました。メニューから misao に切り替えられます。",
+    "muxUnavailable": "{{serverName}} で misao を利用できないため、{{name}} を tmux で起こしました。",
+    "firewall": "ファイアウォール: {{name}}"
+  }
 }

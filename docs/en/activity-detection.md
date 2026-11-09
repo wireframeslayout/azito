@@ -437,7 +437,7 @@ Without navigating to Settings, the panel opens as a floating dropdown from the 
 | Dot | No non-offline rows → off / any row decided by an event-driven tier (`tier0_supervisor` / `tier1_hook`) → accent / otherwise (fallback tiers only) → dimmed |
 | Polling | 3s while open, 30s while closed |
 | Contents | A compact view. Offline rows are hidden and only their count is shown in the footer; "show all →" links to the full table in Settings |
-| Row click | Opens the corresponding task / terminal. It uses the notification center's navigation-aware opener, so it works from a global page outside the workspace as well (each row carries `projectId`) |
+| Row click | Opens the corresponding task / terminal. It uses cross-project navigation (`useCrossProjectNavigation`), so it works from a global page outside the workspace as well (each row carries `projectId`) |
 
 ## 10. The interaction (question) lifecycle
 

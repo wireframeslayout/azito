@@ -1,3 +1,4 @@
+import { useState } from 'react';
 import { fireEvent, render, screen } from '@testing-library/react';
 import { describe, expect, it, vi } from 'vitest';
 import HomeFeed from './HomeFeed';
@@ -11,7 +12,7 @@ let sections = buildLookoutSections({ rows: [row], allTasks: [task], lastSeenMs:
 const selectTerminal = vi.hoisted(() => vi.fn());
 vi.mock('./TaskPanel', () => ({ selectTaskTerminal: selectTerminal }));
 vi.mock('./ServerHealthSheet', () => ({ ServerHealthSheet: () => null }));
-vi.mock('../../hooks/useLookout', () => ({ useLookout: () => ({ sections, rows: [row], historyCount: 0 }) }));
+vi.mock('../../hooks/useLookout', () => ({ useLookout: () => { const [open, setOpen] = useState(false); return { sections, rows: [row], historyCount: 0, open, openDrawer: () => setOpen(true), closeDrawer: () => setOpen(false) }; } }));
 vi.mock('react-i18next', async (original) => ({ ...(await original<typeof import('react-i18next')>()), useTranslation: () => ({ t: (key: string, options?: { count?: number }) => key === 'workspace:activityPill.statusBarWorking' ? `${key}:${options?.count}` : key }) }));
 vi.mock('../../hooks/useActiveWindowRows', () => ({ useActiveWindowRows: () => ({ rows: [row], historyCount: 0 }) }));
 vi.mock('../../hooks/useAgentActivity', () => ({ useAgentActivity: () => ({ markFinishedSeen: vi.fn(), dismissFinished: vi.fn(), clearSeenFinished: vi.fn(), retention: { maxCount: 10 } }) }));

@@ -5,7 +5,6 @@ import { api } from '../api/client';
 import AzitoLogoShort from './AzitoLogoShort';
 import { usePwaInstall } from '../hooks/usePwaInstall';
 import UsageDropdown from './UsageDropdown';
-import NotificationBell from './notifications/NotificationBell';
 import { PROJECTS_CHANGED_EVENT } from '../lib/projectsChanged';
 import { paths, matchWorkspacePath } from '../paths';
 import { Icon } from './ui/Icon';
@@ -283,7 +282,6 @@ export default function ProjectSidebar() {
         </div>
       )}
 
-      <NotificationBell />
 
       <div style={{ display: 'flex', flexDirection: 'column', gap: 2, flexShrink: 0 }}>
         {GLOBAL_ITEMS.map((item) => {
