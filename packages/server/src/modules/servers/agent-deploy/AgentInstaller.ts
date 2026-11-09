@@ -11,7 +11,7 @@ import { posixRemoteCommand } from './posixRemoteCommand';
 import { MacAgentLaunchd } from './macAgentLaunchd';
 import { POSIX_ENVIRONMENT_COMMAND, parsePosixAgentEnvironment } from './posixAgentEnvironment';
 import { HOST_OS_PROBE_COMMAND, parseHostOsProbe } from './hostOsProbe';
-import { buildWindowsPreflightCommand, checkWindowsPreflight, parseWindowsPreflight, type WindowsPreflightInfo } from './windowsPreflight';
+import { buildWindowsPreflightCommand, checkWindowsPreflight, describeTailscaleCli, parseWindowsPreflight, type WindowsPreflightInfo } from './windowsPreflight';
 import { buildSha256VerifyCommand, buildSafeExtractCommand, readSha256FromSumsFile } from './integrityVerifier';
 import { KeyedMutex } from '../../../shared/keyedMutex';
 import { CLEANUP_LOCK_DIR, CLEANUP_TIMEOUT_MS, INSTALL_ID_FILE, MANUAL_STEPS_ANY_START, SYSTEMD_MANUAL_STEPS, buildCleanupGuardScript, buildCleanupScript, buildNohupSightingScript, cleanupMarkMessage, parseCleanupGuard, nohupManualSteps, parseCleanupOutcome, parseNohupSighting, type NohupSighting } from './unixAgentCleanup';
@@ -583,6 +583,7 @@ export class AgentInstaller {
     const result = await this.sshClient.execIsolated(sshHost, buildWindowsPreflightCommand());
     const info = parseWindowsPreflight(result.stdout, result.stderr, result.code);
     const missing = checkWindowsPreflight(info);
+    if (info.networkStatus === 'found') console.warn(`[AgentInstaller] Windows preflight ${sshHost}: using network address; ${describeTailscaleCli(info)}`);
     if (missing.length > 0) {
       throw new Error(`Preflight failed:\n${missing.map(m => `  - ${m}`).join('\n')}`);
     }

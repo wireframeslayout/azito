@@ -41,7 +41,8 @@ import type { PaneProgram } from '../../tmux/IMuxClient';
 import { resolveEnvelopeHost } from './AzitoctlPath';
 import type { LocalAgentHomes } from '../../agents/agentHomes';
 import { createTaskWorktree, TaskWorktreeError, type TaskWorktreeDeps } from './TaskWorktreeSetup';
-import { planNewWorkerLaunch, planResumeWorkerLaunch } from './WorkerLaunchPlan';
+import { planNewWorkerLaunch, planResumeWorkerLaunch, planResumeWorkerLaunchDaemonAware, type ResumeWorkerLaunchPlan } from './WorkerLaunchPlan';
+import type { DaemonSessionChecker } from '../../agents/claude/DaemonSessionChecker';
 import { shellDialectFor, type ShellDialect } from '../../../shared/os/shellDialect';
 import { expandTemplate } from './PromptExpander';
 import type { UnitTypeLoader } from '../../sidekicks/UnitTypeLoader';
@@ -196,6 +197,9 @@ export class ExecuteTaskUseCase {
     private harnessPrefix: string,
     private hubGitIdentity: GitIdentity | null,
     private localHomes: LocalAgentHomes,
+    // Issue #639: asked before a follow-up restarts a Claude worker whether the daemon holds the conversation (an
+    // attach launch then, instead of a --resume the CLI would refuse). Same singleton the respawn path uses.
+    private daemonSessionChecker: DaemonSessionChecker,
   ) {
     this.gitInfoCollector = new GitInfoCollector(this.transportFactory);
     this.pushVerifier = new PushVerifier(this.transportFactory, this.gitProvider);
@@ -1412,7 +1416,8 @@ export class ExecuteTaskUseCase {
           windowId: launchPrimaryWin?.id,
           windowType,
           workerExecutionMode: unit.workerExecutionMode,
-          effectiveLaunchCommand: renderLaunchLine(effectiveLaunch, this.dialectOf(server)),
+          effectiveLaunchCommand: renderLaunchLine({ ...effectiveLaunch, env: undefined }, this.dialectOf(server)),
+          childEnv: effectiveLaunch.env,
           dialect: this.dialectOf(server),
           startedAsProgram,
         });
@@ -1632,7 +1637,9 @@ export class ExecuteTaskUseCase {
     }
 
     // A host that starts the worker as a program (Windows) never wakes a window to start the worker in it afterwards: a sleeping or lost
-    // window is created again below with the worker as its first pane.
+    // window is created again below with the worker as its first pane. The plain resume plan is enough here: this only sizes the argv
+    // (launchArgv) — and on a win32 host the daemon check of the daemon-aware plan below cannot be asked anyway (a bare `claude` cannot
+    // be spawned there), so it would answer unknown and change nothing.
     const startedAsProgram = workerStartsAsProgram(this.transportFactory.hostProfileFor(server));
     if (startedAsProgram) {
       const resumeLaunch = planResumeWorkerLaunch(unit, task.agentSessionId, this.sessionStrategyFactory);
@@ -1811,6 +1818,8 @@ export class ExecuteTaskUseCase {
         // `windowName` once creation is confirmed to have actually
         // succeeded.
         // The window starts in the directory the worker runs in, so a host that starts the worker as a program decides both first.
+        // A program host is win32, where the daemon check is skipped deliberately (an npm claude is a .cmd shim the CommandSpec
+        // cannot spawn) — the plain resume plan is enough here: this only sizes the argv (launchArgv).
         let program: PaneProgram | undefined;
         if (startedAsProgram) {
           const resumeLaunch = planResumeWorkerLaunch(unit, task.agentSessionId, this.sessionStrategyFactory);
@@ -1922,10 +1931,19 @@ export class ExecuteTaskUseCase {
         }
       }
 
-      const effectiveFollowUpLaunch = planResumeWorkerLaunch(unit, task.agentSessionId, this.sessionStrategyFactory);
+      // Issue #639: daemon-aware — a conversation the Claude Code daemon holds is reopened with `claude attach <id>`
+      // (a `--resume` of it is refused and would leave the fresh window back at a shell), everything else as before.
+      // The check runs with the primary window's recorded CLAUDE_CONFIG_DIR when there is one: the recorded dir is
+      // where the conversation lives, explicit or not (for a `claudeConfigDirExplicit === false` window it IS the
+      // pane-side default the withoutEnv launch line runs under), and the env override also keeps the check from
+      // inheriting the hub's own CLAUDE_CONFIG_DIR.
+      const followUpPrimaryWin = this.windowRepo.findByTask(taskId).find((w) => w.isPrimary);
+      const effectiveFollowUpPlan: ResumeWorkerLaunchPlan | null = await planResumeWorkerLaunchDaemonAware(unit, task.agentSessionId, this.sessionStrategyFactory, this.daemonSessionChecker, server, followUpPrimaryWin?.claudeConfigDir ?? null);
+      if (effectiveFollowUpPlan?.daemonCheckUnknownReason) this.appendLog(taskId, unitId, 'command', { type: 'daemon_check_unavailable', reason: effectiveFollowUpPlan.daemonCheckUnknownReason });
+      const effectiveFollowUpLaunch = effectiveFollowUpPlan?.launch ?? null;
       if (effectiveFollowUpLaunch) {
         const runtime = this.runtimeRegistry.get(unit.workerRuntime);
-        const primaryWin = this.windowRepo.findByTask(taskId).find((w) => w.isPrimary);
+        const primaryWin = followUpPrimaryWin;
         const followUpWindowType = primaryWin?.windowType ?? 'terminal';
         if (shouldSupervise(server.type, followUpWindowType, ref.kind)) {
           this.supervisorRegistry.clearExitMarker(server.name, windowTarget);
@@ -1938,7 +1956,8 @@ export class ExecuteTaskUseCase {
             windowId: primaryWin?.id,
             windowType: followUpWindowType,
             workerExecutionMode: unit.workerExecutionMode,
-            effectiveLaunchCommand: renderLaunchLine(effectiveFollowUpLaunch, this.dialectOf(server)),
+            effectiveLaunchCommand: renderLaunchLine({ ...effectiveFollowUpLaunch, env: undefined }, this.dialectOf(server)),
+            childEnv: effectiveFollowUpLaunch.env,
             dialect: this.dialectOf(server),
             startedAsProgram,
           });

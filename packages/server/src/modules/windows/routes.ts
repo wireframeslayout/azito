@@ -40,6 +40,7 @@ import type { TransportFactory } from '../servers/transport/TransportFactory';
 import { shouldSupervise, wrapWithSupervisor } from '../supervisors/SupervisorLaunch';
 import { replyToExecutionGateError } from '../tasks/execution/ExecutionGate';
 import { shouldBlockMcp, ensureMcpBlockByCommand } from '../agents/shouldBlockMcp';
+import { CLAUDE_LAUNCH_ENV, isClaudeCommand } from '../agents/claude/suggestionEnv';
 import { DuplicateAgentSessionError } from './DuplicateAgentSessionError';
 import { isSameWindowTarget, isValidModelId } from '@azito/shared';
 import { muxRefFromTmuxTarget, parseMuxRef, type MuxRef, type PaneOrdinal, type MuxDriverKind } from '@azito/shared';
@@ -605,6 +606,7 @@ const windowsRoutes: FastifyPluginCallback<WindowsRouteOptions> = (fastify, opts
       if (blockMcp) {
         effectiveCommand = ensureMcpBlockByCommand(effectiveCommand);
       }
+      const childEnv = isClaudeCommand(command) ? CLAUDE_LAUNCH_ENV : undefined;
 
       const supervised = shouldSupervise(srv.type, win.windowType, windowKindOf(win));
       const paneRef = win.muxRef ?? muxRefFromTmuxTarget(win.tmuxTarget);
@@ -613,11 +615,12 @@ const windowsRoutes: FastifyPluginCallback<WindowsRouteOptions> = (fastify, opts
         ? wrapWithSupervisor(effectiveCommand, {
             server: srv,
             dialect: shellDialectFor(opts.transportFactory.hostProfileFor(srv)),
+            childEnv,
             target: win.tmuxTarget,
             harnessPrefix: opts.harnessPrefix,
             ...supervisorRegistry.issueLaunch({ serverName: srv.name, target: win.tmuxTarget, taskId: null, unitId: null, windowId: win.id }),
           })
-        : effectiveCommand;
+        : childEnv ? shellDialectFor(opts.transportFactory.hostProfileFor(srv)).withEnv(childEnv, effectiveCommand) : effectiveCommand;
 
       if (supervised) {
         supervisorRegistry.clearExitMarker(srv.name, win.tmuxTarget);
