@@ -24,7 +24,7 @@ export function OrchestratorsProvider({ children }: { children: ReactNode }): Re
   const refresh = useCallback((): void => {
     const current = ++sequence.current;
     apiWithStatus<OrchestratorSummary[]>('/orchestrators').then(({ status: responseStatus, body }) => {
-      if (responseStatus < 200 || responseStatus >= 300 || !Array.isArray(body)) throw new Error('Could not load orchestrators');
+      if (responseStatus < 200 || responseStatus >= 300 || !Array.isArray(body) || body.some((window) => !window.links || !Array.isArray(window.links.targets))) throw new Error('Could not load orchestrators');
       if (sequence.current !== current) return;
       setWindows(body);
       setStatus('ready');

@@ -101,6 +101,7 @@ export class OrchestrationLinkService {
       return { ...w, links: { total: targets.size,
         projectIds: [...new Set(links.flatMap(row => row.project_id === null ? [] : [row.project_id]))],
         serverNames: [...new Set(links.flatMap(row => row.server_name === null ? [] : [row.server_name]))],
+        targets: links.map(row => ({ windowId: row.resolved_window_id, taskId: row.resolved_task_id })),
       }, parentWindowId: parents.get(w.id) ?? null,
       lastInteractionAt: links.reduce<string | null>((latest, link) => link.last_interaction_at && (!latest || link.last_interaction_at > latest) ? link.last_interaction_at : latest, null) };
     });

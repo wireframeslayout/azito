@@ -14,7 +14,7 @@ export interface WindowLinkView {
 }
 
 export interface OrchestratorSummary extends Window {
-  links: { total: number; projectIds: number[]; serverNames: string[] };
+  links: { total: number; projectIds: number[]; serverNames: string[]; targets: Array<{ windowId: number | null; taskId: number | null }> };
   parentWindowId: number | null;
   lastInteractionAt: string | null;
 }

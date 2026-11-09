@@ -29,6 +29,9 @@
     "empty": "No orchestrators yet",
     "connected": "Linked {{count}}",
     "connectedUnknown": "Linked",
+    "attention": "{{count}} need attention",
+    "railAttention": "Orchestration, {{count}} need attention",
+    "active": "Running",
     "returnToProject": "Return to project windows (from: {{name}})",
     "selectWindow": "Select a window from the list",
     "originCount": "{{count}} orchestrators are in the rail"

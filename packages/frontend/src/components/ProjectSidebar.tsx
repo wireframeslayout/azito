@@ -8,6 +8,7 @@ import UsageDropdown from './UsageDropdown';
 import { PROJECTS_CHANGED_EVENT } from '../lib/projectsChanged';
 import { isOrchestrationPath, paths, matchWorkspacePath } from '../paths';
 import { Icon } from './ui/Icon';
+import { useOrchestrationModel } from '../hooks/useOrchestrationModel';
 import { useProjectRail } from '../hooks/useProjectRail';
 import ContextMenu, { useContextMenu } from './ContextMenu';
 import { ProjectSearchPopover } from './ProjectSearchPopover';
@@ -46,6 +47,7 @@ export default function ProjectSidebar() {
   const navigate = useNavigate();
   const location = useLocation();
   const rail = useProjectRail();
+  const { attention } = useOrchestrationModel();
   const [projects, setProjects] = useState<ProjectItem[]>([]);
   const [menuOpen, setMenuOpen] = useState(false);
   const [orchestrationPulse, setOrchestrationPulse] = useState(false);
@@ -325,7 +327,7 @@ export default function ProjectSidebar() {
         })}
       </div>
 
-      <button className={`orchestration-rail-button${orchestrationPulse ? " orchestration-rail-pulse" : ""}`} onClick={() => navigate(ORCHESTRATION_NAV_ITEM.path)} title={t(ORCHESTRATION_NAV_ITEM.labelKey)} aria-current={isOrchestrationPath(location.pathname) ? 'page' : undefined} aria-label={t(ORCHESTRATION_NAV_ITEM.labelKey)} style={{ ...globalButtonStyle(isOrchestrationPath(location.pathname)), color: 'var(--purple)', background: isOrchestrationPath(location.pathname) ? 'var(--purple-a15)' : 'transparent', boxShadow: isOrchestrationPath(location.pathname) ? 'inset 0 0 0 1px var(--purple)' : undefined }}><Icon name={ORCHESTRATION_NAV_ITEM.icon} size={20} /></button>
+      <button className={`orchestration-rail-button${orchestrationPulse ? " orchestration-rail-pulse" : ""}`} onClick={() => navigate(ORCHESTRATION_NAV_ITEM.path)} title={t(ORCHESTRATION_NAV_ITEM.labelKey)} aria-current={isOrchestrationPath(location.pathname) ? 'page' : undefined} aria-label={attention ? t('workspace:orchestration.railAttention', { count: attention }) : t(ORCHESTRATION_NAV_ITEM.labelKey)} style={{ position: 'relative', ...globalButtonStyle(isOrchestrationPath(location.pathname)), color: 'var(--purple)', background: isOrchestrationPath(location.pathname) ? 'var(--purple-a15)' : 'transparent', boxShadow: isOrchestrationPath(location.pathname) ? 'inset 0 0 0 1px var(--purple)' : undefined }}><Icon name={ORCHESTRATION_NAV_ITEM.icon} size={20} />{attention !== null && attention > 0 && <span aria-hidden="true" style={{ position: 'absolute', top: 2, right: 2, width: 9, height: 9, borderRadius: '50%', background: 'var(--warning)' }} />}</button>
 
       <div
         style={{

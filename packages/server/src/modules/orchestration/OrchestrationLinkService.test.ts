@@ -82,7 +82,7 @@ describe('orchestration links and roles', () => {
     const byId = vi.spyOn(windows, 'findById');
     const all = vi.spyOn(windows, 'findAll');
     expect(links.list(1)).toMatchObject([{ taskId: 1, resolvedWindowId: 2 }, { targetWindowId: 2, resolvedWindowId: 2 }]);
-    expect(links.orchestrators()).toMatchObject([{ links: { total: 1, projectIds: [1], serverNames: ['local'] }, lastInteractionAt: expect.any(String) }]);
+    expect(links.orchestrators()).toMatchObject([{ links: { total: 1, projectIds: [1], serverNames: ['local'], targets: [{ windowId: 2, taskId: 1 }, { windowId: 2, taskId: 1 }] }, lastInteractionAt: expect.any(String) }]);
     expect(byTask).not.toHaveBeenCalled();
     expect(byId).not.toHaveBeenCalled();
     expect(all).not.toHaveBeenCalled();
@@ -91,6 +91,17 @@ describe('orchestration links and roles', () => {
     expect(notify).toHaveBeenCalledWith({ type: 'orchestration:updated', payload: { windowId: 1 } });
     db.exec('DELETE FROM tasks WHERE id=1');
     expect(links.list(1)).toHaveLength(0);
+    bus.destroy(); db.close();
+  });
+
+  it('includes a linked task without a primary window in the batch summary', () => {
+    const db = openDatabase(':memory:');
+    db.exec("INSERT INTO projects (id,name,slug) VALUES (1,'P','p'); INSERT INTO tasks (id,project_id,title) VALUES (1,1,'T'); INSERT INTO windows (id,owner_type,server_name,tmux_target,window_type,worker_type,role) VALUES (1,'server','local','s:a','agent','claude','orchestrator')");
+    const bus = new NotificationBus();
+    const windows = new SqliteWindowRepository(db);
+    const links = new OrchestrationLinkService(new SqliteWindowLinkRepository(db), windows, { findById: () => ({ id: 1 }) } as unknown as ITaskRepository, bus);
+    links.add(1, { taskId: 1 }, 'manual');
+    expect(links.orchestrators()[0].links.targets).toEqual([{ windowId: null, taskId: 1 }]);
     bus.destroy(); db.close();
   });
 

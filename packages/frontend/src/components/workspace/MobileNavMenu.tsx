@@ -185,7 +185,7 @@ export function MobileNavMenu({
 
       <div style={sectionLabelStyle}>{t('workspace:mobileNav.sectionGlobal')}</div>
       <button type="button" onClick={() => onNavigateGlobal(ORCHESTRATION_NAV_ITEM.path)} style={{ ...rowStyle, minHeight: 44, color: 'var(--purple)' }} className="glass-popover-item">
-        <Icon name={ORCHESTRATION_NAV_ITEM.icon} size={16} /><span style={rowLabelStyle}>{t(ORCHESTRATION_NAV_ITEM.labelKey)}</span>{orchestratorCount !== undefined && <span style={rowMetaStyle}>{orchestratorCount}</span>}
+        <Icon name={ORCHESTRATION_NAV_ITEM.icon} size={16} /><span style={rowLabelStyle}>{t(ORCHESTRATION_NAV_ITEM.labelKey)}</span>{orchestratorCount !== undefined && orchestratorCount > 0 && <span style={rowMetaStyle}>{orchestratorCount}</span>}
       </button>
       {GLOBAL_NAV_ITEMS.map((item) => (
         <button key={item.path} type="button" onClick={() => onNavigateGlobal(item.path)} style={rowStyle} className="glass-popover-item">

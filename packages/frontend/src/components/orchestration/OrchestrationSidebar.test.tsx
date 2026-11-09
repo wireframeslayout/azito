@@ -5,12 +5,13 @@ import { OrchestrationSidebar } from './OrchestrationSidebar';
 
 vi.mock('../../hooks/useIsMobile', () => ({ useIsMobile: () => false }));
 const removeRole = vi.fn();
+vi.mock('../../hooks/useOrchestrationModel', async () => { const { buildOrchestratorTree } = await import('../../lib/orchestrationModel'); return { useOrchestrationModel: () => ({ tree: buildOrchestratorTree([{ id: 1, originProjectId: 10, parentWindowId: null, label: 'Parent', tmuxTarget: 's:p', serverName: 'local', links: { targets: [], total: 0, projectIds: [], serverNames: [] } }, { id: 2, originProjectId: 10, parentWindowId: 1, label: 'Child', tmuxTarget: 's:c', serverName: 'local', links: { targets: [{ windowId: null, taskId: 8 }], total: 1, projectIds: [10], serverNames: [] } }] as never, { activityByWindowId: new Map(), taskById: new Map([[8, { id: 8, status: 'failed' } as never]]) }), activity: new Map() }) }; });
 vi.mock('../../hooks/useWindowActions', () => ({ useWindowActions: () => ({ getWindowMenuItems: (window: { id: number }) => [{ kind: 'change-role', label: 'orchestration.removeRole', onClick: () => removeRole(window.id) }], confirmDialog: null, respawnResourceWarning: null }) }));
 vi.mock('../../hooks/useWorkspaceCatalog', () => ({ useWorkspaceCatalog: () => ({ allProjects: [{ id: 10, name: 'Project Alpha' }] }) }));
 vi.mock('../../hooks/useAgentActivity', () => ({ useAgentActivity: () => ({ activityStatus: () => null, snapshotStatus: 'ready', retrySnapshot: vi.fn() }) }));
 vi.mock('../../hooks/useOrchestrators', () => ({ useOrchestrators: () => ({ status: 'ready', refresh: vi.fn(), windows: [
-  { id: 1, originProjectId: 10, parentWindowId: null, label: 'Parent', tmuxTarget: 's:p', serverName: 'local', links: { total: 0, projectIds: [], serverNames: [] } },
-  { id: 2, originProjectId: 10, parentWindowId: 1, label: 'Child', tmuxTarget: 's:c', serverName: 'local', links: { total: 0, projectIds: [10], serverNames: [] } },
+  { id: 1, originProjectId: 10, parentWindowId: null, label: 'Parent', tmuxTarget: 's:p', serverName: 'local', links: { targets: [], total: 0, projectIds: [], serverNames: [] } },
+  { id: 2, originProjectId: 10, parentWindowId: 1, label: 'Child', tmuxTarget: 's:c', serverName: 'local', links: { targets: [], total: 0, projectIds: [10], serverNames: [] } },
 ] }) }));
 vi.mock('react-i18next', async (importOriginal) => ({ ...await importOriginal<typeof import('react-i18next')>(), useTranslation: () => ({ t: (key: string) => key }) }));
 
@@ -78,6 +79,12 @@ describe('OrchestrationSidebar', () => {
     act(() => vi.advanceTimersByTime(500));
     expect(screen.queryByText('orchestration.returnToProject')).toBeNull();
     vi.useRealTimers();
+  });
+
+  it('shows descendant attention in the row description', () => {
+    render(<OrchestrationSidebar onSelect={vi.fn()} />);
+    const parent = screen.getByRole('treeitem', { name: 'Parent' });
+    expect(document.getElementById(parent.getAttribute('aria-describedby')!)).toHaveTextContent('orchestration.attention');
   });
 
 });
