@@ -91,6 +91,7 @@ export function useAddWindowModal(
   refreshSessions?: () => Promise<void>,
   onConnect?: (refOrServerName: TerminalRef | string, targetOrProjectId?: string | number, projectId?: number) => void,
   onTaskWindowAdded?: (taskId: number, serverName: string, tmuxTarget: string, label: string, activate: boolean, extra?: TaskWindowExtra & { ref?: string }) => Promise<void>,
+  destination: 'project' | 'orchestrator' = 'project',
 ) {
   const [addWindowOpen, setAddWindowOpen] = useState(false);
   const [awMode, setAwMode] = useState<'existing' | 'session' | 'new'>('existing');
@@ -179,13 +180,13 @@ export function useAddWindowModal(
     setAwTarget(''); setAwLabel(''); setAwMode('new');
     setAwSelectedSession('');
     const ps = effectiveProjectServers.find((p) => p.serverName === firstServer);
-    setAwNewSession(effectiveProject?.slug || '');
+    setAwNewSession(destination === 'orchestrator' ? 'orchestration' : effectiveProject?.slug || '');
     setAwNewWindowName(''); setAwNewCommand('');
     setAwWorkDir(ps?.workingDirectory || effectiveProject?.workingDirectory || '');
-    setAwAgent('none'); setAwAgentModel(''); setAwWorkerModels([]);
+    setAwAgent(destination === 'orchestrator' ? 'claude' : 'none'); setAwAgentModel(''); setAwWorkerModels([]);
     setAwTaskId(taskId ?? null);
     setAddWindowOpen(true);
-  }, [servers, projectServers, project, isServerOffline, setAwServer]);
+  }, [servers, projectServers, project, isServerOffline, setAwServer, destination]);
 
   /**
    * ServerGroup のクイック追加アイコン（claude/codex/terminal）用。サーバー・エージェント種別は
@@ -397,7 +398,10 @@ export function useAddWindowModal(
           windowBody['worker_model'] = awAgentModel || undefined;
           windowBody['working_directory'] = awWorkDir.trim() || undefined;
         }
-        const created = await api<{ ok: boolean; id: number }>(`/projects/${effectiveProjectId}/windows`, { method: 'POST', body: JSON.stringify(windowBody) });
+        const registrationPath = destination === 'orchestrator' ? '/windows' : `/projects/${effectiveProjectId}/windows`;
+        if (destination === 'orchestrator') windowBody['role'] = 'orchestrator';
+        const created = await api<{ ok: boolean; id: number }>(registrationPath, { method: 'POST', body: JSON.stringify(windowBody) });
+        if (!created.ok || !created.id) throw new Error('window registration failed');
         const extra = awAgent !== 'none'
           ? { windowType: 'agent' as const, workerType: awAgent === 'custom' ? 'generic' : awAgent, workerModel: awAgentModel || undefined, workingDirectory: awWorkDir.trim() || undefined }
           : undefined;
@@ -431,7 +435,7 @@ export function useAddWindowModal(
     } finally {
       setAddWindowLoading(false);
     }
-  }, [projectId, awEffectiveProjectId, awMode, awServer, awTarget, awLabel, awSelectedSession, awNewSession, awNewWindowName, awNewCommand, awWorkDir, awAgent, awAgentModel, awSessionData, muxKindModel, agentPresets, project, refreshWorkspace, refreshSessions, addWindowLoading, awTaskId, onConnect, onTaskWindowAdded, launchAgent, showToast, t, closeQuickAddWindow, withMisaoInstall, awServerInfo]);
+  }, [projectId, awEffectiveProjectId, awMode, awServer, awTarget, awLabel, awSelectedSession, awNewSession, awNewWindowName, awNewCommand, awWorkDir, awAgent, awAgentModel, awSessionData, muxKindModel, agentPresets, project, refreshWorkspace, refreshSessions, addWindowLoading, awTaskId, onConnect, onTaskWindowAdded, launchAgent, showToast, t, closeQuickAddWindow, withMisaoInstall, awServerInfo, destination]);
 
   return {
     // State

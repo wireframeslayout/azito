@@ -11,6 +11,7 @@ import { TerminalContainer } from '../TerminalContainer';
 import { RightPanel } from '../workspace/RightPanel';
 import { RightPanelToggle } from '../workspace/RightPanelToggle';
 import { LoadingState } from '../ui';
+import { OrchestrationCreate } from './OrchestrationCreate';
 import { OrchestrationSidebar } from './OrchestrationSidebar';
 
 export interface OrchestrationPageProps { rightPanel?: ReactNode }
@@ -58,6 +59,7 @@ export default function OrchestrationPage({ rightPanel }: OrchestrationPageProps
     </aside>
     <main style={{ flex: 1, minWidth: 0, display: 'flex', flexDirection: 'column' }}>
       {selected ? <TerminalContainer key={selected.id} serverName={selected.serverName} target={selected.tmuxTarget} terminalRef={{ kind: 'windowId', serverName: selected.serverName, windowId: selected.id, pane: 1 }} registeredWindow={{ id: selected.id }} /> : <p>{t('orchestration.empty')}</p>}
+      <OrchestrationCreate showButton={windows.length === 0} />
       {!open && <RightPanelToggle open={false} onToggle={() => setOpen(true)} controls="orchestration-right-panel" buttonRef={toggleRef} />}
     </main>
     <RightPanel id="orchestration-right-panel" title={t('orchestration.connected')} open={open} onOpenChange={setOpen} toggleRef={toggleRef}>{rightPanel}</RightPanel>
