@@ -30,6 +30,7 @@ export function useLookoutSummaries(items: LookoutItem[], enabled: boolean): Rea
     let cancelled = false;
     let timer: ReturnType<typeof setTimeout> | undefined;
     const fetchSummaries = async () => {
+      if (document.visibilityState === 'hidden') { timer = setTimeout(fetchSummaries, 30000); return; }
       try {
         const batches = await Promise.all(Array.from({ length: Math.ceil(windows.length / 50) }, (_, i) => {
           const batch = windows.slice(i * 50, i * 50 + 50);
@@ -39,7 +40,10 @@ export function useLookoutSummaries(items: LookoutItem[], enabled: boolean): Rea
         if (cancelled) return;
         const next = batches.flatMap(batch => batch.summaries);
         setResponse({ key, results: next });
-        if (next.some(result => result.status === 'pending')) timer = setTimeout(fetchSummaries, 3000);
+        const pendingWithoutText = next.some(result => result.status === 'pending' && !result.text);
+        if (next.some(result => result.status !== 'off' && result.status !== 'none')) {
+          timer = setTimeout(fetchSummaries, pendingWithoutText ? 3000 : 120000);
+        }
       } catch {
         if (!cancelled) setResponse({ key, results: windows.map(({ windowId }) => ({ windowId, status: 'unavailable' })) });
       }
@@ -51,7 +55,8 @@ export function useLookoutSummaries(items: LookoutItem[], enabled: boolean): Rea
   const mapped = new Map<string, LookoutSummary>();
   for (const item of items) {
     const result = item.primaryRow?.windowId == null ? undefined : byId.get(item.primaryRow.windowId);
-    if (result?.status === 'ready' && result.text != null) mapped.set(item.key, { status: 'ready', text: result.text });
+    // A pending result can carry the previous summary of the same conversation; show it while the newer one is made.
+    if ((result?.status === 'ready' || result?.status === 'pending') && result.text != null) mapped.set(item.key, { status: 'ready', text: result.text });
     else if (result?.status === 'pending') mapped.set(item.key, { status: 'pending' });
     else if (result?.status === 'unavailable') mapped.set(item.key, { status: 'error', ...(result.reason && { reason: result.reason }) });
   }

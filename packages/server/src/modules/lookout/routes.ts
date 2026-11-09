@@ -1,5 +1,6 @@
 import type { FastifyPluginCallback } from 'fastify';
 import { z } from 'zod';
+import { requireOperator } from '../../shared/auth/requireOperator';
 import { probeLookoutLlm } from './LlmClientFactory';
 import type { LookoutSummaryService } from './LookoutSummaryService';
 import type { SqliteLookoutSettingsRepository } from './SqliteLookoutSettingsRepository';
@@ -8,9 +9,7 @@ const settingsSchema = z.object({ enabled: z.boolean(), provider: z.enum(['claud
 const requestsSchema = z.array(z.object({ windowId: z.number().int().positive(), state: z.enum(['blocked', 'working', 'finished']) }).strict()).max(50).refine((items) => new Set(items.map((item) => item.windowId)).size === items.length);
 
 export const lookoutRoutes: FastifyPluginCallback<{ settings: SqliteLookoutSettingsRepository; service: LookoutSummaryService }> = (app, { settings, service }, done) => {
-  app.addHook('preHandler', async (request, reply) => {
-    if (request.principal?.class !== 'operator') return reply.status(403).send({ error: 'operator_required' });
-  });
+  app.addHook('preHandler', requireOperator('settings.lookout'));
   app.get('/api/settings/lookout', async () => settings.get());
   app.put('/api/settings/lookout', async (request, reply) => {
     const parsed = settingsSchema.safeParse(request.body);

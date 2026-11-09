@@ -27,6 +27,15 @@ describe('useLookoutSummaries', () => {
     const params = new URLSearchParams(api.mock.calls[0][0].split('?')[1]);
     expect(JSON.parse(params.get('states')!)).toEqual([{ windowId: 7, state: 'finished' }]);
   });
+  it('shows the previous summary while a newer one is pending and polls at the refresh interval', async () => {
+    vi.useFakeTimers();
+    api.mockResolvedValue({ status: 200, body: { summaries: [{ windowId: 7, status: 'pending', text: 'Earlier' }] } });
+    const { result } = renderHook(() => useLookoutSummaries([item], true));
+    await act(async () => {});
+    expect(result.current.get('one')).toEqual({ status: 'ready', text: 'Earlier' });
+    await act(async () => { await vi.advanceTimersByTimeAsync(120000); });
+    expect(api).toHaveBeenCalledTimes(2);
+  });
   it('polls pending results and stops when closed', async () => {
     vi.useFakeTimers();
     api.mockResolvedValue({ status: 200, body: { summaries: [{ windowId: 7, status: 'pending' }] } });

@@ -27,7 +27,7 @@ describe.skipIf(process.platform === 'win32')('Lookout CLI', () => {
     process.env.ANTHROPIC_AUTH_TOKEN = 'auth-token';
     expect(await runLookoutLlm({ enabled: true, provider: 'claude', model: 'sonnet', updatedAt: '' }, 'private prompt')).toBe('done');
     const captured = readFileSync(capture, 'utf8');
-    expect(captured).toContain('--tools  --setting-sources  --strict-mcp-config --no-session-persistence');
+    expect(captured).toContain('--tools  --setting-sources  --strict-mcp-config --no-session-persistence --disable-slash-commands');
     expect(captured).toContain('private prompt');
     expect(captured).not.toContain('must-not-leak');
     expect(captured).toContain('auth-token');

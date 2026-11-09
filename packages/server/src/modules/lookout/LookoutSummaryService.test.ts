@@ -1,16 +1,17 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { HeadlessCliError } from '../llm/headlessExec';
+import type { TranscriptEntry } from '../transcripts/sources/TranscriptSource';
 import { LookoutSummaryService } from './LookoutSummaryService';
 import { buildLookoutPrompt, normalizeLookoutSummary } from './lookoutPrompt';
 
 const settings = { enabled: true, provider: 'claude', model: 'test', updatedAt: '' } as const;
 const entry = { uuid: '1', type: 'user', timestamp: null, blocks: [{ kind: 'text', text: 'hello' }] } as const;
-function setup(run: () => Promise<string>) {
+function setup(run: () => Promise<string>, readEntries: () => unknown[] = () => [entry]) {
   const repo = { get: () => settings };
   const windows = { findById: (id: number) => ({ id, serverName: 'local' }) };
   const servers = { findByName: () => ({ name: 'local' }) };
   const resolver = { resolve: async () => ({ resolved: true, sessionId: 'session', agentType: 'claude' }) };
-  const source = { agentType: 'claude', readSession: async () => ({ entries: [entry], startOffset: 0, hasOlder: false }) };
+  const source = { agentType: 'claude', readSession: async () => ({ entries: readEntries(), startOffset: 0, hasOlder: false }) };
   return new LookoutSummaryService(repo as never, windows as never, servers as never, resolver as never, { forServer: () => [source] } as never, run);
 }
 const request = [{ windowId: 1, state: 'working' as const }];
@@ -19,7 +20,7 @@ afterEach(() => vi.useRealTimers());
 describe('Lookout summaries', () => {
   it('limits input and normalizes output', () => {
     const prompt = buildLookoutPrompt([entry as never]);
-    expect(prompt).toContain('user: hello');
+    expect(prompt).toContain('<conversation_tail>\nuser: hello\n</conversation_tail>');
     expect(normalizeLookoutSummary('one\ntwo\u0000' + 'x'.repeat(100))).toHaveLength(80);
   });
   it('deduplicates the same request and caches the result', async () => {
@@ -82,4 +83,25 @@ describe('Lookout summaries', () => {
     await vi.waitFor(async () => expect((await service.getSummaries(request))[0]).toEqual({ windowId: 1, status: 'unavailable', reason: 'not_logged_in' }));
   });
 
+  it('keeps showing the last summary of a conversation that moved on while it was being made', async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date('2026-01-01T00:00:00Z'));
+    let entries: TranscriptEntry[] = [entry as unknown as TranscriptEntry];
+    const finishes: Array<(value: string) => void> = [];
+    const run = vi.fn(() => new Promise<string>((resolve) => { finishes.push(resolve); }));
+    const service = setup(run, () => entries);
+    await service.getSummaries(request);
+    entries = [entry as unknown as TranscriptEntry, { ...entry, uuid: '2', blocks: [{ kind: 'text', text: 'more' }] }];
+    expect((await service.getSummaries(request))[0]).toEqual({ windowId: 1, status: 'pending' });
+    finishes[0]('first summary');
+    await vi.advanceTimersByTimeAsync(0);
+    expect((await service.getSummaries(request))[0]).toEqual({ windowId: 1, status: 'pending', text: 'first summary' });
+    expect((await service.getSummaries([{ windowId: 1, state: 'blocked' }]))[0]).toEqual({ windowId: 1, status: 'pending' });
+    await vi.advanceTimersByTimeAsync(30_000);
+    await service.getSummaries(request);
+    expect(run).toHaveBeenCalledTimes(2);
+    finishes[1]('second summary');
+    await vi.advanceTimersByTimeAsync(0);
+    expect((await service.getSummaries(request))[0]).toEqual({ windowId: 1, status: 'ready', text: 'second summary' });
+  });
 });
