@@ -46,6 +46,7 @@ export default function OrchestrationPage({ rightPanel }: OrchestrationPageProps
     try {
       const response = await apiWithStatus(`/windows/${windowId}/role`, { method: 'PUT', body: JSON.stringify({ role: null }) });
       if (response.status !== 200) throw new Error('role change failed');
+      if (selected?.id === windowId) navigate(paths.orchestration(), { replace: true, state: { missing: true } });
       refresh();
       showToast(t('orchestration.restored'), [{ label: t('orchestration.undo'), onClick: () => { void restoreRole(windowId); } }]);
     } catch { showToast(t('orchestration.roleError')); }

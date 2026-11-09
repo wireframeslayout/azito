@@ -415,9 +415,9 @@ export function useAddWindowModal(
         if (!newWindowLaunch) {
           if (awWorkDir.trim()) {
             if (created.id) {
-              await api(`/windows/${created.id}/panes/1/send-keys`, { method: 'POST', body: JSON.stringify({ keys: [`cd ${awWorkDir.trim()}`, 'Enter'] }) });
+              await api(`/windows/${created.id}/panes/1/send-keys`, { method: 'POST', body: JSON.stringify({ keys: [`cd -- '${awWorkDir.trim().replace(/'/g, "'\\''")}'`, 'Enter'] }) });
             } else {
-              await api(`/servers/${encodeURIComponent(awServer)}/mux/windows/${encodeURIComponent(newRef)}/panes/1/send-keys`, { method: 'POST', body: JSON.stringify({ keys: [`cd ${awWorkDir.trim()}`, 'Enter'] }) });
+              await api(`/servers/${encodeURIComponent(awServer)}/mux/windows/${encodeURIComponent(newRef)}/panes/1/send-keys`, { method: 'POST', body: JSON.stringify({ keys: [`cd -- '${awWorkDir.trim().replace(/'/g, "'\\''")}'`, 'Enter'] }) });
             }
             await new Promise((r) => setTimeout(r, 500));
           }
