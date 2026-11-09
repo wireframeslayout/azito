@@ -393,6 +393,15 @@
     "installing": "Installing misao on {{server}}…"
   },
   "linkedPanel": {
+    "openTitle": "Open {{title}}",
+    "loadError": "Could not load links",
+    "unlinkError": "Could not unlink",
+    "addError": "Could not add link",
+    "unlinked": "Link removed",
+    "not_found": "Target not found",
+    "request_failed": "Request failed",
+    "invalid_target": "Invalid target",
+    "operator_required": "Operator access required",
     "title": "Linked",
     "all": "All",
     "attention": "Needs attention",

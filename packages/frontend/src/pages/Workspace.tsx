@@ -513,7 +513,7 @@ function WorkspaceInner() {
     }
   }, [connectRef, openTerminalTarget]);
 
-  const { setOnOpenInTerminal, setOnOpenTask, setActiveTabId: setTargetsActiveTabId, setFocusedTarget, setOnOpenTabSwitcher } = useWorkspaceTargets();
+  const { setOnOpenInTerminal, setOnOpenTask, setActiveTabId: setTargetsActiveTabId, setFocusedTarget, setOnOpenTabSwitcher, setLinkedSheetOpen } = useWorkspaceTargets();
   const { shouldShowActivity, shouldShowTaskActivity } = useAgentActivity();
   useEffect(() => { setTargetsActiveTabId(activeTabId); }, [activeTabId, setTargetsActiveTabId]);
 
@@ -1387,7 +1387,7 @@ function WorkspaceInner() {
               const shell = (
                 <>
                   <MobileTabChipRow
-                    linked={selectedOrchestrator ? { count: selectedOrchestrator.links.total, onOpen: () => window.dispatchEvent(new Event('azito:open-linked-sheet')) } : undefined}
+                    linked={selectedOrchestrator ? { count: selectedOrchestrator.links.total, onOpen: () => setLinkedSheetOpen(true) } : undefined}
                     activeTab={(() => {
                       const tab = tabs.find((t) => t.id === activeTabId);
                       return tab ? buildTabItem(tab) : null;

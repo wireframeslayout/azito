@@ -34,7 +34,10 @@ export function useOrchestrationLinks(windowId: number | null): {
     }
   }, [windowId]);
   useEffect(() => { setLinks([]); void refresh(); return () => { generation.current++; }; }, [refresh]);
-  useNotificationChannel({ onOrchestrationUpdated: ({ windowId: changed }) => { if (changed === windowId) void refresh(); }, onConnected: () => { void refresh(); } });
+  const eventTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
+  useEffect(() => () => clearTimeout(eventTimer.current), [refresh]);
+  const scheduleRefresh = () => { clearTimeout(eventTimer.current); eventTimer.current = setTimeout(() => void refresh(), 250); };
+  useNotificationChannel({ onOrchestrationUpdated: ({ windowId: changed }) => { if (changed === windowId) scheduleRefresh(); }, onConnected: scheduleRefresh, onSessionsUpdated: scheduleRefresh, onWorkspaceRefresh: scheduleRefresh, onWindowRenamed: scheduleRefresh });
   const mutate = useCallback(async (path: string, options: RequestInit) => {
     if (windowId === null) throw new LinkRequestError('not_found');
     try {
@@ -43,7 +46,6 @@ export function useOrchestrationLinks(windowId: number | null): {
       if (currentWindow.current === windowId) await refresh();
     } catch (cause) {
       const failure = cause instanceof Error ? cause : new Error('request_failed');
-      if (currentWindow.current === windowId) setError(failure);
       throw failure;
     }
   }, [windowId, refresh]);

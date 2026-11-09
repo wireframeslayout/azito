@@ -61,6 +61,7 @@ describe('orchestration routes', () => {
     await app.register(routes, { links: {} as OrchestrationLinkService, windows: {} as SqliteWindowRepository });
     expect((await app.inject({ url: '/api/windows/1/links' })).statusCode).toBe(403);
     expect((await app.inject({ method: 'POST', url: '/api/windows/1/links', payload: { targetWindowId: 2 } })).statusCode).toBe(403);
+    expect((await app.inject({ method: 'DELETE', url: '/api/windows/1/links/2' })).statusCode).toBe(403);
     await app.close();
   });
   it('keeps every link route operator-only', async () => {

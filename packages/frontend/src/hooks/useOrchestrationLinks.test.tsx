@@ -3,14 +3,15 @@ import { expect, it, vi } from 'vitest';
 import { apiWithStatus } from '../api/client';
 import { useOrchestrationLinks } from './useOrchestrationLinks';
 vi.mock('../api/client', () => ({ apiWithStatus: vi.fn() }));
-const events = vi.hoisted(() => ({ handler: undefined as ((event: { windowId: number }) => void) | undefined }));
-vi.mock('./useNotificationChannel', () => ({ useNotificationChannel: (handlers: { onOrchestrationUpdated: typeof events.handler }) => { events.handler = handlers.onOrchestrationUpdated; } }));
+const events = vi.hoisted(() => ({ handler: undefined as ((event: { windowId: number }) => void) | undefined, refresh: undefined as (() => void) | undefined }));
+vi.mock('./useNotificationChannel', () => ({ useNotificationChannel: (handlers: { onOrchestrationUpdated: typeof events.handler; onSessionsUpdated: () => void; onWorkspaceRefresh: () => void; onWindowRenamed: () => void }) => { events.handler = handlers.onOrchestrationUpdated; events.refresh = () => { handlers.onSessionsUpdated(); handlers.onWorkspaceRefresh(); handlers.onWindowRenamed(); }; } }));
 it('loads orchestration links, refreshes on matching events, and ignores stale responses', async () => {
   const pending: Array<(value: { status: number; body: unknown }) => void> = [];
   vi.mocked(apiWithStatus).mockImplementation(() => new Promise(resolve => pending.push(resolve)));
   const { result } = renderHook(() => useOrchestrationLinks(1));
   expect(apiWithStatus).toHaveBeenCalledWith('/windows/1/links?kind=orchestration');
   act(() => events.handler?.({ windowId: 1 }));
+  await waitFor(() => expect(pending).toHaveLength(2));
   await act(async () => { pending[1]({ status: 200, body: [{ id: 2 }] }); });
   await act(async () => { pending[0]({ status: 200, body: [{ id: 1 }] }); });
   await waitFor(() => expect(result.current.links.map(item => item.id)).toEqual([2]));
@@ -28,4 +29,12 @@ it('unlinks and restores the original task target', async () => {
   await act(async () => { await result.current.undo(target); });
   expect(api).toHaveBeenCalledWith('/windows/1/links/4', { method: 'DELETE' });
   expect(api).toHaveBeenCalledWith('/windows/1/links', { method: 'POST', body: '{"taskId":5}' });
+});
+
+it('coalesces session, workspace and rename events into a refresh', async () => {
+  const api = vi.mocked(apiWithStatus); api.mockReset(); api.mockResolvedValue({ status: 200, body: [] });
+  renderHook(() => useOrchestrationLinks(1));
+  await waitFor(() => expect(api).toHaveBeenCalledTimes(1));
+  act(() => events.refresh?.());
+  await waitFor(() => expect(api).toHaveBeenCalledTimes(2));
 });

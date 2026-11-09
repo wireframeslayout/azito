@@ -29,7 +29,7 @@ const routes: FastifyPluginCallback<Options> = (app, { links, windows }, done) =
     if (typeof result === 'string') return reply.status(result === 'not_found' ? 404 : result === 'already_nested' || result === 'cycle' ? 409 : 422).send({ error: result });
     return links.list(id, true).find((link) => link.id === result.id);
   });
-  app.delete<{ Params: { id: string; linkId: string } }>('/api/windows/:id/links/:linkId', async (req, reply) => {
+  app.delete<{ Params: { id: string; linkId: string } }>('/api/windows/:id/links/:linkId', { preHandler: requireOperator('window-links.delete') }, async (req, reply) => {
     const id = parseWindowId(req.params.id); const linkId = parseWindowId(req.params.linkId);
     if (id === null || linkId === null || !links.unlink(id, linkId)) return reply.status(404).send({ error: 'not_found' });
     return { ok: true };

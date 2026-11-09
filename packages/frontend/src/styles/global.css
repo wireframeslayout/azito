@@ -1,5 +1,6 @@
 /* inline style からは padding: 'var(--space-2) var(--space-4)' のように文字列で参照する。calc が必要な箇所は無理にトークン化しない */
-/* =====================================================   Shade（旧称: Kasumi）— テーマドリブン面梯子 + エレベーション体系（canonical source）
+/* ============================================================
+   Shade（旧称: Kasumi）— テーマドリブン面梯子 + エレベーション体系（canonical source）
 
    設計方針（docs/ja/ui-surface-policy.md に詳細）:
    [1] ソースは2変数のみ: --surface-base（井戸=テーマ背景）と --surface-fg。
@@ -150,7 +151,8 @@
   /* 不透明を保つ面: 浮遊UI・記入面（可読性の不変則） */
 }
 
-/* =====================================================   意匠切替（data-design） — Wired レイヤー
+/* ============================================================
+   意匠切替（data-design） — Wired レイヤー
    Shade（既定・線なし・面の梯子）に対し、旧意匠 Wired（線で階層を表す）を
    同じトークン基盤の上に再現する。ソース・オブ・トゥルースは master の
    packages/frontend/src/styles/global.css（`git show master:...`）。
@@ -1304,3 +1306,7 @@ input[aria-invalid="true"]:focus-visible { outline-color: var(--danger) !importa
 }
 
 .linked-window-card:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+
+.linked-window-card-open { background: none; border: 0; color: inherit; font: inherit; padding: 0; text-align: left; cursor: pointer; }
+.linked-window-card-open::after { content: ""; position: absolute; inset: 0; }
+.linked-window-card-open:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }

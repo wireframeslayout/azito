@@ -30,3 +30,10 @@ it('treats tasks in review or done as completed', () => {
   const items = resolveLinkedWindows([link(1, 1), link(2, 2), link(3, 3)], [], tasks, [], buildAttentionContext(new Map(), tasks));
   expect(items.map(item => item.status)).toEqual(['completed', 'completed', 'running']);
 });
+
+it('prefers current catalog fields to the resolved API window', () => {
+  const stale = { id: 8, serverName: 'local', tmuxTarget: 's:w', sleeping: true, label: 'Old' } as WindowLinkView['resolvedWindow'];
+  const link = { id: 1, targetWindowId: 8, resolvedWindowId: 8, resolvedTaskId: null, taskId: null, resolvedWindow: stale, kind: 'orchestration', unlinkedAt: null } as WindowLinkView;
+  const current = { id: 8, serverName: 'local', tmuxTarget: 's:w', sleeping: false, label: 'New' } as Window;
+  expect(resolveLinkedWindows([link], [current], [], [], buildAttentionContext(new Map(), []))[0].window).toEqual(current);
+});

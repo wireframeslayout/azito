@@ -11,6 +11,8 @@ vi.mock('../../hooks/useAgentActivity', () => ({ useAgentActivity: () => ({ entr
 vi.mock('../../hooks/useWorkspaceCatalog', () => ({ useWorkspaceCatalog: () => ({ allTasks: [{ id: 2, title: 'Task A', status: 'waiting_input', projectId: 1, windows: [{ id: 3, taskId: 2, projectId: 1, serverName: 'local', tmuxTarget: 'a:1', isPrimary: true }] }], allProjects: [{ id: 1, name: 'Project A' }], projectsLoaded: true, error: null, refresh: vi.fn() }) }));
 vi.mock('../../hooks/useVisibleIds', () => ({ useVisibleIds: () => ({ visibleIds: new Set<number>(), register: vi.fn() }) }));
 vi.mock('../../hooks/useWindowSnapshots', () => ({ useWindowSnapshots: () => ({ snapshots: new Map(), refresh: vi.fn() }) }));
+vi.mock('../../hooks/useIsMobile', () => ({ useIsMobile: () => false }));
+vi.mock('../../hooks/useToast', () => ({ useToast: () => ({ showToast: vi.fn() }) }));
 vi.mock('../../hooks/useWakeWindow', () => ({ useWakeWindow: () => ({ choose: vi.fn(), dialog: null }) }));
 vi.mock('../../hooks/useHotkeys', () => ({ useHotkey: vi.fn(), useOverlayStack: () => ({ id: 'overlay', isTop: true }) }));
 
@@ -20,7 +22,7 @@ describe('LinkedPanel', () => {
     render(<LinkedPanel windowId={9} enabled onOpen={onOpen} onExpand={vi.fn()} onProject={vi.fn()} excludedWindowIds={[9]} children={[]} onEnter={vi.fn()} />);
     fireEvent.click(screen.getByRole('tab', { name: 'linkedPanel.attention 1' }));
     expect(await screen.findByText('Task A')).toBeTruthy();
-    fireEvent.click(screen.getByText('Task A').closest('article')!);
+    fireEvent.click(screen.getByRole('button', { name: 'linkedPanel.openTitle' }));
     expect(onOpen).toHaveBeenCalledWith(expect.objectContaining({ id: 3 }));
   });
   it('finds registered server windows through existing session listings', async () => {

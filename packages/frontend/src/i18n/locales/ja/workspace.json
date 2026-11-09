@@ -393,6 +393,15 @@
     "installing": "{{server}} に misao をインストール中…"
   },
   "linkedPanel": {
+    "openTitle": "{{title}} を開く",
+    "loadError": "連携一覧を読み込めませんでした",
+    "unlinkError": "連携を解除できませんでした",
+    "addError": "連携を追加できませんでした",
+    "unlinked": "連携を解除しました",
+    "not_found": "対象が見つかりません",
+    "request_failed": "リクエストに失敗しました",
+    "invalid_target": "対象が正しくありません",
+    "operator_required": "操作権限が必要です",
     "title": "連携中",
     "all": "すべて",
     "attention": "要対応",

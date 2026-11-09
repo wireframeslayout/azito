@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState, type ReactNode } from 'react';
 import { useTranslation } from 'react-i18next';
 import { api } from '../../api/client';
+import { useToast } from '../../hooks/useToast';
 import { useWakeWindow } from '../../hooks/useWakeWindow';
 import { useAgentActivity } from '../../hooks/useAgentActivity';
 import { useOrchestrationLinks, type LinkTarget } from '../../hooks/useOrchestrationLinks';
@@ -24,6 +25,7 @@ interface Props { windowId: number; enabled: boolean; onOpen: (window: Window) =
 
 export function LinkedPanel({ windowId, enabled, onOpen, onExpand, onProject, excludedWindowIds, children, onEnter, onWindowOrder }: Props) {
   const { t } = useTranslation('workspace');
+  const { showToast } = useToast();
   const { links, loading, error, refresh, add, unlink, undo } = useOrchestrationLinks(windowId);
   const { allTasks, allProjects, projectsLoaded, error: catalogError, refresh: refreshCatalog } = useWorkspaceCatalog();
   const wake = useWakeWindow();
@@ -54,7 +56,9 @@ export function LinkedPanel({ windowId, enabled, onOpen, onExpand, onProject, ex
     }).catch(() => { if (version === candidateRequest.current) setCandidateError(true); });
   };
   const [, setAcknowledgementVersion] = useState(0);
-  const [removed, setRemoved] = useState<LinkTarget | null>(null);
+  const [operationError, setOperationError] = useState<{ code: string; kind: 'add' | 'unlink'; retry: () => void } | null>(null);
+  const runAdd = (target: LinkTarget) => { setOperationError(null); void add(target).then(() => setAdding(false)).catch((error: Error) => setOperationError({ code: error.message, kind: 'add', retry: () => runAdd(target) })); };
+  const runUnlink = (link: typeof links[number]) => { setOperationError(null); void unlink(link).then(target => showToast(t('linkedPanel.unlinked'), [{ label: t('linkedPanel.undo'), onClick: () => { void undo(target).catch((error: Error) => setOperationError({ code: error.message, kind: 'add', retry: () => runAdd(target) })); } }])).catch((error: Error) => setOperationError({ code: error.message, kind: 'unlink', retry: () => runUnlink(link) })); };
   const { visibleIds, register } = useVisibleIds(root);
   const windows = [...new Map([...allProjects.flatMap(project => project.windows ?? []), ...allTasks.flatMap(task => task.windows ?? []), ...orchestrators].map(window => [window.id, window])).values()];
   const childById = new Map(children.map(child => [child.window.id, child]));
@@ -71,8 +75,12 @@ export function LinkedPanel({ windowId, enabled, onOpen, onExpand, onProject, ex
   }, [attentionKey, loading, projectsLoaded, catalogError, snapshotStatus, t]);
   const attentionIds = items.filter(item => item.status === 'attention' && item.window && !childById.has(item.window.id) && visibleIds.has(item.link.id)).map(item => item.window!.id).sort((a, b) => a - b);
   const normalIds = items.filter(item => item.status !== 'attention' && item.window && !childById.has(item.window.id) && !attentionIds.includes(item.window.id) && visibleIds.has(item.link.id)).map(item => item.window!.id).sort((a, b) => a - b);
-  const attention = useWindowSnapshots(enabled ? [...new Set(attentionIds)] : [], { enabled, intervalMs: 2000 });
-  const normal = useWindowSnapshots(enabled ? [...new Set(normalIds)] : [], { enabled, intervalMs: 3000 });
+  const attentionKeyIds = [...new Set(attentionIds)].join(',');
+  const normalKeyIds = [...new Set(normalIds)].join(',');
+  const [snapshotKeys, setSnapshotKeys] = useState({ attention: '', normal: '' });
+  useEffect(() => { const timer = setTimeout(() => setSnapshotKeys({ attention: attentionKeyIds, normal: normalKeyIds }), 250); return () => clearTimeout(timer); }, [attentionKeyIds, normalKeyIds]);
+  const attention = useWindowSnapshots(enabled && snapshotKeys.attention ? snapshotKeys.attention.split(',').map(Number) : [], { enabled, intervalMs: 2000 });
+  const normal = useWindowSnapshots(enabled && snapshotKeys.normal ? snapshotKeys.normal.split(',').map(Number) : [], { enabled, intervalMs: 3000 });
   const groups = groupLinkedWindows(items.map(item => { const activity = item.window ? (attention.snapshots.get(item.window.id) ?? normal.snapshots.get(item.window.id))?.activity : null; return activity ? { ...item, lastActivityAt: new Date(activity * 1000).toISOString() } : item; }), filter);
   if (focused) {
     const index = (id: number) => { const position = previousOrder.current.indexOf(id); return position < 0 ? Number.MAX_SAFE_INTEGER : position; };
@@ -104,20 +112,20 @@ export function LinkedPanel({ windowId, enabled, onOpen, onExpand, onProject, ex
       <SegmentedToggle ariaLabel={t('linkedPanel.title')} wrap value={filter} onChange={setFilter} options={(['all', 'attention', 'running', 'completed'] as const).map(value => ({ value, label: `${t(`linkedPanel.${value}`)} ${value === 'all' ? items.length : items.filter(item => item.status === value).length}` }))} />
       <Button size="sm" onClick={openAdd}>{t('linkedPanel.add')}</Button>
     </div>
-    <AddLinkPopover open={adding} onClose={() => { candidateRequest.current++; setAdding(false); }} candidates={candidates} searchLabel={t('linkedPanel.search')} emptyLabel={t('linkedPanel.empty')} error={error ? t(`linkedPanel.${error.message}`, { defaultValue: t('linkedPanel.snapshotError') }) : candidateError ? t('linkedPanel.candidateError') : null} excludedWindowIds={excludedWindowIds} linkedTargets={targets} onAdd={target => { void add(target).then(() => setAdding(false)).catch(() => {}); }} />
+    <AddLinkPopover open={adding} onClose={() => { candidateRequest.current++; setAdding(false); }} candidates={candidates} searchLabel={t('linkedPanel.search')} emptyLabel={t('linkedPanel.empty')} error={operationError?.kind === 'add' ? t(`linkedPanel.${operationError.code}`, { defaultValue: t('linkedPanel.addError') }) : candidateError ? t('linkedPanel.candidateError') : null} excludedWindowIds={excludedWindowIds} linkedTargets={targets} onAdd={runAdd} />
     <span aria-live="polite" className="sr-only">{announcement}</span>
     {wake.dialog}
     {wakeError && <div role="alert">{t('windows.respawnFailed')}</div>}
-    {error && !adding && <div role="alert">{t('linkedPanel.snapshotError')} <Button size="sm" onClick={() => void refresh()}>{t('linkedPanel.retry')}</Button></div>}
-    {removed && <Button size="sm" onClick={() => { void undo(removed).then(() => setRemoved(null)).catch(() => {}); }}>{t('linkedPanel.undo')}</Button>}
+    {error && <div role="alert">{t('linkedPanel.loadError')} <Button size="sm" onClick={() => void refresh()}>{t('linkedPanel.retry')}</Button></div>}
+    {operationError && <div role="alert">{t(operationError.kind === 'unlink' ? 'linkedPanel.unlinkError' : 'linkedPanel.addError')} {t(`linkedPanel.${operationError.code}`, { defaultValue: '' })} <Button size="sm" onClick={operationError.retry}>{t('linkedPanel.retry')}</Button></div>}
     <div ref={setRoot} onFocus={() => setFocused(true)} onBlur={event => { if (!event.currentTarget.contains(event.relatedTarget)) setFocused(false); }} style={{ overflowY: 'auto', minHeight: 0 }}>
       {(loading && links.length === 0) || !projectsLoaded ? <p role="status">{t('linkedPanel.loading')}</p> : groups.length === 0 ? <p>{t(`linkedPanel.empty_${filter}`)}</p> : groups.map(group => <LinkedGroup key={group.key} title={group.label} count={group.items.length} onProject={group.key.startsWith('project:') ? () => onProject(Number(group.key.slice(8))) : undefined} projectLabel={t('orchestration.open')}>
         {group.items.map(item => {
           const child = item.link.resolvedWindowId === null ? undefined : childById.get(item.link.resolvedWindowId);
-          if (child) return <li key={item.link.id}><ChildOrchestratorCard title={child.window.label || child.window.tmuxTarget} windowId={child.window.id} linkedCount={child.linkCount} runningCount={countRunning(child)} linkedLabel={t('linkedPanel.title')} runningLabel={t('linkedPanel.running')} summary={countAttention(child) === null ? undefined : t('orchestration.attention', { count: countAttention(child) })} enterLabel={t('linkedPanel.enter')} onEnter={() => onEnter(child.window.id)} unlinkLabel={t('linkedPanel.unlink')} onUnlink={() => { void unlink(item.link).then(setRemoved).catch(() => {}); }} /></li>;
+          if (child) return <li key={item.link.id}><ChildOrchestratorCard title={child.window.label || child.window.tmuxTarget} windowId={child.window.id} linkedCount={child.linkCount} runningCount={countRunning(child)} linkedLabel={t('linkedPanel.title')} runningLabel={t('linkedPanel.running')} summary={countAttention(child) === null ? undefined : t('orchestration.attention', { count: countAttention(child) })} enterLabel={t('linkedPanel.enter')} onEnter={() => onEnter(child.window.id)} unlinkLabel={t('linkedPanel.unlink')} onUnlink={() => runUnlink(item.link)} /></li>;
           const snapshot = item.status === 'attention' ? attention : normal;
           const id = item.window?.id;
-          return <ObservedItem key={item.link.id} id={item.link.id} register={register}><LinkedWindowCard title={item.task?.title ?? item.window?.label ?? item.window?.tmuxTarget ?? t('linkedPanel.waiting')} status={t(`linkedPanel.${item.status}`)} statusTone={item.status} windowId={id} timestamp={item.link.lastInteractionAt || item.lastActivityAt ? formatRelativeTime(item.link.lastInteractionAt ?? item.lastActivityAt!) : undefined} acknowledged={item.status === 'completed' && !!item.task && isLinkedCompletionAcknowledged(item.link.id, item.task.updatedAt)} acknowledgeLabel={t('linkedPanel.acknowledge')} onAcknowledge={item.status === 'completed' && item.task ? () => { acknowledgeLinkedCompletion(item.link.id, item.task!.updatedAt); setAcknowledgementVersion(value => value + 1); } : undefined} sleepingLabel={item.window?.sleeping ? t('linkedPanel.sleeping') : undefined} onWake={item.window?.sleeping ? () => void wakeWindow(item.window!) : undefined} waking={waking === id} wakeLabel={t('linkedPanel.wake')} attention={item.status === 'attention'} openLabel={t('orchestration.open')} unlinkLabel={t('linkedPanel.unlink')} onOpen={item.window ? () => { if (item.status === 'completed' && item.task) { acknowledgeLinkedCompletion(item.link.id, item.task.updatedAt); setAcknowledgementVersion(value => value + 1); } onOpen(item.window!); } : undefined} onExpand={item.window ? () => onExpand(item.window!) : undefined} expandLabel={t('orchestration.expand')} onUnlink={() => { void unlink(item.link).then(setRemoved).catch(() => {}); }} waitingLabel={!item.window && item.link.resolvedWindowId === null && item.link.taskId !== null ? t('linkedPanel.waiting') : undefined} closedLabel={!item.window && (item.link.targetWindowId !== null || item.link.resolvedWindowId !== null) ? t('linkedPanel.windowUnavailable') : undefined} snapshot={id !== undefined && visibleIds.has(item.link.id) ? <LinkedSnapshot snapshot={snapshot.snapshots.get(id)} loadingLabel={t('linkedPanel.loading')} errorLabel={t('linkedPanel.snapshotError')} closedLabel={t('linkedPanel.closed')} retryLabel={t('linkedPanel.retry')} onRetry={snapshot.refresh} /> : undefined} /></ObservedItem>;
+          return <ObservedItem key={item.link.id} id={item.link.id} register={register}><LinkedWindowCard title={item.task?.title ?? item.window?.label ?? item.window?.tmuxTarget ?? t('linkedPanel.waiting')} status={t(`linkedPanel.${item.status}`)} statusTone={item.status} windowId={id} timestamp={item.link.lastInteractionAt || item.lastActivityAt ? formatRelativeTime(item.link.lastInteractionAt ?? item.lastActivityAt!) : undefined} acknowledged={item.status === 'completed' && !!item.task && isLinkedCompletionAcknowledged(item.link.id, item.task.updatedAt)} acknowledgeLabel={t('linkedPanel.acknowledge')} onAcknowledge={item.status === 'completed' && item.task ? () => { acknowledgeLinkedCompletion(item.link.id, item.task!.updatedAt); setAcknowledgementVersion(value => value + 1); } : undefined} sleepingLabel={item.window?.sleeping ? t('linkedPanel.sleeping') : undefined} onWake={item.window?.sleeping ? () => void wakeWindow(item.window!) : undefined} waking={waking === id} wakeLabel={t('linkedPanel.wake')} attention={item.status === 'attention'} openLabel={t('linkedPanel.openTitle', { title: item.task?.title ?? item.window?.label ?? item.window?.tmuxTarget ?? t('linkedPanel.waiting') })} unlinkLabel={t('linkedPanel.unlink')} onOpen={item.window ? () => { if (item.status === 'completed' && item.task) { acknowledgeLinkedCompletion(item.link.id, item.task.updatedAt); setAcknowledgementVersion(value => value + 1); } onOpen(item.window!); } : undefined} onExpand={item.window ? () => onExpand(item.window!) : undefined} expandLabel={t('orchestration.expand')} onUnlink={() => runUnlink(item.link)} waitingLabel={!item.window && item.link.resolvedWindowId === null && item.link.taskId !== null ? t('linkedPanel.waiting') : undefined} closedLabel={!item.window && (item.link.targetWindowId !== null || item.link.resolvedWindowId !== null) ? t('linkedPanel.windowUnavailable') : undefined} snapshot={id !== undefined && visibleIds.has(item.link.id) ? <LinkedSnapshot snapshot={snapshot.snapshots.get(id)} loadingLabel={t('linkedPanel.loading')} errorLabel={t('linkedPanel.snapshotError')} closedLabel={t('linkedPanel.closed')} retryLabel={t('linkedPanel.retry')} onRetry={snapshot.refresh} /> : undefined} /></ObservedItem>;
         })}
       </LinkedGroup>)}
     </div>
