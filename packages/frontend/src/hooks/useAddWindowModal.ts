@@ -298,11 +298,14 @@ export function useAddWindowModal(
         const sess = findSessionByKey(awSessionData[awServer] || [], awSelectedSession);
         if (!sess) throw new Error(`session ${awSelectedSession} is not listed on ${awServer}`);
         const sessionKind = sessionKindOf(sess);
-        await api<SessionWindowRegistrationResult>(`/projects/${effectiveProjectId}/windows/session`, { method: 'POST', body: JSON.stringify({ server_name: awServer, session: sess.name, kind: sessionKind }) });
-        if (sess.windows.length > 0) {
+        const result = await api<SessionWindowRegistrationResult>(`/projects/${effectiveProjectId}/windows/session`, { method: 'POST', body: JSON.stringify({ server_name: awServer, session: sess.name, kind: sessionKind }) });
+        const skippedIds = new Set(result.skipped.map((item) => item.windowId));
+        const eligibleWindows = sess.windows.filter((window) => window.windowId === null || !skippedIds.has(window.windowId));
+        if (result.skipped.length > 0) showToast(t('addWindow.serverOwnedWindowsSkipped', { count: result.skipped.length }));
+        if (eligibleWindows.length > 0) {
           if (awTaskId != null) {
             try {
-              for (const [index, w] of sess.windows.entries()) {
+              for (const [index, w] of eligibleWindows.entries()) {
                 const reg = taskWindowRegistration({ muxKind: sessionKind, target: `${sess.name}:${w.name}`, ref: w.ref });
                 if (!reg) throw new Error(`window ref is not resolved for ${sess.name}:${w.name}`);
                 await onTaskWindowAdded?.(awTaskId, awServer, reg.target, w.name, index === 0, reg.ref ? { ref: reg.ref } : undefined);
@@ -312,7 +315,7 @@ export function useAddWindowModal(
               return;
             }
           } else {
-            const firstWin = sess.windows[0];
+            const firstWin = eligibleWindows[0];
             const firstPane = firstWin.panes[0];
             if (firstPane) {
               // The server-reported windowId / ref identifies the window for every mux kind; no tmux ref is synthesised from the target.

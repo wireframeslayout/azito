@@ -99,6 +99,7 @@
     "switchMisaoStale": "Unavailable while the server cannot be reached."
   },
   "addWindow": {
+    "serverOwnedWindowsSkipped": "{{count}} orchestrator window(s) were skipped because they belong to a server.",
     "title": "Add Window",
     "createAndAdd": "Create & Add",
     "addAllWindows": "Add All Windows",

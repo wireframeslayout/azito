@@ -99,6 +99,7 @@
     "switchMisaoStale": "サーバーに接続できないため選べません。"
   },
   "addWindow": {
+    "serverOwnedWindowsSkipped": "サーバー所有のオーケストレーター窓 {{count}} 件を除外しました。",
     "title": "ウィンドウを追加",
     "createAndAdd": "作成して追加",
     "addAllWindows": "すべてのウィンドウを追加",
