@@ -9,6 +9,8 @@ import { ServerFilesBackend } from './backend/ServerFilesBackend';
 import { TextFileEditor } from './TextFileEditor';
 import { useFileDownload } from './useFileDownload';
 import { Button } from '../ui';
+import { filePreviewKind } from '../preview/filePreviewKind';
+import { PreviewSwitch } from '../preview/PreviewSwitch';
 
 interface FilePreviewPanelProps {
   serverName: string;
@@ -66,6 +68,7 @@ export function FilePreviewPanel(props: FilePreviewPanelProps) {
     } catch { showToast(t('preview.loadError')); }
   };
   if (/\.(png|jpe?g|gif|svg|webp|ico|bmp|pdf)$/i.test(props.filePath)) return <MediaPreview {...props} backend={backend} openInEditor={openInEditor} />;
+  if (filePreviewKind(props.filePath) !== 'other') return <PreviewSwitch backend={backend} path={props.filePath} name={props.filePath.split(/[\\/]/).pop() || props.filePath} download={() => void download()} onDirtyChange={props.onDirtyChange} />;
   const downloadAction = <Button size="sm" variant="ghost" onClick={() => void download()} title={t('explorer.download')}><Icon name="download" size={14} /> {t('explorer.download')}</Button>;
   return <TextFileEditor backend={backend} path={props.filePath} name={props.filePath} initialLine={props.initialLine} downloadAction={downloadAction} headerActions={<>{downloadAction}<Button size="sm" variant="ghost" title={t('explorer.openInVsCode')} onClick={() => void openInEditor('vscode')}>VS Code</Button><Button size="sm" variant="ghost" title={t('explorer.openInZed')} onClick={() => void openInEditor('zed')}>Zed</Button></>} onDirtyChange={props.onDirtyChange} />;
 }

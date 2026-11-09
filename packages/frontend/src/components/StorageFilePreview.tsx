@@ -8,6 +8,8 @@ import { useBlobUrl } from '../hooks/useBlobUrl';
 import { useFileDownload } from './files/useFileDownload';
 import { Button } from './ui';
 import { formatSize } from '../utils/formatSize';
+import { filePreviewKind } from './preview/filePreviewKind';
+import { PreviewSwitch } from './preview/PreviewSwitch';
 
 const MIME_MAP: Record<string, string> = {
   jpg: 'image/jpeg', jpeg: 'image/jpeg', png: 'image/png', gif: 'image/gif',
@@ -176,6 +178,7 @@ export default function StorageFilePreview(props: StorageFilePreviewProps) {
   const { t } = useTranslation('files');
   const download = useFileDownload(backend, props.filename, props.originalName);
   if (isPdf(props.originalName) || isImage(props.originalName)) return <MediaStorageFilePreview {...props} />;
+  if (filePreviewKind(props.originalName) !== 'other') return <PreviewSwitch backend={backend} path={props.filename} name={props.originalName} download={() => void download()} onDirtyChange={props.onDirtyChange} />;
   const downloadAction = <Button size="sm" variant="ghost" onClick={() => void download()} title={t('explorer.download')}><Icon name="download" size={14} /> {t('explorer.download')}</Button>;
   return <TextFileEditor backend={backend} path={props.filename} name={props.originalName} headerActions={downloadAction} downloadAction={downloadAction} onDirtyChange={props.onDirtyChange} />;
 }

@@ -56,8 +56,16 @@
     "includePlaceholder": "例: *.ts, src/**",
     "excludePlaceholder": "node_modules, .git, dist, .worktrees",
     "summary": "{{files}} ファイル · {{hits}} 件 ({{engine}}, {{time}}ms)",
-    "engine": { "rg": "ripgrep", "grep": "grep", "builtin": "内蔵" },
-    "engineHint": { "rg": "ripgrep で検索しました", "grep": "grep で検索しました", "builtin": "内蔵の検索で検索しました。ホストに ripgrep (rg) を入れると速くなります。" },
+    "engine": {
+      "rg": "ripgrep",
+      "grep": "grep",
+      "builtin": "内蔵"
+    },
+    "engineHint": {
+      "rg": "ripgrep で検索しました",
+      "grep": "grep で検索しました",
+      "builtin": "内蔵の検索で検索しました。ホストに ripgrep (rg) を入れると速くなります。"
+    },
     "truncated": "上位 200 件を表示しています — 絞り込んでください",
     "noMatch": "一致するものがありません",
     "noMatchHint": "除外パターンを確認してください",
@@ -108,5 +116,40 @@
       "not_text": "テキストファイルではないため編集できません。",
       "forbidden": "このファイルを読み込む権限がありません。"
     }
+  },
+  "office": {
+    "textView": "テキスト表示",
+    "tableView": "表表示",
+    "delimiter": "区切り文字",
+    "tab": "タブ",
+    "save": "保存",
+    "unsaved": "未保存の変更があります",
+    "truncated": "ファイルの一部のみ表示しています。保存はできません。",
+    "conflict": "ファイルが別の場所で変更されました。",
+    "reload": "再読み込み",
+    "overwrite": "上書き",
+    "previous": "前へ",
+    "next": "次へ",
+    "addRow": "行を追加",
+    "deleteRow": "選択した行を削除",
+    "addColumn": "列を追加",
+    "deleteColumn": "選択した列を削除",
+    "edit": "編集",
+    "formatWarning": "編集すると書式、図形、グラフ、ピボットテーブルが失われる場合があります。数式の再計算が必要な場合があります。続行しますか？",
+    "cancel": "キャンセル",
+    "empty": "ファイルは空です。",
+    "document": "文書プレビュー",
+    "slide": "スライド",
+    "pptxLimit": "簡易表示です。一部のスライドが表示できないと、全体が表示できないことがあります。",
+    "slidesTruncated": "先頭 50 枚だけを表示しています。",
+    "mediaError": "再生できません。形式やコーデックがサポートされていない場合があります。",
+    "retry": "再試行",
+    "legacy": "この旧 Office 形式はプレビューできません。ダウンロードして開いてください。",
+    "loss": {
+      "drawings": "図形",
+      "pivotTables": "ピボットテーブル",
+      "charts": "グラフ"
+    },
+    "saveError": "保存できませんでした。もう一度お試しください。"
   }
 }

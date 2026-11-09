@@ -56,8 +56,16 @@
     "includePlaceholder": "e.g. *.ts, src/**",
     "excludePlaceholder": "node_modules, .git, dist, .worktrees",
     "summary": "{{files}} files · {{hits}} hits ({{engine}}, {{time}}ms)",
-    "engine": { "rg": "ripgrep", "grep": "grep", "builtin": "built-in" },
-    "engineHint": { "rg": "Searched with ripgrep", "grep": "Searched with grep", "builtin": "Searched with the built-in search. Installing ripgrep (rg) on the host makes it faster." },
+    "engine": {
+      "rg": "ripgrep",
+      "grep": "grep",
+      "builtin": "built-in"
+    },
+    "engineHint": {
+      "rg": "Searched with ripgrep",
+      "grep": "Searched with grep",
+      "builtin": "Searched with the built-in search. Installing ripgrep (rg) on the host makes it faster."
+    },
     "truncated": "Showing top 200 results — refine your query",
     "noMatch": "No matches found",
     "noMatchHint": "Check excluded patterns",
@@ -108,5 +116,40 @@
       "not_text": "This file is not text and cannot be edited.",
       "forbidden": "You do not have permission to read this file."
     }
+  },
+  "office": {
+    "textView": "Text view",
+    "tableView": "Table view",
+    "delimiter": "Delimiter",
+    "tab": "Tab",
+    "save": "Save",
+    "unsaved": "Unsaved changes",
+    "truncated": "Only part of this file is shown. Saving is disabled.",
+    "conflict": "This file changed elsewhere.",
+    "reload": "Reload",
+    "overwrite": "Overwrite",
+    "previous": "Previous",
+    "next": "Next",
+    "addRow": "Add row",
+    "deleteRow": "Delete selected row",
+    "addColumn": "Add column",
+    "deleteColumn": "Delete selected column",
+    "edit": "Edit",
+    "formatWarning": "Editing may remove formatting, drawings, charts and pivot tables. Formulas may need recalculation. Continue?",
+    "cancel": "Cancel",
+    "empty": "This file is empty.",
+    "document": "Document preview",
+    "slide": "Slide",
+    "pptxLimit": "This is a simplified preview. Some slides may prevent the entire presentation from displaying.",
+    "slidesTruncated": "Showing only the first 50 slides.",
+    "mediaError": "Unable to play this media. The format or codec may not be supported.",
+    "retry": "Retry",
+    "legacy": "This older Office format cannot be previewed. Download the file to open it.",
+    "loss": {
+      "drawings": "drawings",
+      "pivotTables": "pivot tables",
+      "charts": "charts"
+    },
+    "saveError": "Unable to save the file. Try again."
   }
 }
