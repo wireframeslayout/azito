@@ -1,6 +1,12 @@
 {
-  "rightPanel": {"title": "連携中の窓", "open": "連携中の窓を開く", "close": "連携中の窓を閉じる"},
-  "navigation": { "taskOpenFailed": "タスクを開けませんでした。" },
+  "rightPanel": {
+    "title": "連携中の窓",
+    "open": "連携中の窓を開く",
+    "close": "連携中の窓を閉じる"
+  },
+  "navigation": {
+    "taskOpenFailed": "タスクを開けませんでした。"
+  },
   "tab": {
     "closeDirtyTitle": "未保存の変更があるタブを閉じますか？",
     "closeDirtyMessage": "「{{name}}」には未保存の変更があります。このタブを閉じると変更は破棄されます。",
@@ -348,5 +354,23 @@
     "message": "{{server}} にはまだ misao がありません。ハブに同梱の misao をエージェント経由でサーバーへ送り、サービスとして起動します（サーバー側では何もダウンロードしません）。起動したあと、ウィンドウを作成します。",
     "confirm": "misao をインストール",
     "installing": "{{server}} に misao をインストール中…"
+  },
+  "linkedPanel": {
+    "title": "連携中",
+    "all": "すべて",
+    "attention": "要対応",
+    "running": "稼働中",
+    "completed": "完了",
+    "loading": "読み込み中",
+    "retry": "再試行",
+    "unlink": "連携を解除",
+    "undo": "元に戻す",
+    "add": "連携を追加",
+    "search": "窓またはタスクを検索",
+    "empty": "該当する項目はありません",
+    "enter": "中へ",
+    "cycle": "循環する連携は追加できません",
+    "already_nested": "すでに別のオーケストレーターに連携されています",
+    "not_linkable": "この項目は連携できません"
   }
 }

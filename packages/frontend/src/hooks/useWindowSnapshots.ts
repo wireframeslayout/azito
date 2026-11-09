@@ -18,9 +18,9 @@ export function useWindowSnapshots(ids: number[], { lines = 12, intervalMs = 300
     let timer: ReturnType<typeof setTimeout> | undefined;
     const selected = key ? key.split(',').map(Number) : [];
     if (previousQuery.current.key !== key || previousQuery.current.lines !== lines) {
+      latest.current = previousQuery.current.lines !== lines ? new Map() : new Map([...latest.current].filter(([id]) => selected.includes(id)));
       previousQuery.current = { key, lines };
-      latest.current = new Map();
-      setSnapshots(new Map());
+      setSnapshots(new Map(latest.current));
     }
     const poll = async (): Promise<void> => {
       if (disposed || !enabled || document.hidden || selected.length === 0) return;

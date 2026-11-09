@@ -1,6 +1,12 @@
 {
-  "rightPanel": {"title": "Linked windows", "open": "Open linked windows panel", "close": "Close linked windows panel"},
-  "navigation": { "taskOpenFailed": "Could not open the task." },
+  "rightPanel": {
+    "title": "Linked windows",
+    "open": "Open linked windows panel",
+    "close": "Close linked windows panel"
+  },
+  "navigation": {
+    "taskOpenFailed": "Could not open the task."
+  },
   "tab": {
     "closeDirtyTitle": "Close tab with unsaved changes?",
     "closeDirtyMessage": "\"{{name}}\" has unsaved changes. Closing this tab will discard them.",
@@ -348,5 +354,23 @@
     "message": "{{server}} has no misao yet. The hub sends the misao bundled with it to the server through its agent and starts it as a service (nothing is downloaded on the server). The window is created once it is running.",
     "confirm": "Install misao",
     "installing": "Installing misao on {{server}}…"
+  },
+  "linkedPanel": {
+    "title": "Linked",
+    "all": "All",
+    "attention": "Needs attention",
+    "running": "Running",
+    "completed": "Completed",
+    "loading": "Loading",
+    "retry": "Retry",
+    "unlink": "Unlink",
+    "undo": "Undo",
+    "add": "Add link",
+    "search": "Search windows or tasks",
+    "empty": "No matching items",
+    "enter": "Enter",
+    "cycle": "This link would create a cycle",
+    "already_nested": "Already linked to another orchestrator",
+    "not_linkable": "This item cannot be linked"
   }
 }
