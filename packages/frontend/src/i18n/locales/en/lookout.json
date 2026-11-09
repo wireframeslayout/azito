@@ -41,8 +41,8 @@
     "failed": "{{count}} failed",
     "close": "Dismiss notification",
     "task": "Task #{{id}}",
-    "mux": "Switch mux: {{name}}",
-    "muxUnavailable": "Mux unavailable: {{name}}",
+    "mux": "{{name}} on {{serverName}} reopened with tmux. Use its menu to switch to misao.",
+    "muxUnavailable": "misao is unavailable on {{serverName}}; {{name}} reopened with tmux.",
     "firewall": "Firewall: {{name}}"
   }
 }

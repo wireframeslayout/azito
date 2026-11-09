@@ -106,7 +106,7 @@ export function MobileStatusBar({ openTask, connectPane }: MobileStatusBarProps)
   const workingCount = workingGroups.filter((group) => group.activeWindows > 0).length;
 
   useEffect(() => {
-    if (open) openedUnread.current = rows.filter(row => row.status === 'finished' && row.seenAt == null);
+    if (open) openedUnread.current = unreadRows;
   }, [open]);
 
   const handleToggle = () => {

@@ -115,3 +115,30 @@ it('retains actionable alerts when Lookout opens or is already open', () => {
   expect(screen.getByRole('status')).toHaveTextContent('toast.muxUnavailable');
   expect(screen.getByRole('status')).toHaveTextContent('toast.firewall');
 });
+it('shows mux and firewall alerts immediately when notifications are off', () => {
+  writeLookoutNotifyInterval('off');
+  render(<LookoutNotifier>content</LookoutNotifier>);
+  act(() => {
+    state.handlers.onMuxWake?.({ serverName: 's', windowId: 3, title: 'Window', reason: 'ask' });
+    state.handlers.onServerFirewall?.({ serverName: 's', diagnosis: { state: 'blocked', blockedBy: [], commands: [], checkedAt: 0, networkCategory: null } });
+  });
+  expect(screen.getByRole('status')).toHaveTextContent('toast.mux: Window');
+  expect(screen.getByRole('status')).toHaveTextContent('toast.firewall: s');
+});
+it('keeps a mux wake for a watched window at receipt and flush', () => {
+  state.rows = [{ key: 'x', title: 'x', status: 'running', serverName: 's', target: 'x', windowId: 3 }];
+  state.watched = true;
+  render(<LookoutNotifier>content</LookoutNotifier>);
+  act(() => state.handlers.onMuxWake?.({ serverName: 's', windowId: 3, title: 'Window', reason: 'ask' }));
+  act(() => vi.advanceTimersByTime(300000));
+  expect(screen.getByRole('status')).toHaveTextContent('toast.mux: Window');
+});
+it('removes displayed task events but retains actionable alerts when Lookout opens', () => {
+  writeLookoutNotifyInterval('immediate');
+  const view = render(<LookoutNotifier>content</LookoutNotifier>);
+  act(() => { state.handlers.onTaskStatus?.({ taskId: 1, status: 'done', title: 'Finished' }); state.handlers.onMuxWake?.({ serverName: 's', windowId: 3, title: 'Window', reason: 'ask' }); });
+  state.open = true;
+  view.rerender(<LookoutNotifier>content</LookoutNotifier>);
+  expect(screen.getByRole('status')).not.toHaveTextContent('Finished');
+  expect(screen.getByRole('status')).toHaveTextContent('toast.mux: Window');
+});

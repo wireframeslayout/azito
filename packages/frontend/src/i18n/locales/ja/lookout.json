@@ -41,8 +41,8 @@
     "failed": "失敗 {{count}} 件",
     "close": "通知を閉じる",
     "task": "タスク #{{id}}",
-    "mux": "mux の切り替え: {{name}}",
-    "muxUnavailable": "mux を切り替えられません: {{name}}",
+    "mux": "{{serverName}} の {{name}} を tmux で起こしました。メニューから misao に切り替えられます。",
+    "muxUnavailable": "{{serverName}} で misao を利用できないため、{{name}} を tmux で起こしました。",
     "firewall": "ファイアウォール: {{name}}"
   }
 }

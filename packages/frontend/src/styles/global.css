@@ -1285,5 +1285,10 @@ input[aria-invalid="true"]:focus-visible { outline-color: var(--danger) !importa
 .lookout-toast-names { color: var(--text-dim); overflow-wrap: anywhere; }
 .lookout-toast-action { width: 100%; text-align: left; color: var(--accent); }
 .lookout-toast-main:hover, .lookout-toast-action:hover, .lookout-toast-close:hover { background: var(--bg-card); }
+.lookout-toast-main:active, .lookout-toast-action:active, .lookout-toast-close:active { background: var(--selected-bg-strong); }
 .lookout-toast-main:focus-visible, .lookout-toast-action:focus-visible, .lookout-toast-close:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
-@media (max-width: 768px) { .lookout-toast { bottom: calc(2 * var(--space-6) + var(--space-3) + env(safe-area-inset-bottom)); } }
+@media (max-width: 768px) {
+  .lookout-toast { bottom: calc(2 * var(--space-6) + var(--space-3) + env(safe-area-inset-bottom)); }
+  .lookout-toast-main, .lookout-toast-action, .lookout-toast-close { min-height: calc(var(--space-6) + var(--space-5)); }
+  .lookout-toast-close { min-width: calc(var(--space-6) + var(--space-5)); display: flex; align-items: center; justify-content: center; }
+}

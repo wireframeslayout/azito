@@ -48,15 +48,15 @@ export function LookoutNotifier({ children }: { children: React.ReactNode }) {
   };
   const flush = () => {
     timer.current = null;
-    const visible = pending.current.filter(event => !watched(event));
+    const visible = pending.current.filter(event => event.action || !watched(event));
     pending.current = [];
     if (visible.length) updateToast(visible.reduce(addEvent, currentToast.current));
   };
   const accept = (input: Omit<NotifierEvent, 'at'>) => {
     const event: NotifierEvent = { ...input, at: Date.now() };
     const setting = latest.current.interval;
-    if (setting === 'off' || (latest.current.lookout.open && !event.action) || watched(event)) return;
-    if (setting === 'immediate') {
+    if (!event.action && (setting === 'off' || latest.current.lookout.open || watched(event))) return;
+    if (setting === 'immediate' || setting === 'off') {
       const now = Date.now();
       for (const [key, time] of recent.current) if (now - time >= 8000) recent.current.delete(key);
       if (recent.current.has(event.key)) return;
@@ -76,7 +76,7 @@ export function LookoutNotifier({ children }: { children: React.ReactNode }) {
       if (payload.running || (payload.reason !== 'api_error' && (payload.reason !== 'completed' || payload.operation))) return;
       accept({ key: `agent:${payload.serverName}:${payload.windowId ?? payload.target}:${payload.reason}`, kind: payload.reason === 'api_error' ? 'failed' : 'finished', title: payload.label ?? payload.target, serverName: payload.serverName, target: payload.target, windowId: payload.windowId });
     },
-    onMuxWake: payload => accept({ key: `mux:${payload.serverName}:${payload.windowId}`, kind: 'attention', title: t(payload.reason === 'ask' ? 'toast.mux' : 'toast.muxUnavailable', { name: payload.title ?? `#${payload.windowId}` }), serverName: payload.serverName, windowId: payload.windowId, taskId: payload.taskId, action: 'mux' }),
+    onMuxWake: payload => accept({ key: `mux:${payload.serverName}:${payload.windowId}`, kind: 'attention', title: t(payload.reason === 'ask' ? 'toast.mux' : 'toast.muxUnavailable', { name: payload.title ?? `#${payload.windowId}`, serverName: payload.serverName }), serverName: payload.serverName, windowId: payload.windowId, taskId: payload.taskId, action: 'mux' }),
     onServerFirewall: payload => accept({ key: `firewall:${payload.serverName}`, kind: 'attention', title: t('toast.firewall', { name: payload.serverName }), serverName: payload.serverName, action: 'firewall' }),
   });
   useEffect(() => {
@@ -94,13 +94,14 @@ export function LookoutNotifier({ children }: { children: React.ReactNode }) {
   useEffect(() => {
     if (timer.current) clearTimeout(timer.current);
     timer.current = null;
-    if (interval === 'off') pending.current = [];
+    if (interval === 'off') { pending.current = pending.current.filter(event => event.action); flush(); }
     else if (pending.current.length && interval === 'immediate') flush();
     else if (pending.current.length) timer.current = setTimeout(flush, intervalMs(interval));
   }, [interval]);
   useEffect(() => {
     if (!lookout.open) return;
     pending.current = pending.current.filter(event => event.action);
+    updateToast(currentToast.current.filter(event => event.action));
     if (!pending.current.length && timer.current) { clearTimeout(timer.current); timer.current = null; }
   }, [lookout.open]);
   useEffect(() => {
