@@ -33,7 +33,7 @@ export function Overlay({ open, onClose, labelledBy, children, variant = 'dialog
   const { bindings } = useHotkeyBindings();
   const spec = toggleAction ? bindings[toggleAction] : null;
   const spaceChord = spec?.steps.length === 2 && spec.steps.every(step => step.key === 'space');
-  useHotkey({ action: toggleAction ?? 'local:disabled-toggle', scope: 'overlay', overlayId: id, when: spaceChord ? 'not-editable' : 'always', handler: () => onClose() }, open && !!toggleAction);
+  useHotkey({ action: toggleAction ?? 'local:disabled-toggle', scope: 'overlay', overlayId: id, when: spaceChord && toggleAction !== 'maximize.open' ? 'not-editable' : 'always', handler: () => onClose() }, open && !!toggleAction);
   useHotkey({ action: 'local:overlay-previous', spec: parseKeySpec('Alt+ArrowUp'), scope: 'overlay', overlayId: id, handler: () => onPrevious?.() }, open && !!onPrevious);
   useHotkey({ action: 'local:overlay-next', spec: parseKeySpec('Alt+ArrowDown'), scope: 'overlay', overlayId: id, handler: () => onNext?.() }, open && !!onNext);
   useHotkey({ action: 'local:overlay-close', spec: parseKeySpec('Escape'), scope: 'overlay', overlayId: id, match: shouldCloseOnEscape, handler: event => { if (shouldCloseOnKey(event)) onClose(); } }, open && !closeDisabled && !busy);

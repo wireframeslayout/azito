@@ -1,6 +1,10 @@
 import { useEffect, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
-import { Overlay, Button } from '../ui';
+import { Overlay, Button, WindowIdChip } from '../ui';
+import { ProjectAvatar } from '../ui/ProjectAvatar';
+import WindowActivityIndicator from '../ui/WindowActivityIndicator';
+import { useAgentActivity } from '../../hooks/useAgentActivity';
+import { handleRovingTreeKeyDown } from '../../hooks/useTreeKeyboard';
 import { GlassPopoverSurface } from '../ui/GlassPopoverSurface';
 import { TerminalContainer } from '../TerminalContainer';
 import { TaskTreeRowContent } from '../workspace/TaskTreeRow';
@@ -8,6 +12,8 @@ import { useMaximizedWindow } from '../../hooks/useMaximizedWindow';
 import { useWorkspaceCatalog } from '../../hooks/useWorkspaceCatalog';
 import { useWorkspaceTargets } from '../../hooks/useWorkspaceTargets';
 import { useHotkeyBindings } from '../../hooks/useHotkeys';
+import { formatWindowTitleLine, resolveWindowTitle } from '@azito/shared';
+import { windowTitleInput } from '../../lib/windowDisplay';
 import { formatKeySpec } from '../../lib/hotkeys/keySpec';
 import { useOperationLinks } from '../../hooks/useOperationLinks';
 import { buildOpenTabsTree, visibleMaximizeWindows, type MaximizeTreeRow } from '../../lib/maximizeTreeModel';
@@ -17,6 +23,7 @@ export function MaximizedWindow() {
   const { selectedWindowId, workspace, select, close, isMobile } = useMaximizedWindow();
   const { allTasks, allProjects, refresh } = useWorkspaceCatalog();
   const { onOpenTask } = useWorkspaceTargets();
+  const { windowIndicator } = useAgentActivity();
   const [expanded, setExpanded] = useState<Set<string>>(new Set());
   const [focused, setFocused] = useState<string | null>(null);
   const [treeOpen, setTreeOpen] = useState(false);
@@ -26,6 +33,7 @@ export function MaximizedWindow() {
   const { bindings } = useHotkeyBindings();
   const previousWindowId = useRef<number | null>(null);
   const treeRef = useRef<HTMLDivElement>(null);
+  const lastTreeFocus = useRef<HTMLElement | null>(null);
   const terminalRef = useRef<HTMLDivElement>(null);
   const open = selectedWindowId !== null && !isMobile;
   const fallbackFocus = Array.from(document.querySelectorAll<HTMLElement>('[data-tab-id]')).find(element => element.dataset.tabId === workspace?.activeTabId) ?? null;
@@ -35,21 +43,38 @@ export function MaximizedWindow() {
   const window = selectedWindowId === null ? undefined : workspace?.windows.get(selectedWindowId);
   const task = window ? allTasks.find(item => item.windows?.some(w => w.id === window.id)) : undefined;
   const project = window ? allProjects.find(item => item.id === (task?.projectId ?? window.projectId)) : undefined;
+  const status = window ? windowIndicator(window.serverName, window.tmuxTarget) : null;
+  const knownKeys = useRef(new Set<string>());
+  const treeSelection = useRef<number | null>(null);
+  const rowSignature = JSON.stringify(rows);
   useEffect(() => {
-    if (open) {
-      setExpanded(new Set(rows.flatMap(row => [row.key, ...row.children.map(child => child.key)])));
-      const findSelected = (items: MaximizeTreeRow[]): string | undefined => {
-        for (const row of items) {
-          if (row.kind === 'window' && row.window.id === selectedWindowId) return row.key;
-          const child = findSelected(row.children);
-          if (child) return child;
-        }
-      };
-      setFocused(findSelected(rows) ?? rows[0]?.key ?? null);
+    if (!open) { knownKeys.current = new Set(); treeSelection.current = null; return; }
+    const keys = new Set<string>();
+    let selectedPath: string[] | undefined;
+    const visit = (items: MaximizeTreeRow[], path: string[]) => {
+      for (const row of items) {
+        keys.add(row.key);
+        const next = [...path, row.key];
+        if (row.kind === 'window' && row.window.id === selectedWindowId) selectedPath = next;
+        visit(row.children, next);
+      }
+    };
+    visit(rows, []);
+    const added = [...keys].filter(key => !knownKeys.current.has(key));
+    const initial = knownKeys.current.size === 0;
+    knownKeys.current = keys;
+    const selectionChanged = treeSelection.current !== selectedWindowId;
+    treeSelection.current = selectedWindowId;
+    const revealSelection = selectionChanged || (selectedPath && added.includes(selectedPath[selectedPath.length - 1]));
+    setExpanded(previous => new Set([...previous, ...added, ...(revealSelection ? selectedPath?.slice(0, -1) ?? [] : [])].filter(key => keys.has(key))));
+    setFocused(previous => (selectionChanged ? selectedPath?.at(-1) : undefined) ?? (previous && keys.has(previous) ? previous : selectedPath?.at(-1) ?? rows[0]?.key ?? null));
+    if (initial) {
       setTreeOpen(true);
+      if (selectedPath) requestAnimationFrame(() => treeRef.current?.querySelector<HTMLElement>('[role=treeitem][tabindex="0"]')?.focus());
+    } else if (lastTreeFocus.current && !lastTreeFocus.current.isConnected && document.activeElement === document.body) {
       requestAnimationFrame(() => treeRef.current?.querySelector<HTMLElement>('[role=treeitem][tabindex="0"]')?.focus());
     }
-  }, [open]);
+  }, [open, selectedWindowId, rowSignature]);
   useEffect(() => {
     const previous = previousWindowId.current;
     previousWindowId.current = selectedWindowId;
@@ -67,7 +92,7 @@ export function MaximizedWindow() {
   return <Overlay open={open} onClose={close} labelledBy="maximize-title" fallbackFocusTo={fallbackFocus} toggleAction="maximize.open" surface="solid" maxWidth="min(1400px, 96vw)" maxHeight="96vh" style={{ width: '96vw', height: '96vh', display: 'flex', flexDirection: 'column', padding: 0 }} onPrevious={() => move(-1)} onNext={() => move(1)} shouldCloseOnEscape={event => !(event.target instanceof HTMLElement && (event.target.closest('.xterm') || event.target.closest('[data-maximize-input]')))}>
 
     <header onFocusCapture={() => setInputFocused(false)} style={{ flexWrap: 'wrap', display: 'flex', gap: 'var(--space-2)', alignItems: 'center', padding: 'var(--space-3)', borderBottom: '1px solid var(--border)', minWidth: 0 }}>
-      <div style={{ flex: 1, minWidth: 0 }}><h2 id="maximize-title" style={{ margin: 0 }}>{task?.title ?? t('maximize.title')} · {window?.label ?? window?.tmuxTarget ?? t('maximize.missing')}</h2><div style={{ color: 'var(--text-dim)', fontSize: 'var(--font-sm)' }}>{window && `#${window.id} · ${window.serverName} · ${project?.name ?? ''} · ${window.sleeping ? t('maximize.sleeping') : task?.status ?? ''}`}</div></div>
+      <div style={{ flex: 1, minWidth: 0 }}><h2 id="maximize-title" style={{ margin: 0 }}>{task && <>{task.title} › </>}{window ? formatWindowTitleLine(resolveWindowTitle({ ...windowTitleInput(window), tmuxTarget: window.tmuxTarget })) : t('maximize.missing')}</h2><div style={{ display: 'flex', alignItems: 'center', gap: 'var(--space-2)', color: 'var(--text-dim)', fontSize: 'var(--font-sm)' }}>{window && <><WindowIdChip id={window.id} /><span>{window.serverName}</span>{project && <><ProjectAvatar project={project} size={20} /><span>{project.name}</span></>}{window.sleeping ? <span>{t('maximize.sleeping')}</span> : <><WindowActivityIndicator status={status} /><span>{t(`maximize.status.${status ?? 'unknown'}`)}</span></>}</>}</div></div>
       {task && <Button size="sm" onClick={() => { onOpenTask?.(task.id); close(); }}>{t('maximize.openTask')}</Button>}
       {window && <Button size="sm" onClick={() => { workspace?.openWindowTab(window.id); close(); }}>{t('maximize.openTab')}</Button>}
       <Button size="sm" onClick={close}>{t('maximize.close')}</Button>
@@ -78,13 +103,7 @@ export function MaximizedWindow() {
         <strong>{t('maximize.openTabs')}</strong>
         {links.error && <div role="alert">{t('maximize.linksError')} <Button size="sm" onClick={links.reload}>{t('maximize.retry')}</Button></div>}
         {rows.length === 0 && <p>{t('maximize.empty')}</p>}
-        <div ref={treeRef} role="tree" aria-label={t('maximize.openTabs')} onKeyDown={event => {
-          const items = Array.from(treeRef.current?.querySelectorAll<HTMLElement>('[role=treeitem]') ?? []); const index = items.indexOf(document.activeElement as HTMLElement);
-          if (event.key === ' ' ) { event.preventDefault(); return; }
-          if (event.key === 'ArrowDown' || event.key === 'ArrowUp' || event.key === 'Home' || event.key === 'End') { event.preventDefault(); const next = event.key === 'Home' ? 0 : event.key === 'End' ? items.length - 1 : Math.max(0, Math.min(items.length - 1, index + (event.key === 'ArrowDown' ? 1 : -1))); items[next]?.focus(); }
-          if (event.key === 'Enter') { event.preventDefault(); items[index]?.click(); }
-          if (event.key === 'ArrowRight' || event.key === 'ArrowLeft') { event.preventDefault(); const item = items[index]; const key = item?.dataset.key; if (!key) return; const isExpanded = expanded.has(key); if (item.hasAttribute('aria-expanded') && isExpanded !== (event.key === 'ArrowRight')) setExpanded(previous => { const next = new Set(previous); isExpanded ? next.delete(key) : next.add(key); return next; }); else if (event.key === 'ArrowLeft') item.closest('[role=group]')?.closest<HTMLElement>('[role=treeitem]')?.focus(); else if (item.getAttribute('aria-expanded') === 'true') item.querySelector<HTMLElement>('[role=group] [role=treeitem]')?.focus(); }
-        }}>
+        <div ref={treeRef} role="tree" aria-label={t('maximize.openTabs')} onFocusCapture={event => { if (event.target instanceof HTMLElement && event.target.getAttribute('role') === 'treeitem') lastTreeFocus.current = event.target; }} onKeyDown={event => handleRovingTreeKeyDown(event, treeRef.current, key => setExpanded(previous => { const next = new Set(previous); next.has(key) ? next.delete(key) : next.add(key); return next; }))}>
           {rows.map(row => <TreeRow key={row.key} row={row} expanded={expanded} focused={focused ?? rows[0]?.key} selected={selectedWindowId} onFocus={setFocused} onSelect={id => { select(id); setTreeOpen(false); }} onToggle={key => setExpanded(previous => { const next = new Set(previous); next.has(key) ? next.delete(key) : next.add(key); return next; })} />)}
         </div>
       </GlassPopoverSurface>
@@ -97,13 +116,13 @@ export function MaximizedWindow() {
   </Overlay>;
 }
 
-function TreeRow({ row, expanded, focused, selected, onFocus, onSelect, onToggle }: { row: MaximizeTreeRow; expanded: ReadonlySet<string>; focused: string | null; selected: number | null; onFocus: (key: string) => void; onSelect: (id: number) => void; onToggle: (key: string) => void }) {
+function TreeRow({ row, expanded, focused, selected, onFocus, onSelect, onToggle, level = 1 }: { row: MaximizeTreeRow; expanded: ReadonlySet<string>; focused: string | null; selected: number | null; onFocus: (key: string) => void; onSelect: (id: number) => void; onToggle: (key: string) => void; level?: number }) {
   const { t } = useTranslation('workspace');
   const id = row.kind === 'window' ? row.window.id : row.windowId;
   const label = row.kind === 'task' ? row.task.title : row.window.label || row.window.tmuxTarget;
   const hasChildren = row.children.length > 0;
-  return <div role="treeitem" tabIndex={focused === row.key ? 0 : -1} data-key={row.key} aria-selected={id !== null && id === selected} aria-expanded={hasChildren ? expanded.has(row.key) : undefined} onFocus={event => { if (event.target === event.currentTarget) onFocus(row.key); }} onClick={event => { event.stopPropagation(); if (id !== null) onSelect(id); }} style={{ padding: 'var(--space-1)', cursor: id === null ? 'default' : 'pointer', background: id !== null && id === selected ? 'var(--selected-bg-strong)' : undefined }}>
+  return <div role="treeitem" aria-level={level} tabIndex={focused === row.key ? 0 : -1} data-key={row.key} aria-selected={id !== null && id === selected} aria-expanded={hasChildren ? expanded.has(row.key) : undefined} onFocus={event => { if (event.target === event.currentTarget) onFocus(row.key); }} onClick={event => { event.stopPropagation(); if (id !== null) onSelect(id); }} style={{ padding: 'var(--space-1)', cursor: id === null ? 'default' : 'pointer', background: id !== null && id === selected ? 'var(--selected-bg-strong)' : undefined }}>
     <div style={{ display: 'flex', alignItems: 'center', gap: 'var(--space-1)', minWidth: 0 }}>{row.kind === 'task' ? <TaskTreeRowContent task={row.task} expanded={expanded.has(row.key)} onToggle={() => onToggle(row.key)} /> : <>{hasChildren && <button tabIndex={-1} aria-label={t(expanded.has(row.key) ? 'maximize.collapse' : 'maximize.expand')} onClick={event => { event.stopPropagation(); onToggle(row.key); }}>{expanded.has(row.key) ? '▾' : '▸'}</button>}<span style={{ flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{label}</span><span style={{ color: 'var(--text-dim)', fontSize: 'var(--font-2xs)' }}>W-{row.window.id}</span></>}</div>
-    {hasChildren && expanded.has(row.key) && <div role="group" style={{ paddingLeft: 'var(--space-3)' }}>{row.children.map(child => <TreeRow key={child.key} row={child} expanded={expanded} focused={focused} selected={selected} onFocus={onFocus} onSelect={onSelect} onToggle={onToggle} />)}</div>}
+    {hasChildren && expanded.has(row.key) && <div role="group" style={{ paddingLeft: 'var(--space-3)' }}>{row.children.map(child => <TreeRow key={child.key} row={child} expanded={expanded} focused={focused} selected={selected} onFocus={onFocus} onSelect={onSelect} onToggle={onToggle} level={level + 1} />)}</div>}
   </div>;
 }

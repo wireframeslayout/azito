@@ -32,10 +32,10 @@ test('switches registered windows and releases the extra terminal connection', a
   const baseline = connections.size;
   await app.keyboard.press('Control+Shift+M');
   const dialog = app.getByRole('dialog');
-  await expect(dialog).toContainText(`#${second}`);
+  await expect(dialog.locator('header')).toContainText(`W-${second}`);
   await expect.poll(() => connections.size).toBe(baseline + 1);
   await dialog.getByRole('treeitem', { name: new RegExp(`W-${first}`) }).click();
-  await expect(dialog).toContainText(`#${first}`);
+  await expect(dialog.locator('header')).toContainText(`W-${first}`);
   await expect.poll(() => connections.size).toBe(baseline + 1);
   await app.keyboard.press('Control+Shift+M');
   await expect(dialog).toHaveCount(0);

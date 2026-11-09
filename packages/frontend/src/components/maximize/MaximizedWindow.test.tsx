@@ -1,6 +1,6 @@
 import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { beforeAll, describe, expect, it, vi } from 'vitest';
-import { useEffect } from 'react';
+import { useEffect, useState } from 'react';
 import { HotkeyProvider } from '../../hooks/useHotkeys';
 import { MaximizedWindowProvider, useMaximizedWindow } from '../../hooks/useMaximizedWindow';
 import { MaximizedWindow } from './MaximizedWindow';
@@ -20,8 +20,9 @@ const first = { id: 1, serverName: 'host', tmuxTarget: 'one', label: 'One' } as 
 const second = { id: 2, serverName: 'host', tmuxTarget: 'two', label: 'Two' } as Window;
 function Workspace() {
   const { setWorkspace, open } = useMaximizedWindow();
-  useEffect(() => { setWorkspace({ tabs: [{ kind: 'window', windowId: 1 }, { kind: 'window', windowId: 2 }], activeWindowId: 1, activeTabId: null, windows: new Map([[1, first], [2, second]]), openWindowTab: vi.fn(), wakeWindow: vi.fn(async () => {}) }); return () => setWorkspace(null); }, [setWorkspace]);
-  return <button onClick={() => open(1)}>Launch</button>;
+  const [showSecond, setShowSecond] = useState(true);
+  useEffect(() => { setWorkspace({ tabs: showSecond ? [{ kind: 'window', windowId: 1 }, { kind: 'window', windowId: 2 }] : [{ kind: 'window', windowId: 1 }], activeWindowId: 1, activeTabId: null, windows: new Map([[1, first], [2, second]]), openWindowTab: vi.fn(), wakeWindow: vi.fn(async () => {}) }); return () => setWorkspace(null); }, [setWorkspace, showSecond]);
+  return <><button onClick={() => open(1)}>Launch</button><button onClick={() => open(99)}>Missing</button><button onClick={() => setShowSecond(value => !value)}>Change tabs</button><input aria-label="outside input" /></>;
 }
 describe('maximized window', () => {
   it('switches connections and returns focus to its opener', async () => {
@@ -42,4 +43,30 @@ describe('maximized window', () => {
     expect(mounts.disconnect).toHaveBeenCalledWith(2);
     await waitFor(() => expect(screen.getByText('Launch')).toHaveFocus());
   });
+  it('opens an unresolved ID without substituting another window', async () => {
+    render(<HotkeyProvider><MaximizedWindowProvider><Workspace /><MaximizedWindow /></MaximizedWindowProvider></HotkeyProvider>);
+    fireEvent.click(screen.getByText('Missing'));
+    expect(await screen.findByRole('dialog')).toHaveTextContent('Window not found');
+    expect(screen.queryByLabelText('terminal')).not.toBeInTheDocument();
+  });
+  it('handles the shortcut in an input and keeps roving focus after tab changes', async () => {
+    render(<HotkeyProvider><MaximizedWindowProvider><Workspace /><MaximizedWindow /></MaximizedWindowProvider></HotkeyProvider>);
+    fireEvent.click(screen.getByText('Change tabs'));
+    fireEvent.keyDown(screen.getByLabelText('outside input'), { key: 'M', ctrlKey: true, shiftKey: true });
+    await screen.findByRole('dialog');
+    expect(screen.queryByRole('treeitem', { name: /Two/ })).not.toBeInTheDocument();
+    fireEvent.click(screen.getByText('Change tabs'));
+    expect(await screen.findByRole('treeitem', { name: /Two/ })).toBeInTheDocument();
+    const firstRow = screen.getByRole('treeitem', { name: /One/ });
+    expect(firstRow).toHaveAttribute('aria-level', '1');
+    firstRow.focus();
+    fireEvent.keyDown(firstRow, { key: 'ArrowDown' });
+    expect(screen.getByRole('treeitem', { name: /Two/ })).toHaveFocus();
+    fireEvent.keyDown(screen.getByRole('treeitem', { name: /Two/ }), { key: ' ' });
+    expect(mounts.connect).not.toHaveBeenLastCalledWith(2);
+    fireEvent.click(screen.getByText('Change tabs'));
+    await waitFor(() => expect(screen.queryByRole('treeitem', { name: /Two/ })).not.toBeInTheDocument());
+    await waitFor(() => expect(firstRow).toHaveFocus());
+  });
+
 });

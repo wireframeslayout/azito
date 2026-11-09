@@ -26,10 +26,10 @@ export function MaximizedWindowProvider({ children }: { children: ReactNode }) {
   const isMobile = useIsMobile();
   const [workspace, setWorkspace] = useState<MaximizeWorkspace | null>(null);
   const [selectedWindowId, setSelectedWindowId] = useState<number | null>(null);
-  const open = useCallback((id: number) => { if (!isMobile && workspace?.windows.has(id)) setSelectedWindowId(id); }, [isMobile, workspace]);
+  const open = useCallback((id: number) => { if (!isMobile) setSelectedWindowId(id); }, [isMobile]);
   const close = useCallback(() => setSelectedWindowId(null), []);
   useEffect(() => { if (isMobile) close(); }, [isMobile, close]);
-  useHotkey({ action: 'maximize.open', scope: 'global', handler: () => { if (workspace?.activeWindowId != null) open(workspace.activeWindowId); } }, !isMobile && selectedWindowId === null && workspace?.activeWindowId != null);
+  useHotkey({ action: 'maximize.open', scope: 'global', when: 'always', handler: () => { if (workspace?.activeWindowId != null) open(workspace.activeWindowId); } }, !isMobile && selectedWindowId === null && workspace?.activeWindowId != null);
   return <Context.Provider value={{ selectedWindowId, workspace, setWorkspace, open, select: setSelectedWindowId, close, isMobile }}>{children}</Context.Provider>;
 }
 export function useOptionalMaximizedWindow(): ContextValue | null { return useContext(Context); }

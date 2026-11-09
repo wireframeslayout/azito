@@ -1,5 +1,5 @@
 {
-  "maximize": {"action": "Maximize window", "title": "Window", "missing": "Window not found", "openTask": "Open task", "openTab": "Open in tab", "close": "Close", "openTabs": "Open tabs", "linksError": "Could not load window hierarchy.", "retry": "Retry", "empty": "No open windows", "sleeping": "This window is sleeping.", "wake": "Wake window", "inputHint": "Escape goes to the input · Alt + ↑ / ↓: switch windows", "hint": "Alt + ↑ / ↓: switch windows", "collapse": "Collapse", "expand": "Expand"},
+  "maximize": {"status": {"unknown": "Status unavailable", "working": "Working", "blocked": "Needs attention", "finished": "Finished"}, "action": "Maximize window", "title": "Window", "missing": "Window not found", "openTask": "Open task", "openTab": "Open in tab", "close": "Close", "openTabs": "Open tabs", "linksError": "Could not load window hierarchy.", "retry": "Retry", "empty": "No open windows", "sleeping": "This window is sleeping.", "wake": "Wake window", "inputHint": "Escape goes to the input · Alt + ↑ / ↓: switch windows", "hint": "Alt + ↑ / ↓: switch windows", "collapse": "Collapse", "expand": "Expand"},
   "rightPanel": {"title": "Linked windows", "open": "Open linked windows panel", "close": "Close linked windows panel"},
   "navigation": { "taskOpenFailed": "Could not open the task." },
   "tab": {

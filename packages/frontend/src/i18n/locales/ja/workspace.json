@@ -1,5 +1,5 @@
 {
-  "maximize": {"action": "窓を拡大", "title": "窓", "missing": "窓が見つかりません", "openTask": "タスクを開く", "openTab": "タブで開く", "close": "閉じる", "openTabs": "開いているタブ", "linksError": "窓の階層を取得できませんでした。", "retry": "再試行", "empty": "開いている窓はありません", "sleeping": "この窓はスリープ中です。", "wake": "起動する", "inputHint": "Esc は入力先へ送信 · Alt + ↑ / ↓: 窓を切り替え", "hint": "Alt + ↑ / ↓: 窓を切り替え", "collapse": "折りたたむ", "expand": "展開する"},
+  "maximize": {"status": {"unknown": "状態未取得", "working": "稼働中", "blocked": "要対応", "finished": "完了"}, "action": "窓を拡大", "title": "窓", "missing": "窓が見つかりません", "openTask": "タスクを開く", "openTab": "タブで開く", "close": "閉じる", "openTabs": "開いているタブ", "linksError": "窓の階層を取得できませんでした。", "retry": "再試行", "empty": "開いている窓はありません", "sleeping": "この窓はスリープ中です。", "wake": "起動する", "inputHint": "Esc は入力先へ送信 · Alt + ↑ / ↓: 窓を切り替え", "hint": "Alt + ↑ / ↓: 窓を切り替え", "collapse": "折りたたむ", "expand": "展開する"},
   "rightPanel": {"title": "連携中の窓", "open": "連携中の窓を開く", "close": "連携中の窓を閉じる"},
   "navigation": { "taskOpenFailed": "タスクを開けませんでした。" },
   "tab": {
