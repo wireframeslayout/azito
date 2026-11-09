@@ -35,6 +35,14 @@ export default function KeyboardSection() {
           ]} />
         </div>
       </div>
+      <div style={{ display: 'flex', alignItems: 'center', flexWrap: 'wrap', gap: 'var(--space-3)' }}>
+        <div style={{ fontWeight: 600, flex: 1, minWidth: 'min(100%, calc(var(--space-4) * 9))' }}>{t('keyboard.maximize')}</div>
+        <SegmentedToggle wrap ariaLabel={t('keyboard.maximize')} value={bindingValue('maximize.open')} onChange={value => changeBinding('maximize.open', value)} options={[
+          { value: 'Ctrl+Shift+M', label: 'Ctrl+Shift+M' },
+          { value: 'Ctrl+Shift+K', label: 'Ctrl+Shift+K' },
+          { value: 'disabled', label: t('keyboard.disabled') },
+        ]} />
+      </div>
       <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap', gap: 'var(--space-3)' }}>
         <div style={{ flex: 1, minWidth: 'min(100%, calc(var(--space-4) * 9))' }}>
           <div style={{ fontWeight: 600 }}>{t('keyboard.interval')}</div>

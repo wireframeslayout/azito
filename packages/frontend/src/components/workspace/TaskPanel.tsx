@@ -42,6 +42,7 @@ import { closeBrowserGroup } from '../../lib/browserGroup';
 import type { Task, Unit, Window, Session, Project, ExecutionApprovalData } from '../../pages/workspace/types';
 import type { PersistedTab } from '../../hooks/useTabPersistence';
 import { useIsMobile } from '../../hooks/useIsMobile';
+import { useOptionalMaximizedWindow } from '../../hooks/useMaximizedWindow';
 import { useClickOutside } from '../../hooks/useClickOutside';
 import { isSameWindowTarget } from '@azito/shared';
 import { resolveWindowTitle, formatWindowTitleLine } from '@azito/shared';
@@ -470,6 +471,7 @@ export default function TaskPanel({
   const { menu: ctxMenu, show: showCtxMenu, showAt: showCtxMenuAt, hide: hideCtxMenu } = useContextMenu();
   const moreMenu = useContextMenu();
   const isMobile = useIsMobile();
+  const maximizeOpen = useOptionalMaximizedWindow()?.open;
   // SP ⋯ フルサイズメニュー（TaskDetailMenu、Issue #69 S8）— デスクトップの ⋯ は従来どおり
   // moreMenu（ContextMenu）を使う。own タブ id は useTabPersistence.openTask と同じ形式
   // （`task:${taskId}`）— ピン状態/タブを閉じる操作の対象を特定するために使う。
@@ -526,6 +528,7 @@ export default function TaskPanel({
     proj ? String(proj.id) : undefined,
     onRefresh,
     {
+      maximizeWindow: isMobile ? undefined : maximizeOpen,
       showContextMenu: showCtxMenu,
       showContextMenuAt: showCtxMenuAt,
       findTaskByTarget,
@@ -1263,11 +1266,12 @@ export default function TaskPanel({
       onClose={(tabId) => handlePaneCloseTab(pane.id, tabId)}
       onTabDragStart={(tabId) => setPaneDrag({ tabId, fromPaneId: pane.id })}
       onTabDragEnd={() => setPaneDrag(null)}
+      onTabDoubleClick={tabId => { const parsed = parseWindowTabId(tabId); const window = parsed && windows.find(w => w.serverName === parsed.serverName && isSameWindowTarget(w.tmuxTarget, parsed.target)); if (!isMobile && window) maximizeOpen?.(window.id); }}
       onTabContextMenu={(e, tabId) => showTabContextMenu(e, pane, tabId)}
       size="md"
       trailing={renderPaneTrailing(pane)}
     />
-  ), [buildMiniTab, handlePaneSelectTab, handlePaneCloseTab, showTabContextMenu, renderPaneTrailing]);
+  ), [buildMiniTab, handlePaneSelectTab, handlePaneCloseTab, showTabContextMenu, renderPaneTrailing, windows, isMobile, maximizeOpen]);
 
   const renderPaneEmpty = useCallback(() => (
     <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', height: '100%', color: 'var(--text-dim)', fontSize: 'var(--font-md)', textAlign: 'center', padding: 16 }}>

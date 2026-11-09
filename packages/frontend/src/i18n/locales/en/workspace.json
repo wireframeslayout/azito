@@ -1,4 +1,5 @@
 {
+  "maximize": {"childOrchestrator": "Child", "linkedTitle": "Linked to {{name}}", "linkedEmpty": "No linked windows", "status": {"unknown": "Status unavailable", "working": "Working", "blocked": "Needs attention", "finished": "Finished"}, "action": "Open maximized", "missing": "Window not found", "openTask": "Open task", "openTab": "Open in tab", "close": "Close", "openTabs": "Open tabs", "linksError": "Could not load window hierarchy.", "retry": "Retry", "empty": "No open windows", "sleeping": "This window is sleeping.", "wake": "Wake window", "inputHint": "Escape goes to the input · Alt + ↑ / ↓: switch windows", "hint": "Alt + ↑ / ↓: switch windows", "collapse": "Collapse", "expand": "Expand"},
   "orchestration": {
     "links": "{{count}} linked",
     "showSidebar": "Expand orchestration list",
@@ -44,6 +45,8 @@
     "taskOpenFailed": "Could not open the task."
   },
   "tab": {
+    "pinnedState": "Pinned",
+    "dirtyState": "Unsaved",
     "closeDirtyTitle": "Close tab with unsaved changes?",
     "closeDirtyMessage": "\"{{name}}\" has unsaved changes. Closing this tab will discard them.",
     "closeDirtyConfirm": "Discard and close",

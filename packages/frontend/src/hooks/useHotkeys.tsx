@@ -11,6 +11,7 @@ export interface HotkeyRegistration {
   scope: 'global' | 'overlay';
   overlayId?: symbol;
   when?: 'always' | 'not-editable';
+  match?: (e: KeyboardEvent) => boolean;
   handler: (e: KeyboardEvent) => void;
 }
 type Registration = { current: HotkeyRegistration };
@@ -70,6 +71,7 @@ export function HotkeyProvider({ children }: { children: ReactNode }) {
     for (const [id, ref] of [...registrations.current].reverse()) {
       const reg = ref.current;
       if (top ? reg.scope !== 'overlay' || reg.overlayId !== top.id : reg.scope !== 'global') { matchers.current.delete(id); continue; }
+      if (reg.match && !reg.match(e)) { matchers.current.delete(id); continue; }
       if (reg.when === 'not-editable' && (terminal || isEditableTarget(e.target))) { matchers.current.delete(id); continue; }
       const spec = reg.action.startsWith('local:') ? reg.spec : currentBindings[reg.action as HotkeyAction];
       if (!spec) continue;

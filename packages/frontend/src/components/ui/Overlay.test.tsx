@@ -1,7 +1,8 @@
 import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { ReactElement } from 'react';
-import { HotkeyProvider } from '../../hooks/useHotkeys';
+import { HotkeyProvider, useHotkeyBindings } from '../../hooks/useHotkeys';
+import { parseKeySpec } from '../../lib/hotkeys/keySpec';
 import { Overlay } from './Overlay';
 
 function isInertTree(element: HTMLElement): boolean {
@@ -120,4 +121,31 @@ describe('Overlay', () => {
     rerender(view(false));
     await waitFor(() => expect(screen.getByText('Open nested')).toHaveFocus());
   });
+});
+
+it('passes Escape through when the overlay predicate rejects it', async () => {
+  const close = vi.fn();
+  render(<HotkeyProvider><Overlay open labelledBy="escape-test" onClose={close} shouldCloseOnEscape={event => !(event.target instanceof HTMLInputElement)}><h2 id="escape-test">Escape test</h2><input aria-label="terminal" /><button>Other</button></Overlay></HotkeyProvider>);
+  const event = new KeyboardEvent('keydown', { key: 'Escape', bubbles: true, cancelable: true });
+  screen.getByLabelText('terminal').dispatchEvent(event);
+  await new Promise(resolve => setTimeout(resolve));
+  expect(event.defaultPrevented).toBe(false);
+  expect(close).not.toHaveBeenCalled();
+  fireEvent.keyDown(screen.getByText('Other'), { key: 'Escape' });
+  await waitFor(() => expect(close).toHaveBeenCalledOnce());
+});
+
+it('allows the maximize toggle chord in an editable target', async () => {
+  const close = vi.fn();
+  function Configure() {
+    const { setBinding } = useHotkeyBindings();
+    return <><button onClick={() => setBinding('search.open', null)}>Disable search</button><button onClick={() => setBinding('maximize.open', parseKeySpec('Space Space'))}>Assign chord</button></>;
+  }
+  render(<HotkeyProvider><Configure /><Overlay open labelledBy="toggle" onClose={close} toggleAction="maximize.open" toggleWhen="always"><h2 id="toggle">Toggle</h2><input aria-label="terminal" /></Overlay></HotkeyProvider>);
+  fireEvent.click(screen.getByText('Disable search'));
+  fireEvent.click(screen.getByText('Assign chord'));
+  fireEvent.keyDown(screen.getByLabelText('terminal'), { key: ' ' });
+  fireEvent.keyDown(screen.getByLabelText('terminal'), { key: ' ' });
+  expect(close).toHaveBeenCalledOnce();
+  localStorage.clear();
 });

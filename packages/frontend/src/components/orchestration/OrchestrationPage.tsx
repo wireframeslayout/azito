@@ -7,6 +7,7 @@ import { useOrchestrationModel } from '../../hooks/useOrchestrationModel';
 import { useAgentActivity } from '../../hooks/useAgentActivity';
 import { orchestratorStatus, buildOrchestratorTree } from '../../lib/orchestrationModel';
 import { useOrchestrators } from '../../hooks/useOrchestrators';
+import { useOptionalMaximizedWindow } from '../../hooks/useMaximizedWindow';
 import { useWorkspaceTargets } from '../../hooks/useWorkspaceTargets';
 import { BottomSheet } from '../ui/BottomSheet';
 import { LinkedPanel } from './LinkedPanel';
@@ -28,6 +29,7 @@ export interface OrchestrationPageProps { rightPanel?: ReactNode }
 export default function OrchestrationPage({ rightPanel }: OrchestrationPageProps): ReactNode {
   const { t } = useTranslation('workspace');
   const isMobile = useIsMobile();
+  const maximized = useOptionalMaximizedWindow();
   const { onOpenInTerminal, linkedSheetOpen: sheetOpen, setLinkedSheetOpen: setSheetOpen } = useWorkspaceTargets();
   useEffect(() => () => setSheetOpen(false), [setSheetOpen]);
   const [sheetWindow, setSheetWindow] = useState<Window | null>(null);
@@ -52,7 +54,7 @@ export default function OrchestrationPage({ rightPanel }: OrchestrationPageProps
   while (parent != null && !ancestors.includes(parent)) { ancestors.push(parent); parent = windows.find(window => window.id === parent)?.parentWindowId; }
   const findNode = (nodes: typeof tree): (typeof tree)[number] | undefined => { for (const node of nodes) { if (node.window.id === selected?.id) return node; const found = findNode(node.children); if (found) return found; } return undefined; };
   const openInTab = (window: Window) => { setSheetOpen(false); onOpenInTerminal?.({ serverName: window.serverName, target: window.tmuxTarget, windowId: window.id }); navigate(window.projectId ? paths.workspace(window.projectId) : paths.root()); };
-  const panel = selected && <LinkedPanel key={selected.id} windowId={selected.id} children={findNode(tree)?.children ?? []} onWindowOrder={setWindowOrder} onEnter={childId => navigate(paths.orchestration(childId))} enabled={isMobile ? sheetOpen : open} excludedWindowIds={[selected.id, ...ancestors]} onExpand={openInTab} onOpen={window => { if (isMobile) { setFixedOrder(windowOrder); setSheetWindow(window); return; } openInTab(window); }} onProject={projectId => navigate(paths.workspace(projectId))} />;
+  const panel = selected && <LinkedPanel key={selected.id} windowId={selected.id} children={findNode(tree)?.children ?? []} onWindowOrder={setWindowOrder} onEnter={childId => navigate(paths.orchestration(childId))} enabled={isMobile ? sheetOpen : open} excludedWindowIds={[selected.id, ...ancestors]} onExpand={isMobile ? openInTab : window => maximized?.open(window.id, window)} onOpen={window => { if (isMobile) { setFixedOrder(windowOrder); setSheetWindow(window); return; } openInTab(window); }} onProject={projectId => navigate(paths.workspace(projectId))} />;
   useEffect(() => {
     if (status !== 'ready') return;
     if (!id && windows.length && !state?.missing && snapshotStatus === 'ready') {

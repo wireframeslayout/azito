@@ -31,11 +31,12 @@ interface MiniTabBarProps {
    */
   onTabDragStart?: (key: string) => void;
   onTabDragEnd?: () => void;
+  onTabDoubleClick?: (key: string) => void;
   onTabContextMenu?: (e: React.MouseEvent, key: string) => void;
 }
 
 export function MiniTabBar({
-  tabs, activeKey, onSelect, size = 'sm', trailing, onClose, onTabDragStart, onTabDragEnd, onTabContextMenu,
+  tabs, activeKey, onSelect, size = 'sm', trailing, onClose, onTabDragStart, onTabDragEnd, onTabDoubleClick, onTabContextMenu,
 }: MiniTabBarProps) {
   const fontSize = size === 'sm' ? 11 : 12;
   const padding = size === 'sm' ? '6px 10px' : '8px 14px';
@@ -66,6 +67,7 @@ export function MiniTabBar({
                 onTabDragStart?.(tab.key);
               } : undefined}
               onDragEnd={draggable ? () => onTabDragEnd?.() : undefined}
+              onDoubleClick={() => onTabDoubleClick?.(tab.key)}
               onContextMenu={onTabContextMenu ? (e) => { e.preventDefault(); onTabContextMenu(e, tab.key); } : undefined}
               onClick={() => { if (!tab.disabled) onSelect(tab.key); }}
               disabled={tab.disabled}
@@ -86,6 +88,7 @@ export function MiniTabBar({
               {tab.extra}
               {tab.closable !== false && onClose && (
                 <span
+                  onDoubleClick={e => e.stopPropagation()}
                   onClick={(e) => { e.stopPropagation(); onClose(tab.key); }}
                   className="icon-btn"
                   style={{ display: 'inline-flex', alignItems: 'center', color: 'var(--text-dim)', cursor: 'pointer', padding: '0 2px', borderRadius: 'var(--radius-sm)', lineHeight: 1 }}

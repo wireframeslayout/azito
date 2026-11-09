@@ -18,20 +18,26 @@ interface OverlayProps {
   closeDisabled?: boolean;
   busy?: boolean;
   toggleAction?: HotkeyAction;
+  toggleWhen?: 'always' | 'not-editable';
   fallbackFocusTo?: HTMLElement | null;
+  shouldCloseOnEscape?: (event: KeyboardEvent) => boolean;
+  onPrevious?: () => void;
+  onNext?: () => void;
   maxWidth?: number | string;
   maxHeight?: string;
   style?: CSSProperties;
 }
 
-export function Overlay({ open, onClose, labelledBy, children, variant = 'dialog', surface = 'elevated', initialFocusRef, dismissOnBackdrop = true, closeDisabled = false, busy = false, toggleAction, fallbackFocusTo, maxWidth = 500, maxHeight = '90vh', style }: OverlayProps) {
+export function Overlay({ open, onClose, labelledBy, children, variant = 'dialog', surface = 'elevated', initialFocusRef, dismissOnBackdrop = true, closeDisabled = false, busy = false, toggleAction, toggleWhen, fallbackFocusTo, shouldCloseOnEscape, onPrevious, onNext, maxWidth = 500, maxHeight = '90vh', style }: OverlayProps) {
   const ref = useRef<HTMLDivElement>(null);
   const { id, isTop } = useOverlayStack(open, ref, true, fallbackFocusTo);
   const { bindings } = useHotkeyBindings();
   const spec = toggleAction ? bindings[toggleAction] : null;
   const spaceChord = spec?.steps.length === 2 && spec.steps.every(step => step.key === 'space');
-  useHotkey({ action: toggleAction ?? 'local:disabled-toggle', scope: 'overlay', overlayId: id, when: spaceChord ? 'not-editable' : 'always', handler: () => onClose() }, open && !!toggleAction);
-  useHotkey({ action: 'local:overlay-close', spec: parseKeySpec('Escape'), scope: 'overlay', overlayId: id, handler: event => { if (shouldCloseOnKey(event)) onClose(); } }, open && !closeDisabled && !busy);
+  useHotkey({ action: toggleAction ?? 'local:disabled-toggle', scope: 'overlay', overlayId: id, when: toggleWhen ?? (spaceChord ? 'not-editable' : 'always'), handler: () => onClose() }, open && !!toggleAction);
+  useHotkey({ action: 'local:overlay-previous', spec: parseKeySpec('Alt+ArrowUp'), scope: 'overlay', overlayId: id, handler: () => onPrevious?.() }, open && !!onPrevious);
+  useHotkey({ action: 'local:overlay-next', spec: parseKeySpec('Alt+ArrowDown'), scope: 'overlay', overlayId: id, handler: () => onNext?.() }, open && !!onNext);
+  useHotkey({ action: 'local:overlay-close', spec: parseKeySpec('Escape'), scope: 'overlay', overlayId: id, match: shouldCloseOnEscape, handler: event => { if (shouldCloseOnKey(event)) onClose(); } }, open && !closeDisabled && !busy);
 
   useEffect(() => {
     if (!open) return;

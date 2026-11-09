@@ -5,6 +5,8 @@ import { CrossProjectNavigationProvider } from '../hooks/useCrossProjectNavigati
 import { Suspense, lazy } from 'react';
 import { useLocation } from 'react-router-dom';
 import ProjectSidebar from './ProjectSidebar';
+import { MaximizedWindowProvider } from '../hooks/useMaximizedWindow';
+import { MaximizedWindow } from './maximize/MaximizedWindow';
 import { WorkspaceTargetsProvider } from '../hooks/useWorkspaceTargets';
 import { AgentActivityProvider } from '../hooks/useAgentActivity';
 import { LookoutProvider } from '../hooks/useLookout';
@@ -46,6 +48,7 @@ export default function Layout() {
     <OrchestratorsProvider>
     <WorkspaceCatalogProvider>
     <WorkspaceTargetsProvider>
+    <MaximizedWindowProvider>
     <CrossProjectNavigationProvider>
       <AgentActivityProvider>
       <LookoutProvider>
@@ -100,6 +103,7 @@ export default function Layout() {
             Workspace 側が MobileStatusBar 自体をレンダーしないため常に空のまま（高さ0）。 */}
         <div id={MOBILE_STATUS_SLOT_ID} style={{ flexShrink: 0, position: 'relative' }} />
         <UpdateOverlay />
+        <MaximizedWindow />
         <style>{`
           .project-sidebar-desktop { display: block; }
           .workspace-panel { background: var(--bg); }
@@ -122,6 +126,7 @@ export default function Layout() {
       </LookoutProvider>
       </AgentActivityProvider>
     </CrossProjectNavigationProvider>
+        </MaximizedWindowProvider>
     </WorkspaceTargetsProvider>
     </WorkspaceCatalogProvider>
     </OrchestratorsProvider>

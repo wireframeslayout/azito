@@ -1,4 +1,5 @@
 {
+  "maximize": {"childOrchestrator": "子", "linkedTitle": "{{name}}の連携中", "linkedEmpty": "連携中の窓はありません", "status": {"unknown": "状態未取得", "working": "稼働中", "blocked": "要対応", "finished": "完了"}, "action": "拡大して開く", "missing": "窓が見つかりません", "openTask": "タスクを開く", "openTab": "タブで開く", "close": "閉じる", "openTabs": "開いているタブ", "linksError": "窓の階層を取得できませんでした。", "retry": "再試行", "empty": "開いている窓はありません", "sleeping": "この窓はスリープ中です。", "wake": "起動する", "inputHint": "Esc は入力先へ送信 · Alt + ↑ / ↓: 窓を切り替え", "hint": "Alt + ↑ / ↓: 窓を切り替え", "collapse": "折りたたむ", "expand": "展開する"},
   "orchestration": {
     "links": "連携 {{count}}",
     "showSidebar": "オーケストレーション一覧を展開",
@@ -44,6 +45,8 @@
     "taskOpenFailed": "タスクを開けませんでした。"
   },
   "tab": {
+    "pinnedState": "ピン留め",
+    "dirtyState": "未保存",
     "closeDirtyTitle": "未保存の変更があるタブを閉じますか？",
     "closeDirtyMessage": "「{{name}}」には未保存の変更があります。このタブを閉じると変更は破棄されます。",
     "closeDirtyConfirm": "破棄して閉じる",
