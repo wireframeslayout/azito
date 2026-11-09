@@ -86,7 +86,10 @@ it('handles invalid saved expansion and removes closed window IDs', () => {
   view.unmount();
   localStorage.setItem('tasks-sidebar-expanded-windows', '{"10":{"1":true,"999":false}}');
   render(<TasksSidebar {...props} />);
-  expect(JSON.parse(localStorage.getItem('tasks-sidebar-expanded-windows')!)).toEqual({ '10': { '1': true } });
+  const parent = document.querySelector('[data-window-id="1"]') as HTMLElement;
+  parent.focus();
+  fireEvent.keyDown(parent, { key: 'ArrowLeft' });
+  expect(JSON.parse(localStorage.getItem('tasks-sidebar-expanded-windows')!)).toEqual({ '10': { '1': false } });
 });
 
 
@@ -103,4 +106,30 @@ it('preserves expansion when switching projects and back', () => {
   view.rerender(<TasksSidebar {...props} projectId={10} tasks={[taskA]} />);
   expect(document.querySelector('[data-window-id="1"]')).toHaveAttribute('aria-expanded', 'true');
   expect(JSON.parse(localStorage.getItem('tasks-sidebar-expanded-windows')!)).toEqual({ '10': { '1': true } });
+});
+
+
+it('retains the old project expansion while task data changes ahead of the project', () => {
+  const saved = { '10': { '1': true }, '20': { '3': false } };
+  localStorage.setItem('tasks-sidebar-expanded-windows', JSON.stringify(saved));
+  const taskA = { id: 7, title: 'A', status: 'open', windows: [{ id: 1, isPrimary: true, tmuxTarget: 's:1', serverName: 's' }, { id: 2, isPrimary: false, tmuxTarget: 's:2', serverName: 's' }] } as Task;
+  const taskB = { id: 8, title: 'B', status: 'open', windows: [{ id: 3, isPrimary: true, tmuxTarget: 's:3', serverName: 's' }] } as Task;
+  const props = { titleData: {} as never, onOpenTask: vi.fn(), onOpenAllTasks: vi.fn(), onCreateTask: vi.fn(), onOpenTaskWindow: vi.fn(), onOpenTaskBrowser: vi.fn() };
+  const view = render(<TasksSidebar {...props} projectId={10} tasks={[taskA]} />);
+  view.rerender(<TasksSidebar {...props} projectId={10} tasks={[taskB]} />);
+  expect(JSON.parse(localStorage.getItem('tasks-sidebar-expanded-windows')!)).toEqual(saved);
+  view.rerender(<TasksSidebar {...props} projectId={20} tasks={[taskB]} />);
+  view.rerender(<TasksSidebar {...props} projectId={10} tasks={[taskA]} />);
+  expect(document.querySelector('[data-window-id="1"]')).toHaveAttribute('aria-expanded', 'true');
+});
+
+it('retains saved expansion when tasks are initially empty', () => {
+  const saved = { '10': { '1': true } };
+  localStorage.setItem('tasks-sidebar-expanded-windows', JSON.stringify(saved));
+  const props = { projectId: 10, titleData: {} as never, onOpenTask: vi.fn(), onOpenAllTasks: vi.fn(), onCreateTask: vi.fn(), onOpenTaskWindow: vi.fn(), onOpenTaskBrowser: vi.fn() };
+  const view = render(<TasksSidebar {...props} tasks={[]} />);
+  expect(JSON.parse(localStorage.getItem('tasks-sidebar-expanded-windows')!)).toEqual(saved);
+  const task = { id: 7, title: 'Task', status: 'open', windows: [{ id: 1, isPrimary: true, tmuxTarget: 's:1', serverName: 's' }, { id: 2, isPrimary: false, tmuxTarget: 's:2', serverName: 's' }] } as Task;
+  view.rerender(<TasksSidebar {...props} tasks={[task]} />);
+  expect(document.querySelector('[data-window-id="1"]')).toHaveAttribute('aria-expanded', 'true');
 });

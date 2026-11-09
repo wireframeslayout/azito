@@ -113,18 +113,6 @@ export default function TasksSidebar({
 
   const { parents, error: linksError } = useOperationLinks(loading ? [] : tasks.filter(task => task.status !== 'archived').map(task => task.id));
 
-  useEffect(() => {
-    if (loading) return;
-    const validIds = new Set(tasks.flatMap(task => (task.windows ?? []).map(window => String(window.id))));
-    setExpansionByProject(previous => {
-      const projectEntries = previous[projectId] ?? {};
-      const entries = Object.entries(projectEntries).filter(([key]) => validIds.has(key));
-      if (entries.length === Object.keys(projectEntries).length) return previous;
-      const next = { ...previous, [projectId]: Object.fromEntries(entries) };
-      try { localStorage.setItem(WINDOW_EXPAND_STORAGE_KEY, JSON.stringify(next)); } catch { /* best-effort */ }
-      return next;
-    });
-  }, [tasks, loading, projectId]);
 
   const totalVisible = groups.reduce((n, g) => n + g.rows.length, 0);
   const nonArchivedCount = tasks.filter((t) => t.status !== 'archived').length;
