@@ -1,3 +1,5 @@
+import { lookoutRoutes } from '../modules/lookout/routes';
+import { LookoutSummaryService } from '../modules/lookout/LookoutSummaryService';
 import orchestrationRoutes from '../modules/orchestration/routes';
 import { muxSwitchSettingsRoutes } from '../modules/windows/muxSwitchSettingsRoutes';
 import { formatWindowTitleLine, resolveWindowTitle } from '@azito/shared';
@@ -613,6 +615,8 @@ export async function buildServer(app: FastifyInstance, wiring: Wiring, port: nu
       });
     },
   });
+  const lookoutService = new LookoutSummaryService(wiring.lookoutSettingsRepo, windowRepo, serverRepo, windowSessionResolver, transcriptSourceProvider);
+  await app.register(lookoutRoutes, { settings: wiring.lookoutSettingsRepo, service: lookoutService });
   await app.register(muxSwitchSettingsRoutes, { settingsRepo: wiring.muxSwitchSettingsRepo, serverRepo, muxDriverRegistry });
   await app.register(windowsRoutes, {
     attribution: wiring.orchestrationLinks, windowRoles: wiring.windowRoles,
@@ -888,12 +892,20 @@ export async function buildServer(app: FastifyInstance, wiring: Wiring, port: nu
 
   // ─── Task status → NotificationBus bridge ───
 
-  executeTaskUseCase.events.on('log', (entry: { taskId: number; type: string; content: { status?: string } }) => {
+  executeTaskUseCase.events.on('log', (entry: { taskId: number; type: string; content: { status?: string; reason?: string } }) => {
     if (entry.type !== 'status_change' || !entry.content.status) return;
     const task = taskRepo.findById(entry.taskId);
     notificationBus.emit({
       type: 'task:status',
-      payload: { taskId: entry.taskId, status: entry.content.status, title: task?.title, projectId: task?.projectId },
+      payload: {
+        taskId: entry.taskId,
+        status: entry.content.status,
+        title: task?.title,
+        projectId: task?.projectId,
+        // Notification-only statuses (e.g. worker_launch_failed, #639) carry a short reason code (not shown in the
+        // UI; the sentence comes from the frontend i18n); real status transitions have none and the field stays absent.
+        ...(entry.content.reason ? { reason: entry.content.reason } : {}),
+      },
     });
   });
 

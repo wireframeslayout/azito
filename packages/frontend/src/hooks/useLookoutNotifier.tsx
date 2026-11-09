@@ -3,7 +3,8 @@ import { useNavigate } from 'react-router-dom';
 import { useTranslation } from 'react-i18next';
 import { LookoutToast } from '../components/lookout/LookoutToast';
 import { addEvent, type PendingEvent } from '../lib/lookoutBatch';
-import { LOOKOUT_NOTIFY_INTERVAL_CHANGED, LOOKOUT_NOTIFY_INTERVAL_KEY, readLookoutNotifyInterval, type LookoutNotifyInterval } from '../lib/lookoutNotifyInterval';
+import type { LookoutNotifyInterval } from '../lib/lookoutNotifyInterval';
+import { useLookoutNotifyInterval } from './useLookoutNotifyInterval';
 import { paths } from '../paths';
 import { useAgentActivity } from './useAgentActivity';
 import { useCrossProjectNavigation } from './useCrossProjectNavigation';
@@ -19,7 +20,8 @@ interface NotifierEvent extends PendingEvent {
   action?: 'mux' | 'firewall';
 }
 
-const FAILED = new Set(['error', 'send_error', 'worker_not_ready', 'codex_error', 'stopped_by_user']);
+// worker_launch_failed (v0.12.1 #639) is not a stored task status: the respawn found no worker after the launch.
+const FAILED = new Set(['error', 'send_error', 'worker_not_ready', 'worker_launch_failed', 'codex_error', 'stopped_by_user']);
 let oldHistoryRemoved = false;
 const ATTENTION = new Set(['waiting_for_human', 'phase_review', 'pending_approval']);
 const intervalMs = (interval: LookoutNotifyInterval) => interval === '5min' ? 300_000 : 900_000;
@@ -31,7 +33,7 @@ export function LookoutNotifier({ children }: { children: React.ReactNode }) {
   const { openTerminal } = useCrossProjectNavigation();
   const navigate = useNavigate();
   const { allProjects, allTasks } = useWorkspaceCatalog();
-  const [interval, setIntervalValue] = useState(readLookoutNotifyInterval);
+  const interval = useLookoutNotifyInterval();
   const [toast, setToast] = useState<NotifierEvent[]>([]);
   const pending = useRef<NotifierEvent[]>([]);
   const currentToast = useRef<NotifierEvent[]>([]);
@@ -85,11 +87,7 @@ export function LookoutNotifier({ children }: { children: React.ReactNode }) {
       oldHistoryRemoved = true;
       try { localStorage.removeItem('azito-notifications'); } catch { /* Storage unavailable. */ }
     }
-    const changed = (event: Event) => setIntervalValue((event as CustomEvent<LookoutNotifyInterval>).detail);
-    const storage = (event: StorageEvent) => { if (event.key === LOOKOUT_NOTIFY_INTERVAL_KEY || event.key === null) setIntervalValue(readLookoutNotifyInterval()); };
-    window.addEventListener(LOOKOUT_NOTIFY_INTERVAL_CHANGED, changed);
-    window.addEventListener('storage', storage);
-    return () => { window.removeEventListener(LOOKOUT_NOTIFY_INTERVAL_CHANGED, changed); window.removeEventListener('storage', storage); if (timer.current) clearTimeout(timer.current); };
+    return () => { if (timer.current) clearTimeout(timer.current); };
   }, []);
   useEffect(() => {
     if (timer.current) clearTimeout(timer.current);

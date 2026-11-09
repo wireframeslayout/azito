@@ -290,5 +290,35 @@
       "24 hours",
       "7 days"
     ]
+  },
+  "lookout": {
+    "title": "Lookout",
+    "enabled": "Use summaries",
+    "description": "Summarize the end of conversations in one line. Counts and status remain available when off.",
+    "provider": "LLM provider",
+    "model": "Model",
+    "save": "Save",
+    "saving": "Saving…",
+    "saveFailed": "Could not load or save Lookout settings.",
+    "probe": "Try a summary",
+    "probing": "Testing…",
+    "probeFailed": "Could not test the selected CLI.",
+    "detected": "CLI available ({{version}})",
+    "reasons": {
+      "cli_not_found": "CLI not found",
+      "not_logged_in": "Not signed in",
+      "timeout": "Timed out",
+      "failed": "Summary failed"
+    },
+    "hints": {
+      "version": "Check CLI installation.",
+      "login": "Sign in to the CLI.",
+      "summary": "Check model access and CLI configuration."
+    },
+    "interval": "Notification interval",
+    "intervalImmediate": "Immediately",
+    "interval5min": "5 minutes",
+    "interval15min": "15 minutes",
+    "intervalOff": "Off"
   }
 }

@@ -5,7 +5,7 @@ import { fetchSessionListing } from '../lib/fetchServerSessions';
 
 const mocks = vi.hoisted(() => ({ tasks: [{ id: 1, projectId: 1, windows: [] }, { id: 2, projectId: 2, windows: [] }] as Array<{ id: number; projectId: number; windows: Array<{ serverName: string; tmuxTarget: string }> }>, refresh: vi.fn(async () => {}) }));
 vi.mock('./useWorkspaceCatalog', () => ({ useWorkspaceCatalog: () => ({ allTasks: mocks.tasks, allProjects: [], projectsLoaded: true, refresh: mocks.refresh }) }));
-vi.mock('../lib/fetchServerSessions', () => ({ fetchSessionListing: vi.fn(async () => ({ sessions: [] })), keepUnavailableKinds: vi.fn(() => []) }));
+vi.mock('../lib/fetchServerSessions', () => ({ fetchSessionListing: vi.fn(async () => ({ sessions: [], unavailable: [] })), keepUnavailableKinds: vi.fn(() => []) }));
 vi.mock('./useNotificationChannel', () => ({ useNotificationChannel: vi.fn() }));
 vi.mock('../api/client', () => ({ api: vi.fn(async (path: string) => path.startsWith('/projects/') && !path.endsWith('/servers') ? { id: Number(path.split('/')[2]), windows: [] } : []) }));
 function View({ project }: { project: string }) {

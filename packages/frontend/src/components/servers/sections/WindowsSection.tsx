@@ -18,19 +18,21 @@ import { useToast } from '../../../hooks/useToast';
 import WindowTreePopover from '../WindowTreePopover';
 import CreateSessionModal from '../CreateSessionModal';
 import { TerminalContainer } from '../../TerminalContainer';
-import { EmptyState } from '../../ui';
+import { EmptyState, LoadingState, Notice, Button } from '../../ui';
 import { Icon } from '../../ui/Icon';
+import { windowsEmptyView } from './windowsSectionState';
 
 interface WindowsSectionProps {
   server: Server;
   sessions: Session[];
+  sessionsState?: 'loading' | 'error' | 'partial' | 'ready';
   refresh: () => void;
   windowById: Map<number, WindowIndexEntry>;
   taskById: Map<number, { title?: string }>;
   windowMetaError?: boolean;
 }
 
-export default function WindowsSection({ server, sessions, refresh, windowById, taskById, windowMetaError = false }: WindowsSectionProps) {
+export default function WindowsSection({ server, sessions, sessionsState = 'ready', refresh, windowById, taskById, windowMetaError = false }: WindowsSectionProps) {
   const { t } = useTranslation('servers');
   const { t: tw } = useTranslation('workspace');
   const confirm = useConfirm();
@@ -203,7 +205,16 @@ export default function WindowsSection({ server, sessions, refresh, windowById, 
     />
   ) : null;
 
-  if (sessions.length === 0) {
+  const emptyView = windowsEmptyView(sessionsState, sessions.length);
+  if (emptyView === 'loading') return <LoadingState message={t('sessionState.loading')} />;
+
+  if (emptyView === 'unavailable') return (
+    <Notice tone="danger" role="alert" action={<Button size="sm" onClick={refresh}>{t('windows.retry')}</Button>}>
+      {t(`sessionState.${sessionsState}`)}
+    </Notice>
+  );
+
+  if (emptyView === 'empty') {
     return (
       <div>
         {metaErrorBar}
@@ -229,6 +240,8 @@ export default function WindowsSection({ server, sessions, refresh, windowById, 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', height: '100%', position: 'relative' }}>
       {metaErrorBar}
+      {sessionsState === 'loading' && <LoadingState message={t('sessionState.loading')} />}
+      {(sessionsState === 'error' || sessionsState === 'partial') && <Notice tone="danger" role="alert" action={<Button size="sm" onClick={refresh}>{t('windows.retry')}</Button>}>{t(`sessionState.${sessionsState}`)}</Notice>}
       {createSessionModal}
       <div style={{
         display: 'flex', alignItems: 'center', gap: 8,

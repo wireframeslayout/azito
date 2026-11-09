@@ -1,4 +1,7 @@
 import { spawnSync } from 'child_process';
+import { mkdtempSync, rmSync, writeFileSync } from 'fs';
+import { tmpdir } from 'os';
+import { join } from 'path';
 import { describe, expect, it } from 'vitest';
 import { buildWindowsPreflightCommand, checkWindowsPreflight, parseWindowsPreflight, type WindowsPreflightInfo } from './windowsPreflight';
 
@@ -15,6 +18,7 @@ function output(over: Record<string, unknown> = {}, wrap = (json: string) => `${
     windowsCaption: 'Microsoft Windows 11 Pro',
     buildNumber: '22631',
     tailscaleIp: '100.64.0.9',
+    tailscaleCli: 'ok', tailscaleDetail: null, networkStatus: 'not_checked', networkDetail: null,
     home: 'C:\\Users\\dev',
     systemRoot: 'C:\\Windows',
     userId: 'DESKTOP-1\\dev',
@@ -27,6 +31,7 @@ describe('buildWindowsPreflightCommand', () => {
     const line = buildWindowsPreflightCommand();
     const match = /^powershell\.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -EncodedCommand ([A-Za-z0-9+/=]+)$/.exec(line);
     expect(match).not.toBeNull();
+    expect(line.length).toBeLessThan(7900);
     const script = Buffer.from(match![1], 'base64').toString('utf16le');
     expect(script).toContain(BEGIN);
     expect(script).toContain(END);
@@ -39,7 +44,7 @@ describe('buildWindowsPreflightCommand', () => {
 });
 
 describe('checkWindowsPreflight: the Windows build', () => {
-  const info = (buildNumber: number | null): WindowsPreflightInfo => ({ nodePath: 'C:\\node.exe', nodeVersion: '24.14.0', arch: 'x64', windowsVersion: 'Windows 10', buildNumber, tailscaleIp: '100.64.0.9', home: 'C:\\Users\\d', systemRoot: 'C:\\Windows', userId: 'PC\\d' });
+  const info = (buildNumber: number | null): WindowsPreflightInfo => ({ nodePath: 'C:\\node.exe', nodeVersion: '24.14.0', arch: 'x64', windowsVersion: 'Windows 10', buildNumber, tailscaleIp: '100.64.0.9', tailscaleCli: 'ok', tailscaleDetail: null, networkStatus: 'not_checked', networkDetail: null, home: 'C:\\Users\\d', systemRoot: 'C:\\Windows', userId: 'PC\\d' });
   it('accepts 1809 (build 17763) and later', () => {
     expect(checkWindowsPreflight(info(17763))).toEqual([]);
     expect(checkWindowsPreflight(info(26100))).toEqual([]);
@@ -58,7 +63,8 @@ describe('parseWindowsPreflight', () => {
       arch: 'x64',
       windowsVersion: 'Windows 11 Pro',
       buildNumber: 22631,
-        tailscaleIp: '100.64.0.9',
+      tailscaleIp: '100.64.0.9',
+      tailscaleCli: 'ok', tailscaleDetail: null, networkStatus: 'not_checked', networkDetail: null,
       home: 'C:\\Users\\dev',
       systemRoot: 'C:\\Windows',
       userId: 'DESKTOP-1\\dev',
@@ -79,7 +85,7 @@ describe('parseWindowsPreflight', () => {
   });
 
   it('reads \\uXXXX-escaped non-ASCII text (the script prints ASCII only)', () => {
-    const noisy = output({}, () => `${BEGIN}\n{"nodePath":null,"nodeVersion":null,"arch":"AMD64","windowsCaption":null,"buildNumber":null,"tailscaleIp":null,"home":"C:\\\\Users\\u30c6\\u30b9\\u30c8","systemRoot":"C:\\\\Windows","userId":"PC\\\\\\u30c6"}\n${END}\n`);
+    const noisy = output({}, () => `${BEGIN}\n{"nodePath":null,"nodeVersion":null,"arch":"AMD64","windowsCaption":null,"buildNumber":null,"tailscaleIp":null,"tailscaleCli":"missing","tailscaleDetail":null,"networkStatus":"empty","networkDetail":null,"home":"C:\\\\Users\\u30c6\\u30b9\\u30c8","systemRoot":"C:\\\\Windows","userId":"PC\\\\\\u30c6"}\n${END}\n`);
     expect(parseWindowsPreflight(noisy).home).toBe('C:\\Users\u30c6\u30b9\u30c8');
   });
 
@@ -121,8 +127,39 @@ describe('checkWindowsPreflight', () => {
     expect(checkWindowsPreflight(ok({ arch: 'arm64' }))[0]).toMatch(/x86_64 architecture required \(found: arm64; Windows on ARM is not supported\)/);
   });
 
+  it('reports a bounded, redacted invalid CLI IP', () => {
+    expect(checkWindowsPreflight(ok({ tailscaleIp: 'invalid-ip', tailscaleCli: 'ok' }))[0]).toContain('CLI returned an invalid IP (invalid-ip)');
+    const info = ok({ tailscaleIp: 'API_KEY=secret ' + 'x'.repeat(400), tailscaleCli: 'ok' });
+    const reason = checkWindowsPreflight(info)[0];
+    expect(reason).toContain('CLI returned an invalid IP (API_KEY=[REDACTED]');
+    expect(reason).not.toContain('secret');
+    expect(reason.length).toBeLessThan(400);
+  });
+
   it('refuses a host without a Tailscale IP', () => {
-    expect(checkWindowsPreflight(ok({ tailscaleIp: null }))[0]).toMatch(/Tailscale IP not found \(got: empty/);
+    expect(checkWindowsPreflight(ok({ tailscaleIp: null }))[0]).toMatch(/Tailscale IP not found \(CLI/);
+  });
+
+  it.each([
+    ['denied', 'CLI access denied'], ['missing', 'CLI not found'],
+    ['failed', 'CLI failed'], ['empty', 'CLI returned no IP'],
+  ] as const)('reports %s when the network has no address', (tailscaleCli, reason) => {
+    const info = ok({ tailscaleIp: null, tailscaleCli, tailscaleDetail: tailscaleCli === 'denied' ? '401' : null, networkStatus: 'empty' });
+    expect(checkWindowsPreflight(info)).toEqual([expect.stringContaining(reason)]);
+    if (tailscaleCli === 'missing' || tailscaleCli === 'empty') expect(checkWindowsPreflight(info)[0]).toMatch(/install.*sign in/i);
+    else expect(checkWindowsPreflight(info)[0]).not.toMatch(/install.*sign in/i);
+  });
+
+  it('accepts a network address after CLI denial', () => {
+    for (const tailscaleCli of ['denied'] as const) {
+      expect(checkWindowsPreflight(ok({ tailscaleCli, networkStatus: 'found' }))).toEqual([]);
+    }
+  });
+
+  it('reports both CLI failure and network lookup failure with redacted details', () => {
+    const info = parseWindowsPreflight(output({ tailscaleIp: null, tailscaleCli: 'failed', tailscaleDetail: 'API_KEY=secret', networkStatus: 'failed', networkDetail: 'lookup failed' }));
+    expect(checkWindowsPreflight(info)[0]).toContain('API_KEY=[REDACTED]');
+    expect(checkWindowsPreflight(info)[0]).toContain('failed: lookup failed');
   });
 
   it('lists every problem at once', () => {
@@ -152,6 +189,21 @@ function run(line: string, login: Login, env: NodeJS.ProcessEnv = process.env) {
 describe.skipIf(!isWindows)('the preflight script on a real PowerShell', () => {
   const line = buildWindowsPreflightCommand();
 
+  /** The sent script with the network interfaces replaced by `addresses` and each replacement applied; a replacement that matches nothing fails the test. */
+  function withMockedNetwork(addresses: string[], replacements: Array<[string | RegExp, string]>, name = 'Tailscale', status = 'Up', description = 'Tailscale Tunnel'): string {
+    let script = Buffer.from(line.split(' ').at(-1)!, 'base64').toString('utf16le');
+    for (const [from, to] of [...replacements, ['[System.Net.NetworkInformation.NetworkInterface]::GetAllNetworkInterfaces()', '@($adapter)'] as [string, string]]) {
+      const replaced = script.replace(from, to);
+      expect(replaced, `no match for ${String(from)}`).not.toBe(script);
+      script = replaced;
+    }
+    const setup = `$addresses = @(${addresses.map(ip => `'${ip}'`).join(',')}) | ForEach-Object { [pscustomobject]@{ Address = [System.Net.IPAddress]::Parse($_) } }
+$adapter = [pscustomobject]@{ Name = '${name}'; Description = '${description}'; OperationalStatus = '${status}' }
+$adapter | Add-Member ScriptMethod GetIPProperties { [pscustomobject]@{ UnicastAddresses = $addresses } }
+`;
+    return setup + script;
+  }
+
   it.each(LOGINS)('prints JSON that is read, with %s as the login shell', (login) => {
     const out = run(line, login);
     expect(out.status, out.stderr).toBe(0);
@@ -167,6 +219,61 @@ describe.skipIf(!isWindows)('the preflight script on a real PowerShell', () => {
     expect(info.systemRoot.toLowerCase()).toBe((process.env.SystemRoot ?? '').toLowerCase());
     expect(info.userId).toMatch(/^[^\\]+\\[^\\]+$/);
     expect(checkWindowsPreflight(info)).toEqual([expect.stringMatching(/^Tailscale IP not found/)]);
+  }, 120_000);
+
+  it.each([
+    [['100.63.255.255', '100.64.0.0', '100.127.255.255'], '100.64.0.0'],
+    [['::1', '100.128.0.0', '100.127.255.255'], '100.127.255.255'],
+    [['100.63.255.255', '100.128.0.0', '::1'], null],
+  ])('selects the first IPv4 address in the shared range from %j', (addresses, expected) => {
+    const script = withMockedNetwork(addresses, [[/\$ts = Get-Command[\s\S]*?if \(\$tsCli -eq 'denied'\) \{/, "$tsIp = $null\n$tsCli = 'denied'\n$td = '401'\n$ns = 'not_checked'\n$nd = $null\nif ($tsCli -eq 'denied') {"]]);
+    const out = spawnSync('powershell.exe', ['-NoProfile', '-NonInteractive', '-EncodedCommand', Buffer.from(script, 'utf16le').toString('base64')], { encoding: 'utf8', timeout: 120_000 });
+    expect(out.status, out.stderr).toBe(0);
+    const info = parseWindowsPreflight(out.stdout);
+    expect(info.tailscaleIp).toBe(expected);
+    expect(info.networkStatus).toBe(expected ? 'found' : 'empty');
+    expect(info.tailscaleCli).toBe('denied');
+  }, 120_000);
+
+  it.each([['Ethernet', 'Up', 'WWAN'], ['Tailscale', 'Down', 'Tailscale Tunnel']])('ignores unrelated or inactive adapters', (name, status, description) => {
+    const script = withMockedNetwork(['100.64.1.2'], [[/\$ts = Get-Command[\s\S]*?if \(\$tsCli -eq 'denied'\) \{/, "$tsIp = $null\n$tsCli = 'denied'\n$td = '401'\n$ns = 'not_checked'\n$nd = $null\nif ($tsCli -eq 'denied') {"]], name, status, description);
+    const out = spawnSync('powershell.exe', ['-NoProfile', '-NonInteractive', '-EncodedCommand', Buffer.from(script, 'utf16le').toString('base64')], { encoding: 'utf8', timeout: 120_000 });
+    expect(out.status, out.stderr).toBe(0);
+    expect(parseWindowsPreflight(out.stdout).tailscaleIp).toBeNull();
+  }, 120_000);
+
+  it.each(hasPwsh ? ['powershell.exe', 'pwsh'] : ['powershell.exe'])('runs the CLI and network branches on %s', (shell) => {
+    const dir = mkdtempSync(join(tmpdir(), 'azito-preflight-'));
+    try {
+      const cli = join(dir, 'tailscale.cmd');
+      const cases = [
+        { cli: '@echo off\r\necho 401 Unauthorized 1>&2\r\nexit /b 1\r\n', addresses: ['100.64.1.2'], status: 'denied', ip: '100.64.1.2', network: 'found' },
+        { cli: '@echo off\r\necho 401 Unauthorized 1>&2\r\nexit /b 1\r\n', addresses: [], status: 'denied', ip: null, network: 'empty' },
+        { cli: null, addresses: ['100.64.1.2'], status: 'missing', ip: null, network: 'not_checked' },
+        { cli: null, addresses: [], status: 'missing', ip: null, network: 'not_checked' },
+        { cli: '@echo off\r\necho 100.99.1.1\r\nexit /b 0\r\n', addresses: ['100.64.1.2'], status: 'ok', ip: '100.99.1.1', network: 'not_checked' },
+        { cli: '@echo off\r\nexit /b 0\r\n', addresses: ['100.64.1.2'], status: 'empty', ip: null, network: 'not_checked' },
+        { cli: '@echo off\r\necho error 1401 1>&2\r\nexit /b 2\r\n', addresses: ['100.64.1.2'], status: 'failed', ip: null, network: 'not_checked' },
+        { cli: '@echo off\r\necho failed 1>&2\r\nexit /b 2\r\n', addresses: ['100.64.1.2'], status: 'failed', ip: null, network: 'not_checked' },
+      ];
+      for (const scenario of cases) {
+        if (scenario.cli) writeFileSync(cli, scenario.cli);
+        else rmSync(cli, { force: true });
+        const script = withMockedNetwork(scenario.addresses, [['Get-Command tailscale -EA', 'Get-Command $env:AZITO_TEST_CLI -EA']]);
+        const out = spawnSync(shell, ['-NoProfile', '-NonInteractive', '-EncodedCommand', Buffer.from(script, 'utf16le').toString('base64')], {
+          encoding: 'utf8', timeout: 120_000, env: { ...process.env, AZITO_TEST_CLI: cli, ProgramFiles: dir },
+        });
+        expect(out.status, out.stderr).toBe(0);
+        const info = parseWindowsPreflight(out.stdout);
+        expect(info.tailscaleCli).toBe(scenario.status);
+        expect(info.tailscaleIp).toBe(scenario.ip);
+        expect(info.networkStatus).toBe(scenario.network);
+        if (scenario.status === 'denied') expect(info.tailscaleDetail).toContain('401');
+        if (!scenario.ip && scenario.status === 'denied') expect(checkWindowsPreflight(info)[0]).not.toMatch(/install.*sign in/i);
+      }
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
   }, 120_000);
 
   it.each(LOGINS)('prints ASCII only and reads a non-ASCII home back unchanged, with %s as the login shell', (login) => {

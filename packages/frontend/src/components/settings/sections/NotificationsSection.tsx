@@ -5,6 +5,7 @@ import { registerServiceWorker, subscribeToPush, unsubscribeFromPush } from '../
 import { Button, LoadingState } from '../../ui';
 import { Slider } from '../../ui/Slider';
 import { useAgentActivity } from '../../../hooks/useAgentActivity';
+import { LookoutSettings } from './LookoutSettings';
 import { RETENTION_PERIODS } from '../../../lib/finishedRetentionSettings';
 
 export default function NotificationsSection() {
@@ -95,6 +96,7 @@ export default function NotificationsSection() {
 
   return (
     <div>
+      <LookoutSettings />
       <section style={{ background: 'var(--bg-card)', border: '1px solid var(--border)', borderRadius: 'var(--radius-md)', padding: 'var(--space-4)', marginBottom: 'var(--space-4)' }}>
         <h3 style={{ fontSize: 'var(--font-base)', fontWeight: 600, margin: '0 0 var(--space-1)' }}>{t('history.title')}</h3>
         <p style={{ fontSize: 'var(--font-sm)', color: 'var(--text-dim)', margin: '0 0 var(--space-4)' }}>{t('history.description')}</p>

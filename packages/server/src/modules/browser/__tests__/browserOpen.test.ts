@@ -142,6 +142,7 @@ describe('POST /api/browser/open', () => {
   });
 
   it('forwards to agent server and returns its response', async () => {
+    const timeoutSpy = vi.spyOn(AbortSignal, 'timeout');
     const agentResponse = { groupId: 'agent-deadbeef', tabId: 't1', targetId: 'target-remote', cdpEndpoint: 'http://127.0.0.1:9222' };
     const fetchSpy = vi.spyOn(globalThis, 'fetch').mockResolvedValueOnce({
       ok: true,
@@ -170,6 +171,18 @@ describe('POST /api/browser/open', () => {
       }),
     );
 
+    expect(timeoutSpy).toHaveBeenCalledWith(75_000);
+    expect(fetchSpy.mock.calls[0][1]?.signal).toBeInstanceOf(AbortSignal);
+    timeoutSpy.mockRestore();
+    fetchSpy.mockRestore();
+  });
+
+  it('returns 504 for a timed out agent open', async () => {
+    const fetchSpy = vi.spyOn(globalThis, 'fetch').mockRejectedValueOnce(new DOMException('timed out', 'TimeoutError'));
+    (mockServerRepo as unknown as { findByName: ReturnType<typeof vi.fn> }).findByName.mockReturnValueOnce({ type: 'agent', host: 'agent.invalid', agentPort: 4000 });
+    const res = await app.inject({ method: 'POST', url: '/api/browser/open', payload: { server: 'remote-agent' } });
+    expect(res.statusCode).toBe(504);
+    expect(res.json()).toEqual({ error: 'agent_timeout' });
     fetchSpy.mockRestore();
   });
 
