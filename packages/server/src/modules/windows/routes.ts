@@ -138,8 +138,10 @@ const windowsRoutes: FastifyPluginCallback<WindowsRouteOptions> = (fastify, opts
     const id = parseWindowId(request.params.id);
     const body = z.object({ role: z.enum(['orchestrator']).nullable() }).strict().safeParse(request.body);
     if (id === null || !body.success) return reply.status(400).send({ error: 'invalid_role' });
+    const before = windowRepo.findById(id);
     const result = opts.windowRoles.set(id, body.data.role);
     if (result !== 'ok') return reply.status(result === 'not_found' ? 404 : 409).send({ error: result });
+    if (before && before.role !== body.data.role) notifyWindowsChanged(before.serverName);
     return { ok: true };
   });
 

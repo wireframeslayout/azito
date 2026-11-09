@@ -37,7 +37,9 @@ async function setup(defaultMux: 'tmux' | 'misao' = 'misao', has: { tmux: string
     }],
   } as unknown as IMuxClient, () => (misaoUp ? { available: true } : { available: false, reason: 'daemon_unreachable' }));
   const app = Fastify();
+  const invalidateSessionCache = vi.fn();
   await app.register(windowsRoutes, {
+    invalidateSessionCache,
     attribution: { recordInteraction: vi.fn() }, windowRoles: new WindowRoleService(db, repo, new NotificationBus()),
       paneHandleResolver: {} as never,
     muxSwitchSettingsRepo: {} as never, auditLogService: {} as never, agentActivityMonitor: {} as never,
@@ -50,7 +52,7 @@ async function setup(defaultMux: 'tmux' | 'misao' = 'misao', has: { tmux: string
   } as never);
   await app.ready();
   const post = (url: string, payload: Record<string, unknown>) => app.inject({ method: 'POST', url, payload: { server_name: 'local-misao', ...payload } });
-  return { db, repo, projectId, taskId, post, app };
+  return { db, repo, projectId, taskId, post, app, invalidateSessionCache };
 }
 
 describe('window registration routes share one row per physical misao window (real repository)', () => {
@@ -183,6 +185,18 @@ describe('registration without a ref on a tmux server', () => {
 
 
 describe('server-owned orchestrator registration', () => {
+  it('invalidates the session cache only when the role changes', async () => {
+    const { projectId, post, app, invalidateSessionCache } = await setup();
+    const created = await post(`/api/projects/${projectId}/windows`, { ref: formatMuxRef(MISAO_REF), window_type: 'agent', worker_type: 'claude' });
+    const id = created.json().id;
+    invalidateSessionCache.mockClear();
+    const setRole = (role: 'orchestrator' | null) => app.inject({ method: 'PUT', url: `/api/windows/${id}/role`, payload: { role } });
+    expect((await setRole('orchestrator')).statusCode).toBe(200);
+    expect((await setRole('orchestrator')).statusCode).toBe(200);
+    expect((await setRole(null)).statusCode).toBe(200);
+    expect(invalidateSessionCache).toHaveBeenCalledTimes(2);
+    await app.close();
+  });
   it('registers a role and refuses to adopt or silently re-own it', async () => {
     const { repo, projectId, taskId, post, app } = await setup();
     const created = await post('/api/windows', { ref: formatMuxRef(MISAO_REF), window_type: 'agent', worker_type: 'claude', role: 'orchestrator' });

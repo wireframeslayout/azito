@@ -12,6 +12,8 @@ describe('migration 085', () => {
       INSERT INTO projects (id, name, slug) VALUES (1, 'Project', 'project');
       INSERT INTO windows (id, owner_type, project_id, server_name, tmux_target, window_type, mux_ref, label_source, claude_config_dir, claude_pane_sessions, claude_config_dir_explicit)
       VALUES (1, 'project', 1, 'local', 's:w', 'agent', 'ref', 'user', '/config', '{}', 1);
+      INSERT INTO windows (id, owner_type, project_id, server_name, tmux_target) VALUES (100, 'project', 1, 'local', 's:deleted');
+      DELETE FROM windows WHERE id=100;
       ALTER TABLE windows ADD COLUMN drift TEXT DEFAULT 'test';
       CREATE INDEX test_window_drift ON windows(drift);
       CREATE TABLE reference_test (window_id INTEGER REFERENCES windows(id) ON DELETE CASCADE);
@@ -25,6 +27,8 @@ describe('migration 085', () => {
     expect(db.prepare("SELECT name FROM sqlite_master WHERE type='index' AND tbl_name='windows' ORDER BY name").all()).toEqual(before);
     expect(db.prepare('SELECT id, mux_ref, label_source, claude_config_dir, claude_pane_sessions, claude_config_dir_explicit, drift, role, origin_project_id FROM windows').get()).toEqual({ id: 1, mux_ref: 'ref', label_source: 'user', claude_config_dir: '/config', claude_pane_sessions: '{}', claude_config_dir_explicit: 1, drift: 'test', role: null, origin_project_id: null });
     expect(db.pragma('foreign_key_check')).toEqual([]);
+    const inserted = db.prepare("INSERT INTO windows (owner_type, server_name, tmux_target) VALUES ('server', 'local', 's:new')").run();
+    expect(inserted.lastInsertRowid).toBe(101);
     expect(() => db.exec("UPDATE windows SET label_source='bad' WHERE id=1")).toThrow();
     expect(() => db.exec("UPDATE windows SET role='orchestrator' WHERE id=1")).toThrow();
     db.exec("UPDATE windows SET owner_type='server', project_id=NULL, role='orchestrator', origin_project_id=1 WHERE id=1");

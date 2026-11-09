@@ -4,6 +4,7 @@ export const version = 85;
 export const description = 'Add server-owned windows and orchestrator role';
 
 export function up(db: Database.Database): void {
+  const sequence = db.prepare("SELECT seq FROM sqlite_sequence WHERE name = 'windows'").get() as { seq: number } | undefined;
   const columns = db.prepare('PRAGMA table_info(windows)').all() as Array<{ name: string; type: string; dflt_value: string | null }>;
   const known = ['id', 'owner_type', 'project_id', 'task_id', 'server_name', 'tmux_target', 'label', 'is_primary', 'window_type', 'worker_type', 'worker_model', 'agent_session_id', 'launch_command', 'working_directory', 'pane_layout', 'created_at', 'sleeping', 'mux_ref', 'label_source', 'claude_config_dir', 'claude_pane_sessions', 'claude_config_dir_explicit'];
   const names = new Set(columns.map(c => c.name));
@@ -35,5 +36,9 @@ export function up(db: Database.Database): void {
   const copy = columns.map(c => `"${c.name.replace(/"/g, '""')}"`).join(', ');
   db.exec(`INSERT INTO windows_new (${copy}) SELECT ${copy} FROM windows`);
   db.exec('DROP TABLE windows; ALTER TABLE windows_new RENAME TO windows');
+  if (sequence) {
+    const updated = db.prepare("UPDATE sqlite_sequence SET seq = MAX(seq, ?) WHERE name = 'windows'").run(sequence.seq);
+    if (!updated.changes) db.prepare("INSERT INTO sqlite_sequence (name, seq) VALUES ('windows', ?)").run(sequence.seq);
+  }
   for (const index of indexes) db.exec(index.sql);
 }

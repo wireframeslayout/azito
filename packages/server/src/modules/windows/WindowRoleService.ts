@@ -18,7 +18,9 @@ export class WindowRoleService {
       } else {
         const project = win.originProjectId === null ? undefined : this.db.prepare('SELECT id FROM projects WHERE id=?').get(win.originProjectId);
         this.db.prepare('UPDATE windows SET role=NULL, origin_project_id=NULL, project_id=?, owner_type=? WHERE id=?').run(project ? win.originProjectId : null, project ? 'project' : 'server', id);
+        const children = this.db.prepare('SELECT DISTINCT target_window_id AS id FROM window_links WHERE source_window_id=? AND target_window_id IS NOT NULL AND unlinked_at IS NULL').all(id) as Array<{ id: number }>;
         this.db.prepare("UPDATE window_links SET unlinked_at=datetime('now') WHERE source_window_id=? AND unlinked_at IS NULL").run(id);
+        for (const child of children) this.bus.emit({ type: 'orchestration:updated', payload: { windowId: child.id } });
       }
       this.bus.emit({ type: 'orchestration:updated', payload: { windowId: id } });
       for (const source of affected) this.bus.emit({ type: 'orchestration:updated', payload: { windowId: source.id } });
