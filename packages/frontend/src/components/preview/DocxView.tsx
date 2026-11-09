@@ -48,5 +48,7 @@ export function DocxView({ bytes }: Props) {
     })().catch((reason: unknown) => { if (active) setError(reason instanceof Error && /limit|too many entries/i.test(reason.message) ? 'large' : 'invalid'); });
     return () => { active = false; styles?.remove(); };
   }, [bytes, ready]);
+  // The renderer must create nodes in this frame before sanitization, so the parent needs same-origin DOM access.
+  // Scripts remain disabled by the sandbox; the frame's CSP blocks external resources during rendering.
   return <>{error && <p role="alert">{t(error === 'large' ? 'office.tooLarge' : 'preview.loadError')}</p>}{!rendered && !error && <p role="status">{t('preview.loading')}</p>}<iframe ref={frame} title={t('office.document')} sandbox="allow-same-origin" onLoad={() => setReady(true)} srcDoc={'<!doctype html><html><head><meta http-equiv="Content-Security-Policy" content="default-src \'none\'; img-src data: blob:; style-src \'unsafe-inline\'; font-src \'none\'; base-uri \'none\'; form-action \'none\'"></head><body></body></html>'} style={{ width: '100%', minHeight: '60vh', border: 0, display: rendered ? 'block' : 'none' }} /></>;
 }

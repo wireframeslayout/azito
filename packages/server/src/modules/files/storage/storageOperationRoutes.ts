@@ -5,6 +5,7 @@ import type { IStorageSettingsRepository } from '../SqliteStorageSettingsReposit
 import type { MinioStorageClient } from './MinioStorageClient';
 import { StorageOperationError, validateStoragePath } from './storageOperations';
 import { classifyStorageError } from './storageErrors';
+import { isBase64 } from '../validateBase64';
 
 const path = z.string();
 const paths = z.array(path).max(1000);
@@ -58,7 +59,7 @@ export function registerStorageOperationRoutes(fastify: FastifyInstance, opts: S
     return { content: result.data.toString('base64'), etag: result.etag };
   });
   route('PUT', '/object', contentBody, async (body: z.infer<typeof contentBody>, id) => {
-    if (!/^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/.test(body.content)) throw new StorageOperationError(400, 'invalid_request', 'Invalid binary content');
+    if (!isBase64(body.content)) throw new StorageOperationError(400, 'invalid_request', 'Invalid binary content');
     return binaryContent(id).write(relativeKey(body.key, id), Buffer.from(body.content, 'base64'), body.force ? undefined : body.baseEtag);
   }, 28 * 1024 * 1024);
   route('GET', '/content', contentQuery, (q: z.infer<typeof contentQuery>, id) => textContent(id).read(relativeKey(q.key, id)));

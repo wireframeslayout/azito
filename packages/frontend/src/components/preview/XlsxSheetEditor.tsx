@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { Workbook, type WorkbookInstance } from '@fortune-sheet/react';
-import '@fortune-sheet/react/dist/index.css';
+import fortuneStyles from '@fortune-sheet/react/dist/index.css?inline';
 import { transformExcelToFortune, transformFortuneToExcel } from '@corbe30/fortune-excel';
 import type { ComponentProps } from 'react';
 import { Button } from '../ui';
@@ -85,19 +85,15 @@ export function XlsxSheetEditor({ backend, path, onDirtyChange }: Props) {
     } catch { setExportError(true); }
     finally { exportingRef.current = false; setExporting(false); }
   };
-  useEffect(() => {
-    const handler = (event: KeyboardEvent) => {
-      if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === 's') {
-        event.preventDefault();
-        if (editing && changed && !truncated && !oversized) void save();
-      }
-    };
-    window.addEventListener('keydown', handler);
-    return () => window.removeEventListener('keydown', handler);
-  });
+  const onKeyDown = (event: React.KeyboardEvent<HTMLElement>) => {
+    if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === 's') {
+      event.preventDefault();
+      if (editing && changed && !truncated && !oversized) void save();
+    }
+  };
   if (error || (document.error && !sheets)) return <p role="alert">{t(error === 'large' || document.error === 'preview_too_large' ? 'office.tooLarge' : 'preview.loadError')}</p>;
   if (document.loading || !sheets) return <p role="status">{t('preview.loading')}</p>;
-  return <section style={{ display: 'flex', flexDirection: 'column', height: '100%', minHeight: 0 }}>
+  return <section onKeyDown={onKeyDown} style={{ display: 'flex', flexDirection: 'column', height: '100%', minHeight: 0 }}>
     {(document.error || exportError) && <p role="alert">{t('office.saveError')}</p>}
     <p style={{ padding: 'var(--space-2)', color: 'var(--text)' }}>{t('office.xlsxWarning')}</p>
     {isMobile && <p role="status" style={{ padding: 'var(--space-2)', color: 'var(--text)' }}>{t('office.xlsxMobile')}</p>}
@@ -109,6 +105,6 @@ export function XlsxSheetEditor({ backend, path, onDirtyChange }: Props) {
     </div>
     <ConfirmDialog open={confirm} title={t('office.edit')} message={`${t('office.formatWarning')} ${losses.map((loss) => t(`office.loss.${loss}`)).join(', ')}`} confirmLabel={t('office.edit')} confirmVariant="primary" onConfirm={() => { if (workbook.current) setSheets(workbook.current.getAllSheets().map((sheet) => ({ ...sheet, celldata: sheet.data?.flatMap((row, r) => row.flatMap((cell, c) => cell ? [{ r, c, v: cell }] : [])) }))); baseline.current = null; setEditing(true); setConfirm(false); }} onCancel={() => setConfirm(false)} />
     {document.conflict !== undefined && <div role="alert">{t('office.conflict')} <Button onClick={() => void document.reload()}>{t('office.reload')}</Button><Button disabled={truncated || oversized} onClick={() => void save(true)}>{t('office.overwrite')}</Button></div>}
-    {sheets && <div style={{ flex: 1, minHeight: '40vh' }}><Workbook key={`${key}-${editing}`} ref={workbook} data={sheets} allowEdit={editing && !isMobile && !exporting} onChange={onWorkbookChange} /></div>}
+    {sheets && <div className="xlsx-workbook" style={{ flex: 1, minHeight: '40vh' }}><style>{`@scope (.xlsx-workbook) { ${fortuneStyles} .fortune-container { color: var(--surface-base); background: var(--surface-fg); } }`}</style><Workbook key={`${key}-${editing}`} ref={workbook} data={sheets} allowEdit={editing && !isMobile && !exporting} onChange={onWorkbookChange} /></div>}
   </section>;
 }

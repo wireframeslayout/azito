@@ -16,6 +16,7 @@ import { assertDirectoryContained, assertNewPathContained } from '../git/PathCon
 import { isHostPathContained, isSameHostPath, pathApiFor } from '../../shared/os/hostPath';
 import { MAX_SEARCH_GLOBS, MAX_SEARCH_GLOB_LENGTH } from '../../shared/fs/fileOpsWire';
 import { isGitDirectoryName } from '../git/gitPath';
+import { isBase64 } from './validateBase64';
 
 export function sanitizeFileName(raw: string): string {
   const nfc = raw.normalize('NFC');
@@ -355,7 +356,7 @@ export const fileBrowseRoutes: FastifyPluginCallback<FileBrowseRouteOptions> = (
       if (/[\x00-\x1f]/.test(filePath)) return reply.status(400).send({ error: 'Invalid path' });
       if (typeof body.content !== 'string') return reply.status(400).send({ error: 'content is required' });
       const content = body.content;
-      if (kind === 'binary' && (!/^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/.test(content) || content.length > 28 * 1024 * 1024)) {
+      if (kind === 'binary' && (content.length > 28 * 1024 * 1024 || !isBase64(content))) {
         return reply.status(400).send({ error: 'Invalid binary content' });
       }
       const force = body.force === true;

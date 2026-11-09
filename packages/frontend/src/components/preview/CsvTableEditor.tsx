@@ -3,7 +3,7 @@ import { useTranslation } from 'react-i18next';
 import { Button } from '../ui';
 import type { BinaryFilesBackend } from '../files/backend/FilesBackend';
 import { useBinaryFileDocument } from './useBinaryFileDocument';
-import { parseCsv, serializeCsv, type CsvDocument } from './csvCodec';
+import { InvalidCsvEncodingError, parseCsv, serializeCsv, type CsvDocument } from './csvCodec';
 import { DataGrid } from './DataGrid';
 
 interface Props { backend: BinaryFilesBackend; path: string; onDirtyChange?: (dirty: boolean) => void }
@@ -15,6 +15,7 @@ export function CsvTableEditor({ backend, path, onDirtyChange }: Props) {
   const [mode, setMode] = useState<'table' | 'text'>('table');
   const [page, setPage] = useState(0);
   const [parseError, setParseError] = useState(false);
+  const [invalidUtf8, setInvalidUtf8] = useState(false);
   const [parsing, setParsing] = useState(false);
   const canSave = useRef(false);
   const parseGeneration = useRef(0);
@@ -22,19 +23,17 @@ export function CsvTableEditor({ backend, path, onDirtyChange }: Props) {
   useEffect(() => {
     if (!document.bytes) return;
     let active = true;
-    parseCsv(document.bytes).then((parsed) => { if (active) { setTable(parsed); setParseError(false); canSave.current = !parsed.truncated; } }).catch(() => { if (active) { setParseError(true); canSave.current = false; } });
+    setTable(null);
+    const delimiter = /\.tsv$/i.test(path) ? '\t' : undefined;
+    parseCsv(document.bytes, delimiter).then((parsed) => { if (active) { setTable(parsed); setParseError(false); setInvalidUtf8(false); canSave.current = !parsed.truncated; } }).catch((error: unknown) => { if (active) { setParseError(true); setInvalidUtf8(error instanceof InvalidCsvEncodingError); canSave.current = false; } });
     return () => { active = false; };
-  }, [document.document]);
-  useEffect(() => {
-    const handler = (event: KeyboardEvent) => {
-      if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === 's') {
-        event.preventDefault();
-        if (document.dirty && canSave.current) void document.save();
-      }
-    };
-    window.addEventListener('keydown', handler);
-    return () => window.removeEventListener('keydown', handler);
-  }, [document.dirty, document.save, table?.truncated, parseError]);
+  }, [document.document, path]);
+  const onKeyDown = (event: React.KeyboardEvent<HTMLElement>) => {
+    if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === 's') {
+      event.preventDefault();
+      if (document.dirty && canSave.current) void document.save();
+    }
+  };
   const update = async (next: CsvDocument) => {
     const generation = ++parseGeneration.current;
     canSave.current = false; setParsing(true); setTable(next);
@@ -52,10 +51,10 @@ export function CsvTableEditor({ backend, path, onDirtyChange }: Props) {
     void update({ ...table, rows });
   };
   if (document.loading) return <p role="status">{t('preview.loading')}</p>;
-  if ((document.error || parseError) && !table) return <p role="alert">{t(document.error === 'preview_too_large' ? 'office.tooLarge' : 'preview.loadError')}</p>;
+  if ((document.error || parseError) && !table) return <p role="alert">{t(document.error === 'preview_too_large' ? 'office.tooLarge' : invalidUtf8 ? 'office.invalidUtf8' : 'preview.loadError')}</p>;
   if (!table) return <p role="status">{t('preview.loading')}</p>;
   const columns = Math.max(1, ...table.rows.map((row) => row.length));
-  return <section style={{ display: 'flex', flexDirection: 'column', gap: 'var(--space-3)', padding: 'var(--space-3)', minWidth: 0 }}>
+  return <section onKeyDown={onKeyDown} style={{ display: 'flex', flexDirection: 'column', gap: 'var(--space-3)', padding: 'var(--space-3)', minWidth: 0 }}>
     {document.bytes?.length === 0 && <p role="status">{t('office.empty')}</p>}
     {document.error && <p role="alert">{t('office.saveError')}</p>}
     {parseError && <p role="alert">{t('preview.loadError')}</p>}

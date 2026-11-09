@@ -266,6 +266,13 @@ describe('PUT /api/servers/:name/files/content — baseMtime/baseHash enforcemen
     expect(res.statusCode).toBe(200);
     expect(fs.readFileSync(filePath, 'utf-8')).toBe('forced\n');
   });
+
+  it('writes a multi-megabyte base64 binary through the file route', async () => {
+    const content = Buffer.alloc(4 * 1024 * 1024, 0xa5);
+    const res = await app.inject({ method: 'PUT', url: '/api/servers/test-local/files/binary', payload: { path: filePath, content: content.toString('base64'), projectId: 1, force: true } });
+    expect(res.statusCode).toBe(200);
+    expect(fs.readFileSync(filePath).equals(content)).toBe(true);
+  }, 30000);
 });
 
 describe('storage /raw and /url routes — presigned URL usage', () => {

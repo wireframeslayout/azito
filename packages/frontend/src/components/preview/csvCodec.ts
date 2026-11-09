@@ -1,6 +1,7 @@
 import type Papa from 'papaparse';
 
 export interface CsvDocument { rows: string[][]; delimiter: string; newline: '\n' | '\r' | '\r\n'; bom: boolean; truncated: boolean }
+export class InvalidCsvEncodingError extends Error {}
 function detectNewline(text: string): CsvDocument['newline'] {
   let quoted = false;
   for (let i = 0; i < text.length; i++) {
@@ -15,7 +16,9 @@ function detectNewline(text: string): CsvDocument['newline'] {
 export async function parseCsv(bytes: Uint8Array, delimiter?: string): Promise<CsvDocument> {
   const papa = (await import('papaparse')).default;
   const bom = bytes.length >= 3 && bytes[0] === 0xef && bytes[1] === 0xbb && bytes[2] === 0xbf;
-  const text = new TextDecoder('utf-8', { fatal: true }).decode(bytes);
+  let text: string;
+  try { text = new TextDecoder('utf-8', { fatal: true }).decode(bytes); }
+  catch { throw new InvalidCsvEncodingError('Invalid UTF-8'); }
   const newline = detectNewline(text);
   const parsed = papa.parse<string[]>(text, { delimiter: delimiter ?? '', newline, skipEmptyLines: false, preview: 5001 });
   if (parsed.errors.some((error: Papa.ParseError) => error.code !== 'UndetectableDelimiter')) throw new Error('Invalid CSV');
