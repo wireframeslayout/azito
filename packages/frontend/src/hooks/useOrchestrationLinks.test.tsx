@@ -15,3 +15,17 @@ it('loads orchestration links, refreshes on matching events, and ignores stale r
   await act(async () => { pending[0]({ status: 200, body: [{ id: 1 }] }); });
   await waitFor(() => expect(result.current.links.map(item => item.id)).toEqual([2]));
 });
+it('unlinks and restores the original task target', async () => {
+  const api = vi.mocked(apiWithStatus);
+  api.mockReset();
+  api.mockResolvedValue({ status: 200, body: [] });
+  const { result } = renderHook(() => useOrchestrationLinks(1));
+  await waitFor(() => expect(result.current.loading).toBe(false));
+  const link = { id: 4, taskId: 5, targetWindowId: null } as Parameters<typeof result.current.unlink>[0];
+  let target!: Awaited<ReturnType<typeof result.current.unlink>>;
+  await act(async () => { target = await result.current.unlink(link); });
+  expect(target).toEqual({ taskId: 5 });
+  await act(async () => { await result.current.undo(target); });
+  expect(api).toHaveBeenCalledWith('/windows/1/links/4', { method: 'DELETE' });
+  expect(api).toHaveBeenCalledWith('/windows/1/links', { method: 'POST', body: '{"taskId":5}' });
+});

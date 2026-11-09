@@ -49,6 +49,7 @@ export function BottomSheet({ open, onClose, title, hideTitle, children, detents
       )}
       <div
         ref={ref}
+        className="bottom-sheet"
         role="dialog"
         aria-modal="true"
         aria-label={title}

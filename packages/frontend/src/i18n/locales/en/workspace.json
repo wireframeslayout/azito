@@ -371,6 +371,12 @@
     "enter": "Enter",
     "cycle": "This link would create a cycle",
     "already_nested": "Already linked to another orchestrator",
-    "not_linkable": "This item cannot be linked"
+    "not_linkable": "This item cannot be linked",
+    "waiting": "Waiting for a window",
+    "closed": "Window closed",
+    "sleeping": "Sleeping",
+    "wake": "Wake",
+    "acknowledge": "Mark completed as seen",
+    "snapshotError": "Could not load snapshot"
   }
 }

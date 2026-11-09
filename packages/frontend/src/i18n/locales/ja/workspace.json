@@ -371,6 +371,12 @@
     "enter": "中へ",
     "cycle": "循環する連携は追加できません",
     "already_nested": "すでに別のオーケストレーターに連携されています",
-    "not_linkable": "この項目は連携できません"
+    "not_linkable": "この項目は連携できません",
+    "waiting": "窓の作成を待っています",
+    "closed": "窓が閉じられました",
+    "sleeping": "スリープ中",
+    "wake": "起動",
+    "acknowledge": "完了を確認",
+    "snapshotError": "写しを取得できませんでした"
   }
 }
