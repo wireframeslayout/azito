@@ -150,11 +150,11 @@ For example, `/workspace/3/repos` opens project 3 with the Repositories sidebar 
 
 AZITO is optimized for mobile browsers with the following features:
 
-- **Floating menu bar (MobileMenuBar)** -- A floating menu docked at the bottom of the screen, with a left group (project switcher / task list / files / more) and a right group (keyboard control / notifications / settings). It slides down out of view automatically while the soft keyboard is visible.
+- **Floating menu bar (MobileMenuBar)** -- A floating menu docked at the bottom of the screen, with a left group (project switcher / task list / files / more) and a right group (keyboard control / settings). It slides down out of view automatically while the soft keyboard is visible.
 - **Mobile sidebar** -- Same activity bar + sidebar layout as desktop, sized and spaced for touch.
 - **Project switching** -- Tapping the project icon in the floating menu bar opens a project-switcher popover; each project is identified by its icon and color.
 - **SP keyboard control overlay** -- Opened from the keyboard icon in the floating menu bar. It's draggable and rendered at 40% opacity, letting you send commands (arrow keys, Ctrl+C, etc.) to the currently displayed window without needing focus.
-- **Notifications menu** -- Renders as a full-screen overlay.
+- **Lookout** -- Open the status bar panel to see items needing attention, active items, and completed items.
 - **Active Windows panel** -- The Active Windows button (with a running-count badge) in the floating menu bar opens a glass-panel list of active windows.
 - **Touch swipe scrolling** -- Terminal views support touch swipe scrolling with inertia/momentum.
 - **Quick action buttons** -- On mobile viewports (768px and below), quick action buttons (Enter, Tab, Esc, Ctrl+C, Arrow Up, Arrow Down) appear above the terminal.

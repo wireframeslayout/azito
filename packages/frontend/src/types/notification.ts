@@ -44,33 +44,6 @@ export interface AgentActivityPayload {
   reason?: 'completed' | 'interrupted' | 'deleted' | 'offline' | 'api_error' | 'unknown';
 }
 
-export type AppNotificationKind =
-  | 'qa'
-  | 'plan_approval'
-  | 'execution_approval'
-  | 'task_done'
-  | 'task_failed'
-  | 'agent_finished'
-  | 'mux_wake'
-  | 'server_firewall';
-
-export interface AppNotification {
-  id: string;
-  kind: AppNotificationKind;
-  title?: string;
-  body?: string;
-  messageKey?: string;
-  messageParams?: Record<string, string>;
-  taskId?: number;
-  projectId?: number;
-  serverName?: string;
-  target?: string;
-  /** The window the notification is about, so a misao window opens by id instead of by a tmux-style target. */
-  windowId?: number;
-  read: boolean;
-  createdAt: number;
-}
-
 export interface FirewallDiagnosis {
   state: 'blocked' | 'missing_allow' | 'unknown';
   blockedBy: string[];

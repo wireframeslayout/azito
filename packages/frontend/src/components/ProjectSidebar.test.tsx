@@ -13,7 +13,6 @@ vi.mock('../hooks/useProjectRail', () => ({ useProjectRail: () => ({
   getVisibleProjects: (projects: unknown[]) => projects.slice(0, 6), pinnedIds: [], normalize: mocks.normalize, touch: vi.fn(),
 }) }));
 vi.mock('./UsageDropdown', () => ({ default: () => null }));
-vi.mock('./notifications/NotificationBell', () => ({ default: () => null }));
 vi.mock('./ProjectSearchPopover', () => ({ ProjectSearchPopover: ({ open }: { open: boolean }) => open ? <div role="dialog">Project search</div> : null }));
 
 describe('project rail actions', () => {
