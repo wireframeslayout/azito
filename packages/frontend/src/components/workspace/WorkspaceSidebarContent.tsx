@@ -1,5 +1,6 @@
 import type { ActivityTitleData } from '../../lib/windowDisplay';
 import { storageRelativeKey } from '../files/storageKey';
+import { planWindowRow } from '../../lib/windowRowPlan';
 import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import type { SidebarMode, Project, Session, Window, Task } from '../../pages/workspace/types';
@@ -76,6 +77,13 @@ interface WorkspaceSidebarContentProps {
   allProjects?: Array<{ id: number; name: string; windows?: Array<{ serverName: string; tmuxTarget: string }> }>;
   onAddWindowToProject?: (projectId: number, serverName: string, tmuxTarget: string) => void;
   onWindowFocus?: (windowId: number) => void;
+}
+
+
+function windowContextExtra(window: Window, sessions: Session[]) {
+  const plan = planWindowRow(window, sessions);
+  if (plan.kind === 'offline' || plan.kind === 'sleeping') return { online: false };
+  return { online: true, stale: plan.stale, windowName: plan.window.name, ...(plan.kind === 'single' ? { paneTarget: plan.panes[0].menuPaneTarget } : {}) };
 }
 
 
@@ -187,7 +195,16 @@ export default function WorkspaceSidebarContent({
       )}
       {sidebarMode === 'tasks' && project && (
         <TasksSidebar
+          projectId={project.id}
           titleData={titleData}
+          showWindowContextMenu={(event, window) => {
+            const extra = windowContextExtra(window, sessionData[window.serverName] ?? []);
+            showWindowContextMenu(event, window, extra);
+          }}
+          showWindowContextMenuAt={showWindowContextMenuAt ? (x, y, window) => {
+            const extra = windowContextExtra(window, sessionData[window.serverName] ?? []);
+            showWindowContextMenuAt(x, y, window, extra);
+          } : undefined}
           tasks={tasks}
           onOpenTask={(taskId, title) => {
             openTask(taskId, title);

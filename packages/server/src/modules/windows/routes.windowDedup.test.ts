@@ -43,9 +43,10 @@ async function setup(defaultMux: 'tmux' | 'misao' = 'misao', has: { tmux: string
   const bus = new NotificationBus();
   const links = new OrchestrationLinkService(new SqliteWindowLinkRepository(db), repo, { findById: () => undefined } as unknown as ITaskRepository, bus);
   const invalidateSessionCache = vi.fn();
+  const recordInteraction = vi.fn();
   await app.register(windowsRoutes, {
     invalidateSessionCache,
-    attribution: { recordInteraction: vi.fn() }, windowRoles: new WindowRoleService(db, repo, bus, { findById: id => db.prepare('SELECT id FROM projects WHERE id=?').get(id) as never }, links),
+    attribution: { recordInteraction }, windowRoles: new WindowRoleService(db, repo, bus, { findById: id => db.prepare('SELECT id FROM projects WHERE id=?').get(id) as never }, links),
       paneHandleResolver: {} as never,
     muxSwitchSettingsRepo: {} as never, auditLogService: {} as never, agentActivityMonitor: {} as never,
     windowRepo: repo,
@@ -57,7 +58,7 @@ async function setup(defaultMux: 'tmux' | 'misao' = 'misao', has: { tmux: string
   } as never);
   await app.ready();
   const post = (url: string, payload: Record<string, unknown>) => app.inject({ method: 'POST', url, payload: { server_name: 'local-misao', ...payload } });
-  return { db, repo, projectId, taskId, post, app, invalidateSessionCache };
+  return { db, repo, projectId, taskId, post, app, invalidateSessionCache, recordInteraction };
 }
 
 describe('window registration routes share one row per physical misao window (real repository)', () => {
@@ -84,6 +85,34 @@ describe('window registration routes share one row per physical misao window (re
     const serverRegistration = await post('/api/windows', { ref: formatMuxRef(MISAO_REF) });
     expect(serverRegistration.statusCode).toBe(409);
     expect(serverRegistration.json()).toEqual({ error: 'project_owned_window', windowId: id });
+    await app.close();
+  });
+  it('records a new task window only for a primary caller of the same task', async () => {
+    const { taskId, app, db, recordInteraction } = await setup();
+    db.prepare("INSERT INTO windows (id,owner_type,task_id,server_name,tmux_target,is_primary) VALUES (12,'task',?,'local-misao','azito:primary',1), (13,'task',?,'local-misao','azito:secondary',0)").run(taskId, taskId);
+    const payload = { server_name: 'local-misao', ref: formatMuxRef(MISAO_REF) };
+    const first = await app.inject({ method: 'POST', url: `/api/tasks/${taskId}/windows`, payload, headers: { 'x-azito-window-id': '12' } });
+    expect(first.statusCode).toBe(200);
+    expect(recordInteraction).toHaveBeenCalledWith(12, { windowId: first.json().id });
+    recordInteraction.mockClear();
+    await app.inject({ method: 'POST', url: `/api/tasks/${taskId}/windows`, payload, headers: { 'x-azito-window-id': '13' } });
+    expect(recordInteraction).not.toHaveBeenCalled();
+    await app.close();
+  });
+  it('records attribution on registration, re-registration and adoption without changing responses on failure', async () => {
+    const { taskId, projectId, app, db, recordInteraction } = await setup();
+    db.prepare("INSERT INTO windows (id,owner_type,task_id,server_name,tmux_target,is_primary) VALUES (12,'task',?,'local-misao','azito:primary',1)").run(taskId);
+    const payload = { server_name: 'local-misao', ref: formatMuxRef(MISAO_REF) };
+    const headers = { 'x-azito-window-id': '12' };
+    const first = await app.inject({ method: 'POST', url: `/api/projects/${projectId}/windows`, payload });
+    recordInteraction.mockImplementation(() => { throw new Error('record failed'); });
+    const adopted = await app.inject({ method: 'POST', url: `/api/tasks/${taskId}/windows`, payload, headers });
+    expect(adopted.statusCode).toBe(200);
+    expect(adopted.json()).toMatchObject({ id: first.json().id, adopted: true });
+    const again = await app.inject({ method: 'POST', url: `/api/tasks/${taskId}/windows`, payload, headers });
+    expect(again.statusCode).toBe(200);
+    expect(recordInteraction).toHaveBeenCalledTimes(2);
+    expect(recordInteraction).toHaveBeenCalledWith(12, { windowId: first.json().id });
     await app.close();
   });
   it('ref-only registration, then named tmux_target + ref, adopts the same row', async () => {

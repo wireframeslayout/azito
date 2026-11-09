@@ -8,6 +8,12 @@ import { listPersistedBrowserTabIds, parseBrowserTabId } from '../task/taskPaneL
 export interface TaskChildWindow {
   kind: 'window';
   window: Window;
+  children: TaskSubagentWindow[];
+}
+
+export interface TaskSubagentWindow {
+  kind: 'window';
+  window: Window;
 }
 
 export interface TaskChildBrowser {
@@ -19,21 +25,26 @@ export interface TaskChildBrowser {
 
 export type TaskChild = TaskChildWindow | TaskChildBrowser;
 
+export function buildTaskWindowTree(task: Task, parents: ReadonlyMap<number, number>): TaskChildWindow[] {
+  const sorted = (task.windows ?? []).slice().sort((a, b) => {
+    if (a.isPrimary !== b.isPrimary) return a.isPrimary ? -1 : 1;
+    return (a.label || a.tmuxTarget).localeCompare(b.label || b.tmuxTarget);
+  });
+  const primaryIds = new Set(sorted.filter(w => w.isPrimary).map(w => w.id));
+  return sorted.filter(w => w.isPrimary || !parents.has(w.id) || !primaryIds.has(parents.get(w.id)!)).map(window => ({
+    kind: 'window', window,
+    children: window.isPrimary ? sorted.filter(w => parents.get(w.id) === window.id && !w.isPrimary).map(w => ({ kind: 'window', window: w })) : [],
+  }));
+}
+
 export function listTaskChildren(
   task: Task,
   browserGroups: Record<string, BrowserGroupInfo[]>,
+  parents: ReadonlyMap<number, number>,
 ): TaskChild[] {
   const children: TaskChild[] = [];
 
-  if (task.windows) {
-    const sorted = task.windows.slice().sort((a, b) => {
-      if (a.isPrimary !== b.isPrimary) return a.isPrimary ? -1 : 1;
-      return (a.label || a.tmuxTarget).localeCompare(b.label || b.tmuxTarget);
-    });
-    for (const w of sorted) {
-      children.push({ kind: 'window', window: w });
-    }
-  }
+  children.push(...buildTaskWindowTree(task, parents));
 
   const seen = new Set<string>();
   const browserTabIds = listPersistedBrowserTabIds(task.id);

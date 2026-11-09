@@ -1,5 +1,5 @@
 import type { NotificationBus } from '../notifications/NotificationBus';
-import type { IWindowRepository } from '../windows/Window';
+import { isPrimaryTaskWindow, type IWindowRepository } from '../windows/Window';
 import type { ITaskRepository } from '../tasks/Task';
 import type { SqliteWindowLinkRepository, LinkSubject, LinkRow } from './SqliteWindowLinkRepository';
 import type { WindowLinkView, OrchestratorSummary } from './WindowLink';
@@ -26,7 +26,8 @@ export class OrchestrationLinkService {
     const target = 'windowId' in subject ? this.windows.findById(subject.windowId) : undefined;
     if (!from || ('windowId' in subject ? !target : !this.tasks.findById(subject.taskId))) return 'not_found';
     if (target?.id === source) return 'self_link';
-    const kind = from.role === 'orchestrator' ? 'orchestration' : from.ownerType === 'task' && from.isPrimary && target?.taskId === from.taskId ? 'operation' : 'not_linkable';
+    const kind = from.role === 'orchestrator' ? 'orchestration' : isPrimaryTaskWindow(from) && target?.ownerType === 'task' && !target.isPrimary && from.taskId !== null && target.taskId === from.taskId ? 'operation' : 'not_linkable';
+    if (kind === 'operation' && target && this.linkRepo.operationParentOf(target.id, source) !== null) return 'already_nested';
     if (kind !== 'orchestration' || target?.role !== 'orchestrator') return kind;
     const parent = this.parentOf(target.id);
     if (parent !== null && parent !== source) return 'already_nested';
@@ -43,8 +44,10 @@ export class OrchestrationLinkService {
     return this.linkRepo.transaction(() => {
       const kind = this.check(sourceWindowId, subject);
       if (kind !== 'operation' && kind !== 'orchestration') return kind;
+      if (kind === 'operation' && source === 'manual') return 'not_linkable';
       const old = this.linkRepo.find(sourceWindowId, subject);
       if (old) {
+        if (old.kind !== kind) return 'not_linkable';
         if (source === 'auto' && old.unlinked_at) return old;
         if (source === 'manual' && (old.unlinked_at || old.source !== 'manual')) {
           this.linkRepo.restore(old.id, kind);
@@ -86,6 +89,7 @@ export class OrchestrationLinkService {
   list(source: number, includeUnlinked = false, kind?: WindowLinkView['kind']): WindowLinkView[] {
     return this.linkRepo.list(source, includeUnlinked, kind);
   }
+  operationLinks(taskIds: number[]): Array<{ taskId: number; sourceWindowId: number; targetWindowId: number }> { return this.linkRepo.operationLinks(taskIds); }
   orchestrators(): OrchestratorSummary[] {
     const rows = this.linkRepo.activeForOrchestrators();
     const grouped = new Map<number, typeof rows>();

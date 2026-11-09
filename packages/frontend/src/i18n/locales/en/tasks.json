@@ -89,6 +89,8 @@
     "groupRecent": "Recent",
     "noSearchResults": "No matching tasks",
     "noTasks": "No tasks yet",
+    "subagent": "Sub",
+    "operationLinksError": "Could not load window relationships",
     "browserTabs": "{{count}} tab(s)"
   },
   "contextMenu": {
