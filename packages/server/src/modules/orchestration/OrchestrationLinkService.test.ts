@@ -1,3 +1,4 @@
+import { SqliteWindowLinkRepository } from './SqliteWindowLinkRepository';
 import { describe, expect, it, vi } from 'vitest';
 import { openDatabase } from '../../shared/db/Database';
 import { SqliteWindowRepository } from '../windows/SqliteWindowRepository';
@@ -11,7 +12,7 @@ describe('orchestration links and roles', () => {
     const db = openDatabase(':memory:');
     db.exec("INSERT INTO projects (id,name,slug) VALUES (1,'P','p'); INSERT INTO windows (id,owner_type,project_id,server_name,tmux_target,window_type,worker_type) VALUES (1,'project',1,'local','s:a','agent','claude'), (2,'project',1,'local','s:b','agent','claude'), (3,'project',1,'local','s:c','agent','claude')");
     const windows = new SqliteWindowRepository(db); const bus = new NotificationBus(); const notify = vi.fn(); bus.on(notify);
-    const links = new OrchestrationLinkService(db, windows, { findById: () => undefined } as unknown as ITaskRepository, bus);
+    const links = new OrchestrationLinkService(new SqliteWindowLinkRepository(db), windows, { findById: () => undefined } as unknown as ITaskRepository, bus);
     const roles = new WindowRoleService(db, windows, bus, { findById: id => db.prepare('SELECT id FROM projects WHERE id=?').get(id) as never }, links);
     expect(roles.set(1, 'orchestrator')).toBe('ok');
     expect(roles.set(2, 'orchestrator')).toBe('ok');
@@ -53,7 +54,7 @@ describe('orchestration links and roles', () => {
     const db = openDatabase(':memory:');
     db.exec("INSERT INTO windows (id,owner_type,server_name,tmux_target,window_type,worker_type,role) VALUES (1,'server','local','s:a','agent','claude','orchestrator'), (2,'server','local','s:b','agent','claude',NULL), (3,'server','local','s:c','agent','claude',NULL)");
     const bus = new NotificationBus();
-    const links = new OrchestrationLinkService(db, new SqliteWindowRepository(db), { findById: () => undefined } as unknown as ITaskRepository, bus);
+    const links = new OrchestrationLinkService(new SqliteWindowLinkRepository(db), new SqliteWindowRepository(db), { findById: () => undefined } as unknown as ITaskRepository, bus);
     const clock = vi.spyOn(Date, 'now').mockReturnValue(10000);
     links.recordInteraction(1, { windowId: 2 });
     links.recordInteraction(1, { windowId: 2 });
@@ -74,7 +75,7 @@ describe('orchestration links and roles', () => {
     db.exec("INSERT INTO projects (id,name,slug) VALUES (1,'P','p'); INSERT INTO tasks (id,project_id,title) VALUES (1,1,'T'); INSERT INTO windows (id,owner_type,server_name,tmux_target,window_type,worker_type,role) VALUES (1,'server','local','s:a','agent','claude','orchestrator'); INSERT INTO windows (id,owner_type,task_id,project_id,server_name,tmux_target,is_primary) VALUES (2,'task',1,1,'local','s:b',1)");
     const bus = new NotificationBus(); const notify = vi.fn(); bus.on(notify);
     const windows = new SqliteWindowRepository(db);
-    const links = new OrchestrationLinkService(db, windows, { findById: () => ({ id: 1, projectId: 1, serverName: 'local' }) } as unknown as ITaskRepository, bus);
+    const links = new OrchestrationLinkService(new SqliteWindowLinkRepository(db), windows, { findById: () => ({ id: 1, projectId: 1, serverName: 'local' }) } as unknown as ITaskRepository, bus);
     links.recordInteraction(1, { taskId: 1 });
     const byTask = vi.spyOn(windows, 'findByTask');
     const byId = vi.spyOn(windows, 'findById');
@@ -95,7 +96,7 @@ describe('orchestration links and roles', () => {
   it('rejects terminal and task windows, and retains server ownership after project deletion', () => {
     const db = openDatabase(':memory:');
     db.exec("INSERT INTO projects (id,name,slug) VALUES (1,'P','p'); INSERT INTO tasks (id,project_id,title) VALUES (1,1,'T'); INSERT INTO windows (id,owner_type,project_id,server_name,tmux_target,window_type) VALUES (1,'project',1,'local','s:a','terminal'); INSERT INTO windows (id,owner_type,task_id,project_id,server_name,tmux_target,window_type,worker_type) VALUES (2,'task',1,1,'local','s:b','agent','claude'); INSERT INTO windows (id,owner_type,project_id,server_name,tmux_target,window_type,worker_type) VALUES (3,'project',1,'local','s:c','agent','claude')");
-    const bus = new NotificationBus(); const windows = new SqliteWindowRepository(db); const links = new OrchestrationLinkService(db, windows, { findById: () => undefined } as unknown as ITaskRepository, bus); const roles = new WindowRoleService(db, windows, bus, { findById: id => db.prepare('SELECT id FROM projects WHERE id=?').get(id) as never }, links);
+    const bus = new NotificationBus(); const windows = new SqliteWindowRepository(db); const links = new OrchestrationLinkService(new SqliteWindowLinkRepository(db), windows, { findById: () => undefined } as unknown as ITaskRepository, bus); const roles = new WindowRoleService(db, windows, bus, { findById: id => db.prepare('SELECT id FROM projects WHERE id=?').get(id) as never }, links);
     expect(roles.set(1, 'orchestrator')).toBe('not_agent_window');
     expect(roles.set(2, 'orchestrator')).toBe('task_owned_window');
     expect(roles.set(3, 'orchestrator')).toBe('ok');

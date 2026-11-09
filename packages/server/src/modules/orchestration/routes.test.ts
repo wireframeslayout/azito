@@ -1,3 +1,4 @@
+import { SqliteWindowLinkRepository } from './SqliteWindowLinkRepository';
 import { describe, expect, it, vi } from 'vitest';
 import Fastify from 'fastify';
 import { openDatabase } from '../../shared/db/Database';
@@ -13,7 +14,7 @@ describe('orchestration routes', () => {
     const db = openDatabase(':memory:');
     db.exec("INSERT INTO windows (id,owner_type,server_name,tmux_target,window_type,worker_type,role) VALUES (1,'server','local','s:a','agent','claude','orchestrator'), (2,'server','local','s:b','agent','claude','orchestrator')");
     const windows = new SqliteWindowRepository(db); const bus = new NotificationBus();
-    const links = new OrchestrationLinkService(db, windows, { findById: vi.fn() } as unknown as ITaskRepository, bus);
+    const links = new OrchestrationLinkService(new SqliteWindowLinkRepository(db), windows, { findById: vi.fn() } as unknown as ITaskRepository, bus);
     const app = Fastify(); await app.register(routes, { links, windows });
     const request = (method: 'GET' | 'POST' | 'DELETE', url: string, payload?: object) => app.inject({ method, url, payload });
     expect((await request('POST', '/api/windows/1/links', { targetWindowId: 2, taskId: 1 })).statusCode).toBe(400);

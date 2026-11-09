@@ -49,6 +49,10 @@ export interface OrchestratorSummary extends Window {
   links: { total: number; projectIds: number[]; serverNames: string[] };
   parentWindowId: number | null;
 }
+export interface SessionWindowRegistrationResult {
+  ok: true; count: number; ids: number[];
+  skipped: Array<{ windowId: number; reason: 'server_owned_window' }>;
+}
 export interface Repository { id: number; url: string; name?: string; provider?: string; owner?: string; repoName?: string; }
 export interface ProjectListItem {
   id: number;

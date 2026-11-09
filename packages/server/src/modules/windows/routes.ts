@@ -258,6 +258,7 @@ const windowsRoutes: FastifyPluginCallback<WindowsRouteOptions> = (fastify, opts
       if (role && (body.window_type !== 'agent' || !body.worker_type)) return reply.status(409).send({ error: 'not_agent_window' });
       const existing = findExistingWindow(serverName, tmuxTarget, givenRef);
       if (existing) {
+        if (id === null && existing.ownerType === 'task') return reply.status(409).send({ error: 'task_owned_window', windowId: existing.id });
         if (role && existing.role !== role) return reply.status(409).send({ error: 'already_registered', windowId: existing.id });
         if (id !== null && existing.ownerType === 'server') return reply.status(409).send({ error: 'server_owned_window', windowId: existing.id });
         if (id === null && existing.ownerType !== 'server') return reply.status(409).send({ error: 'project_owned_window', windowId: existing.id });
@@ -333,17 +334,17 @@ const windowsRoutes: FastifyPluginCallback<WindowsRouteOptions> = (fastify, opts
         return reply.status(404).send({ error: `Session '${session}' not found on server '${serverName}'` });
 
       const addedIds: number[] = [];
-      for (const win of targetSession.windows) {
-        const target = win.ref?.kind === 'misao' ? muxWindowTarget(win.ref) : `${session}:${win.name}`;
-        const existing = findExistingWindow(serverName, target, win.ref);
-        if (existing?.ownerType === 'server') return reply.status(409).send({ error: 'server_owned_window', windowId: existing.id });
-      }
+      const skipped: Array<{ windowId: number; reason: 'server_owned_window' }> = [];
       for (const win of targetSession.windows) {
         // tmux: the window name; misao: the window id (a display name is not an identity, M-023).
         const winTarget = win.ref?.kind === 'misao' ? muxWindowTarget(win.ref) : `${session}:${win.name}`;
         const existing = findExistingWindow(serverName, winTarget, win.ref);
         if (existing) {
-          if (existing.ownerType !== 'server' && existing.projectId !== id) {
+          if (existing.ownerType === 'server') {
+            skipped.push({ windowId: existing.id, reason: 'server_owned_window' });
+            continue;
+          }
+          if (existing.projectId !== id) {
             windowRepo.update(existing.id, { projectId: id });
             notifyWindowsChanged(serverName);
           }
@@ -372,7 +373,7 @@ const windowsRoutes: FastifyPluginCallback<WindowsRouteOptions> = (fastify, opts
         addedIds.push(winId);
       }
       notifyWindowsChanged(serverName);
-      return { ok: true, count: addedIds.length, ids: addedIds };
+      return { ok: true, count: addedIds.length, ids: addedIds, skipped };
     },
   );
 

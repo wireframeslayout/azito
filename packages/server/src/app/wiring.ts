@@ -1,3 +1,4 @@
+import { SqliteWindowLinkRepository } from '../modules/orchestration/SqliteWindowLinkRepository';
 import { OrchestrationLinkService } from '../modules/orchestration/OrchestrationLinkService';
 import { WindowRoleService } from '../modules/windows/WindowRoleService';
 import { isLaunchdHub } from '../modules/servers/launchdHub';
@@ -780,7 +781,7 @@ export async function buildWiring(db: SqliteDatabase, publicUrl: string, localUr
   // '' = no prefix. Resolved once here and handed to everything that names the harness folder (install, prompt azitoctl path).
   const harnessPrefix = resolveHarnessPrefix(process.env.AZITO_HARNESS_PREFIX);
   const infra = buildSharedInfra(agentBundler, publicUrl, localUrl, dataPaths, uiToken, webhookToken, scopedAuthEnabled, harnessPrefix, misaoRuntime, hostEnv, secretFileGuard, hubHost, resolveWindowsAgentOptions(process.env), (name) => repos.serverRepo.findByName(name), db, fingerprintStore, repos.auditLogService);
-  const orchestrationLinks = new OrchestrationLinkService(db, repos.windowRepo, repos.taskRepo, infra.notificationBus);
+  const orchestrationLinks = new OrchestrationLinkService(new SqliteWindowLinkRepository(db), repos.windowRepo, repos.taskRepo, infra.notificationBus);
   repos.windowRepo.setDeletionObserver(id => orchestrationLinks.notifyDeletion('window', id));
   repos.taskRepo.setDeletionObserver(id => orchestrationLinks.notifyDeletion('task', id));
   repos.projectRepo.setDeletionObserver(id => orchestrationLinks.notifyDeletion('project', id));
