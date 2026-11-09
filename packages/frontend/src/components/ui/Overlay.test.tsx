@@ -141,7 +141,7 @@ it('allows the maximize toggle chord in an editable target', async () => {
     const { setBinding } = useHotkeyBindings();
     return <><button onClick={() => setBinding('search.open', null)}>Disable search</button><button onClick={() => setBinding('maximize.open', parseKeySpec('Space Space'))}>Assign chord</button></>;
   }
-  render(<HotkeyProvider><Configure /><Overlay open labelledBy="toggle" onClose={close} toggleAction="maximize.open"><h2 id="toggle">Toggle</h2><input aria-label="terminal" /></Overlay></HotkeyProvider>);
+  render(<HotkeyProvider><Configure /><Overlay open labelledBy="toggle" onClose={close} toggleAction="maximize.open" toggleWhen="always"><h2 id="toggle">Toggle</h2><input aria-label="terminal" /></Overlay></HotkeyProvider>);
   fireEvent.click(screen.getByText('Disable search'));
   fireEvent.click(screen.getByText('Assign chord'));
   fireEvent.keyDown(screen.getByLabelText('terminal'), { key: ' ' });

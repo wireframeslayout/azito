@@ -835,11 +835,12 @@ function WorkspaceInner() {
     // TabBar) must go through the same pane-successor/focus handling as the
     // pane TabBar's own ✕ button, not the flat closeTab().
     showContextMenu, showContextMenuAt, findTaskByTarget, openTask, tabs, closeTab: closeTabPaneAware, refreshSessions: data.refreshSessions, togglePin, servers,
-    reconnectWindow: async (win) => {
+    reconnectWindow: async (win, mode) => {
       // `tabs` / `sessionData` are the pre-respawn view the tab's ref was built from; the ref
       // itself is re-resolved against a post-respawn session list when it has to be replaced.
       const open = findWindowTerminalTabs(tabs, win.serverName, win.windowId, sessionData[win.serverName]);
       if (open.length === 0) {
+        if (mode === 'existing') return;
         connectPane({ kind: 'windowId', serverName: win.serverName, windowId: win.windowId, pane: 1 }, undefined, { reconnect: true });
         return;
       }
@@ -866,7 +867,7 @@ function WorkspaceInner() {
         const window = windowById.get(windowId);
         if (window) connectPane({ kind: 'windowId', serverName: window.serverName, windowId, pane: 1 }, window.projectId);
       },
-      wakeWindow: async window => { await windowActions.handleRespawnWindow(window.id, window.serverName, false, undefined, false, undefined, false); },
+      wakeWindow: async window => { await windowActions.handleRespawnWindow(window.id, { serverName: window.serverName, reconnect: 'existing' }); },
     });
     return () => setMaximizeWorkspace(null);
   }, [tabs, focusedActiveTabId, focus.taskId, focus.windowId, resolveTabWindow, windowById, connectPane, windowActions.handleRespawnWindow, setMaximizeWorkspace]);

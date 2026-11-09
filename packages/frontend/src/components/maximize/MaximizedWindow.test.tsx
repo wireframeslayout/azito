@@ -6,8 +6,8 @@ import { MaximizedWindowProvider, useMaximizedWindow } from '../../hooks/useMaxi
 import { MaximizedWindow } from './MaximizedWindow';
 import type { Window } from '../../pages/workspace/types';
 
-const orchestrationState = vi.hoisted(() => ({ tree: [] as unknown[] }));
-vi.mock('../../hooks/useOrchestrationModel', () => ({ useOrchestrationModel: () => ({ tree: orchestrationState.tree }) }));
+const orchestrationState = vi.hoisted(() => ({ tree: [] as unknown[], read: vi.fn() }));
+vi.mock('../../hooks/useOrchestrationModel', () => ({ useOrchestrationModel: () => { orchestrationState.read(); return { tree: orchestrationState.tree }; } }));
 const linkedState = vi.hoisted(() => ({ links: [] as unknown[], error: null as Error | null, refresh: vi.fn() }));
 vi.mock('../../hooks/useOrchestrationLinks', () => ({ useOrchestrationLinks: (id: number | null) => ({ links: id === null ? [] : linkedState.links, loading: false, error: id === null ? null : linkedState.error, refresh: linkedState.refresh }) }));
 vi.mock('../../hooks/useIsMobile', () => ({ useIsMobile: () => false }));
@@ -44,7 +44,7 @@ describe('maximized window', () => {
     expect(screen.getByRole('dialog')).toBeInTheDocument();
     fireEvent.keyDown(screen.getByRole('dialog'), { key: 'Escape' });
     await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument());
-    expect(mounts.disconnect).toHaveBeenCalledWith(2);
+    await waitFor(() => expect(mounts.disconnect).toHaveBeenCalledWith(2));
     await waitFor(() => expect(screen.getByText('Launch')).toHaveFocus());
   });
   it('opens an unresolved ID without substituting another window', async () => {
@@ -91,6 +91,9 @@ describe('maximized window', () => {
     fireEvent.click(screen.getByText('Launch'));
     fireEvent.click(await screen.findByRole('treeitem', { name: /Linked/ }));
     await waitFor(() => expect(mounts.connect).toHaveBeenLastCalledWith(42));
+    const trees = screen.getAllByRole('tree');
+    expect(trees[0].querySelectorAll('[role=treeitem][tabindex="0"]')).toHaveLength(1);
+    expect(trees[1].querySelectorAll('[role=treeitem][tabindex="0"]')).toHaveLength(1);
     linkedState.links = [];
   });
 
@@ -162,6 +165,19 @@ describe('maximized window', () => {
     fireEvent.click(screen.getByText('Change tabs'));
     await waitFor(() => expect(screen.getByRole('dialog')).toHaveTextContent('Window not found'));
     linkedState.links = [];
+  });
+
+  it('does not build orchestration data while closed', async () => {
+    orchestrationState.read.mockClear();
+    render(<HotkeyProvider><MaximizedWindowProvider><Workspace /><MaximizedWindow /></MaximizedWindowProvider></HotkeyProvider>);
+    expect(orchestrationState.read).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByText('Launch'));
+    expect(orchestrationState.read).toHaveBeenCalled();
+    fireEvent.keyDown(screen.getByRole('dialog'), { key: 'Escape' });
+    await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument());
+    orchestrationState.read.mockClear();
+    fireEvent.click(screen.getByText('Change tabs'));
+    expect(orchestrationState.read).not.toHaveBeenCalled();
   });
 
 });

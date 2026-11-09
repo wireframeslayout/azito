@@ -69,6 +69,16 @@ export function visibleMaximizeWindows(rows: readonly MaximizeTreeRow[], expande
   return [...new Set(result)];
 }
 
+export function focusableMaximizeRow(rows: readonly MaximizeTreeRow[], expanded: ReadonlySet<string>, focused: string | null): string | null {
+  const keys: string[] = [];
+  const visit = (row: MaximizeTreeRow): void => {
+    keys.push(row.key);
+    if (expanded.has(row.key)) row.children.forEach(visit);
+  };
+  rows.forEach(visit);
+  return focused !== null && keys.includes(focused) ? focused : keys[0] ?? null;
+}
+
 /** Linked rows have their own keys because a window may also be present in the tab tree. */
 export function buildLinkedTree(items: readonly import('./linkedWindowsModel').LinkedWindow[], children: readonly import('./orchestrationModel').OrchestratorNode[]): MaximizeTreeRow[] {
   const seen = new Set<number>();
