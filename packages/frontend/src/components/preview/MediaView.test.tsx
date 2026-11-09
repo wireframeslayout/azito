@@ -26,6 +26,29 @@ it('renews an expired media URL and restores its position', async () => {
   expect(screen.queryByRole('alert')).toBeNull();
 });
 
+it('preserves the position when timeupdate fires while renewal is pending', async () => {
+  let now = 1000;
+  vi.spyOn(Date, 'now').mockImplementation(() => now);
+  let finishRenewal!: (url: string) => void;
+  const delayed = new Promise<string>((resolve) => { finishRenewal = resolve; });
+  const mediaUrl = vi.fn().mockResolvedValueOnce('/api/media/one').mockReturnValueOnce(delayed);
+  const backend = { mediaUrl } as unknown as BinaryFilesBackend;
+  const { container } = render(<MediaView backend={backend} path="a.mp4" type="video" />);
+  await waitFor(() => expect(container.querySelector('video')).not.toBeNull());
+  const video = container.querySelector('video')!;
+  video.currentTime = 14;
+  fireEvent.timeUpdate(video);
+  now += 600_000;
+  fireEvent.error(video);
+  await waitFor(() => expect(mediaUrl).toHaveBeenCalledTimes(2));
+  video.currentTime = 0;
+  fireEvent.timeUpdate(video);
+  await act(async () => { finishRenewal('/api/media/two'); await delayed; });
+  expect(video.getAttribute('src')).toBe('/api/media/two');
+  fireEvent.loadedMetadata(video);
+  expect(video.currentTime).toBe(14);
+});
+
 it('ignores a delayed renewal after switching files', async () => {
   let now = 1000;
   vi.spyOn(Date, 'now').mockImplementation(() => now);
