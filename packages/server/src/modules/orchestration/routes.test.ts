@@ -28,6 +28,20 @@ describe('orchestration routes', () => {
     expect((await request('GET', '/api/orchestrators')).json()).toHaveLength(2);
     await app.close(); bus.destroy(); db.close();
   });
+  it('validates the batched operation query and requires an operator', async () => {
+    const app = Fastify();
+    app.addHook('onRequest', async request => { request.principal = { class: request.headers.authorization === 'operator' ? 'operator' : 'task' }; });
+    const operationLinks = vi.fn(() => []);
+    await app.register(routes, { links: { operationLinks } as unknown as OrchestrationLinkService, windows: {} as SqliteWindowRepository });
+    expect((await app.inject({ url: '/api/window-links?kind=operation&taskIds=1', headers: { authorization: 'task' } })).statusCode).toBe(403);
+    for (const query of ['', '?kind=operation&taskIds=', '?kind=operation&taskIds=1,x', '?kind=orchestration&taskIds=1']) {
+      expect((await app.inject({ url: `/api/window-links${query}`, headers: { authorization: 'operator' } })).statusCode).toBe(400);
+    }
+    const response = await app.inject({ url: '/api/window-links?kind=operation&taskIds=1,2', headers: { authorization: 'operator' } });
+    expect(response.statusCode).toBe(200);
+    expect(operationLinks).toHaveBeenCalledWith([1, 2]);
+    await app.close();
+  });
   it('keeps every link route operator-only', async () => {
     const app = Fastify();
     app.addHook('onRequest', async (request, reply) => {

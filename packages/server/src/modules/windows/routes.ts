@@ -22,7 +22,7 @@ import { HostProfileError } from '../../shared/os/hostProfile';
 import { isAgentSessionId } from '../agents/agentSessionId';
 import { shellDialectFor } from '../../shared/os/shellDialect';
 import { randomUUID } from 'node:crypto';
-import type { IWindowRepository, Window } from './Window';
+import { isPrimaryTaskWindow, type IWindowRepository, type Window } from './Window';
 import type { IProjectRepository } from '../projects/Project';
 import type { ITaskRepository } from '../tasks/Task';
 import type { ServerConfig } from '../servers/Server';
@@ -91,6 +91,17 @@ export interface WindowsRouteOptions {
 
 const windowsRoutes: FastifyPluginCallback<WindowsRouteOptions> = (fastify, opts, done) => {
   const { windowRepo, projectRepo, taskRepo, tmux, serverRepo, respawnService, sessionStrategyFactory, sessionCaptureService, supervisorRegistry, windowActivityStatusService } = opts;
+  function recordTaskWindow(request: FastifyRequest, taskId: number, targetId: number): void {
+    try {
+      const header = request.headers['x-azito-window-id'];
+      const callerId = typeof header === 'string' ? parseWindowId(header) : null;
+      if (callerId === null) return;
+      const caller = windowRepo.findById(callerId);
+      if (!caller || !isPrimaryTaskWindow(caller) || caller.taskId !== taskId) return;
+      recordAttribution(request, opts.attribution, { windowId: targetId });
+    } catch (err) { request.log.warn({ err }, 'Failed to record window attribution'); }
+  }
+
   const driverFor = (srv: ServerConfig): IMuxClient => opts.muxDriverRegistry.resolve(srv);
   /** The registered window's mux (its ref's kind) must be able to serve the server right now. */
   const muxUnavailableBody = (srv: ServerConfig, kind: MuxDriverKind): { error: string; kind: MuxDriverKind; reason: MuxDriverUnavailableReason } | null => {
@@ -445,8 +456,10 @@ const windowsRoutes: FastifyPluginCallback<WindowsRouteOptions> = (fastify, opts
           const label = existing.labelSource === 'user' ? undefined : body.label || undefined;
           const windowType = body.window_type === 'agent' ? 'agent' as const : undefined;
           if (label || windowType) windowRepo.update(existing.id, { ...(label ? { label } : {}), ...(windowType ? { windowType } : {}) });
+          recordTaskWindow(request, id, existing.id);
           return { ok: true, id: existing.id, adopted: true, tmuxTarget: existing.tmuxTarget };
         }
+        recordTaskWindow(request, id, existing.id);
         return { ok: true, id: existing.id, tmuxTarget: existing.tmuxTarget };
       }
 
@@ -474,6 +487,7 @@ const windowsRoutes: FastifyPluginCallback<WindowsRouteOptions> = (fastify, opts
         sleeping: false,
       });
       if (givenRef && srv) await labelOrRemoveWindow(srv, givenRef, winId, id);
+      recordTaskWindow(request, id, winId);
       sessionCaptureService.scheduleInitialScan(winId, workerType, serverName, workingDirectory);
       notifyWindowsChanged(serverName);
       return { ok: true, id: winId, tmuxTarget };

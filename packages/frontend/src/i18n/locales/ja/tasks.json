@@ -89,6 +89,8 @@
     "groupRecent": "最近",
     "noSearchResults": "一致するタスクがありません",
     "noTasks": "タスクはまだありません",
+    "subagent": "サブ",
+    "operationLinksError": "窓の親子関係を取得できませんでした",
     "browserTabs": "{{count}}タブ"
   },
   "contextMenu": {
