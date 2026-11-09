@@ -1,6 +1,7 @@
 import { useHotkey, useOverlayStack } from '../../hooks/useHotkeys';
 import { parseKeySpec } from '../../lib/hotkeys/keySpec';
-import { useEffect, useRef } from 'react';
+import { useRef } from 'react';
+import { GlassPopoverSurface } from './GlassPopoverSurface';
 
 export interface GlassPopoverItem {
   key: string;
@@ -29,16 +30,6 @@ export function GlassPopover({ open, onClose, label, items, align = 'left', aria
   const { id, isTop } = useOverlayStack(open, ref);
   useHotkey({ action: 'local:overlay-close', spec: parseKeySpec('Escape'), scope: 'overlay', overlayId: id, handler: onClose }, open);
 
-  useEffect(() => {
-    if (!open) return;
-    const handlePointerDown = (e: PointerEvent) => {
-      if (isTop && ref.current && !ref.current.contains(e.target as Node)) onClose();
-    };
-    document.addEventListener('pointerdown', handlePointerDown);
-    return () => {
-      document.removeEventListener('pointerdown', handlePointerDown);
-    };
-  }, [open, onClose, isTop]);
 
   const horizontal: React.CSSProperties = align === 'right'
     ? { right: 14 }
@@ -47,11 +38,12 @@ export function GlassPopover({ open, onClose, label, items, align = 'left', aria
       : { left: 14 };
 
   return (
-    <div
+    <GlassPopoverSurface
       ref={ref}
+      open={open && isTop}
+      onOutside={onClose}
       role="menu"
       aria-label={ariaLabel}
-      className="glass-popover"
       inert={!open}
       style={{
         position: 'fixed',
@@ -106,6 +98,6 @@ export function GlassPopover({ open, onClose, label, items, align = 'left', aria
           {item.selected && <span style={{ color: 'var(--accent)', fontSize: 'var(--font-sm)' }}>&#10003;</span>}
         </button>
       ))}
-    </div>
+    </GlassPopoverSurface>
   );
 }

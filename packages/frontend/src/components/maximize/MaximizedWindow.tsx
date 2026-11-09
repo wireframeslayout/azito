@@ -1,7 +1,9 @@
 import { useEffect, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { Overlay, Button } from '../ui';
+import { GlassPopoverSurface } from '../ui/GlassPopoverSurface';
 import { TerminalContainer } from '../TerminalContainer';
+import { TaskTreeRowContent } from '../workspace/TaskTreeRow';
 import { useMaximizedWindow } from '../../hooks/useMaximizedWindow';
 import { useWorkspaceCatalog } from '../../hooks/useWorkspaceCatalog';
 import { useWorkspaceTargets } from '../../hooks/useWorkspaceTargets';
@@ -18,6 +20,8 @@ export function MaximizedWindow() {
   const [expanded, setExpanded] = useState<Set<string>>(new Set());
   const [focused, setFocused] = useState<string | null>(null);
   const [treeOpen, setTreeOpen] = useState(false);
+  const [narrow, setNarrow] = useState(() => globalThis.matchMedia('(max-width: 1100px)').matches);
+  useEffect(() => { const query = globalThis.matchMedia('(max-width: 1100px)'); const change = (event: MediaQueryListEvent) => setNarrow(event.matches); query.addEventListener('change', change); return () => query.removeEventListener('change', change); }, []);
   const [inputFocused, setInputFocused] = useState(false);
   const { bindings } = useHotkeyBindings();
   const previousWindowId = useRef<number | null>(null);
@@ -70,7 +74,7 @@ export function MaximizedWindow() {
     </header>
     <div onFocusCapture={event => setInputFocused(event.target instanceof HTMLElement && !!event.target.closest('.xterm, [data-maximize-input]'))} className="maximize-content" style={{ display: 'flex', flex: 1, minHeight: 0, minWidth: 0, position: 'relative' }}>
       <button type="button" className="maximize-tree-toggle btn" aria-expanded={treeOpen} onClick={() => setTreeOpen(value => !value)}>{t('maximize.openTabs')}</button>
-      <div className={`maximize-tree ${treeOpen ? 'is-open' : ''}`} style={{ order: 2, overflow: 'auto', padding: 'var(--space-2)', background: 'var(--bg-elevated)' }}>
+      <GlassPopoverSurface open={open && narrow && treeOpen} onOutside={event => { if (!(event.target instanceof Element && event.target.closest('.maximize-tree-toggle'))) setTreeOpen(false); }} className={`maximize-tree ${treeOpen ? 'is-open' : ''}`} style={{ order: 2, overflow: 'auto', padding: 'var(--space-2)', background: 'var(--bg-elevated)' }}>
         <strong>{t('maximize.openTabs')}</strong>
         {links.error && <div role="alert">{t('maximize.linksError')} <Button size="sm" onClick={links.reload}>{t('maximize.retry')}</Button></div>}
         {rows.length === 0 && <p>{t('maximize.empty')}</p>}
@@ -83,9 +87,9 @@ export function MaximizedWindow() {
         }}>
           {rows.map(row => <TreeRow key={row.key} row={row} expanded={expanded} focused={focused ?? rows[0]?.key} selected={selectedWindowId} onFocus={setFocused} onSelect={id => { select(id); setTreeOpen(false); }} onToggle={key => setExpanded(previous => { const next = new Set(previous); next.has(key) ? next.delete(key) : next.add(key); return next; })} />)}
         </div>
-      </div>
+      </GlassPopoverSurface>
       <div ref={terminalRef} style={{ order: 1, flex: 1, minWidth: 0, minHeight: 0, display: 'flex', flexDirection: 'column' }}>
-        {!window ? <p role="status">{t('maximize.missing')}</p> : window.sleeping ? <div><p>{t('maximize.sleeping')}</p><Button onClick={() => { void workspace?.wakeWindow(window.id).then(refresh); }}>{t('maximize.wake')}</Button></div> : <TerminalContainer key={window.id} registeredWindow={{ id: window.id, taskId: window.taskId }} serverName={window.serverName} target={window.tmuxTarget} projectId={window.projectId ?? task?.projectId} taskId={task?.id} allTasks={allTasks} />}
+        {!window ? <p role="status">{t('maximize.missing')}</p> : window.sleeping ? <div><p>{t('maximize.sleeping')}</p><Button onClick={() => { void workspace?.wakeWindow(window.id).then(refresh); }}>{t('maximize.wake')}</Button></div> : <TerminalContainer key={window.id} registeredWindow={{ id: window.id, taskId: window.taskId }} serverName={window.serverName} target={window.tmuxTarget} terminalRef={{ kind: 'windowId', serverName: window.serverName, windowId: window.id, pane: 1 }} projectId={window.projectId ?? task?.projectId} taskId={task?.id} allTasks={allTasks} />}
       </div>
     </div>
     <footer style={{ padding: 'var(--space-2)', color: 'var(--text-dim)', fontSize: 'var(--font-sm)' }}>{t(inputFocused ? 'maximize.inputHint' : 'maximize.hint')} {bindings['maximize.open'] && ` · ${formatKeySpec(bindings['maximize.open'])}: ${t('maximize.close')}`}</footer>
@@ -99,7 +103,7 @@ function TreeRow({ row, expanded, focused, selected, onFocus, onSelect, onToggle
   const label = row.kind === 'task' ? row.task.title : row.window.label || row.window.tmuxTarget;
   const hasChildren = row.children.length > 0;
   return <div role="treeitem" tabIndex={focused === row.key ? 0 : -1} data-key={row.key} aria-selected={id !== null && id === selected} aria-expanded={hasChildren ? expanded.has(row.key) : undefined} onFocus={event => { if (event.target === event.currentTarget) onFocus(row.key); }} onClick={event => { event.stopPropagation(); if (id !== null) onSelect(id); }} style={{ padding: 'var(--space-1)', cursor: id === null ? 'default' : 'pointer', background: id !== null && id === selected ? 'var(--selected-bg-strong)' : undefined }}>
-    {hasChildren && <button tabIndex={-1} aria-label={t(expanded.has(row.key) ? 'maximize.collapse' : 'maximize.expand')} onClick={event => { event.stopPropagation(); onToggle(row.key); }}>{expanded.has(row.key) ? '▾' : '▸'}</button>}{label}
+    <div style={{ display: 'flex', alignItems: 'center', gap: 'var(--space-1)', minWidth: 0 }}>{row.kind === 'task' ? <TaskTreeRowContent task={row.task} expanded={expanded.has(row.key)} onToggle={() => onToggle(row.key)} /> : <>{hasChildren && <button tabIndex={-1} aria-label={t(expanded.has(row.key) ? 'maximize.collapse' : 'maximize.expand')} onClick={event => { event.stopPropagation(); onToggle(row.key); }}>{expanded.has(row.key) ? '▾' : '▸'}</button>}<span style={{ flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{label}</span><span style={{ color: 'var(--text-dim)', fontSize: 'var(--font-2xs)' }}>W-{row.window.id}</span></>}</div>
     {hasChildren && expanded.has(row.key) && <div role="group" style={{ paddingLeft: 'var(--space-3)' }}>{row.children.map(child => <TreeRow key={child.key} row={child} expanded={expanded} focused={focused} selected={selected} onFocus={onFocus} onSelect={onSelect} onToggle={onToggle} />)}</div>}
   </div>;
 }

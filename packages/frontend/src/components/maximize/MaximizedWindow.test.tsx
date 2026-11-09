@@ -1,5 +1,5 @@
 import { fireEvent, render, screen, waitFor } from '@testing-library/react';
-import { describe, expect, it, vi } from 'vitest';
+import { beforeAll, describe, expect, it, vi } from 'vitest';
 import { useEffect } from 'react';
 import { HotkeyProvider } from '../../hooks/useHotkeys';
 import { MaximizedWindowProvider, useMaximizedWindow } from '../../hooks/useMaximizedWindow';
@@ -15,6 +15,7 @@ vi.mock('../TerminalContainer', () => ({ TerminalContainer: ({ registeredWindow 
   useEffect(() => { mounts.connect(registeredWindow.id); return () => mounts.disconnect(registeredWindow.id); }, [registeredWindow.id]);
   return <div className="xterm"><textarea aria-label="terminal" /></div>;
 } }));
+beforeAll(() => { Object.defineProperty(globalThis, 'matchMedia', { configurable: true, value: () => ({ matches: false, addEventListener: vi.fn(), removeEventListener: vi.fn() }) }); });
 const first = { id: 1, serverName: 'host', tmuxTarget: 'one', label: 'One' } as Window;
 const second = { id: 2, serverName: 'host', tmuxTarget: 'two', label: 'Two' } as Window;
 function Workspace() {
@@ -29,7 +30,7 @@ describe('maximized window', () => {
     screen.getByText('Launch').focus(); fireEvent.click(screen.getByText('Launch'));
     expect(await screen.findByRole('dialog')).toBeInTheDocument();
     expect(mounts.connect).toHaveBeenCalledWith(1);
-    fireEvent.click(screen.getByRole('treeitem', { name: 'Two' }));
+    fireEvent.click(screen.getByRole('treeitem', { name: /Two/ }));
     await waitFor(() => expect(mounts.connect).toHaveBeenCalledWith(2));
     expect(mounts.disconnect).toHaveBeenCalledWith(1);
     expect(mounts.disconnect.mock.invocationCallOrder[0]).toBeLessThan(mounts.connect.mock.invocationCallOrder[1]);
