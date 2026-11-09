@@ -1294,6 +1294,7 @@ input[aria-invalid="true"]:focus-visible { outline-color: var(--danger) !importa
   .lookout-toast-close { min-width: calc(var(--space-6) + var(--space-5)); display: flex; align-items: center; justify-content: center; }
 }
 
+@media (prefers-reduced-motion: reduce) { .bottom-sheet { transition: none !important; } }
 @keyframes orchestration-rail-pulse { 50% { box-shadow: 0 0 0 var(--space-2) var(--purple-a35); } }
 .orchestration-rail-pulse { animation: orchestration-rail-pulse 1s ease-out; }
 
@@ -1303,3 +1304,8 @@ input[aria-invalid="true"]:focus-visible { outline-color: var(--danger) !importa
   .task-sidebar-child { min-height: calc(var(--space-6) + var(--space-5)); }
   .task-sidebar-window-toggle { min-width: calc(var(--space-6) + var(--space-5)); min-height: calc(var(--space-6) + var(--space-5)); }
 }
+
+
+.linked-window-card-open { background: none; border: 0; color: inherit; font: inherit; padding: 0; text-align: left; cursor: pointer; }
+.linked-window-card-open::after { content: ""; position: absolute; inset: 0; }
+.linked-window-card-open:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }

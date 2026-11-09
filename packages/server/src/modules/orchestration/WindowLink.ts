@@ -12,6 +12,7 @@ export interface WindowLinkView {
   unlinkedAt: string | null;
   resolvedWindowId: number | null;
   resolvedTaskId: number | null;
+  resolvedWindow: Pick<Window, 'id' | 'ownerType' | 'role' | 'originProjectId' | 'projectId' | 'taskId' | 'serverName' | 'tmuxTarget' | 'muxRef' | 'label' | 'labelSource' | 'isPrimary' | 'windowType' | 'sleeping'> | null;
 }
 
 export interface OrchestratorSummary extends Window {

@@ -70,3 +70,41 @@ test('作業ディレクトリなしでは作成しない', async ({ app, harnes
   await expect(app.getByText('サーバーと作業ディレクトリを指定してください')).toBeVisible();
   await expect(dialog).toBeVisible();
 });
+
+test('連携した窓を右パネルから解除して元に戻す', async ({ app, harness }) => {
+  const project = await harness.createProject('orchestration-links');
+  const sourceAgent = await harness.startFakeAgent('orchestration-links', 'source', { supervised: false });
+  const targetAgent = await harness.startFakeAgent('orchestration-links', 'target', { supervised: false });
+  const source = await harness.registerAgentWindow(project, sourceAgent.target, { label: 'source' });
+  const target = await harness.registerAgentWindow(project, targetAgent.target, { label: 'linked-target' });
+  await harness.api(`/windows/${source}/role`, { method: 'PUT', body: JSON.stringify({ role: 'orchestrator' }) });
+  await harness.api(`/windows/${source}/links`, { method: 'POST', body: JSON.stringify({ targetWindowId: target }) });
+  await app.goto(`${harness.baseUrl}/orchestration/${source}`);
+  await app.getByRole('button', { name: '連携中の窓を開く' }).click();
+  const panel = app.getByRole('complementary', { name: /連携中/ });
+  await expect(panel.getByText('linked-target')).toBeVisible();
+  await panel.getByRole('button', { name: '連携を解除' }).click();
+  await expect(panel.getByText('linked-target')).not.toBeVisible();
+  await panel.getByRole('button', { name: '元に戻す' }).click();
+  await expect(panel.getByText('linked-target')).toBeVisible();
+});
+
+test('自動連携したタスクを要対応順に表示する', async ({ app, harness }) => {
+  const project = await harness.createProject('orchestration-auto');
+  const agent = await harness.startFakeAgent('orchestration-auto', 'source', { supervised: false });
+  const source = await harness.registerAgentWindow(project, agent.target, { label: 'auto-source' });
+  await harness.api(`/windows/${source}/role`, { method: 'PUT', body: JSON.stringify({ role: 'orchestrator' }) });
+  const create = (title: string) => harness.api<{ id: number }>('/tasks', { method: 'POST', headers: { 'X-Azito-Window-Id': `W-${source}` }, body: JSON.stringify({ project_id: project, title }) });
+  await create('通常タスク');
+  const attention = await create('要対応タスク');
+  await harness.api(`/tasks/${attention.id}`, { method: 'PUT', body: JSON.stringify({ status: 'waiting_input' }) });
+  await app.goto(`${harness.baseUrl}/orchestration/${source}`);
+  await app.getByRole('button', { name: '連携中の窓を開く' }).click();
+  const panel = app.getByRole('complementary', { name: /連携中/ });
+  await expect(panel.getByText('要対応タスク', { exact: true })).toBeVisible();
+  const cards = panel.locator('article');
+  await expect(cards.first()).toContainText('要対応タスク');
+  await expect(cards.nth(1)).toContainText('通常タスク');
+  await panel.getByRole('tab', { name: /要対応/ }).click();
+  await expect(panel.getByText('通常タスク')).not.toBeVisible();
+});

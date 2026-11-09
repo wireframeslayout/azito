@@ -14,7 +14,8 @@ export interface GlassPopoverProps {
   open: boolean;
   onClose: () => void;
   label?: string;
-  items: GlassPopoverItem[];
+  items?: GlassPopoverItem[];
+  children?: React.ReactNode;
   align?: 'left' | 'right' | 'center';
   ariaLabel?: string;
   solid?: boolean;
@@ -26,7 +27,7 @@ export interface GlassPopoverProps {
  * 汎用コンポーネント。外側タップ / Esc で閉じる。prefers-reduced-motion 時はアニメーション
  * 無効（global.css）。
  */
-export function GlassPopover({ open, onClose, label, items, align = 'left', ariaLabel, solid = false, anchorRef }: GlassPopoverProps) {
+export function GlassPopover({ open, onClose, label, items = [], children, align = 'left', ariaLabel, solid = false, anchorRef }: GlassPopoverProps) {
   const ref = useRef<HTMLDivElement>(null);
   const { id, isTop } = useOverlayStack(open, ref);
   useHotkey({ action: 'local:overlay-close', spec: parseKeySpec('Escape'), scope: 'overlay', overlayId: id, handler: onClose }, open);
@@ -52,7 +53,7 @@ export function GlassPopover({ open, onClose, label, items, align = 'left', aria
   return (
     <div
       ref={ref}
-      role="menu"
+      role={children ? "dialog" : "menu"}
       aria-label={ariaLabel}
       className="glass-popover"
       inert={!open}
@@ -82,6 +83,7 @@ export function GlassPopover({ open, onClose, label, items, align = 'left', aria
           {label}
         </div>
       )}
+      {children}
       {items.map((item) => (
         <button
           key={item.key}

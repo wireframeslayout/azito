@@ -231,3 +231,7 @@ AZITO はモバイルブラウザからの利用にも対応しています。
 `POST /api/windows` でサーバー所有の窓を登録し、`role: "orchestrator"` を同時に指定できます。`PUT /api/windows/:id/role` の `role` に `"orchestrator"` または `null` を指定して役割を変更します。`GET /api/orchestrators` は一覧と紐づけの集計を返します。`GET /api/windows/:id/links` は有効な紐づけを返し、`includeUnlinked=1` で解除済みを含め、`kind` で絞り込めます。`POST /api/windows/:id/links` に `targetWindowId` または `taskId` のどちらかを指定して追加し、`DELETE /api/windows/:id/links/:linkId` で解除します。これらの管理 API はオペレーター専用です。
 
 `azitoctl` は `AZITO_WINDOW_ID` がある場合、このヘッダーに窓 ID を設定します。
+
+### RC 確認: オーケストレーターの連携パネル
+
+10 個以上の窓を連携し、要対応と通常の窓を混ぜてパネルを開く。スクロール前後でブラウザーのネットワーク記録を確認し、表示領域とその近傍の窓だけが `/api/windows/snapshots` に含まれること、要対応は約 2 秒、通常は約 3 秒の間隔で取得されることを確認する。パネルを閉じた場合とブラウザーのタブを非表示にした場合には取得が止まり、再表示後に再開することを確認する。スマホ幅では連携チップ、シート、窓の前後移動とスワイプ、画面幅 320px での表示も確認する。

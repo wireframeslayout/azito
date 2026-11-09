@@ -1,0 +1,20 @@
+import { act, renderHook } from '@testing-library/react';
+import { expect, it, vi } from 'vitest';
+import { useVisibleIds } from './useVisibleIds';
+it('observes registered nodes near the root and removes unregistered ids', () => {
+  let callback!: IntersectionObserverCallback;
+  const observe = vi.fn(); const unobserve = vi.fn(); const disconnect = vi.fn();
+  vi.stubGlobal('IntersectionObserver', class { constructor(cb: IntersectionObserverCallback, options: IntersectionObserverInit) { callback = cb; expect(options.rootMargin).toBe('120px'); } observe = observe; unobserve = unobserve; disconnect = disconnect; });
+  const root = document.createElement('div'); const node = document.createElement('div');
+  const { result, unmount } = renderHook(() => useVisibleIds(root));
+  act(() => result.current.register(1, node));
+  expect(observe).toHaveBeenCalledWith(node);
+  act(() => callback([{ target: node, isIntersecting: true } as unknown as IntersectionObserverEntry], {} as IntersectionObserver));
+  const reference = result.current.visibleIds;
+  act(() => callback([{ target: node, isIntersecting: true } as unknown as IntersectionObserverEntry], {} as IntersectionObserver));
+  expect(result.current.visibleIds).toBe(reference);
+  act(() => result.current.register(1, null));
+  expect(result.current.visibleIds.size).toBe(0);
+  expect(unobserve).toHaveBeenCalledWith(node);
+  unmount(); expect(disconnect).toHaveBeenCalled(); vi.unstubAllGlobals();
+});

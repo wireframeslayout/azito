@@ -44,6 +44,7 @@ export interface WindowLinkView {
   id: number; sourceWindowId: number; targetWindowId: number | null; taskId: number | null;
   kind: 'orchestration' | 'operation'; source: 'auto' | 'manual'; createdAt: string;
   lastInteractionAt: string | null; unlinkedAt: string | null; resolvedWindowId: number | null; resolvedTaskId: number | null;
+  resolvedWindow: (Omit<Window, 'projectId' | 'taskId' | 'label'> & { projectId: number | null; taskId: number | null; label: string | null }) | null;
 }
 export interface OrchestratorSummary extends Window {
   links: { total: number; projectIds: number[]; serverNames: string[]; targets: Array<{ windowId: number | null; taskId: number | null }> };

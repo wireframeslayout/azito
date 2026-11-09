@@ -1,3 +1,4 @@
+import { useOrchestrators } from '../hooks/useOrchestrators';
 import { useLookout } from '../hooks/useLookout';
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
@@ -79,6 +80,8 @@ function WorkspaceInner() {
   const { t } = useTranslation(['workspace', 'tasks']);
   const navigate = useNavigate();
   const location = useLocation();
+  const { windows: orchestrators } = useOrchestrators();
+  const selectedOrchestrator = location.pathname.startsWith('/orchestration/') ? orchestrators.find(window => String(window.id) === location.pathname.split('/')[2]) : undefined;
   const brailleFrame = useBrailleSpinner();
 
   const wsMatch = matchWorkspacePath(location.pathname);
@@ -510,7 +513,7 @@ function WorkspaceInner() {
     }
   }, [connectRef, openTerminalTarget]);
 
-  const { setOnOpenInTerminal, setOnOpenTask, setActiveTabId: setTargetsActiveTabId, setFocusedTarget, setOnOpenTabSwitcher } = useWorkspaceTargets();
+  const { setOnOpenInTerminal, setOnOpenTask, setActiveTabId: setTargetsActiveTabId, setFocusedTarget, setOnOpenTabSwitcher, setLinkedSheetOpen } = useWorkspaceTargets();
   const { shouldShowActivity, shouldShowTaskActivity } = useAgentActivity();
   useEffect(() => { setTargetsActiveTabId(activeTabId); }, [activeTabId, setTargetsActiveTabId]);
 
@@ -1384,6 +1387,7 @@ function WorkspaceInner() {
               const shell = (
                 <>
                   <MobileTabChipRow
+                    linked={selectedOrchestrator ? { count: selectedOrchestrator.links.total, onOpen: () => setLinkedSheetOpen(true) } : undefined}
                     activeTab={(() => {
                       const tab = tabs.find((t) => t.id === activeTabId);
                       return tab ? buildTabItem(tab) : null;

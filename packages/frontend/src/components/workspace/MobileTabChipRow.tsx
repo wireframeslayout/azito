@@ -5,6 +5,7 @@ import { useToast } from '../../hooks/useToast';
 import type { TabItem } from '../ui';
 
 interface MobileTabChipRowProps {
+  linked?: { count: number; onOpen: () => void };
   activeTab: TabItem | null;
   activeTabId: string | null;
   activeTabPinned: boolean;
@@ -22,6 +23,7 @@ interface MobileTabChipRowProps {
  * 左ボーダー/左エッジでの色分けは禁止のため、プロジェクト色は丸ドットのみで示す。
  */
 export function MobileTabChipRow({
+  linked,
   activeTab,
   activeTabId,
   activeTabPinned,
@@ -126,6 +128,7 @@ export function MobileTabChipRow({
         )}
       </button>
 
+      {linked && <button type="button" className="btn btn-sm" style={{ minHeight: 44 }} onClick={linked.onOpen}>{t('orchestration.connected', { count: linked.count })}</button>}
       <button
         type="button"
         onClick={onOpenMenu}
