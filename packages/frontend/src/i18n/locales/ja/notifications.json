@@ -18,6 +18,7 @@
     "executionApproval": "実行承認待ち: {{title}}",
     "taskDone": "タスク完了: {{title}}",
     "taskFailed": "タスク失敗: {{title}}",
+    "taskLaunchFailed": "worker が起動しません: {{title}}",
     "agentFinished": "エージェント終了: {{label}}",
     "agentApiError": "{{label}} が API エラーで停止しました",
     "muxWakeAsk": "{{serverName}} の {{title}} を tmux で起こしました。メニューから misao に切り替えられます。",

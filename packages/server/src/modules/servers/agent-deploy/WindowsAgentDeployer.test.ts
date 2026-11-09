@@ -75,7 +75,7 @@ describe('powershellErrorText', () => {
 describe('stopping a task launcher', () => {
   it('does not interrupt a waiting launcher, and restarts a present process only when forced', async () => {
     const fake = new FakeWindowsHost({ sha256: 'a'.repeat(64), existingTask: 'running', scriptOutput: { containing: '# AZITO_PROCESS_PRESENT', stdout: 'absent' } });
-    const info = { nodePath: 'C:\\node.exe', nodeVersion: '24', arch: 'x64' as const, windowsVersion: null, buildNumber: 22631, cim: 'ok' as const, tailscaleIp: '100.64.0.9', home: 'C:\\Users\\dev', systemRoot: 'C:\\Windows', userId: 'PC\\dev' };
+    const info = { nodePath: 'C:\\node.exe', nodeVersion: '24', arch: 'x64' as const, windowsVersion: null, buildNumber: 22631, cim: 'ok' as const, tailscaleIp: '100.64.0.9', tailscaleCli: 'ok' as const, tailscaleDetail: null, networkStatus: 'not_checked' as const, networkDetail: null, home: 'C:\\Users\\dev', systemRoot: 'C:\\Windows', userId: 'PC\\dev' };
     const layout = windowsAgentLayout(info.home, DEFAULT_WINDOWS_AGENT_OPTIONS, 'abc123');
     const action = agentTaskAction(info.systemRoot, info.nodePath, layout.envFile, layout.entry, DEFAULT_WINDOWS_AGENT_OPTIONS.taskName);
     fake.registeredXml = buildTaskXml({ userId: info.userId, description: 'agent', executable: action.executable, args: action.args, workingDirectory: layout.versionDir, restartOnFailure: { intervalMinutes: 1, count: 999 } });
@@ -89,7 +89,7 @@ describe('stopping a task launcher', () => {
 
   it('ends the recognised launcher before sweeping its agent even when the scheduler reports stopped', async () => {
     const fake = new FakeWindowsHost({ sha256: 'a'.repeat(64), existingTask: 'stopped' });
-    const info = { nodePath: 'C:\\node.exe', nodeVersion: '24', arch: 'x64' as const, windowsVersion: null, buildNumber: 22631, cim: 'ok' as const, tailscaleIp: '100.64.0.9', home: 'C:\\Users\\dev', systemRoot: 'C:\\Windows', userId: 'PC\\dev' };
+    const info = { nodePath: 'C:\\node.exe', nodeVersion: '24', arch: 'x64' as const, windowsVersion: null, buildNumber: 22631, cim: 'ok' as const, tailscaleIp: '100.64.0.9', tailscaleCli: 'ok' as const, tailscaleDetail: null, networkStatus: 'not_checked' as const, networkDetail: null, home: 'C:\\Users\\dev', systemRoot: 'C:\\Windows', userId: 'PC\\dev' };
     const layout = windowsAgentLayout(info.home, DEFAULT_WINDOWS_AGENT_OPTIONS, 'abc123');
     const action = agentTaskAction(info.systemRoot, info.nodePath, layout.envFile, layout.entry, DEFAULT_WINDOWS_AGENT_OPTIONS.taskName);
     fake.registeredXml = buildTaskXml({ userId: info.userId, description: 'agent', executable: action.executable, args: action.args, workingDirectory: layout.versionDir, restartOnFailure: { intervalMinutes: 1, count: 999 } });
@@ -134,7 +134,7 @@ describe('the process sweep script', () => {
   async function sweepScript(): Promise<string> {
     const host = new FakeWindowsHost({ sha256: 'a'.repeat(64) });
     const deployer = new WindowsAgentDeployer(host.exec, { putFile: async () => undefined, putBuffer: async () => undefined }, DEFAULT_WINDOWS_AGENT_OPTIONS);
-    await deployer.stop('h', { nodePath: 'C:\\node.exe', nodeVersion: '24', arch: 'x64', windowsVersion: null, buildNumber: 22631, tailscaleIp: '100.64.0.9', home: 'C:\\Users\\dev', systemRoot: 'C:\\Windows', userId: 'PC\\dev' });
+    await deployer.stop('h', { nodePath: 'C:\\node.exe', nodeVersion: '24', arch: 'x64', windowsVersion: null, buildNumber: 22631, tailscaleIp: '100.64.0.9', tailscaleCli: 'ok' as const, tailscaleDetail: null, networkStatus: 'not_checked' as const, networkDetail: null, home: 'C:\\Users\\dev', systemRoot: 'C:\\Windows', userId: 'PC\\dev' });
     return host.calls.map((c) => c.text).find((t) => t.includes('Get-AgentNodes'))!;
   }
 
@@ -177,7 +177,7 @@ describe('the process sweep script', () => {
 describe('firewall recovery inspection', () => {
   async function setup(healthOutput: string) {
     const host = new FakeWindowsHost({ sha256: 'a'.repeat(64), existingTask: 'running' });
-    const info = { nodePath: 'C:\\node.exe', nodeVersion: '24', arch: 'x64' as const, windowsVersion: null, buildNumber: 22631, cim: 'ok' as const, tailscaleIp: '100.64.0.9', home: 'C:\\Users\\dev', systemRoot: 'C:\\Windows', userId: 'PC\\dev' };
+    const info = { nodePath: 'C:\\node.exe', nodeVersion: '24', arch: 'x64' as const, windowsVersion: null, buildNumber: 22631, cim: 'ok' as const, tailscaleIp: '100.64.0.9', tailscaleCli: 'ok' as const, tailscaleDetail: null, networkStatus: 'not_checked' as const, networkDetail: null, home: 'C:\\Users\\dev', systemRoot: 'C:\\Windows', userId: 'PC\\dev' };
     const layout = windowsAgentLayout(info.home, DEFAULT_WINDOWS_AGENT_OPTIONS, 'abc123');
     const action = agentTaskAction(info.systemRoot, info.nodePath, layout.envFile, layout.entry, DEFAULT_WINDOWS_AGENT_OPTIONS.taskName);
     host.registeredXml = buildTaskXml({ userId: info.userId, description: 'agent', executable: action.executable, args: action.args, workingDirectory: layout.versionDir, restartOnFailure: { intervalMinutes: 1, count: 999 } });

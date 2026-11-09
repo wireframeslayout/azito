@@ -22,6 +22,7 @@ export interface WorkerLaunchContext {
   windowType: string;
   workerExecutionMode: WorkerExecutionMode;
   effectiveLaunchCommand: string;
+  childEnv?: Readonly<Record<string, string>>;
   /** The shell of the launched pane (the target host's), for the supervisor wrapper. */
   dialect: ShellDialect;
   /**

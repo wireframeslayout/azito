@@ -69,3 +69,12 @@ describe('fetchSessionListing / keepUnavailableKinds (#311)', () => {
     expect(keepUnavailableKinds([tmuxDev, misaoDev], { sessions: [tmuxDev], unavailable: [] })).toEqual([tmuxDev]);
   });
 });
+
+describe('session listing state', () => {
+  it('distinguishes an unavailable agent from a partial listing', async () => {
+    const { sessionListingState } = await import('./fetchServerSessions');
+    expect(sessionListingState({ sessions: [], unavailable: [{ kind: 'tmux', reason: 'agent_unreachable' }], listedKinds: [] })).toBe('error');
+    expect(sessionListingState({ sessions: [], unavailable: [{ kind: 'misao', reason: 'daemon_unreachable' }], listedKinds: ['tmux'] })).toBe('partial');
+    expect(sessionListingState({ sessions: [], unavailable: [], listedKinds: ['tmux'] })).toBe('ready');
+  });
+});

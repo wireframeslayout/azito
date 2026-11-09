@@ -1,6 +1,5 @@
 import { describe, it, expect, vi } from 'vitest';
-import { readFileSync } from 'node:fs';
-import { join } from 'node:path';
+import { fixture } from './fixtures/readFixture';
 import { createFakeWorkerPane, workerScreenWith } from './fakeWorkerScreen';
 import { asPaneHandle } from '@azito/shared';
 import { TuiNotReadyError, TuiWorkerRuntime, workerNotReadyReason } from './TuiWorkerRuntime';
@@ -10,7 +9,7 @@ import { posixDialect } from '../../../../shared/os/shellDialect';
 function makeRuntime(capturePaneResponses: string[], foreground: string | null = 'claude') {
   let callIndex = 0;
   const tmux = {
-    sendKeysToHandle: vi.fn(async () => {}),
+    sendKeysToHandle: vi.fn(async (_server: unknown, _handle: unknown, _keys: string[]) => {}),
     paneCommandByHandle: vi.fn(async () => foreground),
     captureScreen: vi.fn(async () => {
       const stdout = capturePaneResponses[callIndex] ?? capturePaneResponses[capturePaneResponses.length - 1];
@@ -46,6 +45,14 @@ function makeLaunchCtx(tmux: any) {
 }
 
 describe('TuiWorkerRuntime.launch — waitForTuiReady', () => {
+  it('passes the worker environment to the supervisor and keeps the child command clean', async () => {
+    const { runtime, tmux } = makeRuntime(['bypass permissions on (shift+tab to cycle)']);
+    const ctx = { ...makeLaunchCtx(tmux), effectiveLaunchCommand: 'claude --resume abc', childEnv: { CLAUDE_CODE_ENABLE_PROMPT_SUGGESTION: 'false' } };
+    await runtime.launch(ctx);
+    const command = tmux.sendKeysToHandle.mock.calls[0][2][0];
+    expect(command).toContain("CLAUDE_CODE_ENABLE_PROMPT_SUGGESTION='false'");
+    expect(command).toContain("-- 'claude --resume abc'");
+  });
   it('returns immediately after polling when TUI shows ready indicators (claude worker)', async () => {
     const { runtime, tmux } = makeRuntime(['bypass permissions on (shift+tab to cycle)']);
     const ctx = { ...makeLaunchCtx(tmux), effectiveLaunchCommand: 'claude --dangerously-skip-permissions' };
@@ -159,9 +166,6 @@ describe('TuiWorkerRuntime.launch — the Bypass Permissions mode dialog (Claude
   }, 15_000);
 });
 
-/** A screen taken from a real pane (see fixtures/). */
-const fixture = (name: string): string => readFileSync(join(__dirname, 'fixtures', name), 'utf8');
-
 const LINE = 'AZITO prompt file. Read the file named at the end of this line and carry out every instruction in it exactly: C:/Users/SERVER~1/AppData/Local/Temp/azito-prompt-99-0123456789abcdef.md';
 
 interface HarnessOptions {
@@ -260,6 +264,39 @@ describe('TuiWorkerRuntime.sendPrompt — nothing of the prompt is typed into a 
 });
 
 describe('TuiWorkerRuntime.sendPrompt — the worker has to be at an empty input (#532)', () => {
+  it('refuses a Codex draft that starts with the placeholder text', async () => {
+    const h = sendHarness('codex', { idle: '› Ask Codex to do anything else\n\n? for shortcuts' });
+    expect(await h.send()).toMatchObject({ name: 'TuiNotReadyError', reason: 'input_not_empty' });
+    expect(h.promptFiles.stage).not.toHaveBeenCalled();
+    expect(h.workerInput.typePrompt).not.toHaveBeenCalled();
+  });
+  it('currently times out on the captured Claude suggestion', async () => {
+    const h = sendHarness('claude', { idle: fixture('claude-2.1.319-tmux-ghost.ansi') });
+    expect(await h.send()).toMatchObject({ name: 'TuiNotReadyError', reason: 'input_not_empty' });
+    expect(h.waitedMs()).toBe(5000);
+    expect(h.promptFiles.stage).not.toHaveBeenCalled();
+    expect(h.workerInput.typePrompt).not.toHaveBeenCalled();
+  });
+  it('currently times out on a synthetic suggestion rendered as text in the Claude input', async () => {
+    // Synthetic text-only screen: no claim is made about the attributes of a real suggestion.
+    const screen = '──────────────\n❯ suggested next message\n──────────────\nbypass permissions on';
+    const h = sendHarness('claude', { idle: screen });
+    expect(await h.send()).toMatchObject({ name: 'TuiNotReadyError', reason: 'input_not_empty' });
+    expect(h.waitedMs()).toBe(5000);
+    expect(h.promptFiles.stage).not.toHaveBeenCalled();
+    expect(h.workerInput.typePrompt).not.toHaveBeenCalled();
+  });
+  it('sends to the captured named input and refuses a modified draft', async () => {
+    const captured = fixture('claude-2.1.317-named-empty.txt');
+    const empty = sendHarness('claude', { idle: captured });
+    expect(await empty.send()).toBeNull();
+    expect(empty.workerInput.typePrompt).toHaveBeenCalledTimes(1);
+    const draft = sendHarness('claude', { idle: captured.replace('❯ \n', '❯ draft\n') });
+    expect(await draft.send()).toMatchObject({ reason: 'input_not_empty' });
+    expect(draft.promptFiles.stage).not.toHaveBeenCalled();
+    expect(draft.workerInput.typePrompt).not.toHaveBeenCalled();
+  });
+
   it.each([
     ['codex', 'an unknown screen', 'Welcome to Codex\n  1. Sign in with ChatGPT\n  2. Provide your own API key'],
     ['codex', 'an empty screen', ''],
@@ -298,7 +335,23 @@ describe('TuiWorkerRuntime.sendPrompt — the worker has to be at an empty input
     expect(h.workerInput.typePrompt).not.toHaveBeenCalled();
   });
 
-  it('a Claude input that shows "Press up to edit queued messages" is empty, but the turn is still running: ours waits for the turn to end', async () => {
+  it('stops after the ready grace when a busy Codex input is unreadable', async () => {
+    const h = sendHarness('codex', { idle: `• Working (3s • esc to interrupt)
+
+  ? for shortcuts` });
+    expect(await h.send()).toMatchObject({ reason: 'not_ready' });
+    expect(h.waitedMs()).toBe(5000);
+    expect(h.workerInput.typePrompt).not.toHaveBeenCalled();
+  });
+
+  it('confirms a submitted line when Claude displays a queued hint', async () => {
+    const h = sendHarness('claude', { submitted: fixture('claude-2.1.310-linux-queued-placeholder.txt') });
+    expect(await h.send()).toBeNull();
+    expect(h.workerInput.submitPrompt).toHaveBeenCalledTimes(1);
+    expect(h.workerInput.clearInputLine).not.toHaveBeenCalled();
+  });
+
+  it('waits for an ambiguous Claude hint to disappear before sending', async () => {
     const queued = fixture('claude-2.1.310-linux-queued-placeholder.txt');
     const h = sendHarness('claude', { firstScreens: [queued, queued, queued] });
     expect(await h.send()).toBeNull();
@@ -306,11 +359,17 @@ describe('TuiWorkerRuntime.sendPrompt — the worker has to be at an empty input
     expect(h.tmux.captureScreen.mock.calls.length).toBeGreaterThan(3);
   });
 
+  it('stops without typing when a Claude hint remains indistinguishable from a draft', async () => {
+    const h = sendHarness('claude', { idle: fixture('claude-2.1.310-linux-queued-placeholder.txt') });
+    expect(await h.send()).toMatchObject({ name: 'TuiNotReadyError', reason: 'worker_busy' });
+    expect(h.promptFiles.stage).not.toHaveBeenCalled();
+    expect(h.workerInput.typePrompt).not.toHaveBeenCalled();
+  });
+
   it.each([
     ['codex', 'codex-0.163-linux-working-empty.txt'],
     ['codex', 'codex-0.163-linux-working-queued.txt'],
     ['claude', 'claude-2.1.310-linux-working.txt'],
-    ['claude', 'claude-2.1.310-linux-queued-placeholder.txt'],
   ] as const)('a %s worker whose turn does not end (%s): stops with worker_busy after 60 s, sending and writing nothing', async (kind, file) => {
     const h = sendHarness(kind, { idle: fixture(file) });
     expect(await h.send()).toMatchObject({ name: 'TuiNotReadyError', reason: 'worker_busy' });
@@ -585,20 +644,30 @@ describe('TuiWorkerRuntime.sendPrompt — the line has to be drawn, submitted an
     expect(h.workerInput.clearInputLine).toHaveBeenCalledTimes(5);
   });
 
-  it('keeps clearing while text is left: Claude Code clears one display line of a wrapped input per Ctrl+U', async () => {
-    const h = sendHarness('claude', { enterIgnored: 99, wrapWidth: 40, clearsOneLine: true });
+  it('stops clearing once the input shows an ambiguous hint after our line is removed', async () => {
+    const h = sendHarness('claude', { enterIgnored: 99 });
+    const normal = h.tmux.captureScreen.getMockImplementation()!;
+    h.tmux.captureScreen.mockImplementation(async () => h.workerInput.clearInputLine.mock.calls.length > 0
+      ? { stdout: fixture('claude-2.1.310-linux-queued-placeholder.txt') } : normal());
     const err = await h.send();
-    expect(err).toMatchObject({ reason: 'prompt_not_submitted', inputLeft: false });
-    expect((err as Error).message).not.toMatch(/消してから再開/);
-    expect(h.workerInput.clearInputLine.mock.calls.length).toBeGreaterThan(1);
-    expect(h.pane.screen()).toContain('❯ \n');
+    expect(err).toMatchObject({ reason: 'prompt_not_submitted', inputUnreadable: true });
+    expect((err as Error).message).toMatch(/入力欄を確かめてから再開/);
+    expect(h.workerInput.clearInputLine).toHaveBeenCalledTimes(1);
   });
 
-  it('gives up after five Ctrl+U and says to clear the rest when the input is still not empty', async () => {
+  it('stops clearing a wrapped input when the remaining text is no longer identifiable', async () => {
+    const h = sendHarness('claude', { enterIgnored: 99, wrapWidth: 40, clearsOneLine: true });
+    const err = await h.send();
+    expect(err).toMatchObject({ reason: 'prompt_not_submitted', inputLeft: true });
+    expect((err as Error).message).toMatch(/消してから再開/);
+    expect(h.workerInput.clearInputLine).toHaveBeenCalledTimes(1);
+  });
+
+  it('stops clearing a narrow wrapped input once it cannot identify the remainder', async () => {
     const h = sendHarness('claude', { enterIgnored: 99, wrapWidth: 10, clearsOneLine: true });
     const err = await h.send();
     expect(err).toMatchObject({ reason: 'prompt_not_submitted', inputLeft: true });
-    expect(h.workerInput.clearInputLine).toHaveBeenCalledTimes(5);
+    expect(h.workerInput.clearInputLine).toHaveBeenCalledTimes(1);
   });
 
   it('prompt_not_typed: the screen is read again, and an input that is not empty (or cannot be read) is reported as left', async () => {

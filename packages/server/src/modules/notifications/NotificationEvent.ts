@@ -17,7 +17,7 @@ export type NotificationEvent =
   | { type: 'server:firewall'; payload: { serverName: string; diagnosis: FirewallDiagnosis } }
   | { type: 'subagents:updated'; payload: { windowId: number; sessionId: string } }
   | { type: 'sessions:updated'; payload: { serverName: string } }
-  | { type: 'task:status'; payload: { taskId: number; status: string; title?: string; projectId?: number } }
+  | { type: 'task:status'; payload: { taskId: number; status: string; title?: string; projectId?: number; reason?: string } }
   | { type: 'phase:completed'; payload: { taskId: number; unitId: number; phase: string; summary: Record<string, unknown> | null } }
   | { type: 'window:created'; payload: { serverName: string; sessionName: string; windowName: string; windowId?: number } }
   | { type: 'window:destroyed'; payload: { serverName: string; sessionName: string; windowName: string; windowId?: number } }

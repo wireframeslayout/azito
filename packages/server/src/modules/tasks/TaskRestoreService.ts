@@ -613,6 +613,10 @@ export class TaskRestoreService {
         if (startsAsProgram) {
           server = freshServer;
           await prepareEnvironment();
+          // A program host is win32, where the daemon check is skipped deliberately (an npm claude is a .cmd shim the
+          // CommandSpec cannot spawn) — the plain resume launch, no check, no daemon_check_unavailable log. The
+          // daemon-aware launch is not needed here: restore only restarts the worker on a program host (win32), where
+          // the check never runs.
           const launch = unit ? planResumeWorkerLaunch(unit, task.agentSessionId, this.deps.sessionStrategyFactory) : null;
           if (launch) {
             program = await programFor(launch, effectiveDir, () => transportFactory.getFileOps(freshServer));

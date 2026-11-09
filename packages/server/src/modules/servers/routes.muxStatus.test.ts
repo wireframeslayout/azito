@@ -5,6 +5,8 @@ import type { ServersRouteOptions } from './routes';
 import type { IServerRepository, ServerConfig } from './Server';
 import { KeyedMutex } from '../../shared/keyedMutex';
 import { MuxDriverRegistry } from '../tmux/MuxDriverRegistry';
+import { MisaoConnection, type MisaoSdk } from '../tmux/misao/MisaoConnection';
+import { describeMisaoDaemon } from '../tmux/misao/misaoDriver';
 import { checkTmuxStatus, describeDefaultMuxProblem, misaoStatusItem } from './muxStatus';
 
 const local = (defaultMux: 'tmux' | 'misao'): ServerConfig => ({
@@ -20,7 +22,7 @@ async function statusOf(server: ServerConfig, exec: () => Promise<{ stdout: stri
     agentHostRecorder: { recordIfUnknown: vi.fn(async () => null), record: vi.fn(async () => null), forget: vi.fn() } as unknown as ServersRouteOptions['agentHostRecorder'],
     misaoDaemonStatus: misao,
     tmux: {} as ServersRouteOptions['tmux'],
-    transportFactory: { getTransport: () => ({ execMux: exec }), invalidate: vi.fn() } as unknown as ServersRouteOptions['transportFactory'],
+    transportFactory: { getTransport: () => ({ execMux: exec }), getAgentTransport: () => ({ fetchHealth: async () => ({ version: 'test' }) }), invalidate: vi.fn() } as unknown as ServersRouteOptions['transportFactory'],
     windowRepo: { findByServer: vi.fn(() => []) } as unknown as ServersRouteOptions['windowRepo'],
     webhookToken: 'wh',
     uiToken: 'ui',
@@ -37,6 +39,28 @@ async function statusOf(server: ServerConfig, exec: () => Promise<{ stdout: stri
 }
 
 describe('GET /api/servers/:name/status is per mux', () => {
+  it('returns agent status when server.info does not answer', async () => {
+    vi.useFakeTimers();
+    class FakeClient {
+      listener: (state: { status: string }) => void = () => {};
+      onStateChange(cb: (state: { status: string }) => void) { this.listener = cb; }
+      onGap() {} onSubscriptionError() {} onError() {}
+      async connect() { this.listener({ status: 'connected' }); }
+      request() { return new Promise(() => {}); }
+      close() { this.listener({ status: 'closed' }); }
+    }
+    class FakeError extends Error {}
+    const sdk = { MisaoClient: FakeClient, MisaoConnectionError: FakeError, MisaoProtocolVersionError: FakeError, MisaoRpcError: FakeError, DEFAULT_BACKOFF: {}, computeBackoffDelay: () => 100 } as unknown as MisaoSdk;
+    const connection = new MisaoConnection({ connect: async () => { throw new Error('unused'); }, sdk, log: { warn: vi.fn() } });
+    try {
+      await connection.start();
+      const result = statusOf({ ...local('misao'), type: 'agent' }, async () => ({ stdout: 'tmux 3', stderr: '', code: 0 }), () => describeMisaoDaemon(connection));
+      await vi.waitFor(() => expect(vi.getTimerCount()).toBeGreaterThan(0));
+      await vi.advanceTimersByTimeAsync(10_000);
+      expect((await result).mux.misao).toEqual({ available: false, detail: 'daemon_unreachable' });
+    } finally { connection.close(); vi.useRealTimers(); }
+  });
+
   it('reports a misao-only host as online without a problem even though tmux is not installed', async () => {
     const tmuxMissing = async () => { throw Object.assign(new Error('spawn tmux ENOENT'), { code: 'ENOENT' }); };
     const body = await statusOf(local('misao'), tmuxMissing, async () => ({ installed: true, version: '0.3.0', daemonVersion: '0.2.0' }));

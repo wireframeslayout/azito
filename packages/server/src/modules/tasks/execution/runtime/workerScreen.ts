@@ -147,20 +147,25 @@ export function blockingWorkerDialog(kind: TuiAgentKind, output: string): Worker
 }
 
 /**
- * What the worker's input box holds right now (Issue #532). `empty`: the box is there and has nothing in it (Claude: only the `❯`, or its
- * `Try "..."` hint; codex: its placeholder). `filled`: there is text in it (a draft, or the line we typed). `disabled`: codex shows
- * "Input disabled". `unknown`: no box of a known shape is on the screen: that is never taken for empty.
+ * What the worker's input box holds right now (Issue #532). `empty`: Claude's bare prompt or codex's placeholder. `filled`: text in the
+ * input. `disabled`: codex shows "Input disabled". `unknown`: an unrecognised box or a Claude hint indistinguishable from a draft.
  */
 export type InputBox =
   | { state: 'empty' }
   | { state: 'filled'; text: string }
+  | { state: 'ambiguous'; text: string }
   | { state: 'disabled' }
   | { state: 'unknown' };
+
+/** Number of lines requested for task readiness captures. */
+export const SCREEN_CAPTURE_LINES = -50;
 
 const UNKNOWN: InputBox = { state: 'unknown' };
 
 function screenLines(output: string): string[] {
-  return stripAnsi(output).split('\n').map((line) => line.replace(/\s+$/, ''));
+  const lines = stripAnsi(output).split('\n');
+  if (output.endsWith('\n')) lines.pop();
+  return lines.map((line) => line.replace(/\s+$/, ''));
 }
 
 /** What Claude Code shows in an empty input: the `Try "..."` hint, and `Press up to edit queued messages` while a message waits for the turn to end. */
@@ -173,44 +178,78 @@ function boxOf(text: string, isEmpty: (text: string) => boolean): InputBox {
   return trimmed === '' || isEmpty(trimmed) ? { state: 'empty' } : { state: 'filled', text: trimmed };
 }
 
+function claudeBoxOf(text: string): InputBox {
+  return isClaudePlaceholder(text.trim()) ? { state: 'ambiguous', text: text.trim() } : boxOf(text, () => false);
+}
+
 const RULE_LINE = /^─{10,}$/;
 /** A line made of rule characters and spaces: a rule, or one that is not a clean run of them (broken by the pane). */
 const ROUGH_RULE = /^[─\s]*─[─\s]*$/;
+/** The upper rule of a session with a name (Claude Code 2.1.317): `──── <name> ─`. The left run requires at least 10 ─ characters; the lower rule stays a clean run. */
+const NAMED_RULE = /^─{10,}\s+\S(?:.*\S)?\s+─+$/;
+const PROMPT_LINE = /^[❯>]/;
+
+function isClaudeUpperRule(line: string): boolean {
+  return RULE_LINE.test(line.trim()) || NAMED_RULE.test(line.trim());
+}
+
+/**
+ * Whether a rule can be text of a draft whose prompt is further up. Going up from it, rules and indented lines (Claude indents a draft's
+ * continuation) are passed over, and the first other line decides: a prompt right below a rule is an open input that holds this rule; anything
+ * else at column 0 (`● reply`, `✻ Worked for`, a sent message with no rule above it) is the conversation.
+ */
+function ruleMayBeDraftText(lines: string[], rule: number): boolean {
+  const mayBeClipped = lines.length >= -SCREEN_CAPTURE_LINES;
+  for (let i = rule - 1; i >= 0; i--) {
+    const line = lines[i];
+    if (line.trim() === '' || /^\s/.test(line) || isClaudeUpperRule(line)) continue;
+    if (!PROMPT_LINE.test(line)) return false;
+    const above = lines.slice(0, i).filter((other) => other.trim() !== '').pop();
+    return above === undefined ? mayBeClipped : isClaudeUpperRule(above);
+  }
+  return mayBeClipped;
+}
+
+function claudeRuleBox(lines: string[]): { upper: number; lower: number } | undefined {
+  const candidates = lines.map((line, i) => isClaudeUpperRule(line) ? i : -1).filter((i) => i >= 0);
+  if (candidates.length < 2) return undefined;
+  const upper = candidates[candidates.length - 2];
+  const lower = candidates[candidates.length - 1];
+  if (!RULE_LINE.test(lines[lower].trim())) return undefined;
+  if (ruleMayBeDraftText(lines, upper)) return undefined;
+  const inside = lines.slice(upper + 1, lower).filter((line) => line.trim() !== '');
+  const below = lines.slice(lower + 1).filter((line) => line.trim() !== '');
+  if (inside.length === 0 || !PROMPT_LINE.test(inside[0].trim())) return undefined;
+  if (below.length > 4 || [...below, ...inside.slice(1)].some((line) => ROUGH_RULE.test(line.trim()) || NAMED_RULE.test(line.trim())) || below.some((line) => PROMPT_LINE.test(line.trim()))) return undefined;
+  return { upper, lower };
+}
+
 /** codex's lines below the composer: the model line is after a blank line, the shortcuts / context line carries these. */
 /** A row of codex's footer: the model line (`<model> default · <dir>`), the shortcuts / context row, the warning row (`⚠ 3 warnings · f2 to view`; a path with the word `warning` in it is not one). */
 const CODEX_FOOTER_ROW = /·|\? for shortcuts|context left|esc to interrupt|⚠\s*\d+ warnings?|\bf\d to |tab to queue|queued message/i;
 const CODEX_FOOTER_LINE = /\? for shortcuts|context left|esc to interrupt/i;
 
 /**
- * Claude Code 2.1.x: the box is the lines between the last two horizontal rules (`────`), first line `❯ <text>`, the rest wrapped
+ * Claude Code 2.1.x: the box is the lines between the last two horizontal rules (`────`; the upper one can carry the session name), first line `❯ <text>`, the rest wrapped
  * continuation. Claude Code 2.0.x: a frame (`╭──╮ │ > <text> │ ╰──╯`). Anything else is `unknown`: the lines between the rules must
  * start with the prompt, and only a few status lines may follow the lower rule.
  */
 function readClaudeInput(lines: string[]): InputBox {
-  const rules = lines.map((line, i) => (RULE_LINE.test(line.trim()) ? i : -1)).filter((i) => i >= 0);
-  if (rules.length >= 2) {
-    const upper = rules[rules.length - 2];
-    const lower = rules[rules.length - 1];
-    const inside = lines.slice(upper + 1, lower).filter((line) => line.trim() !== '');
-    const below = lines.slice(lower + 1).filter((line) => line.trim() !== '');
-    // The pair is the current input only when it is the bottom of the screen: no other prompt line and no rule-like line (a rule that could
-    // not be read as one, since the pair would then be an old one of the history) below the lower rule, and none inside.
-    const isCurrent = below.length <= 4 && [...below, ...inside.slice(1)].every((line) => !ROUGH_RULE.test(line.trim())) && below.every((line) => !/^[❯>]/.test(line.trim()));
-    if (isCurrent && inside.length > 0 && /^[❯>]/.test(inside[0].trim())) {
-      return boxOf([inside[0].trim().replace(/^[❯>]\s?/, ''), ...inside.slice(1).map((line) => line.trim())].join(''), isClaudePlaceholder);
-    }
-    if (isCurrent && inside.length === 0) return UNKNOWN;
+  const box = claudeRuleBox(lines);
+  if (box !== undefined) {
+    const inside = lines.slice(box.upper + 1, box.lower).filter((line) => line.trim() !== '');
+    return claudeBoxOf([inside[0].trim().replace(/^[❯>]\s?/, ''), ...inside.slice(1).map((line) => line.trim())].join(''));
   }
   const top = lines.map((line, i) => (line.trim().startsWith('╭') ? i : -1)).filter((i) => i >= 0).pop();
   const bottom = lines.map((line, i) => (line.trim().startsWith('╰') ? i : -1)).filter((i) => i >= 0).pop();
   // The 2.0.x frame is the input only when it is the bottom of the screen: a status line or two below it, and no rule or prompt line
   // (a current input of the 2.1.x layout whose rules could not be read, for one) that would make it an old frame of the history.
   const belowFrame = bottom === undefined ? [] : lines.slice(bottom + 1).filter((line) => line.trim() !== '');
-  const frameIsCurrent = belowFrame.length <= 4 && belowFrame.every((line) => !ROUGH_RULE.test(line.trim()) && !/^[❯>]/.test(line.trim()) && !line.trim().startsWith('╭'));
+  const frameIsCurrent = belowFrame.length <= 4 && belowFrame.every((line) => !ROUGH_RULE.test(line.trim()) && !NAMED_RULE.test(line.trim()) && !/^[❯>]/.test(line.trim()) && !line.trim().startsWith('╭'));
   if (top !== undefined && bottom !== undefined && bottom > top + 1 && frameIsCurrent) {
     const inside = lines.slice(top + 1, bottom).map((line) => line.trim().replace(/^│\s?/, '').replace(/\s?│$/, '').trim()).filter((line) => line !== '');
     if (inside.length > 0 && /^[❯>]/.test(inside[0])) {
-      return boxOf([inside[0].replace(/^[❯>]\s?/, ''), ...inside.slice(1)].join(''), isClaudePlaceholder);
+      return claudeBoxOf([inside[0].replace(/^[❯>]\s?/, ''), ...inside.slice(1)].join(''));
     }
   }
   return UNKNOWN;
@@ -236,7 +275,7 @@ function readCodexInput(lines: string[]): InputBox {
   if (below.length > 3 || !below.every((line) => CODEX_FOOTER_ROW.test(line))) return UNKNOWN;
   const text = composer.join(' ').trim();
   if (/^input disabled/i.test(text)) return { state: 'disabled' };
-  return boxOf(composer.join(''), (t) => t.toLowerCase().startsWith('ask codex to do anything'));
+  return boxOf(composer.join(''), (t) => t.toLowerCase() === 'ask codex to do anything');
 }
 
 /** What the input box of `kind`'s worker holds on this screen. */
@@ -254,7 +293,7 @@ export function promptFileNameOf(instruction: string): string {
 
 /** Whether the input holds our instruction line, whatever the pane did to wrap it (the file name is compared without white space). */
 export function inputHoldsLine(box: InputBox, instruction: string): boolean {
-  if (box.state !== 'filled') return false;
+  if (box.state !== 'filled' && box.state !== 'ambiguous') return false;
   const squashed = box.text.toLowerCase().replace(/\s+/g, '');
   return squashed.includes('azitopromptfile.') && squashed.includes(promptFileNameOf(instruction).replace(/\s+/g, ''));
 }
@@ -343,6 +382,5 @@ function lastCodexInputLine(lines: string[]): number | undefined {
 }
 
 function lastClaudeUpperRule(lines: string[]): number | undefined {
-  const rules = lines.map((line, i) => (RULE_LINE.test(line.trim()) ? i : -1)).filter((i) => i >= 0);
-  return rules.length >= 2 ? rules[rules.length - 2] : undefined;
+  return claudeRuleBox(lines)?.upper;
 }

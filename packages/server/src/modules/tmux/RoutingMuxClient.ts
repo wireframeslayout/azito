@@ -1,3 +1,4 @@
+import { AgentUnreachableError } from '../servers/transport/AgentUnreachableError';
 import { muxKindOfPaneHandle, type MuxCapabilities, type MuxDriverKind, type MuxPaneInfo, type MuxRef, type MuxUnavailableKind, type MuxWorkspace, type PaneHandle, type PaneOrdinal } from '@azito/shared';
 import type { ExecResult, ITerminalStream, OpenTerminalOpts } from '../servers/transport/ServerTransport';
 import type { ServerConfig } from '../servers/Server';
@@ -16,7 +17,8 @@ export interface RoutingMuxDeps {
   downKinds(server: ServerConfig): Array<{ kind: MuxDriverKind; reason: MuxDriverUnavailableReason }>;
 }
 
-function describeUnavailable(kind: MuxDriverKind, err: unknown): MuxUnavailableKind {
+export function describeUnavailable(kind: MuxDriverKind, err: unknown): MuxUnavailableKind {
+  if (err instanceof AgentUnreachableError) return { kind, reason: 'agent_unreachable', detail: err.message };
   if (err instanceof MuxDriverUnavailableError) return { kind, reason: err.reason, detail: err.message };
   if (kind === 'tmux' && isMissingBinaryError(err)) return { kind, reason: MUX_BINARY_MISSING, detail: err instanceof Error ? err.message : String(err) };
   return { kind, reason: 'driver_error', detail: err instanceof Error ? err.message : String(err) };
@@ -52,10 +54,10 @@ export class RoutingMuxClient implements IMuxClient {
    * is returned in `unavailable` with the rest of the items; when every usable kind fails the first error (the
    * default kind's) is thrown.
    */
-  private async gather<T>(server: ServerConfig, op: (driver: IMuxClient, kind: MuxDriverKind) => Promise<T[]>): Promise<{ items: T[]; unavailable: MuxUnavailableKind[] }> {
+  private async gather<T>(server: ServerConfig, op: (driver: IMuxClient, kind: MuxDriverKind) => Promise<T[]>, allowAllFailed = false): Promise<{ items: T[]; unavailable: MuxUnavailableKind[] }> {
     const kinds = this.deps.usableKinds(server);
     const down: MuxUnavailableKind[] = this.deps.downKinds(server).map(({ kind, reason }) => ({ kind, reason }));
-    if (kinds.length === 1) {
+    if (kinds.length === 1 && !allowAllFailed) {
       const items = await op(this.deps.resolveKind(kinds[0], server), kinds[0]);
       return { items, unavailable: down };
     }
@@ -66,7 +68,7 @@ export class RoutingMuxClient implements IMuxClient {
       if (outcome.status === 'fulfilled') items.push(...outcome.value);
       else unavailable.push(describeUnavailable(kinds[i], outcome.reason));
     });
-    if (unavailable.length === kinds.length) {
+    if (!allowAllFailed && unavailable.length === kinds.length) {
       const first = settled.find((o): o is PromiseRejectedResult => o.status === 'rejected')!;
       throw first.reason;
     }
@@ -85,8 +87,8 @@ export class RoutingMuxClient implements IMuxClient {
   // ─── Workspace / Window ───
 
   /** Like `listWorkspaces`, with the kinds that could not be listed returned alongside (one call, no shared-state race). */
-  async listWorkspacesDetailed(server: ServerConfig): Promise<{ workspaces: Array<MuxWorkspace & { kind: MuxDriverKind }>; unavailable: MuxUnavailableKind[] }> {
-    const { items, unavailable } = await this.gather(server, async (driver, kind) => (await driver.listWorkspaces(server)).map((ws) => ({ ...ws, kind })));
+  async listWorkspacesDetailed(server: ServerConfig, allowAllFailed = false): Promise<{ workspaces: Array<MuxWorkspace & { kind: MuxDriverKind }>; unavailable: MuxUnavailableKind[] }> {
+    const { items, unavailable } = await this.gather(server, async (driver, kind) => (await driver.listWorkspaces(server)).map((ws) => ({ ...ws, kind })), allowAllFailed);
     return { workspaces: items, unavailable };
   }
 

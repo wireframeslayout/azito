@@ -20,7 +20,7 @@ const TOAST_DURATION_MS = 5000;
 // フォーカス再描画による誤通知は onAgentActivity 側の isWatched チェックで抑える。
 const AGENT_DEDUPE_WINDOW_MS = 8_000;
 const AGENT_DEDUPE_SCAN_LIMIT = 50;
-const FAILED_STATUSES = new Set(['error', 'send_error', 'worker_not_ready', 'codex_error', 'stopped_by_user']);
+const FAILED_STATUSES = new Set(['error', 'send_error', 'worker_not_ready', 'worker_launch_failed', 'codex_error', 'stopped_by_user']);
 
 const NOTIFICATION_KINDS: readonly AppNotificationKind[] = [
   'qa', 'plan_approval', 'execution_approval', 'task_done', 'task_failed', 'agent_finished', 'mux_wake', 'server_firewall',
@@ -108,13 +108,15 @@ function agentLabelOf(payload: AgentActivityPayload): string {
 function buildTaskNotification(
   kind: AppNotificationKind,
   messageKey: string,
-  payload: { taskId: number; status: string; title?: string; projectId?: number },
+  payload: { taskId: number; status: string; title?: string; projectId?: number; reason?: string },
   taskTitle: string,
 ): AppNotification {
   return {
     id: makeId(),
     kind,
     messageKey,
+    // The message is the i18n's job alone; a `reason` in the payload is a short server-side code, never interpolated
+    // into the sentence (#639 review round 2 — a fixed English string would surface untranslated on the ja UI).
     messageParams: { title: taskTitle },
     taskId: payload.taskId,
     projectId: payload.projectId,
@@ -225,9 +227,9 @@ export function NotificationCenterProvider({ children }: { children: React.React
     onMuxWake: (payload) => pushNotification({ id: makeId(), kind: 'mux_wake', messageKey: payload.reason === 'ask' ? 'notifications:kinds.muxWakeAsk' : 'notifications:kinds.muxWakeUnavailable', messageParams: { title: payload.title ?? formatWindowTitleLine(resolveWindowTitle({ id: payload.windowId })), serverName: payload.serverName }, serverName: payload.serverName, taskId: payload.taskId, windowId: payload.windowId, read: false, createdAt: Date.now() }),
     onServerFirewall: useCallback((payload: { serverName: string; diagnosis: FirewallDiagnosis }) => {
       const { diagnosis } = payload;
-      pushNotification({ id: crypto.randomUUID(), kind: 'server_firewall', title: t('firewall.title', { serverName: payload.serverName }), body: t(`firewall.${diagnosis.state}`, { rules: diagnosis.blockedBy.join(', ') }) + (diagnosis.commands.length ? `\n${diagnosis.commands.join('\n')}` : ''), serverName: payload.serverName, read: false, createdAt: Date.now() });
+      pushNotification({ id: makeId(), kind: 'server_firewall', title: t('firewall.title', { serverName: payload.serverName }), body: t(`firewall.${diagnosis.state}`, { rules: diagnosis.blockedBy.join(', ') }) + (diagnosis.commands.length ? `\n${diagnosis.commands.join('\n')}` : ''), serverName: payload.serverName, read: false, createdAt: Date.now() });
     }, [pushNotification, t]),
-    onTaskStatus: useCallback((payload: { taskId: number; status: string; title?: string; projectId?: number }) => {
+    onTaskStatus: useCallback((payload: { taskId: number; status: string; title?: string; projectId?: number; reason?: string }) => {
       const taskTitle = taskTitleOf(payload.title, payload.taskId, t('fallbackTaskTitle', { taskId: payload.taskId }));
       switch (payload.status) {
         case 'waiting_for_human':
@@ -241,6 +243,10 @@ export function NotificationCenterProvider({ children }: { children: React.React
           break;
         case 'done':
           pushNotification(buildTaskNotification('task_done', 'notifications:kinds.taskDone', payload, taskTitle));
+          break;
+        case 'worker_launch_failed':
+          // #639: NOT a real task status — the respawn's post-launch check found no worker. Shows its reason.
+          pushNotification(buildTaskNotification('task_failed', 'notifications:kinds.taskLaunchFailed', payload, taskTitle));
           break;
         default:
           if (FAILED_STATUSES.has(payload.status)) {

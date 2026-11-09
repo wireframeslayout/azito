@@ -64,6 +64,7 @@ export interface UnavailableMuxKind {
 export interface SessionListing<S> {
   sessions: S[];
   unavailable: UnavailableMuxKind[];
+  listedKinds?: MuxDriverKind[];
 }
 
 function isSessionListing<S>(body: unknown): body is SessionListing<S> {
@@ -88,4 +89,9 @@ export function keepUnavailableKinds<S extends ListedSession>(previous: readonly
   if (listing.unavailable.length === 0 || !previous) return listing.sessions;
   const down = new Set(listing.unavailable.map((u) => u.kind));
   return [...listing.sessions, ...previous.filter((s) => down.has(sessionKindOf(s))).map((s) => ({ ...s, stale: true }))];
+}
+
+export function sessionListingState<S>(listing: SessionListing<S>): 'ready' | 'partial' | 'error' {
+  if (listing.unavailable.length === 0) return 'ready';
+  return listing.listedKinds?.length === 0 ? 'error' : 'partial';
 }

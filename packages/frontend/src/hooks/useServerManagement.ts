@@ -159,10 +159,11 @@ export function useServerManagement({ tabs, closeTab }: UseServerManagementParam
       srvs.map(async (srv) => {
         // エラー本文（503 agent_unreachable 等）は一覧でないため失敗扱いにする（空配列の成功と取り違えてタブを閉じない）。
         // 一覧できなかった mux（misao デーモン停止など）のセッションは直前の状態を保つ（削除扱いにしない）
-        const result = keepUnavailableKinds(sessionsRef.current[srv.name], await fetchSessionListing<Session>(srv.name));
+        const listing = await fetchSessionListing<Session>(srv.name);
+        const result = keepUnavailableKinds(sessionsRef.current[srv.name], listing);
         // 遅いサーバー 1 台を待たず、取得できたサーバーから 1 台ずつ反映する
         setSessions((prev) => ({ ...prev, [srv.name]: result }));
-        return { name: srv.name, sessions: result };
+        return { name: srv.name, sessions: result, complete: listing.unavailable.length === 0 };
       }),
     );
     const newSessions: Record<string, Session[]> = {};
@@ -170,9 +171,9 @@ export function useServerManagement({ tabs, closeTab }: UseServerManagementParam
       const r = results[i];
       if (r.status === 'fulfilled') {
         newSessions[r.value.name] = r.value.sessions;
-        successfulServers.add(r.value.name);
+        if (r.value.complete) successfulServers.add(r.value.name);
       } else {
-        newSessions[srvs[i]?.name] = [];
+        newSessions[srvs[i]?.name] = (sessionsRef.current[srvs[i]?.name] ?? []).map((session) => ({ ...session, stale: true }));
       }
     }
     setSessions(newSessions);

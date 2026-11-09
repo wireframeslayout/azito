@@ -41,8 +41,18 @@ describe('TmuxClient.listAllPanes', () => {
     await expect(client.listAllPanes(srv)).resolves.toEqual([]);
   });
 
-  it('rethrows other errors', async () => {
-    const client = makeClient(async () => { throw new Error('some other tmux failure'); });
-    await expect(client.listAllPanes(srv)).rejects.toThrow('some other tmux failure');
+  it.each(['listSessions', 'listAllPanes'] as const)('%s rethrows a missing socket error', async (method) => {
+    const client = makeClient(async () => { throw new Error('error connecting to /tmp/tmux-1000/default (No such file or directory)'); });
+    await expect(client[method](srv)).rejects.toThrow('no server running on tmux socket (no such socket file)');
+  });
+
+  it('returns an empty session list when no tmux server is running', async () => {
+    const client = makeClient(async () => { throw new Error('no server running on /tmp/tmux-1000/default'); });
+    await expect(client.listSessions(srv)).resolves.toEqual([]);
+  });
+
+  it('rethrows other errors without their raw text', async () => {
+    const client = makeClient(async () => { throw new Error('some other tmux failure TOKEN=secret'); });
+    await expect(client.listAllPanes(srv)).rejects.toThrow('tmux list-panes failed: execution failed');
   });
 });

@@ -18,6 +18,7 @@
     "executionApproval": "Execution approval needed: {{title}}",
     "taskDone": "Task completed: {{title}}",
     "taskFailed": "Task failed: {{title}}",
+    "taskLaunchFailed": "Worker did not start: {{title}}",
     "agentFinished": "Agent finished: {{label}}",
     "agentApiError": "{{label}} stopped due to API error",
     "muxWakeAsk": "{{title}} on {{serverName}} reopened with tmux. Use its menu to switch to misao.",

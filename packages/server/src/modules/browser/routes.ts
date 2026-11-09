@@ -75,6 +75,7 @@ function fetchAgent(srv: ServerConfig, path: string, body: unknown): Promise<Res
       ...(authHeader ? { authorization: authHeader } : {}),
     },
     body: JSON.stringify(body),
+    signal: AbortSignal.timeout(path === '/api/browser/open' ? 75_000 : 30_000),
   });
 }
 
@@ -209,7 +210,13 @@ const browserRoutes: FastifyPluginCallback<BrowserRouteOptions> = (fastify, opts
         if (!srv.host || !srv.agentPort) {
           return reply.status(400).send({ error: 'agent server not configured' });
         }
-        const res = await fetchAgent(srv, '/api/browser/open', { url, holdSeconds });
+        let res: Response;
+        try {
+          res = await fetchAgent(srv, '/api/browser/open', { url, holdSeconds });
+        } catch (err) {
+          if (err instanceof Error && err.name === 'TimeoutError') return reply.status(504).send({ error: 'agent_timeout' });
+          throw err;
+        }
         if (!res.ok) {
           const err = await res.json().catch(() => ({ error: 'agent request failed' }));
           return reply.status(res.status).send(err);
