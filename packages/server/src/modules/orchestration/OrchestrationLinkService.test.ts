@@ -77,10 +77,11 @@ describe('orchestration links and roles', () => {
     const windows = new SqliteWindowRepository(db);
     const links = new OrchestrationLinkService(new SqliteWindowLinkRepository(db), windows, { findById: () => ({ id: 1, projectId: 1, serverName: 'local' }) } as unknown as ITaskRepository, bus);
     links.recordInteraction(1, { taskId: 1 });
+    links.add(1, { windowId: 2 }, 'manual');
     const byTask = vi.spyOn(windows, 'findByTask');
     const byId = vi.spyOn(windows, 'findById');
     const all = vi.spyOn(windows, 'findAll');
-    expect(links.list(1)).toMatchObject([{ taskId: 1, resolvedWindowId: 2 }]);
+    expect(links.list(1)).toMatchObject([{ taskId: 1, resolvedWindowId: 2 }, { targetWindowId: 2, resolvedWindowId: 2 }]);
     expect(links.orchestrators()).toMatchObject([{ links: { total: 1, projectIds: [1], serverNames: ['local'] }, lastInteractionAt: expect.any(String) }]);
     expect(byTask).not.toHaveBeenCalled();
     expect(byId).not.toHaveBeenCalled();
