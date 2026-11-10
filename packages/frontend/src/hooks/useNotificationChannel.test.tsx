@@ -44,6 +44,28 @@ it('continues delivery after a listener throws and logs the event type and error
   expect(first).toHaveBeenCalledWith('local');
   expect(second).toHaveBeenCalledWith('local');
   expect(console.error).toHaveBeenCalledExactlyOnceWith('[NotificationChannel] listener failed:', 'sessions:updated', error);
+  for (const log of [console.error, console.warn, console.log]) {
+    expect(JSON.stringify(vi.mocked(log).mock.calls)).not.toContain('secret');
+  }
+});
+
+it.each(['null', '1', '"text"', '{}', '{"type":1}'])('warns and discards an invalid message shape: %s', (data) => {
+  const listener = vi.fn();
+  render(<Subscriber handlers={{ onSessionsUpdated: listener }} />);
+  act(() => MockWebSocket.instance.receive(data));
+  expect(console.warn).toHaveBeenCalledExactlyOnceWith('[NotificationChannel] invalid message shape');
+  expect(listener).not.toHaveBeenCalled();
+});
+
+it('continues notifying connected listeners after one throws', () => {
+  const error = new Error('connected listener failed');
+  const first = vi.fn(() => { throw error; });
+  const second = vi.fn();
+  render(<><Subscriber handlers={{ onConnected: first }} /><Subscriber handlers={{ onConnected: second }} /></>);
+  act(() => MockWebSocket.instance.onopen?.());
+  expect(first).toHaveBeenCalledOnce();
+  expect(second).toHaveBeenCalledOnce();
+  expect(console.error).toHaveBeenCalledExactlyOnceWith('[NotificationChannel] connected listener failed:', error);
 });
 
 it('delivers valid messages and warns without dispatching invalid JSON', () => {

@@ -47,19 +47,29 @@ function connect(): void {
   ws.onopen = () => {
     retryCount = 0;
     console.log('[NotificationChannel] WebSocket connected');
-    for (const fn of connectedListeners) fn();
+    for (const fn of connectedListeners) {
+      try {
+        fn();
+      } catch (error) {
+        console.error('[NotificationChannel] connected listener failed:', error);
+      }
+    }
   };
 
   ws.onmessage = (e) => {
-    let event: NotificationEvent;
+    let event: unknown;
     try {
       event = JSON.parse(e.data);
     } catch (error) {
       console.warn('[NotificationChannel] invalid message:', error);
       return;
     }
-    console.log('[NotificationChannel] event received:', event.type, JSON.stringify(event.payload));
-    dispatch(event);
+    if (typeof event !== 'object' || event === null || !('type' in event) || typeof event.type !== 'string') {
+      console.warn('[NotificationChannel] invalid message shape');
+      return;
+    }
+    console.log('[NotificationChannel] event received:', event.type);
+    dispatch(event as NotificationEvent);
   };
 
   ws.onclose = (ev) => {
