@@ -41,6 +41,15 @@
   },
   "overview": {
     "fetchUnavailable": "取得できません{{reason}}",
+    "fetchReasons": {
+      "agent_unreachable": "エージェントに接続できません",
+      "status_unknown": "サーバーの状態を確認できません",
+      "daemon_unreachable": "デーモンに接続できません",
+      "protocol_incompatible": "プロトコルに互換性がありません",
+      "not_installed": "インストールされていません",
+      "driver_not_registered": "ドライバーが登録されていません",
+      "unsupported_os": "対応していない OS です"
+    },
     "muxLoading": "確認中…",
     "title": "概要",
     "onlineHealthy": "稼働中 — 正常",

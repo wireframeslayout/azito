@@ -4,10 +4,10 @@ import { useServerDetail } from './useServerDetail';
 
 const mocks = vi.hoisted(() => ({ status: 'online', listing: vi.fn(), detail: vi.fn() }));
 vi.mock('./useServerStatuses', () => ({ useServerStatuses: () => ({
-  servers: [{ name: 'a', type: 'agent' }], statuses: { a: { status: mocks.status } },
+  servers: [{ name: 'a', type: 'agent' }, { name: 'b', type: 'local' }], statuses: { a: { status: mocks.status }, b: { status: 'online' } },
   refresh: refreshStatuses,
 }) }));
-async function refreshStatuses() { return [{ name: 'a', type: 'agent' }]; }
+async function refreshStatuses() { return [{ name: 'a', type: 'agent' }, { name: 'b', type: 'local' }]; }
 vi.mock('../lib/fetchServerSessions', async (importOriginal) => ({
   ...await importOriginal<typeof import('../lib/fetchServerSessions')>(), fetchSessionListing: mocks.listing,
 }));
@@ -70,4 +70,26 @@ it('ignores a response after switching servers', async () => {
   await waitFor(() => expect(result.current.sessionsState).toBe('ready'));
   await act(async () => resolveOld({ sessions: [{ name: 'old', windows: [] }], unavailable: [] }));
   expect(result.current.sessions.map((session) => session.name)).toEqual(['one']);
+});
+
+
+it('reports an unknown status reason when the probe fails', async () => {
+  const { result, rerender } = renderHook(() => useServerDetail('a'));
+  await waitFor(() => expect(result.current.sessionsState).toBe('ready'));
+  act(() => { mocks.status = 'error'; rerender(); });
+  expect(result.current.sessionsReason).toBe('status_unknown');
+  expect(result.current.muxReason).toBe('status_unknown');
+});
+
+it('does not fetch twice when returning from a non-agent server', async () => {
+  const { result, rerender } = renderHook(({ name }) => useServerDetail(name), { initialProps: { name: 'a' } });
+  await waitFor(() => expect(result.current.sessionsState).toBe('ready'));
+  act(() => { mocks.status = 'offline'; rerender({ name: 'a' }); });
+  rerender({ name: 'b' });
+  await waitFor(() => expect(result.current.sessionsState).toBe('ready'));
+  mocks.status = 'online';
+  mocks.listing.mockClear();
+  rerender({ name: 'a' });
+  await waitFor(() => expect(result.current.sessionsState).toBe('ready'));
+  expect(mocks.listing).toHaveBeenCalledTimes(1);
 });

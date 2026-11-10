@@ -223,7 +223,7 @@ export function useServerDetail(serverName: string | null): UseServerDetailResul
   ) => {
     const gen = ++overviewGenRef.current;
     if (!serverName) return;
-    const reason = mode === 'unreachable' ? 'agent_unreachable' : null;
+    const reason = mode === 'unreachable' ? 'agent_unreachable' : mode === 'unknown' ? 'status_unknown' : null;
     setMuxDriverStatus('unknown');
     setSessionsState(mode === 'fetch' ? 'loading' : 'error');
     setSessionsReason(reason);
@@ -399,7 +399,11 @@ export function useServerDetail(serverName: string | null): UseServerDetailResul
   const isAgent = server?.type === 'agent';
   const previousConnection = useRef<{ name: string | null; status: string | undefined }>({ name: null, status: undefined });
   useEffect(() => {
-    if (!isAgent || monitoredStatus === 'checking' || !monitoredStatus) return;
+    if (!isAgent) {
+      previousConnection.current = { name: serverName, status: undefined };
+      return;
+    }
+    if (monitoredStatus === 'checking' || !monitoredStatus) return;
     const previous = previousConnection.current;
     previousConnection.current = { name: serverName, status: monitoredStatus };
     if (previous.name === serverName && previous.status === monitoredStatus) return;

@@ -191,7 +191,11 @@ export default function OverviewSection({
 
   const sessionCount = sessions.length;
   const windowCount = sessions.reduce((sum, s) => sum + s.windowCount, 0);
-  const reasonSuffix = (reason: string | null | undefined) => (reason ? ` (${reason})` : '');
+  const reasonSuffix = (reason: string | null | undefined) => {
+    if (!reason) return '';
+    const known = new Set(['agent_unreachable', 'status_unknown', 'daemon_unreachable', 'protocol_incompatible', 'not_installed', 'driver_not_registered', 'unsupported_os']);
+    return ` (${reason.split(', ').map((code) => known.has(code) ? t(`overview.fetchReasons.${code}`) : code).join(', ')})`;
+  };
   const sessionsSummary = sessionsState === 'ready' ? t('overview.sessionsSummary', { sessionCount, windowCount })
     : sessionsState === 'loading' ? t('sessionState.loading')
     : sessionsState === 'partial' ? `${t('sessionState.partial')}${reasonSuffix(sessionsReason)}`
