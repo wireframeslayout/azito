@@ -165,6 +165,6 @@ Install the harness on a Windows agent from the UI (server detail -> Setup -> In
 
 A Windows agent cannot be declared an isolated server (`isolationIntent`) in this release (tracked in #464): the API answers 501 `unsupported_os` and the server form shows the reason. `codex` is started through the script its npm shim runs, with node, so paths with non-ASCII characters or parentheses work; the dependencies of `azt-mcp` installed with `npm install` are kept when the harness is updated.
 
-### Answering task questions through the API
+## Answering task questions through the API
 
 `POST /api/tasks/:id/answer` takes `{"answers":[{"index":0,"value":1}],"additionalComment":"Note"}`. Each `index` is a zero-based integer question index; `value` is a string or number. For a select question it must be a zero-based integer option index or an exact option string. `additionalComment` is an optional string. Partial answers are accepted. An empty array is accepted only when there are no questions (confirmation); a nonempty array with no questions, invalid types, and out-of-range values receive a 400 with a reason, without changing task state or logs.
