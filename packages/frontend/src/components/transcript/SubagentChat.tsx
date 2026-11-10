@@ -28,11 +28,28 @@ interface Props {
 }
 type ListState = { kind: 'loading' } | { kind: 'error'; reason: HostUnavailableReason | null } | { kind: 'ready'; agents: Subagent[] };
 
+function readSelection(key: string): string | null {
+  try { return localStorage.getItem(key); } catch { return null; }
+}
+
+function saveSelection(key: string, id: string | null): void {
+  try {
+    if (id === null) localStorage.removeItem(key);
+    else localStorage.setItem(key, id);
+  } catch { /* Selection remains available for this view. */ }
+}
+
 export default function SubagentChat({ windowId, sessionId, onParentChanged, ...conversationProps }: Props) {
   const { t } = useTranslation('transcript');
   const [list, setList] = useState<ListState>({ kind: 'loading' });
   const [selected, setSelected] = useState<string | null>(null);
   const sequence = useRef(0);
+  const storageKey = `azito.subagent.${windowId}.${sessionId}`;
+  const restored = useRef<string | null>(null);
+  const select = (id: string | null) => {
+    setSelected(id);
+    saveSelection(storageKey, id);
+  };
   const refresh = useCallback(() => {
     const current = ++sequence.current;
     apiWithStatus<{ sessionId: string; subagents: Subagent[] } | { error: string }>(`/transcripts/windows/${windowId}/subagents?sessionId=${encodeURIComponent(sessionId)}`)
@@ -41,11 +58,23 @@ export default function SubagentChat({ windowId, sessionId, onParentChanged, ...
         if (status !== 200 || 'error' in body) { setList({ kind: 'error', reason: 'error' in body ? hostUnavailableReason(body.error) : null }); return; }
         if (body.sessionId !== sessionId) { onParentChanged(); return; }
         setList({ kind: 'ready', agents: body.subagents });
-        setSelected((current) => current && body.subagents.some((agent) => agent.id === current) ? current : null);
+        if (restored.current !== storageKey) {
+          restored.current = storageKey;
+          const saved = readSelection(storageKey);
+          if (saved && body.subagents.some((agent) => agent.id === saved)) setSelected(saved);
+          else { setSelected(null); if (saved) saveSelection(storageKey, null); }
+        } else {
+          setSelected((selectedId) => {
+            if (!selectedId || body.subagents.some((agent) => agent.id === selectedId)) return selectedId;
+            saveSelection(storageKey, null);
+            return null;
+          });
+        }
       })
       .catch(() => { if (current === sequence.current) setList({ kind: 'error', reason: null }); });
-  }, [windowId, sessionId, onParentChanged]);
+  }, [windowId, sessionId, onParentChanged, storageKey]);
   useEffect(() => {
+    setSelected(null);
     refresh();
     const timer = setInterval(() => { if (document.visibilityState === 'visible') refresh(); }, 5000);
     const visible = () => { if (document.visibilityState === 'visible') refresh(); };
@@ -61,9 +90,9 @@ export default function SubagentChat({ windowId, sessionId, onParentChanged, ...
       {(list.kind === 'error' || (list.kind === 'ready' && list.agents.length > 0)) && <section aria-label={t('subagents.title')} style={{ padding: 'var(--space-2) var(--space-3)', borderBottom: '1px solid var(--border)', maxHeight: '35%', overflowY: 'auto' }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: 'var(--space-2)', flexWrap: 'wrap' }}>
           <strong style={{ fontSize: 'var(--font-sm)' }}>{t('subagents.title')}</strong>
-          <Button size="sm" variant={selected === null ? 'primary' : 'default'} aria-pressed={selected === null} onClick={() => setSelected(null)}>{t('subagents.parent')}</Button>
+          <Button size="sm" variant={selected === null ? 'primary' : 'default'} aria-pressed={selected === null} onClick={() => select(null)}>{t('subagents.parent')}</Button>
           {list.kind === 'ready' && list.agents.map((agent) => (
-            <Button key={agent.id} title={[agent.description, agent.model].filter(Boolean).join(' · ')} style={{ maxWidth: '100%', overflowWrap: 'anywhere', textAlign: 'left' }} size="sm" variant={selected === agent.id ? 'primary' : 'default'} aria-pressed={selected === agent.id} onClick={() => setSelected(agent.id)}>
+            <Button key={agent.id} title={[agent.description, agent.model].filter(Boolean).join(' · ')} style={{ maxWidth: '100%', overflowWrap: 'anywhere', textAlign: 'left' }} size="sm" variant={selected === agent.id ? 'primary' : 'default'} aria-pressed={selected === agent.id} onClick={() => select(agent.id)}>
               {agent.name} · {agent.agentType}{agent.model && ` · ${agent.model}`} · {t(`subagents.status.${agent.status}`)}
             </Button>
           ))}
