@@ -51,10 +51,31 @@ const answerBodySchema = z.object({
   additionalComment: z.string().optional(),
 });
 
-const storedQuestionsSchema = z.array(z.discriminatedUnion('type', [
-  z.object({ text: z.string(), type: z.literal('text') }),
-  z.object({ text: z.string(), type: z.literal('select'), options: z.array(z.string()).min(1) }),
-]));
+type Answer = z.infer<typeof answerBodySchema>['answers'][number];
+type StoredQuestion = { text?: unknown; type?: unknown; options?: unknown } | null;
+
+function validateAnswersAgainstQuestions(answers: Answer[], questions: StoredQuestion[] | null): string[] {
+  const issues: string[] = [];
+  const seen = new Set<number>();
+  if (questions !== null && questions.length > 0 && answers.length === 0) issues.push('answers: At least one answer is required');
+  answers.forEach((answer, position) => {
+    const path = `answers.${position}`;
+    if (seen.has(answer.index)) issues.push(`${path}.index: Duplicate question index`);
+    seen.add(answer.index);
+    if (questions !== null && answer.index >= questions.length) {
+      issues.push(`${path}.index: Question index is out of range`);
+      return;
+    }
+    const question = questions?.[answer.index];
+    if (question?.type === 'select' && Array.isArray(question.options)) {
+      const valid = typeof answer.value === 'number'
+        ? Number.isInteger(answer.value) && answer.value >= 0 && answer.value < question.options.length
+        : question.options.includes(answer.value);
+      if (!valid) issues.push(`${path}.value: Select value is not an option`);
+    }
+  });
+  return issues;
+}
 
 function parseSubagentConfigInput(raw: unknown, fieldName: string): SubagentConfig | null {
   if (raw === null || raw === undefined) return null;
@@ -1036,31 +1057,20 @@ const tasksRoutes: FastifyPluginCallback<TasksRouteOptions> = (fastify, opts, do
 
       const parsedBody = answerBodySchema.safeParse(request.body);
       if (!parsedBody.success) {
-        const issue = parsedBody.error.issues[0];
-        return reply.status(400).send({ error: `${issue.path.join('.') || 'body'}: ${issue.message}` });
+        return reply.status(400).send({ error: parsedBody.error.issues.map(issue => `${issue.path.join('.') || 'body'}: ${issue.message}`).join('; ') });
       }
       const { answers, additionalComment } = parsedBody.data;
-      const questions = storedQuestionsSchema.parse(task.pendingQuestions === null ? [] : JSON.parse(task.pendingQuestions));
-      const validatedAnswers = answerBodySchema.superRefine((body, ctx) => {
-        if (questions.length > 0 && body.answers.length === 0) {
-          ctx.addIssue({ code: 'custom', path: ['answers'], message: 'At least one answer is required' });
-        }
-        body.answers.forEach((answer, position) => {
-          const question = questions[answer.index];
-          if (!question) {
-            ctx.addIssue({ code: 'custom', path: ['answers', position, 'index'], message: 'Question index is out of range' });
-          } else if (question.type === 'select') {
-            const valid = typeof answer.value === 'number'
-              ? Number.isInteger(answer.value) && answer.value >= 0 && answer.value < question.options.length
-              : question.options.includes(answer.value);
-            if (!valid) ctx.addIssue({ code: 'custom', path: ['answers', position, 'value'], message: 'Select value is not an option' });
-          }
-        });
-      }).safeParse(parsedBody.data);
-      if (!validatedAnswers.success) {
-        const issue = validatedAnswers.error.issues[0];
-        return reply.status(400).send({ error: `${issue.path.join('.')}: ${issue.message}` });
+      let questions: StoredQuestion[] | null;
+      try {
+        const stored: unknown = task.pendingQuestions === null ? [] : JSON.parse(task.pendingQuestions);
+        if (!Array.isArray(stored)) throw new Error('Invalid stored questions');
+        questions = stored;
+      } catch {
+        request.log.error({ taskId: id }, 'Invalid stored questions');
+        questions = null;
       }
+      const issues = validateAnswersAgainstQuestions(answers, questions);
+      if (issues.length > 0) return reply.status(400).send({ error: issues.join('; ') });
 
       // Same Unit resolution as ExecuteTaskUseCase.resolveExecutionEnv
       // (task.unitId ?? project.defaultUnitId) so follow-up resumes with the
@@ -1105,11 +1115,11 @@ const tasksRoutes: FastifyPluginCallback<TasksRouteOptions> = (fastify, opts, do
 
       // Build human-readable answer text for the agent
       const answerLines = answers.map((answer) => {
-        const question = questions[answer.index];
-        const answerText = question.type === 'select' && typeof answer.value === 'number'
+        const question = questions?.[answer.index];
+        const answerText = question?.type === 'select' && Array.isArray(question.options) && typeof answer.value === 'number'
           ? question.options[answer.value]
           : String(answer.value);
-        return `Q: ${question.text}\nA: ${answerText}`;
+        return `Q: ${question?.text ?? `Question ${answer.index + 1}`}\nA: ${answerText}`;
       });
 
       let followUpComment = answerLines.length > 0
