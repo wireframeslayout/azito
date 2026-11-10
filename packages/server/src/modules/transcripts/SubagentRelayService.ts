@@ -11,7 +11,7 @@ export class SubagentRelayService {
   private readonly inFlight = new Set<number>();
   constructor(private readonly resolver: WindowSessionResolver, private readonly input: WindowInputService) {}
 
-  async relay(window: Window, sessionId: string, paneId: string, agentId: string, text: string, sourceFor: () => RelaySource | null): Promise<RelayResult | null> {
+  async relay(window: Window, sessionId: string, paneId: string, agentId: string, text: string, sourceFor: () => RelaySource | 'unsupported_server' | 'unsupported_agent'): Promise<RelayResult> {
     const reject = (error: string, status = 409): RelayResult => ({ status, body: { error } });
     if (this.inFlight.has(window.id)) return reject('relay_busy');
     this.inFlight.add(window.id);
@@ -23,7 +23,7 @@ export class SubagentRelayService {
       const verified = typeof paneIndex === 'number' && matches.length === 1 && matches[0].index === paneIndex || matches.length === 0 && window.agentSessionId === sessionId && await this.input.isOnlyPane(window.id, asPaneHandle(paneId));
       if (!verified) return reject('pane_session_unverified');
       const source = sourceFor();
-      if (!source) return null;
+      if (typeof source === 'string') return reject(source, 501);
       const agents = await source.listSubagents(sessionId);
       const agent = agents?.find(item => item.id === agentId);
       if (!agent) return reject('subagent_unavailable');

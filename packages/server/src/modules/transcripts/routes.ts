@@ -275,12 +275,18 @@ const transcriptsRoutes: FastifyPluginCallback<TranscriptsRouteOptions> = (fasti
     return resolved.sessionId;
   }
 
-  function findSubagentSource(window: Window, sessionId: string, reply: FastifyReply): SubagentTranscriptSource | null {
+  function resolveSubagentSource(window: Window, sessionId: string): SubagentTranscriptSource | 'unsupported_server' | 'unsupported_agent' {
     const scoped = sourcesForRead(String(window.id), sessionId);
-    if (typeof scoped === 'string') { reply.status(501).send({ error: 'unsupported_server' }); return null; }
+    if (typeof scoped === 'string') return 'unsupported_server';
     const source = findSource(scoped, SUBAGENT_CAPABLE_AGENT_TYPE);
-    if (!source?.listSubagents || !source.readSubagent) { reply.status(501).send({ error: 'unsupported_agent' }); return null; }
+    if (!source?.listSubagents || !source.readSubagent) return 'unsupported_agent';
     return source as SubagentTranscriptSource;
+  }
+
+  function findSubagentSource(window: Window, sessionId: string, reply: FastifyReply): SubagentTranscriptSource | null {
+    const source = resolveSubagentSource(window, sessionId);
+    if (typeof source === 'string') { reply.status(501).send({ error: source }); return null; }
+    return source;
   }
 
   fastify.get<{ Params: { windowId: string }; Querystring: { sessionId?: string } }>('/api/transcripts/windows/:windowId/subagents', async (request, reply) => {
@@ -340,8 +346,8 @@ const transcriptsRoutes: FastifyPluginCallback<TranscriptsRouteOptions> = (fasti
     const window = findSubagentWindow(request.params.windowId, reply);
     if (!window) return;
     try {
-      const result = await relayService.relay(window, body.data.sessionId, body.data.paneId, request.params.agentId, body.data.text, () => findSubagentSource(window, body.data.sessionId, reply));
-      if (result) return reply.status(result.status).send(result.body);
+      const result = await relayService.relay(window, body.data.sessionId, body.data.paneId, request.params.agentId, body.data.text, () => resolveSubagentSource(window, body.data.sessionId));
+      return reply.status(result.status).send(result.body);
     } catch (err) { return replyHostReadError(err, reply); }
   });
 

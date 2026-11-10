@@ -1593,6 +1593,19 @@ describe('window subagent API', () => {
 
 
 describe('subagent relay', () => {
+  it.each(['unsupported_server', 'unsupported_agent'] as const)('returns %s without sending input', async (reason) => {
+    const sendRelayInput = vi.fn();
+    const app = buildApp([], {}, {
+      windowRepo: { findById: (id: number) => ({ id, serverName: reason === 'unsupported_server' ? 'missing' : 'local', paneLayout: { panes: [{ index: 0, agentSessionId: SID }] } }) as unknown as Window },
+      windowInputService: { sendRelayInput },
+      windowSessionResolver: { resolve: async () => ({ resolved: true, agentType: 'claude', sessionId: SID, paneId: PANE_ID, agentDetected: true }) },
+    });
+    const response = await app.inject({ method: 'POST', url: '/api/transcripts/windows/10/subagents/a123/relay', headers: { 'x-test-operator': '1' }, payload: { sessionId: SID, paneId: PANE_ID, text: 'hello' } });
+    expect(response.statusCode).toBe(501);
+    expect(response.json()).toEqual({ error: reason });
+    expect(sendRelayInput).not.toHaveBeenCalled();
+    await app.close();
+  });
   it('requires an operator and relays only to an unambiguous, unfinished child', async () => {
     const sendInput = vi.fn(async () => 'ok' as const);
     const agents = [{ id: 'a123', name: 'worker', routingName: 'worker' as string | null | undefined, description: 'test', agentType: 'Explore', model: null, status: 'unknown' as 'unknown' | 'finished' }];
