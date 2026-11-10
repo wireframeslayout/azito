@@ -962,6 +962,7 @@ function ServerGroup({
       <WindowPaneTree
         windows={windows}
         sessionData={sessionData}
+        showNameSubtitle
         isActive={isActive}
         onPaneClick={onPaneClick}
         onContextMenu={onContextMenu as (e: React.MouseEvent, w: WindowItem, extra?: { online: boolean; windowName?: string; paneTarget?: string; paneTitle?: string }) => void}

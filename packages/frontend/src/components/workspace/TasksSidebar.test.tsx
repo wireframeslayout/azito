@@ -133,3 +133,10 @@ it('retains saved expansion when tasks are initially empty', () => {
   view.rerender(<TasksSidebar {...props} tasks={[task]} />);
   expect(document.querySelector('[data-window-id="1"]')).toHaveAttribute('aria-expanded', 'true');
 });
+
+it.each([['auto', 'Working · W-1'], ['user', 'Registered · W-1']] as const)('keeps %s window titles in the task tree', (labelSource, expected) => {
+  state.rows = [{ taskId: 7, windowId: 1, status: 'running', serverName: 's', target: 's:1', key: 's/1', title: 'Working', paneTitle: 'Working', paneCommand: 'bash' }];
+  const task = { id: 7, title: 'Task', status: 'open', windows: [{ id: 1, isPrimary: true, label: 'Registered', labelSource, tmuxTarget: 's:1', serverName: 's' }] } as Task;
+  render(<TasksSidebar projectId={10} titleData={{} as never} tasks={[task]} onOpenTask={vi.fn()} onOpenAllTasks={vi.fn()} onCreateTask={vi.fn()} onOpenTaskWindow={vi.fn()} onOpenTaskBrowser={vi.fn()} />);
+  expect(document.querySelector('[data-window-id="1"]')).toHaveTextContent(expected);
+});
