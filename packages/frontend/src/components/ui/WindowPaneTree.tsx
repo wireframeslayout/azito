@@ -445,7 +445,7 @@ function WindowRow({ w, sessionData, isActive, expandedWindows, onToggle, onUnzo
     const focused = !active && isFocusedWindow(w.serverName, target, w.id);
     const paneLabel = pane.title && pane.title !== pane.command ? pane.title : pane.command;
     const ctxExtra: ContextMenuExtra = { online: true, stale: plan.stale, windowName: sw.name, paneTarget: panes[0].menuPaneTarget, paneTitle: paneLabel };
-    const subtitle = renderSubtitle?.(w) ?? paneLabel;
+    const subtitle = renderSubtitle ? (renderSubtitle(w) ?? paneLabel) : (winDisplay.subtitle ?? paneLabel);
     return (
       <div
         key={`${w.id}-${sw.index}-${pane.index}`}
