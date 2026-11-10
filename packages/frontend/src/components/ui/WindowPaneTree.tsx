@@ -49,6 +49,7 @@ export interface WindowPaneTreeProps {
   renderTaskBadge?: (w: WindowItem, taskId: number) => React.ReactNode;
   /** 行の副題（既定はペインのタイトル/コマンド）を差し替える。null/undefined を返すと既定表示のまま */
   renderSubtitle?: (w: WindowItem) => React.ReactNode | null | undefined;
+  showNameSubtitle?: boolean;
   /** 行の主題（既定は w.label || tmux ウィンドウ名）を差し替える。null/undefined を返すと既定表示のまま */
   renderTitle?: (w: WindowItem) => React.ReactNode | null | undefined;
   /**
@@ -58,7 +59,7 @@ export interface WindowPaneTreeProps {
   onWindowsChanged?: (outcome: EmptyWindowOutcome, w: WindowItem) => void;
 }
 
-export function WindowPaneTree({ windows, sessionData, isActive, onPaneClick, onContextMenu, onLongPress, extra, activityClassName, respawningWindowIds, renderTaskBadge, renderSubtitle, renderTitle, onWindowsChanged }: WindowPaneTreeProps) {
+export function WindowPaneTree({ windows, sessionData, isActive, onPaneClick, onContextMenu, onLongPress, extra, activityClassName, respawningWindowIds, renderTaskBadge, renderSubtitle, showNameSubtitle, renderTitle, onWindowsChanged }: WindowPaneTreeProps) {
   const { t } = useTranslation('common');
   const [expandedWindows, setExpandedWindows] = useState<Set<string>>(() => new Set());
 
@@ -111,6 +112,7 @@ export function WindowPaneTree({ windows, sessionData, isActive, onPaneClick, on
           isRespawning={respawningWindowIds?.has(w.id)}
           renderTaskBadge={renderTaskBadge}
           renderSubtitle={renderSubtitle}
+          showNameSubtitle={showNameSubtitle}
           renderTitle={renderTitle}
           onWindowsChanged={onWindowsChanged}
         />
@@ -135,6 +137,7 @@ interface WindowRowProps {
   renderTaskBadge?: (w: WindowItem, taskId: number) => React.ReactNode;
   renderSubtitle?: (w: WindowItem) => React.ReactNode | null | undefined;
   renderTitle?: (w: WindowItem) => React.ReactNode | null | undefined;
+  showNameSubtitle?: boolean;
   onWindowsChanged?: WindowPaneTreeProps['onWindowsChanged'];
 }
 
@@ -383,7 +386,7 @@ function EmptyWindowRow({ w, sessionWindow, title, plainTitle, showIdChip, activ
   );
 }
 
-function WindowRow({ w, sessionData, isActive, expandedWindows, onToggle, onUnzoom, onPaneClick, onContextMenu, onLongPress, extra, activityClassName, isRespawning, renderTaskBadge, renderSubtitle, renderTitle, onWindowsChanged }: WindowRowProps) {
+function WindowRow({ w, sessionData, isActive, expandedWindows, onToggle, onUnzoom, onPaneClick, onContextMenu, onLongPress, extra, activityClassName, isRespawning, renderTaskBadge, renderSubtitle, showNameSubtitle, renderTitle, onWindowsChanged }: WindowRowProps) {
   const { t } = useTranslation('common');
   const { isFocusedWindow, isFocusedPane } = useGlobalFocus();
   const bindLongPress = useLongPress();
@@ -445,7 +448,8 @@ function WindowRow({ w, sessionData, isActive, expandedWindows, onToggle, onUnzo
     const focused = !active && isFocusedWindow(w.serverName, target, w.id);
     const paneLabel = pane.title && pane.title !== pane.command ? pane.title : pane.command;
     const ctxExtra: ContextMenuExtra = { online: true, stale: plan.stale, windowName: sw.name, paneTarget: panes[0].menuPaneTarget, paneTitle: paneLabel };
-    const subtitle = renderSubtitle ? (renderSubtitle(w) ?? paneLabel) : (winDisplay.subtitle ?? paneLabel);
+    const nameSubtitle = showNameSubtitle ? resolveWindowTitle({ paneTitle: pane.title, paneCommand: pane.command, label: w.label, labelSource: w.labelSource }).subtitle : undefined;
+    const subtitle = renderSubtitle ? (renderSubtitle(w) ?? paneLabel) : (nameSubtitle ?? paneLabel);
     return (
       <div
         key={`${w.id}-${sw.index}-${pane.index}`}

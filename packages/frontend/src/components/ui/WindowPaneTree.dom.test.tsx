@@ -1,16 +1,18 @@
 import { fireEvent, render, screen } from '@testing-library/react';
 import { describe, expect, it, vi } from 'vitest';
 import { WindowPaneTree, type WindowItem } from './WindowPaneTree';
+import TaskWindowDropdown from '../task/TaskWindowDropdown';
 import type { Pane, Session } from '../../pages/workspace/types';
 
+vi.mock('../../hooks/useAgentActivity', () => ({ useAgentActivity: () => ({ windowIndicator: () => null, findFinished: () => undefined }) }));
 vi.mock('react-i18next', async (importOriginal) => ({ ...await importOriginal<typeof import('react-i18next')>(), useTranslation: () => ({ t: (key: string) => key }) }));
 
 const windowItem: WindowItem = { id: 42, serverName: 'local', tmuxTarget: 'dev:editor', label: 'Registered', labelSource: 'auto' };
 const pane = (title: string, command = 'bash', index = 1): Pane => ({ index, title, command, width: 80, height: 24, active: index === 1 });
 
-function renderTree(item: WindowItem, panes: Pane[], renderSubtitle?: (w: WindowItem) => React.ReactNode) {
+function renderTree(item: WindowItem, panes: Pane[], renderSubtitle?: (w: WindowItem) => React.ReactNode, showNameSubtitle = true) {
   const sessions: Session[] = [{ name: 'dev', windows: [{ index: 1, name: 'editor', ref: '', windowId: 42, panes }] }];
-  return render(<WindowPaneTree windows={[item]} sessionData={{ local: sessions }} onPaneClick={vi.fn()} renderSubtitle={renderSubtitle} />);
+  return render(<WindowPaneTree windows={[item]} sessionData={{ local: sessions }} onPaneClick={vi.fn()} renderSubtitle={renderSubtitle} showNameSubtitle={showNameSubtitle} />);
 }
 
 function expectLines(title: string, subtitle?: string) {
@@ -45,6 +47,18 @@ describe('WindowPaneTree single pane title', () => {
   it('suppresses a subtitle callback equal to the title', () => {
     renderTree(windowItem, [pane('Working')], () => 'Working');
     expectLines('Working');
+  });
+
+  it('keeps the task dropdown default subtitle', () => {
+    const sessions: Session[] = [{ name: 'dev', windows: [{ index: 1, name: 'editor', ref: '', windowId: 42, panes: [pane('Working')] }] }];
+    render(<TaskWindowDropdown windows={[windowItem]} sessionData={{ local: sessions }} activeTarget={null} onPaneClick={vi.fn()} onClose={vi.fn()} />);
+    expectLines('Working');
+    expect(screen.queryByText('Registered')).toBeNull();
+  });
+
+  it.each([{ workerType: 'claude' }, { windowType: 'terminal' }])('keeps the command when a type is present: %o', (type) => {
+    renderTree({ ...windowItem, labelSource: 'user', ...type }, [pane('', 'bash')]);
+    expectLines('Registered', 'bash');
   });
 
   it('keeps multiple pane parent and children unchanged', () => {
