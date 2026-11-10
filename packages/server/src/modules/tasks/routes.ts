@@ -1,3 +1,4 @@
+import { z } from 'zod';
 import { recordAttribution, type Attribution } from '../../shared/attribution';
 import type { FastifyPluginCallback } from 'fastify';
 import { HostProfileError } from '../../shared/os/hostProfile';
@@ -44,6 +45,16 @@ import { isValidModelId } from '@azito/shared';
 import { MuxDriverUnavailableError } from '../tmux/MuxCapabilityError';
 import { taskWindowRef } from '../tmux/windowIdentity';
 import { AmbiguousWindowKindError, resolveStoredWindowKind } from '../tmux/storedWindowKind';
+
+const answerBodySchema = z.object({
+  answers: z.array(z.object({ index: z.number().int().nonnegative(), value: z.union([z.string(), z.number()]) })),
+  additionalComment: z.string().optional(),
+});
+
+const storedQuestionsSchema = z.array(z.discriminatedUnion('type', [
+  z.object({ text: z.string(), type: z.literal('text') }),
+  z.object({ text: z.string(), type: z.literal('select'), options: z.array(z.string()).min(1) }),
+]));
 
 function parseSubagentConfigInput(raw: unknown, fieldName: string): SubagentConfig | null {
   if (raw === null || raw === undefined) return null;
@@ -1023,9 +1034,32 @@ const tasksRoutes: FastifyPluginCallback<TasksRouteOptions> = (fastify, opts, do
         return reply.status(400).send({ error: 'Task is not waiting for answers' });
       }
 
-      const { answers, additionalComment } = request.body as { answers: Array<{ index: number; value: string | number }>; additionalComment?: string };
-      if (!answers || !Array.isArray(answers)) {
-        return reply.status(400).send({ error: 'answers array is required' });
+      const parsedBody = answerBodySchema.safeParse(request.body);
+      if (!parsedBody.success) {
+        const issue = parsedBody.error.issues[0];
+        return reply.status(400).send({ error: `${issue.path.join('.') || 'body'}: ${issue.message}` });
+      }
+      const { answers, additionalComment } = parsedBody.data;
+      const questions = storedQuestionsSchema.parse(task.pendingQuestions === null ? [] : JSON.parse(task.pendingQuestions));
+      const validatedAnswers = answerBodySchema.superRefine((body, ctx) => {
+        if (questions.length > 0 && body.answers.length === 0) {
+          ctx.addIssue({ code: 'custom', path: ['answers'], message: 'At least one answer is required' });
+        }
+        body.answers.forEach((answer, position) => {
+          const question = questions[answer.index];
+          if (!question) {
+            ctx.addIssue({ code: 'custom', path: ['answers', position, 'index'], message: 'Question index is out of range' });
+          } else if (question.type === 'select') {
+            const valid = typeof answer.value === 'number'
+              ? Number.isInteger(answer.value) && answer.value >= 0 && answer.value < question.options.length
+              : question.options.includes(answer.value);
+            if (!valid) ctx.addIssue({ code: 'custom', path: ['answers', position, 'value'], message: 'Select value is not an option' });
+          }
+        });
+      }).safeParse(parsedBody.data);
+      if (!validatedAnswers.success) {
+        const issue = validatedAnswers.error.issues[0];
+        return reply.status(400).send({ error: `${issue.path.join('.')}: ${issue.message}` });
       }
 
       // Same Unit resolution as ExecuteTaskUseCase.resolveExecutionEnv
@@ -1069,17 +1103,14 @@ const tasksRoutes: FastifyPluginCallback<TasksRouteOptions> = (fastify, opts, do
         throw err;
       }
 
-      const questions = task.pendingQuestions ? JSON.parse(task.pendingQuestions) as Array<{ text: string; type: string; options?: string[] }> : [];
-
       // Build human-readable answer text for the agent
       const answerLines = answers.map((answer) => {
         const question = questions[answer.index];
-        if (!question) return null;
-        const answerText = question.type === 'select' && typeof answer.value === 'number' && question.options
-          ? question.options[answer.value] ?? String(answer.value)
+        const answerText = question.type === 'select' && typeof answer.value === 'number'
+          ? question.options[answer.value]
           : String(answer.value);
         return `Q: ${question.text}\nA: ${answerText}`;
-      }).filter(Boolean);
+      });
 
       let followUpComment = answerLines.length > 0
         ? `Here are the answers to your questions:\n\n${answerLines.join('\n\n')}\n\nPlease continue with the task based on these answers.`

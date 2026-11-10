@@ -398,6 +398,8 @@ Workspace 内タブ／パネルとして表示される主なもの:
 | POST | `/api/tasks/:id/archive` | タスクのアーカイブ |
 | POST | `/api/tasks/:id/restore` | アーカイブしたタスクの復元 |
 
+回答 body は `{"answers":[{"index":0,"value":1}],"additionalComment":"補足"}`。`answers` は必須で、各 `index` は質問の 0 始まりの整数添字、`value` は文字列または数値。select の値は選択肢の 0 始まりの整数添字か選択肢と完全一致する文字列。`additionalComment` は任意の文字列。部分回答は可能だが、質問がある場合の空配列、質問がない場合の非空配列、不正な型や範囲外の値は理由付き 400 で拒否され、状態やログは変更されない。質問がない確認には `{"answers":[]}` を送る。
+
 #### Providers
 | Method | Path | 説明 |
 |---|---|---|

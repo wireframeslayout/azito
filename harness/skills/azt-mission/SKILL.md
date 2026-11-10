@@ -182,6 +182,7 @@ done; echo "last:$S"
 - **`waiting_input`（質問あり）**: `pendingQuestions` を読み、タスク本文とミッションの文脈から答えが
   導ける質問は `POST /api/tasks/${TASK_ID}/answer` で回答する。仕様判断が必要な質問は
   ユーザーに確認してから回答する
+  - body 例: `{"answers":[{"index":0,"value":1},{"index":1,"value":"説明"}],"additionalComment":"補足"}`。`index` は質問の 0 始まりの添字。select の `value` は選択肢の 0 始まりの整数添字または選択肢と完全一致する文字列。text は文字列または数値。部分回答可。質問がある場合は空配列不可、質問がない確認は `{"answers":[]}`。不正な入力は理由付き 400 で拒否されるため修正して再送する
 - **`failed`**: tmux ペインを確認する。ワーカーが作業継続中・作業完了済みなのに失敗判定されている場合は
   異常パターン②。それ以外はログを調査し、復旧不能ならユーザーに報告して指示を仰ぐ
 - **`pending_approval`（実行承認待ち）**: 4-1 で `execution_pending_approval` を検出した場合、または
