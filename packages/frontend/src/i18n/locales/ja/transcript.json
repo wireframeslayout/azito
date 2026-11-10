@@ -123,6 +123,17 @@
     "status": {
       "finished": "完了",
       "unknown": "不明"
+    },
+    "unavailable": "このサブエージェントには中継できません。",
+    "relayNotice": "{{name}} への伝言を親に依頼します。",
+    "unknownNotice": "この子の状態は分かりません。親が届けられない場合があります。",
+    "relaySent": "親に依頼しました。",
+    "errors": {
+      "subagent_unavailable": "このサブエージェントには中継できなくなりました。",
+      "parent_session_changed": "親セッションまたはペインが変わりました。更新して再試行してください。",
+      "pane_session_unverified": "親のペインを確認できませんでした。",
+      "agent_outdated": "中継するには agent を更新してください。",
+      "relay_busy": "別の中継処理中です。再試行してください。"
     }
   }
 }

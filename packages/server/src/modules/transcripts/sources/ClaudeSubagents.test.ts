@@ -23,7 +23,7 @@ describe('Claude subagents', () => {
     fs.writeFileSync(path.join(dir, 'agent-a123.meta.json'), JSON.stringify({ name: 'worker', agentType: 'Explore', description: 'Investigate', finished: true }));
     fs.writeFileSync(path.join(dir, 'agent-b456.meta.json'), '{bad');
     fs.writeFileSync(path.join(dir, 'agent-a123.jsonl'), `${JSON.stringify({ uuid: 'one', type: 'assistant', isSidechain: true, message: { role: 'assistant', content: [{ type: 'text', text: 'Hello' }] } })}\n`);
-    expect(source.listSubagents(session)).toEqual([{ id: 'a123', name: 'worker', description: 'Investigate', agentType: 'Explore', model: null, status: 'finished' }]);
+    expect(source.listSubagents(session)).toEqual([{ id: 'a123', name: 'worker', routingName: 'worker', description: 'Investigate', agentType: 'Explore', model: null, status: 'finished' }]);
     const first = source.readSubagent(session, 'a123');
     expect(first?.entries[0]?.blocks).toEqual([{ kind: 'text', text: 'Hello' }]);
     expect(first && 'nextOffset' in first && source.readSubagent(session, 'a123', first.nextOffset)?.entries).toEqual([]);

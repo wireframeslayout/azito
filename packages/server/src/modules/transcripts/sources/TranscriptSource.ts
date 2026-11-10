@@ -6,6 +6,7 @@
 export interface SubagentSummary {
   id: string;
   name: string;
+  routingName?: string | null;
   description: string;
   agentType: string;
   model: string | null;

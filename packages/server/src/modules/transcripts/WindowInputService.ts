@@ -107,6 +107,15 @@ export class WindowInputService {
     return pane ? pane.paneIndex : 'pane_not_found';
   }
 
+  async isOnlyPane(windowId: number, handle: PaneHandle): Promise<boolean> {
+    const window = this.windowRepo.findById(windowId);
+    if (!window) return false;
+    const server = this.serverRepo.findByName(window.serverName);
+    if (!server) return false;
+    const panes = await this.listWindowPanes(this.muxDriverRegistry.resolve(server), server, window);
+    return panes.length === 1 && panes[0].paneId === handle;
+  }
+
   private async detectWorkerType(driver: IMuxClient, server: ServerConfig, window: Window): Promise<string | null> {
     const panes = await this.listWindowPanes(driver, server, window);
     const entries = await this.transportFactory.getTransport(server).listProcesses();

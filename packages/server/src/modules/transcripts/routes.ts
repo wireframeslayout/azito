@@ -1,3 +1,5 @@
+import { z } from 'zod';
+import { requireOperator } from '../../shared/auth/requireOperator';
 import type { FastifyPluginCallback, FastifyReply } from 'fastify';
 import { asPaneHandle, isPaneHandle, isPaneHandleLike } from '@azito/shared';
 import type { TranscriptSource } from './sources/TranscriptSource';
@@ -327,6 +329,50 @@ const transcriptsRoutes: FastifyPluginCallback<TranscriptsRouteOptions> = (fasti
       } catch (err) { return replyHostReadError(err, reply); }
     },
   );
+
+
+  async function isRelayPaneVerified(window: Window, sessionId: string, paneId: string): Promise<boolean> {
+    const paneIndex = await windowInputService.resolvePaneIndex(window.id, paneId);
+    const matches = window.paneLayout?.panes.filter(pane => pane.agentSessionId === sessionId) ?? [];
+    if (typeof paneIndex === 'number' && matches.length === 1 && matches[0].index === paneIndex) return true;
+    return matches.length === 0 && window.agentSessionId === sessionId && await windowInputService.isOnlyPane(window.id, asPaneHandle(paneId));
+  }
+
+  const relaysInFlight = new Set<number>();
+  const relayBody = z.object({ sessionId: sessionIdSchema, paneId: z.string().refine(isPaneHandle), text: z.string().min(1).max(INPUT_TEXT_MAX_LENGTH).refine(value => !/[\x00-\x08\x0b-\x1f\x7f-\x9f]/.test(value)) }).strict();
+  fastify.post<{ Params: { windowId: string; agentId: string } }>('/api/transcripts/windows/:windowId/subagents/:agentId/relay', { preHandler: requireOperator('transcripts.subagent_relay') }, async (request, reply) => {
+    const body = relayBody.safeParse(request.body);
+    if (!body.success || !subagentIdSchema.safeParse(request.params.agentId).success) return reply.status(400).send({ error: 'invalid_input' });
+    const window = findSubagentWindow(request.params.windowId, reply);
+    if (!window) return;
+    if (relaysInFlight.has(window.id)) return reply.status(409).send({ error: 'relay_busy' });
+    relaysInFlight.add(window.id);
+    try {
+      const resolved = await windowSessionResolver.resolve(window);
+      if (!resolved.resolved || resolved.agentType !== 'claude' || resolved.sessionId !== body.data.sessionId || resolved.paneId !== body.data.paneId || !resolved.agentDetected) return reply.status(409).send({ error: 'parent_session_changed' });
+      if (!await isRelayPaneVerified(window, body.data.sessionId, body.data.paneId)) return reply.status(409).send({ error: 'pane_session_unverified' });
+      const source = findSubagentSource(window, body.data.sessionId, reply);
+      if (!source) return;
+      const agents = await source.listSubagents(body.data.sessionId);
+      const agent = agents?.find(item => item.id === request.params.agentId);
+      if (!agent) return reply.status(409).send({ error: 'subagent_unavailable' });
+      if (agent.routingName === undefined) return reply.status(501).send({ error: 'agent_outdated' });
+      const name = agent.routingName;
+      if (!name || name.trim() !== name || name.length > 128 || /[\x00-\x1f\x7f-\x9f]/.test(name) || agents!.filter(item => item.routingName === name).length !== 1 || agent.status === 'finished') return reply.status(409).send({ error: 'subagent_unavailable' });
+      const currentWindow = windowRepo.findById(window.id);
+      if (!currentWindow) return reply.status(409).send({ error: 'parent_session_changed' });
+      const current = await windowSessionResolver.resolve(currentWindow);
+      if (!current.resolved || current.sessionId !== body.data.sessionId || current.paneId !== body.data.paneId || current.agentType !== 'claude' || !current.agentDetected) return reply.status(409).send({ error: 'parent_session_changed' });
+      if (!await isRelayPaneVerified(currentWindow, body.data.sessionId, body.data.paneId)) return reply.status(409).send({ error: 'pane_session_unverified' });
+      const latestAgents = await source.listSubagents(body.data.sessionId);
+      const latest = latestAgents?.find(item => item.id === agent.id);
+      if (!latest || latest.status === 'finished' || latest.routingName !== name || latestAgents!.filter(item => item.routingName === name).length !== 1) return reply.status(409).send({ error: 'subagent_unavailable' });
+      const result = await windowInputService.sendInput(window.id, asPaneHandle(body.data.paneId), `Please relay the following message to subagent ${JSON.stringify(name)}:\n\n${body.data.text}`);
+      if (result !== 'ok') return reply.status(409).send(typeof result === 'object' ? result : { error: result });
+      return { ok: true };
+    } catch (err) { return replyHostReadError(err, reply); }
+    finally { relaysInFlight.delete(window.id); }
+  });
 
   // ── POST /api/transcripts/window-input ── ウィンドウの pane へ直接テキストを送信する
   // （Issue #69 仕様調整3）。セッション JSONL の存在を前提としないため、resolve-window が

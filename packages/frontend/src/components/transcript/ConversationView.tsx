@@ -59,10 +59,13 @@ interface ConversationViewProps {
   viewMode?: WindowViewMode;
   onChangeViewMode?: (mode: WindowViewMode) => void;
   subagentId?: string;
+  relayName?: string | null;
+  relayStatus?: 'unknown' | 'finished';
+  relayAvailable?: boolean;
   onParentChanged?: () => void;
 }
 
-export default function ConversationView({ windowId, sessionId, agentType, paneId, agentDetected, slashCommandsVisibleInLog, viewMode, onChangeViewMode, subagentId, onParentChanged }: ConversationViewProps) {
+export default function ConversationView({ windowId, sessionId, agentType, paneId, agentDetected, slashCommandsVisibleInLog, viewMode, onChangeViewMode, subagentId, relayName, relayStatus, relayAvailable, onParentChanged }: ConversationViewProps) {
   const entriesPath = subagentId
     ? `/transcripts/windows/${windowId}/subagents/${encodeURIComponent(subagentId)}/entries`
     : `/transcripts/${encodeURIComponent(agentType)}/${encodeURIComponent(sessionId)}`;
@@ -540,14 +543,15 @@ export default function ConversationView({ windowId, sessionId, agentType, paneI
 
       {(subagentId || (!loading && !notFound)) && (
         <PromptInputBar
-          readOnlyReason={subagentId ? t('subagents.readOnly') : undefined}
+          readOnlyReason={subagentId && !relayAvailable ? t(relayName === undefined ? 'windowChat.notFound.agent_outdated' : 'subagents.unavailable') : undefined}
+          relay={subagentId ? { sessionId, agentId: subagentId, name: relayName ?? '', status: relayStatus } : undefined}
           windowId={windowId}
           paneId={paneId}
-          draftKey={sessionId}
+          draftKey={subagentId ? `${sessionId}.subagent.${subagentId}` : sessionId}
           agentDetected={agentDetected}
           slashCommandsVisibleInLog={slashCommandsVisibleInLog}
-          agentType={agentType}
-          contextHistory={contextHistory}
+          agentType={subagentId ? undefined : agentType}
+          contextHistory={subagentId ? [] : contextHistory}
           onSent={() => scrollToBottom('smooth')}
           viewMode={viewMode}
           onChangeViewMode={onChangeViewMode}
