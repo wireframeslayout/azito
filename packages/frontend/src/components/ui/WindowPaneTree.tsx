@@ -49,6 +49,7 @@ export interface WindowPaneTreeProps {
   renderTaskBadge?: (w: WindowItem, taskId: number) => React.ReactNode;
   /** 行の副題（既定はペインのタイトル/コマンド）を差し替える。null/undefined を返すと既定表示のまま */
   renderSubtitle?: (w: WindowItem) => React.ReactNode | null | undefined;
+  /** オンライン単一ペイン行に名前候補の副題を表示する。renderSubtitle が優先される */
   showNameSubtitle?: boolean;
   /** 行の主題（既定は w.label || tmux ウィンドウ名）を差し替える。null/undefined を返すと既定表示のまま */
   renderTitle?: (w: WindowItem) => React.ReactNode | null | undefined;
@@ -448,6 +449,7 @@ function WindowRow({ w, sessionData, isActive, expandedWindows, onToggle, onUnzo
     const focused = !active && isFocusedWindow(w.serverName, target, w.id);
     const paneLabel = pane.title && pane.title !== pane.command ? pane.title : pane.command;
     const ctxExtra: ContextMenuExtra = { online: true, stale: plan.stale, windowName: sw.name, paneTarget: panes[0].menuPaneTarget, paneTitle: paneLabel };
+    // 種別名を候補に含めると、名前がない場合に従来のコマンド表示を置き換えてしまう。
     const nameSubtitle = showNameSubtitle ? resolveWindowTitle({ paneTitle: pane.title, paneCommand: pane.command, label: w.label, labelSource: w.labelSource }).subtitle : undefined;
     const subtitle = renderSubtitle ? (renderSubtitle(w) ?? paneLabel) : (nameSubtitle ?? paneLabel);
     return (
