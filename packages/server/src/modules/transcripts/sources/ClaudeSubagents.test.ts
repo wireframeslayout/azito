@@ -18,6 +18,24 @@ function fixture(): { source: ClaudeTranscriptSource; dir: string } {
 afterEach(() => { for (const root of roots.splice(0)) fs.rmSync(root, { recursive: true, force: true }); });
 
 describe('Claude subagents', () => {
+  it('filters confirmed sidechain meta reminders and advances all reading offsets', () => {
+    const { source, dir } = fixture();
+    const reminder = '<system-reminder>generated</system-reminder>';
+    const row = (uuid: string, content: unknown, isMeta = false) => ({ type: 'user', uuid, isSidechain: true, isMeta, message: { content } });
+    const file = path.join(dir, 'agent-a123.jsonl');
+    fs.writeFileSync(file, [row('visible', reminder), row('hidden', reminder, true), row('mixed', [{ type: 'text', text: 'hello' }, { type: 'text', text: reminder }], true)].map((entry) => JSON.stringify(entry)).join('\n') + '\n');
+    const first = source.readSubagent(session, 'a123');
+    expect(first && 'nextOffset' in first).toBe(true);
+    if (!first || !('nextOffset' in first)) throw new Error('expected forward result');
+    expect(first.entries.map((e) => e.uuid)).toEqual(['visible', 'mixed']);
+    fs.appendFileSync(file, JSON.stringify(row('later', reminder, true)) + '\n');
+    const next = source.readSubagent(session, 'a123', first.nextOffset);
+    expect(next && 'nextOffset' in next && next.entries).toEqual([]);
+    expect(next && 'nextOffset' in next && next.nextOffset).toBe(fs.statSync(file).size);
+    const before = source.readSubagent(session, 'a123', undefined, fs.statSync(file).size);
+    expect(before && 'prevOffset' in before && before.entries.map((e) => e.uuid)).toEqual(['visible', 'mixed']);
+    expect(before && 'prevOffset' in before && before.prevOffset).toBe(0);
+  });
   it('isolates malformed metadata and reads sidechain entries with paging', () => {
     const { source, dir } = fixture();
     fs.writeFileSync(path.join(dir, 'agent-a123.meta.json'), JSON.stringify({ name: 'worker', agentType: 'Explore', description: 'Investigate', finished: true }));

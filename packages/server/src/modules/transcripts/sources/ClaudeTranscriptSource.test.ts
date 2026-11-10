@@ -32,6 +32,39 @@ describe('ClaudeTranscriptSource', () => {
     fs.rmSync(dir, { recursive: true, force: true });
   });
 
+  it('filters only confirmed meta reminder strings across reading windows', async () => {
+    const reminder = '<system-reminder>generated</system-reminder>';
+    const meta = { type: 'user', isMeta: true, uuid: 'meta', message: { content: reminder } };
+    const file = writeSession(dir, 'proj-a', SID_A, [
+      { type: 'assistant', uuid: 'a', message: { content: [{ type: 'text', text: 'done' }] } }, meta,
+    ]);
+    const first = service.readSession(SID_A)!;
+    expect(first.entries.map((e) => e.uuid)).toEqual(['a']);
+    expect(first.nextOffset).toBe(fs.statSync(file).size);
+    expect((await service.getSessionTailState(SID_A)).state).toBe('terminal_final');
+    fs.appendFileSync(file, JSON.stringify({ ...meta, uuid: 'later' }) + '\n');
+    const next = service.readSession(SID_A, first.nextOffset)!;
+    expect(next.entries).toEqual([]);
+    expect(next.nextOffset).toBe(fs.statSync(file).size);
+    const before = service.readSessionBefore(SID_A, next.nextOffset)!;
+    expect(before.entries.map((e) => e.uuid)).toEqual(['a']);
+    expect(before.prevOffset).toBe(0);
+  });
+
+  it('preserves user input, unconfirmed mixtures, other meta and assistant content', () => {
+    const reminder = '<system-reminder>example</system-reminder>';
+    writeSession(dir, 'proj-a', SID_A, [
+      { type: 'user', uuid: 'literal', message: { content: reminder } },
+      { type: 'user', isMeta: true, uuid: 'mixed-string', message: { content: `hello ${reminder}` } },
+      { type: 'user', isMeta: true, uuid: 'mixed-blocks', message: { content: [{ type: 'text', text: 'hello' }, { type: 'text', text: reminder }, { type: 'tool_result', tool_use_id: 't', content: 'ok' }] } },
+      { type: 'user', isMeta: true, uuid: 'other', message: { content: 'other metadata' } },
+      { type: 'assistant', isMeta: true, uuid: 'assistant', message: { content: [{ type: 'text', text: reminder }] } },
+    ]);
+    const entries = service.readSession(SID_A)!.entries;
+    expect(entries.map((e) => e.uuid)).toEqual(['literal', 'mixed-string', 'mixed-blocks', 'other', 'assistant']);
+    expect(entries[2].blocks).toHaveLength(3);
+  });
+
   describe('sessionExists (#542)', () => {
     it('finds the id in any project folder and says false when it is in none, or when projects does not exist', () => {
       writeSession(dir, 'proj-a', SID_A, [{ type: 'user', uuid: 'u', message: { role: 'user', content: 'hi' } }]);

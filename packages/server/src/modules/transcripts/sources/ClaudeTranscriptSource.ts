@@ -60,6 +60,7 @@ const INTERRUPT_TEXT_PATTERN = /^\[Request interrupted by user( for tool use)?\]
  * 見た目で描画される・稼働判定が terminal に倒れる）に留まり、実行内容やデータには影響しない。
  */
 const LOCAL_COMMAND_CAVEAT_PREFIX = '<local-command-caveat>';
+const SYSTEM_REMINDER_PATTERN = /^<system-reminder>[\s\S]*<\/system-reminder>\s*$/;
 const COMMAND_NAME_PATTERN =
   /^<command-name>([^<]*)<\/command-name>\s*<command-message>[^<]*<\/command-message>\s*<command-args>([^<]*)<\/command-args>\s*$/;
 const LOCAL_COMMAND_STDOUT_PATTERN = /^<local-command-stdout>([\s\S]*)<\/local-command-stdout>\s*$/;
@@ -723,6 +724,11 @@ function buildParseLine(
     if (!isRecord(record)) return null;
 
     const entryRecord = options.includeSidechain && record.isSidechain === true ? { ...record, isSidechain: false } : record;
+    if (entryRecord.type === 'user' && entryRecord.isMeta === true && isRecord(entryRecord.message)
+      && typeof entryRecord.message.content === 'string' && SYSTEM_REMINDER_PATTERN.test(entryRecord.message.content)) {
+      pendingCommand = null;
+      return null;
+    }
     const commandResult = tryHandleLocalCommandRecord(entryRecord, pendingCommand);
     if (commandResult.handled) {
       pendingCommand = commandResult.nextPending;
