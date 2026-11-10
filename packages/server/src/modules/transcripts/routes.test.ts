@@ -1596,14 +1596,21 @@ describe('subagent relay', () => {
   it('requires an operator and relays only to an unambiguous, unfinished child', async () => {
     const sendInput = vi.fn(async () => 'ok' as const);
     const agents = [{ id: 'a123', name: 'worker', routingName: 'worker' as string | null | undefined, description: 'test', agentType: 'Explore', model: null, status: 'unknown' as 'unknown' | 'finished' }];
-    const source = buildClaudeSource({ listSubagents: () => agents, readSubagent: () => null });
-    const app = buildApp([source], {}, { windowRepo: { findById: (id: number) => ({ id, serverName: 'local', paneLayout: { panes: [{ index: 0, agentSessionId: SID }] } }) as unknown as Window }, windowInputService: { sendInput }, windowSessionResolver: { resolve: async () => ({ resolved: true, agentType: 'claude', sessionId: SID, paneId: PANE_ID, agentDetected: true }) } });
+    let tail: 'terminal_final' | 'unknown' | 'in_progress' = 'terminal_final';
+    const source = buildClaudeSource({ listSubagents: () => agents, readSubagent: () => null, getSessionTailState: async () => ({ state: tail, lastEntryTimestampMs: null }) });
+    const app = buildApp([source], {}, { windowRepo: { findById: (id: number) => ({ id, serverName: 'local', paneLayout: { panes: [{ index: 0, agentSessionId: SID }] } }) as unknown as Window }, windowInputService: { sendInput, sendRelayInput: sendInput }, windowSessionResolver: { resolve: async () => ({ resolved: true, agentType: 'claude', sessionId: SID, paneId: PANE_ID, agentDetected: true }) } });
     const payload = { sessionId: SID, paneId: PANE_ID, text: 'hello' };
     const url = '/api/transcripts/windows/10/subagents/a123/relay';
     const headers = { 'x-test-operator': '1' };
     expect((await app.inject({ method: 'POST', url, payload })).statusCode).toBe(403);
     expect((await app.inject({ method: 'POST', url, headers, payload: { ...payload, text: 'bad\u0000' } })).statusCode).toBe(400);
     expect((await app.inject({ method: 'POST', url, headers, payload: { ...payload, sessionId: 'aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa' } })).statusCode).toBe(409);
+    for (const state of ['unknown', 'in_progress'] as const) {
+      tail = state;
+      expect((await app.inject({ method: 'POST', url, headers, payload })).statusCode).toBe(409);
+      expect(sendInput).not.toHaveBeenCalled();
+    }
+    tail = 'terminal_final';
     expect((await app.inject({ method: 'POST', url, headers, payload })).statusCode).toBe(200);
     expect(sendInput).toHaveBeenCalledWith(10, PANE_ID, expect.stringContaining('hello'));
     agents.push({ ...agents[0], id: 'b456' });

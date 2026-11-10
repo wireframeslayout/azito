@@ -105,6 +105,28 @@ function buildDeps(opts: {
 }
 
 describe('WindowInputService', () => {
+  describe('sendRelayInput', () => {
+    it.each([
+      `✽ Spinning…\n${CLAUDE_SCREEN}`,
+      `Working (5s · esc to interrupt)\n${CLAUDE_SCREEN}`,
+      'unrecognised screen',
+    ])('rejects a working or unverifiable parent without typing', async (screen) => {
+      const { windowRepo, muxDriverRegistry, serverRepo, calls, wait } = buildDeps({ screen });
+      const result = await new WindowInputService(windowRepo, muxDriverRegistry, serverRepo, transportStub, wait).sendRelayInput(42, asPaneHandle('%1'), 'hello');
+      expect(result).not.toBe('ok');
+      expect(calls.sendTextToHandle).toEqual([]);
+      expect(calls.sendKeysToHandle).toEqual([]);
+    });
+    it('allows an idle parent through the existing guard', async () => {
+      const { windowRepo, muxDriverRegistry, serverRepo, calls, wait } = buildDeps();
+      expect(await new WindowInputService(windowRepo, muxDriverRegistry, serverRepo, transportStub, wait).sendRelayInput(42, asPaneHandle('%1'), 'hello')).toBe('ok');
+      expect(calls.sendTextToHandle).toHaveLength(1);
+    });
+    it('preserves ordinary input behavior while working', async () => {
+      const { windowRepo, muxDriverRegistry, serverRepo, wait } = buildDeps({ screen: `Working (5s · esc to interrupt)\n${CLAUDE_SCREEN}` });
+      expect(await new WindowInputService(windowRepo, muxDriverRegistry, serverRepo, transportStub, wait).sendInput(42, asPaneHandle('%1'), 'hello')).toBe('ok');
+    });
+  });
   describe('sendInput', () => {
     it('uses paste before Enter for multiline input', async () => {
       const { windowRepo, muxDriverRegistry, serverRepo } = buildDeps();

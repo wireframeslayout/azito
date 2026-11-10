@@ -49,6 +49,14 @@ export class WindowInputService {
   ) {}
 
   async sendInput(windowId: number, handle: PaneHandle, text: string): Promise<WindowInputResult> {
+    return this.sendGuardedInput(windowId, handle, text, false);
+  }
+
+  async sendRelayInput(windowId: number, handle: PaneHandle, text: string): Promise<WindowInputResult> {
+    return this.sendGuardedInput(windowId, handle, text, true);
+  }
+
+  private async sendGuardedInput(windowId: number, handle: PaneHandle, text: string, requireIdle: boolean): Promise<WindowInputResult> {
     const window = this.windowRepo.findById(windowId);
     if (!window) return 'window_not_found';
 
@@ -61,7 +69,7 @@ export class WindowInputService {
 
     await preparePaneForChatInput(this.muxDriverRegistry.resolveKind(muxKindOfPaneHandle(handle), server), server, handle, this.wait);
     const workerType = window.workerType ?? await this.detectWorkerType(driver, server, window);
-    const rejection = await guardChatInput(driver, server, handle, workerType, text);
+    const rejection = await guardChatInput(driver, server, handle, workerType, text, requireIdle);
     if (rejection) return rejection;
     await typeChatText(driver, server, handle, text);
     const submitDelayMs = this.resolveSubmitDelay(workerType);

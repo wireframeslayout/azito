@@ -367,7 +367,9 @@ const transcriptsRoutes: FastifyPluginCallback<TranscriptsRouteOptions> = (fasti
       const latestAgents = await source.listSubagents(body.data.sessionId);
       const latest = latestAgents?.find(item => item.id === agent.id);
       if (!latest || latest.status === 'finished' || latest.routingName !== name || latestAgents!.filter(item => item.routingName === name).length !== 1) return reply.status(409).send({ error: 'subagent_unavailable' });
-      const result = await windowInputService.sendInput(window.id, asPaneHandle(body.data.paneId), `Please relay the following message to subagent ${JSON.stringify(name)}:\n\n${body.data.text}`);
+      const tail = await source.getSessionTailState(body.data.sessionId);
+      if (!['terminal_final', 'terminal_interrupted', 'terminal_local'].includes(tail.state)) return reply.status(409).send({ code: 'parent_busy', error: 'The parent is working or its state cannot be verified.' });
+      const result = await windowInputService.sendRelayInput(window.id, asPaneHandle(body.data.paneId), `Please relay the following message to subagent ${JSON.stringify(name)}:\n\n${body.data.text}`);
       if (result !== 'ok') return reply.status(409).send(typeof result === 'object' ? result : { error: result });
       return { ok: true };
     } catch (err) { return replyHostReadError(err, reply); }

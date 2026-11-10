@@ -2,7 +2,7 @@ import type { PaneHandle } from '@azito/shared';
 import type { ServerConfig } from '../servers/Server';
 import type { IMuxClient } from '../tmux/IMuxClient';
 import { isBareShellCommand } from '../../shared/os/shellCommands';
-import { blockingWorkerDialog, isWorkerScreenReady, readInputBox, tuiAgentKindOfWorkerType } from '../tasks/execution/runtime/workerScreen';
+import { blockingWorkerDialog, isWorkerBusy, isWorkerScreenReady, readInputBox, tuiAgentKindOfWorkerType } from '../tasks/execution/runtime/workerScreen';
 
 export interface ChatInputRejection { code: string; error: string }
 
@@ -12,7 +12,7 @@ export async function preparePaneForChatInput(driver: IMuxClient, server: Server
   await wait(100);
 }
 
-export async function guardChatInput(driver: IMuxClient, server: ServerConfig, handle: PaneHandle, workerType: string | null, text: string): Promise<ChatInputRejection | null> {
+export async function guardChatInput(driver: IMuxClient, server: ServerConfig, handle: PaneHandle, workerType: string | null, text: string, requireIdle = false): Promise<ChatInputRejection | null> {
   if (/[\x00-\x08\x0b-\x1f\x7f-\x9f]/.test(text)) return { code: 'invalid_control_character', error: 'The message contains unsupported control characters.' };
   const foreground = await driver.paneCommandByHandle(server, handle);
   if (!foreground) return { code: 'pane_unavailable', error: 'Cannot verify the pane process.' };
@@ -21,6 +21,7 @@ export async function guardChatInput(driver: IMuxClient, server: ServerConfig, h
   if (!kind) return { code: 'unsupported_worker', error: 'Cannot verify that this pane is ready for chat input.' };
   const screen = await driver.captureScreen(server, handle);
   if (screen.code !== 0) return { code: 'screen_unavailable', error: 'Cannot read the pane screen.' };
+  if (requireIdle && (kind !== 'claude' || isWorkerBusy(kind, screen.stdout) || /esc to interrupt/i.test(screen.stdout))) return { code: 'parent_busy', error: 'The parent is working or its state cannot be verified.' };
   const dialog = blockingWorkerDialog(kind, screen.stdout);
   if (dialog) return { code: dialog, error: 'The agent is waiting for a dialog to be resolved.' };
   if (!isWorkerScreenReady(kind, screen.stdout)) return { code: 'not_ready', error: 'The agent input is not ready.' };
