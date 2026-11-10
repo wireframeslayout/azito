@@ -423,12 +423,23 @@ always run in **`user/<uid>`**, as Background-session LaunchAgents (`LimitLoadTo
 Installing an agent at a LAN address (for example `192.168.x.x`) from a hub running as a launchd service can fail in the preflight
 with `connect EHOSTUNREACH <IP>:22`. The same node run from an SSH shell does reach it, and Tailscale addresses (`100.x`) are
 reachable from the launchd hub (confirmed with v0.12.0-rc.3, from a macOS 26.3.1 arm64 hub to an Ubuntu 24.04 x64 agent). macOS's
-Local Network privacy permission (macOS 15 and later) is the likely cause.
+Local Network privacy permission (macOS 15 and later) may be involved.
 
 - **Workaround**: use the agent's Tailscale address (or its MagicDNS name) as its address (confirmed).
-- Granting the permission in System Settings › Privacy & Security › Local Network may also let it through, but this has not been confirmed yet.
+- Using the same macOS user as the hub, open System Settings › Privacy & Security › Local Network. If an entry for the hub appears, allow it and retry. If no entry appears, use Tailscale.
+- Running Node from an SSH or Terminal shell does not establish that the hub has permission, because those shells can have exceptions.
 
-The underlying fix comes in a later version ([#536](https://github.com/wireframeslayout/azito/issues/536)).
+The diagnostic is a possibility, not proof: routing or the remote host can produce the same error.
+
+What the v0.12.1 RC observed (macOS 26.6.2 arm64, a v0.12.1-rc.2 hub installed with `install.sh` as a launchd Background job in the `user/<uid>` domain, with that user also logged in to the GUI):
+
+- The hub **reached** a LAN address (adding an agent at the gateway on the same LAN, TCP port 80 `x@192.168.100.1:80`, connected over TCP and failed at the SSH handshake with `Connection lost before handshake`). There was no `EHOSTUNREACH`, so no guidance was shown (which is the correct behaviour).
+- The macOS logs (`com.apple.network` and `tccd`) for the 10 minutes before the attempt had no record of a Local Network denial.
+- System Settings › Privacy & Security › Local Network listed **nothing at all**, the hub included. Because nothing was listed, the effect of granting the permission was not checked.
+
+Under these conditions the Local Network permission did not stop the hub. Other macOS versions, a session with no GUI login, or another way of starting the hub may still need the permission, so the guidance and the checks above stay as they are.
+
+See [Apple TN3179](https://developer.apple.com/documentation/technotes/tn3179-understanding-local-network-privacy) for details.
 
 ### `azito service` on an existing install
 
@@ -605,10 +616,10 @@ azito version        # Show version
 
 | OS | Architecture | Status |
 |----|-------------|--------|
-| Linux | x86_64 (x64) | Supported |
-| Linux | aarch64 (arm64) | Supported |
-| macOS | Apple Silicon (arm64) | Supported |
-| macOS | Intel (x64) | Not supported (will consider on demand) |
+| Linux | x86_64 (x64) | Hub and agent server supported |
+| Linux | aarch64 (arm64) | Hub supported; agent server not supported |
+| macOS | Apple Silicon (arm64) | Hub supported; agent server not supported |
+| macOS | Intel (x64) | Hub not supported (will consider on demand); agent server supported |
 | Windows | x64 | Supported, as a hub ([Windows bundle](#windows-bundle)) and as an agent server ([Windows agent servers](./windows-agent.md)) |
 | Windows | arm64 | Not supported |
 

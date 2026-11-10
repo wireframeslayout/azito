@@ -33,8 +33,12 @@ export interface MisaoServiceStatus {
   /** The concrete error behind `unmanagedReason` when there is one (`invalid_prefix`). */
   unmanagedDetail?: string;
   serviceManager?: 'systemd' | 'launchd' | 'taskscheduler';
-  /** The unit / plist file exists (Windows: the task is registered). */
+  /** The unit / plist exists (Windows: the task belongs to this hub). */
   serviceInstalled: boolean;
+  /** Windows task ownership; absent on other platforms. */
+  windowsTaskOwner?: 'none' | 'hub' | 'other' | 'unknown';
+  /** Whether another installation's Windows task is currently running. */
+  windowsTaskRunning?: boolean;
   serviceState?: MisaoServiceState;
   /**
    * launchd only: the domain the job is loaded into. `gui` = the logged-in screen session, `user` = the background

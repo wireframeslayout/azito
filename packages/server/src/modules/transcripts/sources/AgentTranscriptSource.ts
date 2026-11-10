@@ -6,6 +6,7 @@ import type {
   SessionSummary,
   SessionTailState,
   TranscriptSource,
+  SubagentSummary,
 } from './TranscriptSource';
 import {
   AGENT_SESSION_NOT_FOUND,
@@ -13,6 +14,7 @@ import {
   agentSessionsPath,
   agentSessionExistsSchema,
   agentSessionMetaSchema,
+  subagentsResponseSchema,
   agentSessionsResponseSchema,
   readSessionBeforeResultSchema,
   readSessionResultSchema,
@@ -70,6 +72,18 @@ export class AgentTranscriptSource implements TranscriptSource {
     private readonly serverName: string,
     private readonly client: AgentJsonClient,
   ) {}
+
+  async listSubagents(sessionId: string): Promise<SubagentSummary[] | null> {
+    const path = `${agentSessionsPath(this.agentType)}/${encodeURIComponent(sessionId)}/subagents`;
+    const result = await this.fetchOrNull(path, subagentsResponseSchema);
+    return result?.subagents ?? null;
+  }
+
+  readSubagent(sessionId: string, agentId: string, offset?: number, before?: number): Promise<ReadSessionResult | ReadSessionBeforeResult | null> {
+    const path = `${agentSessionsPath(this.agentType)}/${encodeURIComponent(sessionId)}/subagents/${encodeURIComponent(agentId)}/entries`;
+    if (before !== undefined) return this.fetchOrNull(`${path}?before=${before}`, readSessionBeforeResultSchema);
+    return this.fetchOrNull(offset === undefined ? path : `${path}?offset=${offset}`, readSessionResultSchema);
+  }
 
   async listSessions(limit?: number, options: ListSessionsOptions = {}): Promise<SessionSummary[]> {
     const params = new URLSearchParams();

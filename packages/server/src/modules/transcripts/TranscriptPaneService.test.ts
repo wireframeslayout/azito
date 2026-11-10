@@ -7,6 +7,7 @@ import type { MuxDriverRegistry } from '../tmux/MuxDriverRegistry';
 import type { MuxPaneInfo } from '@azito/shared';
 import type { IServerRepository, ServerConfig } from '../servers/Server';
 
+const CLAUDE_SCREEN = '──────────────\n❯\n──────────────\nbypass permissions on';
 const SID = '11111111-1111-1111-1111-111111111111';
 const LOCAL_SERVER: ServerConfig = {
   name: 'local',
@@ -30,6 +31,8 @@ function buildDeps(overrides: {
   probePane?: IMuxClient['probePane'];
   sendKeysToHandle?: IMuxClient['sendKeysToHandle'];
   sendTextToHandle?: IMuxClient['sendTextToHandle'];
+  foreground?: string;
+  screen?: string;
   servers?: ServerConfig[];
 } = {}) {
   const claudeTranscriptSource = {
@@ -37,6 +40,8 @@ function buildDeps(overrides: {
   } as unknown as TranscriptSource;
 
   const driver = {
+    paneCommandByHandle: async () => overrides.foreground ?? 'node',
+    captureScreen: async () => ({ code: 0, stderr: '', stdout: overrides.screen ?? CLAUDE_SCREEN }),
     listAllPanes: overrides.listAllPanes ?? (async () => []),
     probePane: overrides.probePane ?? (async () => ({ alive: true, verified: true })),
     sendKeysToHandle: overrides.sendKeysToHandle ?? (async () => {}),
@@ -109,6 +114,8 @@ describe('TranscriptPaneService', () => {
           resolve: (s: ServerConfig) => {
             used.push(s.name);
             return {
+              paneCommandByHandle: async () => 'node',
+              captureScreen: async () => ({ code: 0, stderr: '', stdout: CLAUDE_SCREEN }),
               listAllPanes: async () => [pane('%1'), pane(MISAO_PANE)],
               probePane: async () => ({ alive: true, verified: true }),
               sendTextToHandle: async (_s: ServerConfig, handle: string) => { sent.push({ server: s.name, handle }); },
@@ -154,6 +161,26 @@ describe('TranscriptPaneService', () => {
   });
 
   describe('sendInput', () => {
+    it('uses paste before Enter for multiline input', async () => {
+      const { claudeTranscriptSource, muxDriverRegistry, serverRepo } = buildDeps();
+      const driver = muxDriverRegistry.resolve(LOCAL_SERVER);
+      driver.pasteTextToHandle = vi.fn(async () => {});
+      driver.sendKeysToHandle = vi.fn(async () => {});
+      expect(await new TranscriptPaneService(claudeTranscriptSource, muxDriverRegistry, serverRepo).sendInput(SID, asPaneHandle('%1'), 'one\ntwo')).toBe('ok');
+      expect(driver.pasteTextToHandle).toHaveBeenCalledWith(LOCAL_SERVER, '%1', 'one\ntwo');
+      expect(driver.sendKeysToHandle).toHaveBeenCalledWith(LOCAL_SERVER, '%1', ['Enter']);
+    });
+
+    it.each([[{ foreground: 'bash' }, 'worker_exited_to_shell'], [{ screen: 'Do you trust this folder?' }, 'trust_dialog']])('does not send into a shell or dialog', async (opts, code) => {
+      const sendTextToHandle = vi.fn();
+      const sendKeysToHandle = vi.fn();
+      const { claudeTranscriptSource, muxDriverRegistry, serverRepo } = buildDeps({ ...opts, sendTextToHandle, sendKeysToHandle });
+      const result = await new TranscriptPaneService(claudeTranscriptSource, muxDriverRegistry, serverRepo).sendInput(SID, asPaneHandle('%1'), 'hello');
+      expect(result).toEqual(expect.objectContaining({ code }));
+      expect(sendTextToHandle).not.toHaveBeenCalled();
+      expect(sendKeysToHandle).not.toHaveBeenCalled();
+    });
+
     it('returns session_not_found when the session does not exist', async () => {
       const { claudeTranscriptSource, muxDriverRegistry, serverRepo } = buildDeps({ getSessionCwd: () => null });
       const service = new TranscriptPaneService(claudeTranscriptSource, muxDriverRegistry, serverRepo);

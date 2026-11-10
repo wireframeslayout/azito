@@ -14,6 +14,7 @@ function buildOptions(overrides: Partial<WebhookRouteOptions> = {}): WebhookRout
     resolveServerName: (name) => name,
     recordAgentActivity: vi.fn(),
     recordInteractionSignal: vi.fn(),
+    recordSubagentSignal: vi.fn(),
     misao: { resolvePane: vi.fn().mockResolvedValue(null), recordAgentActivity: vi.fn() },
     ...overrides,
   };
@@ -34,6 +35,20 @@ const validActivityBody = {
   paneIndex: 1,
   event: 'start',
 };
+
+describe('POST /api/webhooks/agent-subagent', () => {
+  it('authenticates and validates the parent and pane before dispatch', async () => {
+    const options = buildOptions();
+    const app = await buildApp(options);
+    const payload = { serverName: 'local', misaoPaneId: 'p_0123456789ABCDEFGHJKMNPQRS', event: 'subagent', sessionId: '12345678-1234-1234-1234-123456789abc' };
+    const inject = (body: object, auth = true) => app.inject({ method: 'POST', url: '/api/webhooks/agent-subagent', headers: auth ? { authorization: `Bearer ${TOKEN}` } : {}, payload: body });
+    expect((await inject(payload, false)).statusCode).toBe(401);
+    expect((await inject({ ...payload, sessionId: '../bad' })).statusCode).toBe(400);
+    expect((await inject(payload)).statusCode).toBe(200);
+    expect(options.recordSubagentSignal).toHaveBeenCalledOnce();
+    await app.close();
+  });
+});
 
 describe('POST /api/webhooks/agent-activity', () => {
   let app: FastifyInstance;
@@ -451,7 +466,7 @@ describe('hook webhooks from a misao pane (misaoPaneId)', () => {
 
     expect(res.statusCode).toBe(200);
     expect(misao.resolvePane).toHaveBeenCalledWith('local', PANE_ID);
-    expect(misao.recordAgentActivity).toHaveBeenCalledWith('local', resolvedWindow.tmuxTarget, 'start', undefined);
+    expect(misao.recordAgentActivity).toHaveBeenCalledWith('local', resolvedWindow.tmuxTarget, 'start', undefined, undefined, 1, undefined);
     expect(options.recordAgentActivity).not.toHaveBeenCalled();
   });
 
@@ -631,6 +646,22 @@ describe('agent-activity sessionId handling', () => {
     expect(options.recordAgentActivity).toHaveBeenCalledWith(expect.objectContaining({ event: 'session', sessionId: SESSION_ID }));
   });
 
+  it.each(['', 'relative/path', '~/.claude', '/bad\0path', '/' + 'x'.repeat(4096)])('ignores invalid config metadata but keeps agent session tracking', async (claudeConfigDir) => {
+    const options = buildOptions();
+    app = await buildApp(options);
+    const res = await post({ ...validActivityBody, serverName: 'agent-server', event: 'session', sessionId: SESSION_ID, claudeConfigDir, claudeConfigDirExplicit: true, hookTimestamp: '123' });
+    expect(res.statusCode).toBe(200);
+    expect(options.recordAgentActivity).toHaveBeenCalledWith(expect.objectContaining({ serverName: 'agent-server', sessionId: SESSION_ID, claudeConfigDir: undefined, hookTimestamp: undefined }));
+  });
+
+  it('ignores an invalid explicit flag but preserves the session', async () => {
+    const options = buildOptions();
+    app = await buildApp(options);
+    const res = await post({ ...validActivityBody, event: 'session', sessionId: SESSION_ID, claudeConfigDir: '/config', claudeConfigDirExplicit: 'true', hookTimestamp: '123' });
+    expect(res.statusCode).toBe(200);
+    expect(options.recordAgentActivity).toHaveBeenCalledWith(expect.objectContaining({ sessionId: SESSION_ID, claudeConfigDir: undefined, hookTimestamp: undefined }));
+  });
+
   it('passes sessionId through the misao path', async () => {
     const resolved: ResolvedWindow = {
       windowId: 7,
@@ -644,6 +675,6 @@ describe('agent-activity sessionId handling', () => {
     const res = await post({ serverName: 'local', misaoPaneId: MISAO_PANE_ID, event: 'session', sessionId: SESSION_ID });
 
     expect(res.statusCode).toBe(200);
-    expect(misao.recordAgentActivity).toHaveBeenCalledWith('local', resolved.tmuxTarget, 'session', SESSION_ID);
+    expect(misao.recordAgentActivity).toHaveBeenCalledWith('local', resolved.tmuxTarget, 'session', SESSION_ID, undefined, 1, undefined);
   });
 });

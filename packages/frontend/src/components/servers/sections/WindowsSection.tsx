@@ -6,7 +6,8 @@ import type { Server, Session } from '../../../hooks/useServerManagement';
 import { useIsMobile } from '../../../hooks/useIsMobile';
 import { terminalRefFromWindow, terminalRefDisplayLabel, terminalTabId, resolveTerminalTarget, paneDeletePath, windowKillRequest, type TerminalRef } from '../../../lib/terminalRef';
 import { stripPaneSuffix } from '@azito/shared';
-import { resolveWindowDisplay, formatWindowDisplayLabel, sessionWindowLabel, type WindowIndexEntry } from '../../../lib/windowDisplay';
+import { resolveWindowTitle, formatWindowTitleLine } from '@azito/shared';
+import { sessionWindowLabel, type WindowIndexEntry } from '../../../lib/windowDisplay';
 import { preferredPaneOrdinal } from '../../../lib/paneState';
 import { refUsesMuxRoutes } from '../../../lib/sessionKind';
 import { muxCreateFailureText } from '../../../lib/muxKindChoice';
@@ -17,19 +18,21 @@ import { useToast } from '../../../hooks/useToast';
 import WindowTreePopover from '../WindowTreePopover';
 import CreateSessionModal from '../CreateSessionModal';
 import { TerminalContainer } from '../../TerminalContainer';
-import { EmptyState } from '../../ui';
+import { EmptyState, LoadingState, Notice, Button } from '../../ui';
 import { Icon } from '../../ui/Icon';
+import { windowsEmptyView } from './windowsSectionState';
 
 interface WindowsSectionProps {
   server: Server;
   sessions: Session[];
+  sessionsState?: 'loading' | 'error' | 'partial' | 'ready';
   refresh: () => void;
   windowById: Map<number, WindowIndexEntry>;
   taskById: Map<number, { title?: string }>;
   windowMetaError?: boolean;
 }
 
-export default function WindowsSection({ server, sessions, refresh, windowById, taskById, windowMetaError = false }: WindowsSectionProps) {
+export default function WindowsSection({ server, sessions, sessionsState = 'ready', refresh, windowById, taskById, windowMetaError = false }: WindowsSectionProps) {
   const { t } = useTranslation('servers');
   const { t: tw } = useTranslation('workspace');
   const confirm = useConfirm();
@@ -57,20 +60,20 @@ export default function WindowsSection({ server, sessions, refresh, windowById, 
     if (activeRef.kind === 'windowId') {
       const sessWin = sessions.flatMap(s => s.windows).find(w => w.windowId === activeRef.windowId);
       const pane = sessWin
-        ? (activeRef.pane != null ? sessWin.panes.find(p => p.index === activeRef.pane) : undefined) ?? sessWin.panes[0]
+        ? (activeRef.pane != null ? sessWin.panes.find(p => p.index === activeRef.pane) : undefined) ?? sessWin.panes.find(p => p.active) ?? sessWin.panes[0]
         : undefined;
       const regWin = windowById.get(activeRef.windowId);
-      const display = resolveWindowDisplay({
-        windowId: activeRef.windowId,
+      const display = resolveWindowTitle({
+        id: activeRef.windowId,
         paneTitle: pane?.title,
         paneCommand: pane?.command,
-        label: regWin?.label,
+        label: regWin?.label, labelSource: regWin?.labelSource,
         workerType: regWin?.workerType,
         windowType: regWin?.windowType,
         taskTitle: regWin?.taskId != null ? taskById.get(regWin.taskId)?.title : undefined,
         tmuxTarget: sessWin ? sessionWindowLabel(sessions.find(s => s.windows.includes(sessWin!))!.name, sessWin) : undefined,
       });
-      return formatWindowDisplayLabel(display);
+      return formatWindowTitleLine(display);
     }
     const sessWin = sessions.flatMap((s) => s.windows.map((w) => ({ sessionName: s.name, win: w }))).find(({ win }) => win.ref === activeRef.ref);
     if (sessWin) return sessionWindowLabel(sessWin.sessionName, sessWin.win);
@@ -202,7 +205,16 @@ export default function WindowsSection({ server, sessions, refresh, windowById, 
     />
   ) : null;
 
-  if (sessions.length === 0) {
+  const emptyView = windowsEmptyView(sessionsState, sessions.length);
+  if (emptyView === 'loading') return <LoadingState message={t('sessionState.loading')} />;
+
+  if (emptyView === 'unavailable') return (
+    <Notice tone="danger" role="alert" action={<Button size="sm" onClick={refresh}>{t('windows.retry')}</Button>}>
+      {t(`sessionState.${sessionsState}`)}
+    </Notice>
+  );
+
+  if (emptyView === 'empty') {
     return (
       <div>
         {metaErrorBar}
@@ -228,6 +240,8 @@ export default function WindowsSection({ server, sessions, refresh, windowById, 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', height: '100%', position: 'relative' }}>
       {metaErrorBar}
+      {sessionsState === 'loading' && <LoadingState message={t('sessionState.loading')} />}
+      {(sessionsState === 'error' || sessionsState === 'partial') && <Notice tone="danger" role="alert" action={<Button size="sm" onClick={refresh}>{t('windows.retry')}</Button>}>{t(`sessionState.${sessionsState}`)}</Notice>}
       {createSessionModal}
       <div style={{
         display: 'flex', alignItems: 'center', gap: 8,

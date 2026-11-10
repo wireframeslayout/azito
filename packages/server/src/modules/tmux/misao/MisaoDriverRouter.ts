@@ -26,6 +26,7 @@ export class MisaoDriverRouter implements IMuxClient {
 
   async listWorkspaces(server: ServerConfig): Promise<MuxWorkspace[]> { return this.to(server).listWorkspaces(server); }
   async listWorkspacesStrict(server: ServerConfig): Promise<MuxWorkspace[]> { return this.to(server).listWorkspacesStrict(server); }
+  async prepareWorkspace(server: ServerConfig, name: string, extraEnv?: Record<string, string>): Promise<void> { return this.to(server).prepareWorkspace(server, name, extraEnv); }
   async openWorkspace(server: ServerConfig, name: string, opts?: Parameters<IMuxClient['openWorkspace']>[2]): ReturnType<IMuxClient['openWorkspace']> { return this.to(server).openWorkspace(server, name, opts); }
   async openWindow(server: ServerConfig, workspace: string, baseName?: string, opts?: Parameters<IMuxClient['openWindow']>[3]): ReturnType<IMuxClient['openWindow']> { return this.to(server).openWindow(server, workspace, baseName, opts); }
   async closeWindow(server: ServerConfig, ref: MuxRef): Promise<ExecResult> { return this.to(server).closeWindow(server, ref); }
@@ -49,6 +50,7 @@ export class MisaoDriverRouter implements IMuxClient {
   async captureScreen(server: ServerConfig, handle: PaneHandle, start?: number, end?: number): Promise<ExecResult> { return this.to(server).captureScreen(server, handle, start, end); }
   async sendKeysToHandle(server: ServerConfig, handle: PaneHandle, keys: string[]): Promise<void> { return this.to(server).sendKeysToHandle(server, handle, keys); }
   async sendTextToHandle(server: ServerConfig, handle: PaneHandle, text: string): Promise<void> { return this.to(server).sendTextToHandle(server, handle, text); }
+  async pasteTextToHandle(server: ServerConfig, handle: PaneHandle, text: string): Promise<void> { return this.to(server).pasteTextToHandle(server, handle, text); }
   async panePidByHandle(server: ServerConfig, handle: PaneHandle): Promise<number | null> { return this.to(server).panePidByHandle(server, handle); }
   async paneCommandByHandle(server: ServerConfig, handle: PaneHandle): Promise<string | null> { return this.to(server).paneCommandByHandle(server, handle); }
 

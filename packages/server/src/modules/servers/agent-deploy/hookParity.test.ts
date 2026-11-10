@@ -16,7 +16,7 @@ const describeOnPosix = process.platform === 'win32' ? describe.skip : describe;
 interface Received { path: string; authorization: string | undefined; body: string }
 
 interface Case {
-  hook: 'activity' | 'interaction' | 'question' | 'session' | 'notify';
+  hook: 'activity' | 'interaction' | 'question' | 'session' | 'subagent' | 'notify';
   event?: 'start' | 'stop';
   stdin?: string;
   env?: Record<string, string>;
@@ -98,7 +98,12 @@ async function exercise(kind: 'bash' | 'node', c: Case): Promise<Received[]> {
 async function expectSame(c: Case): Promise<Received[]> {
   const fromBash = await exercise('bash', c);
   const fromNode = await exercise('node', c);
-  expect(fromNode).toEqual(fromBash);
+  const normalize = (requests: Received[]) => requests.map((request) => {
+    const body = JSON.parse(request.body);
+    if (body.hookTimestamp) body.hookTimestamp = '<timestamp>';
+    return { ...request, body };
+  });
+  expect(normalize(fromNode)).toEqual(normalize(fromBash));
   expect(fromBash.length).toBe(c.expectNone ? 0 : 1);
   return fromNode;
 }
@@ -147,9 +152,25 @@ describeOnPosix('azito-hook.mjs sends what the bash hooks send', () => {
     expect(JSON.parse(req.body)).not.toHaveProperty('sessionId');
   });
 
+  it('subagent sends the parent session as a refresh signal', async () => {
+    const [req] = await expectSame({ hook: 'subagent', stdin: JSON.stringify({ session_id: SESSION }), env: { ...fullEnv(), MISAO_PANE_ID: MISAO_PANE } });
+    expect(JSON.parse(req.body)).toEqual({ serverName: 'srv one', misaoPaneId: MISAO_PANE, event: 'subagent', sessionId: SESSION });
+    const [tmux] = await expectSame({ hook: 'subagent', stdin: JSON.stringify({ session_id: SESSION }), env: { ...fullEnv(), TMUX_PANE: '%3' } });
+    expect(JSON.parse(tmux.body)).toMatchObject({ serverName: 'srv one', sessionName: 'main', windowIndex: 2, windowName: 'work', paneIndex: 1, event: 'subagent', sessionId: SESSION });
+    await expectSame({ hook: 'subagent', stdin: '{"session_id":"x"}', env: { ...fullEnv(), MISAO_PANE_ID: MISAO_PANE }, expectNone: true });
+  });
+
   it('session sends event "session" and needs a valid session id', async () => {
     const [req] = await expectSame({ hook: 'session', stdin: JSON.stringify({ session_id: SESSION }), env: { ...fullEnv(), MISAO_PANE_ID: MISAO_PANE } });
-    expect(JSON.parse(req.body)).toEqual({ serverName: 'srv one', misaoPaneId: MISAO_PANE, event: 'session', sessionId: SESSION });
+    expect(JSON.parse(req.body)).toEqual({ serverName: 'srv one', misaoPaneId: MISAO_PANE, event: 'session', sessionId: SESSION, claudeConfigDir: `${home}/.claude`, claudeConfigDirExplicit: false, hookTimestamp: expect.stringMatching(/^[0-9]+$/) });
+    const specialDir = '/tmp/quote"-backslash\\-line\n';
+    const [special] = await expectSame({ hook: 'session', stdin: JSON.stringify({ session_id: SESSION }), env: { ...fullEnv(), MISAO_PANE_ID: MISAO_PANE, CLAUDE_CONFIG_DIR: specialDir } });
+    expect(JSON.parse(special.body).claudeConfigDir).toBe(specialDir);
+    expect(JSON.parse(special.body).claudeConfigDirExplicit).toBe(true);
+    for (const [value, expected] of [['relative/config', `${process.cwd()}/relative/config`], ['~/.claude', `${home}/.claude`]]) {
+      const [request] = await expectSame({ hook: 'session', stdin: JSON.stringify({ session_id: SESSION }), env: { ...fullEnv(), MISAO_PANE_ID: MISAO_PANE, CLAUDE_CONFIG_DIR: value } });
+      expect(JSON.parse(request.body).claudeConfigDir).toBe(expected);
+    }
     await expectSame({ hook: 'session', stdin: '{"session_id":"x"}', env: { ...fullEnv(), MISAO_PANE_ID: MISAO_PANE }, expectNone: true });
   });
 

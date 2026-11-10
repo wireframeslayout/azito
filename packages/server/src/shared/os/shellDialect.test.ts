@@ -151,6 +151,26 @@ describe('PowerShell dialect (text; the Windows job runs it for real)', () => {
   });
 });
 
+describe('withoutEnv', () => {
+  it.each(['sh', 'bash', 'zsh', 'dash', '/usr/bin/zsh', 'BASH', '-zsh'])('uses a subshell for %s', (shell) => {
+    expect(posixDialect.withoutEnv('X', 'cmd', shell)).toBe('(unset X; cmd)');
+  });
+
+  it.each(['fish', 'ksh', 'tcsh', null, ''])('uses env for %s', (shell) => {
+    expect(posixDialect.withoutEnv('X', 'cmd', shell)).toBe('env -u X cmd');
+  });
+
+  it.each([posixDialect, powershellDialect])('rejects invalid environment variable names', (dialect) => {
+    for (const name of ['', '1NAME', 'BAD-NAME', 'X;cmd']) {
+      expect(() => dialect.withoutEnv(name, 'cmd', 'bash')).toThrow(/Invalid environment variable name/);
+    }
+  });
+
+  it('restores the environment variable after a PowerShell command', () => {
+    expect(powershellDialect.withoutEnv('X', 'cmd')).toBe('& { $saved = $env:X; try { Remove-Item Env:X -ErrorAction SilentlyContinue; cmd } finally { $env:X = $saved } }');
+  });
+});
+
 describe('shellDialectFor', () => {
   it('is PowerShell for win32 and POSIX for linux, darwin and an unrecorded host', () => {
     expect(shellDialectFor({ platform: 'win32' })).toBe(powershellDialect);

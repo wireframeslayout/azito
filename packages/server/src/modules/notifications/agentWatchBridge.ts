@@ -1,3 +1,4 @@
+import { formatWindowTitleLine, resolveWindowTitle } from '@azito/shared';
 import type { SqliteAgentWatchRepository } from './SqliteAgentWatchRepository';
 import type { SqlitePushSubscriptionRepository } from './SqlitePushSubscriptionRepository';
 import type { PushNotificationService } from './push/PushNotificationService';
@@ -10,6 +11,12 @@ export interface AgentActivityBridgePayload {
   running: boolean;
   label?: string;
   windowId?: number;
+  labelSource?: 'auto' | 'user';
+  taskTitle?: string;
+  workerType?: string;
+  windowType?: string;
+  paneTitle?: string;
+  paneCommand?: string;
 }
 
 export interface AgentWatchBridgeDeps {
@@ -43,7 +50,7 @@ export async function notifyAgentWatchesOnIdle(
       try {
         await deps.pushService.sendToAll([sub], (s) => ({
           ...getPushMessage(s.lang, 'agent.idle', {
-            label: watch.label ?? payload.label ?? payload.target,
+            label: formatWindowTitleLine(resolveWindowTitle({ ...payload, id: payload.windowId, label: payload.label ?? watch.label, tmuxTarget: payload.target })),
             serverName: payload.serverName,
           }),
           data: { url: agentPushUrl({ serverName: payload.serverName, target: payload.target, windowId: payload.windowId }) },

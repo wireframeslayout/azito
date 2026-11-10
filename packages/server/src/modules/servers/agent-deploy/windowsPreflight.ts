@@ -9,61 +9,92 @@ const END_MARKER = '<<AZITO_PREFLIGHT_END>>';
 /**
  * One PowerShell script (run through the dialect's EncodedCommand, so it is the same under a cmd.exe and a PowerShell login
  * shell) that prints the facts the preflight needs as one JSON line between markers. A missing thing is `null`, not an error.
- * WMI / CIM is refused to a non-administrator's SSH session (a network logon). The script tells that from "could not read" by the exception, never by its
- * localized text: UnauthorizedAccessException, HRESULT 0x80070005, or a NativeErrorCode of AccessDenied on a CimException (on a Win32Exception 2 is
- * file-not-found; the type is compared by name so none has to load), anywhere in the InnerException chain. The 8191-character command line is nearly
- * used up, so notes belong here, not in the script.
  * tailscale.exe is looked for on PATH and then in its installer's location, because an SSH session may not have it on PATH.
+ * The OS architecture comes from the registry because x64-emulated PowerShell reports X64 on Windows on ARM.
+ * JSON is ASCII-escaped because a cmd.exe login shell returns output in the OEM code page.
  */
 const WINDOWS_PREFLIGHT_SCRIPT = `
-$node = Get-Command node -ErrorAction SilentlyContinue | Select-Object -First 1
-$nodePath = $null
-$nodeVersion = $null
-if ($node) {
-  $nodePath = $node.Source
-  $nodeVersion = @(& $nodePath --version)[0]
+$n = Get-Command node -EA SilentlyContinue | Select-Object -First 1
+$np = $null
+$nv = $null
+if ($n) {
+$np = $n.Source
+$nv = @(& $np --version)[0]
 }
-$tailscale = Get-Command tailscale -ErrorAction SilentlyContinue | Select-Object -First 1
-$tailscalePath = $null
-if ($tailscale) { $tailscalePath = $tailscale.Source }
-elseif (Test-Path -LiteralPath (Join-Path $env:ProgramFiles 'Tailscale\\tailscale.exe')) { $tailscalePath = Join-Path $env:ProgramFiles 'Tailscale\\tailscale.exe' }
-$tailscaleIp = $null
-if ($tailscalePath) {
-  try { $tailscaleIp = @(& $tailscalePath ip -4 2>$null)[0] } catch { $tailscaleIp = $null }
+$ts = Get-Command tailscale -EA SilentlyContinue | Select-Object -First 1
+$tsPath = $null
+if ($ts) { $tsPath = $ts.Source }
+elseif (Test-Path (Join-Path $env:ProgramFiles 'Tailscale\\tailscale.exe')) { $tsPath = Join-Path $env:ProgramFiles 'Tailscale\\tailscale.exe' }
+$tsIp = $null
+$tsCli = 'missing'
+$td = $null
+$ns = 'not_checked'
+$nd = $null
+if ($tsPath) {
+try {
+$pref = $ErrorActionPreference
+$ErrorActionPreference = 'Continue'
+$out = @(& $tsPath ip -4 2>&1)
+$exit = $LASTEXITCODE
+$ErrorActionPreference = $pref
+$text = ($out | ForEach-Object { $_.ToString() }) -join ' '
+if ($exit -ne 0) {
+$tsCli = if ($text -match '\\b401\\b|Unauthorized|already in use by') { 'denied' } else { 'failed' }
+$td = "exit $exit : $text"
+} else {
+$tsIp = @($out | Where-Object { $_ -is [string] } | Select-Object -First 1)[0]
+$tsCli = if ($tsIp) { 'ok' } else { 'empty' }
 }
-# The native architecture of the OS from the registry: an x64-emulated PowerShell on Windows on ARM still reports X64 through
-# RuntimeInformation.OSArchitecture and $env:PROCESSOR_ARCHITECTURE, but this machine-wide value is the OS's own. Unreadable = null (refused with a reason).
+} catch {
+$ErrorActionPreference = $pref
+$tsCli = 'failed'
+$td = $_.Exception.Message
+}
+}
+if ($tsCli -eq 'denied') {
+try {
+$ns = 'empty'
+foreach ($a in [System.Net.NetworkInformation.NetworkInterface]::GetAllNetworkInterfaces()) {
+if ($a.OperationalStatus -ne 'Up' -or ($a.Name -notlike 'Tailscale*' -and $a.Description -notlike 'Tailscale*')) { continue }
+foreach ($u in $a.GetIPProperties().UnicastAddresses) {
+$ip = $u.Address
+if ($ip.AddressFamily -ne [System.Net.Sockets.AddressFamily]::InterNetwork) { continue }
+$bytes = $ip.GetAddressBytes()
+if ($bytes[0] -eq 100 -and $bytes[1] -ge 64 -and $bytes[1] -le 127) {
+$tsIp = $ip.ToString()
+$ns = 'found'
+break
+}
+}
+if ($ns -eq 'found') { break }
+}
+} catch {
+$ns = 'failed'
+$nd = $_.Exception.Message
+}
+}
 $arch = $null
-try { $arch = (Get-ItemProperty -LiteralPath 'HKLM:\\SYSTEM\\CurrentControlSet\\Control\\Session Manager\\Environment' -Name PROCESSOR_ARCHITECTURE -ErrorAction Stop).PROCESSOR_ARCHITECTURE } catch { $arch = $null }
-function Test-AccessDenied($ex) {
-  while ($ex) {
-    if ($ex -is [System.UnauthorizedAccessException]) { return $true }
-    if ($ex.HResult -eq -2147024891) { return $true }
-    $native = $ex.PSObject.Properties['NativeErrorCode']
-    if ($ex.GetType().FullName -eq 'Microsoft.Management.Infrastructure.CimException' -and $native -and ([string]$native.Value -eq 'AccessDenied' -or [string]$native.Value -eq '2')) { return $true }
-    $ex = $ex.InnerException
-  }
-  return $false
-}
+try { $arch = (Get-ItemProperty 'HKLM:\\SYSTEM\\CurrentControlSet\\Control\\Session Manager\\Environment' -Name PROCESSOR_ARCHITECTURE -EA Stop).PROCESSOR_ARCHITECTURE } catch { $arch = $null }
 $caption = $null
 $build = $null
-$cim = 'ok'
-try { $os = Get-CimInstance -ClassName Win32_OperatingSystem -ErrorAction Stop; $caption = $os.Caption; $build = $os.BuildNumber } catch { $caption = $null; $build = $null; if (Test-AccessDenied $_.Exception) { $cim = 'denied' } else { $cim = 'unreadable' } }
+try { $os = Get-ItemProperty 'HKLM:\\SOFTWARE\\Microsoft\\Windows NT\\CurrentVersion' -EA Stop; $build = $os.CurrentBuildNumber; $caption = $os.ProductName } catch { $caption = $null; $build = $null }
 $info = [ordered]@{
-  nodePath = $nodePath
-  nodeVersion = $nodeVersion
-  arch = $arch
-  windowsCaption = $caption
-  buildNumber = $build
-  cim = $cim
-  tailscaleIp = $tailscaleIp
-  home = $env:USERPROFILE
-  systemRoot = $env:SystemRoot
-  userId = [System.Security.Principal.WindowsIdentity]::GetCurrent().Name
+nodePath = $np
+nodeVersion = $nv
+arch = $arch
+windowsCaption = $caption
+buildNumber = $build
+tailscaleIp = $tsIp
+tailscaleCli = $tsCli
+tailscaleDetail = $td
+networkStatus = $ns
+networkDetail = $nd
+home = $env:USERPROFILE
+systemRoot = $env:SystemRoot
+userId = [System.Security.Principal.WindowsIdentity]::GetCurrent().Name
 }
 $global:LASTEXITCODE = 0
 Write-Output '${BEGIN_MARKER}'
-# ASCII only: a cmd.exe login shell returns the output in the OEM code page, which would garble a non-ASCII user name or path.
 $json = ConvertTo-Json -InputObject $info -Compress
 Write-Output ([regex]::Replace($json, '[^\\x00-\\x7F]', { param($m) '\\u{0:x4}' -f [int][char]$m.Value }))
 Write-Output '${END_MARKER}'
@@ -71,6 +102,7 @@ Write-Output '${END_MARKER}'
 
 /** The command line to send over SSH: the preflight script as an EncodedCommand. */
 export function buildWindowsPreflightCommand(): string {
+  // Keep the encoded command comfortably below the Windows command-line limit of 8191 characters.
   return powershellDialect.wrapScript(WINDOWS_PREFLIGHT_SCRIPT);
 }
 
@@ -80,8 +112,11 @@ const rawSchema = z.object({
   arch: z.string().nullable(),
   windowsCaption: z.string().nullable(),
   buildNumber: z.string().nullable(),
-  cim: z.enum(['ok', 'denied', 'unreadable']),
   tailscaleIp: z.string().nullable(),
+  tailscaleCli: z.enum(['ok', 'empty', 'missing', 'denied', 'failed']),
+  tailscaleDetail: z.string().nullable(),
+  networkStatus: z.enum(['not_checked', 'found', 'empty', 'failed']),
+  networkDetail: z.string().nullable(),
   home: z.string().min(1),
   systemRoot: z.string().min(1),
   userId: z.string().min(1),
@@ -97,9 +132,11 @@ export interface WindowsPreflightInfo {
   windowsVersion: string | null;
   /** The Windows build number (`17763` is Windows 10 1809 / Server 2019); null = unreadable. */
   buildNumber: number | null;
-  /** Whether `Get-CimInstance` (WMI) answered: `denied` = refused to this session (a non-administrator's SSH), `unreadable` = failed for another reason. */
-  cim: 'ok' | 'denied' | 'unreadable';
   tailscaleIp: string | null;
+  tailscaleCli: z.infer<typeof rawSchema>['tailscaleCli'];
+  tailscaleDetail: string | null;
+  networkStatus: z.infer<typeof rawSchema>['networkStatus'];
+  networkDetail: string | null;
   home: string;
   /** `%SystemRoot%` of the host (where `schtasks.exe` lives). */
   systemRoot: string;
@@ -126,14 +163,19 @@ export function parseWindowsPreflight(output: string, stderr = '', code: number 
   const raw = rawSchema.safeParse(json);
   if (!raw.success) throw new Error(`Could not read the Windows preflight (unexpected result: ${raw.error.message}).`);
   const v = raw.data;
+  const buildNumber = v.buildNumber && /^\d+$/.test(v.buildNumber.trim()) ? Number(v.buildNumber.trim()) : null;
+  const caption = v.windowsCaption ? v.windowsCaption.trim().replace(/^Microsoft\s+/, '') : null;
   return {
     nodePath: v.nodePath,
     nodeVersion: v.nodeVersion ? v.nodeVersion.trim().replace(/^v/, '') : null,
     arch: v.arch === null ? null : (ARCH_BY_REGISTRY_VALUE[v.arch] ?? v.arch),
-    windowsVersion: v.windowsCaption ? v.windowsCaption.trim().replace(/^Microsoft\s+/, '') : null,
-    cim: v.cim,
-    buildNumber: v.buildNumber && /^\d+$/.test(v.buildNumber.trim()) ? Number(v.buildNumber.trim()) : null,
+    windowsVersion: caption && buildNumber !== null && buildNumber >= 22000 ? caption.replace(/^Windows 10\b/, 'Windows 11') : caption,
+    buildNumber,
     tailscaleIp: v.tailscaleIp ? v.tailscaleIp.trim() : null,
+    tailscaleCli: v.tailscaleCli,
+    tailscaleDetail: v.tailscaleDetail ? redactSecretText(v.tailscaleDetail).slice(0, 300) : null,
+    networkStatus: v.networkStatus,
+    networkDetail: v.networkDetail ? redactSecretText(v.networkDetail).slice(0, 300) : null,
     home: v.home,
     systemRoot: v.systemRoot,
     userId: v.userId,
@@ -142,9 +184,6 @@ export function parseWindowsPreflight(output: string, stderr = '', code: number 
 
 /** Windows 10 1809 / Server 2019: the first build with `conhost.exe --headless` (ConPTY), which keeps the agent's console window from appearing. */
 const MIN_WINDOWS_BUILD = 17763;
-
-/** The reason for a WMI refusal. Shown as it is by the API and the UI. */
-export const WMI_DENIED_MESSAGE = 'Windows WMI is not available in this user\'s SSH session (the SSH session of a user who is not an administrator is refused WMI as network access). Install with an administrator account. Installing for a user who is not an administrator will be supported in v0.13.0 (https://github.com/wireframeslayout/azito/issues/559)';
 
 const IPV4 = /^\d+\.\d+\.\d+\.\d+$/;
 
@@ -160,16 +199,21 @@ export function checkWindowsPreflight(info: WindowsPreflightInfo): string[] {
   } else if (info.arch !== 'x64') {
     missing.push(`x86_64 architecture required (found: ${info.arch}; Windows on ARM is not supported)`);
   }
-  if (info.cim === 'denied') {
-    // The build number (and the firewall check after this) cannot be read: say why, and do not call it an old build.
-    missing.push(WMI_DENIED_MESSAGE);
-  } else if (info.buildNumber === null) {
+  if (info.buildNumber === null) {
     missing.push(`Could not read the Windows build number; Windows 10 version 1809 (build ${MIN_WINDOWS_BUILD}) or later is required`);
   } else if (info.buildNumber < MIN_WINDOWS_BUILD) {
     missing.push(`Windows 10 version 1809 (build ${MIN_WINDOWS_BUILD}) or later required (found: build ${info.buildNumber}); the agent runs under \`conhost.exe --headless\``);
   }
   if (!info.tailscaleIp || !IPV4.test(info.tailscaleIp)) {
-    missing.push(`Tailscale IP not found (got: ${info.tailscaleIp || 'empty'}; install Tailscale for Windows and sign in)`);
+    const guidance = info.tailscaleCli === 'missing' || info.tailscaleCli === 'empty' ? '; install Tailscale for Windows and sign in' : '';
+    const network = info.networkStatus === 'not_checked' ? '' : `; network address lookup: ${info.networkStatus}${info.networkDetail ? `: ${info.networkDetail}` : ''}`;
+    missing.push(`Tailscale IP not found (${describeTailscaleCli(info)}${network}${guidance})`);
   }
   return missing;
+}
+
+export function describeTailscaleCli(info: WindowsPreflightInfo): string {
+  const descriptions = { ok: 'CLI returned an invalid IP', empty: 'CLI returned no IP', missing: 'CLI not found', denied: 'CLI access denied for this Windows user (Tailscale may be in use by another user)', failed: 'CLI failed' };
+  const invalidIp = info.tailscaleCli === 'ok' && info.tailscaleIp ? ` (${redactSecretText(info.tailscaleIp).slice(0, 300)})` : '';
+  return `${descriptions[info.tailscaleCli]}${invalidIp}${info.tailscaleDetail ? `: ${info.tailscaleDetail}` : ''}`;
 }

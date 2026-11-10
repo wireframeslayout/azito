@@ -1,3 +1,4 @@
+import { LocalNetworkPermissionError } from '../localNetworkDiagnosis';
 import * as crypto from 'crypto';
 import * as fs from 'fs';
 import { Readable } from 'stream';
@@ -7,11 +8,11 @@ import type { AgentBundler } from './AgentBundler';
 import { AgentTransport } from '../transport/AgentTransport';
 import { HOST_PROBE_COMMAND, HostProfileError, parseHostProbe, type HostProfile } from '../../../shared/os/hostProfile';
 import { HOST_OS_PROBE_COMMAND, parseHostOsProbe } from './hostOsProbe';
-import { buildWindowsPreflightCommand, checkWindowsPreflight, parseWindowsPreflight, type WindowsPreflightInfo } from './windowsPreflight';
+import { buildWindowsPreflightCommand, checkWindowsPreflight, describeTailscaleCli, parseWindowsPreflight, type WindowsPreflightInfo } from './windowsPreflight';
 import { buildSha256VerifyCommand, buildSafeExtractCommand, readSha256FromSumsFile } from './integrityVerifier';
 import { KeyedMutex } from '../../../shared/keyedMutex';
 import { CLEANUP_LOCK_DIR, CLEANUP_TIMEOUT_MS, INSTALL_ID_FILE, MANUAL_STEPS_ANY_START, SYSTEMD_MANUAL_STEPS, buildCleanupGuardScript, buildCleanupScript, buildNohupSightingScript, cleanupMarkMessage, parseCleanupGuard, nohupManualSteps, parseCleanupOutcome, parseNohupSighting, type NohupSighting } from './unixAgentCleanup';
-import { WindowsAgentDeployer, windowsAgentLayout, type WindowsDeployment } from './WindowsAgentDeployer';
+import { WindowsAgentDeployer, windowsAgentLayout, type FirewallInspection, type WindowsDeployment } from './WindowsAgentDeployer';
 import { DEFAULT_WINDOWS_AGENT_OPTIONS, type WindowsAgentOptions } from './windowsAgentConfig';
 import { updateWindowsAgent, type AgentUpdateResult } from './windowsAgentUpdate';
 import type { WindowsUninstallChoice, WindowsUninstallResult } from './windowsAgentUninstall';
@@ -22,6 +23,8 @@ export interface InstallProgress {
   step: InstallStep;
   status: 'running' | 'ok' | 'error';
   message: string;
+  code?: string;
+  detail?: string;
 }
 
 /**
@@ -54,6 +57,8 @@ export interface InstallResult {
   startMethod: 'systemd' | 'nohup' | 'taskscheduler';
   steps: InstallProgress[];
   error?: string;
+  code?: string;
+  detail?: string;
   /** The host has tmux (the preflight found one). A host without it can only use misao, so the server must default to it. */
   tmuxFound?: boolean;
   /** The host's OS / architecture as the preflight read it; set when the install succeeded, for the caller to store with the server. */
@@ -118,6 +123,7 @@ export class AgentInstaller {
     private windowsAgent: WindowsAgentOptions,
     /** Absent for a hub that cannot install misao (no bundled copy): the agent is installed without it. */
     private misaoInstaller?: AgentMisaoInstaller,
+    private harnessPrefix = '',
   ) {
     // The overrides exist to try a second agent beside the real one; they are not saved per server, so a hub started without them
     // looks for the default task: say so once when they are in use.
@@ -136,8 +142,8 @@ export class AgentInstaller {
     muxRuntime?: string,
   ): Promise<InstallResult> {
     const steps: InstallProgress[] = [];
-    const report = (step: InstallStep, status: InstallProgress['status'], message: string) => {
-      const p: InstallProgress = { step, status, message };
+    const report = (step: InstallStep, status: InstallProgress['status'], message: string, diagnosis?: LocalNetworkPermissionError) => {
+      const p: InstallProgress = { step, status, message, ...(diagnosis ? { code: diagnosis.code, detail: diagnosis.detail } : {}) };
       steps.push(p);
       onProgress?.(p);
     };
@@ -154,8 +160,9 @@ export class AgentInstaller {
       report('preflight', 'ok', `Node ${preflight.nodeVersion}, ${preflight.hostProfile.platform} ${preflight.hostProfile.arch}, ${preflight.tmuxVersion ? `tmux ${preflight.tmuxVersion}` : 'no tmux (optional)'}`);
     } catch (err) {
       const msg = err instanceof HostProfileError ? `${err.code}: ${err.message}` : (err as Error).message;
-      report('preflight', 'error', msg);
-      return { success: false, host: '', port: AGENT_PORT, token, version, startMethod: 'nohup', steps, error: msg };
+      const diagnosis = err instanceof LocalNetworkPermissionError ? err : undefined;
+      report('preflight', 'error', msg, diagnosis);
+      return { success: false, host: '', port: AGENT_PORT, token, version, startMethod: 'nohup', steps, error: msg, ...(diagnosis ? { code: diagnosis.code, detail: diagnosis.detail } : {}) };
     }
 
     if (preflight.windows) return this.installOnWindows(sshHost, version, token, preflight, preflight.windows, steps, report);
@@ -381,7 +388,7 @@ export class AgentInstaller {
     return this.hostLocks.withLock(this.lockKey(sshHost), async () => {
       const probe = await this.sshClient.execIsolated(sshHost, buildWindowsPreflightCommand());
       const host = parseWindowsPreflight(probe.stdout, probe.stderr, probe.code);
-      return this.windowsDeployer().uninstall(sshHost, host, choice);
+      return this.windowsDeployer().uninstall(sshHost, host, choice, this.harnessPrefix);
     });
   }
 
@@ -494,6 +501,7 @@ export class AgentInstaller {
     const result = await this.sshClient.execIsolated(sshHost, buildWindowsPreflightCommand());
     const info = parseWindowsPreflight(result.stdout, result.stderr, result.code);
     const missing = checkWindowsPreflight(info);
+    if (info.networkStatus === 'found') console.warn(`[AgentInstaller] Windows preflight ${sshHost}: using network address; ${describeTailscaleCli(info)}`);
     if (missing.length > 0) {
       throw new Error(`Preflight failed:\n${missing.map(m => `  - ${m}`).join('\n')}`);
     }
@@ -700,6 +708,13 @@ export class AgentInstaller {
     await this.sshClient.execIsolated(sshHost, cmd);
   }
 
+  /** Reads (never changes) the Windows Firewall policy that decides whether the hub reaches the agent of the recognised task. */
+  async inspectAgentFirewall(sshHost: string, address: string, port: number): Promise<FirewallInspection> {
+    const probe = await this.sshClient.execIsolated(sshHost, buildWindowsPreflightCommand());
+    const host = parseWindowsPreflight(probe.stdout, probe.stderr, probe.code);
+    return this.windowsDeployer().inspectFirewall(sshHost, host, address, port);
+  }
+
   /**
    * Start an already-deployed agent, used to recover an agent left stopped after an update
    * flow was interrupted (e.g. by a hub restart between stop and start). Reuses the same
@@ -707,16 +722,16 @@ export class AgentInstaller {
    * (e.g. SSH connection failure) — the caller is expected to catch and re-check health
    * afterward regardless of outcome.
    */
-  recoverAgent(sshHost: string, tailscaleIp: string, token: string, hostProfile: HostProfile | null, muxRuntime?: string): Promise<'systemd' | 'nohup' | 'taskscheduler' | 'disabled'> {
-    return this.hostLocks.withLock(this.lockKey(sshHost), () => this.recoverAgentLocked(sshHost, tailscaleIp, token, hostProfile, muxRuntime));
+  recoverAgent(sshHost: string, tailscaleIp: string, token: string, hostProfile: HostProfile | null, muxRuntime?: string, force = false): Promise<'systemd' | 'nohup' | 'taskscheduler' | 'disabled' | 'starting'> {
+    return this.hostLocks.withLock(this.lockKey(sshHost), () => this.recoverAgentLocked(sshHost, tailscaleIp, token, hostProfile, muxRuntime, force));
   }
 
-  private async recoverAgentLocked(sshHost: string, tailscaleIp: string, token: string, hostProfile: HostProfile | null, muxRuntime?: string): Promise<'systemd' | 'nohup' | 'taskscheduler' | 'disabled'> {
+  private async recoverAgentLocked(sshHost: string, tailscaleIp: string, token: string, hostProfile: HostProfile | null, muxRuntime?: string, force = false): Promise<'systemd' | 'nohup' | 'taskscheduler' | 'disabled' | 'starting'> {
     if (hostProfile?.platform === 'win32') {
       // The settings and the task are already on the host: ask it who it is, then restart the logon task.
       const probe = await this.sshClient.execIsolated(sshHost, buildWindowsPreflightCommand());
-      const outcome = await this.windowsDeployer().restart(sshHost, parseWindowsPreflight(probe.stdout, probe.stderr, probe.code));
-      return outcome === 'disabled' ? 'disabled' : 'taskscheduler';
+      const outcome = await this.windowsDeployer().restart(sshHost, parseWindowsPreflight(probe.stdout, probe.stderr, probe.code), force);
+      return outcome === 'restarted' ? 'taskscheduler' : outcome;
     }
     await this.assertNoCleanupRunning(sshHost);
     return this.startAgent(sshHost, tailscaleIp, token, muxRuntime);

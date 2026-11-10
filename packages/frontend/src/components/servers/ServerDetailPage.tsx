@@ -30,7 +30,7 @@ export default function ServerDetailPage({ serverName, section }: ServerDetailPa
   const { t } = useTranslation('servers');
   const isMobile = useIsMobile();
   const {
-    server, servers, status, installStatus, installStatusError, sessions,
+    server, servers, status, installStatus, installStatusError, localNetworkDetail, sessions, sessionsState,
     windowById, taskById, muxDriverStatus,
     isolationReport, isolationReportUnavailable,
     isolationCleanupReport, isolationCleanupReportUnavailable,
@@ -75,6 +75,7 @@ export default function ServerDetailPage({ serverName, section }: ServerDetailPa
         installStatus={installStatus}
         installStatusError={installStatusError}
         sessions={sessions}
+        sessionsState={sessionsState}
       />
     );
   }
@@ -106,6 +107,7 @@ export default function ServerDetailPage({ serverName, section }: ServerDetailPa
               status={status}
               installStatus={installStatus}
               sessions={sessions}
+              sessionsState={sessionsState}
               isolationReport={isolationReport}
               isolationReportUnavailable={isolationReportUnavailable}
               isolationCleanupReport={isolationCleanupReport}
@@ -116,10 +118,10 @@ export default function ServerDetailPage({ serverName, section }: ServerDetailPa
             />
           )}
           {activeSection === 'setup' && (
-            <SetupSection server={server} installStatus={installStatus} installStatusError={installStatusError} refresh={refresh} />
+            <SetupSection server={server} installStatus={installStatus} installStatusError={installStatusError} localNetworkDetail={localNetworkDetail} refresh={refresh} />
           )}
           {activeSection === 'windows' && (
-            <WindowsSection server={server} sessions={sessions} refresh={refresh} windowById={windowById} taskById={taskById} windowMetaError={windowMetaError} />
+            <WindowsSection server={server} sessions={sessions} sessionsState={sessionsState} refresh={refresh} windowById={windowById} taskById={taskById} windowMetaError={windowMetaError} />
           )}
           {activeSection === 'danger' && (
             <DangerSection

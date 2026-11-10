@@ -8,7 +8,7 @@ const PIPE_PREFIX = '\\\\.\\pipe\\';
 
 /**
  * A PowerShell script that prints who holds a named pipe: the pid of the process that serves it (`GetNamedPipeServerProcessId`), the SID
- * of that process's owner (`GetOwnerSid`; empty when Windows does not say) and the SID of whoever runs the script, as `pid=`, `owner=`
+ * of that process's owner (from its process token; empty when Windows does not say) and the SID of whoever runs the script, as `pid=`, `owner=`
  * and `me=` lines.
  */
 export function pipeHolderScript(pipe: string): string {
@@ -18,10 +18,7 @@ export function pipeHolderScript(pipe: string): string {
     `$name = ${powershellDialect.quote(pipe.slice(PIPE_PREFIX.length))}`,
     '$serverPid = [AzitoPipeHolder]::ServerProcessId($name)',
     '$me = [Security.Principal.WindowsIdentity]::GetCurrent().User.Value',
-    '$owner = \'\'',
-    '$process = Get-CimInstance Win32_Process -Filter "ProcessId = $serverPid"',
-    // GetOwnerSid reports "access denied" and the like as a non-zero ReturnValue, not as an exception: only ReturnValue 0 with a SID is an answer.
-    'if ($process) { try { $r = Invoke-CimMethod -InputObject $process -MethodName GetOwnerSid -ErrorAction Stop; if ($r.ReturnValue -eq 0 -and $r.Sid -is [string]) { $owner = $r.Sid } } catch { } }',
+    '$owner = [AzitoPipeHolder]::OwnerSid($serverPid)',
     '"pid=$serverPid"',
     '"owner=$owner"',
     '"me=$me"',

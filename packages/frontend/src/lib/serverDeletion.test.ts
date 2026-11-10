@@ -281,6 +281,15 @@ describe('what the removal left on the host', () => {
   const FIREWALL = { id: 'firewall', outcome: 'skipped', detail: "1 inbound rule(s) were found and left in place:\n- Name {G}\nThen remove it in an Administrator PowerShell:\nRemove-NetFirewallRule -Name '{G}'" } as const;
   const MISAO = { id: 'misaoTask', outcome: 'skipped', detail: 'This misao is the hub\'s.' } as const;
 
+  it('accepts and displays both harness registration results', () => {
+    const steps = [
+      { id: 'claudeHarnessMcp', outcome: 'done' },
+      { id: 'codexHarnessMcp', outcome: 'skipped', detail: 'unverified' },
+    ] as const;
+    expect(readUninstallAnswer({ ok: true, steps })).toEqual({ kind: 'ok', steps });
+    expect(leftBehindOf(steps)).toEqual(steps);
+  });
+
   it('are the skipped steps that say why; steps that were done, absent or skipped without a reason are not', () => {
     const steps = [{ id: 'task', outcome: 'done' }, FIREWALL, { id: 'processes', outcome: 'absent' }, MISAO, { id: 'folder', outcome: 'skipped' }] as const;
     expect(leftBehindOf(steps)).toEqual([FIREWALL, MISAO]);

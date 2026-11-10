@@ -1,3 +1,4 @@
+import { formatWindowTitleLine, resolveWindowTitle } from '@azito/shared';
 // ─── Fastify instance assembly ───
 //
 // Registers plugins, HTTP routes, WebSocket handlers, static files, and the
@@ -83,6 +84,7 @@ import { mapAppError } from './mapAppError';
 import { TmuxHookManager, syncTmuxChangeHooks } from '../modules/tmux/TmuxHookManager';
 import { AgentEventStream } from '../modules/servers/transport/AgentEventStream';
 import { notifyAgentWatchesOnIdle } from '../modules/notifications/agentWatchBridge';
+import { notifyFirewallPush } from '../modules/notifications/firewallPush';
 import { asPaneHandle, type PaneOrdinal } from '@azito/shared';
 import { agentMisaoUpdateAvailable } from '../modules/system/misao/agentMisaoUpdate';
 import { describeMisaoDaemon, syncMisaoNodes } from '../modules/tmux/misao/misaoDriver';
@@ -144,6 +146,11 @@ export async function buildServer(app: FastifyInstance, wiring: Wiring, port: nu
     })).catch(() => {});
   });
 
+  notificationBus.on((event) => {
+    if (event.type !== 'server:firewall') return;
+    void notifyFirewallPush(event.payload.serverName, event.payload.diagnosis, pushSubRepo, pushService).catch((err: unknown) => app.log.warn({ err }, 'Firewall push failed'));
+  });
+
   // ─── Idle-watch push notifications (agent:activity → push, one-shot) ───
   // A user can register a one-shot "notify me when this pane goes idle" watch
   // via POST /api/agent-watches. When AgentActivityMonitor later emits
@@ -171,7 +178,8 @@ export async function buildServer(app: FastifyInstance, wiring: Wiring, port: nu
   // those is exactly the false-completion class this reason field exists to end.
   notificationBus.on((event) => {
     if (event.type !== 'agent:activity') return;
-    const { serverName, target, label, taskId, running, status, reason } = event.payload;
+    const { serverName, target, taskId, running, status, reason } = event.payload;
+    const label = formatWindowTitleLine(resolveWindowTitle({ ...event.payload, id: event.payload.windowId, tmuxTarget: target }));
 
     const resolveUrl = (): string => agentActivityPushUrl(event.payload, (id) => taskRepo.findById(id)?.projectId);
 
@@ -179,7 +187,7 @@ export async function buildServer(app: FastifyInstance, wiring: Wiring, port: nu
       const url = resolveUrl();
       const subs = pushSubRepo.findAll();
       pushService.sendToAll(subs, (sub) => ({
-        ...getPushMessage(sub.lang, 'agent.finished', { label: label || target, serverName }),
+        ...getPushMessage(sub.lang, 'agent.finished', { label, serverName }),
         data: { url, serverName, target },
       })).catch(() => {});
       return;
@@ -189,7 +197,7 @@ export async function buildServer(app: FastifyInstance, wiring: Wiring, port: nu
       const url = resolveUrl();
       const subs = pushSubRepo.findAll();
       pushService.sendToAll(subs, (sub) => ({
-        ...getPushMessage(sub.lang, 'agent.approvalRequired', { label: label || target, serverName }),
+        ...getPushMessage(sub.lang, 'agent.approvalRequired', { label, serverName }),
         data: { url, serverName, target, taskId },
       })).catch(() => {});
     }
@@ -469,6 +477,7 @@ export async function buildServer(app: FastifyInstance, wiring: Wiring, port: nu
   const repoDiscovery = new RepoDiscoveryService(transportFactory);
   const localRepoCloneService = new LocalRepoCloneService(wiring.hubGitSupport);
   await app.register(serversRoutes, {
+    firewallStatus: (server) => wiring.agentRecoveryWatchdog.firewallStatus(server),
     serverRepo, serverAliasRepo, tmux: tmuxClient, transportFactory, agentHostRecorder: wiring.agentHostRecorder, agentInstaller, agentBundler, harnessInstaller, tmuxInstaller, projectRepo, projectServerRepo, windowRepo, webhookToken, uiToken: wiring.uiToken, harnessPrefix, harnessHash: wiring.harnessUpdater.getHarnessHash(), harnessUpdater: wiring.harnessUpdater, auditLogService, serverIsolationMutex, scopedAuthEnabled, muxDriverRegistry, repoDiscovery,
     misaoDaemonStatus: async (srv) => {
       if (srv.type === 'local') return describeMisaoDaemon(wiring.misao.connection);
@@ -638,7 +647,19 @@ export async function buildServer(app: FastifyInstance, wiring: Wiring, port: nu
     resolveServerName: (name) => serverAliasRepo.resolve(name),
     recordAgentActivity: (signal) => agentActivityMonitor.recordHookSignal(signal),
     recordInteractionSignal: (signal) => interactionMonitor.recordSignal(signal),
+    recordSubagentSignal: async (serverName, paneId, sessionId) => {
+      try {
+        const resolved = await paneHandleResolver.resolveWindowByPaneHandle(serverName, asPaneHandle(paneId));
+        if (!resolved || resolved.ordinal !== 1) return;
+        const win = windowRepo.findById(resolved.windowId);
+        if (win?.agentSessionId?.toLowerCase() !== sessionId.toLowerCase()) return;
+        notificationBus.emit({ type: 'subagents:updated', payload: { windowId: win.id, sessionId: win.agentSessionId } });
+      } catch (err) {
+        app.log.warn(`Could not resolve subagent hook pane: ${err instanceof Error ? err.message : String(err)}`);
+      }
+    },
     misao: {
+      recordClaudeSessionHook: (serverName, paneId, sessionId, configDir, timestamp, explicit) => agentActivityMonitor.recordClaudeSessionHook(serverName, paneId, sessionId, configDir, timestamp, explicit),
       // A hook is fire-and-forget: an unreachable daemon is answered like an unknown pane (200, nothing recorded).
       resolvePane: async (serverName, paneId) => {
         const srv = serverRepo.findByName(serverName);
@@ -650,7 +671,7 @@ export async function buildServer(app: FastifyInstance, wiring: Wiring, port: nu
           return null;
         }
       },
-      recordAgentActivity: (serverName, tmuxTarget, event, sessionId) => agentActivityMonitor.recordResolvedHookSignal(serverName, tmuxTarget, event, sessionId),
+      recordAgentActivity: (serverName, tmuxTarget, event, sessionId, claudeConfigDir, paneOrdinal, explicit) => agentActivityMonitor.recordResolvedHookSignal(serverName, tmuxTarget, event, sessionId, claudeConfigDir, paneOrdinal, explicit),
     },
   });
   await app.register(agentSignalRoutes, { agentSignalService, verifyToken: verifyWebhookToken, auditLogService });
@@ -683,7 +704,7 @@ export async function buildServer(app: FastifyInstance, wiring: Wiring, port: nu
     serverRepo,
     transcriptPaneService: new TranscriptPaneService(claudeTranscriptSource, muxDriverRegistry, serverRepo),
     windowSessionResolver,
-    windowInputService: new WindowInputService(windowRepo, muxDriverRegistry, serverRepo),
+    windowInputService: new WindowInputService(windowRepo, muxDriverRegistry, serverRepo, transportFactory),
     windowRepo,
     interactionMonitor,
   });
@@ -856,12 +877,20 @@ export async function buildServer(app: FastifyInstance, wiring: Wiring, port: nu
 
   // ─── Task status → NotificationBus bridge ───
 
-  executeTaskUseCase.events.on('log', (entry: { taskId: number; type: string; content: { status?: string } }) => {
+  executeTaskUseCase.events.on('log', (entry: { taskId: number; type: string; content: { status?: string; reason?: string } }) => {
     if (entry.type !== 'status_change' || !entry.content.status) return;
     const task = taskRepo.findById(entry.taskId);
     notificationBus.emit({
       type: 'task:status',
-      payload: { taskId: entry.taskId, status: entry.content.status, title: task?.title, projectId: task?.projectId },
+      payload: {
+        taskId: entry.taskId,
+        status: entry.content.status,
+        title: task?.title,
+        projectId: task?.projectId,
+        // Notification-only statuses (e.g. worker_launch_failed, #639) carry a short reason code (not shown in the
+        // UI; the sentence comes from the frontend i18n); real status transitions have none and the field stays absent.
+        ...(entry.content.reason ? { reason: entry.content.reason } : {}),
+      },
     });
   });
 

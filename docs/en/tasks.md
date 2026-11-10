@@ -4,6 +4,8 @@
 
 A task is a unit of work assigned to a Unit (the team that runs an operation). Each task holds information such as a title, description, and priority, and is executed autonomously according to the Unit's UnitType (phase definition) and execution runtime (worker type, model). Which Sidekick (tagged skill package) runs each phase is determined by the Unit's `phase_config`.
 
+AZITO disables prompt suggestions when it starts a new Claude Code process. A window started outside AZITO or before this version may still show a suggestion. If the input cannot be distinguished from a draft, the task stops before sending; check the terminal and submit or clear the input before resuming.
+
 ## Creating a Task
 
 ### From the Workspace
@@ -281,6 +283,20 @@ If an agent's pane (tmux window) is lost while a task is running, the session re
 - The TaskPanel checks pane liveness every 30 seconds (`paneAlive` flag).
 - When the pane is lost, the status display changes to "lost" and a recovery button appears.
 - Clicking the recovery button restarts the agent using the saved session ID (`agent_session_id`) via `claude --resume <session-id>`.
+
+### When the Claude Code daemon (background) holds the conversation (#639)
+
+Claude Code (2.1.31x and later) sometimes moves a conversation under its daemon, e.g. when it restarts itself for an update. A conversation the daemon holds keeps running after its window is closed, and `claude --resume <id>` is refused with "That session is running in the background", leaving the window back at a shell. So a wake-up from sleep (respawn / legacy recovery) and the worker restart of a follow-up first ask `claude agents --json` whether the daemon holds that conversation.
+
+- When it does (a `kind: "background"` entry names that session id), the wake-up opens it with `claude attach <id>` as the daemon's client (`--resume` is never typed). attach does not change the session id, so the recorded one stays valid.
+- When it does not, the launch is `--resume`, as before.
+- When the check cannot be asked (an old CLI without the `agents` subcommand, a failed one), the launch is also `--resume`, and the execution log records `daemon_check_unavailable` with the reason. Why falling back to `--resume` is right: the `agents` listing and the daemon (background) feature entered Claude Code together — `claude --help` offers `attach` / `agents` and `--bg, --background` on the same versions — so a CLI without the listing cannot hold a conversation under the daemon either.
+- Sleeping does not stop a daemon-held conversation (`claude stop` is never typed). Attaching is expected to wake the conversation on the daemon side when it needs to, then open the client (unconfirmed on real versions).
+- The attach line carries the usual `CLAUDE_CODE_ENABLE_PROMPT_SUGGESTION=false` of every AZITO claude launch, for the client this pane starts; whether the daemon side honours it is unconfirmed.
+- After the launch line is typed, the pane's process tree is checked for the worker (single-pane windows only). When it did not come up (the CLI refused and left the shell), the execution log records `worker_launch_failed` (with the pane screen's tail) and a notification goes out through a notification-only `status_change` (the task's real status is not changed, the window is not destroyed). When the check itself cannot be answered (a process listing or pane pid that cannot be read), it records `worker_launch_unverified` instead.
+- **MCP blocking (#471's `--strict-mcp-config`) does NOT apply through attach**: attach opens a client of a conversation the daemon is already running with its own settings — the launch-time flags of the client mean nothing. When AZITO itself started that conversation, the daemon inherited the launch flags of that start (blocking included; UNCONFIRMED); a conversation the user started elsewhere keeps theirs.
+- On a Windows host the check is SKIPPED: an npm `claude` there is a `.cmd` shim the shell-less command runner cannot spawn, so the check would answer "unknown" on every recovery — the launch stays `--resume` and no `daemon_check_unavailable` is logged (a daemon-held conversation still refuses to resume there — not solved on Windows).
+- Windows with a saved pane layout are outside the post-launch check (known limit).
 
 ## Task Summary
 

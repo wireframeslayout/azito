@@ -1,7 +1,7 @@
+import type { ActivityTitleData } from '../../lib/windowDisplay';
 import { useActiveWindowRows } from '../../hooks/useActiveWindowRows';
 import { useAgentActivity } from '../../hooks/useAgentActivity';
 import { buildWindowTaskMap, lookupWindowTask } from '../../lib/windowTask';
-import { formatActiveWindowLabel } from '../../lib/windowDisplay';
 import { BrailleSpinner, BlockedDot, FinishedIndicator } from '../ui/WindowActivityIndicator';
 import { formatRelativeTime } from '../../utils/time';
 import { selectTaskTerminal } from './TaskPanel';
@@ -11,16 +11,17 @@ import { useMemo } from 'react';
 import { useTranslation } from 'react-i18next';
 
 export interface MobileActiveWindowsPanelProps {
+  titleData: ActivityTitleData;
   onClose: () => void;
   connectPane: (refOrServerName: TerminalRef | string, targetOrProjectId?: string | number, projectId?: number) => void;
   openTask: (taskId: number, title: string, projectId?: number) => void;
   taskWindows: Array<{ serverName: string; tmuxTarget: string; taskId: number }>;
 }
 
-export function MobileActiveWindowsPanel({ onClose, connectPane, openTask, taskWindows }: MobileActiveWindowsPanelProps) {
+export function MobileActiveWindowsPanel({ titleData, onClose, connectPane, openTask, taskWindows }: MobileActiveWindowsPanelProps) {
   const openTerminal = useOpenTerminalTarget(connectPane);
   const { t } = useTranslation(['workspace', 'tasks']);
-  const { rows } = useActiveWindowRows();
+  const { rows } = useActiveWindowRows(titleData);
   const { dismissFinished } = useAgentActivity();
   const windowTaskMap = useMemo(() => buildWindowTaskMap(taskWindows), [taskWindows]);
 
@@ -58,8 +59,7 @@ export function MobileActiveWindowsPanel({ onClose, connectPane, openTask, taskW
       ) : (
         rows.map((row) => {
           const taskId = row.taskId ?? lookupWindowTask(windowTaskMap, row.serverName, row.target);
-          const displayName = formatActiveWindowLabel(row);
-          const windowLabel = formatActiveWindowLabel(row);
+          const displayName = row.title;
           const isFinished = row.status === 'finished';
           const isBlocked = !isFinished && row.activityStatus === 'blocked';
 
@@ -107,11 +107,6 @@ export function MobileActiveWindowsPanel({ onClose, connectPane, openTask, taskW
                     </span>
                   )}
                 </div>
-                {windowLabel !== displayName && (
-                  <div style={{ fontSize: 'var(--font-xs)', color: 'var(--text-dim)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', marginTop: 1 }}>
-                    {windowLabel}
-                  </div>
-                )}
               </div>
               {isBlocked && (
                 <span style={{ fontSize: 'var(--font-2xs)', color: 'var(--warning)', background: 'rgba(210, 153, 34, 0.15)', borderRadius: 'var(--radius-sm)', padding: '1px 5px', flexShrink: 0 }}>

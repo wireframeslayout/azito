@@ -332,6 +332,20 @@ describe('MisaoMuxClient pane shell (per node)', () => {
 });
 
 describe('MisaoMuxClient writes', () => {
+  it('propagates a workspace creation failure', async () => {
+    const { daemon, client } = setup();
+    const failure = new Error('workspace creation failed');
+    daemon.failures.set('workspace.create', failure);
+    await expect(client.prepareWorkspace(server, 'proj')).rejects.toBe(failure);
+  });
+
+  it('prepares a workspace without opening a window or pane', async () => {
+    const { daemon, client } = setup();
+    await client.prepareWorkspace(server, 'proj');
+    expect(daemon.calls.map((c) => c.method)).toEqual(['workspace.create']);
+    expect(daemon.callsTo('workspace.create')[0]).toEqual({ name: 'proj' });
+  });
+
   it('openWorkspace creates workspace, window and a hub-labelled shell pane in order', async () => {
     const { daemon, client } = setup();
     const { ref, result } = await client.openWorkspace(server, 'proj', { windowName: 'main', exactName: true, extraEnv: { FOO: 'bar' } });
@@ -419,6 +433,12 @@ describe('MisaoMuxClient writes', () => {
   });
 
   describe('a window whose first pane is a program (a worker started with no shell: #371)', () => {
+    it('passes the program environment to the daemon alongside the window environment', async () => {
+      const { daemon, client } = setup({ windowsHub: true });
+      daemon.workspaces.set('proj', []);
+      await client.openWindow(server, 'proj', 'agent', { program: { argv: ['claude'], cols: 120, rows: 40, env: { CLAUDE_CODE_ENABLE_PROMPT_SUGGESTION: 'false' } } });
+      expect(daemon.callsTo('pane.open')[0]).toMatchObject({ ephemeralEnv: { CLAUDE_CODE_ENABLE_PROMPT_SUGGESTION: 'false' } });
+    });
     const program = { argv: ['claude', '--model', 'sonnet'], cwd: 'C:\\work\\wt', cols: 120, rows: 40 };
 
     it('openWorkspace opens the program as the first pane: its argv, cwd and size as given, the window env, the hub labels; no shell is resolved or typed into', async () => {
@@ -707,6 +727,22 @@ describe('MisaoMuxClient input', () => {
     expect(daemon.writes()).toEqual(['Enter', 'line1\nline2']);
   });
 
+  it('sends a multiline paste in a single bracketed write', async () => {
+    const wait = vi.fn(async () => {});
+    const { daemon, client } = setup({ wait });
+    const p = daemon.addPane(daemon.addWindow('proj', 'main'));
+    await client.pasteTextToHandle(server, handle(p), 'one\ntwo');
+    expect(daemon.writes()).toEqual(['\x1b[200~one\ntwo\x1b[201~']);
+    expect(wait).toHaveBeenCalledWith(3000);
+  });
+
+  it('removes injected paste terminators from explicit pastes', async () => {
+    const { daemon, client } = setup({ wait: async () => {} });
+    const p = daemon.addPane(daemon.addWindow('proj', 'main'));
+    await client.pasteTextToHandle(server, handle(p), 'a\x1b[201~b');
+    expect(daemon.writes()).toEqual(['\x1b[200~ab\x1b[201~']);
+  });
+
   it('waits after a long text before returning, so a following Enter is not folded into the paste', async () => {
     const wait = vi.fn(async () => {});
     const { daemon, client } = setup({ wait });
@@ -780,16 +816,17 @@ describe('MisaoMuxClient behind WindowInputService', () => {
     const { daemon, client } = setup();
     const w = daemon.addWindow('proj', 'main');
     const other = daemon.addWindow('proj', 'other');
-    const pane = daemon.addPane(w);
+    const pane = daemon.addPane(w, { fgCommand: 'claude', screen: '──────────────\n❯\n──────────────\nbypass permissions on' });
     const otherPane = daemon.addPane(other);
     const isPaneInMode = vi.spyOn(client, 'isPaneInModeByHandle');
     const registry = new MuxDriverRegistry();
     registry.register('misao', client);
-    const window = { id: 5, serverName: 'local', tmuxTarget: '', muxRef: refOf('proj', w), workerType: null } as unknown as Window;
+    const window = { id: 5, serverName: 'local', tmuxTarget: '', muxRef: refOf('proj', w), workerType: 'claude' } as unknown as Window;
     const service = new WindowInputService(
       { findById: () => window } as unknown as IWindowRepository,
       registry,
       { findByName: () => server } as unknown as IServerRepository,
+      { getTransport: () => ({ listProcesses: async () => [] }) } as unknown as import('../../servers/transport/TransportFactory').TransportFactory,
       async () => {},
     );
 

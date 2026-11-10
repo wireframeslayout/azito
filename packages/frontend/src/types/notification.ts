@@ -12,6 +12,12 @@ export interface AgentActivityPayload {
   taskId?: number;
   windowId?: number;
   label?: string;
+  labelSource?: 'auto' | 'user';
+  taskTitle?: string;
+  workerType?: string;
+  windowType?: string;
+  paneTitle?: string;
+  paneCommand?: string;
   projectId?: number;
   /** エージェントが承認待ち等でブロックされているか。省略時は 'working' 扱い（後方互換） */
   status?: 'working' | 'blocked';
@@ -37,7 +43,8 @@ export type AppNotificationKind =
   | 'execution_approval'
   | 'task_done'
   | 'task_failed'
-  | 'agent_finished';
+  | 'agent_finished'
+  | 'server_firewall';
 
 export interface AppNotification {
   id: string;
@@ -56,9 +63,18 @@ export interface AppNotification {
   createdAt: number;
 }
 
+export interface FirewallDiagnosis {
+  state: 'blocked' | 'missing_allow' | 'unknown';
+  blockedBy: string[];
+  commands: string[];
+  checkedAt: number;
+  networkCategory: string | null;
+}
+
 export type NotificationEvent =
+  | { type: 'server:firewall'; payload: { serverName: string; diagnosis: FirewallDiagnosis } }
   | { type: 'sessions:updated'; payload: { serverName: string } }
-  | { type: 'task:status'; payload: { taskId: number; status: string; title?: string; projectId?: number } }
+  | { type: 'task:status'; payload: { taskId: number; status: string; title?: string; projectId?: number; reason?: string } }
   | { type: 'phase:completed'; payload: { taskId: number; unitId: number; phase: string; summary: Record<string, unknown> | null } }
   | { type: 'window:created'; payload: { serverName: string; sessionName: string; windowName: string } }
   | { type: 'window:destroyed'; payload: { serverName: string; sessionName: string; windowName: string } }
@@ -67,6 +83,7 @@ export type NotificationEvent =
   | { type: 'agent:activity'; payload: AgentActivityPayload }
   | { type: 'browser:opened'; payload: BrowserOpenedPayload }
   | { type: 'supervisor:ready'; payload: { serverName: string; target: string; taskId?: number } }
+  | { type: 'subagents:updated'; payload: { windowId: number; sessionId: string } }
   | { type: 'workspace:refresh'; payload: Record<string, never> };
 
 export interface BrowserOpenedPayload {

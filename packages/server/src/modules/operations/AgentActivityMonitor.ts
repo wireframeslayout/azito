@@ -1,6 +1,7 @@
+import type { ITaskRepository } from '../tasks/Task';
 import type { ExecuteTaskUseCase } from '../tasks/execution/ExecuteTaskUseCase';
 import { ACTIVITY_THRESHOLD_SEC } from '../tasks/execution/WorkerWaiter';
-import type { AgentWindow, IWindowRepository } from '../windows/Window';
+import type { AgentWindow, IWindowRepository, Window } from '../windows/Window';
 import { isAgentWindow } from '../windows/Window';
 import type { TmuxSession, TmuxWindow } from '../tmux/types';
 import { windowSpecMatches } from '../tmux/types';
@@ -174,6 +175,12 @@ export interface AgentActivityEntry {
   operation: boolean;
   taskId?: number;
   label?: string;
+  labelSource?: 'auto' | 'user';
+  taskTitle?: string;
+  workerType?: string;
+  windowType?: string;
+  paneTitle?: string;
+  paneCommand?: string;
   projectId?: number;
   /**
    * Set when a title-aware source resolved the pane's state: either the
@@ -208,6 +215,9 @@ export interface AgentHookSignal {
   muxPaneRef?: string;
   /** Claude Code session id from the hook's stdin; updates the agent window's agent_session_id when it changed. */
   sessionId?: string;
+  claudeConfigDir?: string;
+  claudeConfigDirExplicit?: boolean;
+  hookTimestamp?: string;
 }
 
 interface HookState {
@@ -369,6 +379,12 @@ async function runWithConcurrency(tasks: Array<() => Promise<void>>, limit: numb
     }
   });
   await Promise.all(workers);
+}
+
+/** Only a first pane whose foreground command is known to be a shell; an unknown command or window is not. */
+function isFirstPaneKnownShell(window: TmuxWindow | null): boolean {
+  const firstPane = window?.panes[0];
+  return !!firstPane && firstPane.commandKnown !== false && isBareShellCommand(firstPane.command);
 }
 
 /** Whether the window lives in the misao mux: told by the window's own ref, not by the server's default mux. */
@@ -694,6 +710,7 @@ export class AgentActivityMonitor {
   private hookMatchedBy = new Map<string, 'muxPaneRef' | 'windowSpec'>();
 
   private sessionUpdates = new Map<string, SessionUpdate>();
+  private pendingClaudeHooks = new Map<string, { timestamp: string; sessionId: string; expiresAt: number }>();
 
   // Last MuxDriverUnavailableError reason logged per server, so a server whose driver is
   // unavailable is reported once (and again only if the reason changes) instead of every tick.
@@ -712,6 +729,7 @@ export class AgentActivityMonitor {
     private onActivityDetected?: (serverName: string, target: string) => void,
     private paneHandleResolver?: PaneHandleResolver,
     private onSessionIdUpdated?: (serverName: string, target: string, windowId: number, from: string | null, to: string, event: AgentHookSignal['event']) => void,
+    private taskRepo?: Pick<ITaskRepository, 'findById'>,
   ) {}
 
   start(): void {
@@ -795,14 +813,15 @@ export class AgentActivityMonitor {
     const at = Date.now();
 
     if (signal.muxPaneRef && this.paneHandleResolver) {
+      if (signal.event === 'session' && signal.claudeConfigDir && signal.sessionId && signal.hookTimestamp && signal.claudeConfigDirExplicit !== undefined) {
+        if (this.recordClaudeSessionHook(signal.serverName, signal.muxPaneRef, signal.sessionId, signal.claudeConfigDir, signal.hookTimestamp, signal.claudeConfigDirExplicit, () => this.recordHookSignal({ ...signal, muxPaneRef: undefined, claudeConfigDir: undefined, claudeConfigDirExplicit: undefined, hookTimestamp: undefined }))) return;
+      }
       const resolved = this.paneHandleResolver.getCached(signal.serverName, asPaneHandle(signal.muxPaneRef));
       if (resolved) {
-        this.recordResolvedHookSignal(signal.serverName, resolved.tmuxTarget, signal.event, signal.sessionId);
+        this.recordResolvedHookSignal(signal.serverName, resolved.tmuxTarget, signal.event, signal.sessionId, signal.claudeConfigDir, resolved.ordinal, signal.claudeConfigDirExplicit);
         return;
       }
-      if (resolved === undefined) {
-        this.paneHandleResolver.warm(signal.serverName, signal.muxPaneRef);
-      }
+      if (resolved === undefined) this.paneHandleResolver.warm(signal.serverName, signal.muxPaneRef);
     }
 
     for (const w of this.windowRepo.findAll()) {
@@ -828,16 +847,59 @@ export class AgentActivityMonitor {
     this.requestTick();
   }
 
+  /** Hold early SessionStart events until the window is registered; ignore older deliveries. */
+  recordClaudeSessionHook(serverName: string, paneHandle: string, sessionId: string, configDir: string, timestamp: string, explicit: boolean, onUnresolved?: () => void): boolean {
+    if (!this.paneHandleResolver || this.serverRepo.findByName(serverName)?.type !== 'local' || process.platform === 'win32') return false;
+    const key = `${serverName}::${paneHandle}`;
+    const previous = this.pendingClaudeHooks.get(key);
+    if (previous && BigInt(timestamp) <= BigInt(previous.timestamp)) return true;
+    const pending = { timestamp, sessionId, expiresAt: Date.now() + 15_000 };
+    this.pendingClaudeHooks.set(key, pending);
+    setTimeout(() => {
+      if (this.pendingClaudeHooks.get(key) === pending) this.pendingClaudeHooks.delete(key);
+    }, 60_000).unref();
+    const resolve = async (): Promise<void> => {
+      if (this.pendingClaudeHooks.get(key) !== pending) return;
+      try {
+        this.paneHandleResolver!.invalidatePane(serverName, paneHandle);
+        const result = await this.paneHandleResolver!.resolveWindowByPaneHandle(serverName, asPaneHandle(paneHandle));
+        if (this.pendingClaudeHooks.get(key) !== pending) return;
+        if (result) {
+          this.recordResolvedHookSignal(serverName, result.tmuxTarget, 'session', sessionId, configDir, result.ordinal, explicit);
+          return;
+        }
+      } catch (err) {
+        console.warn('[agent-activity] pane resolution failed:', err);
+      }
+      if (Date.now() < pending.expiresAt) setTimeout(() => { void resolve(); }, 2_000).unref();
+      else if (this.pendingClaudeHooks.get(key) === pending) {
+        this.pendingClaudeHooks.delete(key);
+        console.warn(`[agent-activity] could not resolve pane ${paneHandle} on ${serverName}; falling back to window matching`);
+        onUnresolved?.();
+      }
+    };
+    void resolve();
+    return true;
+  }
+
   /**
    * Record a Tier 1 hook signal for a window the caller already resolved
    * (by mux pane handle), then tick immediately.
    */
-  recordResolvedHookSignal(serverName: string, tmuxTarget: string, event: AgentHookSignal['event'], sessionId?: string): void {
+  recordResolvedHookSignal(serverName: string, tmuxTarget: string, event: AgentHookSignal['event'], sessionId?: string, claudeConfigDir?: string, paneOrdinal?: number, claudeConfigDirExplicit?: boolean): void {
     if (sessionId) {
       const target = this.windowRepo.findAll().find(
         (w): w is AgentWindow => w.serverName === serverName && isSameWindowTarget(w.tmuxTarget, tmuxTarget) && isAgentWindow(w),
       );
-      if (target) this.updateAgentSessionId(target, sessionId, event);
+      if (target && !target.sleeping) {
+        if (event === 'session' && claudeConfigDir && claudeConfigDirExplicit !== undefined && this.serverRepo.findByName(serverName)?.type === 'local' && process.platform !== 'win32') {
+          this.windowRepo.updateClaudeSessionByPane(serverName, target.tmuxTarget, paneOrdinal ?? null, sessionId, claudeConfigDir, claudeConfigDirExplicit);
+          if ((paneOrdinal === undefined || paneOrdinal === 1) && target.agentSessionId !== sessionId) {
+            this.sessionUpdates.set(windowKey(serverName, target.tmuxTarget), { from: target.agentSessionId, to: sessionId, at: Date.now(), event });
+            this.onSessionIdUpdated?.(serverName, target.tmuxTarget, target.id, target.agentSessionId, sessionId, event);
+          }
+        } else if (paneOrdinal === undefined || paneOrdinal === 1) this.updateAgentSessionId(target, sessionId, event);
+      }
     }
     if (event === 'session') return;
     const key = windowKey(serverName, tmuxTarget);
@@ -849,6 +911,7 @@ export class AgentActivityMonitor {
   /** Persist a changed Claude Code session id on an agent window so a respawn `--resume`s the live session. */
   private updateAgentSessionId(w: AgentWindow, sessionId: string | undefined, event: AgentHookSignal['event']): void {
     if (!sessionId || w.agentSessionId === sessionId) return;
+    if (event !== 'session' && w.claudeConfigDir) return;
     this.windowRepo.updateAgentSessionIdByWindow(w.serverName, w.tmuxTarget, sessionId);
     this.sessionUpdates.set(windowKey(w.serverName, w.tmuxTarget), { from: w.agentSessionId, to: sessionId, at: Date.now(), event });
     this.onSessionIdUpdated?.(w.serverName, w.tmuxTarget, w.id, w.agentSessionId, sessionId, event);
@@ -1066,8 +1129,11 @@ export class AgentActivityMonitor {
     const muxStatesAtStart = new Set(this.muxStates.values());
     const allWindows = this.windowRepo.findAll();
     this.windowIdByKey.clear();
+    const windowByKey = new Map<string, Window>();
     for (const w of allWindows) {
-      this.windowIdByKey.set(windowKey(w.serverName, w.tmuxTarget), w.id);
+      const key = windowKey(w.serverName, w.tmuxTarget);
+      this.windowIdByKey.set(key, w.id);
+      windowByKey.set(key, w);
     }
     const next = new Map<string, AgentActivityEntry>();
     const reasons = new Map<string, AgentActivityStopReason>();
@@ -1406,7 +1472,9 @@ export class AgentActivityMonitor {
       // rather than polled. Bypasses Tier 1/2/3 but sits below a supervisor
       // (whose rules are AZITO-controlled).
       const muxState = this.muxStates.get(key);
-      if (muxState) {
+      const shellBytes = muxState?.status === 'working' && muxState.decidedBy === 'bytes' && isMisaoWindow(w)
+        && isFirstPaneKnownShell(findLiveWindow(sessionsByServer.get(w.serverName) ?? [], w.tmuxTarget, w.muxRef));
+      if (muxState && !shellBytes) {
         const mapped = this.mapMuxStatus(muxState.status);
         if (mapped) {
           if (mapped.state === 'idle') {
@@ -1753,18 +1821,22 @@ export class AgentActivityMonitor {
     // Tier 0 idle → blocked refinement, for the keys queued above only.
     await this.refineTier0IdleKeys(tier0IdlePending, servers, sessionsByServer, sessionErrors, next, reasons, decisions);
 
-    // Enrich all entries with paneName from live session data
+    // Attach the same title inputs to every activity source.
     for (const [key, entry] of next) {
-      if (entry.paneName) continue;
+      const dbWin = windowByKey.get(key);
       const sessions = sessionsByServer.get(entry.serverName);
-      if (!sessions) continue;
-      const dbWin = allWindows.find((aw) => windowKey(aw.serverName, aw.tmuxTarget) === key);
-      const win = findLiveWindow(sessions, entry.target, dbWin?.muxRef);
-      if (!win) continue;
+      const win = sessions && findLiveWindow(sessions, entry.target, dbWin?.muxRef);
       const { windowSpec } = parseWindowTarget(entry.target);
-      const pi = extractPaneIndex(windowSpec, win.index, win.name);
-      const name = getRelevantPaneName(win.panes, pi);
-      if (name) next.set(key, { ...entry, paneName: name });
+      const pi = win ? extractPaneIndex(windowSpec, win.index, win.name) : null;
+      const relevant = win ? selectRelevantPanes(win.panes, pi) : [];
+      const pane = relevant.find((p) => p.active) ?? relevant[0];
+      const taskId = dbWin?.taskId ?? entry.taskId;
+      next.set(key, {
+        ...entry,
+        ...(dbWin ? { label: dbWin.label ?? undefined, labelSource: dbWin.labelSource, workerType: dbWin.workerType ?? undefined, windowType: dbWin.windowType } : {}),
+        ...(taskId != null ? { taskTitle: this.taskRepo?.findById(taskId)?.title } : {}),
+        ...(pane ? { paneTitle: pane.title, paneCommand: pane.command, paneName: getRelevantPaneName(win!.panes, pi) } : {}),
+      });
     }
 
     // Expire `done` mux entries: the agent session is finished, so the mux's
@@ -2220,6 +2292,9 @@ export class AgentActivityMonitor {
       // own task_done. recentOperationMeta keeps that attribution alive for a
       // short window after the run leaves getRunning().
       const operationMeta = this.recentOperationMeta.get(key);
+      const windowId = this.windowIdByKey.get(key);
+      const win = windowId == null ? undefined : this.windowRepo.findById(windowId);
+      const taskId = operationMeta?.taskId ?? probe.taskId;
       this.notificationBus.emit({
         type: 'agent:activity',
         payload: {
@@ -2228,10 +2303,14 @@ export class AgentActivityMonitor {
           running: false,
           source: operationMeta ? 'operation' : 'manual',
           operation: operationMeta !== undefined,
-          taskId: operationMeta?.taskId ?? probe.taskId,
-          label: probe.label,
+          taskId,
+          label: win?.label ?? probe.label,
+          labelSource: win?.labelSource,
+          workerType: win?.workerType ?? undefined,
+          windowType: win?.windowType,
+          taskTitle: taskId == null ? undefined : this.taskRepo?.findById(taskId)?.title,
           projectId: probe.projectId,
-          windowId: this.windowIdByKey.get(key),
+          windowId,
           reason: 'completed',
         },
       });
@@ -2261,6 +2340,12 @@ export class AgentActivityMonitor {
             operation: entry.operation,
             taskId: entry.taskId,
             label: entry.label,
+            labelSource: entry.labelSource,
+            taskTitle: entry.taskTitle,
+            workerType: entry.workerType,
+            windowType: entry.windowType,
+            paneTitle: entry.paneTitle,
+            paneCommand: entry.paneCommand,
             projectId: entry.projectId,
             status: entry.status,
             paneName: entry.paneName,
@@ -2293,6 +2378,12 @@ export class AgentActivityMonitor {
             operation: entry.operation,
             taskId: entry.taskId,
             label: entry.label,
+            labelSource: entry.labelSource,
+            taskTitle: entry.taskTitle,
+            workerType: entry.workerType,
+            windowType: entry.windowType,
+            paneTitle: entry.paneTitle,
+            paneCommand: entry.paneCommand,
             projectId: entry.projectId,
             paneName: entry.paneName,
             windowId: entry.windowId,

@@ -1,0 +1,11 @@
+{
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "rootDir": ".",
+    "noEmit": true,
+    // Vitest loads this ESM config with Vite; src is checked separately with Node16.
+    "module": "ESNext",
+    "moduleResolution": "bundler"
+  },
+  "include": ["vitest.config.ts", "vitest.windowsExclude.ts"]
+}

@@ -13,6 +13,7 @@ function baseWindow(overrides: Partial<Omit<Window, 'id' | 'createdAt'>> = {}): 
     serverName: 'local-server',
     tmuxTarget: 'proj:win1',
     label: null,
+    labelSource: 'auto',
     isPrimary: false,
     windowType: 'terminal',
     workerType: null,
@@ -224,5 +225,48 @@ describe('SqliteWindowRepository.adoptForTask', () => {
     expect(w.projectId).toBe(projectId);
     expect(repo.findByTask(taskA).map((x) => x.id)).toEqual([id]);
     expect(repo.findByServerAndTarget('local-server', 'azito:win--qvp6')?.id).toBe(id);
+  });
+});
+
+
+describe('window label source', () => {
+  it('defaults new rows to auto and persists user labels atomically', () => {
+    const db = buildSeededDb();
+    const repo = new SqliteWindowRepository(db);
+    const projectId = insertProject(db, 'Labels');
+    const id = repo.add(baseWindow({ projectId, label: 'generated' }));
+    expect(repo.findById(id)?.labelSource).toBe('auto');
+    repo.update(id, { label: 'chosen', labelSource: 'user' });
+    expect(repo.findById(id)).toMatchObject({ label: 'chosen', labelSource: 'user' });
+    repo.add(baseWindow({ projectId, label: 'generated again' }));
+    expect(repo.findById(id)).toMatchObject({ label: 'chosen', labelSource: 'user' });
+    expect(() => db.prepare("UPDATE windows SET label_source = 'invalid' WHERE id = ?").run(id)).toThrow();
+    db.close();
+  });
+});
+
+describe('Claude configuration directories', () => {
+  it('preserves each pane session when capturing a layout and clears a changed window session', () => {
+    const db = buildSeededDb();
+    const repo = new SqliteWindowRepository(db);
+    const projectId = insertProject(db, 'Claude');
+    const id = repo.add(baseWindow({ projectId }));
+    repo.updateClaudeSessionByPane('local-server', 'proj:win1', 1, 'first', '/first', false);
+    repo.updateClaudeSessionByPane('local-server', 'proj:win1', 2, 'second', '/second', true);
+    expect(repo.findById(id)?.claudeConfigDirExplicit).toBe(false);
+    repo.updatePaneLayout(id, { layout: '', panes: [
+      { index: 0, ordinal: 1, command: null, workingDirectory: null, title: null },
+      { index: 1, ordinal: 2, command: null, workingDirectory: null, title: null },
+    ] });
+    expect(repo.findById(id)?.paneLayout?.panes.map((p) => [p.agentSessionId, p.claudeConfigDir])).toEqual([
+      ['first', '/first'], ['second', '/second'],
+    ]);
+    repo.updateClaudeSessionByPane('local-server', 'proj:win1', 2, 'third', '/third', false);
+    expect(repo.findById(id)?.paneLayout?.panes[1]).toMatchObject({ agentSessionId: 'third', claudeConfigDir: '/third', claudeConfigDirExplicit: false });
+    repo.updateAgentSessionIdByWindow('local-server', 'proj:win1', 'new');
+    expect(repo.findById(id)?.claudeConfigDir).toBeNull();
+    expect(repo.findById(id)?.paneLayout?.panes[0]).toMatchObject({ agentSessionId: 'new' });
+    expect(repo.findById(id)?.paneLayout?.panes[0].claudeConfigDir).toBeUndefined();
+    db.close();
   });
 });

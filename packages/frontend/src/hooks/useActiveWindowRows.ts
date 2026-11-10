@@ -1,14 +1,22 @@
 import { useMemo } from 'react';
+import { resolveActivityTitle, type ActivityTitleData } from '../lib/windowDisplay';
 import { useAgentActivity } from './useAgentActivity';
 import { activityKey, activityKeyForEntry } from '../lib/finishedWindows';
 import type { FinishedEntry } from '../lib/finishedWindows';
 
 export interface ActiveWindowRow {
+  title: string;
   key: string;
   serverName: string;
   target: string;
   windowId?: number;
   label?: string;
+  labelSource?: 'auto' | 'user';
+  taskTitle?: string;
+  workerType?: string;
+  windowType?: string;
+  paneTitle?: string;
+  paneCommand?: string;
   taskId?: number;
   projectId?: number;
   status: 'running' | 'finished';
@@ -17,18 +25,25 @@ export interface ActiveWindowRow {
   paneName?: string;
 }
 
-export function useActiveWindowRows() {
+export function useActiveWindowRows(data: ActivityTitleData) {
   const { entries, finishedEntries } = useAgentActivity();
 
   const rows = useMemo<ActiveWindowRow[]>(() => {
     const running: ActiveWindowRow[] = Array.from(entries.values())
       .filter((e) => e.running)
       .map((e) => ({
+        title: resolveActivityTitle(e, data),
         key: activityKey(e.serverName, e.target, e.windowId),
         serverName: e.serverName,
         target: e.target,
         windowId: e.windowId,
         label: e.label,
+        labelSource: e.labelSource,
+        taskTitle: e.taskTitle,
+        workerType: e.workerType,
+        windowType: e.windowType,
+        paneTitle: e.paneTitle,
+        paneCommand: e.paneCommand,
         taskId: e.taskId,
         projectId: e.projectId,
         status: 'running',
@@ -39,11 +54,18 @@ export function useActiveWindowRows() {
     const finishedRows: ActiveWindowRow[] = finishedEntries
       .filter((e) => !runningKeys.has(activityKeyForEntry(e)))
       .map((e) => ({
+        title: resolveActivityTitle(e, data),
         key: activityKeyForEntry(e),
         serverName: e.serverName,
         target: e.target,
         windowId: e.windowId,
         label: e.label,
+        labelSource: e.labelSource,
+        taskTitle: e.taskTitle,
+        workerType: e.workerType,
+        windowType: e.windowType,
+        paneTitle: e.paneTitle,
+        paneCommand: e.paneCommand,
         taskId: e.taskId,
         projectId: e.projectId,
         status: 'finished',
@@ -51,7 +73,7 @@ export function useActiveWindowRows() {
         paneName: e.paneName,
       }));
     return [...running, ...finishedRows];
-  }, [entries, finishedEntries]);
+  }, [entries, finishedEntries, data]);
 
   const blockedCount = rows.filter((r) => r.status === 'running' && r.activityStatus === 'blocked').length;
 

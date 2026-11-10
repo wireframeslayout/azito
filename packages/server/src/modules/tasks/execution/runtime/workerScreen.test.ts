@@ -1,7 +1,14 @@
 import { describe, it, expect } from 'vitest';
-import { readFileSync } from 'node:fs';
-import { join } from 'node:path';
-import { blockingWorkerDialog, hasUserMessageAbove, detectWorkerDialog, inputHoldsLine, isWorkerBusy, isWorkerScreenReady, readInputBox, showsTurnEnd, tuiAgentKindOf, tuiAgentKindOfWorkerType } from './workerScreen';
+import { fixture } from './fixtures/readFixture';
+import { blockingWorkerDialog, hasUserMessageAbove, detectWorkerDialog, inputHoldsLine, isWorkerBusy, isWorkerScreenReady, readInputBox, screenAboveInput, showsTurnEnd, tuiAgentKindOf, tuiAgentKindOfWorkerType } from './workerScreen';
+
+it('records indistinguishable Claude suggestion and same-text draft at the start cursor', () => {
+  const suggestion = fixture('claude-2.1.319-tmux-ghost.ansi');
+  const draft = fixture('claude-2.1.319-tmux-same-draft-start.ansi');
+  expect(suggestion).toBe(draft);
+  expect(suggestion).toContain('❯ \x1b[7mg\x1b[0mive another tip');
+  expect(readInputBox('claude', suggestion)).toEqual({ state: 'filled', text: 'give another tip' });
+});
 
 describe('tuiAgentKindOf', () => {
   it('reads the agent from the launch line', () => {
@@ -123,9 +130,6 @@ describe('claude screens', () => {
   });
 });
 
-/** A screen taken from a real pane (see fixtures/): Claude Code 2.1.310 on Linux and Windows, codex 0.164.0 on Windows. */
-const fixture = (name: string): string => readFileSync(join(__dirname, 'fixtures', name), 'utf8');
-
 describe('readInputBox on the screens of real panes (#532)', () => {
   const LINE = 'AZITO prompt file. Read the file named at the end of this line and carry out every instruction in it exactly: C:/Users/SERVER~1/AppData/Local/Temp/azito-prompt-99-0123456789abcdef.md';
 
@@ -173,6 +177,85 @@ describe('readInputBox on the screens of real panes (#532)', () => {
     });
   });
 
+  describe('synthetic Codex composer with and without a named rule (not a real screen)', () => {
+    it.each([false, true])('reads empty and filled input with named rule: %s', (named) => {
+      const prefix = named ? `${'─'.repeat(40)} session name ─\n` : '';
+      expect(readInputBox('codex', `${prefix}› Ask Codex to do anything\n\n? for shortcuts`)).toEqual({ state: 'empty' });
+      expect(readInputBox('codex', `${prefix}› draft\n\n? for shortcuts`)).toEqual({ state: 'filled', text: 'draft' });
+    });
+  });
+
+  describe('Claude Code 2.1.317 named input', () => {
+    const captured = fixture('claude-2.1.317-named-empty.txt');
+    const rule = '─'.repeat(40);
+    const named = `${rule} session name ─`;
+    it('reads the captured empty input and its modified draft', () => {
+      expect(readInputBox('claude', captured)).toEqual({ state: 'empty' });
+      expect(readInputBox('claude', captured.replace('❯ \n', '❯ draft\n'))).toEqual({ state: 'filled', text: 'draft' });
+      expect(screenAboveInput('claude', captured)).toContain('Worked for 13s');
+      expect(screenAboveInput('claude', captured)).not.toContain('rc3-chat の挨拶応答 ─');
+    });
+    it.each(['long session name', '長いセッション名'])('rejects a narrow named rule with fewer than ten left strokes: %s', (name) => {
+      expect(readInputBox('claude', `${'─'.repeat(9)} ${name} ─\n❯\n${rule}\nbypass permissions on`)).toEqual({ state: 'unknown' });
+    });
+    it('rejects incomplete, old and ambiguous frames, including rules inside a draft', () => {
+      for (const screen of [
+        `${named}\n❯ draft\n${rule.slice(0, 20)} ${rule.slice(20)}\nbypass permissions on`,
+        `${named}\n❯\n${rule}\n● reply\n${named}\n❯ draft\nbypass permissions on`,
+        `${named}\n❯ draft\n${named}\n❯ fake\n${rule}\nbypass permissions on`,
+        `${named}\n❯ draft\n${rule}\n${rule}\nbypass permissions on`,
+      ]) expect(readInputBox('claude', screen)).toEqual({ state: 'unknown' });
+    });
+    it('does not confuse a named rule in history with the current input', () => {
+      expect(readInputBox('claude', `● conversation\n${named}\nmore text\n${rule}\n❯\n${rule}\nbypass permissions on`)).toEqual({ state: 'empty' });
+      expect(readInputBox('claude', `${named}\n❯ first\n  second\n${rule}\nbypass permissions on`)).toEqual({ state: 'filled', text: 'firstsecond' });
+    });
+    it.each([
+      ['a plain rule', rule],
+      ['a named rule', named],
+    ])('reads the current input below %s followed by an earlier message and its reply', (_label, historyRule) => {
+      const history = `${historyRule}\n\n❯ an earlier message\n  second line\n\n● reply\n  more reply\n\n`;
+      const screen = (input: string): string => `${history}${named}\n${input}\n${rule}\n  bypass permissions on`;
+      expect(readInputBox('claude', screen('❯ '))).toEqual({ state: 'empty' });
+      expect(readInputBox('claude', screen('❯ draft'))).toEqual({ state: 'filled', text: 'draft' });
+      expect(screenAboveInput('claude', screen('❯ '))).toContain('● reply');
+      expect(isWorkerBusy('claude', `${history}✽ Spinning…\n\n${named}\n❯ \n${rule}\n  bypass permissions on`)).toBe(true);
+    });
+    it('reads the captured input with a rule, a message and a reply scrolled above it', () => {
+      expect(readInputBox('claude', `${rule}\n● text\n\n❯ earlier\n\n● reply\n\n${captured}`)).toEqual({ state: 'empty' });
+      expect(readInputBox('claude', `${rule}\n❯ earlier\n\n● reply\n\n${captured}`)).toEqual({ state: 'empty' });
+    });
+    it('still rejects a frame whose upper rule may be text of a draft: nothing but the prompt and its indented continuation lie above it', () => {
+      expect(readInputBox('claude', `${named}\n❯ draft\n  more draft\n${named}\n❯ \n${rule}\nbypass permissions on`)).toEqual({ state: 'unknown' });
+      expect(readInputBox('claude', `${rule}\n❯ draft\n${rule}\n❯ \n${rule}\nbypass permissions on`)).toEqual({ state: 'unknown' });
+    });
+    it.each([
+      ['two rules with text between them', `❯ a\n  ${rule}\n  b\n  ${rule}\n  ❯`],
+      ['two adjacent rules', `❯ a\n  ${rule}\n  ${rule}\n  ❯`],
+      ['a prompt line between the rules', `❯ a\n  ${rule}\n  ❯ b\n  ${rule}\n  ❯`],
+      ['blank lines between the lines', `❯ a\n\n  ${rule}\n\n  b\n\n  ${rule}\n\n  ❯`],
+    ])('does not read a draft as empty when it holds %s and ends in a bare prompt', (_label, draft) => {
+      expect(readInputBox('claude', `${named}\n${draft}\n${rule}\nbypass permissions on`)).toEqual({ state: 'unknown' });
+    });
+    it.each([
+      ['a prompt at the start', `❯ draft line\n  ${rule}\n  >`],
+      ['only indented continuation visible', `  draft line\n  ${rule}\n  >`],
+    ])('rejects a clipped draft with %s', (_label, draft) => {
+      const screen = `${draft}\n${'  continuation\n'.repeat(45)}${rule}\nbypass permissions on\n`;
+      expect(screen.split('\n').length - 1).toBe(50);
+      expect(readInputBox('claude', screen)).toEqual({ state: 'unknown' });
+    });
+    it('reads short screens with an upper rule at the first line', () => {
+      for (const ending of ['', '\n']) {
+        expect(readInputBox('claude', `${rule}\n❯\n${rule}\nbypass permissions on${ending}`)).toEqual({ state: 'empty' });
+        expect(readInputBox('claude', `${rule}\n❯ draft\n${rule}\nbypass permissions on${ending}`)).toEqual({ state: 'filled', text: 'draft' });
+      }
+    });
+    it('reads the current input below a reply whose text holds rules', () => {
+      expect(readInputBox('claude', `❯ earlier\n\n● reply\n  ${rule}\n  more\n  ${rule}\n\n${named}\n❯ \n${rule}\nbypass permissions on`)).toEqual({ state: 'empty' });
+    });
+  });
+
   describe('Claude Code 2.1.310', () => {
     it('the box between the last two rules is empty at rest, while working, and after it finished (a long history above it)', () => {
       for (const name of ['claude-2.1.310-win-idle-after-done.txt', 'claude-2.1.310-linux-working.txt', 'claude-2.1.310-linux-done.txt', 'claude-2.1.310-linux-after-submit.txt', 'claude-2.1.310-linux-just-submitted.txt']) {
@@ -192,18 +275,18 @@ describe('readInputBox on the screens of real panes (#532)', () => {
       expect(inputHoldsLine(box, 'AZITO prompt file. x: /tmp/azito-prompt-4-0123456789abcdef.md')).toBe(true);
     });
 
-    it('the hint of an empty input ("Try ...") is empty, a draft is filled, a screen without a box is unknown', () => {
+    it('a hint that could also be a draft is unknown, a draft is filled, and a screen without a box is unknown', () => {
       const rule = '─'.repeat(60);
-      expect(readInputBox('claude', `${rule}\n❯ Try "fix lint errors"\n${rule}\n  bypass permissions on (shift+tab to cycle)`)).toEqual({ state: 'empty' });
+      expect(readInputBox('claude', `${rule}\n❯ Try "fix lint errors"\n${rule}\n  bypass permissions on (shift+tab to cycle)`)).toEqual({ state: 'ambiguous', text: 'Try "fix lint errors"' });
       expect(readInputBox('claude', `${rule}\n❯ check the logs\n${rule}\n  bypass permissions on (shift+tab to cycle)`)).toEqual({ state: 'filled', text: 'check the logs' });
       expect(readInputBox('claude', 'bypass permissions on (shift+tab to cycle)')).toEqual({ state: 'unknown' });
       expect(readInputBox('claude', '')).toEqual({ state: 'unknown' });
     });
 
-    it('the queued-message placeholder of a busy turn is an empty input', () => {
+    it('the queued-message placeholder cannot be distinguished from a draft', () => {
       const screen = fixture('claude-2.1.310-linux-queued-placeholder.txt');
       expect(screen).toContain('Press up to edit queued messages');
-      expect(readInputBox('claude', screen)).toEqual({ state: 'empty' });
+      expect(readInputBox('claude', screen)).toEqual({ state: 'ambiguous', text: 'Press up to edit queued messages' });
     });
 
     it('an old empty frame in the history is not the input when the current input below it cannot be read', () => {

@@ -164,7 +164,7 @@ function makeOpts(existingTask: Task): { opts: TasksRouteOptions; createCalls: R
       findByServer: vi.fn(() => []),
       findByServerAndSession: vi.fn(() => []),
       update: vi.fn(),
-      updateAgentSessionIdByWindow: vi.fn(),
+      updateAgentSessionIdByWindow: vi.fn(), updateClaudeSessionByPane: vi.fn(),
       remove: vi.fn(),
       removeByServerAndTarget: vi.fn(() => 0),
       updatePaneLayout: vi.fn(),
@@ -632,7 +632,7 @@ describe('recover-session and restore — a host that cannot run a worker in a p
   it('recover-session (window-record path) answers 501 unsupported_os', async () => {
     const { opts } = makeOpts(makeTask({ status: 'review' }));
     opts.windowRepo.findByTask = vi.fn(() => [
-      { id: 1, ownerType: 'task' as const, projectId: null, taskId: 1, serverName: 'test-server', tmuxTarget: 'azito:task-1.1', label: 'task-1', isPrimary: true, windowType: 'agent' as const, workerType: 'claude', workerModel: 'opus', agentSessionId: null, launchCommand: null, workingDirectory: null, paneLayout: null, sleeping: false, createdAt: '' },
+      { id: 1, ownerType: 'task' as const, projectId: null, taskId: 1, serverName: 'test-server', tmuxTarget: 'azito:task-1.1', label: 'task-1', labelSource: 'auto' as const, isPrimary: true, windowType: 'agent' as const, workerType: 'claude', workerModel: 'opus', agentSessionId: null, launchCommand: null, workingDirectory: null, paneLayout: null, sleeping: false, createdAt: '' },
     ]);
     opts.respawnService = { respawn: vi.fn(async () => { throw refuse(); }) } as unknown as TasksRouteOptions['respawnService'];
     const res = await (await appWith(opts)).inject({ method: 'POST', url: '/api/tasks/1/recover-session' });
@@ -662,7 +662,7 @@ describe('POST /api/tasks/:id/recover-session — execution gate (Issue #328)', 
   it('translates WindowRespawnService gate errors into the same HTTP shape as /execute (window-record path)', async () => {
     const { opts } = makeOpts(makeTask({ inputTrust: 'untrusted', status: 'pending_approval' }));
     opts.windowRepo.findByTask = vi.fn(() => [
-      { id: 1, ownerType: 'task' as const, projectId: null, taskId: 1, serverName: 'test-server', tmuxTarget: 'azito:task-1.1', label: 'task-1', isPrimary: true, windowType: 'agent' as const, workerType: 'claude', workerModel: 'opus', agentSessionId: null, launchCommand: null, workingDirectory: null, paneLayout: null, sleeping: false, createdAt: '' },
+      { id: 1, ownerType: 'task' as const, projectId: null, taskId: 1, serverName: 'test-server', tmuxTarget: 'azito:task-1.1', label: 'task-1', labelSource: 'auto' as const, isPrimary: true, windowType: 'agent' as const, workerType: 'claude', workerModel: 'opus', agentSessionId: null, launchCommand: null, workingDirectory: null, paneLayout: null, sleeping: false, createdAt: '' },
     ]);
     opts.respawnService = {
       respawn: vi.fn(async () => { throw new ExecutionGateDeniedError(1); }),

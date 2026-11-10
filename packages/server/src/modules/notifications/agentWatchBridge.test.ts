@@ -36,9 +36,9 @@ describe('notifyAgentWatchesOnIdle', () => {
     const sendToAll = vi.fn().mockResolvedValue(undefined);
 
     await notifyAgentWatchesOnIdle(
-      { serverName: 'local', target: 'session:0', running: false },
+      { serverName: 'local', target: 'session:0', running: false, label: 'My Agent', labelSource: 'user', windowId: 9 },
       {
-        agentWatchRepo: { findByKey: vi.fn().mockReturnValue([watch]), findByWindowId: vi.fn().mockReturnValue([]), deleteById },
+        agentWatchRepo: { findByKey: vi.fn().mockReturnValue([watch]), findByWindowId: vi.fn().mockReturnValue([watch]), deleteById },
         pushSubRepo: { findByEndpoint: vi.fn().mockReturnValue(sub) },
         pushService: { sendToAll },
       },
@@ -48,7 +48,8 @@ describe('notifyAgentWatchesOnIdle', () => {
     const payloadFn = sendToAll.mock.calls[0][1] as (subscription: PushSubscriptionRecord) => { title: string; data: { url: string } };
     const payload = payloadFn(sub);
     expect(payload.title).toBe('AZITO: Agent Idle');
-    expect(payload.data.url).toBe('/?server=local&target=session%3A0');
+    expect((payload as { body?: string }).body).toContain('My Agent');
+    expect(payload.data.url).toBe('/?server=local&target=session%3A0&windowId=9');
     expect(payload.data.url).not.toBe('/workspace');
     expect(payload.data.url).not.toBe('/tasks');
     expect(deleteById).toHaveBeenCalledWith(watch.id);

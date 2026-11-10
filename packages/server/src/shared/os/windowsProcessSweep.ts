@@ -1,4 +1,6 @@
+import { createHash } from 'node:crypto';
 import { powershellDialect } from './shellDialect';
+import { WINDOWS_PROCESS_INFO } from './windowsProcessInfo';
 
 export interface ProcessSweepInput {
   /** The program's image name, e.g. `node.exe`. */
@@ -12,6 +14,8 @@ export interface ProcessSweepInput {
   label: string;
   /** Also end the `conhost.exe` that started such a process (the task runs the program under `conhost.exe --headless`). */
   endParentConhost: boolean;
+  /** The argument is an EncodedCommand; compare its digest to avoid exceeding the command-line limit. */
+  hashEncodedCommand?: boolean;
 }
 
 /**
@@ -27,18 +31,30 @@ export interface ProcessSweepInput {
 export function buildEndProcessesScript(input: ProcessSweepInput): string {
   const q = powershellDialect.quote;
   return [
-    `$envArgument = ${q(input.argument)}`,
-    "$pattern = '(^|[\\s\"])' + [regex]::Escape($envArgument) + '([\\s\"]|$)'",
+    WINDOWS_PROCESS_INFO,
+    ...(input.hashEncodedCommand ? [
+      `$expectedHash = '${createHash('sha256').update(input.argument, 'ascii').digest('hex')}'`,
+      "$pattern = '(?:^|\\s)-EncodedCommand\\s+([A-Za-z0-9+/=]+)(?:\\s|$)'",
+      '$sha = [Security.Cryptography.SHA256]::Create()',
+    ] : [
+      `$envArgument = ${q(input.argument)}`,
+      "$pattern = '(^|[\\s\"])' + [regex]::Escape($envArgument) + '([\\s\"]|$)'",
+    ]),
     '$me = [Security.Principal.WindowsIdentity]::GetCurrent().User.Value',
-    'function Test-Mine($process) { try { (Invoke-CimMethod -InputObject $process -MethodName GetOwnerSid -ErrorAction Stop).Sid -eq $me } catch { $false } }',
-    'function Test-Argument($process) { $process.CommandLine -and ($process.CommandLine -match $pattern) }',
-    `function Get-AgentNodes { @(Get-CimInstance Win32_Process -Filter "Name = ${q(input.image)}" | Where-Object { (Test-Argument $_) -and (Test-Mine $_) }) }`,
-    'function Get-Same($target) { $current = Get-CimInstance Win32_Process -Filter "ProcessId = $($target.Id)"; if ($current -and $current.CreationDate -eq $target.Created) { $current } }',
+    '$elevated = ([Security.Principal.WindowsPrincipal][Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)',
+    "function Read-Node($p) { $started = $p.StartTime.ToUniversalTime(); $data = [AzitoProcessList]::Read($p.Id); $owner = [AzitoProcessList]::Owner($p.Id); $current = Get-Process -Id $p.Id -ErrorAction Stop; if ($current.StartTime.ToUniversalTime() -ne $started) { throw 'Process changed while inspected' }; [pscustomobject]@{ ProcessId = $p.Id; Name = $p.ProcessName + '.exe'; CreationDate = $started; ParentProcessId = $data[0]; CommandLine = $data[1]; Owner = $owner } }",
+    'function Test-Mine($process) { $process.Owner -eq $me }',
+    input.hashEncodedCommand
+      ? "function Test-Argument($process) { if (-not $process.CommandLine) { return $false }; if ($process.CommandLine -match $pattern) { $hash = [BitConverter]::ToString($sha.ComputeHash([Text.Encoding]::ASCII.GetBytes($Matches[1]))).Replace('-', ''); return $hash -eq $expectedHash }; return $false }"
+      : 'function Test-Argument($process) { $process.CommandLine -and ($process.CommandLine -match $pattern) }',
+    `function Get-AgentNodes { @(Get-Process -Name ${q(input.image.replace(/\.exe$/i, ''))} -ErrorAction SilentlyContinue | ForEach-Object { $candidate = $_; $owner = [AzitoProcessList]::Owner($candidate.Id); if (-not $owner) { if (-not (Get-Process -Id $candidate.Id -ErrorAction SilentlyContinue) -or -not $elevated) { return }; throw "Cannot identify process $($_.Id)" }; if ($owner -ne $me) { return }; $n = try { Read-Node $candidate } catch { if (-not (Get-Process -Id $candidate.Id -ErrorAction SilentlyContinue)) { return }; throw }; if (-not $n.Owner -or -not $n.CommandLine) { throw "Cannot identify process $($n.ProcessId)" }; if ((Test-Argument $n) -and (Test-Mine $n)) { $n } }) }`,
+    'function Get-Same($target) { $p = Get-Process -Id $target.Id -ErrorAction SilentlyContinue; if (-not $p) { return }; try { $started = $p.StartTime.ToUniversalTime() } catch { if (-not (Get-Process -Id $target.Id -ErrorAction SilentlyContinue)) { return }; throw }; if ($started -eq $target.Created) { $p } }',
+
     '$targets = @()',
     'foreach ($node in Get-AgentNodes) {',
     '  $targets += [pscustomobject]@{ Id = $node.ProcessId; Created = $node.CreationDate }',
     ...(input.endParentConhost ? [
-      '  $parent = Get-CimInstance Win32_Process -Filter "ProcessId = $($node.ParentProcessId)"',
+      '  $p = Get-Process -Id $node.ParentProcessId -ErrorAction SilentlyContinue; $parent = if ($p -and [AzitoProcessList]::Owner($p.Id) -eq $me) { Read-Node $p } else { $null }',
       "  if ($parent -and $parent.Name -eq 'conhost.exe' -and $parent.CreationDate -le $node.CreationDate -and (Test-Argument $parent) -and (Test-Mine $parent)) {",
       '    $targets += [pscustomobject]@{ Id = $parent.ProcessId; Created = $parent.CreationDate }',
       '  }',
@@ -50,4 +66,36 @@ export function buildEndProcessesScript(input: ProcessSweepInput): string {
     '$left = Get-Alive',
     `if ($left.Count -gt 0) { throw "An ${input.label} process did not end: $(($left | ForEach-Object { $_.Id }) -join ', ')" }`,
   ].join('\n');
+}
+
+/** Check for an owned process with an exact command-line argument without stopping it. */
+export function buildProcessPresentScript(image: string, argument: string): string {
+  const q = powershellDialect.quote;
+  return [
+    '# AZITO_PROCESS_PRESENT',
+    `$arg = ${q(argument)}`,
+    "$pattern = '(^|[\\s\"])' + [regex]::Escape($arg) + '([\\s\"]|$)'",
+    '$me = [Security.Principal.WindowsIdentity]::GetCurrent().User.Value',
+    WINDOWS_PROCESS_INFO,
+    '$elevated = ([Security.Principal.WindowsPrincipal][Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)',
+    `$ps = @(Get-Process -Name ${q(image.replace(/\.exe$/i, ''))} -ErrorAction SilentlyContinue)`,
+    'foreach ($p in $ps) {',
+    '  $owner = [AzitoProcessList]::Owner($p.Id)',
+    '  if (-not $owner) { if (-not (Get-Process -Id $p.Id -ErrorAction SilentlyContinue) -or -not $elevated) { continue }; throw "Cannot identify process $($p.Id)" }',
+    '  if ($owner -ne $me) { continue }',
+    '  $started = $p.StartTime.ToUniversalTime(); $data = [AzitoProcessList]::Read($p.Id)',
+    '  $current = Get-Process -Id $p.Id -ErrorAction SilentlyContinue; if (-not $current) { continue }',
+    '  if ($current.StartTime.ToUniversalTime() -ne $started) { throw "Process changed while inspected" }',
+    '  if (-not $data[1]) { throw "Cannot read process command line" }',
+    '  if ($data[1] -match $pattern) { Write-Output "present"; exit 0 }',
+    '}',
+    'Write-Output "absent"',
+  ].join('\n');
+}
+
+export function parseProcessPresent(output: string): boolean {
+  const value = output.trim();
+  if (value === 'present') return true;
+  if (value === 'absent') return false;
+  throw new Error('Cannot determine whether the managed process is present');
 }

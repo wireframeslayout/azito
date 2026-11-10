@@ -82,6 +82,7 @@ describe.skipIf(!fs.existsSync(MISAO_CLI))('MisaoActivityBridge against a real m
     windows.push({
       id: windows.length + 1, ownerType: 'project', projectId: 1, taskId: null, serverName: SERVER.name, tmuxTarget: windowId,
       label: name, isPrimary: false, windowType: 'agent', workerType: 'claude', workerModel: null, agentSessionId: null,
+      labelSource: 'auto',
       launchCommand: null, workingDirectory: null, paneLayout: null, sleeping: false, createdAt: '2026-01-01T00:00:00Z', muxRef: ref,
     });
     await connection.request('pane.open', { cmd: [process.execPath, path.join(dir, 'fake-agent.js'), screen, mode], windowId });

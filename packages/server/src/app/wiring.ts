@@ -1,3 +1,4 @@
+import { isLaunchdHub } from '../modules/servers/launchdHub';
 // ─── Dependency wiring ───
 //
 // Constructs all infrastructure/repository/domain/application instances via
@@ -117,6 +118,7 @@ import { WindowActivityStatusService } from '../modules/windows/WindowActivitySt
 import { WindowSessionResolver } from '../modules/transcripts/WindowSessionResolver';
 import { TRANSCRIPT_SOURCES } from '../modules/transcripts/sources/registry';
 import { TranscriptConversationProbe } from '../modules/transcripts/TranscriptConversationProbe';
+import { DaemonSessionChecker } from '../modules/agents/claude/DaemonSessionChecker';
 import { HostTranscriptSourceProvider, type TranscriptSourceProvider } from '../modules/transcripts/sources/TranscriptSourceProvider';
 import { TaskRestoreService } from '../modules/tasks/TaskRestoreService';
 import type { GitIdentity } from '../modules/git/ensureGitIdentity';
@@ -207,6 +209,8 @@ export interface PushNotificationModule {
 export interface ApplicationServices {
   sessionStrategyFactory: SessionStrategyFactory;
   sessionCaptureService: SessionCaptureService;
+  /** Issue #639: whether the Claude Code daemon holds a conversation — shared by respawn and follow-up restarts. */
+  daemonSessionChecker: DaemonSessionChecker;
   transcriptSourceProvider: TranscriptSourceProvider;
   windowSessionResolver: WindowSessionResolver;
   windowActivityStatusService: WindowActivityStatusService;
@@ -269,16 +273,17 @@ export interface Wiring extends SharedInfra, Repositories, PushNotificationModul
 // ─── Per-module factories ───
 
 function buildSharedInfra(agentBundler: AgentBundler, publicUrl: string, localUrl: string, dataPaths: DataPaths, uiToken: string, webhookToken: string, scopedAuthEnabled: boolean, harnessPrefix: string, misaoRuntime: MisaoRuntime, hostEnv: HostEnv, secretFileGuard: SecretFileGuard, hubHost: HubHostProfile, windowsAgent: WindowsAgentOptions, findServer: (name: string) => ServerConfig | null, db?: SqliteDatabase, fingerprintStore?: FingerprintStore, auditLogService?: AuditLogService): SharedInfra {
-  const sshClient = new SshClient(resolveSshClientEnv(hostEnv, process.env), fingerprintStore);
+  const isLaunchd = isLaunchdHub(hostEnv.platform, process.pid);
+  const sshClient = new SshClient(resolveSshClientEnv(hostEnv, process.env), fingerprintStore, undefined, isLaunchd);
   const misaoAgentInstaller = new MisaoAgentInstaller(readMisaoBundle(getBundleRoot()), { windowsTaskName: windowsAgent.misaoTaskName, ...optionalLocalMisao(localWindowsMisaoRoot(hostEnv), secretFileGuard, hostEnv.systemRoot) });
   // A hub with no bundled misao installs agents without it (instead of reporting a failed misao step on every install).
-  const agentInstaller = new AgentInstaller(sshClient, agentBundler, windowsAgent, misaoAgentInstaller.bundledVersion !== undefined ? misaoAgentInstaller : undefined);
+  const agentInstaller = new AgentInstaller(sshClient, agentBundler, windowsAgent, misaoAgentInstaller.bundledVersion !== undefined ? misaoAgentInstaller : undefined, harnessPrefix);
   const harnessInstaller = new HarnessInstaller(sshClient);
   const tmuxInstaller = new TmuxInstaller();
   const muxDriverRegistry = new MuxDriverRegistry();
   const taskTempFiles = TaskTempFiles.fromHostEnv(hostEnv);
   taskTempFiles.assertHubDirShellSafe();
-  const transportFactory = new TransportFactory(publicUrl, hostEnv, taskTempFiles, hubHost);
+  const transportFactory = new TransportFactory(publicUrl, hostEnv, taskTempFiles, hubHost, isLaunchd);
   const tmuxClient = new TmuxClient(transportFactory, publicUrl, uiToken, localUrl, webhookToken, harnessPrefix);
   registerTmuxDriver(muxDriverRegistry, tmuxClient);
   const llmClient: ILlmClient = new CodexExecClient();
@@ -420,9 +425,14 @@ function buildAgentRecoveryWatchdog(infra: SharedInfra, repos: Repositories): Ag
   return new AgentRecoveryWatchdog({
     listServers: () => repos.serverRepo.findAll(),
     checkAgent: async (server) => { await infra.transportFactory.getAgentTransport(server).fetchHealth(); },
-    recoverAgent: async (server) => {
+    onFirewallProblem: (server, diagnosis) => infra.notificationBus.emit({ type: 'server:firewall', payload: { serverName: server.name, diagnosis } }),
+    inspectFirewall: async (server) => {
+      if (!server.host || !server.agentPort) throw new Error('the server has no agent address or port');
+      return infra.agentInstaller.inspectAgentFirewall(sshHostOf(server), server.host, server.agentPort);
+    },
+    recoverAgent: async (server, force) => {
       if (!server.host || !server.agentToken) throw new Error('the server has no agent address or token');
-      return infra.agentInstaller.recoverAgent(sshHostOf(server), server.host, server.agentToken, server.hostProfile, server.muxRuntime);
+      return infra.agentInstaller.recoverAgent(sshHostOf(server), server.host, server.agentToken, server.hostProfile, server.muxRuntime, force);
     },
     isMisaoDown: async (server) => {
       return isManagedMisaoDown(await infra.transportFactory.getAgentTransport(server).fetchMisaoStatus());
@@ -494,7 +504,11 @@ function buildApplicationServices(infra: SharedInfra, repos: Repositories, uiTok
   const taskPaneEnvironmentService = new TaskPaneEnvironmentService(repos.taskTokenRepo, repos.projectSecretRepo, uiToken, scopedAuthEnabled, repos.auditLogService);
   const uiTokenEnvFn = (server: ServerConfig) => uiTokenEnvForServer(uiToken, server);
   const transcriptSourceProvider = new HostTranscriptSourceProvider(TRANSCRIPT_SOURCES, infra.transportFactory);
-  const windowRespawnService = new WindowRespawnService(repos.windowRepo, infra.muxDriverRegistry, sessionStrategyFactory, repos.taskRepo, repos.unitRepo, infra.supervisorRegistry, repos.projectServerRepo, repos.projectRepo, infra.transportFactory, repos.logRepo, infra.unitTypeLoader, infra.sidekickPackageLoader, repos.serverRepo, repos.projectSecretRepo, taskEvents, taskPaneEnvironmentService, infra.serverIsolationMutex, scopedAuthEnabled, uiTokenEnvFn, harnessPrefix, new TranscriptConversationProbe(transcriptSourceProvider), sessionCaptureService);
+  // Issue #639: whether the Claude Code daemon holds a conversation — shared by the respawn path (WindowRespawnService)
+  // and the follow-up restarts (ExecuteTaskUseCase). Task restore does not need it: restore only restarts the worker
+  // on a program host (win32), where the check is skipped deliberately.
+  const daemonSessionChecker = new DaemonSessionChecker(infra.transportFactory);
+  const windowRespawnService = new WindowRespawnService(repos.windowRepo, infra.muxDriverRegistry, sessionStrategyFactory, repos.taskRepo, repos.unitRepo, infra.supervisorRegistry, repos.projectServerRepo, repos.projectRepo, infra.transportFactory, repos.logRepo, infra.unitTypeLoader, infra.sidekickPackageLoader, repos.serverRepo, repos.projectSecretRepo, taskEvents, taskPaneEnvironmentService, infra.serverIsolationMutex, scopedAuthEnabled, uiTokenEnvFn, harnessPrefix, new TranscriptConversationProbe(transcriptSourceProvider), daemonSessionChecker, sessionCaptureService);
   const windowSleepService = new WindowSleepService(repos.windowRepo, infra.muxDriverRegistry, sessionStrategyFactory, repos.serverRepo);
   const taskRestoreService = new TaskRestoreService({
     taskRepo: repos.taskRepo,
@@ -529,7 +543,7 @@ function buildApplicationServices(infra: SharedInfra, repos: Repositories, uiTok
   const usageService = new UsageService(infra.agentRegistry);
   const agentSignalService = new AgentSignalService(repos.agentTurnRepo, infra.turnSignalHub, repos.logRepo, repos.auditLogService);
   return {
-    sessionStrategyFactory, sessionCaptureService, transcriptSourceProvider, windowSessionResolver, windowActivityStatusService,
+    sessionStrategyFactory, sessionCaptureService, daemonSessionChecker, transcriptSourceProvider, windowSessionResolver, windowActivityStatusService,
     windowRespawnService, windowSleepService, taskRestoreService, usageService, agentSignalService, taskEvents,
     originationService, taskPaneEnvironmentService,
   };
@@ -600,6 +614,7 @@ function buildExecuteTaskUseCase(
     harnessPrefix,
     hubGitIdentity,
     localAgentHomesFromEnv(process.env),
+    appServices.daemonSessionChecker,
   );
 }
 
@@ -697,6 +712,7 @@ function buildAgentActivityMonitor(
     (serverName, target, windowId, from, to, event) => {
       console.log(`[session-update] window=${windowId} ${(from ?? 'null').slice(0, 8)}→${to.slice(0, 8)} event=${event} server=${serverName} target=${target}`);
     },
+    repos.taskRepo,
   );
 }
 

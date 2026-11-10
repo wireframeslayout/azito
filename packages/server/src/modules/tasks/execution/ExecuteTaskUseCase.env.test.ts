@@ -9,6 +9,7 @@ vi.mock('../../git/ensureGitIdentity', () => ({ ensureGitIdentity: vi.fn(async (
 // What the host's Claude Code settings get is tested on its own; here only that every boundary that starts a Claude worker calls it, in time.
 vi.mock('../../agents/claude/prepareClaudeLaunch', () => ({ prepareClaudeLaunch: vi.fn(async () => {}) }));
 import { prepareClaudeLaunch } from '../../agents/claude/prepareClaudeLaunch';
+import { ClaudeSessionStrategy } from '../../agents/claude/SessionStrategy';
 import { ensureGitIdentity } from '../../git/ensureGitIdentity';
 
 // The hub's own `gh`/`glab` login is the second stage of distribution's token
@@ -242,6 +243,10 @@ function buildUseCase(opts: {
   resourceStatus?: Record<string, unknown>;
   /** Issue #87 Phase 2: stubs projectRepo.findRepositoryById — a repository row with a token, for fetch-distribution gate tests. */
   repository?: { id: number; url: string; provider: 'github' | 'gitlab'; owner: string | null; repoName: string | null; token: string | null };
+  /** Issue #639: the daemon checker the use case is built with (default answers resume). */
+  daemonChecker?: unknown;
+  /** Overrides the session strategy factory (the default says no worker supports sessions). */
+  sessionStrategyFactory?: unknown;
   /** Issue #87 Phase 2: injected as the constructor's fetchDistributionService param — when set, the fetch-distribution gate can actually run. */
   fetchDistributionService?: { distribute: ReturnType<typeof vi.fn> };
   /** Issue #29 Step 3a: defaults to true so pre-existing tests (all predating 'allow') are unaffected. */
@@ -380,7 +385,7 @@ function buildUseCase(opts: {
     createSession: vi.fn(async () => {}),
     createWindow: vi.fn(async () => ({ result: { stdout: '', stderr: '', code: 0 }, windowName: 'w1' })),
     listWorkspaces: vi.fn(async () => []),
-    openWorkspace: vi.fn(async (_srv: unknown, name: string) => ({ ref: { kind: 'tmux' as const, workspace: name, window: 'default' }, result: { stdout: '', stderr: '', code: 0 } })),
+    prepareWorkspace: vi.fn(async () => undefined),
     openWindow: vi.fn(async (_srv: unknown, ws: string, _name?: string) => ({ ref: { kind: 'tmux' as const, workspace: ws, window: 'w1' }, result: { stdout: '', stderr: '', code: 0 } })),
     resolvePaneId: vi.fn(async () => '%0'),
     resolvePane: vi.fn(async () => '%0'),
@@ -422,7 +427,7 @@ function buildUseCase(opts: {
     updatePaneLayout: vi.fn(),
   };
 
-  const sessionStrategyFactory = { create: vi.fn(() => ({ supportsSession: false })) };
+  const sessionStrategyFactory = (opts.sessionStrategyFactory as any) ?? { create: vi.fn(() => ({ supportsSession: false })) };
   const sidekickSyncService = { sync: vi.fn(async () => {}) };
   const turnRepo = {
     supersedeRunning: vi.fn(),
@@ -501,9 +506,11 @@ function buildUseCase(opts: {
     '',
     null,
     { claudeConfigDir: null, codexHome: null },
+    // Issue #639: the default answers that no daemon holds any conversation, so follow-ups keep the plain resume launch.
+    (opts.daemonChecker as any) ?? { check: vi.fn(async () => ({ status: 'resume' })) } as any,
   );
 
-  return { useCase, primaryWindowWaker, sessionStrategyFactory, taskRepo, windowRepo, logRepo, tmux, supervisorRegistry, worktreeServiceFactory, transportFactory, unitRepo, projectRepo, projectServerRepo, serverRepo, projectSecretRepo, unitTypeLoader, sidekickLoader, paneEnvService, gitProvider };
+  return { useCase, primaryWindowWaker, sessionStrategyFactory, taskRepo, windowRepo, logRepo, tmux, supervisorRegistry, worktreeServiceFactory, transportFactory, unitRepo, projectRepo, projectServerRepo, serverRepo, projectSecretRepo, unitTypeLoader, sidekickLoader, paneEnvService, gitProvider, daemonChecker: opts.daemonChecker };
 }
 
 describe('ExecuteTaskUseCase execution-env resolution', () => {
@@ -560,6 +567,7 @@ describe('ExecuteTaskUseCase execution-env resolution', () => {
       expect(prepareClaudeLaunch).toHaveBeenCalledTimes(1);
       expect(prepareClaudeLaunch).toHaveBeenCalledWith(expect.anything(), expect.any(Function));
       expect(preparedBeforeLaunch(tmux)).toBe(true);
+      expect(tmux.sendKeysToHandle.mock.calls.some((call: unknown[]) => (call[2] as string[])[0]?.includes('CLAUDE_CODE_ENABLE_PROMPT_SUGGESTION'))).toBe(true);
     });
 
     it('execute() writes what is reported into the task\'s execution log', async () => {
@@ -607,6 +615,7 @@ describe('ExecuteTaskUseCase execution-env resolution', () => {
 
       expect(prepareClaudeLaunch).toHaveBeenCalledTimes(1);
       expect(preparedBeforeLaunch(tmux)).toBe(true);
+      expect(tmux.sendKeysToHandle.mock.calls.some((call: unknown[]) => (call[2] as string[])[0]?.includes('CLAUDE_CODE_ENABLE_PROMPT_SUGGESTION'))).toBe(true);
     });
 
     it('a Bypass Permissions dialog that is still on the screen fails the task with its reason, without waiting or typing the prompt', async () => {
@@ -711,7 +720,7 @@ describe('ExecuteTaskUseCase execution-env resolution', () => {
 
     await useCase.execute(60, 60);
 
-    const createSessionServer = (tmux.openWorkspace as ReturnType<typeof vi.fn>).mock.calls[0][0];
+    const createSessionServer = (tmux.prepareWorkspace as ReturnType<typeof vi.fn>).mock.calls[0][0];
     const createWindowServer = (tmux.openWindow as ReturnType<typeof vi.fn>).mock.calls[0][0];
     const resolvePaneServer = (tmux.resolvePane as ReturnType<typeof vi.fn>).mock.calls[0][0];
     // Issue #63: getTransport is now called once BEFORE the lock (for
@@ -721,7 +730,7 @@ describe('ExecuteTaskUseCase execution-env resolution', () => {
     const preGateTransportServer = (transportFactory.getTransport as ReturnType<typeof vi.fn>).mock.calls[0][0];
 
     // ensureSessionWithLock's lock span re-read the server for the session
-    // bootstrap — openWorkspace must see that row.
+    // bootstrap — prepareWorkspace must see that row.
     expect(createSessionServer.agentVersion).toBeDefined();
     // createRotatedWindow's own, LATER lock span re-read the server again
     // for the real task window — createWindow must see a STRICTLY NEWER row
@@ -759,7 +768,7 @@ describe('ExecuteTaskUseCase execution-env resolution', () => {
 
     await useCase.followUp(61, 61, 'please continue');
 
-    const createSessionServer = (tmux.openWorkspace as ReturnType<typeof vi.fn>).mock.calls[0][0];
+    const createSessionServer = (tmux.prepareWorkspace as ReturnType<typeof vi.fn>).mock.calls[0][0];
     const createWindowServer = (tmux.openWindow as ReturnType<typeof vi.fn>).mock.calls[0][0];
     const resolvePaneServer = (tmux.resolvePane as ReturnType<typeof vi.fn>).mock.calls[0][0];
 
@@ -830,6 +839,59 @@ describe('ExecuteTaskUseCase execution-env resolution', () => {
       },
     );
     expect(promptCalls).toHaveLength(0);
+  });
+
+  it('followUp() attaches to a daemon-held conversation instead of a --resume it would refuse (Issue #639)', async () => {
+    const SESSION = '14b46fcb-1234-4def-8abc-000000000001';
+    // Same shape as the supervised follow-up test above; only the recorded session and the daemon answer differ.
+    const unit = makeUnit({ id: 49, workerType: 'claude', workerModel: 'opus', workerExecutionMode: 'http-signal' });
+    const task = makeTask({ id: 4, serverName: 'local-server', unitId: 49, tmuxWindow: 'task-4', agentSessionId: SESSION });
+    const daemonChecker = { check: vi.fn(async () => ({ status: 'attach', attachId: '14b46fcb' })) };
+    const { useCase, tmux, windowRepo } = buildUseCase({
+      task,
+      project: makeProject({ defaultUnitId: null }),
+      units: [unit],
+      daemonChecker,
+      // The real claude strategy: the launch plan only asks the daemon for a worker whose strategy supports sessions.
+      sessionStrategyFactory: { create: () => new ClaudeSessionStrategy(null as never, { claudeConfigDir: null, codexHome: null }) },
+    });
+    (windowRepo.findByTask as ReturnType<typeof vi.fn>).mockReturnValue([
+      { id: 10, ownerType: 'task', isPrimary: true, taskId: 4, serverName: 'local-server', tmuxTarget: 'azito:task-4.1', label: 'task-4', projectId: null, windowType: 'agent', workerType: 'claude', workerModel: 'opus', agentSessionId: SESSION, launchCommand: null, workingDirectory: null, paneLayout: null, createdAt: '2026-01-01T00:00:00Z' },
+    ]);
+
+    await useCase.followUp(49, 4, 'please continue');
+
+    expect(daemonChecker.check).toHaveBeenCalledWith(expect.anything(), SESSION, null);
+    const launchCall = tmux.sendKeysToHandle.mock.calls.find((call: unknown[]) => (call[2] as string[])[0]?.includes('claude'));
+    expect(launchCall).toBeDefined();
+    const sentCommand = (launchCall as unknown[])[2] as string[];
+    expect(sentCommand[0]).toContain('claude attach 14b46fcb');
+    expect(sentCommand[0]).not.toContain('--resume');
+    expect(sentCommand[0]).not.toContain('--dangerously-skip-permissions');
+  });
+
+  it('followUp() asks the daemon check with the primary window’s recorded CLAUDE_CONFIG_DIR, explicit or not (Issue #639)', async () => {
+    // A `claudeConfigDirExplicit === false` window's recorded dir IS the pane-side default the conversation ran
+    // under ($HOME/.claude resolved by the session hook) — the check must ask THAT registry, never inheriting the
+    // hub's own CLAUDE_CONFIG_DIR (#639 review round 2).
+    const SESSION = '14b46fcb-1234-4def-8abc-000000000001';
+    const unit = makeUnit({ id: 49, workerType: 'claude', workerModel: 'opus', workerExecutionMode: 'http-signal' });
+    const task = makeTask({ id: 4, serverName: 'local-server', unitId: 49, tmuxWindow: 'task-4', agentSessionId: SESSION });
+    const daemonChecker = { check: vi.fn(async () => ({ status: 'resume' })) };
+    const { useCase, windowRepo } = buildUseCase({
+      task,
+      project: makeProject({ defaultUnitId: null }),
+      units: [unit],
+      daemonChecker,
+      sessionStrategyFactory: { create: () => new ClaudeSessionStrategy(null as never, { claudeConfigDir: null, codexHome: null }) },
+    });
+    (windowRepo.findByTask as ReturnType<typeof vi.fn>).mockReturnValue([
+      { id: 10, ownerType: 'task', isPrimary: true, taskId: 4, serverName: 'local-server', tmuxTarget: 'azito:task-4.1', label: 'task-4', projectId: null, windowType: 'agent', workerType: 'claude', workerModel: 'opus', agentSessionId: SESSION, launchCommand: null, workingDirectory: null, paneLayout: null, claudeConfigDir: '/home/user/.claude', claudeConfigDirExplicit: false, createdAt: '2026-01-01T00:00:00Z' },
+    ]);
+
+    await useCase.followUp(49, 4, 'please continue');
+
+    expect(daemonChecker.check).toHaveBeenCalledWith(expect.anything(), SESSION, '/home/user/.claude');
   });
 
   it('wraps the worker launch sendKeysToHandle command for an agent window on a local server (http-signal mode)', async () => {
@@ -1733,7 +1795,7 @@ describe('ExecuteTaskUseCase.followUp http-signal execution mode (Issue: AZITO�
       caps: { changeEvents: true, agentState: false, independentClients: true, copyMode: true },
       listSessions: vi.fn(async () => [{ name: 'azito', windows: [{ name: 'task-1', index: 1 }] }]),
       listWorkspaces: vi.fn(async () => [{ name: 'azito', windowCount: 1, attached: true, created: 0, windows: [{ index: 0, name: 'task-1', active: true, panes: [], activity: 0 }] }]),
-      openWorkspace: vi.fn(async (_srv: unknown, name: string) => ({ ref: { kind: 'tmux' as const, workspace: name, window: 'default' }, result: { stdout: '', stderr: '', code: 0 } })),
+      prepareWorkspace: vi.fn(async () => undefined),
       openWindow: vi.fn(async (_srv: unknown, ws: string, name?: string) => ({ ref: { kind: 'tmux' as const, workspace: ws, window: name ?? 'task-1' }, result: { stdout: '', stderr: '', code: 0 } })),
       createSession: vi.fn(async () => {}),
       createWindow: vi.fn(async () => ({ result: { stdout: '', stderr: '', code: 0 }, windowName: 'task-1' })),
@@ -1831,6 +1893,7 @@ describe('ExecuteTaskUseCase.followUp http-signal execution mode (Issue: AZITO�
     '',
     null,
     { claudeConfigDir: null, codexHome: null },
+    { check: vi.fn(async () => ({ status: 'resume' })) } as any,
     );
 
     await useCase.followUp(42, 1, 'please continue');
@@ -2981,7 +3044,7 @@ describe('ExecuteTaskUseCase.execute() execution-gate self-invalidation regressi
       caps: { changeEvents: true, agentState: false, independentClients: true, copyMode: true },
       listSessions: vi.fn(async () => []),
       listWorkspaces: vi.fn(async () => []),
-      openWorkspace: vi.fn(async (_srv: unknown, name: string) => ({ ref: { kind: 'tmux' as const, workspace: name, window: 'default' }, result: { stdout: '', stderr: '', code: 0 } })),
+      prepareWorkspace: vi.fn(async () => undefined),
       openWindow: vi.fn(async (_srv: unknown, ws: string, _name?: string) => ({ ref: { kind: 'tmux' as const, workspace: ws, window: 'w1' }, result: { stdout: '', stderr: '', code: 0 } })),
       createSession: vi.fn(async () => {}),
       createWindow: vi.fn(async () => ({ result: { stdout: '', stderr: '', code: 0 }, windowName: 'w1' })),
@@ -3076,6 +3139,7 @@ describe('ExecuteTaskUseCase.execute() execution-gate self-invalidation regressi
     '',
     null,
     { claudeConfigDir: null, codexHome: null },
+    { check: vi.fn(async () => ({ status: 'resume' })) } as any,
     );
 
     // execute() itself resolves once setup (session/window/worktree
@@ -5459,7 +5523,7 @@ describe('ExecuteTaskUseCase on a host that starts the worker as the window\'s p
 
     await expect(useCase.execute(80, 8)).rejects.toMatchObject({ code: 'unsupported_os', message: expect.stringContaining('#464') });
 
-    expect(tmux.openWorkspace).not.toHaveBeenCalled();
+    expect(tmux.prepareWorkspace).not.toHaveBeenCalled();
     expect(tmux.openWindow).not.toHaveBeenCalled();
     expect(worktreeServiceFactory.create).not.toHaveBeenCalled();
   });
@@ -5536,7 +5600,7 @@ describe('ExecuteTaskUseCase on a host that starts the worker as the window\'s p
     task.worktreePath = worktreePath;
     sessionStrategyFactory.create.mockReturnValue({ supportsSession: true, buildResumeArgs: (id: string) => ['--resume', id] } as never);
     worktreeServiceFactory.create.mockReturnValue({ exists: vi.fn(async () => true) });
-    let opened: { program?: { argv: string[]; cwd?: string } } | undefined;
+    let opened: { program?: { argv: string[]; cwd?: string; env?: Record<string, string> } } | undefined;
     tmux.openWindow.mockImplementation((async (_srv: unknown, ws: string, _name: string, o: typeof opened) => {
       opened = o;
       return { ref: { kind: 'tmux' as const, workspace: ws, window: 'w1' }, result: { stdout: '', stderr: '', code: 0 } };
@@ -5550,6 +5614,7 @@ describe('ExecuteTaskUseCase on a host that starts the worker as the window\'s p
     expect(vi.mocked(prepareClaudeLaunch).mock.invocationCallOrder[0]).toBeLessThan(tmux.openWindow.mock.invocationCallOrder[0]);
     expect(opened?.program?.argv.slice(-2)).toEqual(['--resume', '7a8b0f9c-1d2e-4f30-8a45-6b7c8d9e0f12']);
     expect(opened?.program?.cwd).toBe(worktreePath);
+    expect(opened?.program?.env).toEqual({ CLAUDE_CODE_ENABLE_PROMPT_SUGGESTION: 'false' });
     const typed = tmux.sendKeysToHandle.mock.calls.map((c: unknown[]) => (c[2] as string[])[0]);
     expect(typed.filter((line) => line.startsWith('cd ') || line.includes('claude'))).toEqual([]);
   });

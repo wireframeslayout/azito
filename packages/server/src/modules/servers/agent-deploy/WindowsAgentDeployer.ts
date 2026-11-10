@@ -1,20 +1,32 @@
 import * as path from 'path';
+import { createHash, randomUUID } from 'node:crypto';
 import type { ExecResult } from '../transport/ServerTransport';
 import { CREATE_SCRIPT, INSPECT_SCRIPT, PROTECT_SCRIPT, evaluateAcl, parseAclSnapshot } from '../../../shared/os/windowsSecretFileGuard';
-import { powershellDialect } from '../../../shared/os/shellDialect';
-import { buildEndProcessesScript } from '../../../shared/os/windowsProcessSweep';
+import { MAX_WINDOWS_COMMAND_LINE, powershellDialect, powershellEncodedArgs } from '../../../shared/os/shellDialect';
+import { compressPowerShellScript } from '../../../shared/os/compressPowerShellScript';
+import { buildEndProcessesScript, buildProcessPresentScript, parseProcessPresent } from '../../../shared/os/windowsProcessSweep';
 import { SchtasksClient, type TaskScheduleState } from '../../../shared/os/taskScheduler/schtasks';
 import { buildTaskXml, encodeTaskXml, isTaskDefinitionDisabled } from '../../../shared/os/taskScheduler/taskDefinition';
 import { redactSecretText } from '../../../shared/redactSecretText';
 import { createSshCommandSpecRunner } from './windowsSshRunner';
-import { checkFirewall, describeFirewallProblem } from './windowsFirewall';
+import { checkFirewall, readFirewallDump, evaluateRecoveryFirewall, describeFirewallProblem, firewallRuleCommand, type FirewallResult } from './windowsFirewall';
+import { WINDOWS_PROCESS_INFO } from '../../../shared/os/windowsProcessInfo';
 import { MISAO_WINDOWS_DIR, type WindowsAgentOptions } from './windowsAgentConfig';
 import type { WindowsPreflightInfo } from './windowsPreflight';
-import { agentTaskAction } from './windowsAgentTask';
+import { agentTaskAction, agentTaskIdentity } from './windowsAgentTask';
+import { soleExecAction, taskHasUserId, taskPrincipalId } from '../../../shared/os/taskScheduler/taskXmlRead';
 import { uninstallWindowsAgent, type WindowsUninstallChoice, type WindowsUninstallResult } from './windowsAgentUninstall';
 
 /** Runs one command line on the Windows host through its SSH login shell. */
 export type WindowsSshExec = (sshHost: string, command: string, timeoutMs: number) => Promise<ExecResult>;
+
+export function needsTransferredScript(body: string): boolean {
+  const script = `$ProgressPreference = 'SilentlyContinue'\n${body}`;
+  return ['powershell.exe', ...powershellEncodedArgs(script)].join(' ').length > MAX_WINDOWS_COMMAND_LINE;
+}
+
+/** The firewall verdict for the recognised agent task, with the commands an administrator would run to inspect or allow it. */
+export type FirewallInspection = Omit<FirewallResult, 'ruleFound'> & { ruleFound: false | null; allowCommand: string; blockCommands: string[] };
 
 /** Puts bytes on the host over SFTP. The remote path is relative to the user's home, with `/` separators (what Windows OpenSSH's sftp-server takes). */
 export interface WindowsFileTransfer {
@@ -78,16 +90,6 @@ const RESTART_COUNT = 999;
 const SAFE_VERSION = /^[A-Za-z0-9][A-Za-z0-9._-]*$/;
 /** The folder name of an agent release: `build-agent.ts` names a bundle by the first 12 hex digits of its content hash. Only such folders are ever pruned. */
 const RELEASE_DIR_PATTERN = '^[0-9a-f]{12}$';
-/** The version folder a task definition runs its entry from (`...\<version>\azito-agent.cjs`). */
-const ENTRY_VERSION = /([A-Za-z0-9][A-Za-z0-9._-]*)\\azito-agent\.cjs/;
-
-/** The version a task definition (its XML) starts the agent from; undefined when the definition names no such entry. */
-export function versionOfTaskXml(xml: string): string | undefined {
-  const args = /<Arguments>([^<]*)<\/Arguments>/.exec(xml)?.[1];
-  const version = args === undefined ? undefined : ENTRY_VERSION.exec(args)?.[1];
-  return version !== undefined && SAFE_VERSION.test(version) ? version : undefined;
-}
-
 const sleep = (ms: number): Promise<void> => new Promise((resolve) => setTimeout(resolve, ms));
 
 /** Where everything of one agent install lives on the host. */
@@ -242,8 +244,8 @@ export class WindowsAgentDeployer {
       await this.prepareRoot(input.sshHost, layout);
       await this.transfer.putFile(input.sshHost, input.tarballPath, `${layout.rootRelative}/azito-agent-${input.version}.tar.gz`);
       await this.verifySha256(input.sshHost, layout.tarball, input.expectedSha256);
-      previous = await this.capturePrevious(client);
-      await this.stopTask(input.sshHost, client, layout.envFile);
+      previous = await this.capturePrevious(input.sshHost, client, input.host, layout);
+      await this.stopTask(input.sshHost, client, layout.envFile, input.host);
       await this.extract(input, layout);
       progress.versionCreated = true;
       await this.writeSettings(input, layout, envContent);
@@ -265,19 +267,76 @@ export class WindowsAgentDeployer {
     await this.schtasks(sshHost, host).start(this.options.taskName);
   }
 
+  /** Inspect the policy for the executable named by the recognised task without changing it. */
+  async inspectFirewall(sshHost: string, host: WindowsPreflightInfo, address: string, port: number): Promise<FirewallInspection> {
+    const xml = await this.schtasks(sshHost, host).exportXml(this.options.taskName);
+    const action = soleExecAction(xml);
+    const root = windowsAgentRoot(host.home, this.options);
+    const identity = action && agentTaskIdentity(action, host.systemRoot, root, windowsAgentEnvFile(host.home, this.options), this.options.taskName);
+    if (!identity || !await this.taskOwnedByHost(sshHost, xml, host.userId)) throw new Error(`The task "${this.options.taskName}" is not a recognised agent task for ${root}`);
+    const q = powershellDialect.quote;
+    const envFile = windowsAgentEnvFile(host.home, this.options);
+    const launcher = /-EncodedCommand ([A-Za-z0-9+/=]+)$/.exec(action!.argumentsLine)?.[1];
+    if (!identity.launcher || !launcher) throw new Error('The managed launcher could not be identified');
+    const launcherHash = createHash('sha256').update(launcher, 'ascii').digest('hex');
+    const script = [
+      WINDOWS_PROCESS_INFO,
+      `$address = ${q(address)}; $port = ${port}; $nodePath = ${q(identity.nodePath)}; $arg = ${q(`--env-file=${envFile}`)}; $entry = ${q(path.win32.join(root, identity.version, 'azito-agent.cjs'))}; $launcherHash = ${q(launcherHash)}`,
+      "$me = [Security.Principal.WindowsIdentity]::GetCurrent().User.Value",
+      "$pattern = '(^|[\\s\"])' + [regex]::Escape($arg) + '([\\s\"]|$)'",
+      '$lines = @(& (Join-Path $env:SystemRoot "System32\\netstat.exe") -ano -p tcp); if ($LASTEXITCODE -ne 0) { throw "Cannot list TCP listeners" }',
+      '$endpoint = $address + ":" + $port',
+      '$listeners = @(foreach ($line in $lines) { $parts = @($line.Trim() -split \u0027\\s+\u0027); if ($parts.Count -eq 5 -and $parts[0] -eq "TCP" -and $parts[1] -eq $endpoint -and $parts[3] -eq "LISTENING" -and $parts[4] -match "^[0-9]+$") { [int]$parts[4] } })',
+      'if ($listeners.Count -ne 1) { throw "Cannot identify the agent listener" }',
+      '$p = Get-Process -Id $listeners[0] -ErrorAction Stop',
+      'if ($p.Path -ine $nodePath -or [AzitoProcessList]::Owner($p.Id) -ne $me) { throw "Listener is not the managed agent" }',
+      '$start = $p.StartTime.ToUniversalTime(); $data = [AzitoProcessList]::Read($p.Id)',
+      'if (-not $data[1] -or $data[1] -notmatch $pattern -or -not $data[1].Contains($entry)) { throw "Cannot identify agent command line" }',
+      '$parent = Get-Process -Id $data[0] -ErrorAction Stop; $parentData = [AzitoProcessList]::Read($parent.Id)',
+      'if ($parent.ProcessName -ine "powershell" -or [AzitoProcessList]::Owner($parent.Id) -ne $me -or -not $parentData[1] -or $parentData[1] -notmatch "(?i)-EncodedCommand\\s+([A-Za-z0-9+/=]+)") { throw "Cannot identify the managed launcher" }',
+      '$sha = [Security.Cryptography.SHA256]::Create(); try { $hash = ([BitConverter]::ToString($sha.ComputeHash([Text.Encoding]::ASCII.GetBytes($Matches[1])))).Replace("-", "").ToLowerInvariant() } finally { $sha.Dispose() }',
+      'if ($hash -ne $launcherHash -or $parent.StartTime.ToUniversalTime() -gt $start) { throw "Cannot identify the managed launcher" }',
+      '$request = [System.Net.HttpWebRequest]::Create("http://" + $address + ":" + $port + "/health"); $request.Proxy = $null; $request.Timeout = 5000; $request.AllowAutoRedirect = $false',
+      '$response = $request.GetResponse(); try { if ([int]$response.StatusCode -ne 200) { throw "Agent health is not 200" } } finally { $response.Dispose() }',
+      'if ((Get-Process -Id $p.Id -ErrorAction Stop).StartTime.ToUniversalTime() -ne $start) { throw "Agent process changed" }',
+      'Write-Output "AZITO_AGENT_HEALTHY"',
+    ].join('\n');
+    const healthy = await this.script(sshHost, 'Checking the managed agent listener and health', compressPowerShellScript(script));
+    if (healthy.trim() !== 'AZITO_AGENT_HEALTHY') throw new Error('Could not verify the managed agent health');
+    const dump = await readFirewallDump((command) => this.sshExec(sshHost, command, FIREWALL_MS), address);
+    const verdict = evaluateRecoveryFirewall(dump, { port, nodePath: identity.nodePath, localAddress: address, networkCategory: dump.networkCategory });
+    return {
+      ruleFound: verdict.state === 'unknown' ? null : false,
+      elevated: dump.elevated, created: false, problem: verdict.state === 'unknown' ? 'the effective firewall policy could not be confirmed' : null,
+      blockedBy: verdict.blockedBy.map((r) => r.displayName), allowedBy: [], store: dump.store, networkCategory: dump.networkCategory,
+      allowCommand: firewallRuleCommand(port, identity.nodePath, address),
+      blockCommands: verdict.blockedBy.map((r) => `Get-NetFirewallRule -PolicyStore ActiveStore -Name ${q(r.name)} | Format-List *`),
+    };
+  }
+
   /** Stops the task if it is running and waits until it is not (`/End` returns before the process is gone). */
   async stop(sshHost: string, host: WindowsPreflightInfo): Promise<void> {
-    await this.stopTask(sshHost, this.schtasks(sshHost, host), windowsAgentEnvFile(host.home, this.options));
+    await this.stopTask(sshHost, this.schtasks(sshHost, host), windowsAgentEnvFile(host.home, this.options), host);
   }
 
   /** Stops and starts the registered task. A task that is not registered is an error (nothing is installed to restart); one disabled by hand is not touched. */
-  async restart(sshHost: string, host: WindowsPreflightInfo): Promise<'restarted' | 'disabled'> {
+  async restart(sshHost: string, host: WindowsPreflightInfo, force = false): Promise<'restarted' | 'disabled' | 'starting'> {
     const client = this.schtasks(sshHost, host);
     const state = await client.query(this.options.taskName);
     if (!state.exists) throw new Error(`The task "${this.options.taskName}" is not registered on the host: install the agent first`);
     // Disabled by hand (`schtasks /Change /DISABLE`): that is how the agent is kept stopped, so it is left alone.
-    if (isTaskDefinitionDisabled(await client.exportXml(this.options.taskName))) return 'disabled';
-    await this.stopTask(sshHost, client, windowsAgentEnvFile(host.home, this.options));
+    const xml = await client.exportXml(this.options.taskName);
+    if (isTaskDefinitionDisabled(xml)) return 'disabled';
+    const action = soleExecAction(xml);
+    const root = windowsAgentRoot(host.home, this.options);
+    const identity = action && agentTaskIdentity(action, host.systemRoot, root, windowsAgentEnvFile(host.home, this.options), this.options.taskName);
+    if (!identity || !await this.taskOwnedByHost(sshHost, xml, host.userId)) throw new Error(`The task "${this.options.taskName}" is not a recognised agent task for ${root}`);
+    if (identity.launcher && state.running) {
+      if (!force) return 'starting';
+      const output = await this.script(sshHost, 'Checking the agent process', compressPowerShellScript(buildProcessPresentScript('node.exe', `--env-file=${windowsAgentEnvFile(host.home, this.options)}`)));
+      if (!parseProcessPresent(output)) return 'starting';
+    }
+    await this.stopTask(sshHost, client, windowsAgentEnvFile(host.home, this.options), host);
     await client.start(this.options.taskName);
     return 'restarted';
   }
@@ -325,17 +384,20 @@ export class WindowsAgentDeployer {
    * Takes the agent off the host (task, processes, firewall rule, folder, and with `removeMisao` the misao beside it). Every step reports
    * its own outcome and a failure does not stop the steps that do not depend on it; see {@link uninstallWindowsAgent}.
    */
-  async uninstall(sshHost: string, host: Pick<WindowsPreflightInfo, 'home' | 'systemRoot' | 'nodePath' | 'userId'>, choice: WindowsUninstallChoice): Promise<WindowsUninstallResult> {
+  async uninstall(sshHost: string, host: Pick<WindowsPreflightInfo, 'home' | 'systemRoot' | 'nodePath' | 'userId'>, choice: WindowsUninstallChoice, harnessPrefix = ''): Promise<WindowsUninstallResult> {
     const client = this.schtasks(sshHost, host);
     return uninstallWindowsAgent(
       {
         tasks: client,
         endTask: (taskName) => this.endTask(client, taskName),
-        script: (what, body, timeoutMs) => this.script(sshHost, what, body, timeoutMs),
+        script: (what, body, timeoutMs) => needsTransferredScript(body)
+          ? this.transferredScript(sshHost, host.home, what, body, timeoutMs)
+          : this.script(sshHost, what, body, timeoutMs),
       },
       { home: host.home, systemRoot: host.systemRoot, nodePath: host.nodePath, userId: host.userId },
       this.options,
       choice,
+      harnessPrefix,
     );
   }
 
@@ -358,7 +420,7 @@ export class WindowsAgentDeployer {
    * `--headless` (Windows 10 1809 and later) gives the process a console that has no window.
    */
   private buildTask(input: WindowsDeployInput, layout: WindowsAgentLayout): string {
-    const action = agentTaskAction(input.host.systemRoot, input.nodePath, layout.envFile, layout.entry);
+    const action = agentTaskAction(input.host.systemRoot, input.nodePath, layout.envFile, layout.entry, this.options.taskName);
     return buildTaskXml({
       userId: input.host.userId,
       description: 'AZITO Agent: started at logon by the AZITO hub',
@@ -369,12 +431,22 @@ export class WindowsAgentDeployer {
     });
   }
 
+  private async taskOwnedByHost(sshHost: string, xml: string, userId: string): Promise<boolean> {
+    if (taskHasUserId(xml, userId)) return true;
+    if (!/^S-1-\d+(?:-\d+)+$/i.test(taskPrincipalId(xml) ?? '')) return false;
+    const sid = await this.script(sshHost, 'Reading the Windows account SID', '[System.Security.Principal.WindowsIdentity]::GetCurrent().User.Value');
+    return taskHasUserId(xml, userId, sid.trim());
+  }
+
   /** Reads what is registered now. A definition that cannot be read stops the deploy, before anything is changed. */
-  private async capturePrevious(client: SchtasksClient): Promise<Previous> {
+  private async capturePrevious(sshHost: string, client: SchtasksClient, host: WindowsPreflightInfo, layout: WindowsAgentLayout): Promise<Previous> {
     const state = await client.query(this.options.taskName);
     if (!state.exists) return { taskXml: undefined, version: undefined, wasRunning: false };
     const taskXml = await client.exportXml(this.options.taskName);
-    return { taskXml, version: versionOfTaskXml(taskXml), wasRunning: state.running };
+    const action = soleExecAction(taskXml);
+    const identity = action && agentTaskIdentity(action, host.systemRoot, layout.root, layout.envFile, this.options.taskName);
+    if (!identity || !await this.taskOwnedByHost(sshHost, taskXml, host.userId)) throw new Error(`The task "${this.options.taskName}" is not a recognised agent task for ${layout.root}; it was left unchanged`);
+    return { taskXml, version: identity.version, wasRunning: state.running };
   }
 
   /**
@@ -382,8 +454,21 @@ export class WindowsAgentDeployer {
    * task runs is gone (its settings say so), which is what `/End` and the Task Scheduler's own "End" rely on; this is the
    * safety net for an agent that does not (an older one, or one whose parent watch has not fired yet).
    */
-  private async stopTask(sshHost: string, client: SchtasksClient, envFile: string): Promise<void> {
+  private async stopTask(sshHost: string, client: SchtasksClient, envFile: string, host: WindowsPreflightInfo): Promise<void> {
+    const state = await client.query(this.options.taskName);
+    let launcherCommand: string | undefined;
+    if (state.exists) {
+      const xml = await client.exportXml(this.options.taskName);
+      const action = soleExecAction(xml);
+      const identity = action && agentTaskIdentity(action, host.systemRoot, path.win32.dirname(envFile), envFile, this.options.taskName);
+      if (identity?.launcher && await this.taskOwnedByHost(sshHost, xml, host.userId)) {
+        launcherCommand = /-EncodedCommand ([A-Za-z0-9+/=]+)$/.exec(action!.argumentsLine)?.[1];
+      }
+    }
     await this.endTask(client, this.options.taskName);
+    if (launcherCommand) {
+      await this.script(sshHost, 'Ending the agent launcher', compressPowerShellScript(buildEndProcessesScript({ image: 'powershell.exe', argument: launcherCommand, label: 'agent launcher', endParentConhost: false, hashEncodedCommand: true })), QUICK_MS);
+    }
     await this.endStrayProcesses(sshHost, envFile);
   }
 
@@ -413,7 +498,7 @@ export class WindowsAgentDeployer {
    * creation time: the time is checked again just before it is ended, and "has it ended?" asks the same question.
    */
   private async endStrayProcesses(sshHost: string, envFile: string): Promise<void> {
-    await this.script(sshHost, 'Ending the agent processes', buildEndProcessesScript({ image: 'node.exe', argument: `--env-file=${envFile}`, label: 'agent', endParentConhost: true }), QUICK_MS);
+    await this.script(sshHost, 'Ending the agent processes', compressPowerShellScript(buildEndProcessesScript({ image: 'node.exe', argument: `--env-file=${envFile}`, label: 'agent', endParentConhost: true })), QUICK_MS);
   }
 
   /** Runs a PowerShell script on the host; a non-zero exit is an error carrying the script's own message. */
@@ -424,6 +509,28 @@ export class WindowsAgentDeployer {
       throw new Error(`${what} failed on the Windows host (exit ${result.code})${reason ? `: ${redactSecretText(reason).slice(0, 600)}` : ''}`);
     }
     return result.stdout;
+  }
+
+  private async transferredScript(sshHost: string, home: string, what: string, body: string, timeoutMs = QUICK_MS): Promise<string> {
+    const name = `.azito-script-${randomUUID()}.tmp`;
+    const remote = path.win32.join(home, name);
+    const bytes = Buffer.from(body, 'utf8');
+    const hash = createHash('sha256').update(bytes).digest('hex');
+    const q = powershellDialect.quote;
+    try {
+      await this.transfer.putBuffer(sshHost, bytes, name);
+      return await this.script(sshHost, what, [
+        `$file = ${q(remote)}`,
+        '$bytes = [IO.File]::ReadAllBytes($file)',
+        `$hash = ([BitConverter]::ToString([Security.Cryptography.SHA256]::Create().ComputeHash($bytes))).Replace('-', '').ToLowerInvariant()`,
+        `if ($hash -ne ${q(hash)}) { throw 'The uploaded script failed its SHA256 check' }`,
+        'Remove-Item -LiteralPath $file -Force -ErrorAction Stop',
+        'Invoke-Expression ([Text.Encoding]::UTF8.GetString($bytes))',
+      ].join('\n'), timeoutMs);
+    } finally {
+      await this.script(sshHost, 'Removing the temporary script', `Remove-Item -LiteralPath ${q(remote)} -Force -ErrorAction SilentlyContinue`, QUICK_MS)
+        .catch((error: unknown) => console.warn(`Could not remove the temporary Windows script: ${redactSecretText(String(error))}`));
+    }
   }
 
   /**
@@ -560,7 +667,7 @@ export class WindowsAgentDeployer {
     // Nothing was touched before the capture: only the temporary files are removed.
     let restored = false;
     if (previous !== undefined) {
-      await attempt('stopped the new agent', () => this.stopTask(input.sshHost, client, layout.envFile));
+      await attempt('stopped the new agent', () => this.stopTask(input.sshHost, client, layout.envFile, input.host));
       const folder = await putBackAttempt('restored the version folder', 'Restoring the previous version folder', layout.versionDirPrev, layout.versionDir, progress.versionCreated);
       const settings = await putBackAttempt('restored the settings', 'Restoring the previous settings', layout.envFilePrev, layout.envFile, progress.settingsSwapped);
       restored = folder && settings;

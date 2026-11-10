@@ -1,4 +1,5 @@
 import { useTranslation } from 'react-i18next';
+import { FirewallDiagnostic } from '../FirewallDiagnostic';
 import type { Server, Session } from '../../../hooks/useServerManagement';
 import type { IsolationReport } from '../../../hooks/useServerDetail';
 import type { ServerStatus, InstallStatusResponse } from '../serverSections';
@@ -46,6 +47,7 @@ interface OverviewSectionProps {
   status: ServerStatus | null;
   installStatus: InstallStatusResponse | null;
   sessions: Session[];
+  sessionsState?: 'loading' | 'error' | 'partial' | 'ready';
   isolationReport: IsolationReport | null;
   // Issue #29 review, Important finding 3: true when this server declares
   // isolationIntent but the detail fetch that would carry isolationReport
@@ -68,7 +70,7 @@ interface OverviewSectionProps {
 }
 
 export default function OverviewSection({
-  server, status, installStatus, sessions,
+  server, status, installStatus, sessions, sessionsState = 'ready',
   isolationReport, isolationReportUnavailable,
   isolationCleanupReport, isolationCleanupReportUnavailable,
   muxDriverStatus,
@@ -186,7 +188,7 @@ export default function OverviewSection({
 
   const sessionCount = sessions.length;
   const windowCount = sessions.reduce((sum, s) => sum + s.windowCount, 0);
-  const sessionsSummary = t('overview.sessionsSummary', { sessionCount, windowCount });
+  const sessionsSummary = sessionsState === 'ready' ? t('overview.sessionsSummary', { sessionCount, windowCount }) : t(`sessionState.${sessionsState}`);
 
   const memUsedBytes = measurement ? measurement.memTotalBytes - measurement.memAvailableBytes : null;
   const loadPerCore = measurement?.loadPerCore ?? null;
@@ -248,6 +250,7 @@ export default function OverviewSection({
                 {status?.message && <span>{isAgent ? `(${status.message})` : status.message}</span>}
               </div>
             )}
+            {status?.firewall && <FirewallDiagnostic diagnostic={status.firewall} />}
           </div>
         </div>
 
@@ -499,7 +502,7 @@ export default function OverviewSection({
             </span>
           </KvRow>
           <KvRow label={t('overview.sessionsLabel')}>
-            <span style={{ fontFamily: 'var(--mono)', fontSize: 'var(--font-xs)' }}>{sessionsSummary}</span>
+            <span role="status" style={{ fontFamily: 'var(--mono)', fontSize: 'var(--font-xs)' }}>{sessionsSummary}</span>
           </KvRow>
         </KvCard>
       </div>

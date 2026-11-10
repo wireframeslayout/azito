@@ -1,9 +1,12 @@
+import { misaoTaskVersion } from '../../../shared/os/taskScheduler/misaoTaskIdentity';
 import * as path from 'path';
+import { harnessLocation } from './harnessLocation';
+import { harnessMcpScript, parseHarnessMcpOutput } from './windowsHarnessMcpUninstall';
 import type { SchtasksClient } from '../../../shared/os/taskScheduler/schtasks';
-import { hubRootOfScript, soleExecAction, taskExecActions } from '../../../shared/os/taskScheduler/taskXmlRead';
+import { hubRootOfScript, soleExecAction, taskExecActions, taskHasUserId, taskPrincipalId } from '../../../shared/os/taskScheduler/taskXmlRead';
 import { firewallRuleName } from './windowsFirewall';
 import { windowsMisaoPipe } from '../transport/agentMisaoSocket';
-import { agentTaskIdentity, misaoTaskVersion, type AgentTaskIdentity } from './windowsAgentTask';
+import { agentTaskIdentity, type AgentTaskIdentity } from './windowsAgentTask';
 import type { WindowsAgentOptions } from './windowsAgentConfig';
 import { decideMisaoStop, decidePathChains, folderScript, leftoverProcessesScript, misaoHolderScript, misaoStopScript, parseFolderOutput, parseLeftoverOutput, parseMisaoHolderOutput, parsePathChainOutput, pathChainScript, type ScriptOutcome, type UninstallOutcome } from './windowsAgentUninstallScripts';
 import { firewallInspectScript, misaoDaemonScript, misaoHubScript, parseFirewallOutput, parseMisaoGuardOutput, parseSameFileOutput, sameFileScript } from './windowsAgentOwnership';
@@ -26,7 +29,7 @@ import { firewallInspectScript, misaoDaemonScript, misaoHubScript, parseFirewall
 /** The Task Scheduler task of a Windows hub (`HUB_SERVICE.windowsTaskName`, fixed: there is no setting for it; a test keeps the two in step). */
 export const WINDOWS_HUB_TASK_NAME = 'AzitoHub';
 
-export type UninstallStepId = 'task' | 'processes' | 'firewall' | 'folder' | 'misaoTask' | 'misaoProcesses' | 'misaoFolder';
+export type UninstallStepId = 'task' | 'processes' | 'firewall' | 'folder' | 'misaoTask' | 'misaoProcesses' | 'misaoFolder' | 'claudeHarnessMcp' | 'codexHarnessMcp';
 
 export type { UninstallOutcome };
 
@@ -86,19 +89,26 @@ async function step(id: UninstallStepId, action: () => Promise<ScriptOutcome>): 
  * `agentTaskIdentity`); undefined when it is not known to be the install's. A task with any other action beside it (a COM handler, a
  * message) is not the install's.
  */
-function agentTaskOf(xml: string, facts: HostFacts, root: string, envFile: string): AgentTaskIdentity | undefined {
+function agentTaskOf(xml: string, facts: HostFacts, root: string, envFile: string, taskName: string): AgentTaskIdentity | undefined {
   const action = soleExecAction(xml);
-  return action === undefined ? undefined : agentTaskIdentity(action, facts.systemRoot, root, envFile);
+  return action === undefined ? undefined : agentTaskIdentity(action, facts.systemRoot, root, envFile, taskName);
 }
 
 /** The release folder the misao task runs, when the task has ONE action, an Exec equal to what the install writes for the misao in `root` (see `misaoTaskVersion`). */
-function misaoTaskOf(xml: string, facts: HostFacts, root: string): string | undefined {
+function misaoTaskOf(xml: string, facts: HostFacts, root: string, taskName: string): string | undefined {
   const action = soleExecAction(xml);
-  return action === undefined ? undefined : misaoTaskVersion(action, facts.systemRoot, root, userNameOf(facts.userId));
+  return action === undefined ? undefined : misaoTaskVersion(action, facts.systemRoot, root, windowsMisaoPipe(root, userNameOf(facts.userId)), taskName);
 }
 
 /** `DOMAIN\user` -> `user`: the account name the misao pipe is made from. */
 const userNameOf = (userId: string): string => userId.slice(userId.lastIndexOf('\\') + 1);
+
+async function taskOwnedByHost(host: WindowsUninstallHost, xml: string, userId: string): Promise<boolean> {
+  if (taskHasUserId(xml, userId)) return true;
+  if (!/^S-1-\d+(?:-\d+)+$/i.test(taskPrincipalId(xml) ?? '')) return false;
+  const sid = await host.script('Reading the Windows account SID', '[System.Security.Principal.WindowsIdentity]::GetCurrent().User.Value', QUICK_MS);
+  return taskHasUserId(xml, userId, sid.trim());
+}
 
 type TaskRemoval = { step: ScriptOutcome; foreign: boolean };
 
@@ -129,9 +139,9 @@ async function removeTask(host: WindowsUninstallHost, taskName: string, isOurs: 
  *
  * A task is removed only when it has ONE action and that action is exactly what the install writes (`agentTaskAction`), with a node.exe that
  * is the same file as the one found on the host now; anything else is left. The folders are not entered through a link (every folder up to
- * the drive's root must be a real one). Harness files and hooks are not touched.
+ * the drive's root must be a real one). Harness files and hooks are not touched; matching MCP registrations are removed conditionally.
  */
-export async function uninstallWindowsAgent(host: WindowsUninstallHost, facts: HostFacts, options: WindowsAgentOptions, choice: WindowsUninstallChoice): Promise<WindowsUninstallResult> {
+export async function uninstallWindowsAgent(host: WindowsUninstallHost, facts: HostFacts, options: WindowsAgentOptions, choice: WindowsUninstallChoice, harnessPrefix = ''): Promise<WindowsUninstallResult> {
   const { home } = facts;
   const steps: UninstallStep[] = [];
   const agentRoot = path.win32.join(home, options.dir);
@@ -140,8 +150,8 @@ export async function uninstallWindowsAgent(host: WindowsUninstallHost, facts: H
   let removal: TaskRemoval;
   try {
     removal = await removeTask(host, options.taskName, async (xml) => {
-      const identity = agentTaskOf(xml, facts, agentRoot, envFile);
-      return identity !== undefined && await isHostNode(host, identity.nodePath, facts.nodePath);
+      const identity = agentTaskOf(xml, facts, agentRoot, envFile, options.taskName);
+      return identity !== undefined && await taskOwnedByHost(host, xml, facts.userId) && await isHostNode(host, identity.nodePath, facts.nodePath);
     }, `have the form the AZITO install writes for ${envFile}, with this host's node.exe`);
   } catch (err) {
     removal = { step: { outcome: 'failed', detail: err instanceof Error ? err.message : String(err) }, foreign: false };
@@ -160,11 +170,27 @@ export async function uninstallWindowsAgent(host: WindowsUninstallHost, facts: H
   }
 
   const stopped = steps.every((s) => s.id === 'firewall' || s.outcome !== 'failed');
-  steps.push(stopped
+  const folder = stopped
     ? await step('folder', async () => parseFolderOutput(await host.script(`Removing ${agentRoot}`, folderScript(home, agentRoot), FOLDER_MS)))
-    : skipped('folder', 'the agent may still be running or registered: the folder is left so that nothing breaks underneath it'));
+    : skipped('folder', 'the agent may still be running or registered: the folder is left so that nothing breaks underneath it');
+  steps.push(folder);
 
   if (choice.removeMisao) steps.push(...await removeMisao(host, facts, options));
+  // A prefixed harness never registers azt-mcp.
+  if (harnessPrefix) {
+    for (const id of ['claudeHarnessMcp', 'codexHarnessMcp'] as const) {
+      steps.push(skipped(id, 'this hub uses a harness prefix and never registers azt-mcp, so the registration was left'));
+    }
+  } else {
+    const expected = path.win32.join(harnessLocation('win32', home).harnessDir, 'skills', 'azt-mcp', 'mcp-server', 'index.js');
+    for (const [id, kind] of [['claudeHarnessMcp', 'claude'], ['codexHarnessMcp', 'codex']] as const) {
+      steps.push(folder.outcome !== 'done' && folder.outcome !== 'absent'
+        ? skipped(id, 'the agent was not removed, so its MCP registration was kept')
+        : facts.nodePath === null
+        ? skipped(id, 'Node is unavailable, so the registration could not be inspected')
+        : await step(id, async () => parseHarnessMcpOutput(await host.script(`Checking ${kind} MCP registration`, harnessMcpScript(kind, facts.nodePath!, home, expected), 200_000))));
+    }
+  }
   return { ok: steps.every((s) => s.outcome !== 'failed'), steps };
 }
 
@@ -188,9 +214,9 @@ async function removeMisao(host: WindowsUninstallHost, facts: HostFacts, options
   }
   let version: string | undefined;
   const task = await step('misaoTask', async () => {
-    const removal = await removeTask(host, options.misaoTaskName, (xml) => {
-      version = misaoTaskOf(xml, facts, root);
-      return version !== undefined;
+    const removal = await removeTask(host, options.misaoTaskName, async (xml) => {
+      version = misaoTaskOf(xml, facts, root, options.misaoTaskName);
+      return version !== undefined && await taskOwnedByHost(host, xml, facts.userId);
     }, `have the form the AZITO install writes for the misao of ${root}`);
     return removal.step;
   });

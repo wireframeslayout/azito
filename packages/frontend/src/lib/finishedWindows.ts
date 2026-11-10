@@ -8,6 +8,12 @@ export interface FinishedEntry {
   target: string;
   windowId?: number;
   label?: string;
+  labelSource?: 'auto' | 'user';
+  taskTitle?: string;
+  workerType?: string;
+  windowType?: string;
+  paneTitle?: string;
+  paneCommand?: string;
   taskId?: number;
   projectId?: number;
   finishedAt: number;
@@ -56,4 +62,21 @@ export function upsertFinished(entries: FinishedEntry[], entry: FinishedEntry): 
 export function removeFinished(entries: FinishedEntry[], key: string): FinishedEntry[] {
   const kept = entries.filter((e) => activityKeyForEntry(e) !== key);
   return kept.length === entries.length ? entries : kept;
+}
+
+/** Preserve display metadata omitted by the completion event. */
+export function mergeFinishedEntry(entry: FinishedEntry, previous?: Omit<FinishedEntry, 'finishedAt'>): FinishedEntry {
+  return {
+    ...entry,
+    taskId: entry.taskId ?? previous?.taskId,
+    projectId: entry.projectId ?? previous?.projectId,
+    label: entry.label ?? previous?.label,
+    labelSource: entry.labelSource ?? previous?.labelSource,
+    taskTitle: entry.taskTitle ?? previous?.taskTitle,
+    workerType: entry.workerType ?? previous?.workerType,
+    windowType: entry.windowType ?? previous?.windowType,
+    paneTitle: entry.paneTitle || previous?.paneTitle,
+    paneCommand: entry.paneCommand ?? previous?.paneCommand,
+    paneName: entry.paneName || previous?.paneName,
+  };
 }

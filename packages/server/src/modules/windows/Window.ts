@@ -12,11 +12,15 @@ export interface Window {
   tmuxTarget: string;
   muxRef?: MuxRef;
   label: string | null;
+  labelSource: 'auto' | 'user';
   isPrimary: boolean;
   windowType: WindowType;
   workerType: string | null;
   workerModel: string | null;
   agentSessionId: string | null;
+  claudeConfigDir?: string | null;
+  claudeConfigDirExplicit?: boolean | null;
+  claudePaneSessions?: Array<{ sessionId: string; configDir: string }>;
   launchCommand: string | null;
   workingDirectory: string | null;
   paneLayout: PaneLayout | null;
@@ -31,11 +35,14 @@ export interface PaneLayout {
 
 export interface PaneConfig {
   index: number;
+  ordinal?: number;
   command: string | null;
   workingDirectory: string | null;
   title: string | null;
   workerType?: string;
   agentSessionId?: string;
+  claudeConfigDir?: string;
+  claudeConfigDirExplicit?: boolean;
 }
 
 export interface TerminalWindow extends Window {
@@ -77,7 +84,7 @@ export function isPrimaryTaskWindow(win: Pick<Window, 'ownerType' | 'isPrimary'>
 }
 
 export interface IWindowRepository {
-  add(window: Omit<Window, 'id' | 'createdAt'>): number;
+  add(window: Omit<Window, 'id' | 'createdAt' | 'labelSource'>): number;
   findAll(): Window[];
   findById(id: number): Window | undefined;
   findByProject(projectId: number): Window[];
@@ -128,9 +135,10 @@ export interface IWindowRepository {
    */
   adoptForTask(id: number, taskId: number): void;
   update(id: number, data: Partial<Pick<Window,
-    'tmuxTarget' | 'muxRef' | 'label' | 'agentSessionId' | 'launchCommand' | 'paneLayout' | 'workerModel' | 'workingDirectory' | 'windowType' | 'workerType' | 'sleeping' | 'projectId'
+    'tmuxTarget' | 'muxRef' | 'label' | 'labelSource' | 'agentSessionId' | 'launchCommand' | 'paneLayout' | 'workerModel' | 'workingDirectory' | 'windowType' | 'workerType' | 'sleeping' | 'projectId'
   >>): void;
   updateAgentSessionIdByWindow(serverName: string, tmuxTarget: string, sessionId: string): void;
+  updateClaudeSessionByPane(serverName: string, tmuxTarget: string, paneOrdinal: number | null, sessionId: string, configDir: string, configDirExplicit: boolean): void;
   remove(id: number): void;
   removeByServerAndTarget(serverName: string, tmuxTarget: string): number;
   updatePaneLayout(id: number, layout: PaneLayout): void;

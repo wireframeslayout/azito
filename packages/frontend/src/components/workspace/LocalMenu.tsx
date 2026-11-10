@@ -1,3 +1,4 @@
+import type { ActivityTitleData } from '../../lib/windowDisplay';
 import { useTranslation } from 'react-i18next';
 import type { SidebarMode } from '../../pages/workspace/types';
 import type { ConnectPaneFn } from '../../lib/terminalRef';
@@ -22,6 +23,7 @@ const ACTIVITY_BUTTONS: { id: SidebarMode; labelKey: string }[] = [
 ];
 
 interface LocalMenuProps {
+  titleData: ActivityTitleData;
   collapsed: boolean;
   sidebarMode: SidebarMode;
   onModeClick: (mode: SidebarMode, e?: React.MouseEvent) => void;
@@ -50,6 +52,7 @@ const btnStyle = (active: boolean): React.CSSProperties => ({
 });
 
 export default function LocalMenu({
+  titleData,
   collapsed,
   sidebarMode,
   onModeClick,
@@ -135,6 +138,7 @@ export default function LocalMenu({
           />
           {connectPane && openTask && (
             <ActiveWindowIcons
+                titleData={titleData}
               connectPane={connectPane}
               openTask={openTask}
               taskWindows={taskWindows ?? []}

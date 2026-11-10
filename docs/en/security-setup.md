@@ -630,3 +630,13 @@ cp data.db.bak-<timestamp> data.db  # the backup from Step 0
 ```
 
 The added DB column (`servers.ssh_host_fingerprint`) is harmless to old code, so you can also run without restoring the DB. However, encrypted secret columns will not be decrypted by the old code, so restoring `data.db` from the backup is the reliable path.
+
+### Windows agent removal and MCP credentials
+
+Host removal deletes Claude and Codex `azt-mcp` registrations only when their command and single argument identify this hub's harness file on the host. A hub with a harness prefix never registers azt-mcp and leaves both registrations untouched. Registrations that cannot be verified are left for manual inspection. The default harness can be shared by other hubs, so removing a matching registration can affect them. `~/.azito/operator.env` is shared and remains; inspect it and remove credentials manually when no longer needed.
+
+### Windows agent over SSH without elevation
+
+For a Windows agent installation using a non-elevated SSH account, prepare the following. Arrange an inbound firewall rule in advance using an administrator account: allow the agent's `node.exe`, its Tailscale address and configured TCP port, from the Tailscale address range. The non-elevated firewall inspection cannot establish the effective policy in every configuration. When it is unknown, AZITO stops before installation or update and reports the reason. In a non-elevated session the local and Group Policy registry rules are inspected, but they do not establish the complete effective policy; installation and update therefore stop at this check even when a rule is configured. An elevated session uses ActiveStore. Rules created by AZITO use the same display name and a Windows-generated unique rule ID. The uninstall report leaves them in place for manual inspection; a non-elevated inspection reports an inconclusive result when no matching rule is visible. If process ownership or command lines cannot be read, removal may stop until the affected processes can be identified.
+
+The non-elevated local Windows process and firewall API paths were checked on Windows build 26200. A non-administrator OpenSSH session and the complete install, update and uninstall sequence have not yet been verified on a real machine.

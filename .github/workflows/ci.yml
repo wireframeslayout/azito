@@ -31,6 +31,12 @@ jobs:
       - name: Type check (server)
         run: npx -w packages/server tsc --noEmit
 
+      - name: Type check (server scripts)
+        run: npx -w packages/server tsc -p tsconfig.scripts.json
+
+      - name: Type check (server Vitest config)
+        run: npx -w packages/server tsc -p tsconfig.vitest.json
+
       - name: Type check (frontend)
         run: npx -w packages/frontend tsc --noEmit
 
@@ -380,4 +386,4 @@ jobs:
       - uses: actions/checkout@v4
 
       - name: shellcheck
-        run: shellcheck install.sh packages/server/scripts/run-hub.sh packages/server/scripts/download-node.sh packages/server/scripts/smoke-misao.sh
+        run: shellcheck install.sh packages/server/scripts/run-hub.sh packages/server/scripts/download-node.sh packages/server/scripts/smoke-misao.sh packages/server/scripts/check-macos-minos.sh

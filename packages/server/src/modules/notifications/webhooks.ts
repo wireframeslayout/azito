@@ -1,3 +1,4 @@
+import path from 'node:path';
 import type { FastifyPluginCallback } from 'fastify';
 import type { SqliteTaskRepository } from '../tasks/SqliteTaskRepository';
 import type { AgentHookSignal } from '../operations/AgentActivityMonitor';
@@ -14,7 +15,8 @@ const SESSION_ID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]
 export interface MisaoWebhookOptions {
   /** The window a misao pane belongs to, or null when no registered window owns it or the daemon cannot be reached. */
   resolvePane: (serverName: string, paneId: string) => Promise<ResolvedWindow | null>;
-  recordAgentActivity: (serverName: string, tmuxTarget: string, event: AgentHookSignal['event'], sessionId?: string) => void;
+  recordClaudeSessionHook?: (serverName: string, paneId: string, sessionId: string, configDir: string, timestamp: string, explicit: boolean) => boolean;
+  recordAgentActivity: (serverName: string, tmuxTarget: string, event: AgentHookSignal['event'], sessionId?: string, claudeConfigDir?: string, paneOrdinal?: number, claudeConfigDirExplicit?: boolean) => void;
 }
 
 export interface WebhookRouteOptions {
@@ -29,6 +31,7 @@ export interface WebhookRouteOptions {
   recordAgentActivity: (signal: AgentHookSignal) => void;
   /** v1 only ever receives event: 'open' — see InteractionMonitor's doc comment. */
   recordInteractionSignal: (signal: InteractionSignal) => void;
+  recordSubagentSignal: (serverName: string, paneId: string, sessionId: string) => Promise<void>;
   misao: MisaoWebhookOptions;
 }
 
@@ -104,6 +107,22 @@ function parseInteractionContent(raw: unknown): InteractionContent | undefined {
 const webhookRoutes: FastifyPluginCallback<WebhookRouteOptions> = (fastify, opts, done) => {
   const { taskRepo, verifyToken, resolveServerName, recordAgentActivity, recordInteractionSignal, misao } = opts;
 
+  fastify.post('/api/webhooks/agent-subagent', async (request, reply) => {
+    if (!verifyToken(request.headers.authorization)) return reply.status(401).send({ error: 'Unauthorized' });
+    const body = request.body as (HookSignalBody & { sessionId?: unknown; muxPaneRef?: unknown; event?: unknown }) | null;
+    if (!body || typeof body !== 'object' || typeof body.serverName !== 'string' || !body.serverName ||
+        typeof body.sessionId !== 'string' || !SESSION_ID_RE.test(body.sessionId) || body.event !== 'subagent') {
+      return reply.status(400).send({ error: 'Invalid subagent signal' });
+    }
+    const misaoPaneId = readMisaoPaneId(body);
+    const paneId = misaoPaneId === undefined ? body.muxPaneRef : misaoPaneId;
+    if (typeof paneId !== 'string' || !isPaneHandleLike(paneId, misaoPaneId === undefined ? 'tmux' : 'misao')) {
+      return reply.status(400).send({ error: 'Invalid pane id' });
+    }
+    await opts.recordSubagentSignal(resolveServerName(body.serverName), paneId, body.sessionId);
+    return { ok: true };
+  });
+
   fastify.post('/api/webhooks/agent-done', async (request, reply) => {
     if (!verifyToken(request.headers.authorization)) {
       return reply.status(401).send({ error: 'Unauthorized' });
@@ -160,8 +179,19 @@ const webhookRoutes: FastifyPluginCallback<WebhookRouteOptions> = (fastify, opts
       muxPaneRef?: unknown;
       misaoPaneId?: unknown;
       sessionId?: unknown;
+      claudeConfigDir?: unknown;
+      claudeConfigDirExplicit?: unknown;
+      hookTimestamp?: unknown;
     };
 
+    const invalidConfig = body.claudeConfigDir !== undefined && (typeof body.claudeConfigDir !== 'string' || body.claudeConfigDir.length === 0 || body.claudeConfigDir.length > 4096 || body.claudeConfigDir.includes('\0') || !path.posix.isAbsolute(body.claudeConfigDir));
+    const invalidExplicit = body.claudeConfigDirExplicit !== undefined && typeof body.claudeConfigDirExplicit !== 'boolean';
+    const invalidTimestamp = body.hookTimestamp !== undefined && (typeof body.hookTimestamp !== 'string' || !/^[0-9]{1,20}$/.test(body.hookTimestamp));
+    const invalidMetadata = invalidConfig || invalidExplicit || invalidTimestamp;
+    if (invalidMetadata) request.log.warn('Ignoring invalid Claude session configuration metadata; preserving session ID');
+    const claudeConfigDirExplicit = !invalidMetadata && typeof body.claudeConfigDirExplicit === 'boolean' ? body.claudeConfigDirExplicit : undefined;
+    const hookTimestamp = !invalidMetadata && typeof body.hookTimestamp === 'string' ? body.hookTimestamp : undefined;
+    const claudeConfigDir = !invalidMetadata && body.event === 'session' && typeof body.claudeConfigDir === 'string' ? body.claudeConfigDir : undefined;
     const sessionId = typeof body.sessionId === 'string' && SESSION_ID_RE.test(body.sessionId)
       ? body.sessionId : undefined;
     const misaoPaneId = readMisaoPaneId(body);
@@ -175,9 +205,12 @@ const webhookRoutes: FastifyPluginCallback<WebhookRouteOptions> = (fastify, opts
       if (body.event !== 'start' && body.event !== 'stop' && body.event !== 'session') {
         return reply.status(400).send({ error: 'event must be "start", "stop" or "session"' });
       }
+      if (body.event === 'session' && sessionId && claudeConfigDir && hookTimestamp && claudeConfigDirExplicit !== undefined && misao.recordClaudeSessionHook) {
+        if (misao.recordClaudeSessionHook(resolveServerName(body.serverName), misaoPaneId, sessionId, claudeConfigDir, hookTimestamp, claudeConfigDirExplicit)) return { ok: true };
+      }
       const resolved = await misao.resolvePane(resolveServerName(body.serverName), misaoPaneId);
       // Only the first pane carries the window's agent state; a split pane's hook must not stand in for it.
-      if (resolved && resolved.ordinal === 1) misao.recordAgentActivity(resolveServerName(body.serverName), resolved.tmuxTarget, body.event, sessionId);
+      if (resolved && (resolved.ordinal === 1 || body.event === 'session')) misao.recordAgentActivity(resolveServerName(body.serverName), resolved.tmuxTarget, body.event, sessionId, claudeConfigDir, resolved.ordinal, claudeConfigDirExplicit);
       return { ok: true };
     }
 
@@ -212,6 +245,9 @@ const webhookRoutes: FastifyPluginCallback<WebhookRouteOptions> = (fastify, opts
       event: body.event,
       muxPaneRef,
       sessionId,
+      claudeConfigDir,
+      ...(claudeConfigDirExplicit !== undefined ? { claudeConfigDirExplicit } : {}),
+      hookTimestamp,
     });
 
     return { ok: true };

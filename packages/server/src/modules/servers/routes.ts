@@ -16,8 +16,9 @@ import { probeOutput, resolveOsName } from './installProbe';
 import type { AgentInstaller, InstallProgress } from './agent-deploy/AgentInstaller';
 import type { AgentBundler } from './agent-deploy/AgentBundler';
 import type { AgentHostRecorder } from './agent-deploy/AgentHostRecorder';
+import type { FirewallDiagnosis } from './agent-deploy/AgentRecoveryWatchdog';
 import type { TransportFactory } from './transport/TransportFactory';
-import { AgentUnreachableError } from './transport/AgentUnreachableError';
+import { AgentLocalNetworkPermissionError, AgentUnreachableError } from './transport/AgentUnreachableError';
 import type { HarnessInstaller, HarnessInstallProgress, HarnessInstallResult } from './agent-deploy/HarnessInstaller';
 import type { HarnessUpdater } from './agent-deploy/HarnessUpdater';
 import { buildHarnessInstallOptions } from './agent-deploy/harnessInstallOptions';
@@ -166,6 +167,8 @@ function describeMux(registry: MuxDriverRegistry, srv: ServerConfig): Record<str
 }
 
 export interface ServersRouteOptions {
+  /** The watchdog's firewall diagnosis of an agent that does not answer (shown next to the unreachable reason, never instead of it). */
+  firewallStatus?: (server: ServerConfig) => FirewallDiagnosis | undefined;
   serverAliasRepo: IServerAliasRepository;
   serverRepo: IServerRepository;
   tmux: TmuxClient;
@@ -454,7 +457,7 @@ const serversRoutes: FastifyPluginCallback<ServersRouteOptions> = (fastify, opts
           return { ok: true, type: 'agent', steps, startMethod: result.startMethod, ...(result.misaoError ? { misaoError: result.misaoError } : {}) };
         }
 
-        return reply.status(500).send({ error: result.error, steps });
+        return reply.status(500).send({ error: result.error, steps, ...(result.code ? { code: result.code, detail: result.detail } : {}) });
       }
 
       if (!type || !['local', 'agent'].includes(type))
@@ -892,7 +895,7 @@ const serversRoutes: FastifyPluginCallback<ServersRouteOptions> = (fastify, opts
         return { ok: true, steps, startMethod: result.startMethod, ...(result.misaoError ? { misaoError: result.misaoError } : {}) };
       }
 
-      return reply.status(500).send({ error: result.error, steps });
+      return reply.status(500).send({ error: result.error, steps, ...(result.code ? { code: result.code, detail: result.detail } : {}) });
     }),
   );
 
@@ -1170,7 +1173,8 @@ const serversRoutes: FastifyPluginCallback<ServersRouteOptions> = (fastify, opts
             };
           } catch (err: unknown) {
             if (!(err instanceof AgentUnreachableError)) return { status: 'offline' as const, mux: {}, message: `Agent returned an error: ${(err as Error).message}` };
-            return { status: 'offline' as const, mux: {}, message: `Agent unreachable: ${err.reason}` };
+            const firewall = opts.firewallStatus?.(srv);
+            return { status: 'offline' as const, mux: {}, message: `Agent unreachable: ${err.reason}`, ...(firewall ? { firewall } : {}) };
           }
         }
         const mux = await checkMuxes();
@@ -1260,7 +1264,7 @@ const serversRoutes: FastifyPluginCallback<ServersRouteOptions> = (fastify, opts
         osName = await resolveOsName(transport, transportFactory.hostProfileFor(srv));
       } catch (err: unknown) {
         if (err instanceof AgentUnreachableError) {
-          return reply.status(503).send({ error: 'agent_unreachable', server: err.serverName, reason: err.reason, status: 'offline' });
+          return reply.status(503).send({ error: 'agent_unreachable', server: err.serverName, reason: err.reason, status: 'offline', ...(err instanceof AgentLocalNetworkPermissionError ? { code: err.code, detail: err.detail } : {}) });
         }
         throw err;
       }

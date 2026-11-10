@@ -18,11 +18,18 @@
     "executionApproval": "実行承認待ち: {{title}}",
     "taskDone": "タスク完了: {{title}}",
     "taskFailed": "タスク失敗: {{title}}",
+    "taskLaunchFailed": "worker が起動しません: {{title}}",
     "agentFinished": "エージェント終了: {{label}}",
     "agentApiError": "{{label}} が API エラーで停止しました"
   },
   "toast": {
     "dismissAriaLabel": "通知を閉じる"
   },
-  "fallbackTaskTitle": "タスク #{{taskId}}"
+  "fallbackTaskTitle": "タスク #{{taskId}}",
+  "firewall": {
+    "title": "Windows ファイアウォール: {{serverName}}",
+    "blocked": "受信 Block 規則がエージェントに適用されます: {{rules}}。",
+    "missing_allow": "適用可能な受信 Allow 規則がありません。",
+    "unknown": "ポリシーを確認できません。"
+  }
 }

@@ -1,3 +1,4 @@
+import type { ActivityTitleData } from '../../lib/windowDisplay';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { Icon } from '../ui/Icon';
@@ -9,8 +10,7 @@ import { useActiveWindowRows, type ActiveWindowRow } from '../../hooks/useActive
 import { useRecentTasks } from '../../hooks/useRecentTasks';
 import { useBrowserGroups } from '../../hooks/useBrowserGroups';
 import { buildTaskSidebarGroups, findWindowActivity, type TaskGroupKey, type TaskSidebarGroup, type TaskSidebarRow } from './taskSidebarModel';
-import { listTaskChildren, type TaskChild } from './taskSidebarChildren';
-import { resolveWindowDisplay, formatWindowDisplayLabel } from '../../lib/windowDisplay';
+import { listTaskChildren, taskChildWindowTitle, type TaskChild } from './taskSidebarChildren';
 import type { Task } from '../../pages/workspace/types';
 
 const EXPAND_STORAGE_KEY = 'tasks-sidebar-expanded';
@@ -32,6 +32,7 @@ function saveExpandedIds(ids: Set<number>): void {
 }
 
 interface TasksSidebarProps {
+  titleData: ActivityTitleData;
   tasks: Task[];
   loading?: boolean;
   onOpenTask: (taskId: number, title: string) => void;
@@ -48,6 +49,7 @@ const GROUP_LABEL_KEYS: Record<TaskGroupKey, string> = {
 };
 
 export default function TasksSidebar({
+  titleData,
   tasks,
   loading,
   onOpenTask,
@@ -62,7 +64,7 @@ export default function TasksSidebar({
   const searchRef = useRef<HTMLInputElement>(null);
   const treeRef = useRef<HTMLDivElement>(null);
 
-  const { rows: activityRows } = useActiveWindowRows();
+  const { rows: activityRows } = useActiveWindowRows(titleData);
   const { openedAt } = useRecentTasks();
 
   const groups = useMemo(
@@ -534,15 +536,7 @@ interface ChildRowProps {
 function ChildRow({ child, taskId, taskTitle, onOpenTaskWindow, onOpenTaskBrowser, activity, t }: ChildRowProps) {
   if (child.kind === 'window') {
     const w = child.window;
-    const label = formatWindowDisplayLabel(resolveWindowDisplay({
-      windowId: w.id,
-      paneTitle: activity?.paneName,
-      label: w.label,
-      taskTitle: taskTitle,
-      workerType: w.workerType,
-      windowType: w.windowType,
-      tmuxTarget: w.tmuxTarget,
-    }));
+    const label = taskChildWindowTitle(w, taskTitle, activity);
     return (
       <div
         role="treeitem"

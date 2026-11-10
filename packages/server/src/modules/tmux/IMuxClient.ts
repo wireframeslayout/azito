@@ -21,6 +21,8 @@ export type PaneLocation =
 export interface PaneProgram {
   /** The program and its arguments; the program is looked up by the host's own rules (PATH, PATHEXT on Windows). */
   argv: readonly string[];
+  /** Environment for the program itself; overrides matching keys in extraEnv. */
+  env?: Record<string, string>;
   /** Where it starts. Omitted: the mux's own default. */
   cwd?: string;
   /** The size the program starts with: a Node TUI does not follow a later resize on Windows (a ConPTY limit), so it must be right at start. */
@@ -38,6 +40,8 @@ export interface IMuxClient {
 
   listWorkspaces(server: ServerConfig): Promise<MuxWorkspace[]>;
   listWorkspacesStrict(server: ServerConfig): Promise<MuxWorkspace[]>;
+  /** Creates the workspace only (no window where the mux allows it: tmux needs one, misao does not), in the server's default mux. Throws on failure. */
+  prepareWorkspace(server: ServerConfig, name: string, extraEnv?: Record<string, string>): Promise<void>;
   /** `kind` (routing driver only) picks the mux to create in; omitted = the server's default mux. A single driver ignores it. */
   openWorkspace(server: ServerConfig, name: string, opts?: { command?: string; windowName?: string; exactName?: boolean; extraEnv?: Record<string, string>; kind?: MuxDriverKind; program?: PaneProgram }): Promise<{ ref: MuxRef; result: ExecResult; windowName?: string }>;
   openWindow(server: ServerConfig, workspace: string, baseName?: string, opts?: { exactName?: boolean; extraEnv?: Record<string, string>; kind?: MuxDriverKind; program?: PaneProgram }): Promise<{ ref: MuxRef; result: ExecResult; windowName?: string }>;
@@ -67,6 +71,7 @@ export interface IMuxClient {
   captureScreen(server: ServerConfig, handle: PaneHandle, start?: number, end?: number): Promise<ExecResult>;
   sendKeysToHandle(server: ServerConfig, handle: PaneHandle, keys: string[]): Promise<void>;
   sendTextToHandle(server: ServerConfig, handle: PaneHandle, text: string): Promise<void>;
+  pasteTextToHandle(server: ServerConfig, handle: PaneHandle, text: string): Promise<void>;
   panePidByHandle(server: ServerConfig, handle: PaneHandle): Promise<number | null>;
   paneCommandByHandle(server: ServerConfig, handle: PaneHandle): Promise<string | null>;
 

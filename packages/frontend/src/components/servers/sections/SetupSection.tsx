@@ -1,9 +1,10 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { api } from '../../../api/client';
-import { InstallSteps, FormSelect, FormInput, Chip, Button } from '../../ui';
+import { FormSelect, FormInput, Chip, Button } from '../../ui';
 import type { InstallStep, ChipTone } from '../../ui';
 import { Icon } from '../../ui/Icon';
+import { ServerInstallSteps } from '../ServerInstallSteps';
 import type { Server } from '../../../hooks/useServerManagement';
 import { closedSetupRows, describeMisaoItem, type InstallStatusResponse, type InstallStatusItem } from '../serverSections';
 import { hostFeatureBlockReason, isUnsupportedOsAnswer, describeUnsupportedOs } from '../../../lib/hostFeature';
@@ -42,6 +43,7 @@ interface SetupSectionProps {
   server: Server;
   installStatus: InstallStatusResponse | null;
   installStatusError: 'offline' | 'failed' | null;
+  localNetworkDetail?: string;
   refresh: () => void;
 }
 
@@ -64,7 +66,7 @@ function SetupHeading() {
   );
 }
 
-export default function SetupSection({ server, installStatus, installStatusError, refresh }: SetupSectionProps) {
+export default function SetupSection({ server, installStatus, installStatusError, localNetworkDetail, refresh }: SetupSectionProps) {
   const { t } = useTranslation('servers');
   const [installingHarness, setInstallingHarness] = useState(false);
   const [installingAgent, setInstallingAgent] = useState(false);
@@ -137,7 +139,7 @@ export default function SetupSection({ server, installStatus, installStatusError
     setAgentSteps([]);
     try {
       const encoded = encodeURIComponent(server.name);
-      const res = await api<{ ok: boolean; steps: InstallStep[]; error?: string }>(
+      const res = await api<{ ok: boolean; steps: InstallStep[]; error?: string; code?: string; detail?: string }>(
         `/servers/${encoded}/agent/install`,
         { method: 'POST' },
       );
@@ -198,7 +200,7 @@ export default function SetupSection({ server, installStatus, installStatusError
       <div>
         <SetupHeading />
         <p role="status" style={{ fontSize: 'var(--font-sm)', color: 'var(--text-dim)', margin: '0 0 var(--space-4)' }}>
-          {t('setup.offlineNotice')}
+          {localNetworkDetail ? <>{t('localNetwork.guidance')}<br />{t('localNetwork.detail')}: {localNetworkDetail}</> : t('setup.offlineNotice')}
         </p>
         {canInstallAgent && (
           <StepRow
@@ -738,7 +740,7 @@ function StepLog({ steps, installing }: { steps: InstallStep[]; installing: bool
           background: 'var(--bg)', border: '1px solid var(--border)', borderRadius: 'var(--radius-md)',
           padding: '2px 12px', marginTop: 4,
         }}>
-          <InstallSteps steps={steps} />
+          <ServerInstallSteps steps={steps} />
         </div>
       )}
     </div>

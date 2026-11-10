@@ -70,6 +70,8 @@ describe('AgentTranscriptSource', () => {
     const source = new AgentTranscriptSource('claude', 'srv', clientReturning({}));
     await expect(source.getSessionCwd(SID)).rejects.toBeInstanceOf(TranscriptAgentOutdatedError);
     await expect(source.listSessions()).rejects.toBeInstanceOf(TranscriptAgentOutdatedError);
+    await expect(source.listSubagents(SID)).rejects.toBeInstanceOf(TranscriptAgentOutdatedError);
+    await expect(source.readSubagent(SID, 'a123')).rejects.toBeInstanceOf(TranscriptAgentOutdatedError);
   });
 
   it('propagates an unreachable agent', async () => {

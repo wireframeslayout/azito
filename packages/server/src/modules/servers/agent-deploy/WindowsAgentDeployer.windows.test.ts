@@ -1,3 +1,4 @@
+import { decodedTaskScript } from '../../../shared/os/taskScheduler/taskLauncher';
 import { exec as execCallback, execFile, spawn, type ChildProcess } from 'child_process';
 import crypto from 'crypto';
 import fs from 'fs';
@@ -11,7 +12,7 @@ import { readSha256FromSumsFile } from './integrityVerifier';
 import { AgentBundler } from './AgentBundler';
 import { updateWindowsAgent } from './windowsAgentUpdate';
 import { WindowsAgentDeployer, buildAgentEnvFile, windowsAgentLayout, type WindowsDeployInput, type WindowsFileTransfer, type WindowsSshExec } from './WindowsAgentDeployer';
-import { checkFirewall, firewallRuleName } from './windowsFirewall';
+import { checkFirewall, inspectFirewall, readFirewallDump, firewallRuleName } from './windowsFirewall';
 import { buildWindowsPreflightCommand, parseWindowsPreflight, type WindowsPreflightInfo } from './windowsPreflight';
 import type { WindowsAgentOptions } from './windowsAgentConfig';
 
@@ -186,8 +187,8 @@ describe.skipIf(process.platform !== 'win32')('the Windows agent install on a re
       const query = await cmdExec('ci', `"${schtasksPath()}" /Query /TN ${OPTIONS.taskName}`, 60_000);
       if (query.code === 0) problems.push(`the task ${OPTIONS.taskName} is still registered (delete exit ${deleted.code}: ${deleted.stderr.trim()})`);
       for (const name of firewallRules) {
-        await ps(`Remove-NetFirewallRule -DisplayName ${powershellDialect.quote(name)} -ErrorAction SilentlyContinue`).catch(() => undefined);
-        const left = (await ps(`@(Get-NetFirewallRule -DisplayName ${powershellDialect.quote(name)} -ErrorAction SilentlyContinue).Count`).catch((e: unknown) => String(e))).trim();
+        await ps(`Remove-NetFirewallRule -DisplayName ${powershellDialect.quote(`${name}*`)} -ErrorAction SilentlyContinue`).catch(() => undefined);
+        const left = (await ps(`@(Get-NetFirewallRule -DisplayName ${powershellDialect.quote(`${name}*`)} -ErrorAction SilentlyContinue).Count`).catch((e: unknown) => String(e))).trim();
         if (left !== '0') problems.push(`the firewall rule "${name}" is still there (${left})`);
       }
     }
@@ -219,27 +220,25 @@ describe.skipIf(process.platform !== 'win32')('the Windows agent install on a re
     const create = (name: string, extra: string): Promise<string> =>
       ps(`$null = New-NetFirewallRule -DisplayName ${powershellDialect.quote(name)} -Direction Inbound -Protocol TCP -Profile Any ${extra}`);
 
-    it('adds the rule the first time (an elevated session) and finds it the second time', async (ctx) => {
+    it('reads effective profile and interface filters on the Windows runner', async (ctx) => {
+      const dump = await readFirewallDump((command) => cmdExec('ci', command, 120_000), BIND);
+      if (!dump.elevated) ctx.skip('this session is not elevated');
+      expect(dump.problem).toBeNull();
+      expect(dump.profiles?.length).toBeGreaterThan(0);
+      for (const rule of dump.rules) {
+        expect(rule.interfaceAlias).toBeDefined();
+        expect(rule.interfaceType).toBeDefined();
+      }
+    }, 300_000);
+
+    it('adds a rule when the elevated ActiveStore has no matching rule', async (ctx) => {
       const port = await freePort();
       track(port);
-      const first = await run(port);
-      if (!first.elevated) ctx.skip('this session is not elevated: the rule cannot be added here');
-      console.log(`[WindowsAgentDeployer.windows.test] first firewall result: ${JSON.stringify(first)}`);
-      expect(first).toMatchObject({ ruleFound: false, created: true, problem: null, blockedBy: [] });
-      const second = await run(port);
-      expect(second).toMatchObject({ ruleFound: true, created: false, blockedBy: [] });
-      // The rule is limited to this program, this address and the tailnet.
-      const detail = JSON.parse(await ps([
-        `$r = Get-NetFirewallRule -DisplayName ${powershellDialect.quote(firewallRuleName(port))}`,
-        '$info = [ordered]@{ program = "$(($r | Get-NetFirewallApplicationFilter).Program)"; local = "$(($r | Get-NetFirewallAddressFilter).LocalAddress)"; remote = "$(($r | Get-NetFirewallAddressFilter).RemoteAddress)"; port = "$(($r | Get-NetFirewallPortFilter).LocalPort)"; action = "$($r.Action)" }',
-        '$global:LASTEXITCODE = 0',
-        'ConvertTo-Json -InputObject $info -Compress',
-      ].join('\n'))) as Record<string, string>;
-      expect(detail.program.toLowerCase()).toBe(fwNode.toLowerCase());
-      expect(detail.local).toBe(BIND);
-      expect(detail.remote).toMatch(/^100\.64\.0\.0\/(10|255\.192\.0\.0)$/);
-      expect(detail.port).toBe(String(port));
-      expect(detail.action).toBe('Allow');
+      const inspection = await inspectFirewall((command) => cmdExec('ci', command, 120_000), port, fwNode, BIND);
+      if (!inspection.elevated) ctx.skip('this session is not elevated');
+      expect(inspection).toMatchObject({ ruleFound: false, created: false, blockedBy: [] });
+      const result = await run(port);
+      expect(result).toMatchObject({ ruleFound: false, created: true, blockedBy: [] });
     }, 300_000);
 
     it('stops at an enabled inbound Block rule for the port, with its name, and adds nothing', async () => {
@@ -276,7 +275,9 @@ describe.skipIf(process.platform !== 'win32')('the Windows agent install on a re
       firewallRules.add(name);
       track(port);
       await create(name, `-Action Allow -Program ${powershellDialect.quote(fwNode)}`);
-      expect(await run(port)).toMatchObject({ ruleFound: true, created: false });
+      const result = await run(port);
+      if (result.elevated) expect(result).toMatchObject({ ruleFound: true, created: false });
+      else expect(result.ruleFound).toBeNull();
     }, 300_000);
   });
 
@@ -308,8 +309,11 @@ describe.skipIf(process.platform !== 'win32')('the Windows agent install on a re
       expect(registered.stdout).toContain('<LogonTrigger>');
       expect(registered.stdout).toContain(path.win32.join(host.systemRoot, 'System32', 'conhost.exe'));
       expect(registered.stdout).toContain('--headless');
-      expect(registered.stdout).toContain(layout.entry);
-      expect(registered.stdout).toContain(`--env-file=${layout.envFile}`);
+      const encoded = /-EncodedCommand ([A-Za-z0-9+/=]+)/.exec(registered.stdout)?.[1];
+      expect(encoded).toBeDefined();
+      const launcher = decodedTaskScript(encoded!)!;
+      expect(launcher).toContain(layout.entry);
+      expect(launcher).toContain(layout.envFile);
 
       await deployment.commit();
       expect(fs.existsSync(layout.envFilePrev)).toBe(false);
@@ -423,12 +427,35 @@ describe.skipIf(process.platform !== 'win32')('the Windows agent install on a re
       } catch (err) {
         throw new Error(`${(err as Error).message}\nagent log:\n${readLog(layoutOf().logFile)}`);
       }
-      // conhost is the parent of node; neither has a window.
+      // The launcher carries paths encoded, while the node process names the agent folder.
       const running = await agentProcesses(layoutOf().root);
-      expect(running.map((p) => p.name).sort()).toEqual(['conhost.exe', 'node.exe']);
+      expect(running.map((p) => p.name)).toEqual(['node.exe']);
       expect(running.every((p) => p.handle === 0)).toBe(true);
 
+      await ps([
+        `$root = ${powershellDialect.quote(layoutOf().root)}`,
+        'Get-CimInstance Win32_Process -Filter "Name = \'node.exe\'" | Where-Object { $_.CommandLine -and $_.CommandLine.Contains($root) } | ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction Stop }',
+      ].join('\n'));
+      await waitForNoHealth(OPTIONS.port, 30_000);
+      await waitForHealth(OPTIONS.port, version, 60_000);
+      expect(readLog(layoutOf().logFile)).toMatch(/launcher:.*retry/);
+
       await deployer.restart('ci', host);
+      await waitForHealth(OPTIONS.port, version, 60_000);
+
+      await cmdExec('ci', `"${schtasksPath()}" /Change /TN ${OPTIONS.taskName} /DISABLE`, 60_000);
+      try {
+        await ps([
+          `$root = ${powershellDialect.quote(layoutOf().root)}`,
+          'Get-CimInstance Win32_Process -Filter "Name = \'node.exe\'" | Where-Object { $_.CommandLine -and $_.CommandLine.Contains($root) } | ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction Stop }',
+        ].join('\n'));
+        await waitForNoHealth(OPTIONS.port, 30_000);
+        await new Promise((r) => setTimeout(r, 8000));
+        expect(await agentProcesses(layoutOf().root)).toEqual([]);
+      } finally {
+        await cmdExec('ci', `"${schtasksPath()}" /Change /TN ${OPTIONS.taskName} /ENABLE`, 60_000);
+      }
+      await deployer.start('ci', host);
       await waitForHealth(OPTIONS.port, version, 60_000);
 
       // The Task Scheduler's own /End (what the docs tell a person to run, and what its "End" button does) is enough: the agent
@@ -527,7 +554,11 @@ describe.skipIf(process.platform !== 'win32')('the Windows agent install on a re
     const deps = () => ({ deployer, checkHealth, logger: { warn: (m: string) => console.warn(m) } });
     const currentToken = (): string => /AZITO_AGENT_TOKEN="([^"]+)"/.exec(fs.readFileSync(layoutOf().envFile, 'utf8'))![1]!;
     const releaseDirs = (): string[] => fs.readdirSync(layoutOf().root, { withFileTypes: true }).filter((e) => e.isDirectory() && /^[0-9a-f]{12}$/.test(e.name)).map((e) => e.name).sort();
-    const registeredEntry = async (): Promise<string> => (await cmdExec('ci', `"${schtasksPath()}" /Query /TN ${OPTIONS.taskName} /XML`, 60_000)).stdout;
+    const registeredEntry = async (): Promise<string> => {
+      const xml = (await cmdExec('ci', `"${schtasksPath()}" /Query /TN ${OPTIONS.taskName} /XML`, 60_000)).stdout;
+      const encoded = /-EncodedCommand ([A-Za-z0-9+/=]+)/.exec(xml)?.[1];
+      return `${xml}\n${encoded ? decodedTaskScript(encoded) ?? '' : ''}`;
+    };
 
     afterAll(() => {
       fs.rmSync(bundleDir, { recursive: true, force: true });
@@ -591,8 +622,14 @@ describe.skipIf(process.platform !== 'win32')('the Windows agent install on a re
       const token = currentToken();
       const b = await makeBundle();
 
+      const beforeTask = await deployer.describeTask('ci', host);
+      const beforeProcesses = await agentProcesses(root);
       const result = await updateWindowsAgent(deps(), { ...b, token }, OPTIONS.port, layoutOf().logFile);
-
+      if (!result.success) {
+        const afterTask = await deployer.describeTask('ci', host);
+        const afterProcesses = await agentProcesses(root);
+        console.error(`[agent update diagnostic] before task: ${beforeTask}; processes: ${JSON.stringify(beforeProcesses)}; after task: ${afterTask}; processes: ${JSON.stringify(afterProcesses)}; agent log: ${readLog(layoutOf().logFile).slice(-12000)}`);
+      }
       expect(result, JSON.stringify(result)).toMatchObject({ success: true, version: b.version });
       await checkHealth(b.version);
       expect(currentToken()).toBe(token);

@@ -1,26 +1,7 @@
 import { describe, expect, it } from 'vitest';
-import { buildTaskXml } from '../../../shared/os/taskScheduler/taskDefinition';
 import { DEFAULT_WINDOWS_AGENT_OPTIONS } from './windowsAgentConfig';
 import { FakeWindowsHost } from './testing/fakeWindowsHost';
-import { WindowsAgentDeployer, parsePruneOutput, versionOfTaskXml, windowsAgentLayout } from './WindowsAgentDeployer';
-
-describe('versionOfTaskXml', () => {
-  const taskFor = (entry: string): string => buildTaskXml({
-    userId: 'PC\\dev', description: 'd', executable: 'C:\\Windows\\System32\\conhost.exe',
-    args: ['--headless', 'C:\\Program Files\\nodejs\\node.exe', '--env-file=C:\\Users\\Server User\\.azito\\agent\\agent.env', entry], workingDirectory: 'C:\\Users\\Server User\\.azito\\agent',
-    restartOnFailure: { intervalMinutes: 1, count: 999 },
-  });
-
-  it('reads the version folder the task runs the agent from, also from a path with spaces', () => {
-    const layout = windowsAgentLayout('C:\\Users\\Server User', DEFAULT_WINDOWS_AGENT_OPTIONS, '0123456789ab');
-    expect(versionOfTaskXml(taskFor(layout.entry))).toBe('0123456789ab');
-  });
-
-  it('is undefined for a definition that does not run the agent entry', () => {
-    expect(versionOfTaskXml('<Task>previous definition</Task>')).toBeUndefined();
-    expect(versionOfTaskXml(taskFor('C:\\tools\\other.js'))).toBeUndefined();
-  });
-});
+import { WindowsAgentDeployer, parsePruneOutput } from './WindowsAgentDeployer';
 
 describe('WindowsAgentDeployer.pruneOldVersions', () => {
   const HOST = { home: 'C:\\Users\\dev' };

@@ -1,20 +1,25 @@
+import { compressPowerShellScript } from '../../../shared/os/compressPowerShellScript';
 import fs from 'fs';
 import * as path from 'path';
 import { buildCommandSpec } from '../../../shared/exec/commandSpec';
 import { powershellDialect, powershellEncodedArgs } from '../../../shared/os/shellDialect';
 import { createScriptCommandSpecRunner } from '../../servers/agent-deploy/windowsSshRunner';
 import { powershellErrorText } from '../../servers/agent-deploy/WindowsAgentDeployer';
+import { soleExecAction, taskHasUserId, taskPrincipalId, taskMisaoRoot } from '../../../shared/os/taskScheduler/taskXmlRead';
+import { legacyMisaoTaskArgumentsOf } from '../../../shared/os/taskScheduler/misaoTaskArguments';
+import { sameTaskAction } from '../../../shared/os/taskScheduler/taskLauncher';
+import { misaoTaskVersion } from '../../../shared/os/taskScheduler/misaoTaskIdentity';
 import { SchtasksClient } from '../../../shared/os/taskScheduler/schtasks';
 import { encodeTaskXml, isTaskDefinitionDisabled } from '../../../shared/os/taskScheduler/taskDefinition';
 import { PROTECT_SCRIPT } from '../../../shared/os/windowsSecretFileGuard';
-import { buildEndProcessesScript } from '../../../shared/os/windowsProcessSweep';
+import { buildEndProcessesScript, buildProcessPresentScript, parseProcessPresent } from '../../../shared/os/windowsProcessSweep';
 import { redactSecretText } from '../../../shared/redactSecretText';
 import { managedEndpointOf, MISAO_RELEASE_FILE_NAMES, type AgentMisaoWindowsHost, type MisaoSocketStatus } from '../../servers/transport/agentMisaoSocket';
 import type { MisaoBundle, MisaoTargetFiles } from './MisaoBundle';
 import { bundleFilesFor, sha256Buffer } from './MisaoBundle';
 import { daemonCheckScript, parseDaemonCheck, sameProgram } from './misaoWindowsVerify';
 import { MisaoServiceError } from './MisaoServiceError';
-import { buildMisaoTaskXml, taskMisaoRoot, misaoWindowsLayout, misaoWindowsReleasePaths, type MisaoWindowsLayout } from './misaoWindowsTask';
+import { buildMisaoTaskXml, misaoTaskArguments, misaoWindowsLayout, misaoWindowsReleasePaths, type MisaoWindowsLayout } from './misaoWindowsTask';
 import type { MisaoAgentInstallResult, MisaoInstallStep, MisaoInstallTarget } from './misaoInstallTypes';
 
 export interface MisaoWindowsInstallerOptions {
@@ -27,8 +32,9 @@ export interface MisaoWindowsInstallerOptions {
   /** How long a stopped daemon's task gets to leave the running state before it is ended. */
   taskIdleTimeoutMs?: number;
   /**
-   * Refuse (before anything is changed) when the task starts another folder's misao. Set for an agent's misao, whose folder is fixed
-   * (`~\.azito\misao`). The hub's own misao leaves it off: its caller (`MisaoServiceService`) decides that, and `--replace-socket` takes the task over on purpose.
+   * Refuse (before anything is changed) when the registered task is not exactly the one this install writes for its folder (another
+   * folder's misao, another account's task, or a definition changed by hand). Set for an agent only. The hub checks in
+   * MisaoServiceService, where an explicit `--replace-socket` permits taking over a stopped task.
    */
   refuseTaskOfAnotherRoot?: boolean;
 }
@@ -58,11 +64,6 @@ const sleep = (ms: number): Promise<void> => new Promise((resolve) => setTimeout
 
 function describeError(err: unknown): string {
   return err instanceof Error ? err.message : String(err);
-}
-
-/** The agent reported its folder in its real spelling and the task was written with it: the strings are compared, never looked up on this machine. */
-function isTaskOfRoot(taskRoot: string | undefined, misaoRoot: string): boolean {
-  return taskRoot !== undefined && win32.normalize(taskRoot).toLowerCase() === win32.normalize(misaoRoot).toLowerCase();
 }
 
 /** What was on the host before a switch, to put back if it fails. */
@@ -106,7 +107,7 @@ export class MisaoWindowsInstaller {
     const live = status.socketPresent;
     // The pipe probe can miss a daemon that is just starting (the logon task is on its way up): the task's own state says so.
     if (!live && (await this.taskIsRunning(session))) {
-      throw new MisaoServiceError('daemon_not_ready', `The task "${this.options.taskName}" is running but ${session.pipe} does not accept connections yet. Nothing was changed; try again in a moment.`);
+      throw new MisaoServiceError('daemon_not_ready', `The task "${this.options.taskName}" is running but ${session.pipe} does not accept connections. The task may belong to another installation or may still be starting. Nothing was changed. Check the task definition to confirm which folder it uses.`);
     }
     if (live && !status.installedVersion) {
       throw new MisaoServiceError('custom_socket', `A misao daemon is already listening on ${session.pipe} that AZITO did not install. It is used as it is; AZITO will not put a second one beside it.`);
@@ -144,11 +145,19 @@ export class MisaoWindowsInstaller {
     }
     const live = status.socketPresent;
     if (live && status.installedVersion === bundle.version) {
-      return { version: bundle.version, runningVersion: bundle.version, startMethod: 'running', updateAvailable: false };
+      const task = await session.tasks.query(this.options.taskName);
+      if (task.exists) {
+        const action = soleExecAction(await session.tasks.exportXml(this.options.taskName));
+        const layout = this.layout(session, bundle.version);
+        const expected = misaoTaskArguments({ systemRoot: session.windows.systemRoot, layout, pipe: session.pipe });
+        if (action && sameTaskAction(action.argumentsLine, expected)) {
+          return { version: bundle.version, runningVersion: bundle.version, startMethod: 'running', updateAvailable: false };
+        }
+      }
     }
     // The pipe probe can miss a daemon that is just starting: stopping or restarting around it could not be undone, so nothing is touched.
     if (!live && (await this.taskIsRunning(session))) {
-      throw new MisaoServiceError('daemon_not_ready', `The task "${this.options.taskName}" is running but ${session.pipe} does not accept connections yet. Nothing was changed; try again in a moment.`);
+      throw new MisaoServiceError('daemon_not_ready', `The task "${this.options.taskName}" is running but ${session.pipe} does not accept connections. The task may belong to another installation or may still be starting. Nothing was changed. Check the task definition to confirm which folder it uses.`);
     }
 
     // The new release is complete on disk and its task definition is built before anything is stopped: a damaged transfer or a value the task cannot hold leaves the daemon running.
@@ -176,10 +185,11 @@ export class MisaoWindowsInstaller {
 
   /**
    * The daemon AZITO installed does not answer (it died: its task reports 0 whatever happened, so the Task Scheduler does not start it
-   * again): starts the task through the agent. A task still "running" while the pipe is silent is left alone (it is starting), unless
-   * `force`: then it is ended with the `misao.exe` of this pipe first. Touches nothing (and says why) when the agent relays to a pipe
+   * again): starts the task through the agent. A task still "running" while the pipe is silent is left alone (it is starting, or its
+   * launcher is waiting to retry), unless `force` and the managed daemon is still present (or the task is of the earlier form): then it is ended with the
+   * `misao.exe` of this pipe first. Touches nothing (and says why) when the agent relays to a pipe
    * other than the managed one (`custom_socket`: that daemon is not ours), when the daemon answers, when AZITO did not install it,
-   * when its task is gone (the install is what recreates that), when the task starts another folder's misao (`other_task`) or when
+   * when its task is gone (the install is what recreates that), when the task is not this install's (another folder, another account or a changed definition: `other_task`) or when
    * it was disabled by hand (`disabled`).
    */
   async reviveDaemon(target: WindowsTarget, force: boolean): Promise<'running' | 'custom_socket' | 'not_installed' | 'no_task' | 'other_task' | 'disabled' | 'starting' | 'started'> {
@@ -193,12 +203,26 @@ export class MisaoWindowsInstaller {
     const state = await tasks.query(this.options.taskName);
     if (!state.exists) return 'no_task';
     const xml = await tasks.exportXml(this.options.taskName);
-    const taskRoot = taskMisaoRoot(xml);
-    if (!isTaskOfRoot(taskRoot, host.windows.misaoRoot)) return 'other_task';
+    const action = soleExecAction(xml);
+    if (!(await this.taskOwnedByCurrentUser(target, xml))) return 'other_task';
+    const version = action && misaoTaskVersion(action, host.windows.systemRoot, host.windows.misaoRoot, managedEndpointOf(host), this.options.taskName);
+    if (!action || !version) return 'other_task';
+    const legacy = legacyMisaoTaskArgumentsOf({ systemRoot: host.windows.systemRoot, exe: win32.join(host.windows.misaoRoot, version, 'misao.exe'), root: host.windows.misaoRoot, logFile: win32.join(host.windows.misaoRoot, 'misao.log'), pipe: managedEndpointOf(host) }) === action.argumentsLine;
     if (isTaskDefinitionDisabled(xml)) return 'disabled';
     if (state.running) {
       if (!force) return 'starting';
+      if (!legacy) {
+        const found = await this.runScript(target, compressPowerShellScript(buildProcessPresentScript('misao.exe', managedEndpointOf(host))), SCRIPT_TIMEOUT_MS);
+        if (found.code !== 0) throw new MisaoServiceError('update_failed', `Cannot check the misao process: ${redactSecretText(powershellErrorText(found.stderr) || found.stdout.trim()).slice(0, 600)}`);
+        if (!parseProcessPresent(found.stdout)) return 'starting';
+      }
       await tasks.stop(this.options.taskName);
+      if (!legacy) {
+        const encoded = /-EncodedCommand ([A-Za-z0-9+/=]+)$/.exec(action.argumentsLine)?.[1];
+        if (!encoded) throw new MisaoServiceError('update_failed', 'Cannot identify the misao launcher');
+        const launcher = await this.runScript(target, compressPowerShellScript(buildEndProcessesScript({ image: 'powershell.exe', argument: encoded, label: 'misao launcher', endParentConhost: false, hashEncodedCommand: true })), SCRIPT_TIMEOUT_MS);
+        if (launcher.code !== 0) throw new MisaoServiceError('update_failed', `Ending the misao launcher failed: ${redactSecretText(powershellErrorText(launcher.stderr) || launcher.stdout.trim()).slice(0, 600)}`);
+      }
       const sweep = await this.runScript(target, buildEndProcessesScript({ image: 'misao.exe', argument: managedEndpointOf(host), label: 'misao', endParentConhost: false }), SCRIPT_TIMEOUT_MS);
       if (sweep.code !== 0) throw new MisaoServiceError('update_failed', `Ending the misao processes failed on the Windows host (exit ${sweep.code}): ${redactSecretText(powershellErrorText(sweep.stderr) || sweep.stdout.trim()).slice(0, 600)}`);
       const deadline = Date.now() + (this.options.taskIdleTimeoutMs ?? DEFAULT_TASK_IDLE_WAIT_MS);
@@ -215,7 +239,7 @@ export class MisaoWindowsInstaller {
 
   // ── Reading the host ──
 
-  /** Only an agent's installer asks for this check: see {@link MisaoWindowsInstallerOptions.refuseTaskOfAnotherRoot}. */
+  /** See {@link MisaoWindowsInstallerOptions.refuseTaskOfAnotherRoot}. */
   private async refuseTaskOfAnotherRootIfAsked(session: Session): Promise<void> {
     if (this.options.refuseTaskOfAnotherRoot) await this.refuseTaskOfAnotherRoot(session);
   }
@@ -227,28 +251,35 @@ export class MisaoWindowsInstaller {
    */
   private async refuseTaskOfAnotherRoot(session: Session): Promise<void> {
     if (!(await session.tasks.query(this.options.taskName)).exists) return;
-    const taskRoot = taskMisaoRoot(await session.tasks.exportXml(this.options.taskName));
-    if (taskRoot !== undefined && isTaskOfRoot(taskRoot, session.windows.misaoRoot)) return;
-    const resolved = taskRoot === undefined ? undefined : await this.resolveFolderOnHost(session, taskRoot);
-    if (resolved !== undefined && resolved !== 'missing' && isTaskOfRoot(resolved, session.windows.misaoRoot)) return;
-    const where = taskRoot === undefined
-      ? 'a task whose misao folder cannot be read'
-      : resolved === 'missing' ? `a misao task of a folder that does not exist (${taskRoot})` : `a misao task of another folder (${taskRoot})`;
-    throw new MisaoServiceError('custom_socket', `The task "${this.options.taskName}" is registered as ${where}, not ${session.windows.misaoRoot}. Changing it would leave that install without its misao, so nothing was changed.`);
+    const xml = await session.tasks.exportXml(this.options.taskName);
+    const action = soleExecAction(xml);
+    const taskRoot = taskMisaoRoot(xml);
+    if (taskRoot === undefined) throw new MisaoServiceError('custom_socket', `The task "${this.options.taskName}" has a definition whose misao folder cannot be read. Nothing was changed.`);
+    if (!(await this.taskOwnedByCurrentUser(session.target, xml))) {
+      throw new MisaoServiceError('custom_socket', `The task "${this.options.taskName}" belongs to another account or its owner cannot be determined. Nothing was changed.`);
+    }
+    if (action && misaoTaskVersion(action, session.windows.systemRoot, session.windows.misaoRoot, session.pipe, this.options.taskName)) return;
+    const same = (a: string, b: string): boolean => win32.normalize(a).toLowerCase() === win32.normalize(b).toLowerCase();
+    if (!same(taskRoot, session.windows.misaoRoot)) {
+      const code = 'try { process.stdout.write(require("fs").realpathSync.native(process.argv[1])) } catch (e) { process.exit(e.code === "ENOENT" ? 3 : 1) }';
+      const result = await session.target.run(buildCommandSpec(session.nodePath, ['-e', code, '--', taskRoot], { timeoutMs: SCRIPT_TIMEOUT_MS, maxOutputBytes: SCRIPT_OUTPUT_BYTES }));
+      if (result.exitCode === 3) throw new MisaoServiceError('custom_socket', `The task "${this.options.taskName}" names a misao folder that does not exist (${taskRoot}). Nothing was changed.`);
+      if (result.exitCode !== 0 || !result.stdout.trim()) throw new MisaoServiceError('custom_socket', `The task "${this.options.taskName}" names a misao folder that cannot be resolved (${taskRoot}). Nothing was changed.`);
+      if (!same(result.stdout.trim(), session.windows.misaoRoot)) throw new MisaoServiceError('custom_socket', `The task "${this.options.taskName}" belongs to another misao folder (${taskRoot}). Nothing was changed.`);
+    }
+    throw new MisaoServiceError('custom_socket', `The task "${this.options.taskName}" has a modified definition for ${session.windows.misaoRoot}. Nothing was changed.`);
   }
 
-  /**
-   * The task may name the same folder in another spelling (an 8.3 short name, a junction). The agent reported its folder resolved, so the
-   * task's folder is resolved by the host itself (`fs.realpath.native` in the agent's Node), never on the hub. The folder comes from the
-   * task definition, so it follows `--`: a value that starts with `-` (`--require=...`) is a path to resolve, never an option of node.
-   * `missing` = the folder does not exist; `undefined` = it could not be resolved.
-   */
-  private async resolveFolderOnHost(session: Session, taskRoot: string): Promise<string | 'missing' | undefined> {
-    const script = 'try { process.stdout.write(require("fs").realpathSync.native(process.argv[1])) } catch (e) { process.exit(e.code === "ENOENT" ? 3 : 1) }';
-    const spec = buildCommandSpec(session.nodePath, ['-e', script, '--', taskRoot], { timeoutMs: SCRIPT_TIMEOUT_MS, maxOutputBytes: SCRIPT_OUTPUT_BYTES });
-    const result = await session.target.run(spec);
-    if (result.exitCode === 3) return 'missing';
-    return result.exitCode === 0 ? result.stdout.trim() : undefined;
+  async taskOwnedByCurrentUser(target: WindowsTarget, xml: string): Promise<boolean> {
+    const out = await this.runScript(target, "[Convert]::ToBase64String([System.Text.Encoding]::UTF8.GetBytes([System.Security.Principal.WindowsIdentity]::GetCurrent().Name))", SCRIPT_TIMEOUT_MS);
+    if (out.code !== 0) throw new MisaoServiceError('unsupported_host', 'Could not determine the task owner on the Windows host.');
+    const account = Buffer.from(out.stdout.trim(), 'base64').toString('utf8');
+    if (!account) throw new MisaoServiceError('unsupported_host', 'The Windows host did not report its account.');
+    if (taskHasUserId(xml, account)) return true;
+    if (!/^S-1-\d+(?:-\d+)+$/i.test(taskPrincipalId(xml) ?? '')) return false;
+    const sid = await this.runScript(target, "[System.Security.Principal.WindowsIdentity]::GetCurrent().User.Value", SCRIPT_TIMEOUT_MS);
+    if (sid.code !== 0) throw new MisaoServiceError('unsupported_host', 'Could not determine the account SID on the Windows host.');
+    return taskHasUserId(xml, account, sid.stdout.trim());
   }
 
   private async inspect(target: WindowsTarget, bundle: MisaoBundle): Promise<{ session: Session; status: MisaoSocketStatus }> {

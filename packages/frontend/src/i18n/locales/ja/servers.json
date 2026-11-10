@@ -1,4 +1,5 @@
 {
+  "sessionState": { "loading": "セッションを読み込み中…", "error": "セッションを取得できません", "partial": "一部のセッション一覧を取得できません" },
   "status": {
     "online": "稼働中",
     "offline": "オフライン",
@@ -121,7 +122,11 @@
     "osLabel": "OS",
     "osUnknown": "不明",
     "osUnknownHint": "この agent の OS はまだ記録されていません（OS を記録する前に登録されたため）。agent の更新または再接続で記録されるまで、Unix として扱います。",
-    "os": { "linux": "Linux", "macos": "macOS", "windows": "Windows" },
+    "os": {
+      "linux": "Linux",
+      "macos": "macOS",
+      "windows": "Windows"
+    },
     "agentVersionLabel": "agent バージョン",
     "browserSupport": "ブラウザ実行対応",
     "supported": "対応",
@@ -131,7 +136,12 @@
     "hubVersionLabel": "Hub バージョン",
     "muxRuntimeNote": "tmux を使うときだけ有効",
     "misaoNotInstalled": "このサーバーには misao が入っていません",
-    "misaoNotInstalledSub": "セットアップの「misao をインストール」から入れられます。ハブが持っている misao をエージェント経由で送ります。"
+    "misaoNotInstalledSub": "セットアップの「misao をインストール」から入れられます。ハブが持っている misao をエージェント経由で送ります。",
+    "firewallMeta": "ネットワークプロファイル: {{profile}} · 確認: {{checkedAt}}",
+    "firewallProfileUnknown": "不明",
+    "firewall_blocked": "このエージェントに受信 Block 規則が適用されます: {{rules}}。管理者に確認を依頼してください。",
+    "firewall_missing_allow": "適用可能な受信 Allow 規則がありません。管理者にポリシーの確認を依頼してください。",
+    "firewall_unknown": "エージェントまたはファイアウォールの状態を確認できません。復旧を続けます。"
   },
   "setup": {
     "title": "セットアップ",
@@ -217,14 +227,14 @@
     "deleting": "削除中…",
     "leftBehind": {
       "title": "サーバー \"{{name}}\" を削除しました",
-      "intro": "サーバーの登録は消えましたが、次のものは意図してホストに残してあります。ひとつずつ確かめて、導入が作ったものなら手で消してください。",
+      "intro": "サーバーの登録を削除しました。ホスト上の削除結果を確認し、残ったものは必要に応じて手動で削除してください。",
       "harmless": "残ったファイアウォールの規則は、消さなくても害はありません。agent を消したので、そのポートを待ち受けるものはなく、規則が新しく開くものもありません。気になるときだけ消してください。",
       "commands": "確かめたあとにホストで実行するコマンド（管理者の PowerShell）"
     },
     "hostRemoval": {
       "groupLabel": "ホスト上のエージェント",
       "removeFromHost": "ホストからもエージェントを消す",
-      "removeFromHostDesc": "サーバーを削除する前に、Windows ホストからエージェントを消します。タスクスケジューラのタスクを終了して登録解除し、~\\.azito\\agent フォルダーを消します。AZITO はプロセスを自分では止めず、ファイアウォールの規則も消しません。フォルダーから動いているプロセスが残っていれば消さずに知らせ（どれかを示します）、規則は一覧と消すコマンドを示します。消せたときだけサーバーを削除します。",
+      "removeFromHostDesc": "サーバーを削除する前に、Windows ホストからエージェントを消します。タスクスケジューラのタスクを終了して登録解除し、~\\.azito\\agent フォルダーを消します。AZITO はプロセスを自分では止めず、ファイアウォールの規則も消しません。フォルダーから動いているプロセスが残っていれば消さずに知らせ（どれかを示します）、規則は一覧と消すコマンドを示します。消せたときだけサーバーを削除します。一致する Claude と Codex の azt-mcp 登録も削除します。共有ハーネスは他のハブでも利用される場合があります。トークンを含む可能性のある operator.env は残ります。",
       "removeMisao": "misao も消す（窓はすべて閉じます）",
       "removeMisaoDesc": "misao のタスクと ~\\.azito\\misao フォルダーを消します。このホストの misao で動いている窓はすべて閉じます。同じホストの Windows のハブが使っている misao は消しません。",
       "removeMisaoNeedsHost": "ホストからもエージェントを消すときに選べます。",
@@ -250,6 +260,8 @@
         "folder": "エージェントのフォルダー",
         "misaoTask": "misao のタスク",
         "misaoProcesses": "misao のプロセス",
+        "claudeHarnessMcp": "Claude の azt-mcp 登録",
+        "codexHarnessMcp": "Codex の azt-mcp 登録",
         "misaoFolder": "misao のフォルダー"
       },
       "outcomes": {
@@ -273,6 +285,14 @@
     "killPaneMessage": "ペイン \"{{name}}\" を終了しますか？"
   },
   "misaoService": {
+    "otherTask": "別の導入",
+    "unknownTask": "タスクの所有先が不明",
+    "otherTaskDetail": "AzitoMisao は別のフォルダーに属しています。引き継ぐと、そのフォルダーの misao はこのタスクから起動されなくなり、その導入のペインは使えなくなります。",
+    "otherTaskRunning": "別の導入の AzitoMisao は稼働中です。引き継ぐ前に停止してください。停止後、再確認してください。",
+    "unknownTaskDetail": "タスクの所有先を判定できません。操作する前に AzitoMisao のタスク定義を確認してください。",
+    "takeoverTitle": "AzitoMisao を引き継ぎますか？",
+    "takeoverMessage": "引き継ぐと、別の導入のフォルダーの misao はこのタスクから起動されなくなり、その導入のペインは使えなくなります。続けますか？",
+    "takeoverConfirm": "引き継いでインストール",
     "loading": "misao のサービスを確認中…",
     "loadFailed": "misao のサービス状態を取得できませんでした。",
     "service": "サービス",
@@ -341,5 +361,9 @@
     "updateConfirmTitle": "misao を更新しますか？",
     "updateConfirmMessage": "更新のため、このサーバーの misao を停止します。このサーバーで実行中のペインはすべて終了し、中のエージェントの作業は中断されます。必要な作業を終えてから続けてください。",
     "updateConfirmLabel": "停止して更新"
+  },
+  "localNetwork": {
+    "guidance": "macOS のローカルネットワークの許可が接続を妨げている可能性があります。agent の Tailscale アドレスを試すか、システム設定 › プライバシーとセキュリティ › ローカルネットワークでハブの許可を確認し、再試行してください。macOS 26.6.2 の launchd のハブでは許可に止められず LAN に届き、この一覧にハブは出ませんでしたが、ほかの版や条件では許可が要る場合があります。",
+    "detail": "元のエラー"
   }
 }

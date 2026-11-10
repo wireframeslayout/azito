@@ -1,55 +1,12 @@
-/**
- * オブジェクト一覧のウィンドウ行の表示テキスト（主表示・検索対象）を決める（純関数）。
- *
- * 主表示はペインタイトル（例: claude がペインに出す「libghostty の wasm 版導入検討」の
- * ような動的タイトル）。tmux はタイトル未設定のペインで実行コマンド名を返すため、
- * `paneTitle` がコマンド名そのものの場合は「タイトルなし」とみなす。
- *
- * 取得できないとき（オフライン・タイトル空）のフォールバックは
- * ウィンドウラベル → タスクタイトル → tmux ターゲット の順。
- */
+import { parseMuxRef, resolveWindowTitle, formatWindowTitleLine, type WindowTitleInput } from '@azito/shared';
 
-import { formatWindowId, isInternalWindowName, parseMuxRef, stripGeneratedSuffix } from '@azito/shared';
-
-/**
- * ペインの実タイトル（エージェントが設定した動的タイトル）。タイトル未設定のペインでは
- * tmux がコマンド名を返すため、その場合は「タイトルなし」として undefined を返す。
- */
-export function resolvePaneDisplayTitle(paneTitle?: string, paneCommand?: string): string | undefined {
-  const title = paneTitle?.trim();
-  if (!title || title === paneCommand?.trim()) return undefined;
-  return title;
-}
-
-export interface WindowDisplayInput {
-  paneTitle?: string;
-  paneCommand?: string;
-  label?: string;
-  taskTitle?: string;
-  tmuxTarget?: string;
-  windowId?: number;
-  workerType?: string;
-  windowType?: string;
-}
-
-export interface WindowDisplay {
-  title: string;
-  idLabel?: string;
-  hasDisplayName: boolean;
-}
-
-export const TYPE_LABEL: Record<string, string> = {
-  claude: 'Claude',
-  codex: 'Codex',
-  generic: 'Terminal',
-  terminal: 'Terminal',
-};
 
 export interface WindowIndexEntry {
   id: number;
   serverName: string;
   tmuxTarget: string;
-  label?: string;
+  label?: string | null;
+  labelSource?: 'auto' | 'user';
   workerType?: string;
   windowType?: string;
   taskId?: number;
@@ -73,63 +30,34 @@ export function buildWindowIndex<T extends WindowIndexEntry>(
   return map;
 }
 
-export function formatWindowDisplayLabel(display: WindowDisplay): string {
-  return display.hasDisplayName && display.idLabel
-    ? `${display.idLabel} · ${display.title}`
-    : display.title;
-}
-
-export function resolveWindowDisplay(i: WindowDisplayInput): WindowDisplay {
-  const idLabel = i.windowId != null ? formatWindowId(i.windowId) : undefined;
-  const paneDisplay = resolvePaneDisplayTitle(i.paneTitle, i.paneCommand);
-  if (paneDisplay) return { title: paneDisplay, idLabel, hasDisplayName: true };
-
-  const label = i.label?.trim();
-  if (label && !isInternalWindowName(label)) {
-    return { title: stripGeneratedSuffix(label), idLabel, hasDisplayName: true };
-  }
-
-  const taskTitle = i.taskTitle?.trim();
-  if (taskTitle) return { title: taskTitle, idLabel, hasDisplayName: true };
-
-  const typeLabel = (i.workerType && TYPE_LABEL[i.workerType]) || (i.windowType && TYPE_LABEL[i.windowType]);
-  if (typeLabel) return { title: typeLabel, idLabel, hasDisplayName: true };
-
-  if (idLabel) return { title: idLabel, idLabel: undefined, hasDisplayName: false };
-
-  return { title: i.tmuxTarget ?? '', idLabel, hasDisplayName: false };
-}
-
-/**
- * ActiveWindowRow (稼働中ウィンドウ行) のフィールドから表示ラベルを組み立てる。
- * `paneName` をペインタイトルとして `resolveWindowDisplay` に渡し、
- * `formatWindowDisplayLabel` で「表示名 · W-123」形式に整形する。
- */
-export function formatActiveWindowLabel(row: {
-  windowId?: number;
-  label?: string;
-  paneName?: string;
-  taskTitle?: string;
-  workerType?: string;
-  windowType?: string;
-  target?: string;
-}): string {
-  const display = resolveWindowDisplay({
-    windowId: row.windowId,
-    paneTitle: row.paneName,
-    label: row.label,
-    taskTitle: row.taskTitle,
-    workerType: row.workerType,
-    windowType: row.windowType,
-    tmuxTarget: row.target,
-  });
-  return formatWindowDisplayLabel(display);
-}
-
 /**
  * Label of a window in a session list. A misao window is addressed by its own id and named on its own, so only the
  * window name is shown; a tmux window keeps `<session>:<window>`.
  */
 export function sessionWindowLabel(sessionName: string, win: { name: string; ref: string }): string {
   return parseMuxRef(win.ref).kind === 'misao' ? win.name : `${sessionName}:${win.name}`;
+}
+
+/** Adapt activity rows to the shared window title input. */
+export function activeWindowTitleInput(row: { windowId?: number; target: string; paneTitle?: string; paneName?: string; paneCommand?: string; label?: string; labelSource?: 'auto' | 'user'; taskTitle?: string; workerType?: string; windowType?: string }): WindowTitleInput {
+  return { id: row.windowId, label: row.label, labelSource: row.labelSource, paneTitle: row.paneTitle || row.paneName, paneCommand: row.paneCommand, taskTitle: row.taskTitle, workerType: row.workerType, windowType: row.windowType, tmuxTarget: row.target };
+}
+
+export interface ActivityTitleData {
+  windowById: Map<number, WindowIndexEntry>;
+  taskById: Map<number, { title: string }>;
+}
+
+export function resolveActivityTitle(row: Parameters<typeof activeWindowTitleInput>[0] & { taskId?: number }, data: ActivityTitleData): string {
+  const win = row.windowId == null ? undefined : data.windowById.get(row.windowId);
+  const taskId = win?.taskId ?? row.taskId;
+  const task = taskId == null ? undefined : data.taskById.get(taskId);
+  return formatWindowTitleLine(resolveWindowTitle(activeWindowTitleInput({
+    ...row,
+    label: win?.label === null ? undefined : win?.label ?? row.label,
+    labelSource: win?.label === null ? win.labelSource : win?.labelSource ?? row.labelSource,
+    workerType: win?.workerType ?? row.workerType,
+    windowType: win?.windowType ?? row.windowType,
+    taskTitle: task?.title ?? row.taskTitle,
+  })));
 }

@@ -1,3 +1,4 @@
+import { LocalNetworkPermissionError } from '../localNetworkDiagnosis';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { HOST_PROBE_COMMAND } from '../../../shared/os/hostProfile';
 import { HOST_OS_PROBE_COMMAND } from './hostOsProbe';
@@ -399,6 +400,16 @@ describe('AgentInstaller', () => {
     expect(text).toContain('pkill -f azito-agent.cjs');
   });
 
+  it('preserves a local network diagnosis in the result and progress', async () => {
+    const error = new LocalNetworkPermissionError('connect EHOSTUNREACH 192.168.1.2:22');
+    const ssh = { resolveHost: () => ({ username: 'u', host: '192.168.1.2', port: 22 }), execIsolated: async () => { throw error; } };
+    const installer = new AgentInstaller(ssh as never, makeBundler() as never, DEFAULT_WINDOWS_AGENT_OPTIONS);
+    const steps: InstallProgress[] = [];
+    const result = await installer.install('u@192.168.1.2', (step) => steps.push(step));
+    expect(result).toMatchObject({ success: false, code: error.code, detail: error.detail });
+    expect(steps.at(-1)).toMatchObject({ status: 'error', code: error.code, detail: error.detail });
+  });
+
   describe('host OS / architecture preflight', () => {
     it('reads the host with a fixed node command, not uname', async () => {
       const { installer, commands } = make(okMisao(), { tmux: 'tmux 3.4' });
@@ -456,7 +467,7 @@ describe('AgentInstaller', () => {
 
   describe('OS detection and the Windows preflight', () => {
     const windowsOutput = (over: Record<string, unknown> = {}) => `banner\n<<AZITO_PREFLIGHT_BEGIN>>\n${JSON.stringify({
-      nodePath: 'C:\\node.exe', nodeVersion: 'v24.14.0', arch: 'AMD64', windowsCaption: 'Microsoft Windows 11 Pro', buildNumber: '22631', cim: 'ok', tailscaleIp: '100.64.0.9', home: 'C:\\Users\\d', systemRoot: 'C:\\Windows', userId: 'PC\\d', ...over,
+      nodePath: 'C:\\node.exe', nodeVersion: 'v24.14.0', arch: 'AMD64', windowsCaption: 'Microsoft Windows 11 Pro', buildNumber: '22631', tailscaleIp: '100.64.0.9', tailscaleCli: 'ok', tailscaleDetail: null, networkStatus: 'not_checked', networkDetail: null, home: 'C:\\Users\\d', systemRoot: 'C:\\Windows', userId: 'PC\\d', ...over,
     })}\n<<AZITO_PREFLIGHT_END>>\n`;
 
     function makeWindows(login: 'cmd' | 'powershell', over: Record<string, unknown> = {}) {
@@ -487,6 +498,27 @@ describe('AgentInstaller', () => {
       expect(result.error).toContain('x86_64 architecture required (found: arm64');
       expect(result.error).toContain('Tailscale IP not found');
       expect(result.error).not.toContain('unsupported_os');
+    });
+
+    it('propagates a CLI refusal and failed network lookup without suggesting sign in', async () => {
+      const { installer } = makeWindows('cmd', { tailscaleIp: null, tailscaleCli: 'denied', tailscaleDetail: '401 Unauthorized', networkStatus: 'failed', networkDetail: 'network unavailable' });
+      const result = await installer.install('user@host');
+      expect(result.error).toContain('CLI access denied for this Windows user (Tailscale may be in use by another user): 401 Unauthorized');
+      expect(result.error).toContain('network address lookup: failed: network unavailable');
+      expect(result.error).not.toMatch(/install.*sign in/i);
+    });
+
+    it('goes past the preflight with the network address after a CLI refusal, and logs the refusal', async () => {
+      const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+      try {
+        const { installer, commands } = makeWindows('cmd', { tailscaleIp: '100.64.1.2', tailscaleCli: 'denied', tailscaleDetail: 'exit 1 : 401 Unauthorized', networkStatus: 'found' });
+        const result = await installer.install('user@host');
+        expect(result.error ?? '').not.toContain('Preflight failed');
+        expect(commands.length).toBeGreaterThan(2);
+        expect(warn).toHaveBeenCalledWith(expect.stringMatching(/using network address; CLI access denied for this Windows user .*401 Unauthorized/));
+      } finally {
+        warn.mockRestore();
+      }
     });
 
     it('refuses a Windows host whose native architecture cannot be read, with the reason', async () => {

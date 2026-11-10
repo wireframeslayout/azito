@@ -1,5 +1,8 @@
 import { describe, it, expect, vi } from 'vitest';
 import Fastify from 'fastify';
+import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
 import transcriptsRoutes from './routes';
 import type { TranscriptReader, TranscriptSource } from './sources/TranscriptSource';
 import { HostTranscriptSourceProvider, type TranscriptSourceProvider } from './sources/TranscriptSourceProvider';
@@ -175,6 +178,15 @@ describe('GET /api/transcripts/:agent/:id', () => {
     await app.close();
   });
 
+  it('returns the rejection reason for session input', async () => {
+    const rejection = { code: 'not_ready', error: 'Agent input is not ready.' };
+    const app = buildApp([buildClaudeSource()], { sendInput: async () => rejection });
+    const res = await app.inject({ method: 'POST', url: `/api/transcripts/claude/${SID}/input`, payload: { paneId: PANE_ID, text: 'hello' } });
+    expect(res.statusCode).toBe(409);
+    expect(res.json()).toEqual(rejection);
+    await app.close();
+  });
+
   it('returns 404 when the session is not found', async () => {
     const app = buildApp([buildClaudeSource({ readSession: () => null })]);
     const res = await app.inject({ method: 'GET', url: `/api/transcripts/claude/${SID}` });
@@ -224,6 +236,24 @@ describe('GET /api/transcripts/:agent/:id', () => {
     const res = await app.inject({ method: 'GET', url: `/api/transcripts/claude/${SID}?before=42` });
     expect(res.statusCode).toBe(404);
     await app.close();
+  });
+
+  it.skipIf(process.platform === 'win32')('reads the matching live pane session from its recorded configuration', async () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'transcript-route-'));
+    const paneId = '22222222-2222-2222-2222-222222222222';
+    const project = path.join(root, 'projects', 'project');
+    fs.mkdirSync(project, { recursive: true });
+    fs.writeFileSync(path.join(project, `${paneId}.jsonl`), JSON.stringify({ type: 'user', uuid: 'u', message: { role: 'user', content: 'pane conversation' } }) + '\n');
+    const window = { id: 7, serverName: 'local', agentSessionId: SID, claudeConfigDir: '/different', claudePaneSessions: [{ sessionId: paneId, configDir: root }], paneLayout: null } as unknown as Window;
+    const app = buildApp([buildClaudeSource()], {}, { windowRepo: { findById: () => window } });
+    try {
+      const response = await app.inject({ method: 'GET', url: `/api/transcripts/claude/${paneId}?windowId=7` });
+      expect(response.statusCode).toBe(200);
+      expect(JSON.stringify(response.json().entries)).toContain('pane conversation');
+    } finally {
+      await app.close();
+      fs.rmSync(root, { recursive: true, force: true });
+    }
   });
 
   it('rejects a non-positive windowId with 400', async () => {
@@ -324,6 +354,7 @@ describe('GET /api/transcripts/:agent/:id', () => {
       serverName: 'local',
       tmuxTarget: 'azito:agent-1',
       label: null,
+      labelSource: 'auto',
       isPrimary: true,
       windowType: 'agent',
       workerType: 'codex',
@@ -826,6 +857,7 @@ describe('GET /api/transcripts/resolve-window', () => {
     serverName: 'local',
     tmuxTarget: 'main:0',
     label: null,
+    labelSource: 'auto',
     isPrimary: true,
     windowType: 'agent',
     workerType: 'claude',
@@ -914,6 +946,15 @@ describe('GET /api/transcripts/resolve-window', () => {
 
 describe('POST /api/transcripts/window-input', () => {
   const PANE_ID_WINDOW = '%5';
+
+  it('returns the rejection reason for window input', async () => {
+    const rejection = { code: 'not_ready', error: 'Agent input is not ready.' };
+    const app = buildApp([buildClaudeSource()], {}, { windowInputService: { sendInput: async () => rejection } });
+    const res = await app.inject({ method: 'POST', url: '/api/transcripts/window-input', payload: { windowId: 42, paneId: PANE_ID_WINDOW, text: 'hello' } });
+    expect(res.statusCode).toBe(409);
+    expect(res.json()).toEqual(rejection);
+    await app.close();
+  });
 
   it('rejects a non-numeric windowId with 400', async () => {
     const app = buildApp();
@@ -1401,5 +1442,150 @@ describe('GET /api/transcripts/:agent/:id for a window on another server', () =>
     const res = await app.inject({ method: 'GET', url: `/api/transcripts/claude/${SID}?offset=5&windowId=10` });
     expect(res.statusCode).toBe(502);
     expect(res.json()).toEqual({ error: 'agent_bad_response' });
+  });
+});
+
+describe('window subagent API', () => {
+  it('reads only the resolved parent and rejects stale parent selections', async () => {
+    const readSubagent = vi.fn(() => ({ entries: [], nextOffset: 0, truncated: false, startOffset: 0, hasOlder: false }));
+    const source = buildClaudeSource({
+      listSubagents: () => [{ id: 'a123', name: 'worker', description: 'test', agentType: 'Explore', model: null, status: 'unknown' }],
+      readSubagent,
+    });
+    const app = buildApp([source], {}, { windowSessionResolver: { resolve: async () => ({ resolved: true, agentType: 'claude', sessionId: SID, paneId: PANE_ID, agentDetected: true }) } });
+    const list = await app.inject({ method: 'GET', url: '/api/transcripts/windows/10/subagents' });
+    expect(list.statusCode).toBe(200);
+    expect(list.json().sessionId).toBe(SID);
+    const stale = await app.inject({ method: 'GET', url: '/api/transcripts/windows/10/subagents/a123/entries?sessionId=aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa' });
+    expect(stale.statusCode).toBe(409);
+    expect(readSubagent).not.toHaveBeenCalled();
+    const result = await app.inject({ method: 'GET', url: `/api/transcripts/windows/10/subagents/a123/entries?sessionId=${SID}&before=12` });
+    expect(result.statusCode).toBe(200);
+    expect(readSubagent).toHaveBeenCalledWith(SID, 'a123', undefined, 12);
+    await app.close();
+  });
+
+  it('re-resolves a cached parent when the list request names a different session', async () => {
+    const OTHER = '22222222-2222-2222-2222-222222222222';
+    const source = buildClaudeSource({ listSubagents: () => [], readSubagent: () => null });
+    let parent = SID;
+    const resolve = vi.fn(async () => ({ resolved: true as const, agentType: 'claude', sessionId: parent, paneId: PANE_ID, agentDetected: true }));
+    const app = buildApp([source], {}, { windowSessionResolver: { resolve } });
+    await app.inject({ method: 'GET', url: `/api/transcripts/windows/10/subagents?sessionId=${SID}` });
+    parent = OTHER;
+    const response = await app.inject({ method: 'GET', url: `/api/transcripts/windows/10/subagents?sessionId=${OTHER}` });
+    expect(response.json().sessionId).toBe(OTHER);
+    expect(resolve).toHaveBeenCalledTimes(2);
+    await app.close();
+  });
+
+  it('reuses the recent parent resolution while polling and re-checks when the window link changes', async () => {
+    const OTHER = '22222222-2222-2222-2222-222222222222';
+    const readSubagent = vi.fn(() => ({ entries: [], nextOffset: 0, truncated: false, startOffset: 0, hasOlder: false }));
+    const source = buildClaudeSource({ listSubagents: () => [], readSubagent });
+    let parent = SID;
+    const resolve = vi.fn(async () => ({ resolved: true as const, agentType: 'claude', sessionId: parent, paneId: PANE_ID, agentDetected: true }));
+    const window = { id: 10, serverName: LOCAL_SERVER.name, agentSessionId: SID, taskId: null } as unknown as Window;
+    const app = buildApp([source], {}, { windowSessionResolver: { resolve }, windowRepo: { findById: () => window } });
+    const poll = () => app.inject({ method: 'GET', url: `/api/transcripts/windows/10/subagents/a123/entries?sessionId=${SID}&offset=0` });
+
+    expect((await app.inject({ method: 'GET', url: '/api/transcripts/windows/10/subagents' })).statusCode).toBe(200);
+    expect((await poll()).statusCode).toBe(200);
+    expect((await poll()).statusCode).toBe(200);
+    expect(resolve).toHaveBeenCalledOnce();
+    expect(readSubagent).toHaveBeenCalledTimes(2);
+
+    // The window's own link moved to another session (SessionStart hook): the cached parent is not used.
+    parent = OTHER;
+    window.agentSessionId = OTHER;
+    const changed = await poll();
+    expect(changed.statusCode).toBe(409);
+    expect(resolve).toHaveBeenCalledTimes(2);
+    expect(readSubagent).toHaveBeenCalledTimes(2);
+    await app.close();
+  });
+
+  function pollingApp(agentSessionId: string | null) {
+    const listSubagents = vi.fn((_sessionId: string) => []);
+    const readSubagent = vi.fn(() => ({ entries: [], nextOffset: 0, truncated: false, startOffset: 0, hasOlder: false }));
+    const source = buildClaudeSource({ listSubagents, readSubagent });
+    const state = { parent: SID };
+    const resolve = vi.fn(async () => ({ resolved: true as const, agentType: 'claude', sessionId: state.parent, paneId: PANE_ID, agentDetected: true }));
+    const window = { id: 10, serverName: LOCAL_SERVER.name, agentSessionId, taskId: null } as unknown as Window;
+    const app = buildApp([source], {}, { windowSessionResolver: { resolve }, windowRepo: { findById: () => window } });
+    const list = async () => (await app.inject({ method: 'GET', url: '/api/transcripts/windows/10/subagents' })).json().sessionId;
+    const read = async (sessionId: string) =>
+      (await app.inject({ method: 'GET', url: `/api/transcripts/windows/10/subagents/a123/entries?sessionId=${sessionId}&offset=0` })).statusCode;
+    return { app, state, window, resolve, listSubagents, readSubagent, list, read };
+  }
+
+  it('with a DB agentSessionId, reuses the parent across list polls for the long TTL and re-resolves on a link change', async () => {
+    vi.useFakeTimers({ toFake: ['Date'] });
+    try {
+      const OTHER = '22222222-2222-2222-2222-222222222222';
+      const t = pollingApp(SID);
+
+      // Polling every 5 s within the TTL: one resolution, children read each time.
+      expect(await t.list()).toBe(SID);
+      vi.advanceTimersByTime(5000);
+      expect(await t.list()).toBe(SID);
+      vi.advanceTimersByTime(5000);
+      expect(await t.list()).toBe(SID);
+      expect(t.resolve).toHaveBeenCalledOnce();
+      expect(t.listSubagents).toHaveBeenCalledTimes(3);
+
+      // A DB link change (SessionStart hook) is picked up on the next poll, inside the TTL.
+      t.state.parent = OTHER;
+      t.window.agentSessionId = OTHER;
+      expect(await t.list()).toBe(OTHER);
+      expect(t.resolve).toHaveBeenCalledTimes(2);
+      expect(t.listSubagents).toHaveBeenLastCalledWith(OTHER);
+      await t.app.close();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('without a DB link, re-resolves the parent on every 5 s list poll so a parent change shows within one poll', async () => {
+    vi.useFakeTimers({ toFake: ['Date'] });
+    try {
+      const OTHER = '22222222-2222-2222-2222-222222222222';
+      const t = pollingApp(null);
+
+      expect(await t.list()).toBe(SID);
+      // Child conversation polls (2 s) inside the short TTL reuse the resolution.
+      vi.advanceTimersByTime(2000);
+      expect(await t.read(SID)).toBe(200);
+      expect(t.resolve).toHaveBeenCalledOnce();
+
+      // The parent changes with no DB link change: the next list poll (5 s) already shows it.
+      t.state.parent = OTHER;
+      vi.advanceTimersByTime(3000);
+      expect(await t.list()).toBe(OTHER);
+      expect(t.resolve).toHaveBeenCalledTimes(2);
+      expect(t.listSubagents).toHaveBeenLastCalledWith(OTHER);
+      // The old parent's child is refused instead of being read.
+      expect(await t.read(SID)).toBe(409);
+      expect(t.readSubagent).toHaveBeenCalledTimes(1);
+      await t.app.close();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('uses the short TTL when the resolved parent differs from the DB agentSessionId', async () => {
+    vi.useFakeTimers({ toFake: ['Date'] });
+    try {
+      const OTHER = '22222222-2222-2222-2222-222222222222';
+      const t = pollingApp(OTHER); // The DB names OTHER, but the resolver falls back to SID.
+
+      expect(await t.list()).toBe(SID);
+      vi.advanceTimersByTime(5000);
+      expect(await t.list()).toBe(SID);
+      expect(t.resolve).toHaveBeenCalledTimes(2);
+      await t.app.close();
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });

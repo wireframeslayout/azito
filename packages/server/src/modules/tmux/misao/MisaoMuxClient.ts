@@ -83,6 +83,10 @@ export class MisaoMuxClient implements IMuxClient {
     return this.listWorkspaces(server);
   }
 
+  async prepareWorkspace(_server: ServerConfig, name: string, _extraEnv?: Record<string, string>): Promise<void> {
+    await this.rpc.request('workspace.create', { name });
+  }
+
   async openWorkspace(server: ServerConfig, name: string, opts?: { command?: string; windowName?: string; exactName?: boolean; extraEnv?: Record<string, string>; program?: PaneProgram }): Promise<{ ref: MuxRef; result: ExecResult; windowName?: string }> {
     await this.rpc.request('workspace.create', { name });
     const windowName = opts?.exactName && opts.windowName ? opts.windowName : generateWindowName(opts?.windowName || 'win');
@@ -299,6 +303,11 @@ export class MisaoMuxClient implements IMuxClient {
     if (Buffer.byteLength(text, 'utf8') > LONG_TEXT_BYTES) await this.wait(LONG_TEXT_PASTE_SETTLE_MS);
   }
 
+  async pasteTextToHandle(_server: ServerConfig, handle: PaneHandle, text: string): Promise<void> {
+    await this.write(handle, `${BRACKETED_PASTE_START}${stripPasteEnd(text)}${BRACKETED_PASTE_END}`);
+    await this.wait(LONG_TEXT_PASTE_SETTLE_MS);
+  }
+
   async panePidByHandle(_server: ServerConfig, handle: PaneHandle): Promise<number | null> {
     return (await this.paneInfo(handle))?.pid ?? null;
   }
@@ -398,7 +407,7 @@ export class MisaoMuxClient implements IMuxClient {
         ...(program ? { ...(program.cwd !== undefined ? { cwd: program.cwd } : {}), cols: program.cols, rows: program.rows } : {}),
         windowId,
         labels: { origin: 'hub', name: windowName },
-        ...this.paneEnvParams(server, extraEnv),
+        ...this.paneEnvParams(server, program?.env ? { ...extraEnv, ...program.env } : extraEnv),
       });
     } catch (err) {
       await this.rpc.request('window.close', { windowId }).catch(() => undefined);

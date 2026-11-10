@@ -13,6 +13,7 @@ interface ServerDrilldownMenuProps {
   installStatus: InstallStatusResponse | null;
   installStatusError: 'offline' | 'failed' | null;
   sessions: Session[];
+  sessionsState?: 'loading' | 'error' | 'partial' | 'ready';
 }
 
 export default function ServerDrilldownMenu({
@@ -22,6 +23,7 @@ export default function ServerDrilldownMenu({
   installStatus,
   installStatusError,
   sessions,
+  sessionsState = 'ready',
 }: ServerDrilldownMenuProps) {
   const navigate = useNavigate();
   const { t } = useTranslation('servers');
@@ -32,7 +34,7 @@ export default function ServerDrilldownMenu({
   const summaries: Record<string, SectionSummary> = {
     overview: getOverviewSummary(status),
     setup: getSetupSummary(installStatus, installStatusError, currentServer?.hostProfile),
-    windows: getWindowsSummary(sessions.length, windowCount),
+    windows: sessionsState === 'ready' ? getWindowsSummary(sessions.length, windowCount) : { text: t(`sessionState.${sessionsState}`), tone: 'dim' },
     danger: { text: '', tone: 'dim' },
   };
 

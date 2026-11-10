@@ -76,6 +76,7 @@ describe.skipIf(!fs.existsSync(MISAO_CLI))('WindowRespawnService against a real 
     row = {
       id: 1, ownerType: 'task', projectId: null, taskId: 7, serverName: server.name, tmuxTarget: muxWindowTarget(opened.ref), muxRef: opened.ref,
       label: DISPLAY_NAME, isPrimary: true, windowType: 'terminal', workerType: null, workerModel: null, agentSessionId: null, launchCommand: null,
+      labelSource: 'auto',
       workingDirectory: null, paneLayout: null, sleeping: true, createdAt: '2026-01-01T00:00:00Z',
     };
     task = makeTask({ tmuxWindow: opened.ref.window });
@@ -113,6 +114,7 @@ describe.skipIf(!fs.existsSync(MISAO_CLI))('WindowRespawnService against a real 
       () => ({}),
       '',
       { exists: async () => true },
+      { check: async () => ({ status: 'resume' }) } as never,
     );
   });
 

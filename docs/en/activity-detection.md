@@ -195,7 +195,7 @@ After resolution, an empty `AZITO_WEBHOOK_TOKEN` or `AZITO_SERVER_NAME` makes th
 without doing anything.
 
 Scripts involved: `harness/hooks/azito-activity.sh`, `azito-interaction.sh`,
-`azito-question.sh`, `azito-session.sh`.
+`azito-question.sh`, `azito-session.sh`, `azito-subagent.sh`.
 
 ### Following the session id (SessionStart hook / `sessionId`)
 
@@ -209,6 +209,8 @@ add `sessionId` to the webhook body only when it is a UUID (`start`/`stop` from
 - The hub updates `agent_session_id` of the matched **agent window** (`window_type = 'agent'`) only when it differs from `sessionId`
 - `event: "session"` never changes the activity (Tier 1 hook) state
 - Each update shows up as `sessionUpdate` (`from` / `to` / `at` / `event`) in `GET /api/debug/activity`
+
+SessionStart also sends `claudeConfigDir`, `claudeConfigDirExplicit`, and `hookTimestamp` to record local configuration per pane, including split panes (ordinal ≥ 2). Start / stop do not update IDs for windows with a recorded directory, and sleeping windows are not updated. Invalid configuration metadata is discarded while session ID tracking continues. See [isolated execution](isolated-execution.md).
 
 ### Window identification (phase 4: muxPaneRef-first)
 
@@ -580,6 +582,12 @@ tmux. For tmux servers nothing below is created and the tmux behavior above is u
   `sessions:updated` (for up to 60s). On a gap and on every reconnect the whole `pane.list` is
   re-read (`agentState` / `decidedBy`); while the connection is down every misao-derived key is
   `unknown`.
+  A `working` decided by `bytes` is excluded from Tier 0 when the first pane's foreground command is a
+  known shell (an unknown command and title / profile decisions are unchanged). An empty codex title is
+  `unknown` and falls through to the lower tiers (tmux normally supplies the hostname as a non-empty
+  title, which is classified as idle).
+  When the window is absent from the listing for a tick (including a listing failure), bytes-based working is not excluded.
+  After an empty title falls through, the diagnostics row's `decidedBy` for a misao window becomes `tier3_heuristic` or another lower tier and the stop reason as `unknown` (tmux reports `completed`).
 - **Blocked refinement.** The Rust core (misao 0.3.0 and later) also reports `blocked` in `pane.state`, from its
   bundled claude / codex profiles (mapped to blocked as above). A working / idle row can still hide a prompt, and a
   not-yet-updated 0.2.0 (Node) daemon never reports `blocked`, so for a misao window the screen is read the same way as
@@ -613,3 +621,16 @@ tmux. For tmux servers nothing below is created and the tmux behavior above is u
   ignored and the tmux fields stay required.
 - **Diagnostics.** `GET /api/debug/activity` rows carry `mux: { status, decidedBy?, at }`, and the
   panel shows `tier0 misao`.
+
+## 14. Subagent conversations
+
+In a Claude Code chat, select a subagent belonging to the window's current parent session to view
+its conversation. Subagent conversations are read-only; return to the parent conversation to send a
+prompt. The selection is kept only while the view is open and is not restored later. A status that
+cannot be determined from metadata is shown as unknown.
+
+The harness's `SubagentStart` and `SubagentStop` hooks send authenticated notifications that prompt
+the list to refresh. Status comes from the conversation files and metadata, not the notifications.
+The list is also refreshed periodically if hooks are missing, although file updates can be delayed.
+On an agent server, an older agent without this feature reports `agent_outdated`; update the agent to
+use it.

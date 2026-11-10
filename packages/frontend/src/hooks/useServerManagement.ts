@@ -1,3 +1,4 @@
+import type { FirewallDiagnosis } from '../types/notification';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { api } from '../api/client';
@@ -77,6 +78,7 @@ export interface ServerStatus {
   hubVersion?: string;
   versionMatch?: boolean;
   message?: string;
+  firewall?: FirewallDiagnosis;
 }
 
 interface UseServerManagementParams {
@@ -157,10 +159,11 @@ export function useServerManagement({ tabs, closeTab }: UseServerManagementParam
       srvs.map(async (srv) => {
         // エラー本文（503 agent_unreachable 等）は一覧でないため失敗扱いにする（空配列の成功と取り違えてタブを閉じない）。
         // 一覧できなかった mux（misao デーモン停止など）のセッションは直前の状態を保つ（削除扱いにしない）
-        const result = keepUnavailableKinds(sessionsRef.current[srv.name], await fetchSessionListing<Session>(srv.name));
+        const listing = await fetchSessionListing<Session>(srv.name);
+        const result = keepUnavailableKinds(sessionsRef.current[srv.name], listing);
         // 遅いサーバー 1 台を待たず、取得できたサーバーから 1 台ずつ反映する
         setSessions((prev) => ({ ...prev, [srv.name]: result }));
-        return { name: srv.name, sessions: result };
+        return { name: srv.name, sessions: result, complete: listing.unavailable.length === 0 };
       }),
     );
     const newSessions: Record<string, Session[]> = {};
@@ -168,9 +171,9 @@ export function useServerManagement({ tabs, closeTab }: UseServerManagementParam
       const r = results[i];
       if (r.status === 'fulfilled') {
         newSessions[r.value.name] = r.value.sessions;
-        successfulServers.add(r.value.name);
+        if (r.value.complete) successfulServers.add(r.value.name);
       } else {
-        newSessions[srvs[i]?.name] = [];
+        newSessions[srvs[i]?.name] = (sessionsRef.current[srvs[i]?.name] ?? []).map((session) => ({ ...session, stale: true }));
       }
     }
     setSessions(newSessions);
@@ -240,13 +243,13 @@ export function useServerManagement({ tabs, closeTab }: UseServerManagementParam
     if (addAutoInstall) {
       setAddLoading(true);
       setAddInstallSteps([]);
-      const res = await api<{ ok?: boolean; error?: string; steps?: InstallStep[]; type?: string; fallback?: boolean; startMethod?: string; misaoError?: string }>('/servers', {
+      const res = await api<{ ok?: boolean; error?: string; code?: string; steps?: InstallStep[]; type?: string; fallback?: boolean; startMethod?: string; misaoError?: string }>('/servers', {
         method: 'POST',
         body: JSON.stringify({ name: addName.trim(), host: addHost.trim(), autoInstall: true }),
       });
       setAddLoading(false);
       if (res.steps) setAddInstallSteps(res.steps);
-      if (res.error && !res.fallback) return showToast(res.error);
+      if (res.error && !res.fallback) return showToast(res.code === 'macos_local_network_permission' ? t('localNetwork.guidance') : res.error);
       if (res.fallback) {
         showToast(`Agent install failed: ${res.error}. Server registered as SSH instead.`);
       }
@@ -356,7 +359,7 @@ export function useServerManagement({ tabs, closeTab }: UseServerManagementParam
     if (!ok) return;
     setReinstalling(serverName);
     setReinstallSteps([]);
-    const res = await api<{ ok?: boolean; error?: string; steps?: InstallStep[] }>(
+    const res = await api<{ ok?: boolean; error?: string; code?: string; steps?: InstallStep[] }>(
       `/servers/${serverName}/agent/install`,
       { method: 'POST' },
     );
@@ -368,7 +371,9 @@ export function useServerManagement({ tabs, closeTab }: UseServerManagementParam
       // (see routes.ts's doc comment) — give it the same localized toast
       // treatment as the PUT handler's isolation gates instead of showing
       // the raw error code.
-      if (res.error === 'isolation_intent_blocks_agent_install') {
+      if (res.code === 'macos_local_network_permission') {
+        showToast(t('localNetwork.guidance'));
+      } else if (res.error === 'isolation_intent_blocks_agent_install') {
         showToast(t('overview.isolationBlocksAgentInstallToast'));
       } else {
         showToast(`Reinstall failed: ${res.error}`);
@@ -448,7 +453,7 @@ export function useServerManagement({ tabs, closeTab }: UseServerManagementParam
     const newTitle = prompt('Rename pane:', currentTitle);
     if (!newTitle || newTitle === currentTitle) return;
     if (windowId != null && paneOrdinal != null) {
-      await api(`/windows/${windowId}/panes/${paneOrdinal}/rename`, { method: 'PUT', body: JSON.stringify({ title: newTitle }) });
+      await api(`/windows/${windowId}/panes/${paneOrdinal}/rename`, { method: 'PUT', body: JSON.stringify({ name: newTitle }) });
     } else if (refUsesMuxRoutes(ref) && paneOrdinal != null) {
       await api(`/servers/${encodeURIComponent(serverName)}/mux/windows/${encodeURIComponent(ref)}/panes/${paneOrdinal}/rename`, { method: 'PUT', body: JSON.stringify({ name: newTitle }) });
     } else {

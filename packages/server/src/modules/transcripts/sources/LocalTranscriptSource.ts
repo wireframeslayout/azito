@@ -5,6 +5,7 @@ import type {
   SessionSummary,
   SessionTailState,
   TranscriptReader,
+  SubagentSummary,
   TranscriptSource,
 } from './TranscriptSource';
 
@@ -18,6 +19,16 @@ export class LocalTranscriptSource implements TranscriptSource {
 
   get agentType(): string {
     return this.reader.agentType;
+  }
+
+  async listSubagents(sessionId: string): Promise<SubagentSummary[] | null> {
+    if (!this.reader.listSubagents) throw new Error('Subagents are unsupported');
+    return this.reader.listSubagents(sessionId);
+  }
+
+  async readSubagent(sessionId: string, agentId: string, offset?: number, before?: number): Promise<ReadSessionResult | ReadSessionBeforeResult | null> {
+    if (!this.reader.readSubagent) throw new Error('Subagents are unsupported');
+    return this.reader.readSubagent(sessionId, agentId, offset, before);
   }
 
   async listSessions(limit?: number, options?: ListSessionsOptions): Promise<SessionSummary[]> {

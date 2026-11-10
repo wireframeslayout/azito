@@ -1,3 +1,4 @@
+import { AgentUnreachableError } from '../servers/transport/AgentUnreachableError';
 import { describe, it, expect, vi } from 'vitest';
 import { asPaneHandle, type MuxDriverKind, type MuxRef, type MuxWorkspace } from '@azito/shared';
 import type { ServerConfig } from '../servers/Server';
@@ -47,6 +48,15 @@ function setup(opts: { tmux?: FakeDriver; misao?: FakeDriver; misaoAvailable?: b
 }
 
 describe('RoutingMuxClient delegation', () => {
+  it('prepares workspaces using the current server default', async () => {
+    const { routing, srv, tmux, misao } = setup();
+    await routing.prepareWorkspace(srv, 'a', {});
+    const fresh = { ...srv, defaultMux: 'misao' as const };
+    await routing.prepareWorkspace(fresh, 'b', {});
+    expect(tmux.prepareWorkspace).toHaveBeenCalledWith(srv, 'a', {});
+    expect(misao.prepareWorkspace).toHaveBeenCalledWith(fresh, 'b', {});
+  });
+
   it('sends a ref-based call to the driver of ref.kind', async () => {
     const { tmux, misao, routing, srv } = setup();
     await routing.closeWindow(srv, misaoRef);
@@ -121,6 +131,18 @@ describe('RoutingMuxClient pane labels are decided per window, not by the defaul
 });
 
 describe('RoutingMuxClient merging', () => {
+  it('reports every failed kind in a detailed listing while keeping ordinary listings strict', async () => {
+    const failure = new Error('down');
+    const { routing, srv } = setup({
+      tmux: fakeDriver('tmux', { listWorkspaces: vi.fn(async () => { throw failure; }) }),
+      misao: fakeDriver('misao', { listWorkspaces: vi.fn(async () => { throw failure; }) }),
+    });
+    const result = await routing.listWorkspacesDetailed(srv, true);
+    expect(result.workspaces).toEqual([]);
+    expect(result.unavailable.map((item) => item.kind)).toEqual(['tmux', 'misao']);
+    await expect(routing.listWorkspaces(srv)).rejects.toBe(failure);
+  });
+
   it('concatenates the workspaces of every usable kind, stamped with their kind', async () => {
     const { routing, srv } = setup({
       tmux: fakeDriver('tmux', { listWorkspaces: vi.fn(async () => [workspace('same')]) }),
@@ -139,6 +161,16 @@ describe('RoutingMuxClient merging', () => {
     const { workspaces, unavailable } = await routing.listWorkspacesDetailed(srv);
     expect(workspaces.map((w) => w.name)).toEqual(['t']);
     expect(unavailable).toEqual([{ kind: 'misao', reason: 'daemon_unreachable', detail: expect.any(String) }]);
+  });
+
+  it('reports agent reachability for one kind while preserving the other listing', async () => {
+    const { routing, srv } = setup({
+      tmux: fakeDriver('tmux', { listWorkspaces: vi.fn(async () => { throw new AgentUnreachableError('agent', 'circuit_open'); }) }),
+      misao: fakeDriver('misao', { listWorkspaces: vi.fn(async () => [workspace('m')]) }),
+    });
+    const result = await routing.listWorkspacesDetailed(srv);
+    expect(result.workspaces.map((item) => item.name)).toEqual(['m']);
+    expect(result.unavailable).toEqual([{ kind: 'tmux', reason: 'agent_unreachable', detail: expect.stringContaining('circuit_open') }]);
   });
 
   it('records a non-availability failure as driver_error, and still returns the other kind', async () => {

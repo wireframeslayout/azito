@@ -1,0 +1,23 @@
+  2 more notices hidden
+
+❯ Reply only OK. Do not use tools.
+
+● OK
+
+✻ Crunched for 0s · done 11:19 AM
+
+❯ Give one short tip for writing tests. Do not use tools.
+
+● Test behavior, not implementation: assert what the code does from the caller's
+  point of view, so your tests survive refactoring and only fail when something
+  is actually broken.
+
+✻ Cooked for 0s · done 11:20 AM
+
+────────────────────────────────────────────────────────────────────────────────
+❯ [7mg[0mive another tip
+────────────────────────────────────────────────────────────────────────────────
+  ⏵⏵ auto mode on (shift+tab to cycle)
+
+
+

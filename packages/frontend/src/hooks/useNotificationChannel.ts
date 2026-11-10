@@ -1,15 +1,17 @@
 import { useEffect, useRef } from 'react';
-import type { AgentActivityPayload, BrowserOpenedPayload, NotificationEvent } from '../types/notification';
+import type { AgentActivityPayload, BrowserOpenedPayload, FirewallDiagnosis, NotificationEvent } from '../types/notification';
 import { buildWsUrl } from '../api/wsUrl';
 
 export interface NotificationHandlers {
+  onServerFirewall?: (payload: { serverName: string; diagnosis: FirewallDiagnosis }) => void;
   onSessionsUpdated?: (serverName: string) => void;
-  onTaskStatus?: (payload: { taskId: number; status: string; title?: string; projectId?: number }) => void;
+  onTaskStatus?: (payload: { taskId: number; status: string; title?: string; projectId?: number; reason?: string }) => void;
   onPaneExited?: (serverName: string) => void;
   onAgentActivity?: (payload: AgentActivityPayload) => void;
   onBrowserOpened?: (payload: BrowserOpenedPayload) => void;
   onSupervisorReady?: (payload: { serverName: string; target: string; taskId?: number }) => void;
   onWorkspaceRefresh?: () => void;
+  onSubagentsUpdated?: (payload: { windowId: number; sessionId: string }) => void;
   /** Fired on every WebSocket (re)connect — use to re-fetch snapshot state. */
   onConnected?: () => void;
 }
@@ -87,6 +89,9 @@ export function useNotificationChannel(handlers: NotificationHandlers): void {
     const listener: Listener = (event) => {
       const h = handlersRef.current;
       switch (event.type) {
+        case 'server:firewall':
+          h.onServerFirewall?.(event.payload);
+          break;
         case 'sessions:updated':
           h.onSessionsUpdated?.(event.payload.serverName);
           break;
@@ -104,6 +109,9 @@ export function useNotificationChannel(handlers: NotificationHandlers): void {
           break;
         case 'supervisor:ready':
           h.onSupervisorReady?.(event.payload);
+          break;
+        case 'subagents:updated':
+          h.onSubagentsUpdated?.(event.payload);
           break;
         case 'workspace:refresh':
           h.onWorkspaceRefresh?.();

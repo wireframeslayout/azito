@@ -422,12 +422,23 @@ launchd にはユーザーごとのドメインが 2 つあります。`gui/<uid
 launchd のサービスとして動くハブから、LAN のアドレス（例: `192.168.x.x`）の agent を導入すると、preflight が
 `connect EHOSTUNREACH <IP>:22` で失敗することがあります。同じ node を SSH のシェルから動かすと届き、Tailscale のアドレス（`100.x`）には
 launchd のハブからも届きます（v0.12.0-rc.3、macOS 26.3.1 arm64 のハブから Ubuntu 24.04 x64 の agent で確認）。macOS の
-「ローカルネットワーク」のプライバシー許可（macOS 15 以降）が関係していると考えられます。
+「ローカルネットワーク」のプライバシー許可（macOS 15 以降）が関係している可能性があります。
 
 - **回避策**: agent の宛先に Tailscale のアドレス（または MagicDNS 名）を使います（確認済み）
-- システム設定 › プライバシーとセキュリティ › ローカルネットワークで許可を与えると届く可能性がありますが、まだ確かめていません
+- ハブと同じ macOS ユーザーでシステム設定 › プライバシーとセキュリティ › ローカルネットワークを開き、ハブの項目が表示されていれば許可して再試行してください。表示されない場合は Tailscale を使ってください。
+- SSH や Terminal のシェルで Node を実行して接続できても、それらには例外があり、ハブの許可を証明できません。
 
-根本の対応は後の版で行います（[#536](https://github.com/wireframeslayout/azito/issues/536)）。
+この案内は可能性を示すもので、経路や相手側の問題でも同じエラーが発生します。
+
+v0.12.1 の RC で確かめた範囲（macOS 26.6.2 arm64、v0.12.1-rc.2 のハブを `install.sh` で launchd の `user/<uid>` の Background のジョブとして動かし、そのユーザーで GUI にもログインした状態）では、次のとおりでした。
+
+- ハブから LAN のアドレスに**届きました**（同じ LAN のゲートウェイの TCP の 80 番 `x@192.168.100.1:80` に agent の追加を試すと、TCP はつながり、SSH の挨拶の段階で `Connection lost before handshake` になりました）。`EHOSTUNREACH` にはならず、案内も出ません（出ないのが正しい振る舞いです）。
+- 試す直前の 10 分の macOS のログ（`com.apple.network` と `tccd`）に、ローカルネットワークの拒否の記録はありませんでした。
+- システム設定 › プライバシーとセキュリティ › ローカルネットワークの一覧には、**ハブを含めて何も表示されませんでした**。一覧に項目が出なかったため、許可したときの効果は確かめていません。
+
+この条件では、ローカルネットワークの許可にハブは止められていませんでした。ほかの macOS の版、GUI にログインしていない状態、別の起動のしかたでは許可が要る可能性があるため、上の案内と確かめ方はそのまま残しています。
+
+詳細は [Apple TN3179](https://developer.apple.com/documentation/technotes/tn3179-understanding-local-network-privacy) を参照してください。
 
 ### 既存のインストールでの `azito service`
 
@@ -602,10 +613,10 @@ azito version        # バージョン表示
 
 | OS | アーキテクチャ | 状態 |
 |----|---------------|------|
-| Linux | x86_64 (x64) | サポート |
-| Linux | aarch64 (arm64) | サポート |
-| macOS | Apple Silicon (arm64) | サポート |
-| macOS | Intel (x64) | 未対応（要望があれば検討） |
+| Linux | x86_64 (x64) | ハブ・エージェントサーバーともにサポート |
+| Linux | aarch64 (arm64) | ハブはサポート、エージェントサーバーは未対応 |
+| macOS | Apple Silicon (arm64) | ハブはサポート、エージェントサーバーは未対応 |
+| macOS | Intel (x64) | ハブは未対応（要望があれば検討）、エージェントサーバーはサポート |
 | Windows | x64 | サポート。ハブ（[Windows 版の配布物](#windows-版の配布物)）と、エージェントサーバー（[Windows のエージェントサーバー](./windows-agent.md)）の両方 |
 | Windows | arm64 | 未対応 |
 

@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { decodeEncodedCommand, FakeWindowsHost, type FakeWindowsHostOptions } from './testing/fakeWindowsHost';
+import { decodeEncodedCommand, FAKE_PREVIOUS_VERSION, FakeWindowsHost, legacyAgentTaskXml, type FakeWindowsHostOptions } from './testing/fakeWindowsHost';
 import { AgentInstaller, type AgentMisaoInstaller, type InstallProgress } from './AgentInstaller';
 import { DEFAULT_WINDOWS_AGENT_OPTIONS, type WindowsAgentOptions } from './windowsAgentConfig';
 
@@ -19,10 +19,10 @@ function makeBundler() {
 
 type SftpFake = { sftpUpload: (host: string, local: string, remote: string) => Promise<void>; sftpWrite: (host: string, data: Buffer, remote: string) => Promise<void> };
 
-function make(hostOptions: Partial<FakeWindowsHostOptions> = {}, windowsAgent: WindowsAgentOptions = DEFAULT_WINDOWS_AGENT_OPTIONS, misao?: AgentMisaoInstaller) {
-  const host = new FakeWindowsHost({ sha256: SHA, taskName: windowsAgent.taskName, ...hostOptions });
+function make(hostOptions: Partial<FakeWindowsHostOptions> = {}, windowsAgent: WindowsAgentOptions = DEFAULT_WINDOWS_AGENT_OPTIONS, misao?: AgentMisaoInstaller, harnessPrefix = '') {
+  const host = new FakeWindowsHost({ sha256: SHA, taskName: windowsAgent.taskName, firewall: { ruleFound: true, elevated: true, created: false, problem: null }, ...hostOptions });
   const execIsolated = vi.fn(async (sshHost: string, command: string) => host.exec(sshHost, command));
-  const installer = new AgentInstaller({ execIsolated, resolveHost: (h: string) => ({ username: 'user', host: h.replace(/^.*@/, '').replace(/:\d+$/, ''), port: 22 }) } as never, makeBundler() as never, windowsAgent, misao);
+  const installer = new AgentInstaller({ execIsolated, resolveHost: (h: string) => ({ username: 'user', host: h.replace(/^.*@/, '').replace(/:\d+$/, ''), port: 22 }) } as never, makeBundler() as never, windowsAgent, misao, harnessPrefix);
   const sftp = installer as unknown as SftpFake;
   const uploads: string[] = [];
   sftp.sftpUpload = async (_h, _local, remote) => { uploads.push(remote); host.uploaded.set(remote, Buffer.from('tarball')); };
@@ -84,7 +84,11 @@ describe('AgentInstaller on a Windows host', () => {
     expect(host.registeredXml).toContain('<UserId>PC\\dev</UserId>');
     // Under conhost --headless: node.exe has a console without a window, so nothing appears on the user's desktop.
     expect(host.registeredXml).toContain('<Command>C:\\Windows\\System32\\conhost.exe</Command>');
-    expect(host.registeredXml).toContain('<Arguments>--headless "C:\\Program Files\\nodejs\\node.exe" --env-file=C:\\Users\\dev\\.azito\\agent\\agent.env C:\\Users\\dev\\.azito\\agent\\bundlehash1\\azito-agent.cjs</Arguments>');
+    // conhost runs the PowerShell launcher, which starts node.exe --env-file=<settings> <entry> and restarts it after a failure.
+    const args = /<Arguments>([^<]*)<\/Arguments>/.exec(host.registeredXml!)![1]!;
+    expect(args).toMatch(/^--headless C:\\Windows\\System32\\WindowsPowerShell\\v1\.0\\powershell\.exe .*-EncodedCommand [A-Za-z0-9+/=]+$/);
+    const launcher = decodeEncodedCommand(args);
+    expect(launcher).toContain("$node = 'C:\\Program Files\\nodejs\\node.exe'\n$envFile = 'C:\\Users\\dev\\.azito\\agent\\agent.env'\n$entry = 'C:\\Users\\dev\\.azito\\agent\\bundlehash1\\azito-agent.cjs'\n$taskName = 'AzitoAgent'");
     expect(host.registeredXml).toContain('<WorkingDirectory>C:\\Users\\dev\\.azito\\agent\\bundlehash1</WorkingDirectory>');
     expect(host.registeredXml).toContain('<LogonTrigger>');
     const schtasks = host.calls.filter((c) => c.kind === 'schtasks').map((c) => c.schtasksArgs![0]);
@@ -160,9 +164,7 @@ describe('AgentInstaller on a Windows host', () => {
       const steps: InstallProgress[] = [];
       const result = await installer.install('user@win', (p) => steps.push(p));
       expect(result.success).toBe(false);
-      expect(result.error).toContain('Windows Firewall has no enabled inbound rule that lets the hub reach the agent (TCP 3002 for C:\\Program Files\\nodejs\\node.exe on 100.64.0.9');
-      expect(result.error).toContain('not elevated');
-      expect(result.error).toContain('New-NetFirewallRule -DisplayName "AZITO Agent (TCP 3002)" -Direction Inbound -Action Allow -Protocol TCP -LocalPort 3002 -Program "C:\\Program Files\\nodejs\\node.exe" -LocalAddress 100.64.0.9 -RemoteAddress 100.64.0.0/10');
+      expect(result.error).toContain('effective firewall policy could not be read');
       expect(steps.map((s) => `${s.step}:${s.status}`)).toEqual(['preflight:running', 'preflight:error']);
       expect(uploads).toEqual([]);
       expect(host.calls.some((c) => c.kind === 'script')).toBe(false);
@@ -179,9 +181,20 @@ describe('AgentInstaller on a Windows host', () => {
       expect(result.error).toContain('the host refused (Access is denied)');
     });
 
-    it('goes on, leaving the health check to prove it, when the host cannot say whether a rule exists', async () => {
-      const { installer } = make({ firewall: { ruleFound: null, elevated: false, created: false, problem: null } });
-      expect((await installer.install('user@win')).success).toBe(true);
+    it('stops before transfer when the firewall policy is unknown', async () => {
+      const { installer, host } = make({ firewall: { ruleFound: null, elevated: false, created: false, problem: null } });
+      const result = await installer.install('user@win');
+      expect(result.success).toBe(false);
+      expect(result.error).toContain('effective policy could not be verified');
+      expect(host.uploaded.size).toBe(0);
+    });
+
+    it('stops with the registry-only firewall response used by a non-elevated host', async () => {
+      const { installer, host } = make({ firewall: { ruleFound: true, elevated: false, created: false, problem: null } });
+      const result = await installer.install('user@win');
+      expect(result.success).toBe(false);
+      expect(result.error).toContain('effective firewall policy could not be read');
+      expect(host.uploaded.size).toBe(0);
     });
   });
 
@@ -261,7 +274,7 @@ describe('AgentInstaller on a Windows host', () => {
         expect(result.error).toContain('restored the previous task definition');
         expect(result.error).toContain('started the previous agent again');
         // The definition on the host is the previous one again, and the previous agent is running.
-        expect(host.registeredXml).toBe('<Task>previous definition</Task>');
+        expect(host.registeredXml).toBe(legacyAgentTaskXml(FAKE_PREVIOUS_VERSION));
         expect(host.taskState).toBe('running');
         const scripts = host.calls.filter((c) => c.kind === 'script').map((c) => c.text);
         // The previous folder and settings are moved aside on the way in (never deleted) and moved back on the way out.
@@ -435,15 +448,6 @@ describe('AgentInstaller on a Windows host', () => {
       expect(host.calls.some((c) => c.kind === 'firewall' || c.kind === 'script')).toBe(false);
     });
 
-    it('stops with the WMI reason, not an old-build one, when WMI is refused, before the firewall and any transfer', async () => {
-      const { installer, host } = make({ cim: 'denied', buildNumber: null });
-      const result = await installer.install('user@win');
-      expect(result.success).toBe(false);
-      expect(result.error).toMatch(/WMI is not available.*administrator.*v0\.13\.0.*issues\/559/);
-      expect(result.error).not.toMatch(/build number|1809/);
-      expect(host.calls.some((c) => c.kind === 'firewall' || c.kind === 'script')).toBe(false);
-    });
-
     it('stops with the name of an enabled inbound Block rule', async () => {
       const { installer, host } = make({ firewall: { ruleFound: true, elevated: true, created: false, problem: null, blockedBy: ['node.js JavaScript Runtime'] } });
       const result = await installer.install('user@win');
@@ -473,7 +477,7 @@ describe('AgentInstaller on a Windows host', () => {
   describe('updating an agent that is registered', () => {
     const WIN = { platform: 'win32', arch: 'x64' } as const;
     const OLD = '0123456789ab';
-    const OLD_XML = `<Task><Actions><Exec><Arguments>--headless "C:\\Program Files\\nodejs\\node.exe" --env-file=C:\\Users\\dev\\.azito\\agent\\agent.env C:\\Users\\dev\\.azito\\agent\\${OLD}\\azito-agent.cjs</Arguments></Exec></Actions></Task>`;
+    const OLD_XML = legacyAgentTaskXml(OLD);
     const makeRunning = (hostOptions: Partial<FakeWindowsHostOptions> = {}, misao?: AgentMisaoInstaller) => {
       const made = make({ existingTask: 'running', ...hostOptions }, DEFAULT_WINDOWS_AGENT_OPTIONS, misao);
       made.host.registeredXml = OLD_XML;
@@ -522,6 +526,16 @@ describe('AgentInstaller on a Windows host', () => {
       expect(host.calls.some((c) => c.kind === 'firewall')).toBe(true); // checked as in the install, before anything is stopped
     });
 
+    it('updates when an existing rule has the same name but the old node path', async () => {
+      const { installer, host } = makeRunning({ nodePath: 'C:\\new\\node.exe', previousFirewallProgram: 'C:\\old\\node.exe', firewall: { ruleFound: false, elevated: true, created: true, problem: null } });
+      stubAgent(() => (host.uploaded.size > 0 ? VERSION : undefined));
+      const result = await withTimers(() => installer.update('user@win', '100.64.0.9', 'tok', WIN));
+      expect(result).toEqual({ success: true, version: VERSION });
+      const add = host.calls.find((call) => call.kind === 'firewall' && call.text.includes('AZITO_FIREWALL_ADD_BEGIN'));
+      expect(add?.text).toContain("New-NetFirewallRule -DisplayName 'AZITO Agent (TCP 3002)'");
+      expect(add?.text).toContain("-Program 'C:\\new\\node.exe'");
+    });
+
     it('reports an old release that could not be removed as a warning of a successful update', async () => {
       const { installer, host } = makeRunning({ scriptOutput: { containing: 'REMOVED', stdout: 'REMOVED bbbbbbbbbbbb\r\nFAILED aaaaaaaaaaaa The process cannot access the file because it is being used by another process.\r\n' } });
       stubAgent(() => (host.uploaded.size > 0 ? VERSION : undefined));
@@ -561,19 +575,6 @@ describe('AgentInstaller on a Windows host', () => {
       expect(result.error).toContain('the previous agent does NOT answer');
     });
 
-    it('stops an update with the WMI reason, before the firewall and anything being stopped, when WMI is refused', async () => {
-      const { installer, host } = makeRunning({ cim: 'denied', buildNumber: null });
-      stubAgent(() => OLD);
-
-      const result = await installer.update('user@win', '100.64.0.9', 'tok', WIN);
-
-      expect(result.success).toBe(false);
-      expect(result.error).toMatch(/WMI is not available.*v0\.13\.0/);
-      expect(host.calls.some((c) => c.kind === 'firewall')).toBe(false);
-      expect(host.taskState).toBe('running');
-      expect(host.uploaded.size).toBe(0);
-    });
-
     it('stops with the install\'s firewall error, before anything is stopped, when the node.exe found now has no rule', async () => {
       const { installer, host } = makeRunning({ firewall: { ruleFound: false, elevated: false, created: false, problem: null } });
       stubAgent(() => OLD);
@@ -582,6 +583,16 @@ describe('AgentInstaller on a Windows host', () => {
 
       expect(result.success).toBe(false);
       expect(result.error).toMatch(/[Ff]irewall/);
+      expect(host.taskState).toBe('running');
+      expect(host.uploaded.size).toBe(0);
+    });
+
+    it('leaves the existing agent running when the effective firewall policy is unknown', async () => {
+      const { installer, host } = makeRunning({ firewall: { ruleFound: null, elevated: false, created: false, problem: null } });
+      stubAgent(() => OLD);
+      const result = await installer.update('user@win', '100.64.0.9', 'tok', WIN);
+      expect(result.success).toBe(false);
+      expect(result.error).toContain('effective policy could not be verified');
       expect(host.taskState).toBe('running');
       expect(host.uploaded.size).toBe(0);
     });
@@ -600,7 +611,16 @@ describe('AgentInstaller on a Windows host', () => {
   });
 
   describe('removing the agent from the host', () => {
-    const TASK_XML = '<Task><Actions><Exec><Command>C:\\Windows\\System32\\conhost.exe</Command><Arguments>--headless "C:\\Program Files\\nodejs\\node.exe" --env-file=C:\\Users\\dev\\.azito\\agent\\agent.env C:\\Users\\dev\\.azito\\agent\\abc123abc123\\azito-agent.cjs</Arguments></Exec></Actions></Task>';
+    const TASK_XML = legacyAgentTaskXml('abc123abc123');
+
+    it('propagates the hub harness prefix and leaves both MCP registrations untouched', async () => {
+      const { installer, host } = make({}, DEFAULT_WINDOWS_AGENT_OPTIONS, undefined, 'second-hub');
+      const result = await installer.uninstallFromWindowsHost('user@win', { removeMisao: false });
+      const mcp = result.steps.filter((s) => s.id.endsWith('HarnessMcp'));
+      expect(mcp).toHaveLength(2);
+      expect(mcp.every((s) => s.outcome === 'skipped' && s.detail?.includes('harness prefix'))).toBe(true);
+      expect(host.calls.some((c) => c.text.includes('AZITO_MCP_SRC'))).toBe(false);
+    });
 
     it('asks the host who it is, takes the task off, and reports each step; no install check (Tailscale) is needed', async () => {
       const { installer, host } = make({ existingTask: 'running', tailscaleIp: '' });
