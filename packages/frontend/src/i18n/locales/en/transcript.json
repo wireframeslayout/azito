@@ -120,7 +120,6 @@
     "loading": "Loading subagents…",
     "empty": "No subagents found.",
     "error": "Could not load subagents.",
-    "readOnly": "This conversation is read-only. Return to the parent conversation to send a message.",
     "status": {
       "finished": "Finished",
       "unknown": "Unknown"

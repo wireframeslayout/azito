@@ -17,6 +17,9 @@ describe('resolveSubagentRelay', () => {
     ['finished', [{ ...child, status: 'finished' as const }]],
     ['unnamed', [{ ...child, routingName: null }]],
     ['duplicate', [child, { ...child, id: 'b' }]],
+    ['whitespace', [{ ...child, routingName: ' worker' }]],
+    ['control character', [{ ...child, routingName: 'worker\n' }]],
+    ['too long', [{ ...child, routingName: 'x'.repeat(129) }]],
   ])('refuses a %s child', (_label, agents) => {
     expect(resolveSubagentRelay(agents, 'a')).toEqual({ kind: 'unavailable', reason: 'unavailable' });
   });

@@ -1,3 +1,5 @@
+import { isRelayRoutingName } from '@azito/shared';
+
 export interface RelayableSubagent {
   id: string;
   routingName?: string | null;
@@ -13,6 +15,6 @@ export function resolveSubagentRelay(agents: RelayableSubagent[] | null, selecte
   if (!agents || !agent) return { kind: 'unavailable', reason: 'unavailable' };
   if (agent.routingName === undefined) return { kind: 'unavailable', reason: 'agent_outdated' };
   const name = agent.routingName;
-  if (!name || agent.status === 'finished' || agents.filter((item) => item.routingName === name).length !== 1) return { kind: 'unavailable', reason: 'unavailable' };
+  if (agent.status === 'finished' || !isRelayRoutingName(name, agents.map((item) => item.routingName))) return { kind: 'unavailable', reason: 'unavailable' };
   return { kind: 'available', name, status: agent.status };
 }

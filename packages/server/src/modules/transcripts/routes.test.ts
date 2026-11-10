@@ -1597,8 +1597,9 @@ describe('subagent relay', () => {
     const sendInput = vi.fn(async () => 'ok' as const);
     const agents = [{ id: 'a123', name: 'worker', routingName: 'worker' as string | null | undefined, description: 'test', agentType: 'Explore', model: null, status: 'unknown' as 'unknown' | 'finished' }];
     let tail: 'terminal_final' | 'unknown' | 'in_progress' = 'terminal_final';
+    const resolve = vi.fn(async () => ({ resolved: true as const, agentType: 'claude', sessionId: SID, paneId: PANE_ID, agentDetected: true }));
     const source = buildClaudeSource({ listSubagents: () => agents, readSubagent: () => null, getSessionTailState: async () => ({ state: tail, lastEntryTimestampMs: null }) });
-    const app = buildApp([source], {}, { windowRepo: { findById: (id: number) => ({ id, serverName: 'local', paneLayout: { panes: [{ index: 0, agentSessionId: SID }] } }) as unknown as Window }, windowInputService: { sendInput, sendRelayInput: sendInput }, windowSessionResolver: { resolve: async () => ({ resolved: true, agentType: 'claude', sessionId: SID, paneId: PANE_ID, agentDetected: true }) } });
+    const app = buildApp([source], {}, { windowRepo: { findById: (id: number) => ({ id, serverName: 'local', paneLayout: { panes: [{ index: 0, agentSessionId: SID }] } }) as unknown as Window }, windowInputService: { sendInput, sendRelayInput: sendInput }, windowSessionResolver: { resolve } });
     const payload = { sessionId: SID, paneId: PANE_ID, text: 'hello' };
     const url = '/api/transcripts/windows/10/subagents/a123/relay';
     const headers = { 'x-test-operator': '1' };
@@ -1611,7 +1612,14 @@ describe('subagent relay', () => {
       expect(sendInput).not.toHaveBeenCalled();
     }
     tail = 'terminal_final';
+    for (const name of [' worker', 'worker\n', 'x'.repeat(129)]) {
+      agents[0].routingName = name;
+      expect((await app.inject({ method: 'POST', url, headers, payload })).statusCode).toBe(409);
+    }
+    agents[0].routingName = 'worker';
+    resolve.mockClear();
     expect((await app.inject({ method: 'POST', url, headers, payload })).statusCode).toBe(200);
+    expect(resolve).toHaveBeenCalledTimes(1);
     expect(sendInput).toHaveBeenCalledWith(10, PANE_ID, expect.stringContaining('hello'));
     agents.push({ ...agents[0], id: 'b456' });
     expect((await app.inject({ method: 'POST', url, headers, payload })).statusCode).toBe(409);
