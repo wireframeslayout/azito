@@ -40,6 +40,17 @@
     "serverSelect": "Select server"
   },
   "overview": {
+    "fetchUnavailable": "Unavailable{{reason}}",
+    "fetchReasons": {
+      "agent_unreachable": "Agent unreachable",
+      "status_unknown": "Server status could not be checked",
+      "daemon_unreachable": "Daemon unreachable",
+      "protocol_incompatible": "Incompatible protocol",
+      "not_installed": "Not installed",
+      "driver_not_registered": "Driver not registered",
+      "unsupported_os": "Unsupported OS"
+    },
+    "muxLoading": "Checking…",
     "title": "Overview",
     "onlineHealthy": "Online — Healthy",
     "onlineMeasuring": "Online — Measuring resources…",

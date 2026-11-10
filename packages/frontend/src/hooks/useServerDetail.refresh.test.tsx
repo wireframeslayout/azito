@@ -1,0 +1,95 @@
+import { act, renderHook, waitFor } from '@testing-library/react';
+import { beforeEach, expect, it, vi } from 'vitest';
+import { useServerDetail } from './useServerDetail';
+
+const mocks = vi.hoisted(() => ({ status: 'online', listing: vi.fn(), detail: vi.fn() }));
+vi.mock('./useServerStatuses', () => ({ useServerStatuses: () => ({
+  servers: [{ name: 'a', type: 'agent' }, { name: 'b', type: 'local' }], statuses: { a: { status: mocks.status }, b: { status: 'online' } },
+  refresh: refreshStatuses,
+}) }));
+async function refreshStatuses() { return [{ name: 'a', type: 'agent' }, { name: 'b', type: 'local' }]; }
+vi.mock('../lib/fetchServerSessions', async (importOriginal) => ({
+  ...await importOriginal<typeof import('../lib/fetchServerSessions')>(), fetchSessionListing: mocks.listing,
+}));
+vi.mock('../api/client', () => ({
+  api: vi.fn(async (path: string) => path.includes('install-status') ? {} : []),
+  apiWithStatus: mocks.detail,
+}));
+
+beforeEach(() => {
+  mocks.status = 'online';
+  mocks.listing.mockReset().mockResolvedValue({ sessions: [{ name: 'one', windows: [], windowCount: 0 }], unavailable: [] });
+  mocks.detail.mockReset().mockResolvedValue({ status: 200, body: { mux: { driverAvailable: true }, isolationReport: null, isolationCleanupReport: null } });
+});
+
+it('invalidates old results on disconnect and fetches again after reconnect', async () => {
+  const { result, rerender } = renderHook(() => useServerDetail('a'));
+  await waitFor(() => expect(result.current.sessionsState).toBe('ready'));
+  expect(result.current.muxDriverStatus).toBe('ok');
+  act(() => { mocks.status = 'offline'; rerender(); });
+  expect(result.current.sessionsState).toBe('error');
+  expect(result.current.sessionsReason).toBe('agent_unreachable');
+  expect(result.current.muxFetchState).toBe('error');
+  expect(result.current.sessions[0].stale).toBe(true);
+  act(() => { mocks.status = 'checking'; rerender(); });
+  act(() => { mocks.status = 'online'; rerender(); });
+  await waitFor(() => expect(result.current.sessionsState).toBe('ready'));
+  expect(result.current.muxDriverStatus).toBe('ok');
+  expect(mocks.listing).toHaveBeenCalledTimes(2);
+  expect(mocks.detail).toHaveBeenCalledTimes(2);
+});
+
+it('asks for the detail once on open and keeps the error code of an unreachable detail', async () => {
+  mocks.detail.mockReset().mockResolvedValue({ status: 503, body: { error: 'agent_unreachable', reason: 'circuit_open' } });
+  const { result } = renderHook(() => useServerDetail('a'));
+  await waitFor(() => expect(result.current.muxFetchState).toBe('error'));
+  expect(result.current.muxReason).toBe('agent_unreachable');
+  expect(result.current.muxDriverStatus).toBe('unknown');
+  expect(mocks.detail).toHaveBeenCalledTimes(1);
+});
+
+it('ignores an old listing after disconnect and keeps partial failure reasons', async () => {
+  let resolveOld!: (value: unknown) => void;
+  mocks.listing.mockReturnValueOnce(new Promise((resolve) => { resolveOld = resolve; }));
+  const { result, rerender, unmount } = renderHook(() => useServerDetail('a'));
+  act(() => { mocks.status = 'offline'; rerender(); });
+  await act(async () => resolveOld({ sessions: [{ name: 'old', windows: [] }], unavailable: [] }));
+  expect(result.current.sessionsState).toBe('error');
+  mocks.listing.mockResolvedValueOnce({ sessions: [], unavailable: [{ kind: 'misao', reason: 'daemon_unreachable' }], listedKinds: ['tmux'] });
+  act(() => { mocks.status = 'online'; rerender(); });
+  await waitFor(() => expect(result.current.sessionsState).toBe('partial'));
+  expect(result.current.sessionsReason).toBe('daemon_unreachable');
+  unmount();
+});
+
+it('ignores a response after switching servers', async () => {
+  let resolveOld!: (value: unknown) => void;
+  mocks.listing.mockReturnValueOnce(new Promise((resolve) => { resolveOld = resolve; }));
+  const { result, rerender } = renderHook(({ name }) => useServerDetail(name), { initialProps: { name: 'a' } });
+  rerender({ name: 'b' });
+  await waitFor(() => expect(result.current.sessionsState).toBe('ready'));
+  await act(async () => resolveOld({ sessions: [{ name: 'old', windows: [] }], unavailable: [] }));
+  expect(result.current.sessions.map((session) => session.name)).toEqual(['one']);
+});
+
+
+it('reports an unknown status reason when the probe fails', async () => {
+  const { result, rerender } = renderHook(() => useServerDetail('a'));
+  await waitFor(() => expect(result.current.sessionsState).toBe('ready'));
+  act(() => { mocks.status = 'error'; rerender(); });
+  expect(result.current.sessionsReason).toBe('status_unknown');
+  expect(result.current.muxReason).toBe('status_unknown');
+});
+
+it('does not fetch twice when returning from a non-agent server', async () => {
+  const { result, rerender } = renderHook(({ name }) => useServerDetail(name), { initialProps: { name: 'a' } });
+  await waitFor(() => expect(result.current.sessionsState).toBe('ready'));
+  act(() => { mocks.status = 'offline'; rerender({ name: 'a' }); });
+  rerender({ name: 'b' });
+  await waitFor(() => expect(result.current.sessionsState).toBe('ready'));
+  mocks.status = 'online';
+  mocks.listing.mockClear();
+  rerender({ name: 'a' });
+  await waitFor(() => expect(result.current.sessionsState).toBe('ready'));
+  expect(mocks.listing).toHaveBeenCalledTimes(1);
+});

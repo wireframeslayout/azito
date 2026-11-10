@@ -31,7 +31,7 @@ export default function ServerDetailPage({ serverName, section }: ServerDetailPa
   const isMobile = useIsMobile();
   const {
     server, servers, status, installStatus, installStatusError, localNetworkDetail, sessions, sessionsState,
-    windowById, taskById, muxDriverStatus,
+    windowById, taskById, muxDriverStatus, sessionsReason, muxFetchState, muxReason,
     isolationReport, isolationReportUnavailable,
     isolationCleanupReport, isolationCleanupReportUnavailable,
     windowMetaError,
@@ -113,6 +113,9 @@ export default function ServerDetailPage({ serverName, section }: ServerDetailPa
               isolationCleanupReport={isolationCleanupReport}
               isolationCleanupReportUnavailable={isolationCleanupReportUnavailable}
               muxDriverStatus={muxDriverStatus}
+              muxFetchState={muxFetchState}
+              muxReason={muxReason}
+              sessionsReason={sessionsReason}
               refresh={refresh}
               onEdit={() => mgmt.openEditModal(server)}
             />
