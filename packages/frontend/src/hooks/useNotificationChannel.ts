@@ -29,7 +29,13 @@ const listeners = new Set<Listener>();
 const connectedListeners = new Set<() => void>();
 
 function dispatch(event: NotificationEvent): void {
-  for (const fn of listeners) fn(event);
+  for (const fn of listeners) {
+    try {
+      fn(event);
+    } catch (error) {
+      console.error('[NotificationChannel] listener failed:', event.type, error);
+    }
+  }
 }
 
 function connect(): void {
@@ -41,15 +47,29 @@ function connect(): void {
   ws.onopen = () => {
     retryCount = 0;
     console.log('[NotificationChannel] WebSocket connected');
-    for (const fn of connectedListeners) fn();
+    for (const fn of connectedListeners) {
+      try {
+        fn();
+      } catch (error) {
+        console.error('[NotificationChannel] connected listener failed:', error);
+      }
+    }
   };
 
   ws.onmessage = (e) => {
+    let event: unknown;
     try {
-      const event: NotificationEvent = JSON.parse(e.data);
-      console.log('[NotificationChannel] event received:', event.type, JSON.stringify(event.payload));
-      dispatch(event);
-    } catch { /* ignore */ }
+      event = JSON.parse(e.data);
+    } catch (error) {
+      console.warn('[NotificationChannel] invalid message:', error);
+      return;
+    }
+    if (typeof event !== 'object' || event === null || !('type' in event) || typeof event.type !== 'string') {
+      console.warn('[NotificationChannel] invalid message shape');
+      return;
+    }
+    console.log('[NotificationChannel] event received:', event.type);
+    dispatch(event as NotificationEvent);
   };
 
   ws.onclose = (ev) => {
