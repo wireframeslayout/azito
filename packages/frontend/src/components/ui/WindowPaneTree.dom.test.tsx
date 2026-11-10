@@ -16,11 +16,10 @@ function renderTree(item: WindowItem, panes: Pane[], renderSubtitle?: (w: Window
 }
 
 function expectLines(title: string, subtitle?: string) {
-  const titleElement = screen.getByText(title);
-  const content = titleElement.parentElement!.parentElement!;
-  expect(content.children[0].contains(titleElement)).toBe(true);
-  if (subtitle === undefined) expect(content.children).toHaveLength(1);
-  else expect(content.children[1].textContent).toBe(subtitle);
+  expect(screen.getByText(title)).toBeTruthy();
+  const subtitleElement = screen.queryByTestId('window-name-subtitle');
+  if (subtitle === undefined) expect(subtitleElement).toBeNull();
+  else expect(subtitleElement?.textContent).toBe(subtitle);
 }
 
 describe('WindowPaneTree single pane title', () => {

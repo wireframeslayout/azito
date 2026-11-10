@@ -412,7 +412,9 @@ function WindowRow({ w, sessionData, isActive, expandedWindows, onToggle, onUnzo
   const isExpanded = expandedWindows.has(expandKey);
 
   // resolveWindowTitle を先に計算し、idChip の重複を防ぐ
-  const winDisplay = resolveWindowTitle({ id: w.id, paneTitle: (sw.panes.find(p => p.active) ?? sw.panes[0])?.title, paneCommand: (sw.panes.find(p => p.active) ?? sw.panes[0])?.command, label: w.label, labelSource: w.labelSource, workerType: w.workerType, windowType: w.windowType, tmuxTarget: w.tmuxTarget });
+  const displayPane = sw.panes.find(p => p.active) ?? sw.panes[0];
+  const nameInput = { paneTitle: displayPane?.title, paneCommand: displayPane?.command, label: w.label, labelSource: w.labelSource };
+  const winDisplay = resolveWindowTitle({ ...nameInput, id: w.id, workerType: w.workerType, windowType: w.windowType, tmuxTarget: w.tmuxTarget });
   const winTitle = renderTitle?.(w) ?? winDisplay.title;
   const winShowIdChip = renderTitle?.(w) != null ? w.id != null : !!winDisplay.idLabel;
 
@@ -450,7 +452,7 @@ function WindowRow({ w, sessionData, isActive, expandedWindows, onToggle, onUnzo
     const paneLabel = pane.title && pane.title !== pane.command ? pane.title : pane.command;
     const ctxExtra: ContextMenuExtra = { online: true, stale: plan.stale, windowName: sw.name, paneTarget: panes[0].menuPaneTarget, paneTitle: paneLabel };
     // 種別名を候補に含めると、名前がない場合に従来のコマンド表示を置き換えてしまう。
-    const nameSubtitle = showNameSubtitle ? resolveWindowTitle({ paneTitle: pane.title, paneCommand: pane.command, label: w.label, labelSource: w.labelSource }).subtitle : undefined;
+    const nameSubtitle = showNameSubtitle ? resolveWindowTitle(nameInput).subtitle : undefined;
     const subtitle = renderSubtitle ? (renderSubtitle(w) ?? paneLabel) : (nameSubtitle ?? paneLabel);
     return (
       <div
@@ -480,7 +482,7 @@ function WindowRow({ w, sessionData, isActive, expandedWindows, onToggle, onUnzo
             {w.taskId != null && (renderTaskBadge ? renderTaskBadge(w, w.taskId) : <TaskIdBadge taskId={w.taskId} />)}
           </div>
           {subtitle != null && (typeof subtitle !== 'string' || subtitle !== winTitle) && (
-            <div style={{
+            <div data-testid="window-name-subtitle" style={{
               fontSize: 'var(--font-xs)', color: 'var(--text-dim)', overflow: 'hidden',
               textOverflow: 'ellipsis', whiteSpace: 'nowrap', marginTop: 1,
             }}>
