@@ -913,13 +913,6 @@ describe('the scripts it sends', () => {
     expect(scripts).toHaveLength(2);
     expect(scripts.every(({ transfer }) => transfer === true)).toBe(true);
   });
-  it('fits the MCP commands with a long non-ASCII home path', () => {
-    const home = 'C:\\Users\\佐藤花子開発環境東京横浜大阪京都札幌名古屋神戸福岡仙台広島長崎熊本金沢岡山松山';
-    const expected = `${home}\\.azito\\harness\\skills\\azt-mcp\\mcp-server\\index.js`;
-    for (const kind of ['claude', 'codex'] as const) {
-      expect(() => powershellDialect.wrapScript(`$ProgressPreference = 'SilentlyContinue'\n${harnessMcpScript(kind, NODE, home, expected)}`)).not.toThrow();
-    }
-  });
   it('each fits one command line (8191 characters once encoded) for a long user folder', async () => {
     const home = `C:\\Users\\${'a-very-long-user-name-'.repeat(4)}`;
     const long = new FakeUninstallHost({

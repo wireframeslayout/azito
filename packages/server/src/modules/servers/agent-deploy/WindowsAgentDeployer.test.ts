@@ -110,29 +110,33 @@ describe('transferred uninstall scripts', () => {
     const home = `C:\\Users\\${'名'.repeat(40)}`;
     const nodePath = `${home}\\node\\node.exe`;
     const host = new FakeWindowsHost({ sha256: 'a'.repeat(64) });
-    const uploads: string[] = [];
+    const uploads = new Map<string, string>();
     const commands: string[] = [];
-    const deployer = new WindowsAgentDeployer(async (h, command, timeout) => {
+    const deployer = new WindowsAgentDeployer(async (h, command) => {
       commands.push(command);
-      const staged = /\.azito-script-[^']+/.exec(decodeEncodedCommand(command))?.[0];
-      const body = staged && host.uploaded.get(staged)?.toString('utf8');
-      if (body && !body.includes('AZITO_MCP_SRC')) return { stdout: 'CLEAR', stderr: '', code: 0 };
-      return host.exec(h, command);
-    }, { putFile: async () => undefined, putBuffer: async (_h, bytes, name) => { uploads.push(bytes.toString('utf8')); host.uploaded.set(name, bytes); } }, DEFAULT_WINDOWS_AGENT_OPTIONS);
-    const internals = deployer as unknown as { script: (h: string, what: string, body: string, timeout?: number) => Promise<string> };
-    const original = internals.script.bind(deployer);
-    internals.script = async (h, what, body, timeout) => {
-      if (what.startsWith('Removing the temporary script') || body.includes('[IO.File]::ReadAllBytes')) return original(h, what, body, timeout);
-      if (what.startsWith('Looking for processes')) return 'CLEAR';
-      if (what.startsWith('Looking for the Windows Firewall')) return 'ABSENT';
-      if (what.startsWith('Removing ')) return 'DONE';
-      return original(h, what, body, timeout);
-    };
-    await deployer.uninstall('h', { home, systemRoot: 'C:\\Windows', nodePath, userId: 'PC\\dev' }, { removeMisao: false });
-    expect(uploads.filter((body) => body.includes('AZITO_MCP_SRC'))).toHaveLength(2);
-    const launchers = commands.filter((command) => decodeEncodedCommand(command).includes('[IO.File]::ReadAllBytes'));
-    expect(launchers.length).toBeGreaterThanOrEqual(2);
-    expect(launchers.every((command) => command.length < 8191)).toBe(true);
+      const result = await host.exec(h, command);
+      const script = host.calls.at(-1)?.text ?? '';
+      if (script.includes('AZITO_MCP_SRC')) return { ...result, stdout: 'AZITO_MCP_RESULT:{"outcome":"absent"}' };
+      if (script.includes('Remove-Tree')) return { ...result, stdout: 'DONE' };
+      if (script.includes('COMRULE|')) return { ...result, stdout: 'UNKNOWN' };
+      if (script.includes('Find-Left')) return { ...result, stdout: 'CLEAR' };
+      return result;
+    }, { putFile: async () => undefined, putBuffer: async (_h, bytes, name) => { uploads.set(name, bytes.toString('utf8')); host.uploaded.set(name, bytes); } }, DEFAULT_WINDOWS_AGENT_OPTIONS);
+    const result = await deployer.uninstall('h', { home, systemRoot: 'C:\\Windows', nodePath, userId: 'PC\\dev' }, { removeMisao: false });
+    expect(result.steps.filter((step) => step.id.endsWith('HarnessMcp'))).toEqual([
+      { id: 'claudeHarnessMcp', outcome: 'absent' },
+      { id: 'codexHarnessMcp', outcome: 'absent' },
+    ]);
+    const mcpFiles = [...uploads].filter(([, body]) => body.includes('AZITO_MCP_SRC')).map(([name]) => name);
+    expect(mcpFiles).toHaveLength(2);
+    for (const name of mcpFiles) {
+      const launchers = commands.filter((command) => {
+        const script = decodeEncodedCommand(command);
+        return script.includes('[IO.File]::ReadAllBytes') && script.includes(name);
+      });
+      expect(launchers).toHaveLength(1);
+      expect(launchers[0]!.length).toBeLessThan(8191);
+    }
   });
 
   it('keeps a successful result when cleanup fails', async () => {
