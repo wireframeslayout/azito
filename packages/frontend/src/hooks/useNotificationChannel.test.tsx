@@ -35,7 +35,7 @@ afterEach(() => {
   vi.unstubAllGlobals();
 });
 
-it('continues delivery after a listener throws and logs only the event type and error', () => {
+it('continues delivery after a listener throws and logs the event type and error to console.error', () => {
   const error = new Error('listener failed');
   const first = vi.fn(() => { throw error; });
   const second = vi.fn();
