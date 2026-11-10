@@ -77,7 +77,7 @@ export function ToastProvider({ children }: { children: React.ReactNode }) {
   return (
     <ToastContext.Provider value={{ showToast }}>
       {children}
-      <span aria-live="polite" aria-atomic="true" style={{ position: 'absolute', width: 1, height: 1, padding: 0, overflow: 'hidden', clipPath: 'inset(50%)', whiteSpace: 'nowrap' }}>
+      <span aria-live="polite" aria-atomic="true" className="sr-only">
         {toast?.message ?? ''}
       </span>
       {toast && (
@@ -100,8 +100,8 @@ export function ToastProvider({ children }: { children: React.ReactNode }) {
             boxShadow: 'var(--shadow-2)',
           }}>
           <span aria-hidden="true" style={{ flex: '1 1 0', minWidth: 0, overflowWrap: 'anywhere' }}>{toast.message}</span>
-          {toast.actions.map((action) => <Button key={action.label} type="button" variant="ghost" size="sm" style={{ minHeight: 44 }} onClick={() => { dismiss(); action.onClick(); }}>{action.label}</Button>)}
-          <Button type="button" variant="ghost" size="sm" style={{ minWidth: 44, minHeight: 44 }} onClick={dismiss}>{t('actions.close')}</Button>
+          {toast.actions.map((action) => <Button key={action.label} type="button" variant="ghost" size="sm" style={{ minHeight: 'calc(var(--space-5) + var(--space-6))' }} onClick={() => { dismiss(); action.onClick(); }}>{action.label}</Button>)}
+          <Button type="button" variant="ghost" size="sm" style={{ minWidth: 'calc(var(--space-5) + var(--space-6))', minHeight: 'calc(var(--space-5) + var(--space-6))' }} onClick={dismiss}>{t('actions.close')}</Button>
         </div>
       )}
     </ToastContext.Provider>
