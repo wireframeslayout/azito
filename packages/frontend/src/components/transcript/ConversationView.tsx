@@ -23,6 +23,7 @@ import TuiEntry from './styles/TuiEntry';
 import type { StyleGroupProps } from './styles/types';
 import { dateKeyOf, formatDateSeparator, isErrorResponse } from './transcriptFormat';
 import { useTranscriptStyle, type TranscriptStyle } from './transcriptStyle';
+import type { SubagentRelay } from './subagentRelay';
 import type {
   PendingQuestion,
   PendingQuestionItem,
@@ -59,13 +60,11 @@ interface ConversationViewProps {
   viewMode?: WindowViewMode;
   onChangeViewMode?: (mode: WindowViewMode) => void;
   subagentId?: string;
-  relayName?: string | null;
-  relayStatus?: 'unknown' | 'finished';
-  relayAvailable?: boolean;
+  subagentRelay?: SubagentRelay;
   onParentChanged?: () => void;
 }
 
-export default function ConversationView({ windowId, sessionId, agentType, paneId, agentDetected, slashCommandsVisibleInLog, viewMode, onChangeViewMode, subagentId, relayName, relayStatus, relayAvailable, onParentChanged }: ConversationViewProps) {
+export default function ConversationView({ windowId, sessionId, agentType, paneId, agentDetected, slashCommandsVisibleInLog, viewMode, onChangeViewMode, subagentId, subagentRelay, onParentChanged }: ConversationViewProps) {
   const entriesPath = subagentId
     ? `/transcripts/windows/${windowId}/subagents/${encodeURIComponent(subagentId)}/entries`
     : `/transcripts/${encodeURIComponent(agentType)}/${encodeURIComponent(sessionId)}`;
@@ -543,8 +542,8 @@ export default function ConversationView({ windowId, sessionId, agentType, paneI
 
       {(subagentId || (!loading && !notFound)) && (
         <PromptInputBar
-          readOnlyReason={subagentId && !relayAvailable ? t(relayName === undefined ? 'windowChat.notFound.agent_outdated' : 'subagents.unavailable') : undefined}
-          relay={subagentId ? { sessionId, agentId: subagentId, name: relayName ?? '', status: relayStatus } : undefined}
+          readOnlyReason={subagentRelay?.kind === 'unavailable' ? t(subagentRelay.reason === 'agent_outdated' ? 'windowChat.notFound.agent_outdated' : 'subagents.unavailable') : undefined}
+          relay={subagentId && subagentRelay?.kind === 'available' ? { sessionId, agentId: subagentId, name: subagentRelay.name, status: subagentRelay.status } : undefined}
           windowId={windowId}
           paneId={paneId}
           draftKey={subagentId ? `${sessionId}.subagent.${subagentId}` : sessionId}

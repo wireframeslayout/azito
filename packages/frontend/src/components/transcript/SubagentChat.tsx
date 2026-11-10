@@ -6,6 +6,7 @@ import { Button } from '../ui';
 import type { WindowViewMode } from '../../lib/windowViewMode';
 import ConversationView from './ConversationView';
 import { hostUnavailableReason, type HostUnavailableReason } from './hostUnavailable';
+import { resolveSubagentRelay } from './subagentRelay';
 
 interface Subagent {
   id: string;
@@ -88,7 +89,7 @@ export default function SubagentChat({ windowId, sessionId, onParentChanged, ...
   });
   return (
     <div style={{ display: 'flex', flexDirection: 'column', height: '100%', minHeight: 0 }}>
-      {<section aria-label={t('subagents.title')} style={{ padding: 'var(--space-2) var(--space-3)', borderBottom: '1px solid var(--border)', maxHeight: '35%', overflowY: 'auto' }}>
+      <section aria-label={t('subagents.title')} style={{ padding: 'var(--space-2) var(--space-3)', borderBottom: '1px solid var(--border)', maxHeight: '35%', overflowY: 'auto' }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: 'var(--space-2)', flexWrap: 'wrap' }}>
           <strong style={{ fontSize: 'var(--font-sm)' }}>{t('subagents.title')}</strong>
           <Button style={{ minHeight: 44 }} size="sm" variant={selected === null ? 'primary' : 'default'} aria-pressed={selected === null} onClick={() => select(null)}>{t('subagents.parent')}</Button>
@@ -97,7 +98,7 @@ export default function SubagentChat({ windowId, sessionId, onParentChanged, ...
               <Button style={{ maxWidth: '100%', overflowWrap: 'anywhere', textAlign: 'left', minHeight: 44 }} size="sm" variant={selected === agent.id ? 'primary' : 'default'} aria-pressed={selected === agent.id} onClick={() => select(agent.id)}>
                 {agent.name} · {agent.agentType}{agent.model && ` · ${agent.model}`} · {t(`subagents.status.${agent.status}`)}
               </Button>
-              <div>{agent.description}</div>
+              <div style={{ color: 'var(--text-dim)', fontSize: 'var(--font-xs)', marginTop: 'var(--space-1)' }}>{agent.description}</div>
             </div>
           ))}
         </div>
@@ -105,9 +106,9 @@ export default function SubagentChat({ windowId, sessionId, onParentChanged, ...
           {list.kind === 'loading' ? t('subagents.loading') : list.kind === 'ready' && list.agents.length === 0 ? t('subagents.empty') : null}
           {list.kind === 'error' ? <>{list.reason ? t(`windowChat.notFound.${list.reason}`) : t('subagents.error')} <Button style={{ minHeight: 44 }} size="sm" onClick={refresh}>{t('windowChat.retry')}</Button></> : null}
         </div>
-      </section>}
+      </section>
       <div style={{ flex: 1, minHeight: 0 }}>
-        <ConversationView key={selected ?? 'parent'} windowId={windowId} sessionId={sessionId} onParentChanged={onParentChanged} subagentId={selected ?? undefined} relayStatus={list.kind === 'ready' ? list.agents.find(agent => agent.id === selected)?.status : undefined} relayName={list.kind === 'ready' ? list.agents.find(agent => agent.id === selected)?.routingName : undefined} relayAvailable={list.kind === 'ready' && list.agents.some(agent => agent.id === selected && agent.status !== 'finished' && !!agent.routingName && list.agents.filter(other => other.routingName === agent.routingName).length === 1)} {...conversationProps} />
+        <ConversationView key={selected ?? 'parent'} windowId={windowId} sessionId={sessionId} onParentChanged={onParentChanged} subagentId={selected ?? undefined} subagentRelay={selected === null ? undefined : resolveSubagentRelay(list.kind === 'ready' ? list.agents : null, selected)} {...conversationProps} />
       </div>
     </div>
   );
