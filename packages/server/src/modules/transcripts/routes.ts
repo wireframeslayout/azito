@@ -1,3 +1,6 @@
+import { z } from 'zod';
+import { SubagentRelayService } from './SubagentRelayService';
+import { requireOperator } from '../../shared/auth/requireOperator';
 import type { FastifyPluginCallback, FastifyReply } from 'fastify';
 import { asPaneHandle, isPaneHandle, isPaneHandleLike } from '@azito/shared';
 import type { TranscriptSource } from './sources/TranscriptSource';
@@ -272,12 +275,18 @@ const transcriptsRoutes: FastifyPluginCallback<TranscriptsRouteOptions> = (fasti
     return resolved.sessionId;
   }
 
-  function findSubagentSource(window: Window, sessionId: string, reply: FastifyReply): SubagentTranscriptSource | null {
+  function resolveSubagentSource(window: Window, sessionId: string): SubagentTranscriptSource | 'unsupported_server' | 'unsupported_agent' {
     const scoped = sourcesForRead(String(window.id), sessionId);
-    if (typeof scoped === 'string') { reply.status(501).send({ error: 'unsupported_server' }); return null; }
+    if (typeof scoped === 'string') return 'unsupported_server';
     const source = findSource(scoped, SUBAGENT_CAPABLE_AGENT_TYPE);
-    if (!source?.listSubagents || !source.readSubagent) { reply.status(501).send({ error: 'unsupported_agent' }); return null; }
+    if (!source?.listSubagents || !source.readSubagent) return 'unsupported_agent';
     return source as SubagentTranscriptSource;
+  }
+
+  function findSubagentSource(window: Window, sessionId: string, reply: FastifyReply): SubagentTranscriptSource | null {
+    const source = resolveSubagentSource(window, sessionId);
+    if (typeof source === 'string') { reply.status(501).send({ error: source }); return null; }
+    return source;
   }
 
   fastify.get<{ Params: { windowId: string }; Querystring: { sessionId?: string } }>('/api/transcripts/windows/:windowId/subagents', async (request, reply) => {
@@ -327,6 +336,20 @@ const transcriptsRoutes: FastifyPluginCallback<TranscriptsRouteOptions> = (fasti
       } catch (err) { return replyHostReadError(err, reply); }
     },
   );
+
+
+  const relayService = new SubagentRelayService(windowSessionResolver, windowInputService);
+  const relayBody = z.object({ sessionId: sessionIdSchema, paneId: z.string().refine(isPaneHandle), text: z.string().min(1).max(INPUT_TEXT_MAX_LENGTH).refine(value => !/[\x00-\x08\x0b-\x1f\x7f-\x9f]/.test(value)) }).strict();
+  fastify.post<{ Params: { windowId: string; agentId: string } }>('/api/transcripts/windows/:windowId/subagents/:agentId/relay', { preHandler: requireOperator('transcripts.subagent_relay') }, async (request, reply) => {
+    const body = relayBody.safeParse(request.body);
+    if (!body.success || !subagentIdSchema.safeParse(request.params.agentId).success) return reply.status(400).send({ error: 'invalid_input' });
+    const window = findSubagentWindow(request.params.windowId, reply);
+    if (!window) return;
+    try {
+      const result = await relayService.relay(window, body.data.sessionId, body.data.paneId, request.params.agentId, body.data.text, () => resolveSubagentSource(window, body.data.sessionId));
+      return reply.status(result.status).send(result.body);
+    } catch (err) { return replyHostReadError(err, reply); }
+  });
 
   // ── POST /api/transcripts/window-input ── ウィンドウの pane へ直接テキストを送信する
   // （Issue #69 仕様調整3）。セッション JSONL の存在を前提としないため、resolve-window が

@@ -16,13 +16,14 @@ import { CommandPalette, type CommandPaletteStage } from './CommandPalette';
 import { useChatCommands } from './useChatCommands';
 import { extractCommandQuery, filterChatCommands, expandCommandOutput, textCommandInsertion, type ChatCommand } from './chatCommands';
 
-const TEXTAREA_MIN_HEIGHT = 38;
+const TEXTAREA_MIN_HEIGHT = 44;
 const TEXTAREA_MAX_HEIGHT = 120;
 const DRAFT_SAVE_DEBOUNCE_MS = 300;
 const RESTORED_HINT_MS = 1500;
 
 interface PromptInputBarProps {
   readOnlyReason?: string;
+  relay?: { sessionId: string; agentId: string; name: string; status?: 'unknown' | 'finished' };
   windowId: number;
   /** 送信先ペイン。resolve-window が固定で解決した値（ユーザー選択なし、Issue #69 仕様調整3で
    * ペインセレクトを撤去した）。 */
@@ -67,7 +68,7 @@ interface PromptInputBarProps {
  * 送信内容自体は既存の JSONL ポーリングで会話に反映される（オプティミスティック表示はしない）。
  * textarea＋履歴🕘＋送信↑ の1行構成（SP実機の高さ節約のため）。
  */
-export default function PromptInputBar({ readOnlyReason, windowId, paneId, draftKey, agentDetected, slashCommandsVisibleInLog, agentType, contextHistory, onSent, viewMode, onChangeViewMode }: PromptInputBarProps) {
+export default function PromptInputBar({ readOnlyReason, relay, windowId, paneId, draftKey, agentDetected, slashCommandsVisibleInLog, agentType, contextHistory, onSent, viewMode, onChangeViewMode }: PromptInputBarProps) {
   const { t } = useTranslation('transcript');
   const [style, setStyle] = useTranscriptStyle();
   const [historyOpen, setHistoryOpen] = useState(false);
@@ -75,6 +76,7 @@ export default function PromptInputBar({ readOnlyReason, windowId, paneId, draft
   const [historyIndex, setHistoryIndex] = useState(-1); // -1 = 履歴を辿っていない
   const [sending, setSending] = useState(false);
   const [sendError, setSendError] = useState<string | null>(null);
+  const [relaySent, setRelaySent] = useState(false);
   const [showRestoredHint, setShowRestoredHint] = useState(false);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const draftSaverRef = useRef(createDebouncedDraftSaver(DRAFT_SAVE_DEBOUNCE_MS));
@@ -167,15 +169,17 @@ export default function PromptInputBar({ readOnlyReason, windowId, paneId, draft
 
     setSending(true);
     setSendError(null);
+    setRelaySent(false);
     try {
       const { status, body } = await apiWithStatus<{ ok: true } | TranscriptErrorResponse>(
-        '/transcripts/window-input',
-        { method: 'POST', body: JSON.stringify({ windowId, paneId, text: trimmed }) },
+        relay ? `/transcripts/windows/${windowId}/subagents/${encodeURIComponent(relay.agentId)}/relay` : '/transcripts/window-input',
+        { method: 'POST', body: JSON.stringify(relay ? { sessionId: relay.sessionId, paneId, text: trimmed } : { windowId, paneId, text: trimmed }) },
       );
       if (status !== 200 || isErrorResponse(body)) {
-        setSendError(isErrorResponse(body) ? (body.code ? t(`promptBar.reject.${body.code}`, { defaultValue: body.error }) : body.error) : t('promptBar.sendError'));
+        setSendError(isErrorResponse(body) ? (body.code ? t(`promptBar.reject.${body.code}`, { defaultValue: body.error }) : relay ? t(`subagents.errors.${body.error}`, { defaultValue: t('promptBar.sendError') }) : body.error) : t('promptBar.sendError'));
         return;
       }
+      setRelaySent(!!relay);
       setText('');
       setHistoryIndex(-1);
       clearDraft(draftKey);
@@ -189,7 +193,7 @@ export default function PromptInputBar({ readOnlyReason, windowId, paneId, draft
     } finally {
       setSending(false);
     }
-  }, [sending, readOnlyReason, windowId, paneId, draftKey, onSent, t]);
+  }, [sending, readOnlyReason, relay, windowId, paneId, draftKey, onSent, t]);
 
   const handleSend = useCallback(() => sendText(text), [sendText, text]);
 
@@ -297,6 +301,8 @@ export default function PromptInputBar({ readOnlyReason, windowId, paneId, draft
         padding: '8px 16px',
       }}
     >
+      {relay && <div style={{ color: 'var(--text-dim)', fontSize: 'var(--font-xs)' }}>{t('subagents.relayNotice', { name: relay.name })} {relay.status === 'unknown' && t('subagents.unknownNotice')}</div>}
+      {relaySent && <div role="status">{t('subagents.relaySent')}</div>}
       {/* 設定駆動コマンドパレット（Issue #338 フェーズC）。「/」入力かつ定義済みコマンドに前方一致
           するとき、入力欄上部にポップオーバー表示する（浮遊UIのため --bg-elevated 必須）。 */}
       {!readOnlyReason && paletteStage !== 'closed' && (
@@ -421,7 +427,6 @@ export default function PromptInputBar({ readOnlyReason, windowId, paneId, draft
             color: 'var(--text)',
             fontSize: 'var(--font-base)',
             fontFamily: 'inherit',
-            outline: 'none',
             resize: 'none',
             minHeight: TEXTAREA_MIN_HEIGHT,
             maxHeight: TEXTAREA_MAX_HEIGHT,
@@ -451,7 +456,7 @@ export default function PromptInputBar({ readOnlyReason, windowId, paneId, draft
               display: 'flex',
               alignItems: 'center',
               justifyContent: 'center',
-              width: 38,
+              width: 44,
               height: TEXTAREA_MIN_HEIGHT,
               background: historyOpen ? 'var(--bg-hover)' : 'var(--bg)',
               border: '1px solid var(--border)',
@@ -477,7 +482,7 @@ export default function PromptInputBar({ readOnlyReason, windowId, paneId, draft
             display: 'flex',
             alignItems: 'center',
             justifyContent: 'center',
-            width: 38,
+            width: 44,
             height: TEXTAREA_MIN_HEIGHT,
             flexShrink: 0,
             background: canSend ? 'var(--accent)' : 'var(--bg)',

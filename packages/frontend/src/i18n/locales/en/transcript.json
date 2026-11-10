@@ -77,7 +77,8 @@
       "codex_update_prompt": "Resolve the Codex update dialog before sending.",
       "codex_trust_prompt": "Resolve the Codex folder trust dialog before sending.",
       "not_ready": "The agent is not ready for input.",
-      "input_not_empty": "The input may contain a suggestion or a draft. Check it in the terminal and clear or submit it before trying again."
+      "input_not_empty": "The input may contain a suggestion or a draft. Check it in the terminal and clear or submit it before trying again.",
+      "parent_busy": "The parent is working or its state cannot be verified. Try again when it is idle."
     },
     "sendError": "Failed to send",
     "retry": "Retry",
@@ -119,10 +120,20 @@
     "loading": "Loading subagents…",
     "empty": "No subagents found.",
     "error": "Could not load subagents.",
-    "readOnly": "This conversation is read-only. Return to the parent conversation to send a message.",
     "status": {
       "finished": "Finished",
       "unknown": "Unknown"
+    },
+    "unavailable": "Relay is unavailable for this subagent.",
+    "relayNotice": "Send to {{name}} through the parent.",
+    "unknownNotice": "This subagent’s status is unknown. The parent may be unable to deliver the message.",
+    "relaySent": "Requested from the parent.",
+    "errors": {
+      "subagent_unavailable": "The subagent is no longer available for relay.",
+      "parent_session_changed": "The parent session or pane changed. Refresh and try again.",
+      "pane_session_unverified": "The parent pane could not be verified.",
+      "agent_outdated": "Update the agent to use relay.",
+      "relay_busy": "Another relay is in progress. Try again."
     }
   }
 }

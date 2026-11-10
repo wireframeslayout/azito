@@ -62,3 +62,4 @@ export { pickTaskExecutionServer } from './taskServer';
 export { type HostPathApi, hostPathFor } from './hostPath';
 export { resolveWindowTitle, formatWindowTitleLine, resolvePaneDisplayTitle } from './windowTitle';
 export type { WindowTitleInput, WindowTitle } from './windowTitle';
+export { isRelayRoutingName } from './subagentRelay';

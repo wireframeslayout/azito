@@ -851,7 +851,7 @@ export class ClaudeTranscriptSource implements TranscriptReader {
       if (value.name !== undefined && typeof value.name !== 'string') continue;
       if (value.model !== undefined && typeof value.model !== 'string') continue;
       if (value.finished !== undefined && typeof value.finished !== 'boolean') continue;
-      result.push({ id: match[1], name: typeof value.name === 'string' ? value.name : value.description, description: value.description, agentType: value.agentType,
+      result.push({ id: match[1], name: typeof value.name === 'string' ? value.name : value.description, routingName: typeof value.name === 'string' ? value.name : null, description: value.description, agentType: value.agentType,
         model: typeof value.model === 'string' ? value.model : null, status: value.finished === true ? 'finished' : 'unknown' });
     }
     return result;

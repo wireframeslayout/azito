@@ -92,6 +92,7 @@ function buildApp(
   } as unknown as IServerRepository;
 
   const app = Fastify();
+  app.addHook('preHandler', async (request) => { if (request.headers['x-test-operator']) request.principal = { class: 'operator' } as typeof request.principal; });
   app.register(transcriptsRoutes, { sources, sourceProvider: new HostTranscriptSourceProvider(sources, noAgentTransports), serverRepo, transcriptPaneService, windowSessionResolver, windowInputService, windowRepo, interactionMonitor });
   return app;
 }
@@ -1587,5 +1588,61 @@ describe('window subagent API', () => {
     } finally {
       vi.useRealTimers();
     }
+  });
+});
+
+
+describe('subagent relay', () => {
+  it.each(['unsupported_server', 'unsupported_agent'] as const)('returns %s without sending input', async (reason) => {
+    const sendRelayInput = vi.fn();
+    const app = buildApp([], {}, {
+      windowRepo: { findById: (id: number) => ({ id, serverName: reason === 'unsupported_server' ? 'missing' : 'local', paneLayout: { panes: [{ index: 0, agentSessionId: SID }] } }) as unknown as Window },
+      windowInputService: { sendRelayInput },
+      windowSessionResolver: { resolve: async () => ({ resolved: true, agentType: 'claude', sessionId: SID, paneId: PANE_ID, agentDetected: true }) },
+    });
+    const response = await app.inject({ method: 'POST', url: '/api/transcripts/windows/10/subagents/a123/relay', headers: { 'x-test-operator': '1' }, payload: { sessionId: SID, paneId: PANE_ID, text: 'hello' } });
+    expect(response.statusCode).toBe(501);
+    expect(response.json()).toEqual({ error: reason });
+    expect(sendRelayInput).not.toHaveBeenCalled();
+    await app.close();
+  });
+  it('requires an operator and relays only to an unambiguous, unfinished child', async () => {
+    const sendInput = vi.fn(async () => 'ok' as const);
+    const agents = [{ id: 'a123', name: 'worker', routingName: 'worker' as string | null | undefined, description: 'test', agentType: 'Explore', model: null, status: 'unknown' as 'unknown' | 'finished' }];
+    let tail: 'terminal_final' | 'unknown' | 'in_progress' = 'terminal_final';
+    const resolve = vi.fn(async () => ({ resolved: true as const, agentType: 'claude', sessionId: SID, paneId: PANE_ID, agentDetected: true }));
+    const source = buildClaudeSource({ listSubagents: () => agents, readSubagent: () => null, getSessionTailState: async () => ({ state: tail, lastEntryTimestampMs: null }) });
+    const app = buildApp([source], {}, { windowRepo: { findById: (id: number) => ({ id, serverName: 'local', paneLayout: { panes: [{ index: 0, agentSessionId: SID }] } }) as unknown as Window }, windowInputService: { sendInput, sendRelayInput: sendInput }, windowSessionResolver: { resolve } });
+    const payload = { sessionId: SID, paneId: PANE_ID, text: 'hello' };
+    const url = '/api/transcripts/windows/10/subagents/a123/relay';
+    const headers = { 'x-test-operator': '1' };
+    expect((await app.inject({ method: 'POST', url, payload })).statusCode).toBe(403);
+    expect((await app.inject({ method: 'POST', url, headers, payload: { ...payload, text: 'bad\u0000' } })).statusCode).toBe(400);
+    expect((await app.inject({ method: 'POST', url, headers, payload: { ...payload, sessionId: 'aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa' } })).statusCode).toBe(409);
+    for (const state of ['unknown', 'in_progress'] as const) {
+      tail = state;
+      expect((await app.inject({ method: 'POST', url, headers, payload })).statusCode).toBe(409);
+      expect(sendInput).not.toHaveBeenCalled();
+    }
+    tail = 'terminal_final';
+    for (const name of [' worker', 'worker\n', 'x'.repeat(129)]) {
+      agents[0].routingName = name;
+      expect((await app.inject({ method: 'POST', url, headers, payload })).statusCode).toBe(409);
+    }
+    agents[0].routingName = 'worker';
+    resolve.mockClear();
+    expect((await app.inject({ method: 'POST', url, headers, payload })).statusCode).toBe(200);
+    expect(resolve).toHaveBeenCalledTimes(1);
+    expect(sendInput).toHaveBeenCalledWith(10, PANE_ID, expect.stringContaining('hello'));
+    agents.push({ ...agents[0], id: 'b456' });
+    expect((await app.inject({ method: 'POST', url, headers, payload })).statusCode).toBe(409);
+    agents.pop(); agents[0].routingName = null;
+    expect((await app.inject({ method: 'POST', url, headers, payload })).statusCode).toBe(409);
+    agents[0].routingName = undefined;
+    expect((await app.inject({ method: 'POST', url, headers, payload })).statusCode).toBe(501);
+    agents[0].routingName = 'worker'; agents[0].status = 'finished';
+    expect((await app.inject({ method: 'POST', url, headers, payload })).statusCode).toBe(409);
+    expect(sendInput).toHaveBeenCalledTimes(1);
+    await app.close();
   });
 });

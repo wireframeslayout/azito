@@ -49,6 +49,14 @@ export class WindowInputService {
   ) {}
 
   async sendInput(windowId: number, handle: PaneHandle, text: string): Promise<WindowInputResult> {
+    return this.sendGuardedInput(windowId, handle, text, false);
+  }
+
+  async sendRelayInput(windowId: number, handle: PaneHandle, text: string): Promise<WindowInputResult> {
+    return this.sendGuardedInput(windowId, handle, text, true);
+  }
+
+  private async sendGuardedInput(windowId: number, handle: PaneHandle, text: string, requireIdle: boolean): Promise<WindowInputResult> {
     const window = this.windowRepo.findById(windowId);
     if (!window) return 'window_not_found';
 
@@ -61,7 +69,7 @@ export class WindowInputService {
 
     await preparePaneForChatInput(this.muxDriverRegistry.resolveKind(muxKindOfPaneHandle(handle), server), server, handle, this.wait);
     const workerType = window.workerType ?? await this.detectWorkerType(driver, server, window);
-    const rejection = await guardChatInput(driver, server, handle, workerType, text);
+    const rejection = await guardChatInput(driver, server, handle, workerType, text, requireIdle);
     if (rejection) return rejection;
     await typeChatText(driver, server, handle, text);
     const submitDelayMs = this.resolveSubmitDelay(workerType);
@@ -105,6 +113,15 @@ export class WindowInputService {
     const driver = this.muxDriverRegistry.resolve(server);
     const pane = (await this.listWindowPanes(driver, server, window)).find((p) => p.paneId === paneId);
     return pane ? pane.paneIndex : 'pane_not_found';
+  }
+
+  async isOnlyPane(windowId: number, handle: PaneHandle): Promise<boolean> {
+    const window = this.windowRepo.findById(windowId);
+    if (!window) return false;
+    const server = this.serverRepo.findByName(window.serverName);
+    if (!server) return false;
+    const panes = await this.listWindowPanes(this.muxDriverRegistry.resolve(server), server, window);
+    return panes.length === 1 && panes[0].paneId === handle;
   }
 
   private async detectWorkerType(driver: IMuxClient, server: ServerConfig, window: Window): Promise<string | null> {

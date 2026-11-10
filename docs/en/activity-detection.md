@@ -634,3 +634,5 @@ the list to refresh. Status comes from the conversation files and metadata, not 
 The list is also refreshed periodically if hooks are missing, although file updates can be delayed.
 On an agent server, an older agent without this feature reports `agent_outdated`; update the agent to
 use it.
+
+Subagent selection is saved per window and parent session in this browser. Start and stop hooks refresh the list; a missing stop notification can leave the state unknown. A relay requests that the parent send a message and does not guarantee delivery. Only a uniquely named child not explicitly finished can be addressed, and the parent must be ready for input. Agent servers require an updated agent for relay.

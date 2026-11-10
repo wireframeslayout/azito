@@ -39,7 +39,7 @@ export const sessionIdSchema = z.string().regex(SESSION_ID_PATTERN);
 /** サブエージェントの id。`<session>/subagents/agent-<id>.jsonl` のファイル名になるので、パス区切りやドットは受け付けない。 */
 export const subagentIdSchema = z.string().regex(/^[a-zA-Z0-9_-]+$/);
 export const subagentsResponseSchema = z.object({ subagents: z.array(z.object({
-  id: subagentIdSchema, name: z.string(), description: z.string(), agentType: z.string(),
+  id: subagentIdSchema, name: z.string(), routingName: z.string().nullable().optional(), description: z.string(), agentType: z.string(),
   model: z.string().nullable(), status: z.enum(['finished', 'unknown']),
 })) });
 

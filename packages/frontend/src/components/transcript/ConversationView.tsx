@@ -23,6 +23,7 @@ import TuiEntry from './styles/TuiEntry';
 import type { StyleGroupProps } from './styles/types';
 import { dateKeyOf, formatDateSeparator, isErrorResponse } from './transcriptFormat';
 import { useTranscriptStyle, type TranscriptStyle } from './transcriptStyle';
+import type { SubagentRelay } from './subagentRelay';
 import type {
   PendingQuestion,
   PendingQuestionItem,
@@ -59,10 +60,11 @@ interface ConversationViewProps {
   viewMode?: WindowViewMode;
   onChangeViewMode?: (mode: WindowViewMode) => void;
   subagentId?: string;
+  subagentRelay?: SubagentRelay;
   onParentChanged?: () => void;
 }
 
-export default function ConversationView({ windowId, sessionId, agentType, paneId, agentDetected, slashCommandsVisibleInLog, viewMode, onChangeViewMode, subagentId, onParentChanged }: ConversationViewProps) {
+export default function ConversationView({ windowId, sessionId, agentType, paneId, agentDetected, slashCommandsVisibleInLog, viewMode, onChangeViewMode, subagentId, subagentRelay, onParentChanged }: ConversationViewProps) {
   const entriesPath = subagentId
     ? `/transcripts/windows/${windowId}/subagents/${encodeURIComponent(subagentId)}/entries`
     : `/transcripts/${encodeURIComponent(agentType)}/${encodeURIComponent(sessionId)}`;
@@ -540,14 +542,15 @@ export default function ConversationView({ windowId, sessionId, agentType, paneI
 
       {(subagentId || (!loading && !notFound)) && (
         <PromptInputBar
-          readOnlyReason={subagentId ? t('subagents.readOnly') : undefined}
+          readOnlyReason={subagentId && subagentRelay?.kind !== 'available' ? t(subagentRelay?.kind === 'unavailable' && subagentRelay.reason === 'agent_outdated' ? 'subagents.errors.agent_outdated' : 'subagents.unavailable') : undefined}
+          relay={subagentId && subagentRelay?.kind === 'available' ? { sessionId, agentId: subagentId, name: subagentRelay.name, status: subagentRelay.status } : undefined}
           windowId={windowId}
           paneId={paneId}
-          draftKey={sessionId}
+          draftKey={subagentId ? `${sessionId}.subagent.${subagentId}` : sessionId}
           agentDetected={agentDetected}
           slashCommandsVisibleInLog={slashCommandsVisibleInLog}
-          agentType={agentType}
-          contextHistory={contextHistory}
+          agentType={subagentId ? undefined : agentType}
+          contextHistory={subagentId ? [] : contextHistory}
           onSent={() => scrollToBottom('smooth')}
           viewMode={viewMode}
           onChangeViewMode={onChangeViewMode}
