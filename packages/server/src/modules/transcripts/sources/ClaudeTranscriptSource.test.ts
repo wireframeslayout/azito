@@ -56,13 +56,15 @@ describe('ClaudeTranscriptSource', () => {
     writeSession(dir, 'proj-a', SID_A, [
       { type: 'user', uuid: 'literal', message: { content: reminder } },
       { type: 'user', isMeta: true, uuid: 'mixed-string', message: { content: `hello ${reminder}` } },
+      { type: 'user', isMeta: true, uuid: 'between-reminders', message: { content: `${reminder} user text ${reminder}` } },
       { type: 'user', isMeta: true, uuid: 'mixed-blocks', message: { content: [{ type: 'text', text: 'hello' }, { type: 'text', text: reminder }, { type: 'tool_result', tool_use_id: 't', content: 'ok' }] } },
       { type: 'user', isMeta: true, uuid: 'other', message: { content: 'other metadata' } },
       { type: 'assistant', isMeta: true, uuid: 'assistant', message: { content: [{ type: 'text', text: reminder }] } },
     ]);
     const entries = service.readSession(SID_A)!.entries;
-    expect(entries.map((e) => e.uuid)).toEqual(['literal', 'mixed-string', 'mixed-blocks', 'other', 'assistant']);
-    expect(entries[2].blocks).toHaveLength(3);
+    expect(entries.map((e) => e.uuid)).toEqual(['literal', 'mixed-string', 'between-reminders', 'mixed-blocks', 'other', 'assistant']);
+    expect(entries[2].blocks).toEqual([{ kind: 'text', text: `${reminder} user text ${reminder}` }]);
+    expect(entries[3].blocks).toHaveLength(3);
   });
 
   describe('sessionExists (#542)', () => {
