@@ -40,6 +40,7 @@
     "serverSelect": "サーバー選択"
   },
   "overview": {
+    "fetchUnavailable": "取得できません{{reason}}",
     "title": "概要",
     "onlineHealthy": "稼働中 — 正常",
     "onlineMeasuring": "稼働中 — リソース計測中…",

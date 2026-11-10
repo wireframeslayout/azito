@@ -2,7 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { api, apiWithStatus } from '../api/client';
 import type { Server, Session, ServerStatus } from './useServerManagement';
 import { useServerStatuses } from './useServerStatuses';
-import { fetchSessionListing, sessionListingState, keepUnavailableKinds } from '../lib/fetchServerSessions';
+import { fetchSessionListing, sessionListingState, keepUnavailableKinds, SessionListingError } from '../lib/fetchServerSessions';
 import type { InstallStatusResponse } from '../components/servers/serverSections';
 import type { Window } from '../pages/workspace/types';
 import { buildWindowIndex, type WindowIndexEntry } from '../lib/windowDisplay';
@@ -143,6 +143,9 @@ interface UseServerDetailResult {
   localNetworkDetail: string | undefined;
   sessions: Session[];
   sessionsState: 'loading' | 'error' | 'partial' | 'ready';
+  sessionsReason: string | null;
+  muxFetchState: 'loading' | 'ready' | 'error';
+  muxReason: string | null;
   windowById: Map<number, WindowIndexEntry>;
   taskById: Map<number, { title?: string }>;
   /** Whether the hub can reach this server's mux driver (detail API `mux`); 'unknown' until fetched or when the body is not understood. */
@@ -176,11 +179,17 @@ export function useServerDetail(serverName: string | null): UseServerDetailResul
   // サーバー一覧・接続状態は ServerStatusProvider から供給（グローバルにポーリング済み）。
   // ここでは install-status とセッション一覧のみ、この画面固有に取得する。
   const { servers, statuses, refresh: refreshStatuses } = useServerStatuses();
+  const connectionRef = useRef({ servers, statuses });
+  connectionRef.current = { servers, statuses };
   const [installStatus, setInstallStatus] = useState<InstallStatusResponse | null>(null);
   const [installStatusError, setInstallStatusError] = useState<'offline' | 'failed' | null>(null);
   const [localNetworkDetail, setLocalNetworkDetail] = useState<string | undefined>();
   const [sessions, setSessions] = useState<Session[]>([]);
   const [sessionsState, setSessionsState] = useState<'loading' | 'error' | 'partial' | 'ready'>('loading');
+  const [sessionsReason, setSessionsReason] = useState<string | null>(null);
+  const [muxFetchState, setMuxFetchState] = useState<'loading' | 'ready' | 'error'>('loading');
+  const [muxReason, setMuxReason] = useState<string | null>(null);
+  const overviewGenRef = useRef(0);
   const sessionServerRef = useRef<string | null>(null);
   const [allProjects, setAllProjects] = useState<Array<{ windows?: Window[] }>>([]);
   const [allTasks, setAllTasks] = useState<Array<{ id: number; title?: string; windows?: Window[] }>>([]);
@@ -206,6 +215,51 @@ export function useServerDetail(serverName: string | null): UseServerDetailResul
   // externally-triggered `refresh()` re-entrancy).
   const fetchGenRef = useRef(0);
 
+  const refreshOverview = useCallback((offline: boolean | 'error' = false) => {
+    const gen = ++overviewGenRef.current;
+    if (!serverName) return;
+    setMuxDriverStatus('unknown');
+    setSessionsState(offline ? 'error' : 'loading');
+    setSessionsReason(offline === true ? 'agent_unreachable' : null);
+    setMuxFetchState(offline ? 'error' : 'loading');
+    setMuxReason(offline === true ? 'agent_unreachable' : null);
+    if (offline) {
+      setSessions((prev) => prev.map((session) => ({ ...session, stale: true })));
+      return;
+    }
+    void fetchSessionListing<Session>(serverName).then((result) => {
+      if (overviewGenRef.current !== gen) return;
+      setSessions((prev) => keepUnavailableKinds(prev, result));
+      setSessionsState(sessionListingState(result));
+      setSessionsReason(result.unavailable.map((item) => item.reason).join(', ') || null);
+    }, (error: unknown) => {
+      if (overviewGenRef.current !== gen) return;
+      setSessions((prev) => prev.map((session) => ({ ...session, stale: true })));
+      setSessionsState('error');
+      setSessionsReason(error instanceof SessionListingError ? error.reason : null);
+    });
+    void apiWithStatus<unknown>(`/servers/${encodeURIComponent(serverName)}`).then((result) => {
+      if (overviewGenRef.current !== gen) return;
+      const body = result.body;
+      const mux = body && typeof body === 'object' ? (body as { mux?: unknown }).mux : null;
+      const parsed = parseMuxDriverStatus(mux);
+      const reason = mux && typeof mux === 'object' && typeof (mux as { reason?: unknown }).reason === 'string'
+        ? (mux as { reason: string }).reason : null;
+      if (result.status < 200 || result.status >= 300 || parsed === 'unknown') {
+        setMuxFetchState('error');
+        setMuxReason(reason);
+      } else {
+        setMuxDriverStatus(parsed);
+        setMuxFetchState('ready');
+        setMuxReason(reason);
+      }
+    }, () => {
+      if (overviewGenRef.current !== gen) return;
+      setMuxFetchState('error');
+      setMuxReason(null);
+    });
+  }, [serverName]);
+
   const fetchAll = useCallback(async () => {
     if (!serverName) return;
     const gen = ++fetchGenRef.current;
@@ -221,7 +275,7 @@ export function useServerDetail(serverName: string | null): UseServerDetailResul
     setLocalNetworkDetail(undefined);
     if (sessionServerRef.current !== serverName) setSessions([]);
     sessionServerRef.current = serverName;
-    setSessionsState('loading');
+    refreshOverview(connectionRef.current.servers.find((s) => s.name === serverName)?.type === 'agent' && connectionRef.current.statuses[serverName]?.status === 'offline');
     setIsolationReport(null);
     setIsolationReportUnavailable(false);
     setIsolationCleanupReport(null);
@@ -252,15 +306,6 @@ export function useServerDetail(serverName: string | null): UseServerDetailResul
         setAllProjects(projectsOk ? projResult.value : []);
         setAllTasks(tasksOk ? taskResult.value : []);
         setWindowMetaError(!projectsOk || !tasksOk);
-      });
-      void fetchSessionListing<Session>(serverName).then((result) => {
-        if (fetchGenRef.current !== gen) return;
-        setSessions((prev) => keepUnavailableKinds(prev, result));
-        setSessionsState(sessionListingState(result));
-      }, () => {
-        if (fetchGenRef.current !== gen) return;
-        setSessions((prev) => prev.map((session) => ({ ...session, stale: true })));
-        setSessionsState('error');
       });
       const mainPromise = Promise.all([
         refreshStatuses(),
@@ -317,8 +362,6 @@ export function useServerDetail(serverName: string | null): UseServerDetailResul
         return { report: null, unavailable: false };
       }
 
-      const detailBody = detailResult !== null && detailResult.status >= 200 && detailResult.status < 300 ? detailResult.body : null;
-      setMuxDriverStatus(parseMuxDriverStatus(detailBody && typeof detailBody === 'object' ? (detailBody as { mux?: unknown }).mux : null));
 
       const verification = parseReportField('isolationReport');
       const cleanup = parseReportField('isolationCleanupReport');
@@ -335,15 +378,28 @@ export function useServerDetail(serverName: string | null): UseServerDetailResul
     } finally {
       if (fetchGenRef.current === gen) setLoading(false);
     }
-  }, [serverName, refreshStatuses]);
+  }, [serverName, refreshStatuses, refreshOverview]);
 
   useEffect(() => {
     void fetchAll();
-    return () => { fetchGenRef.current += 1; };
+    return () => { fetchGenRef.current += 1; overviewGenRef.current += 1; };
   }, [fetchAll]);
 
   const server = servers.find((s) => s.name === serverName) ?? null;
   const status = serverName ? statuses[serverName] ?? null : null;
+
+  const monitoredStatus = status?.status;
+  const isAgent = server?.type === 'agent';
+  const previousConnection = useRef<{ name: string | null; status: string | undefined }>({ name: null, status: undefined });
+  useEffect(() => {
+    if (!isAgent || monitoredStatus === 'checking' || !monitoredStatus) return;
+    const previous = previousConnection.current;
+    previousConnection.current = { name: serverName, status: monitoredStatus };
+    if (previous.name === serverName && previous.status === monitoredStatus) return;
+    if (monitoredStatus === 'offline') refreshOverview(true);
+    else if (monitoredStatus === 'error') refreshOverview('error');
+    else if (monitoredStatus === 'online' && previous.name === serverName && (previous.status === 'offline' || previous.status === 'error')) refreshOverview();
+  }, [serverName, monitoredStatus, isAgent, refreshOverview]);
 
   const windowById = useMemo(() => buildWindowIndex(allProjects, allTasks, null), [allProjects, allTasks]);
   const taskById = useMemo(() => {
@@ -354,7 +410,7 @@ export function useServerDetail(serverName: string | null): UseServerDetailResul
 
   return {
     server, servers, status, installStatus, installStatusError, localNetworkDetail, sessions, sessionsState,
-    windowById, taskById,
+    windowById, taskById, sessionsReason, muxFetchState, muxReason,
     muxDriverStatus,
     isolationReport, isolationReportUnavailable,
     isolationCleanupReport, isolationCleanupReportUnavailable,
