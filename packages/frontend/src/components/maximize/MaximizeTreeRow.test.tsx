@@ -16,3 +16,10 @@ it('gives a parent window its own accessible name without descendant names', () 
   expect(screen.getByRole('treeitem', { name: /^Parent$/ })).toBeInTheDocument();
   expect(screen.getByRole('treeitem', { name: /Child/ })).toBeInTheDocument();
 });
+
+it.each(['auto', 'user'] as const)('keeps the registered name in the %s maximize tree row', labelSource => {
+  const row = { kind: 'window', key: 'window:1', window: { id: 1, label: 'Registered', labelSource, tmuxTarget: 's:1' }, children: [] } as unknown as Row;
+  render(<div role="tree"><MaximizeTreeRow row={row} expanded={new Set()} focused="window:1" selected={1} onFocus={vi.fn()} onSelect={vi.fn()} onToggle={vi.fn()} /></div>);
+  expect(screen.getByRole('treeitem')).toHaveTextContent('Registered');
+  expect(screen.getByRole('treeitem')).toHaveTextContent('W-1');
+});

@@ -2,6 +2,8 @@ import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { expect, it, vi } from 'vitest';
 import { useState } from 'react';
 import { HotkeyProvider } from '../../hooks/useHotkeys';
+import { resolveActivityTitle } from '../../lib/windowDisplay';
+import { buildLookoutSections } from '../../lib/lookoutSummary';
 import { LookoutDrawer } from './LookoutDrawer';
 import type { LookoutItem } from '../../lib/lookoutSummary';
 
@@ -56,4 +58,12 @@ it('does not show an idle message or active count while activity is unavailable'
   expect(screen.getAllByText('—')).toHaveLength(2);
   expect(screen.getByRole('heading', { name: /in progress.*—/i })).toBeInTheDocument();
   expect(screen.queryByText(/nothing is currently running/i)).not.toBeInTheDocument();
+});
+
+it.each([['auto', 'Working · W-1'], ['user', 'Registered · W-1']] as const)('keeps the %s window title in Lookout', (labelSource, expected) => {
+  const input = { windowId: 1, serverName: 'local', target: 's:1', paneTitle: 'Working', paneCommand: 'bash', label: 'Registered', labelSource };
+  const title = resolveActivityTitle(input, { windowById: new Map(), taskById: new Map() });
+  const sections = buildLookoutSections({ rows: [{ ...input, key: 'window', status: 'running', title }], allTasks: [], lastSeenMs: 0 });
+  render(<HotkeyProvider><LookoutDrawer open onClose={() => {}} sections={sections} snapshotStatus="ready" onRetry={() => {}} onOpenItem={() => {}} /></HotkeyProvider>);
+  expect(screen.getByText(expected)).toBeInTheDocument();
 });
