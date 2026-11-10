@@ -164,3 +164,7 @@ Node 版のフックの動きは bash 版と同じです。宛先プロファイ
 Windows の agent への導入は、他のサーバーと同じく UI（サーバー詳細 → Setup → Install Harness）から行います。Windows のマシン上で手で行う場合は `node harness\setup.mjs --azito-url <url> --webhook-token <token> --server-name <名前>` を実行します（運用者の資格情報も入れるなら `--ui-token <token>` を足します）。
 
 Windows の agent は、このリリースでは隔離サーバー（`isolationIntent`）にできません（#464 で扱います）。API は 501 `unsupported_os` で断り、サーバーのフォームには理由を表示します。`codex` は npm の shim が実行するスクリプトを node で直接起動するので、日本語や括弧を含むパスでも動きます。`npm install` で入れた `azt-mcp` の依存は、ハーネスを更新しても残ります。
+
+## API でタスクの質問に回答する
+
+`POST /api/tasks/:id/answer` の body は `{"answers":[{"index":0,"value":1}],"additionalComment":"補足"}`。各 `index` は質問の 0 始まりの整数添字、`value` は文字列または数値。select の値は選択肢の 0 始まりの整数添字か、選択肢と完全に一致する文字列。`additionalComment` は任意の文字列。部分回答は可能。空配列は質問がない確認の場合のみ受け付ける。質問がない場合の非空配列、不正な型や範囲外の値は、理由付き 400 で拒否され、タスクの状態やログは変更されない。

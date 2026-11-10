@@ -201,6 +201,128 @@ function makeOpts(existingTask: Task, opts: { gateAllows: boolean }): { opts: Ta
   return { opts: routeOpts, task };
 }
 
+describe('answer validation', () => {
+  const questions = JSON.stringify([
+    { text: 'Approach?', type: 'select', options: ['A', 'B'] },
+    { text: 'Why?', type: 'text' },
+  ]);
+
+  it.each([
+    [{ answers: ['A'] }, 'answers.0'],
+    [{}, 'answers'],
+    [{ answers: [{ index: 0 }] }, 'value'],
+    [{ answers: [{ index: -1, value: 'A' }] }, 'index'],
+    [{ answers: [{ index: 0.5, value: 'A' }] }, 'index'],
+    [{ answers: [{ index: 2, value: 'A' }] }, 'index'],
+    [{ answers: [{ index: 0, value: -1 }] }, 'value'],
+    [{ answers: [{ index: 0, value: 0.5 }] }, 'value'],
+    [{ answers: [{ index: 0, value: 2 }] }, 'value'],
+    [{ answers: [{ index: 0, value: 'C' }] }, 'value'],
+    [{ answers: [{ index: 1, value: 'yes' }, { index: 3, value: 'no' }] }, 'answers.1.index'],
+    [{ answers: [] }, 'answers'],
+    [{ answers: [{ index: 1, value: 'yes' }], additionalComment: 1 }, 'additionalComment'],
+  ])('rejects invalid input %# without side effects', async (payload, reason) => {
+    const original = makeTask({ pendingQuestions: questions });
+    const { opts, task } = makeOpts(original, { gateAllows: false });
+    const app = Fastify();
+    await app.register(tasksRoutes, opts);
+    const res = await app.inject({ method: 'POST', url: '/api/tasks/1/answer', payload });
+    expect(res.statusCode).toBe(400);
+    expect(res.json().error).toContain(reason);
+    expect(task).toEqual(original);
+    expect(opts.taskRepo.update).not.toHaveBeenCalled();
+    expect(opts.executeTaskUseCase.enforceExecutionGate).not.toHaveBeenCalled();
+    expect(opts.logRepo.append).not.toHaveBeenCalled();
+    expect(opts.executeTaskUseCase.followUp).not.toHaveBeenCalled();
+    await app.close();
+  });
+
+  it.each([
+    [[{ index: 0, value: 1 }, { index: 1, value: 'because' }], 'A: B'],
+    [[{ index: 0, value: 'A' }], 'A: A'],
+    [[{ index: 1, value: 'because' }], 'A: because'],
+  ])('accepts valid and partial answers %#', async (answers, expected) => {
+    const { opts } = makeOpts(makeTask({ pendingQuestions: questions }), { gateAllows: true });
+    const app = Fastify();
+    await app.register(tasksRoutes, opts);
+    const res = await app.inject({ method: 'POST', url: '/api/tasks/1/answer', payload: { answers } });
+    expect(res.statusCode).toBe(200);
+    expect(opts.executeTaskUseCase.followUp).toHaveBeenCalledWith(20, 1, expect.stringContaining(expected));
+    await app.close();
+  });
+
+  it('accepts an empty confirmation only when there are no questions', async () => {
+    const { opts } = makeOpts(makeTask({ pendingQuestions: null }), { gateAllows: true });
+    const app = Fastify();
+    await app.register(tasksRoutes, opts);
+    const res = await app.inject({ method: 'POST', url: '/api/tasks/1/answer', payload: { answers: [] } });
+    expect(res.statusCode).toBe(200);
+    expect(opts.executeTaskUseCase.followUp).toHaveBeenCalledWith(20, 1, 'User confirmed. Continue with the task.');
+    await app.close();
+  });
+
+  it('rejects answers when there are no questions', async () => {
+    const original = makeTask({ pendingQuestions: null });
+    const { opts, task } = makeOpts(original, { gateAllows: false });
+    const app = Fastify();
+    await app.register(tasksRoutes, opts);
+    const res = await app.inject({ method: 'POST', url: '/api/tasks/1/answer', payload: { answers: [{ index: 0, value: 'yes' }] } });
+    expect(res.statusCode).toBe(400);
+    expect(res.json().error).toContain('answers.0.index');
+    expect(task).toEqual(original);
+    expect(opts.executeTaskUseCase.enforceExecutionGate).not.toHaveBeenCalled();
+    expect(opts.logRepo.append).not.toHaveBeenCalled();
+    expect(opts.executeTaskUseCase.followUp).not.toHaveBeenCalled();
+    await app.close();
+  });
+
+  it.each([
+    JSON.stringify([{ text: 'Bad', type: 'select' }]),
+    JSON.stringify([{ type: 'unexpected' }]),
+    JSON.stringify([null]),
+    '{',
+  ])('accepts answers to malformed stored questions', async (pendingQuestions) => {
+    const { opts } = makeOpts(makeTask({ pendingQuestions }), { gateAllows: true });
+    const app = Fastify();
+    await app.register(tasksRoutes, opts);
+    const res = await app.inject({ method: 'POST', url: '/api/tasks/1/answer', payload: { answers: [{ index: 0, value: 'answer' }] } });
+    expect(res.statusCode).toBe(200);
+    expect(opts.executeTaskUseCase.followUp).toHaveBeenCalledWith(20, 1, expect.stringContaining('A: answer'));
+    await app.close();
+  });
+
+  it('reports all duplicate and invalid answers without side effects', async () => {
+    const original = makeTask({ pendingQuestions: questions });
+    const { opts, task } = makeOpts(original, { gateAllows: false });
+    const app = Fastify();
+    await app.register(tasksRoutes, opts);
+    const res = await app.inject({ method: 'POST', url: '/api/tasks/1/answer', payload: { answers: [{ index: 0, value: 5 }, { index: 0, value: 'C' }] } });
+    expect(res.statusCode).toBe(400);
+    expect(res.json().error).toContain('answers.0.value');
+    expect(res.json().error).toContain('answers.1.index');
+    expect(res.json().error).toContain('answers.1.value');
+    expect(task).toEqual(original);
+    expect(opts.executeTaskUseCase.enforceExecutionGate).not.toHaveBeenCalled();
+    expect(opts.logRepo.append).not.toHaveBeenCalled();
+    expect(opts.executeTaskUseCase.followUp).not.toHaveBeenCalled();
+    await app.close();
+  });
+
+  it('reports every body validation issue', async () => {
+    const { opts } = makeOpts(makeTask({ pendingQuestions: questions }), { gateAllows: false });
+    const app = Fastify();
+    await app.register(tasksRoutes, opts);
+    const res = await app.inject({ method: 'POST', url: '/api/tasks/1/answer', payload: { answers: [{ index: -1, value: null }, { index: -2, value: null }] } });
+    expect(res.statusCode).toBe(400);
+    expect(res.json().error).toContain('answers.0.index');
+    expect(res.json().error).toContain('answers.0.value');
+    expect(res.json().error).toContain('answers.1.index');
+    expect(res.json().error).toContain('answers.1.value');
+    await app.close();
+  });
+
+});
+
 describe('POST /api/tasks/:id/answer — untrusted-input execution gate (Issue #328 sixth-round review)', () => {
   it('blocked by the gate: returns 409, leaves pendingQuestions and task.status untouched, never calls followUp', async () => {
     const originalTask = makeTask();

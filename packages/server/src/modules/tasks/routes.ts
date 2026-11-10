@@ -1,3 +1,4 @@
+import { z } from 'zod';
 import { recordAttribution, type Attribution } from '../../shared/attribution';
 import type { FastifyPluginCallback } from 'fastify';
 import { HostProfileError } from '../../shared/os/hostProfile';
@@ -44,6 +45,37 @@ import { isValidModelId } from '@azito/shared';
 import { MuxDriverUnavailableError } from '../tmux/MuxCapabilityError';
 import { taskWindowRef } from '../tmux/windowIdentity';
 import { AmbiguousWindowKindError, resolveStoredWindowKind } from '../tmux/storedWindowKind';
+
+const answerBodySchema = z.object({
+  answers: z.array(z.object({ index: z.number().int().nonnegative(), value: z.union([z.string(), z.number()]) })),
+  additionalComment: z.string().optional(),
+});
+
+type Answer = z.infer<typeof answerBodySchema>['answers'][number];
+type StoredQuestion = { text?: unknown; type?: unknown; options?: unknown } | null;
+
+function validateAnswersAgainstQuestions(answers: Answer[], questions: StoredQuestion[] | null): string[] {
+  const issues: string[] = [];
+  const seen = new Set<number>();
+  if (questions !== null && questions.length > 0 && answers.length === 0) issues.push('answers: At least one answer is required');
+  answers.forEach((answer, position) => {
+    const path = `answers.${position}`;
+    if (seen.has(answer.index)) issues.push(`${path}.index: Duplicate question index`);
+    seen.add(answer.index);
+    if (questions !== null && answer.index >= questions.length) {
+      issues.push(`${path}.index: Question index is out of range`);
+      return;
+    }
+    const question = questions?.[answer.index];
+    if (question?.type === 'select' && Array.isArray(question.options)) {
+      const valid = typeof answer.value === 'number'
+        ? Number.isInteger(answer.value) && answer.value >= 0 && answer.value < question.options.length
+        : question.options.includes(answer.value);
+      if (!valid) issues.push(`${path}.value: Select value is not an option`);
+    }
+  });
+  return issues;
+}
 
 function parseSubagentConfigInput(raw: unknown, fieldName: string): SubagentConfig | null {
   if (raw === null || raw === undefined) return null;
@@ -1023,10 +1055,22 @@ const tasksRoutes: FastifyPluginCallback<TasksRouteOptions> = (fastify, opts, do
         return reply.status(400).send({ error: 'Task is not waiting for answers' });
       }
 
-      const { answers, additionalComment } = request.body as { answers: Array<{ index: number; value: string | number }>; additionalComment?: string };
-      if (!answers || !Array.isArray(answers)) {
-        return reply.status(400).send({ error: 'answers array is required' });
+      const parsedBody = answerBodySchema.safeParse(request.body);
+      if (!parsedBody.success) {
+        return reply.status(400).send({ error: parsedBody.error.issues.map(issue => `${issue.path.join('.') || 'body'}: ${issue.message}`).join('; ') });
       }
+      const { answers, additionalComment } = parsedBody.data;
+      let questions: StoredQuestion[] | null;
+      try {
+        const stored: unknown = task.pendingQuestions === null ? [] : JSON.parse(task.pendingQuestions);
+        if (!Array.isArray(stored)) throw new Error('Invalid stored questions');
+        questions = stored;
+      } catch {
+        request.log.error({ taskId: id }, 'Invalid stored questions');
+        questions = null;
+      }
+      const issues = validateAnswersAgainstQuestions(answers, questions);
+      if (issues.length > 0) return reply.status(400).send({ error: issues.join('; ') });
 
       // Same Unit resolution as ExecuteTaskUseCase.resolveExecutionEnv
       // (task.unitId ?? project.defaultUnitId) so follow-up resumes with the
@@ -1069,17 +1113,14 @@ const tasksRoutes: FastifyPluginCallback<TasksRouteOptions> = (fastify, opts, do
         throw err;
       }
 
-      const questions = task.pendingQuestions ? JSON.parse(task.pendingQuestions) as Array<{ text: string; type: string; options?: string[] }> : [];
-
       // Build human-readable answer text for the agent
       const answerLines = answers.map((answer) => {
-        const question = questions[answer.index];
-        if (!question) return null;
-        const answerText = question.type === 'select' && typeof answer.value === 'number' && question.options
-          ? question.options[answer.value] ?? String(answer.value)
+        const question = questions?.[answer.index];
+        const answerText = question?.type === 'select' && Array.isArray(question.options) && typeof answer.value === 'number'
+          ? question.options[answer.value]
           : String(answer.value);
-        return `Q: ${question.text}\nA: ${answerText}`;
-      }).filter(Boolean);
+        return `Q: ${question?.text ?? `Question ${answer.index + 1}`}\nA: ${answerText}`;
+      });
 
       let followUpComment = answerLines.length > 0
         ? `Here are the answers to your questions:\n\n${answerLines.join('\n\n')}\n\nPlease continue with the task based on these answers.`
