@@ -470,7 +470,11 @@ describe.skipIf(process.platform !== 'win32')('harness MCP removal on Windows', 
       fs.writeFileSync(target, '');
       fs.symlinkSync(harness, linked, 'junction');
       const registration = { command: 'node', args: [path.join(linked, 'index.js')], env: { TOKEN: 'do-not-print' } };
-      const runMcp = (kind: 'claude' | 'codex', env = '') => ps(`$ProgressPreference = 'SilentlyContinue'\n${env}${harnessMcpScript(kind, process.execPath, home, target)}`);
+      const runMcp = async (kind: 'claude' | 'codex', env = '') => {
+        const script = path.join(root, 'mcp.ps1');
+        fs.writeFileSync(script, `$ProgressPreference = 'SilentlyContinue'\n${env}${harnessMcpScript(kind, process.execPath, home, target)}`, 'utf8');
+        return ps(`& ${powershellDialect.quote(script)}`);
+      };
       fs.writeFileSync(settings, JSON.stringify({ mcpServers: { 'azt-mcp': registration, other: { command: 'keep' } }, other: true }));
       const claude = await runMcp('claude');
       expect(parseHarnessMcpOutput(claude).outcome).toBe('done');

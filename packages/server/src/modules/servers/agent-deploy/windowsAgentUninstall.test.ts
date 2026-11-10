@@ -77,7 +77,7 @@ class FakeUninstallHost {
   };
   endTaskError: Error | undefined;
   queryError: { task: string; error: Error } | undefined;
-  readonly bodies: Array<{ what: string; body: string }> = [];
+  readonly bodies: Array<{ what: string; body: string; transfer?: boolean }> = [];
 
   constructor(tasks: Record<string, TaskInit>) {
     this.tasks = new Map(Object.entries(tasks).map(([name, t]) => [name, { ...t, running: t.running ?? false }]));
@@ -107,9 +107,9 @@ class FakeUninstallHost {
     if (t) t.running = false;
   };
 
-  script = async (what: string, body: string): Promise<string> => {
+  script = async (what: string, body: string, _timeoutMs?: number, transfer?: boolean): Promise<string> => {
     if (!what.includes('MCP registration')) this.log.push(`script ${what}`);
-    this.bodies.push({ what, body });
+    this.bodies.push({ what, body, transfer });
     const key = Object.keys(this.answers).find((k) => what.startsWith(k));
     const answer = key === undefined ? '' : this.answers[key]!;
     if (answer instanceof Error) throw answer;
@@ -905,6 +905,13 @@ describe('the scripts it sends', () => {
     const body = 'x'.repeat(2990);
     expect(needsTransferredScript(body)).toBe(true);
     expect(needsTransferredScript('x'.repeat(100))).toBe(false);
+  });
+  it('requests transfer for both MCP scripts even for a short profile', async () => {
+    const host = new FakeUninstallHost({});
+    await run(host);
+    const scripts = host.bodies.filter(({ what }) => what.includes('MCP registration'));
+    expect(scripts).toHaveLength(2);
+    expect(scripts.every(({ transfer }) => transfer === true)).toBe(true);
   });
   it('fits the MCP commands with a long non-ASCII home path', () => {
     const home = 'C:\\Users\\佐藤花子開発環境東京横浜大阪京都札幌名古屋神戸福岡仙台広島長崎熊本金沢岡山松山';
