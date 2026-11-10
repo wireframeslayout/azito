@@ -60,8 +60,8 @@ const INTERRUPT_TEXT_PATTERN = /^\[Request interrupted by user( for tool use)?\]
  * 見た目で描画される・稼働判定が terminal に倒れる）に留まり、実行内容やデータには影響しない。
  */
 const LOCAL_COMMAND_CAVEAT_PREFIX = '<local-command-caveat>';
-// Only an isMeta user record with one whole string envelope is known to be generated;
-// preserve mixed text and content blocks whose origin cannot be distinguished.
+// 実記録で isMeta: true・文字列1つ・タグ1組の形を確認した。
+// 混在の形は未確認のため、利用者の文を誤って消さないよう残す。
 const SYSTEM_REMINDER_PATTERN = /^<system-reminder>(?:(?!<\/?system-reminder>)[\s\S])*<\/system-reminder>\s*$/;
 const COMMAND_NAME_PATTERN =
   /^<command-name>([^<]*)<\/command-name>\s*<command-message>[^<]*<\/command-message>\s*<command-args>([^<]*)<\/command-args>\s*$/;
