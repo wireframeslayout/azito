@@ -77,33 +77,29 @@ export function ToastProvider({ children }: { children: React.ReactNode }) {
   return (
     <ToastContext.Provider value={{ showToast }}>
       {children}
-      <span aria-live="polite" aria-atomic="true" className="sr-only">
-        {toast?.message ?? ''}
-      </span>
-      {toast && (
-        <div
-          ref={toastRef}
-          onMouseEnter={() => { hoveredRef.current = true; clearTimeout(timerRef.current); }}
-          onMouseLeave={() => { hoveredRef.current = false; scheduleHide(); }}
-          onFocus={() => { focusedRef.current = true; clearTimeout(timerRef.current); }}
-          onBlur={(event) => {
-            if (event.currentTarget.contains(event.relatedTarget as Node | null)) return;
-            focusedRef.current = false;
-            scheduleHide();
-          }}
-          style={{
-            display: 'flex', alignItems: 'center', flexWrap: 'wrap', gap: 'var(--space-2)',
-            position: 'absolute', bottom: 'var(--space-5)', left: '50%', transform: 'translateX(-50%)',
-            width: 'max-content', maxWidth: 'calc(100% - 2 * var(--space-4))', boxSizing: 'border-box',
-            background: 'var(--bg-elevated)', border: '1px solid var(--border)', borderRadius: 'var(--radius-md)',
-            padding: 'var(--space-2) var(--space-4)', fontSize: 'var(--font-md)', color: 'var(--text)', zIndex: 300,
-            boxShadow: 'var(--shadow-2)',
-          }}>
-          <span aria-hidden="true" style={{ flex: '1 1 0', minWidth: 0, overflowWrap: 'anywhere' }}>{toast.message}</span>
-          {toast.actions.map((action) => <Button key={action.label} type="button" variant="ghost" size="sm" style={{ minHeight: 'calc(var(--space-5) + var(--space-6))' }} onClick={() => { dismiss(); action.onClick(); }}>{action.label}</Button>)}
-          <Button type="button" variant="ghost" size="sm" style={{ minWidth: 'calc(var(--space-5) + var(--space-6))', minHeight: 'calc(var(--space-5) + var(--space-6))' }} onClick={dismiss}>{t('actions.close')}</Button>
-        </div>
-      )}
+      <div
+        ref={toastRef}
+        className={toast ? undefined : 'sr-only'}
+        onMouseEnter={() => { hoveredRef.current = true; clearTimeout(timerRef.current); }}
+        onMouseLeave={() => { hoveredRef.current = false; scheduleHide(); }}
+        onFocus={() => { focusedRef.current = true; clearTimeout(timerRef.current); }}
+        onBlur={(event) => {
+          if (event.currentTarget.contains(event.relatedTarget as Node | null)) return;
+          focusedRef.current = false;
+          scheduleHide();
+        }}
+        style={toast ? {
+          display: 'flex', alignItems: 'center', flexWrap: 'wrap', gap: 'var(--space-2)',
+          position: 'absolute', bottom: 'var(--space-5)', left: '50%', transform: 'translateX(-50%)',
+          width: 'max-content', maxWidth: 'calc(100% - 2 * var(--space-4))', boxSizing: 'border-box',
+          background: 'var(--bg-elevated)', border: '1px solid var(--border)', borderRadius: 'var(--radius-md)',
+          padding: 'var(--space-2) var(--space-4)', fontSize: 'var(--font-md)', color: 'var(--text)', zIndex: 300,
+          boxShadow: 'var(--shadow-2)',
+        } : undefined}>
+        <span aria-live="polite" aria-atomic="true" style={{ flex: '1 1 0', minWidth: 0, overflowWrap: 'anywhere' }}>{toast?.message ?? ''}</span>
+        {toast?.actions.map((action) => <Button key={action.label} type="button" variant="ghost" size="sm" style={{ minHeight: 'calc(var(--space-5) + var(--space-6))' }} onClick={() => { dismiss(); action.onClick(); }}>{action.label}</Button>)}
+        {toast && <Button type="button" variant="ghost" size="sm" style={{ minWidth: 'calc(var(--space-5) + var(--space-6))', minHeight: 'calc(var(--space-5) + var(--space-6))' }} onClick={dismiss}>{t('actions.close')}</Button>}
+      </div>
     </ToastContext.Provider>
   );
 }

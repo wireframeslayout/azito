@@ -50,7 +50,8 @@ describe('ToastProvider', () => {
   });
   it('dismisses manually and on action, and leaves a permanent live region', () => {
     const region = live(); expect(region.getAttribute('aria-atomic')).toBe('true');
-    display('hello'); fireEvent.click(screen.getByRole('button', { name: 'actions.close' }));
+    display('hello'); expect(screen.getAllByText('hello')).toEqual([region]);
+    fireEvent.click(screen.getByRole('button', { name: 'actions.close' }));
     expect(region.textContent).toBe('');
     const action = vi.fn(); display('again', [{ label: 'Undo', onClick: action }]);
     fireEvent.click(screen.getByRole('button', { name: 'Undo' }));
