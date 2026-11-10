@@ -158,11 +158,26 @@ describe.skipIf(process.platform !== 'win32')('tidying the old versions on a rea
     folder('v0.2.0');
     const exe = path.join(dir, 'node.exe');
     fs.copyFileSync(process.execPath, exe);
-    const child = spawn(exe, ['-e', 'setTimeout(() => {}, 60000)'], { stdio: 'ignore' });
+    const child = spawn(exe, ['-e', 'setTimeout(() => {}, 300000)'], { stdio: 'ignore' });
     children.push(child);
+    const exited = new Promise<void>((resolve) => child.once('exit', () => resolve()));
     await new Promise<void>((resolve, reject) => { child.once('spawn', () => resolve()); child.once('error', reject); });
 
-    const found = await findHubVersionsInUse(run, host!.systemRoot!, [hub]);
+    const waitForVersion = async (present: boolean): Promise<ReadonlySet<string>> => {
+      const deadline = Date.now() + 30_000;
+      let found: ReadonlySet<string>;
+      do {
+        found = await findHubVersionsInUse(run, host!.systemRoot!, [hub]);
+        if (present && (child.exitCode !== null || child.signalCode !== null)) {
+          throw new Error(`child exited before detection: exitCode=${child.exitCode}, signal=${child.signalCode}, found=${JSON.stringify([...found])}`);
+        }
+        if (found.has('v0.1.0') === present) return found;
+        await new Promise((resolve) => setTimeout(resolve, 250));
+      } while (Date.now() < deadline);
+      throw new Error(`timed out waiting for v0.1.0 ${present ? 'to appear' : 'to disappear'}: exitCode=${child.exitCode}, signal=${child.signalCode}, found=${JSON.stringify([...found])}`);
+    };
+
+    const found = await waitForVersion(true);
     expect([...found]).toEqual(['v0.1.0']);
 
     const report = await prune(() => findHubVersionsInUse(run, host!.systemRoot!, [hub]));
@@ -171,9 +186,13 @@ describe.skipIf(process.platform !== 'win32')('tidying the old versions on a rea
     expect(fs.existsSync(exe)).toBe(true);
 
     child.kill();
-    await new Promise<void>((resolve) => child.once('exit', () => resolve()));
-    expect((await prune(() => findHubVersionsInUse(run, host!.systemRoot!, [hub]))).removed).toHaveLength(1);
-  });
+    await exited;
+    await waitForVersion(false);
+    const second = await prune(() => findHubVersionsInUse(run, host!.systemRoot!, [hub]));
+    expect(second.failed, JSON.stringify(second)).toEqual([]);
+    expect(second.removed, JSON.stringify(second)).toHaveLength(1);
+    expect(fs.existsSync(dir)).toBe(false);
+  }, 180_000);
 
   it('removes nothing of a version whose node.exe runs although no one told the tidying (the image stays mapped after its handle is closed)', async () => {
     const dir = folder('v0.1.0');
