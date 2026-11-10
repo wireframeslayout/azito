@@ -390,7 +390,7 @@ export class WindowsAgentDeployer {
       {
         tasks: client,
         endTask: (taskName) => this.endTask(client, taskName),
-        script: (what, body, timeoutMs) => needsTransferredScript(body)
+        script: (what, body, timeoutMs, transfer) => transfer || needsTransferredScript(body)
           ? this.transferredScript(sshHost, host.home, what, body, timeoutMs)
           : this.script(sshHost, what, body, timeoutMs),
       },

@@ -66,8 +66,8 @@ export interface WindowsUninstallHost {
   tasks: Pick<SchtasksClient, 'query' | 'exportXml' | 'delete'>;
   /** Ends the running instance of a task and waits until it is not running; throws when it still is. */
   endTask(taskName: string): Promise<void>;
-  /** Runs a PowerShell script on the host and returns its output; a non-zero exit throws with the script's own message. */
-  script(what: string, body: string, timeoutMs?: number): Promise<string>;
+  /** Runs a PowerShell script on the host; transfer forces file execution regardless of command length. A non-zero exit throws. */
+  script(what: string, body: string, timeoutMs?: number, transfer?: boolean): Promise<string>;
 }
 
 const QUICK_MS = 60_000;
@@ -183,12 +183,13 @@ export async function uninstallWindowsAgent(host: WindowsUninstallHost, facts: H
     }
   } else {
     const expected = path.win32.join(harnessLocation('win32', home).harnessDir, 'skills', 'azt-mcp', 'mcp-server', 'index.js');
+    // These scripts are close to the command-line limit even for ordinary profile paths.
     for (const [id, kind] of [['claudeHarnessMcp', 'claude'], ['codexHarnessMcp', 'codex']] as const) {
       steps.push(folder.outcome !== 'done' && folder.outcome !== 'absent'
         ? skipped(id, 'the agent was not removed, so its MCP registration was kept')
         : facts.nodePath === null
         ? skipped(id, 'Node is unavailable, so the registration could not be inspected')
-        : await step(id, async () => parseHarnessMcpOutput(await host.script(`Checking ${kind} MCP registration`, harnessMcpScript(kind, facts.nodePath!, home, expected), 200_000))));
+        : await step(id, async () => parseHarnessMcpOutput(await host.script(`Checking ${kind} MCP registration`, harnessMcpScript(kind, facts.nodePath!, home, expected), 200_000, true))));
     }
   }
   return { ok: steps.every((s) => s.outcome !== 'failed'), steps };

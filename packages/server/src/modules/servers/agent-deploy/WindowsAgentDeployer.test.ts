@@ -106,6 +106,39 @@ describe('stopping a task launcher', () => {
 });
 
 describe('transferred uninstall scripts', () => {
+  it('uploads MCP scripts and executes short verified launchers during uninstall', async () => {
+    const home = `C:\\Users\\${'名'.repeat(40)}`;
+    const nodePath = `${home}\\node\\node.exe`;
+    const host = new FakeWindowsHost({ sha256: 'a'.repeat(64) });
+    const uploads = new Map<string, string>();
+    const commands: string[] = [];
+    const deployer = new WindowsAgentDeployer(async (h, command) => {
+      commands.push(command);
+      const result = await host.exec(h, command);
+      const script = host.calls.at(-1)?.text ?? '';
+      if (script.includes('AZITO_MCP_SRC')) return { ...result, stdout: 'AZITO_MCP_RESULT:{"outcome":"absent"}' };
+      if (script.includes('Remove-Tree')) return { ...result, stdout: 'DONE' };
+      if (script.includes('COMRULE|')) return { ...result, stdout: 'UNKNOWN' };
+      if (script.includes('Find-Left')) return { ...result, stdout: 'CLEAR' };
+      return result;
+    }, { putFile: async () => undefined, putBuffer: async (_h, bytes, name) => { uploads.set(name, bytes.toString('utf8')); host.uploaded.set(name, bytes); } }, DEFAULT_WINDOWS_AGENT_OPTIONS);
+    const result = await deployer.uninstall('h', { home, systemRoot: 'C:\\Windows', nodePath, userId: 'PC\\dev' }, { removeMisao: false });
+    expect(result.steps.filter((step) => step.id.endsWith('HarnessMcp'))).toEqual([
+      { id: 'claudeHarnessMcp', outcome: 'absent' },
+      { id: 'codexHarnessMcp', outcome: 'absent' },
+    ]);
+    const mcpFiles = [...uploads].filter(([, body]) => body.includes('AZITO_MCP_SRC')).map(([name]) => name);
+    expect(mcpFiles).toHaveLength(2);
+    for (const name of mcpFiles) {
+      const launchers = commands.filter((command) => {
+        const script = decodeEncodedCommand(command);
+        return script.includes('[IO.File]::ReadAllBytes') && script.includes(name);
+      });
+      expect(launchers).toHaveLength(1);
+      expect(launchers[0]!.length).toBeLessThan(8191);
+    }
+  });
+
   it('keeps a successful result when cleanup fails', async () => {
     const host = new FakeWindowsHost({ sha256: 'a'.repeat(64), failScript: { containing: "Remove-Item -LiteralPath 'C:\\Users\\dev\\.azito-script-", stderr: 'cleanup failed' } });
     const deployer = new WindowsAgentDeployer(host.exec, { putFile: async () => undefined, putBuffer: async () => undefined }, DEFAULT_WINDOWS_AGENT_OPTIONS);
