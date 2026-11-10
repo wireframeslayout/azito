@@ -51,6 +51,11 @@ export function ToastProvider({ children }: { children: React.ReactNode }) {
     focusedRef.current = false;
     setToast(null);
   }, []);
+  const dismissAndRestoreFocus = useCallback(() => {
+    const restoreFocus = toastRef.current?.contains(document.activeElement) ? previousFocusRef.current : null;
+    dismiss();
+    if (restoreFocus?.isConnected) restoreFocus.focus();
+  }, [dismiss]);
   useEffect(() => () => clearTimeout(timerRef.current), []);
   useLayoutEffect(() => {
     if (!toast) return;
@@ -104,12 +109,8 @@ export function ToastProvider({ children }: { children: React.ReactNode }) {
           boxShadow: 'var(--shadow-2)',
         } : undefined}>
         <span aria-live="polite" aria-atomic="true" style={{ flex: '1 1 0', minWidth: 0, overflowWrap: 'anywhere' }}>{toast?.message ?? ''}</span>
-        {toast?.actions.map((action) => <Button key={action.label} type="button" variant="ghost" size="sm" className="toast-action" onClick={() => { dismiss(); action.onClick(); }}>{action.label}</Button>)}
-        {toast && <Button type="button" variant="ghost" size="sm" className="toast-action toast-close" aria-label={t('toast.close')} onClick={() => {
-          const restoreFocus = toastRef.current?.contains(document.activeElement) ? previousFocusRef.current : null;
-          dismiss();
-          if (restoreFocus?.isConnected) restoreFocus.focus();
-        }}>{t('actions.close')}</Button>}
+        {toast?.actions.map((action) => <Button key={action.label} type="button" variant="ghost" size="sm" className="toast-action" onClick={() => { dismissAndRestoreFocus(); action.onClick(); }}>{action.label}</Button>)}
+        {toast && <Button type="button" variant="ghost" size="sm" className="toast-action toast-close" aria-label={t('toast.close')} onClick={dismissAndRestoreFocus}>{t('actions.close')}</Button>}
       </div>
     </ToastContext.Provider>
   );

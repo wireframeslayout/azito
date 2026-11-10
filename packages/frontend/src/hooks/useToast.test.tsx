@@ -67,6 +67,20 @@ describe('ToastProvider', () => {
     fireEvent.click(close);
     expect(document.activeElement).toBe(outside);
   });
+  it('restores focus before invoking an action, which may move it elsewhere', () => {
+    const outside = screen.getByRole('button', { name: 'outside' });
+    const target = document.createElement('button');
+    document.body.appendChild(target);
+    act(() => outside.focus());
+    const action = vi.fn(() => { expect(document.activeElement).toBe(outside); target.focus(); });
+    display('hello', [{ label: 'Undo', onClick: action }]);
+    const undo = screen.getByRole('button', { name: 'Undo' });
+    act(() => undo.focus());
+    fireEvent.click(undo);
+    expect(action).toHaveBeenCalledOnce();
+    expect(document.activeElement).toBe(target);
+    target.remove();
+  });
   it('clears the timer when unmounted', () => {
     display('hello'); cleanup(); expect(vi.getTimerCount()).toBe(0);
   });

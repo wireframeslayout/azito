@@ -1,5 +1,5 @@
 {
-  "toast": { "close": "Dismiss notification" },
+  "toast": { "close": "Close notification" },
   "copyCommand": {
     "copy": "Copy",
     "copied": "Copied",
