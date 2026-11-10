@@ -1309,3 +1309,6 @@ input[aria-invalid="true"]:focus-visible { outline-color: var(--danger) !importa
 .linked-window-card-open { background: none; border: 0; color: inherit; font: inherit; padding: 0; text-align: left; cursor: pointer; }
 .linked-window-card-open::after { content: ""; position: absolute; inset: 0; }
 .linked-window-card-open:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+
+.toast-action { min-height: 44px; }
+.toast-close { min-width: 44px; }

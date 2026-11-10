@@ -18,15 +18,15 @@ describe('ToastProvider', () => {
   afterEach(() => { cleanup(); vi.useRealTimers(); });
 
   it('uses code point length, with a minimum and maximum', () => {
-    display('😀'); advance(3049); expect(live().textContent).toBe('😀');
+    display('😀'); advance(3099); expect(live().textContent).toBe('😀');
     advance(1); expect(live().textContent).toBe('');
     display('x'.repeat(1000)); advance(29999); expect(live().textContent).not.toBe('');
     advance(1); expect(live().textContent).toBe('');
   });
   it('gives the local network guidance time to read', () => {
     const message = jaServers.localNetwork.guidance;
-    display(message); advance(3000); expect(live().textContent).toBe(message);
-    advance(Array.from(message).length * 50 - 1); expect(live().textContent).toBe(message);
+    display(message); advance(20000); expect(live().textContent).toBe(message);
+    advance(Math.min(30000, 3000 + Array.from(message).length * 100) - 20000 - 1); expect(live().textContent).toBe(message);
     advance(1); expect(live().textContent).toBe('');
   });
   it('keeps actions for at least ten seconds and cancels replaced timers', () => {
@@ -36,7 +36,7 @@ describe('ToastProvider', () => {
   });
   it('pauses for hover and focus, including when replaced and moving focus inside', () => {
     display('first', [{ label: 'Undo', onClick: vi.fn() }]);
-    const close = screen.getByRole('button', { name: 'actions.close' });
+    const close = screen.getByRole('button', { name: 'toast.close' });
     const toast = close.parentElement!;
     fireEvent.mouseEnter(toast); act(() => close.focus());
     display('replacement', [{ label: 'Undo', onClick: vi.fn() }]);
@@ -51,12 +51,21 @@ describe('ToastProvider', () => {
   it('dismisses manually and on action, and leaves a permanent live region', () => {
     const region = live(); expect(region.getAttribute('aria-atomic')).toBe('true');
     display('hello'); expect(screen.getAllByText('hello')).toEqual([region]);
-    fireEvent.click(screen.getByRole('button', { name: 'actions.close' }));
+    fireEvent.click(screen.getByRole('button', { name: 'toast.close' }));
     expect(region.textContent).toBe('');
     const action = vi.fn(); display('again', [{ label: 'Undo', onClick: action }]);
     fireEvent.click(screen.getByRole('button', { name: 'Undo' }));
     expect(action).toHaveBeenCalledOnce(); expect(region.textContent).toBe('');
     expect(vi.getTimerCount()).toBe(0);
+  });
+  it('restores focus to the element preceding the toast when dismissed', () => {
+    const outside = screen.getByRole('button', { name: 'outside' });
+    act(() => outside.focus());
+    display('hello');
+    const close = screen.getByRole('button', { name: 'toast.close' });
+    act(() => close.focus());
+    fireEvent.click(close);
+    expect(document.activeElement).toBe(outside);
   });
   it('clears the timer when unmounted', () => {
     display('hello'); cleanup(); expect(vi.getTimerCount()).toBe(0);

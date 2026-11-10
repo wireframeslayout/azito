@@ -3,7 +3,7 @@ import { useTranslation } from 'react-i18next';
 import { OPERATOR_REQUIRED_EVENT, type OperatorRequiredEventDetail } from '../api/operatorRequired';
 import { Button } from '../components/ui/Button';
 
-const TOAST_DURATION = { base: 3000, perCodePoint: 50, actionMinimum: 10000, maximum: 30000 };
+const TOAST_DURATION = { base: 3000, perCodePoint: 100, actionMinimum: 10000, maximum: 30000 };
 
 function getDuration(message: string, hasActions: boolean): number {
   return Math.min(TOAST_DURATION.maximum, Math.max(
@@ -33,6 +33,7 @@ export function ToastProvider({ children }: { children: React.ReactNode }) {
   const durationRef = useRef(0);
   const hoveredRef = useRef(false);
   const focusedRef = useRef(false);
+  const previousFocusRef = useRef<HTMLElement | null>(null);
   const scheduleHide = useCallback(() => {
     clearTimeout(timerRef.current);
     if (!hoveredRef.current && !focusedRef.current) {
@@ -82,7 +83,13 @@ export function ToastProvider({ children }: { children: React.ReactNode }) {
         className={toast ? undefined : 'sr-only'}
         onMouseEnter={() => { hoveredRef.current = true; clearTimeout(timerRef.current); }}
         onMouseLeave={() => { hoveredRef.current = false; scheduleHide(); }}
-        onFocus={() => { focusedRef.current = true; clearTimeout(timerRef.current); }}
+        onFocus={(event) => {
+          if (!event.currentTarget.contains(event.relatedTarget as Node | null)) {
+            previousFocusRef.current = event.relatedTarget instanceof HTMLElement ? event.relatedTarget : null;
+          }
+          focusedRef.current = true;
+          clearTimeout(timerRef.current);
+        }}
         onBlur={(event) => {
           if (event.currentTarget.contains(event.relatedTarget as Node | null)) return;
           focusedRef.current = false;
@@ -97,8 +104,12 @@ export function ToastProvider({ children }: { children: React.ReactNode }) {
           boxShadow: 'var(--shadow-2)',
         } : undefined}>
         <span aria-live="polite" aria-atomic="true" style={{ flex: '1 1 0', minWidth: 0, overflowWrap: 'anywhere' }}>{toast?.message ?? ''}</span>
-        {toast?.actions.map((action) => <Button key={action.label} type="button" variant="ghost" size="sm" style={{ minHeight: 'calc(var(--space-5) + var(--space-6))' }} onClick={() => { dismiss(); action.onClick(); }}>{action.label}</Button>)}
-        {toast && <Button type="button" variant="ghost" size="sm" style={{ minWidth: 'calc(var(--space-5) + var(--space-6))', minHeight: 'calc(var(--space-5) + var(--space-6))' }} onClick={dismiss}>{t('actions.close')}</Button>}
+        {toast?.actions.map((action) => <Button key={action.label} type="button" variant="ghost" size="sm" className="toast-action" onClick={() => { dismiss(); action.onClick(); }}>{action.label}</Button>)}
+        {toast && <Button type="button" variant="ghost" size="sm" className="toast-action toast-close" aria-label={t('toast.close')} onClick={() => {
+          const restoreFocus = toastRef.current?.contains(document.activeElement) ? previousFocusRef.current : null;
+          dismiss();
+          if (restoreFocus?.isConnected) restoreFocus.focus();
+        }}>{t('actions.close')}</Button>}
       </div>
     </ToastContext.Provider>
   );
