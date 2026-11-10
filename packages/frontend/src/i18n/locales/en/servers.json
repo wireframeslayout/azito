@@ -41,6 +41,7 @@
   },
   "overview": {
     "fetchUnavailable": "Unavailable{{reason}}",
+    "muxLoading": "Checking…",
     "title": "Overview",
     "onlineHealthy": "Online — Healthy",
     "onlineMeasuring": "Online — Measuring resources…",

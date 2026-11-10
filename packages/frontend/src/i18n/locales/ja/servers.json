@@ -41,6 +41,7 @@
   },
   "overview": {
     "fetchUnavailable": "取得できません{{reason}}",
+    "muxLoading": "確認中…",
     "title": "概要",
     "onlineHealthy": "稼働中 — 正常",
     "onlineMeasuring": "稼働中 — リソース計測中…",

@@ -73,13 +73,14 @@ function isSessionListing<S>(body: unknown): body is SessionListing<S> {
     && Array.isArray((body as Record<string, unknown>)['unavailable']);
 }
 
-/** `GET /sessions?detail=1`. Throws when the reply is not a listing (an error body), so callers never read "no windows". */
+/** The reply of `GET /sessions?detail=1` was not a listing; `reason` is the error body's `error` code when it has one. */
 export class SessionListingError extends Error {
   constructor(readonly reason: string | null) {
     super('Session listing unavailable');
   }
 }
 
+/** `GET /sessions?detail=1`. Throws when the reply is not a listing (an error body), so callers never read "no windows". */
 export async function fetchSessionListing<S extends Session | ListedSession = Session>(serverName: string): Promise<SessionListing<S>> {
   const body = await api<unknown>(`/servers/${encodeURIComponent(serverName)}/sessions?detail=1`);
   if (!isSessionListing<S>(body)) {

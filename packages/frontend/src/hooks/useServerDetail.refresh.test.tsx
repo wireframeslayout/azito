@@ -36,6 +36,16 @@ it('invalidates old results on disconnect and fetches again after reconnect', as
   await waitFor(() => expect(result.current.sessionsState).toBe('ready'));
   expect(result.current.muxDriverStatus).toBe('ok');
   expect(mocks.listing).toHaveBeenCalledTimes(2);
+  expect(mocks.detail).toHaveBeenCalledTimes(2);
+});
+
+it('asks for the detail once on open and keeps the error code of an unreachable detail', async () => {
+  mocks.detail.mockReset().mockResolvedValue({ status: 503, body: { error: 'agent_unreachable', reason: 'circuit_open' } });
+  const { result } = renderHook(() => useServerDetail('a'));
+  await waitFor(() => expect(result.current.muxFetchState).toBe('error'));
+  expect(result.current.muxReason).toBe('agent_unreachable');
+  expect(result.current.muxDriverStatus).toBe('unknown');
+  expect(mocks.detail).toHaveBeenCalledTimes(1);
 });
 
 it('ignores an old listing after disconnect and keeps partial failure reasons', async () => {

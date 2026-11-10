@@ -215,15 +215,21 @@ export function useServerDetail(serverName: string | null): UseServerDetailResul
   // externally-triggered `refresh()` re-entrancy).
   const fetchGenRef = useRef(0);
 
-  const refreshOverview = useCallback((offline: boolean | 'error' = false) => {
+  // 'unreachable' = the status probe says the agent is offline, 'unknown' = the probe itself failed.
+  // `detailRequest` lets fetchAll share its own GET /servers/:name instead of asking twice.
+  const refreshOverview = useCallback((
+    mode: 'fetch' | 'unreachable' | 'unknown',
+    detailRequest?: Promise<{ status: number; body: unknown }>,
+  ) => {
     const gen = ++overviewGenRef.current;
     if (!serverName) return;
+    const reason = mode === 'unreachable' ? 'agent_unreachable' : null;
     setMuxDriverStatus('unknown');
-    setSessionsState(offline ? 'error' : 'loading');
-    setSessionsReason(offline === true ? 'agent_unreachable' : null);
-    setMuxFetchState(offline ? 'error' : 'loading');
-    setMuxReason(offline === true ? 'agent_unreachable' : null);
-    if (offline) {
+    setSessionsState(mode === 'fetch' ? 'loading' : 'error');
+    setSessionsReason(reason);
+    setMuxFetchState(mode === 'fetch' ? 'loading' : 'error');
+    setMuxReason(reason);
+    if (mode !== 'fetch') {
       setSessions((prev) => prev.map((session) => ({ ...session, stale: true })));
       return;
     }
@@ -238,21 +244,20 @@ export function useServerDetail(serverName: string | null): UseServerDetailResul
       setSessionsState('error');
       setSessionsReason(error instanceof SessionListingError ? error.reason : null);
     });
-    void apiWithStatus<unknown>(`/servers/${encodeURIComponent(serverName)}`).then((result) => {
+    void (detailRequest ?? apiWithStatus<unknown>(`/servers/${encodeURIComponent(serverName)}`)).then((result) => {
       if (overviewGenRef.current !== gen) return;
-      const body = result.body;
-      const mux = body && typeof body === 'object' ? (body as { mux?: unknown }).mux : null;
+      const body = result.body && typeof result.body === 'object' ? result.body as { mux?: unknown; error?: unknown } : null;
+      const mux = body?.mux ?? null;
       const parsed = parseMuxDriverStatus(mux);
-      const reason = mux && typeof mux === 'object' && typeof (mux as { reason?: unknown }).reason === 'string'
-        ? (mux as { reason: string }).reason : null;
+      const muxReasonValue = mux && typeof mux === 'object' ? (mux as { reason?: unknown }).reason : undefined;
       if (result.status < 200 || result.status >= 300 || parsed === 'unknown') {
         setMuxFetchState('error');
-        setMuxReason(reason);
-      } else {
-        setMuxDriverStatus(parsed);
-        setMuxFetchState('ready');
-        setMuxReason(reason);
+        setMuxReason(typeof body?.error === 'string' ? body.error : typeof muxReasonValue === 'string' ? muxReasonValue : null);
+        return;
       }
+      setMuxDriverStatus(parsed);
+      setMuxFetchState('ready');
+      setMuxReason(typeof muxReasonValue === 'string' ? muxReasonValue : null);
     }, () => {
       if (overviewGenRef.current !== gen) return;
       setMuxFetchState('error');
@@ -275,17 +280,19 @@ export function useServerDetail(serverName: string | null): UseServerDetailResul
     setLocalNetworkDetail(undefined);
     if (sessionServerRef.current !== serverName) setSessions([]);
     sessionServerRef.current = serverName;
-    refreshOverview(connectionRef.current.servers.find((s) => s.name === serverName)?.type === 'agent' && connectionRef.current.statuses[serverName]?.status === 'offline');
     setIsolationReport(null);
     setIsolationReportUnavailable(false);
     setIsolationCleanupReport(null);
     setIsolationCleanupReportUnavailable(false);
-    setMuxDriverStatus('unknown');
     setWindowMetaError(false);
     setLoading(true);
     setError(null);
     try {
       const encoded = encodeURIComponent(serverName);
+      const detailRequest = apiWithStatus<unknown>(`/servers/${encoded}`);
+      const knownServer = connectionRef.current.servers.find((s) => s.name === serverName);
+      const agentOffline = knownServer?.type === 'agent' && connectionRef.current.statuses[serverName]?.status === 'offline';
+      refreshOverview(agentOffline ? 'unreachable' : 'fetch', detailRequest);
       // Issue #29 review, Important finding 3: the isolationReport fetch
       // used to swallow every failure (network error, 4xx/5xx, malformed
       // body) into a bare `null` via `.catch(() => null)` — indistinguishable
@@ -311,7 +318,7 @@ export function useServerDetail(serverName: string | null): UseServerDetailResul
         refreshStatuses(),
         // 到達不能なサーバー（503 agent_unreachable）でも詳細全体を落とさず、失敗の種類を区別して返す
         fetchInstallStatus(encoded),
-        apiWithStatus<unknown>(`/servers/${encoded}`).catch(() => null),
+        detailRequest.catch(() => null),
       ]);
       const [srvList, installRes, detailResult] = await mainPromise;
       if (!srvList.some((s) => s.name === serverName)) throw new Error(`Server "${serverName}" not found`);
@@ -396,9 +403,9 @@ export function useServerDetail(serverName: string | null): UseServerDetailResul
     const previous = previousConnection.current;
     previousConnection.current = { name: serverName, status: monitoredStatus };
     if (previous.name === serverName && previous.status === monitoredStatus) return;
-    if (monitoredStatus === 'offline') refreshOverview(true);
-    else if (monitoredStatus === 'error') refreshOverview('error');
-    else if (monitoredStatus === 'online' && previous.name === serverName && (previous.status === 'offline' || previous.status === 'error')) refreshOverview();
+    if (monitoredStatus === 'offline') refreshOverview('unreachable');
+    else if (monitoredStatus === 'error') refreshOverview('unknown');
+    else if (monitoredStatus === 'online' && previous.name === serverName && (previous.status === 'offline' || previous.status === 'error')) refreshOverview('fetch');
   }, [serverName, monitoredStatus, isAgent, refreshOverview]);
 
   const windowById = useMemo(() => buildWindowIndex(allProjects, allTasks, null), [allProjects, allTasks]);

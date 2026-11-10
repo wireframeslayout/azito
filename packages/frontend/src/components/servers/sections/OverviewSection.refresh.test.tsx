@@ -3,7 +3,7 @@ import { expect, it, vi } from 'vitest';
 import OverviewSection from './OverviewSection';
 import type { Server, Session } from '../../../hooks/useServerManagement';
 
-vi.mock('react-i18next', async (original) => ({ ...await original<typeof import('react-i18next')>(), useTranslation: () => ({ t: (key: string, values?: Record<string, unknown>) => key === 'overview.fetchUnavailable' ? `Unavailable${values?.reason}` : key === 'overview.sessionsSummary' ? `Sessions ${values?.sessionCount}` : key }) }));
+vi.mock('react-i18next', async (original) => ({ ...await original<typeof import('react-i18next')>(), useTranslation: () => ({ t: (key: string, values?: Record<string, unknown>) => key === 'overview.fetchUnavailable' ? `Unavailable${values?.reason}` : key === 'overview.sessionsSummary' ? `Sessions ${values?.sessionCount}` : key === 'sessionState.partial' ? 'Partial' : key }) }));
 vi.mock('../../../hooks/useServerResources', () => ({ useServerResourcesContext: () => [], getHealthLevel: () => 'healthy' }));
 vi.mock('../../../hooks/useIsolationDoctor', () => ({ useIsolationDoctor: () => ({ running: false, runDoctor: vi.fn() }) }));
 vi.mock('../../../hooks/useHealth', () => ({ useHealth: () => ({ scopedAuthEnabled: true }) }));
@@ -24,4 +24,19 @@ it('shows unavailable reasons instead of old values until recovery', () => {
   rerender(<OverviewSection {...props} sessionsState="ready" muxFetchState="ready" />);
   expect(screen.getByText('overview.misaoConnected')).toBeInTheDocument();
   expect(screen.getByText('Sessions 1')).toBeInTheDocument();
+});
+
+it('shows a partial listing as partial, not as unavailable', () => {
+  render(
+    <OverviewSection
+      server={{ name: 'a', type: 'agent', defaultMux: 'misao' } as Server}
+      status={{ status: 'online' }} installStatus={null} sessions={[]}
+      isolationReport={null} isolationReportUnavailable={false}
+      isolationCleanupReport={null} isolationCleanupReportUnavailable={false}
+      muxDriverStatus="ok" refresh={vi.fn()} onEdit={vi.fn()}
+      sessionsState="partial" sessionsReason="daemon_unreachable" muxFetchState="ready"
+    />,
+  );
+  expect(screen.getByText('Partial (daemon_unreachable)')).toBeInTheDocument();
+  expect(screen.queryByText(/^Unavailable/)).not.toBeInTheDocument();
 });

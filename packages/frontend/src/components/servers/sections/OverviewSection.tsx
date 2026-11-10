@@ -191,7 +191,11 @@ export default function OverviewSection({
 
   const sessionCount = sessions.length;
   const windowCount = sessions.reduce((sum, s) => sum + s.windowCount, 0);
-  const sessionsSummary = sessionsState === 'ready' ? t('overview.sessionsSummary', { sessionCount, windowCount }) : sessionsState === 'loading' ? t('sessionState.loading') : t('overview.fetchUnavailable', { reason: sessionsReason ? ` (${sessionsReason})` : '' });
+  const reasonSuffix = (reason: string | null | undefined) => (reason ? ` (${reason})` : '');
+  const sessionsSummary = sessionsState === 'ready' ? t('overview.sessionsSummary', { sessionCount, windowCount })
+    : sessionsState === 'loading' ? t('sessionState.loading')
+    : sessionsState === 'partial' ? `${t('sessionState.partial')}${reasonSuffix(sessionsReason)}`
+    : t('overview.fetchUnavailable', { reason: reasonSuffix(sessionsReason) });
 
   const memUsedBytes = measurement ? measurement.memTotalBytes - measurement.memAvailableBytes : null;
   const loadPerCore = measurement?.loadPerCore ?? null;
@@ -466,7 +470,11 @@ export default function OverviewSection({
           <KvRow label={t('overview.defaultMuxLabel')}>
             <span style={{ display: 'inline-flex', alignItems: 'center', flexWrap: 'wrap', gap: 'var(--space-2)', fontFamily: 'var(--mono)', fontSize: 'var(--font-xs)' }}>
               {server.defaultMux === 'misao' ? t('overview.defaultMuxMisao') : t('overview.defaultMuxTmux')}
-              {server.defaultMux === 'misao' && muxFetchState !== 'ready' && <span role="status">{muxFetchState === 'loading' ? t('sessionState.loading') : t('overview.fetchUnavailable', { reason: muxReason ? ` (${muxReason})` : '' })}</span>}
+              {server.defaultMux === 'misao' && muxFetchState !== 'ready' && (
+                <span role="status">
+                  {muxFetchState === 'loading' ? t('overview.muxLoading') : <Chip tone="orange">{t('overview.fetchUnavailable', { reason: reasonSuffix(muxReason) })}</Chip>}
+                </span>
+              )}
               {server.defaultMux === 'misao' && muxFetchState === 'ready' && muxDriverStatus === 'ok' && <Chip tone="green">{t('overview.misaoConnected')}</Chip>}
               {server.defaultMux === 'misao' && muxFetchState === 'ready' && muxDriverStatus === 'unreachable' && <Chip tone="orange">{t('overview.misaoUnreachableChip')}</Chip>}
               {server.defaultMux === 'misao' && muxFetchState === 'ready' && muxDriverStatus === 'incompatible' && <Chip tone="orange">{t('overview.misaoIncompatibleChip')}</Chip>}
