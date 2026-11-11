@@ -16,6 +16,7 @@ import { downloadFile } from './files/useFileDownload';
 import { useServerPath } from '../hooks/useServerPath';
 import { parentOrRoot } from '../lib/serverPath';
 import FileTree from './files/FileTree';
+import { filterFileTree } from './files/filterFileTree';
 import DeleteConfirmModal from './files/DeleteConfirmModal';
 
 export { FilePreviewPanel } from './files/FilePreviewPanel';
@@ -111,13 +112,7 @@ function FileExplorerTree({ serverName, rootPath, projectId, onFileSelect, onRef
     onRefreshRef?.(loadRoot);
   }, [onRefreshRef, loadRoot]);
 
-  const filterNodes = (nodes: TreeNode[]): TreeNode[] => nodes.flatMap((node) => {
-    const children = node.expanded && node.children ? filterNodes(node.children) : [];
-    const matches = node.name.toLocaleLowerCase().includes(filter.toLocaleLowerCase());
-    const editing = crud.pendingRename?.path === node.path || crud.pendingCreate?.parentPath === node.path;
-    return matches || children.length || editing ? [{ ...node, children: matches ? node.children : children }] : [];
-  });
-  const visibleTree = filter ? filterNodes(tree) : tree;
+  const visibleTree = filter ? filterFileTree(tree, filter, crud.pendingRename?.path, crud.pendingCreate?.parentPath) : tree;
   const areaLongPressHandlers = bindAreaLongPress((x, y) => showContextMenuAt(x, y, buildAreaMenuItems()));
 
   return (

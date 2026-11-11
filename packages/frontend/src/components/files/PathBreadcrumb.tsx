@@ -30,6 +30,10 @@ export function PathBreadcrumb({ path, onNavigate, rootLabel, navigationLabel, m
     </nav>;
   }
 
+  const parts = path.split(separator === '\\' ? /[\\/]+/ : /\/+/).filter(Boolean);
+  if (separator === '\\' && path.startsWith('\\\\')) parts.unshift('\\\\');
+  else if (path.startsWith(separator)) parts.unshift(separator);
+
   return (
     <div
       style={{
@@ -54,7 +58,7 @@ export function PathBreadcrumb({ path, onNavigate, rootLabel, navigationLabel, m
           textAlign: 'left',
         }}
       >
-        <bdi aria-label={path}>{path.split(separator).map((part, index) => <span key={index}>{index > 0 && <span aria-hidden="true">{separator}</span>}{part}</span>)}</bdi>
+        <bdi aria-label={path}>{parts.map((part, index) => <span key={index}>{index > 0 && <span aria-hidden="true" style={{ margin: '0 var(--space-1)' }}>›</span>}{part}</span>)}</bdi>
       </div>
       <button
         type="button"
