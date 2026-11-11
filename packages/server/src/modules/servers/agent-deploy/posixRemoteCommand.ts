@@ -12,7 +12,7 @@ export class PosixRemoteProtocolError extends Error {}
 /** Recover the remote shell status independently of the SSH server's exit status. */
 export async function execPosixRemote(ssh: Pick<SshClient, 'execIsolated'>, host: string, script: string, timeoutMs?: number): ReturnType<SshClient['execIsolated']> {
   const marker = `AZITO_EXIT_${randomBytes(16).toString('hex')}`;
-  const command = `${posixRemoteCommand(script)}; printf '\\n${marker}:%s\\n' "$?"`;
+  const command = posixRemoteCommand(`${posixRemoteCommand(script)}; printf '\\n${marker}:%s\\n' "$?"`);
   let result: Awaited<ReturnType<SshClient['execIsolated']>>;
   try {
     result = await ssh.execIsolated(host, command, timeoutMs);

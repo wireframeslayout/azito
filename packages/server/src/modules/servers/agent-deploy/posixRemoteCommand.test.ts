@@ -5,13 +5,19 @@ import { execPosixRemote, posixRemoteCommand } from './posixRemoteCommand';
 
 const exec = promisify(execFile);
 const ssh = { execIsolated: async (_host: string, command: string) => {
-  const result = await exec('/bin/bash', ['-c', command]);
+  const result = await exec('/bin/sh', ['-c', command]);
   return { ...result, code: 0 };
 } };
 
 describe('execPosixRemote', () => {
   it.each([['printf foo; exit 7', 'foo', 7], ['exit 113', '', 113], ["printf 'hello\\n'", 'hello\n', 0]])('preserves output and exit status: %s', async (script, stdout, code) => {
     await expect(execPosixRemote(ssh as never, 'host', script)).resolves.toMatchObject({ stdout, code });
+  });
+  it('places both the script and the status capture inside bash', async () => {
+    let command = '';
+    await execPosixRemote({ execIsolated: async (host: string, raw: string) => { command = raw; return ssh.execIsolated(host, raw); } } as never, 'host', 'exit 7');
+    expect(command).toMatch(/^\/bin\/bash -c '/);
+    expect(command.endsWith("'")).toBe(true);
   });
   it('rejects missing or malformed markers', async () => {
     const broken = { execIsolated: async () => ({ stdout: 'no marker', stderr: '', code: 0 }) };

@@ -1,3 +1,6 @@
+import { mkdtempSync, writeFileSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { LocalNetworkPermissionError } from '../localNetworkDiagnosis';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { HOST_PROBE_COMMAND } from '../../../shared/os/hostProfile';
@@ -12,8 +15,9 @@ const VERSION = 'bundlehash1';
 
 function fakeExec(fn: (host: string, command: string) => Promise<{ stdout: string; stderr: string; code: number }>) {
   return vi.fn(async (host: string, command: string) => {
-    const marker = /; printf '\\n(AZITO_EXIT_[a-f0-9]+):%s\\n' "\$\?"$/.exec(command);
-    const result = await fn(host, marker ? command.slice(0, marker.index) : command);
+    const inner = unwrapCommand(command);
+    const marker = /; printf '\\n(AZITO_EXIT_[a-f0-9]+):%s\\n' "\$\?"$/.exec(inner);
+    const result = await fn(host, marker ? inner.slice(0, marker.index) : command);
     return marker ? { ...result, stdout: `${result.stdout}\n${marker[1]}:${result.code}\n`, code: 0 } : result;
   });
 }
@@ -123,6 +127,31 @@ describe('AgentInstaller', () => {
       onProgress?.('transfer');
       return { version: '0.2.0', startMethod: 'systemd' as const, updateAvailable: false };
     }),
+  });
+
+  it.each(['extract', 'link'])('reports %s failure during transfer even when SSH reports zero', async (failedStep) => {
+    const dir = mkdtempSync(join(tmpdir(), 'azito-transfer-test-'));
+    const hash = 'a'.repeat(64);
+    const commands: string[] = [];
+    try {
+      const tarball = join(dir, 'agent.tar.gz');
+      const sums = join(dir, 'SHA256SUMS');
+      writeFileSync(tarball, 'fixture');
+      writeFileSync(sums, `${hash}  azito-agent.tar.gz\n`);
+      const bundler = { ...makeBundler(), getTarballPath: () => tarball, getSha256sumsPath: () => sums };
+      const execIsolated = fakeExec(async (_host, raw) => {
+        const command = unwrapCommand(raw);
+        commands.push(command);
+        if (command.includes('sha256sum') || command.includes('shasum')) return { stdout: hash, stderr: '', code: 0 };
+        const failed = failedStep === 'extract' ? command.includes('tar ') : command.startsWith('ln -sfn');
+        return { stdout: '', stderr: failed ? 'denied' : '', code: failed ? 1 : 0 };
+      });
+      const installer = new AgentInstaller({ execIsolated } as never, bundler as never, DEFAULT_WINDOWS_AGENT_OPTIONS, {} as never);
+      const target = installer as unknown as { sftpUpload: () => Promise<void>; transferAndDeploy: (host: string, version: string) => Promise<void> };
+      target.sftpUpload = async () => undefined;
+      await expect(target.transferAndDeploy('host', VERSION)).rejects.toThrow(failedStep === 'extract' ? /Deploy failed/ : /link update failed/);
+      if (failedStep === 'extract') expect(commands.some((command) => command.startsWith('ln -sfn'))).toBe(false);
+    } finally { rmSync(dir, { recursive: true, force: true }); }
   });
 
   it('does not require tmux when misao is installed: a host without it passes', async () => {
