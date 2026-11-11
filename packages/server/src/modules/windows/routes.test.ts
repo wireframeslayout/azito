@@ -87,16 +87,19 @@ describe('POST /api/windows/:id/launch-agent', () => {
   let sendKeys: ReturnType<typeof vi.fn>;
   let updateByWindowFn: ReturnType<typeof vi.fn<IWindowRepository['updateAgentSessionIdByWindow']>>;
   let windowUpdate: ReturnType<typeof vi.fn<IWindowRepository['update']>>;
+  let takePending: ReturnType<typeof vi.fn>;
 
   beforeEach(async () => {
     window = makeWindow();
     windowUpdate = vi.fn<IWindowRepository['update']>();
+    takePending = vi.fn(() => null);
     server = makeServer();
     sendKeys = vi.fn().mockResolvedValue(undefined);
     updateByWindowFn = vi.fn<IWindowRepository['updateAgentSessionIdByWindow']>();
 
     const windowRepo: Partial<IWindowRepository> = {
       findById: (id: number) => (id === window.id ? window : undefined),
+      findByProject: () => [window], findByTask: () => [window],
       updateAgentSessionIdByWindow: updateByWindowFn,
       findByServerAndTarget: vi.fn(() => undefined), findByServerAndRef: vi.fn(() => undefined),
       add: vi.fn(() => 2), update: windowUpdate,
@@ -120,10 +123,11 @@ describe('POST /api/windows/:id/launch-agent', () => {
       muxSwitchSettingsRepo: {} as never, auditLogService: {} as never, agentActivityMonitor: {} as never,
       harnessPrefix: '',
       windowRepo: windowRepo as IWindowRepository,
+      takePendingWorkerLaunch: takePending as unknown as NonNullable<import('./routes').WindowsRouteOptions['takePendingWorkerLaunch']>,
       projectRepo: { findById: () => ({ id: 1 }) } as unknown as IProjectRepository,
       taskRepo: { findById: () => ({ id: 1 }) } as unknown as ITaskRepository,
       tmux: tmux as TmuxClient,
-      muxDriverRegistry: { resolve: () => tmux } as any,
+      muxDriverRegistry: { resolve: () => tmux, availabilityFor: () => ({ available: true }) } as any,
       serverRepo: serverRepo as IServerRepository,
       transportFactory: { hostProfileFor: () => null },
       respawnService: { respawn: vi.fn(async () => ({ tmuxTarget: 'proj:win1' })) } as unknown as WindowRespawnService,
@@ -145,6 +149,38 @@ describe('POST /api/windows/:id/launch-agent', () => {
       uiToken: 'test-token', serverIsolationMutex: new KeyedMutex(), buildSecondaryWindowEnv: () => ({}),
     });
     await app.ready();
+  });
+
+  it('takes launch settings from the server-side record at registration', async () => {
+    const ref = { kind: 'tmux', workspace: 's', window: 'w' };
+    const record = { workerType: 'claude', args: ['--dangerously-skip-permissions'] };
+    takePending.mockReturnValue(record);
+    const res = await app.inject({ method: 'POST', url: '/api/projects/1/windows', payload: { server_name: 'local-server', ref: JSON.stringify(ref), worker_type: 'claude', window_type: 'agent' } });
+    expect(res.statusCode, res.body).toBe(200);
+    expect(takePending).toHaveBeenCalledWith('local-server', ref);
+    expect(windowUpdate).toHaveBeenCalledWith(2, { workerLaunch: record });
+    expect(JSON.stringify(res.json())).not.toContain('dangerously');
+    const forged = await app.inject({ method: 'POST', url: '/api/projects/1/windows', payload: { server_name: 'local-server', ref: JSON.stringify(ref), worker_launch_command: 'claude --dangerously-skip-permissions' } });
+    expect(forged.statusCode).toBe(400);
+  });
+
+  it('hides launch arguments in window list responses', async () => {
+    window.workerLaunch = { workerType: 'claude', args: ['--permission-mode', 'manual'] };
+    for (const url of ['/api/projects/1/windows', '/api/tasks/1/windows']) {
+      const response = await app.inject({ method: 'GET', url });
+      expect(response.statusCode).toBe(200);
+      expect(response.json()[0]).not.toHaveProperty('workerLaunch');
+    }
+  });
+
+  it('updates and clears recorded models when the window model changes', async () => {
+    window.workerLaunch = { workerType: 'claude', args: ['--permission-mode', 'auto', '-m', 'opus'] };
+    const response = await app.inject({ method: 'PUT', url: '/api/windows/1', payload: { worker_model: 'claude-opus-5-5[1m]' } });
+    expect(response.statusCode).toBe(200);
+    expect(windowUpdate).toHaveBeenLastCalledWith(1, { workerModel: 'claude-opus-5-5[1m]', workerLaunch: { workerType: 'claude', args: ['--permission-mode', 'auto', '--model', 'claude-opus-5-5[1m]'] } });
+    const cleared = await app.inject({ method: 'PUT', url: '/api/windows/1', payload: { worker_model: null } });
+    expect(cleared.statusCode).toBe(200);
+    expect(windowUpdate).toHaveBeenLastCalledWith(1, { workerModel: null, workerLaunch: { workerType: 'claude', args: ['--permission-mode', 'auto'] } });
   });
 
   it.each([
@@ -355,7 +391,9 @@ describe('POST /api/windows/:id/launch-agent', () => {
       harnessPrefix: '',
       windowRepo: {
         findById: (id: number) => (id === window.id ? window : undefined),
+      findByProject: () => [window], findByTask: () => [window],
         updateAgentSessionIdByWindow: codexUpdateByWindowFn,
+        update: vi.fn(),
       } as unknown as IWindowRepository,
       projectRepo: {} as IProjectRepository,
       taskRepo: {} as ITaskRepository,
@@ -537,6 +575,7 @@ describe('POST /api/windows/:id/respawn — execution gate (Issue #328 second-ro
   async function setup(respawn: WindowRespawnService['respawn'], invalidateSessionCache?: (serverName: string) => void): Promise<FastifyInstance> {
     const windowRepo: Partial<IWindowRepository> = {
       findById: (id: number) => (id === window.id ? window : undefined),
+      findByProject: () => [window], findByTask: () => [window],
     };
     const serverRepo: Partial<IServerRepository> = {
       findByName: (name: string) => (name === server.name ? server : null),
@@ -657,7 +696,7 @@ describe('resource check in the answers of launch-agent and respawn (#531)', () 
       paneHandleResolver: {} as never,
       muxSwitchSettingsRepo: {} as never, auditLogService: {} as never, agentActivityMonitor: {} as never,
       harnessPrefix: '',
-      windowRepo: { findById: () => window, updateAgentSessionIdByWindow: vi.fn() } as unknown as IWindowRepository,
+      windowRepo: { findById: () => window, updateAgentSessionIdByWindow: vi.fn(), update: vi.fn() } as unknown as IWindowRepository,
       projectRepo: {} as IProjectRepository,
       taskRepo: {} as ITaskRepository,
       tmux: tmux as TmuxClient,

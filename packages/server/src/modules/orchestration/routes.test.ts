@@ -25,7 +25,11 @@ describe('orchestration routes', () => {
     expect((await request('GET', '/api/windows/1/links')).json()).toHaveLength(0);
     expect((await request('GET', '/api/windows/1/links?includeUnlinked=1')).json()).toHaveLength(1);
     expect((await request('POST', '/api/windows/1/links', { targetWindowId: 2 })).json().id).toBe(id);
-    expect((await request('GET', '/api/orchestrators')).json()).toHaveLength(2);
+    windows.update(1, { workerLaunch: { workerType: 'claude', args: ['--permission-mode', 'auto'] } });
+    const orchestrators = (await request('GET', '/api/orchestrators')).json();
+    expect(orchestrators).toHaveLength(2);
+    expect(orchestrators[0]).not.toHaveProperty('workerLaunch');
+    expect(orchestrators[0]).toHaveProperty('links');
     await app.close(); bus.destroy(); db.close();
   });
   it('returns the resolved task id for both task and window links', async () => {

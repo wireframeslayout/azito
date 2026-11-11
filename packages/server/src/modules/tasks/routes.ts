@@ -1,3 +1,4 @@
+import { publicWindow } from '../windows/Window';
 import { z } from 'zod';
 import { recordAttribution, type Attribution } from '../../shared/attribution';
 import type { FastifyPluginCallback } from 'fastify';
@@ -283,7 +284,7 @@ const tasksRoutes: FastifyPluginCallback<TasksRouteOptions> = (fastify, opts, do
       tasks = taskRepo.findAll();
     }
     const windowsByTask = windowRepo.findByTaskIds(tasks.map((t) => t.id));
-    return tasks.map((t) => toListItem(t, windowsByTask.get(t.id) ?? []));
+    return tasks.map((t) => toListItem(t, (windowsByTask.get(t.id) ?? []).map(publicWindow)));
   });
 
   // ── POST /api/tasks ──
@@ -430,7 +431,7 @@ const tasksRoutes: FastifyPluginCallback<TasksRouteOptions> = (fastify, opts, do
         }
       }
 
-      return { ...t, paneAlive, windows, unitType: unitTypeInfo };
+      return { ...t, paneAlive, windows: windows.map(publicWindow), unitType: unitTypeInfo };
     },
   );
 

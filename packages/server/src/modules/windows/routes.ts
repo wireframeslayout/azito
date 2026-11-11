@@ -1,3 +1,4 @@
+import { parseWorkerLaunchRecord } from './workerLaunchRecord';
 import { z } from 'zod';
 import { parseWindowId, formatWindowId, asPaneHandle } from '@azito/shared';
 import { WindowMessageService } from './WindowMessageService';
@@ -22,7 +23,7 @@ import { HostProfileError } from '../../shared/os/hostProfile';
 import { isAgentSessionId } from '../agents/agentSessionId';
 import { shellDialectFor } from '../../shared/os/shellDialect';
 import { randomUUID } from 'node:crypto';
-import { isPrimaryTaskWindow, type IWindowRepository, type Window } from './Window';
+import { publicWindow, isPrimaryTaskWindow, type IWindowRepository, type Window } from './Window';
 import type { IProjectRepository } from '../projects/Project';
 import type { ITaskRepository } from '../tasks/Task';
 import type { ServerConfig } from '../servers/Server';
@@ -86,6 +87,7 @@ export interface WindowsRouteOptions {
   uiToken: string;
   /** Masked-only env of a secondary task-owned window; see SessionsRouteOptions. */
   buildSecondaryWindowEnv: (taskId: number, server: ServerConfig) => Record<string, string>;
+  takePendingWorkerLaunch?: (serverName: string, ref: MuxRef) => import('./workerLaunchRecord').WorkerLaunchRecord | null;
   /** The shared per-server mutex (the same instance the sessions and servers routes receive). */
   serverIsolationMutex: KeyedMutex;
 }
@@ -223,7 +225,7 @@ const windowsRoutes: FastifyPluginCallback<WindowsRouteOptions> = (fastify, opts
       const id = parseInt(request.params.id, 10);
       if (!projectRepo.findById(id))
         return reply.status(404).send({ error: 'Project not found' });
-      return windowRepo.findByProject(id);
+      return windowRepo.findByProject(id).map(publicWindow);
     },
   );
 
@@ -311,6 +313,8 @@ const windowsRoutes: FastifyPluginCallback<WindowsRouteOptions> = (fastify, opts
         sleeping: false,
       });
       if (givenRef && srv) await labelOrRemoveWindow(srv, givenRef, winId);
+      const launchRecord = givenRef ? opts.takePendingWorkerLaunch?.(serverName, givenRef) : null;
+      if (launchRecord) windowRepo.update(winId, { workerLaunch: launchRecord });
       sessionCaptureService.scheduleInitialScan(winId, workerType, serverName, workingDirectory);
       notifyWindowsChanged(serverName);
       return { ok: true, id: winId };
@@ -396,7 +400,7 @@ const windowsRoutes: FastifyPluginCallback<WindowsRouteOptions> = (fastify, opts
       const id = parseInt(request.params.id, 10);
       if (!taskRepo.findById(id))
         return reply.status(404).send({ error: 'Task not found' });
-      return windowRepo.findByTask(id);
+      return windowRepo.findByTask(id).map(publicWindow);
     },
   );
 
@@ -520,6 +524,16 @@ const windowsRoutes: FastifyPluginCallback<WindowsRouteOptions> = (fastify, opts
           return reply.code(400).send({ error: 'Invalid worker_model format' });
         }
         data['workerModel'] = body.worker_model;
+        if (win.workerLaunch) {
+          const args = win.workerLaunch.args;
+          const updated: string[] = [];
+          for (let i = 0; i < args.length; i++) {
+            if (args[i] === '--model' || args[i] === '-m') { i++; continue; }
+            updated.push(args[i]);
+          }
+          if (body.worker_model) updated.push('--model', body.worker_model);
+          data['workerLaunch'] = { ...win.workerLaunch, args: updated };
+        }
       }
       if ('working_directory' in body) data['workingDirectory'] = body.working_directory;
 
@@ -598,19 +612,20 @@ const windowsRoutes: FastifyPluginCallback<WindowsRouteOptions> = (fastify, opts
 
       const strategy = sessionStrategyFactory.create(win.workerType);
       let effectiveCommand = command;
+      let launchedSessionId: string | null = null;
 
       // Session ID processing first (operates on the original command)
       if (strategy.supportsSession && !strategy.needsPostLaunchScan) {
         const existingId = /(?:^|\s)--session-id\s+(\S+)/.exec(effectiveCommand)?.[1]
           ?? /(?:^|\s)--resume\s+(\S+)/.exec(effectiveCommand)?.[1];
         if (existingId) {
-          windowRepo.updateAgentSessionIdByWindow(win.serverName, win.tmuxTarget, existingId);
+          launchedSessionId = existingId;
         } else {
           const sessionId = randomUUID();
           const sessionArgs = strategy.buildNewSessionArgs(sessionId);
           if (sessionArgs.length > 0) {
             effectiveCommand = `${effectiveCommand} ${sessionArgs.join(' ')}`;
-            windowRepo.updateAgentSessionIdByWindow(win.serverName, win.tmuxTarget, sessionId);
+            launchedSessionId = sessionId;
           }
         }
       }
@@ -642,6 +657,8 @@ const windowsRoutes: FastifyPluginCallback<WindowsRouteOptions> = (fastify, opts
       // Exported into the pane's shell (a POSIX one: Windows hosts are refused above) rather than prefixed onto the command, so every
       // part of a compound command (`cd x && claude`) sees it; the pane belongs to this window, so the value stays right afterwards too.
       await driverFor(srv).sendKeysToHandle(srv, paneHandle, [`export AZITO_WINDOW_ID=${win.id}; ${cmd}`, 'Enter']);
+      if (launchedSessionId) windowRepo.updateAgentSessionIdByWindow(win.serverName, win.tmuxTarget, launchedSessionId);
+      windowRepo.update(win.id, { workerLaunch: parseWorkerLaunchRecord(command) });
       return { ok: true, supervised, ...resourceCheckBody(resourceSkipped) };
     },
   );

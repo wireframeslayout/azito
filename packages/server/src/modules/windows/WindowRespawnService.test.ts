@@ -8,6 +8,7 @@ import { WindowRespawnService, buildRespawnManifestInput } from './WindowRespawn
 import { DuplicateAgentSessionError } from './DuplicateAgentSessionError';
 import type { ConversationProbe } from './ConversationProbe';
 import { ConversationCheckError } from '../agents/ConversationCheckError';
+import { buildClaudeLaunch } from '../agents/claude/launchCommand';
 import { ClaudeSessionStrategy } from '../agents/claude/SessionStrategy';
 import { CodexSessionStrategy } from '../agents/codex/SessionStrategy';
 import { TranscriptConversationProbe } from '../transcripts/TranscriptConversationProbe';
@@ -248,7 +249,7 @@ function buildService(opts: {
   const stubStrategyFactory = {
     create: vi.fn(() => ({
       supportsSession: true,
-      buildRespawnLaunch: vi.fn(() => (opts.noRespawnLaunch ? null : { ...program('claude', ['--resume', 'abc', '--dangerously-skip-permissions']), env: { CLAUDE_CODE_ENABLE_PROMPT_SUGGESTION: 'false' } })),
+      buildRespawnLaunch: vi.fn((id, model, _extra, blockMcp, conversation, _attach, options) => (opts.noRespawnLaunch ? null : options ? buildClaudeLaunch({ model, blockMcp, ...options }, id, conversation === 'new') : { ...program('claude', ['--resume', 'abc', '--dangerously-skip-permissions']), env: { CLAUDE_CODE_ENABLE_PROMPT_SUGGESTION: 'false' } })),
       conversationLogAgentType: null,
     })),
   };
@@ -454,6 +455,52 @@ describe('WindowRespawnService — prepares the host for a Claude worker (Bypass
 
     expect(prepareClaudeLaunch).toHaveBeenCalledTimes(1);
     expect(vi.mocked(prepareClaudeLaunch).mock.invocationCallOrder[0]).toBeLessThan(tmux.openWindow.mock.invocationCallOrder[0]);
+  });
+});
+
+describe('user window launch records', () => {
+  it('uses recorded permission and model settings for an unlinked window', async () => {
+    const win = makeWindow({ taskId: null, workerType: 'claude', workerLaunch: { workerType: 'claude', args: ['--permission-mode', 'acceptEdits', '--model', 'sonnet'] } });
+    const { service, sentCommands } = buildService({ window: win, task: null });
+    await service.respawn(1, makeServer());
+    const command = sentCommands.join('\n');
+    expect(command).toContain('--permission-mode');
+    expect(command).toContain('acceptEdits');
+    expect(command).toContain('sonnet');
+    expect(command).not.toContain('--dangerously-skip-permissions');
+  });
+
+  it('keeps the recorded settings with their session in a multi-pane window', async () => {
+    const win = makeWindow({ taskId: null, workerType: 'claude', agentSessionId: 'abc', workerLaunch: { workerType: 'claude', args: ['--dangerously-skip-permissions'] }, paneLayout: { layout: '', panes: [
+      { index: 0, workerType: 'claude', agentSessionId: 'other', workingDirectory: null, command: null, title: null },
+      { index: 1, workerType: 'claude', agentSessionId: 'abc', workingDirectory: null, command: null, title: null },
+    ] } });
+    const { service, tmux, sentCommands } = buildService({ window: win, task: null });
+    tmux.listPanesByRef.mockResolvedValue([{ ordinal: 1, handle: '%0', title: '', command: 'bash', active: true }, { ordinal: 2, handle: '%1', title: '', command: 'bash', active: false }]);
+    await service.respawn(1, makeServer());
+    const commands = sentCommands.filter((command) => command.includes('claude'));
+    expect(commands).toHaveLength(2);
+    expect(commands[0]).not.toContain('--dangerously-skip-permissions');
+    expect(commands[1]).toContain('--dangerously-skip-permissions');
+  });
+
+  it('does not guess which pane has recorded settings when session ids collide', async () => {
+    const win = makeWindow({ taskId: null, workerType: 'claude', agentSessionId: 'abc', workerLaunch: { workerType: 'claude', args: ['--dangerously-skip-permissions'] }, paneLayout: { layout: '', panes: [
+      { index: 0, workerType: 'claude', agentSessionId: 'abc', workingDirectory: null, command: null, title: null },
+      { index: 1, workerType: 'claude', agentSessionId: 'abc', workingDirectory: null, command: null, title: null },
+    ] } });
+    const { service, tmux, sentCommands } = buildService({ window: win, task: null });
+    tmux.listPanesByRef.mockResolvedValue([{ ordinal: 1, handle: '%0', title: '', command: 'bash', active: true }, { ordinal: 2, handle: '%1', title: '', command: 'bash', active: false }]);
+    await service.respawn(1, makeServer());
+    expect(sentCommands.filter((command) => command.includes('claude'))).toHaveLength(2);
+    expect(sentCommands.join('\n')).not.toContain('--dangerously-skip-permissions');
+  });
+
+  it('does not add bypass for a legacy window with no launch record', async () => {
+    const win = makeWindow({ taskId: null, workerType: 'claude', workerLaunch: null });
+    const { service, sentCommands } = buildService({ window: win, task: null });
+    await service.respawn(1, makeServer());
+    expect(sentCommands.join('\n')).not.toContain('--dangerously-skip-permissions');
   });
 });
 
@@ -2575,6 +2622,17 @@ describe('WindowRespawnService.respawn — a host that starts a worker as a prog
     ],
   };
 
+  it('uses recorded settings when opening a Windows program', async () => {
+    const win = makeWindow({ id: 7, taskId: null, workerType: 'claude', agentSessionId: 'abc', workerLaunch: { workerType: 'claude', args: ['--permission-mode', 'default', '--model', 'sonnet'] }, muxRef: { kind: 'misao', workspace: 'azito', window: 'w_01' } });
+    const { service, tmux } = buildService({ window: win, task: null, transportFactory: win32Factory() });
+    Object.assign(tmux, { windowExists: vi.fn(async () => false) });
+    await service.respawn(7, makeServer());
+    const options = tmux.openWindow.mock.calls[0][3] as { program: { argv: string[] } };
+    expect(options.program.argv).toContain('--permission-mode');
+    expect(options.program.argv).toContain('sonnet');
+    expect(options.program.argv).not.toContain('--dangerously-skip-permissions');
+  });
+
   it("creates the window with the worker as its first pane (argv, directory, size, the window's env), and types nothing", async () => {
     const { service, tmux, sentCommands } = buildService({
       window: makeWindow({ id: 7, workerType: 'claude', workerModel: 'opus', agentSessionId: 'abc', workingDirectory: 'C:\\work\\app', muxRef: { kind: 'misao', workspace: 'azito', window: 'w_01' } }),
@@ -2585,7 +2643,7 @@ describe('WindowRespawnService.respawn — a host that starts a worker as a prog
     await service.respawn(7, makeServer());
 
     const created = tmux.openWindow.mock.calls[0] as unknown as [unknown, string, string, { program: { argv: string[]; cwd: string; cols: number; rows: number }; extraEnv: Record<string, string> }];
-    expect(created[3].program).toEqual({ argv: ['claude', '--resume', 'abc', '--dangerously-skip-permissions'], env: { CLAUDE_CODE_ENABLE_PROMPT_SUGGESTION: 'false' }, cwd: 'C:\\work\\app', cols: 120, rows: 40 });
+    expect(created[3].program).toEqual({ argv: ['claude', '--resume', 'abc', '--strict-mcp-config', '--model', 'opus'], env: { CLAUDE_CODE_ENABLE_PROMPT_SUGGESTION: 'false' }, cwd: 'C:\\work\\app', cols: 120, rows: 40 });
     expect(created[3].extraEnv).toEqual({ AZITO_UI_TOKEN: 'ui-token-fixture', AZITO_WINDOW_ID: '7' });
     expect(sentCommands).toEqual([]);
     expect(tmux.resolvePane).not.toHaveBeenCalled();
