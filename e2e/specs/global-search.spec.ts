@@ -127,5 +127,9 @@ test('320px の検索入力は下線でフォーカスを示し横にはみ出�
   await expect(input).toBeFocused();
   expect(await input.evaluate(el => getComputedStyle(el).outlineStyle)).toBe('none');
   expect(await input.evaluate(el => getComputedStyle(el).boxShadow)).not.toBe('none');
+  await app.getByRole('tab', { name: /タスク/ }).click();
+  await input.hover();
+  const style = await input.evaluate(el => ({ background: getComputedStyle(el).backgroundColor, radius: getComputedStyle(el).borderRadius, shadow: getComputedStyle(el).boxShadow }));
+  expect(style).toEqual({ background: 'rgba(0, 0, 0, 0)', radius: '0px', shadow: 'none' });
   expect(await app.evaluate(() => document.documentElement.scrollWidth <= document.documentElement.clientWidth)).toBe(true);
 });
