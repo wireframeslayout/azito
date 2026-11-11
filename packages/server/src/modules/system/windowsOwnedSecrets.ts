@@ -40,7 +40,13 @@ export function readOwnedSecret(prefix: string, hubDir: string, name: string, re
   assertRealDirectoryChain(data);
   const file = path.join(data, name);
   if (saved.name !== name || !sameIdentity(record.dataRootIdentity, saved.root) || !sameIdentity(saved.root, readInstallFileIdentity(data))) throw new Error(`The data directory for ${name} is not the recorded directory.`);
-  const fileStat = fs.lstatSync(file);
+  let fileStat: fs.Stats;
+  try {
+    fileStat = fs.lstatSync(file);
+  } catch (err) {
+    if (/^\.azito-hub-canary-[a-f0-9]{32}$/.test(name) && (err as NodeJS.ErrnoException).code === 'ENOENT') return undefined;
+    throw err;
+  }
   if (!fileStat.isFile() || fileStat.isSymbolicLink() || !sameIdentity(saved.identity, readInstallFileIdentity(file)) || !guard.inspect(file, 'file').ok) throw new Error(`${name} is not the recorded protected file.`);
   return file;
 }

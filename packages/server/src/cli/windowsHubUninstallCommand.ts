@@ -24,7 +24,6 @@ export async function windowsHubUninstallCommand(host: HostEnv, context: Service
   const run = (spec: Parameters<typeof runCommandSpec>[0]) => runCommandSpec(spec, hub.runHost);
   await underHubLock(lock, async () => {
     const { record, release } = await prepareRecordedRelease(hub.layout.prefix, context.secretFileGuard, run, hub.systemRoot);
-    await uninstallWindowsTask(created.manager, hub, context);
     const retained: string[] = [];
     let data = false;
     let dataDb = false;
@@ -38,6 +37,15 @@ export async function windowsHubUninstallCommand(host: HostEnv, context: Service
         try {
           await assertHubDirsOnlyOwnerWritable(run, hub.systemRoot, [path.join(hub.layout.prefix, 'data')]);
           verifyRecordedDatabase(hub.layout.prefix, record, context.secretFileGuard);
+          for (const suffix of ['-wal', '-shm']) {
+            const sidecar = path.join(hub.layout.prefix, 'data', `data.db${suffix}`);
+            try {
+              fs.lstatSync(sidecar);
+              throw new Error(`${sidecar} exists; retain the database and inspect its SQLite sidecars manually.`);
+            } catch (err) {
+              if ((err as NodeJS.ErrnoException).code !== 'ENOENT') throw err;
+            }
+          }
           dataDb = true;
           retained.push('Data retained: only recorded data files can be removed; unrecorded data will be kept.');
         } catch (dbErr) {
@@ -68,6 +76,7 @@ export async function windowsHubUninstallCommand(host: HostEnv, context: Service
     } else retained.push('The CLI wrapper was not recorded as created by this installer; inspect it manually.');
     await assertNoHubLaunchers(hub.hubRoots, run, hub.systemRoot, process.ppid);
     await assertNoOtherHubProcesses(hub.layout.hubRoot, run, hub.systemRoot, context.pid);
+    await uninstallWindowsTask(created.manager, hub, context);
     consumeWindowsInstallRecord(hub.layout.hubRoot, record, context.secretFileGuard);
     console.log(JSON.stringify({ release: path.basename(release), data, dataDb, dataFiles, wrapper, pathAdded: record.pathAdded, retained }));
     const action = await new Promise<string>((resolve) => {

@@ -66,7 +66,7 @@ foreach ($option in @('Version', 'Prefix', 'Port', 'ZipPath', 'Sha256Sums')) {
         if ($option -eq 'ZipPath') { $ZipPathFromEnvironment = $true }
     }
 }
-foreach ($option in @('Yes', 'NoPath', 'NoService', 'Uninstall', 'RemoveData')) {
+foreach ($option in @('Yes', 'NoPath', 'NoService')) {
     if ($PSBoundParameters.ContainsKey($option)) { continue }
     if ([Environment]::GetEnvironmentVariable('AZITO_INSTALL_' + $option.ToUpperInvariant()) -eq '1') { Set-Variable -Name $option -Value ([switch]$true) }
 }
