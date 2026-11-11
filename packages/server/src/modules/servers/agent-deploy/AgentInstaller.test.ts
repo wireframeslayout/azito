@@ -463,7 +463,7 @@ describe('AgentInstaller', () => {
     const text = commands.join('\n');
     expect(text).not.toMatch(/azito-misao/);
     expect(text).not.toMatch(/pkill[^\n]*misao/);
-    expect(text).toContain('pkill -f azito-agent.cjs');
+    expect(text).toContain("pkill -f '[a]zito-agent[.]cjs'");
   });
 
   it('preserves a local network diagnosis in the result and progress', async () => {
@@ -544,8 +544,8 @@ describe('AgentInstaller', () => {
       expect(result.startMethod).toBe('launchd');
       expect(commands.some((c) => c.includes("'launchctl' 'bootstrap' 'user/501'"))).toBe(true);
       expect(commands.some((c) => c.includes('systemctl --user'))).toBe(false);
-      expect(commands.findIndex((c) => c.includes('pkill -f azito-agent.cjs'))).toBeLessThan(commands.findIndex((c) => c.includes("'launchctl' 'bootstrap' 'user/501'")));
-      expect(commands.some((c) => c.includes('agent.pid') && c.includes('pkill -f azito-agent.cjs'))).toBe(true);
+      expect(commands.findIndex((c) => c.includes("pkill -f '[a]zito-agent[.]cjs'"))).toBeLessThan(commands.findIndex((c) => c.includes("'launchctl' 'bootstrap' 'user/501'")));
+      expect(commands.some((c) => c.includes('agent.pid') && c.includes("pkill -f '[a]zito-agent[.]cjs'"))).toBe(true);
       expect(commands.some((c) => /pkill.*misao/.test(c))).toBe(false);
     });
 

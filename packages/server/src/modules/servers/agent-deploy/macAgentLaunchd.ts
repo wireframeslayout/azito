@@ -1,5 +1,6 @@
 import { LaunchdJobOperations, DEFAULT_LAUNCHD_TIMING, limitToBackgroundSession, type CommandRunner } from '../../../shared/os/launchd';
 import { execPosixRemote } from './posixRemoteCommand';
+import { diagnostics } from './hostOsProbe';
 import { shellQuote } from '../../../shared/shellQuote';
 import type { SshClient } from '../ssh/SshClient';
 
@@ -31,7 +32,7 @@ export class MacAgentLaunchd {
       if (result.code === 0 && result.stdout.includes(`${args[1]} = {`)) return result;
       if (result.code === 113 && /Could not find service/i.test(result.stderr)) return result;
       if ((result.code === 113 || result.code === 125) && /Could not find domain/i.test(result.stderr)) return result;
-      throw new Error(`Could not determine launchd job state for ${args[1]}`);
+      throw new Error(`Could not determine launchd job state for ${args[1]}${diagnostics(result.stderr, result.code)}`);
     };
     return new MacAgentLaunchd(ssh, host, home, plist, new LaunchdJobOperations(run, LABEL, Number(lines[1]), plist, DEFAULT_LAUNCHD_TIMING));
   }

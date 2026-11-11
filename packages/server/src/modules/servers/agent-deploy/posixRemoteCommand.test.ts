@@ -1,4 +1,5 @@
 import { execFile, execFileSync } from 'node:child_process';
+import { randomBytes } from 'node:crypto';
 import { promisify } from 'node:util';
 import { describe, expect, it } from 'vitest';
 import { LocalNetworkPermissionError } from '../localNetworkDiagnosis';
@@ -11,7 +12,7 @@ const ssh = { execIsolated: async (_host: string, command: string) => {
 } };
 
 describe('execPosixRemote', () => {
-  it.each([['printf foo; exit 7', 'foo', 7], ['exit 113', '', 113], ["printf 'hello\\n'", 'hello\n', 0]])('preserves output and exit status: %s', async (script, stdout, code) => {
+  it.each([['printf foo; exit 7', 'foo', 7], ['exit 113', '', 113], ["printf 'first\\nsecond'", 'first\nsecond', 0], ["printf 'hello\\n'", 'hello\n', 0]])('preserves output and exit status: %s', async (script, stdout, code) => {
     await expect(execPosixRemote(ssh as never, 'host', script)).resolves.toMatchObject({ stdout, code });
   });
   it('places both the script and the status capture inside bash', async () => {
@@ -25,6 +26,17 @@ describe('execPosixRemote', () => {
     const failed = (error: Error) => ({ execIsolated: async () => { throw error; } });
     await expect(execPosixRemote(failed(denied) as never, 'host', 'true')).rejects.toBe(denied);
     await expect(execPosixRemote(failed(new Error('connection reset')) as never, 'host', 'true')).rejects.toThrow('connection reset');
+  });
+  it('rejects a nonzero SSH transport status', async () => {
+    await expect(execPosixRemote({ execIsolated: async () => ({ stdout: '', stderr: '', code: 7 }) } as never, 'host', 'true')).rejects.toThrow(/transport failed/);
+  });
+  it('keeps a fake marker line in command output', async () => {
+    await expect(execPosixRemote(ssh as never, 'host', "printf 'AZITO_EXIT_fake:0\\nother'")).resolves.toMatchObject({ stdout: 'AZITO_EXIT_fake:0\nother', code: 0 });
+  });
+  it.skipIf(process.platform === 'win32')('does not match its own shells when searching with a bracketed pattern', async () => {
+    const suffix = randomBytes(16).toString('hex');
+    const result = await execPosixRemote(ssh as never, 'host', `pgrep -f '[a]zito_test_${suffix}' >/dev/null; status=$?; printf '%s' "$status"; true`);
+    expect(result).toMatchObject({ stdout: '1', code: 0 });
   });
   it('rejects missing or malformed markers', async () => {
     const broken = { execIsolated: async () => ({ stdout: 'no marker', stderr: '', code: 0 }) };

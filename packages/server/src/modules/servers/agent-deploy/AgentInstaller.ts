@@ -844,7 +844,7 @@ export class AgentInstaller {
   private async stopAgent(sshHost: string, mac = false): Promise<void> {
     await this.execPosix(
       sshHost,
-      `${mac ? '' : 'systemctl --user disable --now azito-agent 2>/dev/null; '}test -f ~/.azito/agent/agent.pid && kill $(cat ~/.azito/agent/agent.pid) 2>/dev/null; pkill -f azito-agent.cjs 2>/dev/null; sleep 1; true`,
+      `${mac ? '' : 'systemctl --user disable --now azito-agent 2>/dev/null; '}test -f ~/.azito/agent/agent.pid && kill $(cat ~/.azito/agent/agent.pid) 2>/dev/null; pkill -f '[a]zito-agent[.]cjs' 2>/dev/null; sleep 1; true`,
     );
   }
 
