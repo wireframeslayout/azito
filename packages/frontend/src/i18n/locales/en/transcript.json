@@ -115,6 +115,8 @@
     }
   },
   "subagents": {
+    "detailsTitle": "Subagent details",
+    "details": "Details: {{name}}",
     "title": "Subagents",
     "parent": "Parent conversation",
     "loading": "Loading subagents…",

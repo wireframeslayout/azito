@@ -8,9 +8,9 @@ vi.mock('../api/client', () => ({ apiWithStatus: vi.fn() }));
 const mobile = vi.hoisted(() => ({ value: false }));
 vi.mock('./useIsMobile', () => ({ useIsMobile: () => mobile.value }));
 
-function Example({ onChoice }: { onChoice: (value: string | null) => void }) {
+function Example({ onChoice, explicit = false }: { onChoice: (value: string | null) => void; explicit?: boolean }) {
   const wake = useWakeWindow();
-  return <><button onClick={() => void wake.choose(12, 'Example').then(onChoice)}>Wake</button>{wake.dialog}</>;
+  return <><button onClick={() => void wake.choose(12, 'Example', explicit).then(onChoice)}>Wake</button>{wake.dialog}</>;
 }
 
 beforeEach(() => {
@@ -74,6 +74,16 @@ describe('wake selection', () => {
     await waitFor(() => expect(screen.getByText('Open with misao')).toHaveFocus());
     expect(Array.from(sheet.querySelectorAll('button')).map((button) => button.textContent)).toEqual(['Open with misao', 'Open with tmux']);
     fireEvent.keyDown(document, { key: 'Escape' });
+    await waitFor(() => expect(chosen).toHaveBeenCalledWith(null));
+  });
+  it('cancels explicit migration when keeping tmux on mobile', async () => {
+    mobile.value = true;
+    const chosen = vi.fn();
+    render(<HotkeyProvider><Example onChoice={chosen} explicit /></HotkeyProvider>);
+    fireEvent.click(screen.getByText('Wake'));
+    const sheet = await screen.findByRole('dialog', { name: 'Reopen with misao?' });
+    expect(sheet.querySelector('input')).toBeNull();
+    fireEvent.click(await screen.findByText('Open with tmux'));
     await waitFor(() => expect(chosen).toHaveBeenCalledWith(null));
   });
   it('cancels without choosing a mux', async () => {
