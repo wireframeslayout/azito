@@ -8,6 +8,7 @@ import { resolveCurrentHostEnv } from '../../../shared/os/hostEnv';
 import { powershellEncodedArgs } from '../../../shared/os/shellDialect';
 import { assertHubDirOnlyOwnerWritable, findHubVersionsInUse, removeFolderWithRd } from '../windowsHubFolderOps';
 import { pruneHubVersions } from '../windowsHubPrune';
+import { assertRealDirectoryChain, readInstallInventory } from '../windowsInstallInventory';
 import { windowsPowershell } from '../windowsHubService';
 
 /**
@@ -127,6 +128,8 @@ describe.skipIf(process.platform !== 'win32')('tidying the old versions on a rea
     fs.writeFileSync(path.join(mountedOutside, 'sentinel.txt'), 'on the other volume');
     expect(fs.readFileSync(path.join(mountedInside, 'sentinel.txt'), 'utf-8')).toBe('on the other volume');
 
+    expect(() => assertRealDirectoryChain(mountedInside)).toThrow(/mount point|link/);
+    expect(() => readInstallInventory(old)).toThrow(/mount point|link/);
     const report = await prune();
 
     expect(report).toEqual({ removed: ['v0.1.0'], failed: [], skipped: [] });
