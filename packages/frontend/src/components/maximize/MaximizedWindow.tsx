@@ -16,7 +16,7 @@ import { useHotkeyBindings } from '../../hooks/useHotkeys';
 import { formatKeySpec } from '../../lib/hotkeys/keySpec';
 import { useOrchestrationLinks } from '../../hooks/useOrchestrationLinks';
 import { useOrchestrationModel } from '../../hooks/useOrchestrationModel';
-import { buildAttentionContext } from '../../lib/orchestrationModel';
+import { childAttentionIds } from '../../lib/orchestrationModel';
 import { resolveLinkedWindows } from '../../lib/linkedWindowsModel';
 import { useOperationLinks } from '../../hooks/useOperationLinks';
 import { buildOpenTabsTree, buildLinkedTree, visibleMaximizeWindows, focusableMaximizeRow, type MaximizeTreeRow as MaximizeTreeRowModel } from '../../lib/maximizeTreeModel';
@@ -31,7 +31,7 @@ function MaximizedWindowContent() {
   const { selectedWindowId, workspace, extraWindows, rememberWindow, forgetWindow, select, close, isMobile, fallbackFocusTo } = useMaximizedWindow();
   const { allTasks, allProjects, refresh } = useWorkspaceCatalog();
   const { onOpenTask, onOpenInTerminal } = useWorkspaceTargets();
-  const { windowIndicator, entries } = useAgentActivity();
+  const { windowIndicator, entries, finishedEntries, snapshotStatus } = useAgentActivity();
   const { tree: orchestrators } = useOrchestrationModel();
   const [expanded, setExpanded] = useState<Set<string>>(new Set());
   const [focused, setFocused] = useState<string | null>(null);
@@ -59,7 +59,7 @@ function MaximizedWindowContent() {
   useEffect(() => { if (!open) setLinkedSource(null); else if (window?.role === 'orchestrator') setLinkedSource(window); }, [open, window]);
   const orchestration = useOrchestrationLinks(open && source ? source.id : null);
   const findNode = (nodes: typeof orchestrators): (typeof orchestrators)[number] | undefined => { for (const node of nodes) { if (node.window.id === source?.id) return node; const found = findNode(node.children); if (found) return found; } };
-  const linkedItems = resolveLinkedWindows(orchestration.links, [...(workspace?.windows.values() ?? []), ...extraWindows.values()], allTasks, allProjects, buildAttentionContext(entries, allTasks));
+  const linkedItems = resolveLinkedWindows(orchestration.links, [...(workspace?.windows.values() ?? []), ...extraWindows.values()], allTasks, allProjects, entries, finishedEntries, snapshotStatus === 'ready', childAttentionIds(findNode(orchestrators)?.children ?? []));
   const selectedResolved = orchestration.links.find(link => link.resolvedWindowId === selectedWindowId)?.resolvedWindow;
   const selectedLinked = selectedResolved && { ...selectedResolved, projectId: selectedResolved.projectId ?? undefined, taskId: selectedResolved.taskId ?? undefined, label: selectedResolved.label ?? undefined };
   useEffect(() => {

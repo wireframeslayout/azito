@@ -39,7 +39,7 @@ describe('orchestration model', () => {
     expect(orchestratorStatus(window(1, null), entries)).toBe('active');
     expect(orchestratorStatus(window(2, null), entries)).toBe('idle');
   });
-  it.each(['waiting_input', 'waiting_for_human', 'phase_review', 'pending_approval', 'failed'])('detects task status %s', (status) => {
+  it.each(['waiting_input', 'phase_review', 'pending_approval', 'failed'])('detects task status %s', (status) => {
     expect(isAttentionTarget({ windowId: null, taskId: 10 }, ctx([], [{ id: 10, status }]))).toBe(true);
   });
   it('detects blocked activity and excludes operations', () => {

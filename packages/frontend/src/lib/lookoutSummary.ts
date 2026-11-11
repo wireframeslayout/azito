@@ -1,5 +1,6 @@
 import type { ActiveWindowRow } from '../hooks/useActiveWindowRows';
 import type { Task } from '../pages/workspace/types';
+import { isAttentionTask } from './orchestrationModel';
 import { groupRunningRows } from './activityPillLogic';
 
 export type LookoutStatus = 'blocked' | 'waiting_input' | 'pending_approval' | 'phase_review' | 'failed' | 'working' | 'finished';
@@ -31,14 +32,11 @@ export interface LookoutInput {
   scope?: { windowIds: ReadonlySet<number> };
 }
 
-const ATTENTION_STATUSES = new Set(['waiting_input', 'pending_approval', 'phase_review', 'failed']);
-
 function makeItem(key: string, task: Task | undefined, rows: ActiveWindowRow[]): LookoutItem {
   const blockedRow = rows.find((row) => row.activityStatus === 'blocked');
   const primaryRow = blockedRow ?? rows[0];
   const hasBlocked = blockedRow != null;
-  const status: LookoutStatus = hasBlocked ? 'blocked'
-    : task && ATTENTION_STATUSES.has(task.status) ? task.status as LookoutStatus : 'working';
+  const status: LookoutStatus = hasBlocked ? 'blocked' : isAttentionTask(task) && task ? task.status as LookoutStatus : 'working';
   return {
     key, title: task?.title ?? primaryRow!.title, status, task, primaryRow,
     projectId: task?.projectId ?? primaryRow?.projectId,
@@ -67,7 +65,7 @@ export function buildLookoutSections({ rows, allTasks, lastSeenMs, scope }: Look
     groups.set(group.groupKey, { task: taskId != null ? taskById.get(taskId) : undefined, rows: group.rows });
   }
   for (const task of scopedTasks) {
-    if (!ATTENTION_STATUSES.has(task.status)) continue;
+    if (!isAttentionTask(task)) continue;
     const key = `task:${task.id}`;
     if (!groups.has(key)) groups.set(key, { task, rows: [] });
   }
