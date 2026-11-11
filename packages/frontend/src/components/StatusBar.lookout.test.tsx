@@ -3,8 +3,8 @@ import { fireEvent, render, screen } from '@testing-library/react';
 import { expect, it, vi } from 'vitest';
 import { StatusBar } from './StatusBar';
 import { HotkeyProvider } from '../hooks/useHotkeys';
-const mocks = vi.hoisted(() => ({ open: vi.fn(), close: vi.fn(), openTask: vi.fn(), attention: 2 }));
-vi.mock('../hooks/useServerStatuses', () => ({ useServerStatuses: () => ({ servers: [], serversLoaded: true }) }));
+const mocks = vi.hoisted(() => ({ open: vi.fn(), close: vi.fn(), openTask: vi.fn(), attention: 2, serverLoaded: true }));
+vi.mock('../hooks/useServerStatuses', () => ({ useServerStatuses: () => ({ servers: [{ name: 'local', defaultMux: 'misao' }], serversLoaded: mocks.serverLoaded }) }));
 vi.mock('../hooks/useIsMobile', () => ({ useIsMobile: () => false }));
 vi.mock('../hooks/useAgentActivity', () => ({ useAgentActivity: () => ({ snapshotStatus: 'ready', retrySnapshot: vi.fn() }) }));
 vi.mock('../hooks/useCrossProjectNavigation', () => ({ useCrossProjectNavigation: () => ({ openTask: mocks.openTask, openTerminal: vi.fn() }) }));
@@ -39,4 +39,9 @@ it('uses monospace only for the requested status labels', () => {
   expect(screen.getByRole('button', { name: '稼働検知' }).style.fontFamily).toBe('');
   rerender(<StatusBarItem label="Hub" mono active={false} onClick={() => {}} />);
   expect(screen.getByRole('button', { name: 'Hub' }).style.fontFamily).toBe('var(--font-mono)');
+});
+
+it('shows a known default mux for the displayed server', () => {
+  render(<HotkeyProvider><StatusBar servers={[{ serverName: 'local', type: 'local', measurement: null, unavailable: false } as never]} /></HotkeyProvider>);
+  expect(screen.getByText(/misao/)).toBeInTheDocument();
 });
