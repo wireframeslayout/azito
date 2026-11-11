@@ -48,6 +48,8 @@ export default function SubagentChat({ windowId, sessionId, onParentChanged, ...
   const [list, setList] = useState<ListState>({ kind: 'loading' });
   const [selected, setSelected] = useState<string | null>(null);
   const [detailsId, setDetailsId] = useState<string | null>(null);
+  const stripRef = useRef<HTMLDivElement>(null);
+  const [hasMore, setHasMore] = useState(false);
   const agentElements = useRef(new Map<string, HTMLDivElement>());
   const details = list.kind === 'ready' ? list.agents.find(agent => agent.id === detailsId) : undefined;
   const sequence = useRef(0);
@@ -92,6 +94,17 @@ export default function SubagentChat({ windowId, sessionId, onParentChanged, ...
     if (selected && list.kind === 'ready') agentElements.current.get(selected)?.scrollIntoView({ block: 'nearest', inline: 'nearest' });
   }, [selected, list.kind]);
   useEffect(() => {
+    const strip = stripRef.current;
+    if (!strip) return;
+    const update = () => setHasMore(strip.scrollLeft + strip.clientWidth < strip.scrollWidth - 1);
+    const observer = new ResizeObserver(update);
+    observer.observe(strip);
+    Array.from(strip.children).forEach(child => observer.observe(child));
+    strip.addEventListener('scroll', update);
+    update();
+    return () => { observer.disconnect(); strip.removeEventListener('scroll', update); };
+  }, [list]);
+  useEffect(() => {
     if (detailsId && !details) setDetailsId(null);
   }, [detailsId, details]);
   useNotificationChannel({
@@ -101,7 +114,7 @@ export default function SubagentChat({ windowId, sessionId, onParentChanged, ...
   return (
     <div style={{ display: 'flex', flexDirection: 'column', height: '100%', minHeight: 0, minWidth: 0 }}>
       <section aria-label={t('subagents.title')} style={{ padding: 'var(--space-2) var(--space-3)', borderBottom: '1px solid var(--border)', minWidth: 0 }}>
-        <div style={{ display: 'flex', alignItems: 'center', gap: 'var(--space-2)', overflowX: 'auto', minWidth: 0, padding: 'var(--space-1)' }}>
+        <div style={{ display: 'flex', alignItems: 'center', minWidth: 0 }}><div ref={stripRef} style={{ display: 'flex', alignItems: 'center', gap: 'var(--space-2)', overflowX: 'auto', minWidth: 0, flex: 1, padding: 'var(--space-1)' }}>
           <strong style={{ fontSize: 'var(--font-sm)', flexShrink: 0 }}>{t('subagents.title')}</strong>
           <Button style={{ minHeight: 'calc(var(--space-6) + var(--space-5))', flexShrink: 0 }} size="sm" variant={selected === null ? 'primary' : 'default'} aria-pressed={selected === null} onClick={() => select(null)}>{t('subagents.parent')}</Button>
           {list.kind === 'ready' && list.agents.map((agent) => (
@@ -113,6 +126,7 @@ export default function SubagentChat({ windowId, sessionId, onParentChanged, ...
             </div>
           ))}
         </div>
+        {hasMore && <span aria-hidden="true" style={{ color: 'var(--text)', flexShrink: 0 }}><Icon name="chevron-right" size={14} /></span>}</div>
         <div aria-live="polite" style={{ color: 'var(--text-dim)', fontSize: 'var(--font-xs)', marginTop: 'var(--space-1)' }}>
           {list.kind === 'loading' ? t('subagents.loading') : list.kind === 'ready' && list.agents.length === 0 ? t('subagents.empty') : null}
           {list.kind === 'error' ? <>{list.reason ? t(`windowChat.notFound.${list.reason}`) : t('subagents.error')} <Button style={{ minHeight: 'calc(var(--space-6) + var(--space-5))' }} size="sm" onClick={refresh}>{t('windowChat.retry')}</Button></> : null}

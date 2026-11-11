@@ -13,6 +13,8 @@ import { useOptionalMaximizedWindow } from '../../hooks/useMaximizedWindow';
 import { useWorkspaceTargets } from '../../hooks/useWorkspaceTargets';
 import { BottomSheet } from '../ui/BottomSheet';
 import { LinkedPanel } from './LinkedPanel';
+import { useWindowViewMode } from '../../hooks/useWindowViewMode';
+import type { WindowViewMode } from '../../lib/windowViewMode';
 import { useIsMobile } from '../../hooks/useIsMobile';
 import { useRightPanelState } from '../../hooks/useRightPanelState';
 import { useToast } from '../../hooks/useToast';
@@ -20,13 +22,24 @@ import { paths } from '../../paths';
 import { TerminalContainer } from '../TerminalContainer';
 import { RightPanel } from '../workspace/RightPanel';
 import { RightPanelToggle } from '../workspace/RightPanelToggle';
-import { GlassPopover, LoadingState, EmptyState, Notice, Button, IconButton } from '../ui';
+import { GlassPopover, LoadingState, EmptyState, Notice, Button, IconButton, TabBar, SegmentedToggle } from '../ui';
 import { Icon } from '../ui/Icon';
 import { BrailleSpinner } from '../ui/WindowActivityIndicator';
 import { OrchestrationCreate } from './OrchestrationCreate';
 import { OrchestrationSidebar } from './OrchestrationSidebar';
 
 export interface OrchestrationPageProps { rightPanel?: ReactNode }
+
+function OrchestrationWindow({ window, isMobile, showTab = false }: { window: Window; isMobile: boolean; showTab?: boolean }) {
+  const { t } = useTranslation('workspace');
+  const [viewMode, setViewMode] = useWindowViewMode(window.id, false, window.windowType === 'agent');
+  const changeMode = (mode: WindowViewMode) => setViewMode(mode, window.id);
+  const title = formatWindowTitleLine(resolveWindowTitle({ ...windowTitleInput(window), tmuxTarget: window.tmuxTarget }));
+  return <div style={{ display: 'flex', flexDirection: 'column', flex: 1, minHeight: 0, minWidth: 0 }}>
+    {showTab && <TabBar tabs={[{ id: String(window.id), label: title, closable: false }]} activeId={String(window.id)} onSelect={() => {}} trailing={!isMobile ? <SegmentedToggle<WindowViewMode> ariaLabel={t('terminal.viewMode.ariaLabel')} value={viewMode} onChange={changeMode} options={[{ value: 'terminal', label: t('terminal.viewMode.terminal'), icon: 'terminal' }, { value: 'chat', label: t('terminal.viewMode.chat'), icon: 'transcript' }]} /> : undefined} />}
+    <TerminalContainer viewMode={viewMode} onViewModeChange={changeMode} serverName={window.serverName} target={window.tmuxTarget} terminalRef={{ kind: 'windowId', serverName: window.serverName, windowId: window.id, pane: 1 }} registeredWindow={{ id: window.id }} />
+  </div>;
+}
 
 export default function OrchestrationPage({ rightPanel }: OrchestrationPageProps): ReactNode {
   const { t } = useTranslation('workspace');
@@ -86,10 +99,10 @@ export default function OrchestrationPage({ rightPanel }: OrchestrationPageProps
     <main style={{ flex: 1, minWidth: 0, display: 'flex', flexDirection: 'column' }}>
       {status === 'error' && <Notice tone="danger" action={<Button onClick={refresh}>{t('orchestration.retry')}</Button>}>{t('orchestration.loadError')}</Notice>}
       {selected && <nav aria-label={t('orchestration.title')}>{ancestors.slice().reverse().map(ancestorId => { const ancestor = windows.find(window => window.id === ancestorId); return ancestor && <Button key={ancestorId} size="sm" onClick={() => navigate(paths.orchestration(ancestorId))}>{titleOf(ancestor)}</Button>; })}</nav>}
-      {selected ? <TerminalContainer key={selected.id} serverName={selected.serverName} target={selected.tmuxTarget} terminalRef={{ kind: 'windowId', serverName: selected.serverName, windowId: selected.id, pane: 1 }} registeredWindow={{ id: selected.id }} /> : windows.length === 0 ? <EmptyState title={t('orchestration.empty')} action={<OrchestrationCreate showButton />} /> : <EmptyState title={t('orchestration.selectWindow')} />}
+      {selected ? <OrchestrationWindow key={selected.id} window={selected} isMobile={isMobile} showTab /> : windows.length === 0 ? <EmptyState title={t('orchestration.empty')} action={<OrchestrationCreate showButton />} /> : <EmptyState title={t('orchestration.selectWindow')} />}
       {!isMobile && !open && <RightPanelToggle open={false} onToggle={() => setOpen(true)} controls="orchestration-right-panel" buttonRef={toggleRef} />}
     </main>
     {!isMobile && <RightPanel id="orchestration-right-panel" title={selected ? t('orchestration.connected', { count: selected.links.total }) : t('orchestration.connectedUnknown')} open={open} onOpenChange={setOpen} toggleRef={toggleRef}>{rightPanel ?? panel}</RightPanel>}
-    {isMobile && <BottomSheet open={sheetOpen} onClose={() => { setSheetOpen(false); setSheetWindow(null); }} title={t('linkedPanel.title')} detents={[{ label: t('orchestration.expand'), height: '50dvh' }, { label: t('orchestration.collapse'), height: '95dvh' }]}><div hidden={!!sheetWindow}>{panel}</div>{sheetWindow && <div style={{ height: '85%', display: 'flex', flexDirection: 'column' }} onTouchStart={event => { touchStart.current = event.touches[0]?.clientX ?? null; }} onTouchEnd={event => { if (touchStart.current !== null) { const delta = event.changedTouches[0].clientX - touchStart.current; if (Math.abs(delta) > 80) stepWindow(delta < 0 ? 1 : -1); touchStart.current = null; } }}><div style={{ display: 'flex', gap: 'var(--space-2)' }}><Button onClick={() => setSheetWindow(null)}>{t('linkedPanel.back')}</Button><Button disabled={windowIndex <= 0} onClick={() => stepWindow(-1)}>{t('linkedPanel.previous')}</Button><span>{windowIndex + 1} / {fixedOrder.length}</span><Button disabled={windowIndex >= fixedOrder.length - 1} onClick={() => stepWindow(1)}>{t('linkedPanel.next')}</Button></div><TerminalContainer key={sheetWindow.id} serverName={sheetWindow.serverName} target={sheetWindow.tmuxTarget} terminalRef={{ kind: 'windowId', serverName: sheetWindow.serverName, windowId: sheetWindow.id, pane: 1 }} registeredWindow={{ id: sheetWindow.id }} /></div>}</BottomSheet>}
+    {isMobile && <BottomSheet open={sheetOpen} onClose={() => { setSheetOpen(false); setSheetWindow(null); }} title={t('linkedPanel.title')} detents={[{ label: t('orchestration.expand'), height: '50dvh' }, { label: t('orchestration.collapse'), height: '95dvh' }]}><div hidden={!!sheetWindow}>{panel}</div>{sheetWindow && <div style={{ height: '85%', display: 'flex', flexDirection: 'column' }} onTouchStart={event => { touchStart.current = event.touches[0]?.clientX ?? null; }} onTouchEnd={event => { if (touchStart.current !== null) { const delta = event.changedTouches[0].clientX - touchStart.current; if (Math.abs(delta) > 80) stepWindow(delta < 0 ? 1 : -1); touchStart.current = null; } }}><div style={{ display: 'flex', gap: 'var(--space-2)' }}><Button onClick={() => setSheetWindow(null)}>{t('linkedPanel.back')}</Button><Button disabled={windowIndex <= 0} onClick={() => stepWindow(-1)}>{t('linkedPanel.previous')}</Button><span>{windowIndex + 1} / {fixedOrder.length}</span><Button disabled={windowIndex >= fixedOrder.length - 1} onClick={() => stepWindow(1)}>{t('linkedPanel.next')}</Button></div><OrchestrationWindow key={sheetWindow.id} window={sheetWindow} isMobile /></div>}</BottomSheet>}
   </div>;
 }

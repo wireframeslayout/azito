@@ -1,6 +1,8 @@
 import { render, screen } from '@testing-library/react';
 import { describe, expect, it, vi } from 'vitest';
 import ConversationView from './ConversationView';
+import { DateDivider } from './DateDivider';
+import { GroupHeading } from './styles/GroupHeading';
 
 vi.mock('../../api/client', () => ({ apiWithStatus: () => new Promise(() => {}) }));
 vi.mock('react-i18next', async (original) => ({ ...(await original<typeof import('react-i18next')>()), useTranslation: () => ({ t: (key: string) => key, i18n: { language: 'en' } }) }));
@@ -23,4 +25,14 @@ describe('child conversation input', () => {
     render(<ConversationView windowId={1} sessionId="parent" agentType="claude" paneId="%1" agentDetected subagentId="child" subagentRelay={{ kind: 'unavailable', reason: 'unnamed' }} />);
     expect(screen.getByTestId('input')).toHaveTextContent('subagents.relayUnavailable.unnamed');
   });
+});
+
+it('keeps dates in flow and omits unavailable heading metadata', () => {
+  const view = render(<><DateDivider label="Yesterday" /><GroupHeading isUser={false} agentLabel="CLAUDE" timeLabel="" /></>);
+  expect(screen.getByText('Yesterday').parentElement).not.toHaveStyle({ position: 'sticky' });
+  expect(screen.getByText('CLAUDE')).toBeInTheDocument();
+  expect(view.container.textContent).toBe('YesterdayCLAUDE');
+  view.rerender(<GroupHeading isUser={false} agentLabel="CLAUDE" model="model-name" timeLabel="12:34" />);
+  expect(screen.getByText('· model-name')).toBeInTheDocument();
+  expect(screen.getByText('12:34')).toBeInTheDocument();
 });
