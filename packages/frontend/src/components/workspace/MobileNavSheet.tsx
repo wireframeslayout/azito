@@ -134,7 +134,7 @@ export function MobileNavSheet({
             aria-modal="true"
             aria-label={t('workspace:mobile.navMenu')}
             style={{
-              position: 'fixed', top: 0, right: 0, bottom: 0, left: 0,
+              position: 'fixed', top: 0, right: 0, bottom: 'calc(var(--status-bar-height) + env(safe-area-inset-bottom))', left: 0,
               display: 'flex', flexDirection: 'column', overflow: 'hidden',
               background: 'var(--bg-solid)', zIndex: 50,
               boxShadow: 'var(--shadow-3)',
