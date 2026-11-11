@@ -59,6 +59,7 @@ function DefaultFileTree({
 }: DefaultFileTreeProps) {
   const renderNode = (node: TreeNode, depth: number): React.ReactElement => {
     const isDir = node.type === 'directory';
+    const isImage = /\.(png|jpe?g|gif|webp|svg)$/i.test(node.name);
     const isSelected = node.path === selectedPath;
     const isRenaming = pendingRename?.path === node.path;
 
@@ -107,7 +108,7 @@ function DefaultFileTree({
             {isDir ? <Icon name="chevron-right" size={14} rotate={node.expanded ? 90 : 0} /> : null}
           </span>
           <span style={{ width: 18, display: 'inline-flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}>
-            <Icon name={isDir ? (node.expanded ? 'folder-open' : 'files') : /\.(png|jpe?g|gif|webp|svg)$/i.test(node.name) ? 'image' : /\.(tsx?|jsx?|json|css|html|py|rs|sh)$/i.test(node.name) ? 'file-code' : 'file'} size={14} style={{ color: isDir ? 'var(--accent)' : /\.(png|jpe?g|gif|webp|svg)$/i.test(node.name) ? 'var(--purple)' : 'var(--text-dim)' }} />
+            <Icon name={isDir ? (node.expanded ? 'folder-open' : 'files') : isImage ? 'image' : /\.(tsx?|jsx?|json|css|html|py|rs|sh)$/i.test(node.name) ? 'file-code' : 'file'} size={14} style={{ color: isDir ? 'var(--accent)' : isImage ? 'var(--purple)' : 'var(--text-dim)' }} />
           </span>
           <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', fontFamily: 'var(--font-mono)' }}>{node.name}</span>
           {!isDir && node.size != null && (

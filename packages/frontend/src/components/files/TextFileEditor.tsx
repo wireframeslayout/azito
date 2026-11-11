@@ -63,9 +63,10 @@ export function TextFileEditor({ backend, path, name, initialLine, headerActions
       <div style={{ padding: 'var(--space-2) var(--space-4)', borderBottom: '1px solid var(--border)', background: 'var(--bg-card)', display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: 'var(--space-3)', flexShrink: 0, minHeight: 40 }}>
         <Icon name="file" size={14} />
         <span style={{ flex: 1, minWidth: 0, fontSize: 'var(--font-md)', fontWeight: 500, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={name}>
-          {name}{doc.dirty && <span style={{ color: 'var(--accent)' }}> • {t('editor.unsaved')}</span>}
+          {name}
         </span>
         {markdown && <SegmentedToggle options={options} value={currentMode} onChange={selectMode} ariaLabel={t('editor.viewMode')} />}
+        {doc.dirty && <span style={{ color: 'var(--warning)', fontSize: 'var(--font-sm)' }}>● {t('editor.unsaved')}</span>}
         <Button size="sm" variant={canSave ? 'primary' : 'default'} disabled={!canSave} onClick={save} title={`${t('editor.save')} (Ctrl+S)`}>{doc.saving ? t('editor.saving') : t('editor.save')} <kbd aria-hidden="true">Ctrl+S</kbd></Button>
         {headerActions}
       </div>
