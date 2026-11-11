@@ -7,6 +7,8 @@ import { MaximizedWindow } from './MaximizedWindow';
 import { TabBar } from '../ui/TabBar';
 import type { Window } from '../../pages/workspace/types';
 
+const activity = vi.hoisted(() => ({ status: 'ready' as 'ready' | 'loading' | 'error', updatedAt: 1 as number | null, values: new Map<string, 'working' | 'blocked'>() }));
+vi.mock('../../hooks/useAgentActivity', () => ({ useAgentActivity: () => ({ entries: new Map(), snapshotStatus: activity.status, snapshotUpdatedAt: activity.updatedAt, activityStatus: (server: string, target: string) => activity.values.get(`${server}:${target.replace(/\.\d+$/, '')}`) ?? null }) }));
 const orchestrationState = vi.hoisted(() => ({ tree: [] as unknown[], read: vi.fn() }));
 vi.mock('../../hooks/useOrchestrationModel', () => ({ useOrchestrationModel: () => { orchestrationState.read(); return { tree: orchestrationState.tree }; } }));
 const linkedState = vi.hoisted(() => ({ links: [] as unknown[], error: null as Error | null, refresh: vi.fn() }));
@@ -32,6 +34,28 @@ function Workspace() {
   return <><TabBar tabs={[{ id: 'tab-one', label: 'Tab one' }]} activeId="tab-one" onSelect={() => {}} onTabContextMenu={() => setMenu(true)} />{menu && <button onClick={() => { setMenu(false); open(1); }}>Expand from menu</button>}<button onClick={() => open(1)}>Launch</button><button onClick={() => open(99)}>Missing</button><button onClick={() => setShowSecond(value => !value)}>Change tabs</button><input aria-label="outside input" /></>;
 }
 describe('maximized window', () => {
+  it('shows the selected window activity and distinguishes unavailable snapshots from idle', async () => {
+    activity.status = 'loading'; activity.updatedAt = null; activity.values.clear();
+    const view = render(<HotkeyProvider><MaximizedWindowProvider><Workspace /><MaximizedWindow /></MaximizedWindowProvider></HotkeyProvider>);
+    fireEvent.click(screen.getByText('Launch'));
+    const header = (await screen.findByRole('dialog')).querySelector('header')!;
+    expect(header).toHaveTextContent('Status unavailable');
+    activity.status = 'ready'; activity.updatedAt = 1;
+    view.rerender(<HotkeyProvider><MaximizedWindowProvider><Workspace /><MaximizedWindow /></MaximizedWindowProvider></HotkeyProvider>);
+    expect(header).toHaveTextContent('Idle');
+    activity.status = 'loading';
+    view.rerender(<HotkeyProvider><MaximizedWindowProvider><Workspace /><MaximizedWindow /></MaximizedWindowProvider></HotkeyProvider>);
+    expect(header).toHaveTextContent('Idle');
+    activity.status = 'ready'; activity.values.set('host:one', 'working'); activity.values.set('host:two', 'blocked');
+    view.rerender(<HotkeyProvider><MaximizedWindowProvider><Workspace /><MaximizedWindow /></MaximizedWindowProvider></HotkeyProvider>);
+    expect(header).toHaveTextContent('Working');
+    fireEvent.click(screen.getByRole('treeitem', { name: /Two/ }));
+    expect(header).toHaveTextContent('Needs attention');
+    activity.status = 'error';
+    view.rerender(<HotkeyProvider><MaximizedWindowProvider><Workspace /><MaximizedWindow /></MaximizedWindowProvider></HotkeyProvider>);
+    expect(header).toHaveTextContent('Status unavailable');
+    activity.status = 'ready'; activity.values.clear();
+  });
   it('switches connections and returns focus to its opener', async () => {
     mounts.connect.mockClear(); mounts.disconnect.mockClear();
     render(<HotkeyProvider><MaximizedWindowProvider><Workspace /><MaximizedWindow /></MaximizedWindowProvider></HotkeyProvider>);

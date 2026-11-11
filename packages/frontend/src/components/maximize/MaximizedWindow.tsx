@@ -31,7 +31,7 @@ function MaximizedWindowContent() {
   const { selectedWindowId, workspace, extraWindows, rememberWindow, forgetWindow, select, close, isMobile } = useMaximizedWindow();
   const { allTasks, allProjects, refresh } = useWorkspaceCatalog();
   const { onOpenTask, onOpenInTerminal } = useWorkspaceTargets();
-  const { windowIndicator, entries } = useAgentActivity();
+  const { activityStatus, snapshotStatus, snapshotUpdatedAt, entries } = useAgentActivity();
   const { tree: orchestrators } = useOrchestrationModel();
   const [expanded, setExpanded] = useState<Set<string>>(new Set());
   const [focused, setFocused] = useState<string | null>(null);
@@ -74,7 +74,9 @@ function MaximizedWindowContent() {
   const visible = visibleMaximizeWindows([...rows, ...linkedRows], expanded);
   const task = window ? allTasks.find(item => item.windows?.some(w => w.id === window.id)) : undefined;
   const project = window ? allProjects.find(item => item.id === (task?.projectId ?? window.projectId)) : undefined;
-  const status = window ? windowIndicator(window.serverName, window.tmuxTarget) : null;
+  const status = snapshotStatus === 'error' || (snapshotStatus === 'loading' && snapshotUpdatedAt === null)
+    ? 'unknown'
+    : window ? activityStatus(window.serverName, window.tmuxTarget) ?? 'idle' : 'unknown';
   const [viewMode, setViewMode] = useWindowViewMode(selectedWindowId, false, window?.windowType === 'agent');
   const knownKeys = useRef(new Set<string>());
   const treeSelection = useRef<number | null>(null);
