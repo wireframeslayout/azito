@@ -1,4 +1,4 @@
-import { useTranslation } from 'react-i18next';
+import { Trans, useTranslation } from 'react-i18next';
 import { Button, Chip, Notice, Spinner } from '../../ui';
 import type { ChipTone } from '../../ui';
 import { useConfirm } from '../../../hooks/useConfirm';
@@ -102,8 +102,8 @@ export function MisaoServicePanel({ onChanged }: MisaoServicePanelProps) {
           : chipState
           ? <Chip tone={STATE_CHIP[chipState].tone}>{t(`misaoService.${STATE_CHIP[chipState].key}`)}</Chip>
           : <Chip tone="orange">{t('misaoService.stateNotInstalled')}</Chip>}
-        {versions.bundled && <span style={{ ...mutedStyle, fontFamily: 'var(--font-mono)' }}>{t('misaoService.bundledVersion', { version: versions.bundled })}</span>}
-        {versions.running && <span style={{ ...mutedStyle, fontFamily: 'var(--font-mono)' }}>{t('misaoService.runningVersion', { version: versions.running })}</span>}
+        {versions.bundled && <span style={mutedStyle}><Trans ns="servers" i18nKey="misaoService.bundledVersion" values={{ version: versions.bundled }} components={{ v: <span style={{ fontFamily: 'var(--font-mono)' }} /> }} /></span>}
+        {versions.running && <span style={mutedStyle}><Trans ns="servers" i18nKey="misaoService.runningVersion" values={{ version: versions.running }} components={{ v: <span style={{ fontFamily: 'var(--font-mono)' }} /> }} /></span>}
       </div>
 
       {(mode === 'other_task' || mode === 'unknown_task') && <Notice tone="warning">{t(`misaoService.${mode === 'other_task' ? (otherTaskRunning ? 'otherTaskRunning' : 'otherTaskDetail') : 'unknownTaskDetail'}`)}</Notice>}
