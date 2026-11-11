@@ -51,5 +51,8 @@
     "mux": "{{name}} on {{serverName}} reopened with tmux. Use its menu to switch to misao.",
     "muxUnavailable": "misao is unavailable on {{serverName}}; {{name}} reopened with tmux.",
     "firewall": "Firewall: {{name}}"
-  }
+  },
+  "currentSituation": "Current situation",
+  "refresh": "Refresh",
+  "notUpdated": "Not yet updated"
 }

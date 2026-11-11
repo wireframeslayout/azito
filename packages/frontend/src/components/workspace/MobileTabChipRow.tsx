@@ -7,6 +7,7 @@ import type { TabItem } from '../ui';
 interface MobileTabChipRowProps {
   linked?: { count: number; onOpen: () => void };
   activeTab: TabItem | null;
+  selectedLabel?: string;
   activeTabId: string | null;
   activeTabPinned: boolean;
   tabCount: number;
@@ -25,6 +26,7 @@ interface MobileTabChipRowProps {
 export function MobileTabChipRow({
   linked,
   activeTab,
+  selectedLabel,
   activeTabId,
   activeTabPinned,
   tabCount,
@@ -96,11 +98,13 @@ export function MobileTabChipRow({
           cursor: 'pointer',
           color: 'var(--text)',
           textAlign: 'left',
-          ...(activeTab ? longPressStyle : {}),
+          ...(activeTab && !selectedLabel ? longPressStyle : {}),
         }}
-        {...(activeTab ? bindLongPress(handleLongPress) : {})}
+        {...(activeTab && !selectedLabel ? bindLongPress(handleLongPress) : {})}
       >
-        {activeTab ? (
+        {selectedLabel ? (
+          <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', fontSize: 'var(--font-sm)' }}>{selectedLabel}</span>
+        ) : activeTab ? (
           <>
             <span
               aria-hidden="true"
@@ -124,7 +128,7 @@ export function MobileTabChipRow({
             {activeTab.extra}
           </>
         ) : (
-          <span style={{ fontSize: 'var(--font-sm)', color: 'var(--text-dim)' }}>{t('mobile.noTabSelected')}</span>
+          <span style={{ fontSize: 'var(--font-sm)', color: 'var(--text-dim)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{t('mobile.noTabSelected')}</span>
         )}
       </button>
 

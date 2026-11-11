@@ -3,6 +3,7 @@ import { createContext, useContext, useEffect, useRef, useState, type ReactNode 
 import { useNavigate } from 'react-router-dom';
 import { useTranslation } from 'react-i18next';
 import { useHotkey } from '../../hooks/useHotkeys';
+import { useOrchestrators } from '../../hooks/useOrchestrators';
 import { useWorkspaceCatalog } from '../../hooks/useWorkspaceCatalog';
 import { useCrossProjectNavigation } from '../../hooks/useCrossProjectNavigation';
 import { useRecentTasks } from '../../hooks/useRecentTasks';
@@ -35,7 +36,7 @@ export function useOpenGlobalSearch(): (fallbackFocusTo?: HTMLElement | null) =>
 }
 
 type Category = 'all' | SearchKind;
-const defaultCategories: Category[] = ['all', 'window', 'task', 'project'];
+const defaultCategories: Category[] = ['all', 'window', 'orchestrator', 'task', 'project'];
 
 export function GlobalSearchProvider({ children }: { children: ReactNode }) {
   const [open, setOpen] = useState(false);
@@ -58,6 +59,7 @@ function resolveWindowStatus(item: SearchItem, unreachable: readonly string[], s
 function GlobalSearchPalette({ onClose, fallbackFocusTo }: { onClose: () => void; fallbackFocusTo: HTMLElement | null }) {
   const { t } = useTranslation('navigation');
   const { allProjects, allTasks, loading, error, refresh } = useWorkspaceCatalog();
+  const orchestrators = useOrchestrators();
   const { openTask, openTerminal } = useCrossProjectNavigation();
   const { openedAt } = useRecentTasks();
   const rail = useProjectRail();
@@ -79,7 +81,7 @@ function GlobalSearchPalette({ onClose, fallbackFocusTo }: { onClose: () => void
   const [query, setQuery] = useState('');
   const [category, setCategory] = useState<Category>('all');
   const [selected, setSelected] = useState(0);
-  const windows = [...allProjects.flatMap(project => project.windows ?? []), ...allTasks.flatMap(task => task.windows ?? [])];
+  const windows = [...allProjects.flatMap(project => project.windows ?? []), ...allTasks.flatMap(task => task.windows ?? []), ...orchestrators.windows];
   const { sessions, failed, unreachable, retry } = useSearchServerStatus(windows);
   const runningRows = rows.filter(row => row.status === 'running');
   const activeTargets = new Set(runningRows.map(row => windowKey(row.serverName, row.target)));
@@ -87,8 +89,8 @@ function GlobalSearchPalette({ onClose, fallbackFocusTo }: { onClose: () => void
   for (const window of windows) {
     if (activeTargets.has(windowKey(window.serverName, window.tmuxTarget))) activeIds.add(window.id);
   }
-  const index = buildSearchIndex(allProjects, allTasks, openedAt, activeIds, sessions);
-  const categories: Category[] = index.some(item => item.kind === 'orchestrator') ? ['all', 'window', 'orchestrator', 'task', 'project'] : defaultCategories;
+  const index = buildSearchIndex(allProjects, allTasks, openedAt, activeIds, sessions, orchestrators.windows);
+  const categories = defaultCategories;
   const activeCategory = categories.includes(category) ? category : 'all';
   const matches = query.trim() ? searchIndex(index, query) : recentItems(index, rail.recentIds);
   const groups = categories.slice(1).map(kind => ({ kind: kind as SearchKind, items: matches.filter(item => item.kind === kind) }));
@@ -98,7 +100,8 @@ function GlobalSearchPalette({ onClose, fallbackFocusTo }: { onClose: () => void
   const currentId = shown[current] ? `search-${shown[current].kind}-${shown[current].id}` : undefined;
   useEffect(() => { if (currentId) document.getElementById(currentId)?.scrollIntoView?.({ block: 'nearest' }); }, [currentId]);
   const choose = (item: SearchItem) => {
-    if (item.kind === 'task') openTask(item.id);
+    if (item.kind === 'orchestrator') navigate(paths.orchestration(item.id));
+    else if (item.kind === 'task') openTask(item.id);
     else if (item.window) openTerminal({ serverName: item.window.serverName, target: item.window.tmuxTarget, windowId: item.id }, item.projectId);
     else { rail.touch(item.id); navigate(paths.workspace(item.id)); }
     onClose();
@@ -112,13 +115,16 @@ function GlobalSearchPalette({ onClose, fallbackFocusTo }: { onClose: () => void
       if (event.key === 'ArrowDown' || event.key === 'ArrowUp') { event.preventDefault(); setSelected(shown.length ? (current + (event.key === 'ArrowDown' ? 1 : shown.length - 1)) % shown.length : 0); }
       if (event.key === 'Enter' && shown[current]) { event.preventDefault(); choose(shown[current]); }
     }}>
-      <header className="global-search-header"><h2 id="global-search-title">{t('globalSearch.title')}</h2><IconButton ref={closeButton} type="button" onClick={onClose} aria-label={t('globalSearch.close')} style={{ minWidth: 44, minHeight: 44 }}><Icon name="close" size={16} /></IconButton></header>
-      <input ref={input} role="combobox" aria-label={t('globalSearch.title')} enterKeyHint="search" aria-expanded="true" aria-controls="global-search-results" aria-activedescendant={currentId} value={query} onChange={event => { setQuery(event.target.value); setSelected(0); }} placeholder={t('globalSearch.placeholder')} />
+      <header className="global-search-header"><h2 id="global-search-title" className="sr-only">{t('globalSearch.title')}</h2><Icon name="search" size={16} />
+        <input ref={input} role="combobox" aria-label={t('globalSearch.title')} enterKeyHint="search" aria-expanded="true" aria-controls="global-search-results" aria-activedescendant={currentId} value={query} onChange={event => { setQuery(event.target.value); setSelected(0); }} placeholder={t('globalSearch.placeholder')} />
+        <IconButton ref={closeButton} style={{ minWidth: 'calc(var(--space-5) + var(--space-6))', minHeight: 'calc(var(--space-5) + var(--space-6))' }} type="button" onClick={onClose} aria-label={t('globalSearch.close')}><kbd>Esc</kbd></IconButton>
+      </header>
       <div className="global-search-tabs" role="tablist" aria-label={t('globalSearch.categories')}>
         {categories.map(kind => <button type="button" role="tab" aria-selected={activeCategory === kind} key={kind} onClick={() => changeCategory(kind)}>
           <Chip tone={activeCategory === kind ? 'accent' : 'default'}>{t(`globalSearch.${kind}`)} {kind === 'all' ? matches.length : groups.find(group => group.kind === kind)?.items.length}</Chip>
         </button>)}
       </div>
+      {orchestrators.status === 'error' && <Notice tone="danger" action={<button onClick={orchestrators.refresh}>{t('globalSearch.retry')}</button>}>{t('globalSearch.orchestratorError')}</Notice>}
       {error && <Notice tone="danger" action={<button onClick={() => void refresh()}>{t('globalSearch.retry')}</button>}>{t('globalSearch.error')}</Notice>}
       {failed.length > 0 && <Notice tone="warning" action={<button onClick={retry}>{t('globalSearch.retry')}</button>}>{t('globalSearch.failed', { servers: failed.join(', ') })}</Notice>}
       {loading ? <LoadingState message={t('globalSearch.loading')} />

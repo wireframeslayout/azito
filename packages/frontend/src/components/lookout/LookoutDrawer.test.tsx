@@ -5,6 +5,7 @@ import { HotkeyProvider } from '../../hooks/useHotkeys';
 import { resolveActivityTitle } from '../../lib/windowDisplay';
 import { buildLookoutSections } from '../../lib/lookoutSummary';
 import { LookoutDrawer } from './LookoutDrawer';
+import { Overlay } from '../ui/Overlay';
 import type { LookoutItem } from '../../lib/lookoutSummary';
 
 const mocks = vi.hoisted(() => ({ openTask: vi.fn(), openTerminal: vi.fn(), retry: vi.fn() }));
@@ -30,8 +31,19 @@ it('opens with focus, retries, navigates and restores focus', async () => {
 it('closes using Escape', async () => {
   render(<Harness />);
   fireEvent.click(screen.getByText('Launch'));
-  fireEvent.keyDown(document, { key: 'Escape' });
+  fireEvent.keyDown(screen.getByRole('dialog'), { key: 'Escape' });
   await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument());
+});
+
+it('does not intercept keyboard input or restore focus after focus leaves the drawer', () => {
+  render(<Harness />);
+  const trigger = screen.getByText('Launch');
+  fireEvent.click(trigger);
+  trigger.focus();
+  fireEvent.keyDown(trigger, { key: 'Escape' });
+  expect(screen.getByRole('dialog')).toBeInTheDocument();
+  fireEvent.click(screen.getByRole('button', { name: /close lookout/i }));
+  expect(trigger).toHaveFocus();
 });
 
 it('opens a task referenced by an activity row even when the catalog has not loaded it', () => {
@@ -67,3 +79,18 @@ it.each([['auto', 'Working · W-1'], ['user', 'Registered · W-1']] as const)('k
   render(<HotkeyProvider><LookoutDrawer open onClose={() => {}} sections={sections} snapshotStatus="ready" onRetry={() => {}} onOpenItem={() => {}} /></HotkeyProvider>);
   expect(screen.getByText(expected)).toBeInTheDocument();
 });
+
+it('makes the drawer inert while a modal is open and restores it afterwards', async () => {
+  function LayerHarness() {
+    const [modal, setModal] = useState(false);
+    const sections = { attention: [], active: [], finished: [], counts: { attention: 0, active: 0, finished: 0, failed: 0 } };
+    return <HotkeyProvider><button onClick={() => setModal(true)}>Open modal</button><LookoutDrawer open onClose={() => {}} sections={sections} snapshotStatus="ready" onRetry={() => {}} onOpenItem={() => {}} /><Overlay open={modal} onClose={() => setModal(false)} labelledBy="modal-title"><h2 id="modal-title">Modal</h2></Overlay></HotkeyProvider>;
+  }
+  render(<LayerHarness />);
+  const drawer = screen.getByRole('dialog');
+  fireEvent.click(screen.getByText('Open modal'));
+  await waitFor(() => expect(drawer).toHaveAttribute('inert'));
+  fireEvent.keyDown(screen.getByRole('dialog', { name: 'Modal' }), { key: 'Escape' });
+  await waitFor(() => expect(drawer).not.toHaveAttribute('inert'));
+});
+

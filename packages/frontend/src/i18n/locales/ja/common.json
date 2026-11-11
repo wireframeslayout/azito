@@ -245,6 +245,7 @@
     "skipNote": "{{actionLabel}} を押すと、リソースチェックをスキップして実行します。"
   },
   "statusbar": {
+    "defaultMux": "既定: {{mux}}",
     "healthy": "正常",
     "warning": "注意",
     "critical": "危険",

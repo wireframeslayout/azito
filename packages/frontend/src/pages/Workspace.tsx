@@ -1433,6 +1433,7 @@ function WorkspaceInner() {
                       const tab = tabs.find((t) => t.id === activeTabId);
                       return tab ? buildTabItem(tab) : null;
                     })()}
+                    selectedLabel={selectedOrchestrator ? formatWindowTitleLine(resolveWindowTitle({ ...windowTitleInput(selectedOrchestrator), tmuxTarget: selectedOrchestrator.tmuxTarget })) : undefined}
                     activeTabId={activeTabId}
                     activeTabPinned={!!tabs.find((t) => t.id === activeTabId)?.pinned}
                     tabCount={tabs.length}

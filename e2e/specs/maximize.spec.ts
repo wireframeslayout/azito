@@ -74,3 +74,22 @@ test('opens a linked card in the maximize dialog', async ({ app, harness }) => {
   await expect(dialog.locator('header')).toContainText(`W-${target}`);
   await dialog.getByRole('button', { name: '閉じる' }).click();
 });
+
+
+test('switches a project window to chat in the maximize dialog', async ({ app, harness }) => {
+  const project = await harness.createProject('maximize-chat');
+  const agent = await harness.startFakeAgent('maximize-chat-window', 'agent', { supervised: false });
+  const id = await harness.registerAgentWindow(project, agent.target, { label: 'maximize-chat-window' });
+  await app.goto(`${harness.baseUrl}/workspace/${project}`);
+  await app.getByRole('button', { name: /検索/ }).first().click();
+  const input = app.getByRole('combobox', { name: '検索' });
+  await input.fill(`W-${id}`);
+  await expect(app.getByRole('option', { name: new RegExp(`W-${id}`) })).toBeVisible();
+  await input.press('Enter');
+  await expect(app.locator('.xterm').first()).toBeVisible();
+  await app.keyboard.press('Control+Shift+M');
+  const dialog = app.getByRole('dialog');
+  await expect(dialog).toBeVisible();
+  await dialog.getByRole('tab', { name: 'チャット' }).click();
+  await expect(dialog.locator('.xterm')).toHaveCount(0);
+});

@@ -9,7 +9,7 @@
     "downloadFailed": "ダウンロードに失敗しました",
     "openInVsCode": "VS Code で開く",
     "openInZed": "Zed で開く",
-    "sourceView": "ソース",
+    "sourceView": "編集",
     "previewView": "プレビュー",
     "splitView": "分割",
     "newFile": "新規ファイル",

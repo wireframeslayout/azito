@@ -1149,8 +1149,9 @@ input[aria-invalid="true"]:focus-visible { outline-color: var(--danger) !importa
 .global-search-header {
   display:flex;
   align-items:center;
-  justify-content:space-between;
+  gap:var(--space-2);
   padding:var(--space-3) var(--space-4);
+  border-bottom:1px solid var(--border);
 }
 .global-search-header h2 {
   margin:0;
@@ -1172,18 +1173,25 @@ input[aria-invalid="true"]:focus-visible { outline-color: var(--danger) !importa
 .global-search button:focus-visible {
   outline:2px solid var(--accent);
 }
-.global-search input {
-  margin:0 var(--space-4);
+.global-search input:not([type="checkbox"]):not([type="radio"]):not([type="range"]) {
+  flex:1;
+  margin:0;
   padding:var(--space-3);
-  border:1px solid var(--border);
-  border-radius:var(--radius-md);
-  background:var(--input-bg);
+  border:0;
+  background:transparent !important;
+  border-radius:0 !important;
+  box-shadow:none;
   color:var(--text);
   font:inherit;
   min-width:0;
 }
-.global-search input:focus-visible {
-  outline:2px solid var(--accent);
+.global-search input:not([type="checkbox"]):not([type="radio"]):not([type="range"]):hover {
+  background: transparent !important;
+}
+.global-search input:not([type="checkbox"]):not([type="radio"]):not([type="range"]):focus {
+  outline: none !important;
+  background: transparent !important;
+  box-shadow: 0 2px 0 var(--accent);
 }
 .global-search-tabs {
   display:flex;

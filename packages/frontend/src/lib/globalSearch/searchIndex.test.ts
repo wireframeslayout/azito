@@ -6,7 +6,7 @@ const projects: ProjectListItem[] = [{ id: 1, name: 'Alpha', windows: [{ id: 806
 const tasks: Task[] = [{ id: 371, title: 'Fix Search', status: 'running', projectId: 1, unitId: null, priority: 0, sourceRef: 'GH-42', createdAt: '', updatedAt: '' }];
 
 describe('global search index', () => {
-  const index = buildSearchIndex(projects, tasks, {}, new Set(), {});
+  const index = buildSearchIndex(projects, tasks, {}, new Set(), {}, []);
   it('matches normalized identifiers and AND terms across fields', () => {
     expect(searchIndex(index, 'Ｗ-８０６')[0]?.title).toBe('Editor');
     expect(searchIndex(index, 'w806')[0]?.title).toBe('Editor');
@@ -23,17 +23,17 @@ describe('search ordering', () => {
   it('deduplicates windows and puts running results before idle matches', () => {
     const duplicate = projects[0].windows![0];
     const withWindow = [{ ...tasks[0], windows: [duplicate] }];
-    const index = buildSearchIndex(projects, withWindow, {}, new Set([806]), {});
+    const index = buildSearchIndex(projects, withWindow, {}, new Set([806]), {}, []);
     expect(index.filter(item => item.kind === 'window')).toHaveLength(1);
     expect(searchIndex(index, 'alpha')[0].kind).toBe('window');
   });
   it('treats a running task as active', () => {
-    const index = buildSearchIndex(projects, tasks, {}, new Set(), {});
+    const index = buildSearchIndex(projects, tasks, {}, new Set(), {}, []);
     expect(index.find(item => item.kind === 'task')?.active).toBe(true);
   });
   it('uses the resolved name after a rename', () => {
     const renamed = [{ ...projects[0], windows: [{ ...projects[0].windows![0], label: 'Renamed' }] }];
-    const index = buildSearchIndex(renamed, tasks, {}, new Set(), {});
+    const index = buildSearchIndex(renamed, tasks, {}, new Set(), {}, []);
     expect(searchIndex(index, 'renamed')[0]?.kind).toBe('window');
     expect(searchIndex(index, 'editor')).toHaveLength(0);
   });
@@ -42,7 +42,7 @@ describe('search ordering', () => {
 describe('window roles', () => {
   it('classifies orchestrators separately and defaults absent roles to windows', () => {
     const window = projects[0].windows![0];
-    const index = buildSearchIndex([{ ...projects[0], windows: [window, { ...window, id: 807, role: 'orchestrator' }] }], tasks, {}, new Set(), {});
+    const index = buildSearchIndex([{ ...projects[0], windows: [window, { ...window, id: 807, role: 'orchestrator' }] }], tasks, {}, new Set(), {}, []);
     expect(index.find(item => item.id === 806 && item.window)?.kind).toBe('window');
     expect(index.find(item => item.id === 807 && item.window)?.kind).toBe('orchestrator');
   });

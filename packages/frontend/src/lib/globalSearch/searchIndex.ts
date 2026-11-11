@@ -8,8 +8,8 @@ export interface SearchItem {
   kind: SearchKind;
   id: number;
   title: string;
-  projectId: number;
-  projectName: string;
+  projectId?: number;
+  projectName?: string;
   fields: string[];
   window?: Window;
   task?: Task;
@@ -21,19 +21,19 @@ export function normalizeSearch(value: string): string {
   return value.normalize('NFKC').toLocaleLowerCase().trim();
 }
 
-export function buildSearchIndex(projects: ProjectListItem[], tasks: Task[], taskOpenedAt: Record<number, number>, activeWindowIds: ReadonlySet<number>, sessions: Record<string, Session[]>): SearchItem[] {
+export function buildSearchIndex(projects: ProjectListItem[], tasks: Task[], taskOpenedAt: Record<number, number>, activeWindowIds: ReadonlySet<number>, sessions: Record<string, Session[]>, orchestrators: Window[]): SearchItem[] {
   const items: SearchItem[] = [];
   const projectById = new Map(projects.map(project => [project.id, project]));
   const seenWindows = new Set<number>();
-  const addWindow = (window: Window, project: ProjectListItem, task?: Task) => {
+  const addWindow = (window: Window, project?: ProjectListItem, task?: Task) => {
     if (seenWindows.has(window.id)) return;
     seenWindows.add(window.id);
     const matched = findSessionWindow(window, sessions[window.serverName] ?? []);
     const pane = matched?.window.panes.find(p => p.active) ?? matched?.window.panes[0];
     const display = resolveWindowTitle({ ...window, paneTitle: pane?.title, paneCommand: pane?.command, taskTitle: task?.title });
     const title = display.title;
-    items.push({ kind: window.role === 'orchestrator' ? 'orchestrator' : 'window', id: window.id, title, projectId: project.id, projectName: project.name,
-      fields: [title, formatWindowTitleLine(display), formatWindowId(window.id), `w${window.id}`, String(window.id), window.serverName, project.name, task?.title ?? '', task ? `#${task.id}` : ''].map(normalizeSearch),
+    items.push({ kind: window.role === 'orchestrator' ? 'orchestrator' : 'window', id: window.id, title, projectId: project?.id, projectName: project?.name,
+      fields: [title, formatWindowTitleLine(display), formatWindowId(window.id), `w${window.id}`, String(window.id), window.serverName, project?.name ?? '', task?.title ?? '', task ? `#${task.id}` : ''].map(normalizeSearch),
       window, task, recent: task ? taskOpenedAt[task.id] ?? 0 : 0, active: activeWindowIds.has(window.id) });
   };
   for (const task of tasks) {
@@ -49,6 +49,7 @@ export function buildSearchIndex(projects: ProjectListItem[], tasks: Task[], tas
       fields: [project.name].map(normalizeSearch), recent: 0, active: false });
     for (const window of project.windows ?? []) addWindow(window, project);
   }
+  for (const window of orchestrators) addWindow(window, projectById.get(window.projectId ?? window.originProjectId ?? -1));
   return items;
 }
 

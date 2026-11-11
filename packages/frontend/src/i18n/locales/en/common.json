@@ -245,6 +245,7 @@
     "skipNote": "Press {{actionLabel}} to skip the resource check and proceed."
   },
   "statusbar": {
+    "defaultMux": "Default: {{mux}}",
     "healthy": "Healthy",
     "warning": "Warning",
     "critical": "Critical",

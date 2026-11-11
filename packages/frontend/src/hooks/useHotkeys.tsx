@@ -133,6 +133,10 @@ export function useHotkeyBindings(): Pick<HotkeysContextValue, 'bindings' | 'set
 export function useHotkeyDispatch(): Pick<HotkeysContextValue, 'dispatchFromTerminal'> {
   const { dispatchFromTerminal } = useStableContext(); return { dispatchFromTerminal };
 }
+export function useModalOpen(): boolean {
+  return useContext(StackContext).length > 0;
+}
+
 export function useOverlayStack(open: boolean, elementRef: RefObject<HTMLElement | null>, returnFocus = false, fallbackFocusTo?: HTMLElement | null): { id: symbol; isTop: boolean } {
   const { addOverlay } = useStableContext();
   const stack = useContext(StackContext);

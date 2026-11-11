@@ -3,10 +3,11 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { HotkeyProvider } from '../../hooks/useHotkeys';
 import { GlobalSearchProvider, useOpenGlobalSearch } from './GlobalSearch';
 
-const mocks = vi.hoisted(() => ({ openTask: vi.fn(), openTerminal: vi.fn(), navigate: vi.fn(), fetch: vi.fn(), refresh: vi.fn(), catalogError: false, withWindow: false, role: '', muxKind: 'tmux', activity: '' }));
+const mocks = vi.hoisted(() => ({ openTask: vi.fn(), openTerminal: vi.fn(), navigate: vi.fn(), fetch: vi.fn(), refresh: vi.fn(), catalogError: false, withWindow: false, role: '', muxKind: 'tmux', activity: '', standalone: false }));
 vi.mock('react-i18next', () => ({ useTranslation: () => ({ t: (key: string, values?: { count?: number; query?: string }) => values?.query ? `${key} ${values.query}` : values?.count == null ? key : `${key} ${values.count}` }) }));
 vi.mock('../ui/WindowActivityIndicator', () => ({ BrailleSpinner: () => <span data-testid="working" />, BlockedDot: () => <span data-testid="blocked" /> }));
 vi.mock('react-router-dom', () => ({ useNavigate: () => mocks.navigate }));
+vi.mock('../../hooks/useOrchestrators', () => ({ useOrchestrators: () => ({ windows: mocks.standalone ? [{ id: 902, role: 'orchestrator', ownerType: 'server', originProjectId: null, serverName: 'local', tmuxTarget: 's:1', label: 'Independent', isPrimary: true, windowType: 'terminal', links: { total: 0, projectIds: [], serverNames: [], targets: [] } }] : [], status: 'ready', refresh: vi.fn() }) }));
 vi.mock('../../hooks/useWorkspaceCatalog', () => ({ useWorkspaceCatalog: () => ({ allProjects: [{ id: 1, name: 'Alpha', windows: mocks.withWindow ? [{ id: 806, role: mocks.role, muxRef: { kind: mocks.muxKind }, ownerType: 'project', projectId: 1, serverName: 'broken', tmuxTarget: 's:1', isPrimary: true, windowType: 'terminal' }] : [] }], allTasks: [{ id: 371, projectId: 1, title: 'Search task', status: 'running' }], loading: false, error: mocks.catalogError ? new Error('failed') : null, refresh: mocks.refresh }) }));
 vi.mock('../../hooks/useCrossProjectNavigation', () => ({ useCrossProjectNavigation: () => ({ openTask: mocks.openTask, openTerminal: mocks.openTerminal }) }));
 vi.mock('../../hooks/useNotificationChannel', () => ({ useNotificationChannel: () => {} }));
@@ -20,11 +21,11 @@ function OpenButton() { const open = useOpenGlobalSearch(); return <button onCli
 function setup() { return render(<HotkeyProvider><GlobalSearchProvider><OpenButton /></GlobalSearchProvider></HotkeyProvider>); }
 
 describe('global search', () => {
-  beforeEach(() => { localStorage.clear(); vi.clearAllMocks(); mocks.catalogError = false; mocks.withWindow = false; mocks.role = ''; mocks.muxKind = 'tmux'; mocks.activity = ''; });
+  beforeEach(() => { localStorage.clear(); vi.clearAllMocks(); mocks.catalogError = false; mocks.withWindow = false; mocks.role = ''; mocks.muxKind = 'tmux'; mocks.activity = ''; mocks.standalone = false; });
   it('searches tasks and opens a result using the keyboard', async () => {
     setup(); fireEvent.click(screen.getByText('Open'));
     const input = screen.getByRole('combobox');
-    expect(screen.queryByRole('tab', { name: /globalSearch.orchestrator/ })).toBeNull();
+    expect(screen.getByRole('tab', { name: /globalSearch.orchestrator/ })).toBeInTheDocument();
     await waitFor(() => expect(screen.getByText('Search task')).toBeTruthy());
     fireEvent.change(input, { target: { value: '#371' } });
     fireEvent.keyDown(input, { key: 'Enter' });
@@ -63,6 +64,16 @@ describe('global search', () => {
     setup(); fireEvent.click(screen.getByText('Open'));
     fireEvent.change(screen.getByRole('combobox'), { target: { value: '806' } });
     expect(screen.getByRole('option')).toContainElement(screen.getByTestId('blocked'));
+  });
+  it('finds and opens an independent orchestrator', () => {
+    mocks.standalone = true;
+    mocks.fetch.mockResolvedValue({ sessions: [], unavailable: [] });
+    setup(); fireEvent.click(screen.getByText('Open'));
+    const input = screen.getByRole('combobox');
+    fireEvent.change(input, { target: { value: 'Independent' } });
+    expect(screen.getByRole('option')).toHaveTextContent('Independent');
+    fireEvent.keyDown(input, { key: 'Enter' });
+    expect(mocks.navigate).toHaveBeenCalledWith('/orchestration/902');
   });
   it('does not close when two spaces are typed into the search input', async () => {
     setup(); fireEvent.click(screen.getByText('Open'));

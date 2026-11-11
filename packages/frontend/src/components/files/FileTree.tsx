@@ -1,7 +1,7 @@
 import React from 'react';
 import type { HostPathApi } from '@azito/shared';
 import { parentOrRoot } from '../../lib/serverPath';
-import { Icon } from '../ui/Icon';
+import { Icon, type IconName } from '../ui/Icon';
 import type { TreeNode } from './useFileTree';
 import type { PendingCreate, PendingRename } from './useFileCrud';
 import InlineNameInput from './InlineNameInput';
@@ -35,6 +35,12 @@ interface DefaultFileTreeProps {
   };
 }
 
+function fileIconFor(name: string): { icon: IconName; color: string } {
+  if (/\.(png|jpe?g|gif|webp|svg)$/i.test(name)) return { icon: 'image', color: 'var(--purple)' };
+  if (/\.(tsx?|jsx?|json|css|html|py|rs|sh)$/i.test(name)) return { icon: 'file-code', color: 'var(--text-dim)' };
+  return { icon: 'file', color: 'var(--text-dim)' };
+}
+
 type FileTreeProps = DefaultFileTreeProps | CustomRowFileTreeProps;
 
 export default function FileTree(props: FileTreeProps): React.ReactElement {
@@ -59,6 +65,7 @@ function DefaultFileTree({
 }: DefaultFileTreeProps) {
   const renderNode = (node: TreeNode, depth: number): React.ReactElement => {
     const isDir = node.type === 'directory';
+    const fileIcon = fileIconFor(node.name);
     const isSelected = node.path === selectedPath;
     const isRenaming = pendingRename?.path === node.path;
 
@@ -107,7 +114,7 @@ function DefaultFileTree({
             {isDir ? <Icon name="chevron-right" size={14} rotate={node.expanded ? 90 : 0} /> : null}
           </span>
           <span style={{ width: 18, display: 'inline-flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}>
-            <Icon name={isDir ? (node.expanded ? 'folder-open' : 'files') : 'file'} size={14} />
+            <Icon name={isDir ? (node.expanded ? 'folder-open' : 'files') : fileIcon.icon} size={14} style={{ color: isDir ? 'var(--accent)' : fileIcon.color }} />
           </span>
           <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', fontFamily: 'var(--font-mono)' }}>{node.name}</span>
           {!isDir && node.size != null && (

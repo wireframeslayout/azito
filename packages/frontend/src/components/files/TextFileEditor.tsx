@@ -46,8 +46,8 @@ export function TextFileEditor({ backend, path, name, initialLine, headerActions
   const markdown = doc.document?.language === 'markdown';
   const options: Array<{ value: Mode; label: string }> = [
     { value: 'source', label: t('explorer.sourceView') },
-    { value: 'preview', label: t('explorer.previewView') },
     ...(!mobile ? [{ value: 'split' as const, label: t('explorer.splitView') }] : []),
+    { value: 'preview', label: t('explorer.previewView') },
   ];
   const selectMode = (value: Mode) => { setMode(value); localStorage.setItem('azito-md-view-mode', value); };
   const showDiff = () => setDiff(doc.conflict?.kind === 'text' ? lineDiff(doc.conflict.content, doc.content) : null);
@@ -63,10 +63,11 @@ export function TextFileEditor({ backend, path, name, initialLine, headerActions
       <div style={{ padding: 'var(--space-2) var(--space-4)', borderBottom: '1px solid var(--border)', background: 'var(--bg-card)', display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: 'var(--space-3)', flexShrink: 0, minHeight: 40 }}>
         <Icon name="file" size={14} />
         <span style={{ flex: 1, minWidth: 0, fontSize: 'var(--font-md)', fontWeight: 500, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={name}>
-          {name}{doc.dirty && <span style={{ color: 'var(--accent)' }}> • {t('editor.unsaved')}</span>}
+          {name}
         </span>
-        <Button size="sm" variant={canSave ? 'primary' : 'default'} disabled={!canSave} onClick={save} title={`${t('editor.save')} (Ctrl+S)`}>{doc.saving ? t('editor.saving') : t('editor.save')}</Button>
         {markdown && <SegmentedToggle options={options} value={currentMode} onChange={selectMode} ariaLabel={t('editor.viewMode')} />}
+        {doc.dirty && <span style={{ color: 'var(--warning)', fontSize: 'var(--font-sm)' }}>● {t('editor.unsaved')}</span>}
+        <Button size="sm" variant={canSave ? 'primary' : 'default'} disabled={!canSave} onClick={save} title={`${t('editor.save')} (Ctrl+S)`}>{doc.saving ? t('editor.saving') : t('editor.save')} <kbd aria-hidden="true">Ctrl+S</kbd></Button>
         {headerActions}
       </div>
       <div className="sr-only" role="status" aria-live="polite" aria-atomic="true">{doc.conflict !== undefined ? t('editor.conflict') : doc.saving ? t('editor.saving') : doc.dirty ? t('editor.unsaved') : doc.saved ? t('editor.saved') : ''}</div>
