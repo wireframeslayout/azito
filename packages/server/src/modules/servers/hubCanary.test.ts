@@ -1,7 +1,8 @@
 import fs from 'fs';
 import os from 'os';
 import path from 'path';
-import { describe, it, expect, beforeEach, afterEach } from 'vitest';
+import crypto from 'crypto';
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { writeHubCanary, getHubCanary, getVerifiedHubCanary } from './hubCanary';
 
 // Review round (Important finding 2): getHubCanary() used to be the ONLY
@@ -30,6 +31,16 @@ describe('hubCanary', () => {
     expect(fs.readFileSync(canary!.path, 'utf-8')).toBe(canary!.content);
     expect(getHubCanary()).toEqual(canary);
     expect(getVerifiedHubCanary()).toEqual(canary);
+  });
+
+  it('does not overwrite an existing file if the generated name collides', () => {
+    const file = path.join(dataDir, `.azito-hub-canary-${'00'.repeat(16)}`);
+    fs.writeFileSync(file, 'user data');
+    const random = vi.spyOn(crypto, 'randomBytes').mockReturnValueOnce(Buffer.alloc(16) as never);
+    try {
+      expect(writeHubCanary(dataDir)).toBeNull();
+      expect(fs.readFileSync(file, 'utf8')).toBe('user data');
+    } finally { random.mockRestore(); }
   });
 
   it('getVerifiedHubCanary regenerates when the cached canary file has been deleted from disk', () => {

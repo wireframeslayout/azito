@@ -1,0 +1,188 @@
+import path from 'path';
+import fs from 'fs';
+import { createHash } from 'crypto';
+import { createInterface } from 'readline';
+import type { Readable } from 'stream';
+import { createServiceManager } from '../modules/system/createServiceManager';
+import { HUB_SERVICE, runCommand } from '../modules/system/serviceManager';
+import { createHubLock, underHubLock } from '../modules/system/hubLock';
+import { resolveWindowsHub, uninstallWindowsTask, type ServiceCommandContext } from '../modules/system/windowsHubOperations';
+import { assertNoHubLaunchers, assertNoOtherHubProcesses, consumeWindowsInstallRecord, prepareRecordedData, prepareRecordedRelease, removeRecordedTree, verifyRecordedDatabase, verifyRecordedRelease, verifyRecordedWrapper } from '../modules/system/windowsHubUninstall';
+import { assertHubDirsOnlyOwnerWritable, findHubVersionsInUse } from '../modules/system/windowsHubFolderOps';
+import { runCommandSpec } from '../shared/exec/runCommandSpec';
+import { listOwnedDataNames, readOwnedSecret, removeOwnedDataMarkers } from '../modules/system/windowsOwnedSecrets';
+import { findHubProcesses } from '../modules/system/windowsHubService';
+import { HUB_UPDATE_TASK } from '../modules/system/windowsHubUpdateTask';
+import type { HostEnv } from '../shared/os/hostEnv';
+import { readInstallFileIdentity, sameInstallFileIdentity } from '../modules/system/windowsInstallInventory';
+
+export class UninstallPreparationError extends Error {
+  constructor(message: string, readonly taskMayHaveBeenRemoved: boolean) { super(message); }
+}
+
+export async function withUninstallPreparation<T>(action: (beforeDelete: () => void) => Promise<T>): Promise<T> {
+  let taskMayHaveBeenRemoved = false;
+  try {
+    return await action(() => { taskMayHaveBeenRemoved = true; });
+  } catch (err) {
+    throw new UninstallPreparationError(err instanceof Error ? err.message : String(err), taskMayHaveBeenRemoved);
+  }
+}
+
+/** Read one UTF-8 line even when the input is split across chunks. */
+export async function confirmUninstall(input: Readable, report: (message: string) => void, fail: () => void): Promise<boolean> {
+  const line = await new Promise<string | null>((resolve, reject) => {
+    const reader = createInterface({ input, crlfDelay: Infinity });
+    let received = false;
+    reader.once('line', (value) => {
+      received = true;
+      reader.close();
+      resolve(value);
+    });
+    reader.once('close', () => { if (!received) resolve(null); });
+    input.once('error', reject);
+  });
+  const action = line === null ? '' : line.replace(/^\uFEFF/, '').trim();
+  if (action === 'remove') return true;
+  const error = line === null ? 'cancelled' : `unexpected uninstall action: ${JSON.stringify(action.slice(0, 120))}`;
+  report(JSON.stringify({ removed: false, error }));
+  fail();
+  return false;
+}
+
+/** Prepares the installer to remove only items proved by its record. */
+export async function windowsHubUninstallCommand(host: HostEnv, context: ServiceCommandContext, removeData: boolean): Promise<void> {
+  return withUninstallPreparation((beforeDelete) => runUninstall(host, context, removeData, beforeDelete));
+}
+
+async function runUninstall(host: HostEnv, context: ServiceCommandContext, removeData: boolean, beforeDelete: () => void): Promise<void> {
+  if (host.platform !== 'win32') throw new Error('Windows uninstall requires Windows.');
+  const created = createServiceManager(host, HUB_SERVICE, runCommand);
+  if ('error' in created) throw created.error;
+  const hub = resolveWindowsHub(host, context);
+  const lock = createHubLock(hub.layout.hubRoot, context.secretFileGuard, hub.systemRoot);
+  const run = (spec: Parameters<typeof runCommandSpec>[0]) => runCommandSpec(spec, hub.runHost);
+  await underHubLock(lock, async () => {
+    const { record, release } = await prepareRecordedRelease(hub.layout.prefix, context.secretFileGuard, run, hub.systemRoot);
+    const retained: string[] = [];
+    let data = false;
+    let dataDb = false;
+    const dataFiles: string[] = [];
+    let wrapper = false;
+    if (removeData) {
+      try {
+        await prepareRecordedData(hub.layout.prefix, record, context.secretFileGuard, run, hub.systemRoot);
+        data = true;
+      } catch (err) {
+        try {
+          await assertHubDirsOnlyOwnerWritable(run, hub.systemRoot, [path.join(hub.layout.prefix, 'data')]);
+          verifyRecordedDatabase(hub.layout.prefix, record, context.secretFileGuard);
+          for (const suffix of ['-wal', '-shm']) {
+            const sidecar = path.join(hub.layout.prefix, 'data', `data.db${suffix}`);
+            try {
+              fs.lstatSync(sidecar);
+              throw new Error(`${sidecar} exists; retain the database and inspect its SQLite sidecars manually.`);
+            } catch (err) {
+              if ((err as NodeJS.ErrnoException).code !== 'ENOENT') throw err;
+            }
+          }
+          dataDb = true;
+          retained.push('Data retained: only recorded data files can be removed; unrecorded data will be kept.');
+        } catch (dbErr) {
+          retained.push(`Data retained: ${err instanceof Error ? err.message : String(err)}; database: ${dbErr instanceof Error ? dbErr.message : String(dbErr)}`);
+        }
+        try {
+          await assertHubDirsOnlyOwnerWritable(run, hub.systemRoot, [path.join(hub.layout.prefix, 'data')]);
+          for (const name of listOwnedDataNames(hub.layout.hubRoot)) {
+            try {
+              if (readOwnedSecret(hub.layout.prefix, hub.layout.hubRoot, name, record, context.secretFileGuard)) dataFiles.push(name);
+            } catch (itemErr) {
+              retained.push(`${name} retained: ${itemErr instanceof Error ? itemErr.message : String(itemErr)}`);
+            }
+          }
+        } catch (itemErr) {
+          retained.push(`Data files retained: ${itemErr instanceof Error ? itemErr.message : String(itemErr)}`);
+        }
+      }
+    }
+    if (record.wrapperSha256 !== null) {
+      try {
+        await assertHubDirsOnlyOwnerWritable(run, hub.systemRoot, [path.join(hub.layout.prefix, 'bin')]);
+        wrapper = verifyRecordedWrapper(hub.layout.prefix, record);
+        if (!wrapper) retained.push('The CLI wrapper is changed; it is retained.');
+      } catch (err) {
+        retained.push(`CLI wrapper retained: ${err instanceof Error ? err.message : String(err)}`);
+      }
+    } else retained.push('The CLI wrapper was not recorded as created by this installer; inspect it manually.');
+    await assertNoHubLaunchers(hub.hubRoots, run, hub.systemRoot, process.ppid);
+    await assertNoOtherHubProcesses(hub.layout.hubRoot, run, hub.systemRoot, context.pid);
+    await uninstallWindowsTask(created.manager, hub, context, beforeDelete);
+    consumeWindowsInstallRecord(hub.layout.hubRoot, record, context.secretFileGuard);
+    console.log(JSON.stringify({ release: path.basename(release), data, dataDb, dataFiles, wrapper, pathAdded: record.pathAdded, pathValueCreated: record.pathValueCreated === true, retained }));
+    if (!(await confirmUninstall(process.stdin, (message) => console.log(message), () => { process.exitCode = 1; }))) return;
+    try {
+      console.error('Uninstall helper: checking tasks and running processes.');
+      if ((await hub.client.query(HUB_SERVICE.windowsTaskName)).exists || (await hub.client.query(HUB_UPDATE_TASK)).exists) throw new Error('A hub or update task appeared while preparing removal; inspect it and retry manually.');
+      if ((await findHubProcesses(run, hub.systemRoot, hub.hubRoots, context.pid)).length > 0) throw new Error('A hub process started while preparing removal; stop it and inspect the retained files.');
+      const inUse = await findHubVersionsInUse(run, hub.systemRoot, hub.hubRoots, { rejectUnknownVersions: true, excludePid: context.pid });
+      if ([...inUse].some((version) => version.toLowerCase() === record.release.toLowerCase())) throw new Error('A process is using the recorded release; stop it and inspect the retained files.');
+      await assertNoHubLaunchers(hub.hubRoots, run, hub.systemRoot, process.ppid);
+      await assertNoOtherHubProcesses(hub.layout.hubRoot, run, hub.systemRoot, context.pid);
+      console.error('Uninstall helper: removing verified data when selected.');
+      if (data) {
+        await prepareRecordedData(hub.layout.prefix, record, context.secretFileGuard, run, hub.systemRoot);
+        await removeRecordedTree(hub.layout.prefix, 'data', run, hub.systemRoot);
+      } else if (dataDb || dataFiles.length > 0) {
+        const dir = path.join(hub.layout.prefix, 'data');
+        await assertHubDirsOnlyOwnerWritable(run, hub.systemRoot, [dir]);
+        if (dataDb) fs.unlinkSync(verifyRecordedDatabase(hub.layout.prefix, record, context.secretFileGuard));
+        for (const name of dataFiles) {
+          const secret = readOwnedSecret(hub.layout.prefix, hub.layout.hubRoot, name, record, context.secretFileGuard);
+          if (secret === undefined) throw new Error(`The ownership record for ${name} disappeared.`);
+          fs.unlinkSync(secret);
+        }
+        if (fs.readdirSync(dir).length === 0) fs.rmdirSync(dir);
+      }
+      console.error('Uninstall helper: verifying and removing the recorded release.');
+      await assertHubDirsOnlyOwnerWritable(run, hub.systemRoot, [release, ...record.inventory.directories.map((dir) => path.join(release, dir))]);
+      verifyRecordedRelease(hub.layout.hubRoot, record);
+      await removeRecordedTree(hub.layout.hubRoot, record.release, run, hub.systemRoot);
+      if (removeData && record.envIdentity) {
+        const env = path.join(hub.layout.hubRoot, '.env');
+        try {
+          const stat = fs.lstatSync(env);
+          if (!stat.isFile() || stat.isSymbolicLink() || !sameInstallFileIdentity(record.envIdentity, readInstallFileIdentity(env)) || !context.secretFileGuard.inspect(env, 'file').ok) {
+            retained.push('hub\\.env changed after install; retained');
+          } else fs.unlinkSync(env);
+        } catch (err) {
+          if ((err as NodeJS.ErrnoException).code !== 'ENOENT') retained.push(`hub\\.env could not be removed; retained: ${err instanceof Error ? err.message : String(err)}`);
+        }
+      }
+      console.error('Uninstall helper: removing recorded metadata.');
+      const pointer = path.join(hub.layout.hubRoot, 'current.txt');
+      const stat = fs.lstatSync(pointer);
+      if (!stat.isFile() || stat.isSymbolicLink() || fs.readFileSync(pointer, 'utf8').trim() !== record.release) throw new Error(`The pointer ${pointer} changed and is retained.`);
+      fs.unlinkSync(pointer);
+      const remainingMarkers = removeOwnedDataMarkers(hub.layout.hubRoot, record, context.secretFileGuard);
+      if (remainingMarkers.length) retained.push(`Ownership records retained: ${remainingMarkers.join(', ')}`);
+      const recordPath = path.join(hub.layout.hubRoot, '.install-record.json');
+      if (!context.secretFileGuard.inspect(recordPath, 'file').ok || fs.lstatSync(recordPath).isSymbolicLink()) throw new Error('The installation record changed; it is retained.');
+      fs.unlinkSync(recordPath);
+      const emptyDirectoryCandidates: string[] = [];
+      for (const [name, dir] of [['bin', path.join(hub.layout.prefix, 'bin')], ['hub', hub.layout.hubRoot], ['prefix', hub.layout.prefix]] as const) {
+        const identity = record.directories?.[name];
+        if (!identity) continue;
+        try {
+          await assertHubDirsOnlyOwnerWritable(run, hub.systemRoot, [dir]);
+          if (sameInstallFileIdentity(identity, readInstallFileIdentity(dir))) emptyDirectoryCandidates.push(name);
+        } catch { retained.push(`Directory retained: ${dir} could not be verified.`); }
+      }
+      const lockKey = path.join(hub.layout.hubRoot, '.lock-key');
+      const lockKeyHash = createHash('sha256').update(fs.readFileSync(lockKey)).digest('hex');
+      console.log(JSON.stringify({ removed: true, retained, emptyDirectoryCandidates, lockKeyHash }));
+    } catch (err) {
+      console.log(JSON.stringify({ error: err instanceof Error ? err.message : String(err) }));
+      process.exitCode = 1;
+    }
+  });
+}

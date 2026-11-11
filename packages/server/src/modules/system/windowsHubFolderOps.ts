@@ -24,6 +24,7 @@ async function powershell(run: SpecRunner, systemRoot: string, script: string, w
 const ALWAYS_TRUSTED_SIDS = ['S-1-5-18', 'S-1-5-32-544', 'S-1-3-0', 'S-1-5-80-956008885-3418522649-1831038044-1853292631-2271478464'];
 /** WriteData, AppendData, DeleteSubdirectoriesAndFiles, Delete, ChangePermissions, TakeOwnership, GenericWrite, GenericAll: what swaps or replaces a folder. */
 const WRITE_RIGHTS = 0x2 | 0x4 | 0x40 | 0x10000 | 0x40000 | 0x80000 | 0x40000000 | 0x10000000;
+const REPLACE_RIGHTS = 0x40 | 0x10000 | 0x40000 | 0x80000 | 0x10000000;
 
 export interface HubDirAcl {
   me: string;
@@ -51,10 +52,11 @@ export function parseHubDirAcl(output: string): HubDirAcl {
  * folder for a link between the tidying's check and its removal, so the tidying is not done at all then. This user, SYSTEM and Administrators
  * can always change it (they can do anything to this user's files anyway) and are not counted.
  */
-export function whyHubDirIsWritableByOthers(acl: HubDirAcl): string | undefined {
+export function whyHubDirIsWritableByOthers(acl: HubDirAcl, deleteOnly = false): string | undefined {
   const trusted = new Set([acl.me, ...ALWAYS_TRUSTED_SIDS]);
-  if (acl.owner !== acl.me && acl.owner !== 'S-1-5-32-544') return `the hub folder is owned by ${acl.owner}, not by this user`;
-  const others = acl.allows.filter((e) => !trusted.has(e.sid) && (e.rights & WRITE_RIGHTS) !== 0).map((e) => e.sid);
+  const trustedAncestorOwner = deleteOnly && (acl.owner === 'S-1-5-18' || acl.owner === 'S-1-5-80-956008885-3418522649-1831038044-1853292631-2271478464');
+  if (acl.owner !== acl.me && acl.owner !== 'S-1-5-32-544' && !trustedAncestorOwner) return `the hub folder is owned by ${acl.owner}, not by this user`;
+  const others = acl.allows.filter((e) => !trusted.has(e.sid) && (e.rights & (deleteOnly ? REPLACE_RIGHTS : WRITE_RIGHTS)) !== 0).map((e) => e.sid);
   return others.length === 0 ? undefined : `the hub folder can be changed by others (${[...new Set(others)].join(', ')})`;
 }
 
@@ -71,16 +73,54 @@ export async function assertHubDirOnlyOwnerWritable(run: SpecRunner, systemRoot:
   if (why !== undefined) throw new Error(`${why}, so the old versions are not removed`);
 }
 
+/** The same ACL check for a tree, in batches to avoid a PowerShell process per directory. */
+export async function assertHubDirsOnlyOwnerWritable(run: SpecRunner, systemRoot: string, dirs: readonly string[], deleteOnly = false): Promise<void> {
+  const q = powershellDialect.quote;
+  for (let start = 0; start < dirs.length;) {
+    const batch: string[] = [];
+    let characters = 0;
+    while (start < dirs.length && batch.length < 20) {
+      const dir = dirs[start]!;
+      if (batch.length > 0 && characters + dir.length > 3000) break;
+      batch.push(dir);
+      characters += dir.length;
+      start++;
+    }
+    const script = [
+      "$ErrorActionPreference = 'Stop'",
+      `$dirs = @(${batch.map(q).join(',')})`,
+      'for ($i = 0; $i -lt $dirs.Count; $i++) {',
+      '  Write-Output "dir $i"',
+      '  $acl = [IO.Directory]::GetAccessControl($dirs[$i])',
+      '  Write-Output "me $([Security.Principal.WindowsIdentity]::GetCurrent().User.Value)"',
+      '  Write-Output "owner $($acl.GetOwner([Security.Principal.SecurityIdentifier]).Value)"',
+      "  foreach ($r in $acl.GetAccessRules($true, $true, [Security.Principal.SecurityIdentifier])) { if ($r.AccessControlType -eq 'Allow' -and -not ($r.PropagationFlags -band [Security.AccessControl.PropagationFlags]::InheritOnly)) { Write-Output \"allow $($r.IdentityReference.Value) $([int]$r.FileSystemRights)\" } }",
+      '}',
+    ].join('\n');
+    const output = await powershell(run, systemRoot, script, 'Reading the access lists of the install folders');
+    const sections = output.split(/^dir \d+\r?$/m).slice(1);
+    if (sections.length !== batch.length) throw new Error('Could not read every install folder access list');
+    for (let i = 0; i < batch.length; i++) {
+      const why = whyHubDirIsWritableByOthers(parseHubDirAcl(sections[i]!), deleteOnly);
+      if (why !== undefined) throw new Error(`${batch[i]}: ${why}; nothing is removed`);
+    }
+  }
+}
+
 // ── which versions a process uses ────────────────────────────────────────
 
 /** Reads the answer of the in-use script: the versions found, and the processes whose use could not be told. Throws on the latter. */
-export function parseVersionsInUse(output: string): Set<string> {
+export function parseVersionsInUse(output: string, rejectUnknownVersions = false): Set<string> {
   const found = new Set<string>();
   const unknown: string[] = [];
   for (const raw of output.split(/\r?\n/)) {
     const line = raw.trim();
     const version = /^version (\S+)$/.exec(line)?.[1];
-    if (version !== undefined && isHubPointerVersion(version)) found.add(version);
+    if (version !== undefined) {
+      const normalised = version.startsWith('V') ? `v${version.slice(1)}` : version;
+      if (isHubPointerVersion(normalised)) found.add(normalised);
+      else if (rejectUnknownVersions) throw new Error(`A process uses an unrecognised hub folder (${version}); nothing is removed`);
+    }
     const missing = /^unknown (\d+) (\S+)$/.exec(line);
     if (missing) unknown.push(`${missing[1]} (${missing[2]})`);
   }
@@ -147,7 +187,7 @@ public static class AzitoImage {
  * is given (`INTERPRETERS`), the missing command line does not matter (protected system and antivirus components have none). One that is gone by
  * the time it is looked at is not counted. PowerShell prints only version names (ASCII), so a code page cannot garble them.
  */
-export async function findHubVersionsInUse(run: SpecRunner, systemRoot: string, hubRoots: readonly string[]): Promise<Set<string>> {
+export async function findHubVersionsInUse(run: SpecRunner, systemRoot: string, hubRoots: readonly string[], options?: { rejectUnknownVersions: boolean; excludePid: number }): Promise<Set<string>> {
   const q = powershellDialect.quote;
   const pattern = `(?:${hubRoots.map(rootPattern).join('|')})([^\\\\/"\\s]+)(?=[\\\\/"\\s]|$)`;
   const script = [
@@ -157,6 +197,7 @@ export async function findHubVersionsInUse(run: SpecRunner, systemRoot: string, 
     `$interpreters = @(${INTERPRETERS.map((n) => q(n)).join(', ')})`,
     '$me = [Security.Principal.WindowsIdentity]::GetCurrent().User.Value',
     'foreach ($p in @(Get-CimInstance Win32_Process)) {',
+    ...(options ? [`  if ($p.ProcessId -eq ${Math.trunc(options.excludePid)}) { continue }`] : []),
     '  $path = $p.ExecutablePath',
     '  $cmd = $p.CommandLine',
     '  $hit = $false',
@@ -185,7 +226,7 @@ export async function findHubVersionsInUse(run: SpecRunner, systemRoot: string, 
     '  "unknown $($p.ProcessId) $name"',
     '}',
   ].join('\n');
-  return parseVersionsInUse(await powershell(run, systemRoot, script, 'Looking for the version folders in use'));
+  return parseVersionsInUse(await powershell(run, systemRoot, script, 'Looking for the version folders in use'), options?.rejectUnknownVersions);
 }
 
 // ── removing a folder ────────────────────────────────────────────────────

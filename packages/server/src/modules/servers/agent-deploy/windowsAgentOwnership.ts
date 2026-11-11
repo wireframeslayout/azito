@@ -96,6 +96,9 @@ export interface MisaoHubInput {
   hubRoot: string | undefined;
   /** No `AzitoHub` task: look for a hub process instead. */
   looksForHub: boolean;
+  /** In uninstall, exclude the checking process and refuse unreadable or short-name node commands. */
+  excludePid?: number;
+  strictUnknown?: boolean;
 }
 
 /**
@@ -124,6 +127,13 @@ export function misaoHubScript(input: MisaoHubInput): string {
     ...(input.looksForHub ? [
       `$hubPattern = ${q(HUB_COMMAND_LINE_PATTERN)}`,
       'foreach ($candidate in @(All | Where-Object { $_.Name -eq \'node.exe\' })) {',
+      ...(input.excludePid !== undefined ? [`  if ($candidate.ProcessId -eq ${Math.trunc(input.excludePid)}) { continue }`] : []),
+      ...(input.strictUnknown ? [
+        '  if (-not $candidate.CommandLine) { Write-Output ("UNKNOWN " + $candidate.ProcessId); exit 0 }',
+        "  if ($candidate.CommandLine -match '~[0-9]+') { Write-Output (\"UNKNOWN \" + $candidate.ProcessId); exit 0 }",
+        '  if ($candidate.CommandLine -match $hubPattern) { Write-Output ("HUB " + $candidate.ProcessId); exit 0 }',
+        '  continue',
+      ] : [
       '  $owner = if (-not $candidate.OwnerSid) { \'unknown\' } elseif ($candidate.OwnerSid -eq $me) { \'mine\' } else { \'other\' }',
       '  if ($owner -eq \'other\') { continue }',
       '  if ($owner -eq \'unknown\' -and -not $elevated) { continue }',
@@ -131,6 +141,7 @@ export function misaoHubScript(input: MisaoHubInput): string {
       '  if ($candidate.CommandLine -notmatch $hubPattern) { continue }',
       '  if ($owner -eq \'unknown\') { Write-Output ("UNKNOWN " + $candidate.ProcessId); exit 0 }',
       '  if ($owner -eq \'mine\') { Write-Output ("HUB " + $candidate.ProcessId); exit 0 }',
+      ]),
       '}',
     ] : []),
     'Write-Output \'CLEAR\'',

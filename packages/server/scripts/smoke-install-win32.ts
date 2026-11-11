@@ -5,6 +5,10 @@ import * as os from 'os';
 import * as path from 'path';
 import { createSecretFileGuard } from '../src/shared/os/secretFileGuard';
 import { readEnvValue } from '../src/shared/envFile';
+import { assertNoHubLaunchers, assertNoOtherHubProcesses } from '../src/modules/system/windowsHubUninstall';
+import { powershellDialect, powershellEncodedArgs } from '../src/shared/os/shellDialect';
+import { runCommandSpec, runHostOf } from '../src/shared/exec/runCommandSpec';
+import { resolveCurrentHostEnv } from '../src/shared/os/hostEnv';
 
 /**
  * End-to-end check of the Windows install path (install.ps1, the `azito` CLI, run.ps1) on a real Windows PowerShell 5.1:
@@ -30,8 +34,9 @@ function assert(condition: boolean, message: string, detail = ''): void {
 }
 
 function powershell(args: string[], env: NodeJS.ProcessEnv = process.env): Result {
-  const r = spawnSync(POWERSHELL, ['-NoProfile', '-ExecutionPolicy', 'Bypass', ...args], { encoding: 'utf-8', timeout: 300_000, env });
-  return { status: r.status, output: `${r.stdout}${r.stderr}` };
+  const r = spawnSync(POWERSHELL, ['-NoProfile', '-ExecutionPolicy', 'Bypass', ...args], { encoding: 'utf-8', timeout: 900_000, maxBuffer: 16 * 1024 * 1024, env });
+  const output = `${r.stdout ?? ""}${r.stderr ?? ""}`;
+  return { status: r.status, output: r.status === 0 ? output : `stdout:\n${r.stdout ?? ""}\nstderr:\n${r.stderr ?? ""}\nexit status: ${r.status}, signal: ${r.signal ?? "none"}${r.error ? `, error: ${r.error.message}` : ""}` };
 }
 
 function install(installPs1: string, args: string[], env: NodeJS.ProcessEnv = process.env): Result {
@@ -99,6 +104,7 @@ function checkInstall(installPs1: string, zip: string, sums: string, prefix: str
     assert(fs.existsSync(path.join(hubDir, file)), `missing after install: hub/${file}`, first.output);
   }
   assert(fs.existsSync(path.join(prefix, 'bin', 'azito.cmd')), 'missing bin/azito.cmd', first.output);
+  assert(fs.existsSync(path.join(hubDir, '.install-record.json')), 'missing installation ownership record', first.output);
   assert(fs.readFileSync(path.join(hubDir, 'current.txt'), 'utf-8').trim() === version, 'current.txt must name the installed version');
   const token = readEnvValue(path.join(hubDir, '.env'), 'AZITO_UI_TOKEN');
   assert(/^[0-9a-f]{64}$/.test(token ?? ''), 'hub/.env must hold a 64-hex UI token');
@@ -112,7 +118,119 @@ function checkInstall(installPs1: string, zip: string, sums: string, prefix: str
   assert(fs.readFileSync(path.join(hubDir, '.env'), 'utf-8') === envBefore, 'a re-run must not touch hub/.env');
 }
 
-/** An install that stopped part-way (a version folder, no current.txt, no CLI) is repaired by running the installer again; the CLI refuses a bad pointer and survives `&` in the prefix. */
+function checkUninstall(installPs1: string, prefix: string, version: string): void {
+  step('uninstall refuses an unrecorded file, then retains data and is repeatable');
+  const release = path.join(prefix, 'hub', version);
+  const extra = path.join(release, 'user-file');
+  fs.writeFileSync(extra, 'leave this');
+  const args = ['-Uninstall', '-Prefix', prefix, '-Yes'];
+  step('uninstall: refuse an unrecorded file');
+  const refused = install(installPs1, args);
+  assert(refused.status !== 0 && fs.existsSync(extra), 'an unrecorded file must prevent removal', refused.output);
+  fs.unlinkSync(extra);
+  const target = path.join(path.dirname(prefix), 'junction-target');
+  fs.mkdirSync(target);
+  fs.writeFileSync(path.join(target, 'keep'), 'outside');
+  const junction = path.join(release, 'user-junction');
+  fs.symlinkSync(target, junction, 'junction');
+  step('uninstall: refuse a junction without following it');
+  const linked = install(installPs1, args);
+  assert(linked.status !== 0 && fs.existsSync(path.join(target, 'keep')), 'a junction must be refused without entering it', linked.output);
+  fs.rmdirSync(junction);
+  step('uninstall: remove the release while retaining data');
+  const removed = install(installPs1, args);
+  assert(removed.status === 0, 'uninstall failed', removed.output);
+  assert(!fs.existsSync(release), 'the recorded release must be removed', removed.output);
+  assert(fs.existsSync(path.join(prefix, 'data', 'data.db')), 'data must be retained by default', removed.output);
+  step('uninstall: repeat after successful removal');
+  const again = install(installPs1, args);
+  assert(again.status === 0 && /No installation record/.test(again.output), 'a repeat must report the retained files', again.output);
+}
+
+async function checkRemoveData(installPs1: string, zip: string, sums: string, prefix: string): Promise<void> {
+  step('an explicit -RemoveData removes an unchanged recorded data directory');
+  const installed = install(installPs1, ['-ZipPath', zip, '-Sha256Sums', sums, '-Prefix', prefix, '-Yes', '-NoPath', '-NoService']);
+  assert(installed.status === 0, 'install for data removal failed', installed.output);
+  const removed = install(installPs1, ['-Uninstall', '-RemoveData', '-Prefix', prefix, '-Yes']);
+  assert(removed.status === 0, 'uninstall with data removal failed', removed.output);
+  assert(!fs.existsSync(path.join(prefix, 'data')), 'unchanged recorded data must be removed', removed.output);
+  assert(!fs.existsSync(path.join(prefix, 'hub', '.env')), 'recorded .env must be removed', removed.output);
+  assert(!fs.existsSync(prefix), 'an unused NoService install must remove its empty prefix', removed.output);
+  const reinstalled = install(installPs1, ['-ZipPath', zip, '-Sha256Sums', sums, '-Prefix', prefix, '-Yes', '-NoPath', '-NoService']);
+  assert(reinstalled.status === 0, 'reinstall failed', reinstalled.output);
+  const removedAgain = install(installPs1, ['-Uninstall', '-RemoveData', '-Prefix', prefix, '-Yes']);
+  assert(removedAgain.status === 0 && !fs.existsSync(path.join(prefix, 'hub', 'current.txt')), 'uninstall after reinstall failed', removedAgain.output);
+
+  const envPrefix = `${prefix}-env-replaced`;
+  const envInstall = install(installPs1, ['-ZipPath', zip, '-Sha256Sums', sums, '-Prefix', envPrefix, '-Yes', '-NoPath', '-NoService']);
+  assert(envInstall.status === 0, 'install for changed env failed', envInstall.output);
+  const envFile = path.join(envPrefix, 'hub', '.env');
+  const envCopy = `${envFile}.replacement`;
+  fs.copyFileSync(envFile, envCopy);
+  fs.renameSync(envCopy, envFile);
+  const envRemoval = install(installPs1, ['-Uninstall', '-RemoveData', '-Prefix', envPrefix, '-Yes']);
+  assert(envRemoval.status === 0 && fs.existsSync(envFile) && /env changed after install; retained/i.test(envRemoval.output), 'a replaced env must be kept while uninstall completes', envRemoval.output);
+  assert(!fs.existsSync(path.join(envPrefix, 'hub', 'current.txt')), 'changed env must not prevent release removal', envRemoval.output);
+
+  const changedPrefix = `${prefix}-changed`;
+  const changedInstall = install(installPs1, ['-ZipPath', zip, '-Sha256Sums', sums, '-Prefix', changedPrefix, '-Yes', '-NoPath', '-NoService']);
+  assert(changedInstall.status === 0, 'install for changed data failed', changedInstall.output);
+  const hubOutput = await checkStart(installPs1, path.join(changedPrefix, 'bin', 'azito.cmd'), changedPrefix);
+  const extra = path.join(changedPrefix, 'data', 'user-file');
+  fs.writeFileSync(extra, 'keep');
+  const database = path.join(changedPrefix, 'data', 'data.db');
+  const webhook = path.join(changedPrefix, 'data', 'webhook-token');
+  assert(fs.existsSync(path.join(changedPrefix, 'hub', '.owned-data-webhook-token.json')), 'the generated webhook token must have an ownership record', hubOutput);
+  const canary = fs.readdirSync(path.join(changedPrefix, 'data')).find((name) => /^\.azito-hub-canary-[a-f0-9]{32}$/.test(name));
+  assert(canary !== undefined && fs.existsSync(path.join(changedPrefix, 'hub', `.owned-data-${canary}.json`)), 'the generated canary must have an ownership record', hubOutput);
+  const changedRemoval = install(installPs1, ['-Uninstall', '-RemoveData', '-Prefix', changedPrefix, '-Yes']);
+  assert(changedRemoval.status === 0 && fs.existsSync(extra) && /Data retained/.test(changedRemoval.output), 'changed data must be retained and reported', changedRemoval.output);
+  if (fs.existsSync(`${database}-wal`) || fs.existsSync(`${database}-shm`)) assert(fs.existsSync(database), 'database must be kept with SQLite sidecars', changedRemoval.output);
+  else assert(!fs.existsSync(database), 'the recorded database must be removed without sidecars', changedRemoval.output);
+  assert(!fs.existsSync(webhook), 'the recorded generated token must be removed', changedRemoval.output);
+  assert(!fs.existsSync(path.join(changedPrefix, 'data', canary as string)), 'the recorded canary must be removed', changedRemoval.output);
+}
+
+async function checkOrphanLauncher(prefix: string): Promise<void> {
+  step('a synthetic orphan launcher mentioning the hub is detected without being stopped');
+  const hub = path.join(prefix, 'hub');
+  const script = `$hubRoot = ${powershellDialect.quote(hub)}; Start-Sleep -Seconds 90`;
+  const child = spawn(POWERSHELL, powershellEncodedArgs(script), { stdio: 'ignore' });
+  try {
+    await new Promise((resolve) => setTimeout(resolve, 1500));
+    const host = runHostOf(resolveCurrentHostEnv());
+    let reason = '';
+    try { await assertNoHubLaunchers([hub], (spec) => runCommandSpec(spec, host), SYSTEM_ROOT, process.pid); } catch (err) { reason = err instanceof Error ? err.message : String(err); }
+    assert(/launcher is still running/.test(reason), 'the orphan launcher must be reported', reason);
+    assert(child.exitCode === null, 'the launcher check must not stop the process');
+  } finally {
+    if (child.exitCode === null && child.signalCode === null) {
+      const exited = new Promise<void>((resolve) => child.once('exit', () => resolve()));
+      child.kill();
+      await exited;
+    }
+  }
+}
+
+async function checkShortProcessPath(prefix: string): Promise<void> {
+  step('an unidentifiable Node process with a short path is refused without being stopped');
+  const child = spawn(process.execPath, ['-e', 'setTimeout(() => {}, 90000)', 'C:\\MIXED~1\\fake'], { stdio: 'ignore' });
+  try {
+    await new Promise((resolve) => setTimeout(resolve, 1500));
+    const host = runHostOf(resolveCurrentHostEnv());
+    let reason = '';
+    try { await assertNoOtherHubProcesses(path.join(prefix, 'hub'), (spec) => runCommandSpec(spec, host), SYSTEM_ROOT, process.pid); } catch (err) { reason = err instanceof Error ? err.message : String(err); }
+    assert(reason.includes(`node process (${child.pid}) could not be identified`), 'the short-name process must be reported', reason);
+    assert(child.exitCode === null, 'the process check must not stop the process');
+  } finally {
+    if (child.exitCode === null && child.signalCode === null) {
+      const exited = new Promise<void>((resolve) => child.once('exit', () => resolve()));
+      child.kill();
+      await exited;
+    }
+  }
+}
+
 function checkRepairAndDiagnostics(installPs1: string, zip: string, sums: string, prefix: string, version: string): void {
   step(`install into ${prefix} (a prefix with &), then repair a half-finished install`);
   const args = ['-ZipPath', zip, '-Sha256Sums', sums, '-Prefix', prefix, '-Yes', '-NoPath', '-NoService'];
@@ -173,7 +291,7 @@ function checkCli(azitoCmd: string, prefix: string, version: string): void {
   assert(unknown.status === 1 && /Unknown command/.test(unknown.output), 'an unknown command must fail', unknown.output);
 }
 
-async function checkStart(azitoCmd: string, prefix: string): Promise<void> {
+async function checkStart(installPs1: string, azitoCmd: string, prefix: string): Promise<string> {
   step('azito run runs the hub in the foreground with hub/.env and /api/health answers');
   const envFile = path.join(prefix, 'hub', '.env');
   const port = await freePort();
@@ -183,7 +301,10 @@ async function checkStart(azitoCmd: string, prefix: string): Promise<void> {
   let output = '';
   let failure: Error | null = null;
   let exited = false;
-  const child: ChildProcess = spawn(CMD, cmdLine(azitoCmd, 'run'), { stdio: ['ignore', 'pipe', 'pipe'], windowsVerbatimArguments: true });
+  const env = { ...process.env };
+  delete env.AZITO_WEBHOOK_TOKEN;
+  delete env.AZITO_MASTER_KEY;
+  const child: ChildProcess = spawn(CMD, cmdLine(azitoCmd, 'run'), { stdio: ['ignore', 'pipe', 'pipe'], windowsVerbatimArguments: true, env });
   child.stdout?.on('data', (chunk: Buffer) => { output += chunk.toString(); });
   child.stderr?.on('data', (chunk: Buffer) => { output += chunk.toString(); });
   child.on('error', (err) => { failure = new Error(`could not start azito run: ${err.message}`); exited = true; });
@@ -192,6 +313,9 @@ async function checkStart(azitoCmd: string, prefix: string): Promise<void> {
     const status = await waitForHealth(`http://127.0.0.1:${port}/api/health`, () => failure);
     console.log(`[smoke-install] /api/health -> ${status}`);
     assert(fs.existsSync(path.join(prefix, 'data', 'data.db')), 'the hub must use the AZITO_DATA_DIR from hub/.env', output);
+    const refused = install(installPs1, ['-Uninstall', '-Prefix', prefix, '-Yes']);
+    assert(refused.status !== 0 && /hub process/i.test(refused.output) && /still running/i.test(refused.output) && /Nothing was removed:/i.test(refused.output) && !/Fatal error starting server:/.test(refused.output), 'uninstall must leave a foreground hub running', refused.output);
+    assert((await fetch(`http://127.0.0.1:${port}/api/health`)).ok, 'uninstall must not stop the foreground hub');
   } catch (err) {
     console.error(`[smoke-install] hub output:\n${output}`);
     throw err;
@@ -202,6 +326,7 @@ async function checkStart(azitoCmd: string, prefix: string): Promise<void> {
       await new Promise((r) => setTimeout(r, 1500));
     }
   }
+  return output;
 }
 
 function checkAccessRules(prefix: string): void {
@@ -225,8 +350,8 @@ function checkUserPath(installPs1: string, work: string): void {
   fs.writeFileSync(script, [
     // install.ps1 keeps its functions inside one script block (so `irm | iex` leaves nothing behind): take the two under test out of its syntax tree.
     `$ast = [System.Management.Automation.Language.Parser]::ParseFile('${installPs1.replace(/'/g, "''")}', [ref]$null, [ref]$null)`,
-    "$found = $ast.FindAll({ param($n) ($n -is [System.Management.Automation.Language.FunctionDefinitionAst]) -and (($n.Name -eq 'Add-UserPathEntry') -or ($n.Name -eq 'Send-EnvironmentChange')) }, $true)",
-    "if (@($found).Count -ne 2) { throw 'Add-UserPathEntry / Send-EnvironmentChange not found in install.ps1' }",
+    "$found = $ast.FindAll({ param($n) ($n -is [System.Management.Automation.Language.FunctionDefinitionAst]) -and (($n.Name -eq 'Add-UserPathEntry') -or ($n.Name -eq 'Remove-RecordedPathEntry') -or ($n.Name -eq 'Send-EnvironmentChange')) }, $true)",
+    "if (@($found).Count -ne 3) { throw 'PATH functions not found in install.ps1' }",
     'foreach ($function in $found) { . ([scriptblock]::Create($function.Extent.Text)) }',
     "$key = [Microsoft.Win32.Registry]::CurrentUser.OpenSubKey('Environment', $true)",
     "$had = $key.GetValueNames() -contains 'Path'",
@@ -238,6 +363,8 @@ function checkUserPath(installPs1: string, work: string): void {
     "  $again = Add-UserPathEntry 'C:\\Foo Bar (x)\\bin\\'",
     "  $now = $key.GetValue('Path', '', [Microsoft.Win32.RegistryValueOptions]::DoNotExpandEnvironmentNames)",
     "  Write-Output \"first=$first\"; Write-Output \"again=$again\"; Write-Output \"kind=$($key.GetValueKind('Path'))\"; Write-Output \"path=$now\"",
+    "  Remove-RecordedPathEntry 'C:\\Foo Bar (x)\\bin'",
+    "  Write-Output \"after=$($key.GetValue('Path', '', [Microsoft.Win32.RegistryValueOptions]::DoNotExpandEnvironmentNames))\"",
     '} finally {',
     "  if ($had) { $key.SetValue('Path', $orig, $origKind) } else { $key.DeleteValue('Path', $false) }",
     '  $key.Close()',
@@ -250,6 +377,7 @@ function checkUserPath(installPs1: string, work: string): void {
   assert(lines.includes('first=True') && lines.includes('again=False'), 'the entry must be added once', r.output);
   assert(lines.includes('kind=ExpandString'), 'the registry type must be kept', r.output);
   assert(lines.includes('path=%USERPROFILE%\\.azito-test-bin;C:\\Existing;C:\\Foo Bar (x)\\bin'), 'existing entries must be kept as they were', r.output);
+  assert(lines.includes('after=%USERPROFILE%\\.azito-test-bin;C:\\Existing'), 'only the recorded entry must be removed', r.output);
 }
 
 function checkTailscaleDns(installPs1: string, work: string): void {
@@ -321,10 +449,14 @@ async function main(): Promise<void> {
     checkInstall(installPs1, zip, sums, prefix, version as string);
     const azitoCmd = path.join(prefix, 'bin', 'azito.cmd');
     checkCli(azitoCmd, prefix, version as string);
+    await checkOrphanLauncher(prefix);
+    await checkShortProcessPath(prefix);
     checkRepairAndDiagnostics(installPs1, zip, sums, path.join(work, 'Amp&Co', '.azito'), version as string);
-    await checkStart(azitoCmd, prefix);
+    await checkStart(installPs1, azitoCmd, prefix);
     checkAccessRules(prefix);
     checkUserPath(installPs1, work);
+    checkUninstall(installPs1, prefix, version as string);
+    await checkRemoveData(installPs1, zip, sums, path.join(work, 'remove-data', '.azito'));
   } finally {
     // A leftover file must not replace the failure that got us here.
     try {

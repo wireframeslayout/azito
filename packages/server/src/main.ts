@@ -25,6 +25,9 @@ import { authDoctorCommand } from './cli/authDoctorCommand';
 import { misaoCommand } from './cli/misaoCommand';
 import { serviceCommand } from './cli/serviceCommand';
 import { initEnvCommand } from './cli/initEnvCommand';
+import { windowsInstallRecordCommand } from './cli/windowsInstallRecordCommand';
+import { windowsHubUninstallCommand, UninstallPreparationError } from './cli/windowsHubUninstallCommand';
+import { createOwnedCanaryRecorder, trackWindowsOwnedSecrets } from './modules/system/windowsOwnedSecrets';
 import { hostRunsTmux } from './modules/servers/muxKinds';
 import { hasMisaoToRelyOn } from './modules/system/misao/misaoPaths';
 import { misaoWindowsTaskExists } from './modules/system/misao/misaoLocalWindows';
@@ -42,7 +45,7 @@ const RECOVERY_DRAIN_MS = 4000;
 
 async function main(): Promise<void> {
   const hostEnv = resolveCurrentHostEnv();
-  const secretFileGuard = createSecretFileGuard(hostEnv.platform, process.env);
+  let secretFileGuard = createSecretFileGuard(hostEnv.platform, process.env);
   if (process.argv[2] === 'token') {
     await tokenCommand(process.argv.slice(3), hostEnv.homeDir, secretFileGuard);
     return;
@@ -60,6 +63,18 @@ async function main(): Promise<void> {
 
   if (process.argv[2] === 'service') {
     await serviceCommand(process.argv.slice(3), hostEnv, { bundleRoot: getBundleRoot(), pid: process.pid, secretFileGuard });
+    return;
+  }
+
+  if (process.argv[2] === 'windows-install-record') {
+    windowsInstallRecordCommand(getBundleRoot(), process.argv.slice(3), secretFileGuard, hostEnv.platform);
+    return;
+  }
+
+  if (process.argv[2] === 'windows-uninstall-prepare') {
+    const args = process.argv.slice(3);
+    if (args[0] !== '--bundle-root' || !args[1] || args.length > 3 || (args.length === 3 && args[2] !== '--remove-data')) throw new Error('Invalid uninstall options.');
+    await windowsHubUninstallCommand(hostEnv, { bundleRoot: args[1], pid: process.pid, secretFileGuard }, args.length === 3);
     return;
   }
 
@@ -104,6 +119,7 @@ async function main(): Promise<void> {
   }
 
   migrateDataIfNeeded(paths, legacy, secretFileGuard);
+  secretFileGuard = trackWindowsOwnedSecrets(secretFileGuard, getBundleRoot(), paths, hostEnv.platform);
 
   initSecretBox(paths.masterKey, secretFileGuard);
   initVapidKeyManager(paths.vapidKeys, secretFileGuard);
@@ -111,7 +127,8 @@ async function main(): Promise<void> {
   // Isolation doctor FS-boundary canary (Issue #29 review, Critical finding
   // 1): best-effort, write failure only warns — never blocks startup. See
   // hubCanary.ts's own doc comment.
-  if (writeHubCanary(paths.dir) === null) {
+  const canaryRecorder = createOwnedCanaryRecorder(secretFileGuard, getBundleRoot(), paths, hostEnv.platform);
+  if (writeHubCanary(paths.dir, canaryRecorder) === null) {
     console.warn('[azito] Failed to write isolation-doctor FS-boundary canary — the FS-boundary check will report "unknown" for every agent server until the hub restarts with a writable data directory');
   }
 
@@ -331,6 +348,10 @@ async function main(): Promise<void> {
 }
 
 main().catch((err) => {
+  if (process.argv[2] === 'windows-uninstall-prepare') {
+    console.log(JSON.stringify({ error: err instanceof Error ? err.message : String(err), taskMayHaveBeenRemoved: err instanceof UninstallPreparationError && err.taskMayHaveBeenRemoved }));
+    process.exit(1);
+  }
   console.error('Fatal error starting server:', err);
   process.exit(1);
 });

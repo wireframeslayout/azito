@@ -43,7 +43,10 @@ param(
     # Do not add <Prefix>\bin to the user's PATH.
     [switch]$NoPath,
     # Do not register the Task Scheduler tasks (the hub's and misao's). Run the hub in the foreground with `azito run`, or register it later with `azito service install`.
-    [switch]$NoService
+    [switch]$NoService,
+    # Remove this Windows installation. Data is retained unless -RemoveData is also given.
+    [switch]$Uninstall,
+    [switch]$RemoveData
 )
 
 # These assignments are local to this script block: the caller's preferences are not changed.
@@ -313,6 +316,273 @@ function Confirm-Proceed {
     return ($answer -eq '' -or $answer -match '^[Yy]')
 }
 
+# Before running an installed executable, refuse links and paths another account can change.
+function Assert-OwnerWritableOnly([string]$Path, [bool]$DeleteOnly = $false) {
+    $acl = Get-Acl -LiteralPath $Path
+    $me = [Security.Principal.WindowsIdentity]::GetCurrent().User.Value
+    $trusted = @($me, 'S-1-5-18', 'S-1-5-32-544', 'S-1-3-0', 'S-1-5-80-956008885-3418522649-1831038044-1853292631-2271478464')
+    $owner = $acl.GetOwner([Security.Principal.SecurityIdentifier]).Value
+    if ($trusted -notcontains $owner -or $owner -eq 'S-1-3-0') { throw "$Path has an untrusted owner ($owner); nothing is removed." }
+    $writeRights = 0x40 -bor 0x10000 -bor 0x40000 -bor 0x80000 -bor 0x10000000
+    if (-not $DeleteOnly) { $writeRights = $writeRights -bor 0x2 -bor 0x4 -bor 0x40000000 }
+    foreach ($rule in $acl.GetAccessRules($true, $true, [Security.Principal.SecurityIdentifier])) {
+        if (($rule.PropagationFlags -band [Security.AccessControl.PropagationFlags]::InheritOnly) -ne 0) { continue }
+        if ($rule.AccessControlType -eq 'Allow' -and $trusted -notcontains $rule.IdentityReference.Value -and (([long]$rule.FileSystemRights -band $writeRights) -ne 0)) {
+            throw "$Path can be changed by another account ($($rule.IdentityReference.Value)); nothing is removed."
+        }
+    }
+}
+
+function Assert-RealPathChain([string]$Path) {
+    $current = [IO.Path]::GetFullPath($Path)
+    $first = $true
+    while ($true) {
+        $item = Get-Item -LiteralPath $current -Force
+        if (($item.Attributes -band [IO.FileAttributes]::ReparsePoint) -ne 0) { throw "$current is a link or mount point; nothing is removed." }
+        Assert-OwnerWritableOnly $current (-not $first)
+        $first = $false
+        $parent = [IO.Directory]::GetParent($current)
+        if ($null -eq $parent) { break }
+        $current = $parent.FullName
+    }
+}
+
+function Assert-RecordedTree([string]$Root, $Inventory) {
+    Assert-RealPathChain $Root
+    $files = @{}
+    $dirs = @{}
+    foreach ($entry in @($Inventory.files)) {
+        if (-not $entry.path -or $files.ContainsKey([string]$entry.path) -or $entry.sha256 -notmatch '^[a-f0-9]{64}$') { throw 'Invalid installation record.' }
+        $files[[string]$entry.path] = [string]$entry.sha256
+    }
+    foreach ($entry in @($Inventory.directories)) {
+        if (-not $entry -or $dirs.ContainsKey([string]$entry)) { throw 'Invalid installation record.' }
+        $dirs[[string]$entry] = $true
+    }
+    $pending = New-Object 'System.Collections.Generic.Stack[object]'
+    $pending.Push(@{ FullPath = $Root; RelativePath = '' })
+    while ($pending.Count -gt 0) {
+        $directory = $pending.Pop()
+        foreach ($entry in (Get-ChildItem -LiteralPath $directory.FullPath -Force)) {
+            if (($entry.Attributes -band [IO.FileAttributes]::ReparsePoint) -ne 0) { throw "$($entry.FullName) is a link or mount point; nothing is removed." }
+            Assert-OwnerWritableOnly $entry.FullName
+            $relative = if ($directory.RelativePath -eq '') { $entry.Name } else { Join-Path $directory.RelativePath $entry.Name }
+            if ($entry.PSIsContainer) {
+                if (-not $dirs.ContainsKey($relative)) { throw "$relative was not recorded; nothing is removed." }
+                $dirs.Remove($relative)
+                $pending.Push(@{ FullPath = $entry.FullName; RelativePath = $relative })
+            } else {
+                if (-not $files.ContainsKey($relative) -or (Get-FileHash -LiteralPath $entry.FullName -Algorithm SHA256).Hash -ine $files[$relative]) { throw "$relative differs from the record; nothing is removed." }
+                $files.Remove($relative)
+            }
+        }
+    }
+    if ($dirs.Count -ne 0 -or $files.Count -ne 0) { throw 'Recorded bundle entries are missing; nothing is removed.' }
+}
+
+function Assert-ProtectedTree([string]$Root) {
+    Assert-RealPathChain $Root
+    $pending = New-Object 'System.Collections.Generic.Stack[string]'
+    $pending.Push($Root)
+    while ($pending.Count -gt 0) {
+        foreach ($entry in (Get-ChildItem -LiteralPath ($pending.Pop()) -Force)) {
+            if (($entry.Attributes -band [IO.FileAttributes]::ReparsePoint) -ne 0) { throw "$($entry.FullName) is a link or mount point." }
+            Assert-OwnerWritableOnly $entry.FullName
+            if ($entry.PSIsContainer) { $pending.Push($entry.FullName) }
+        }
+    }
+}
+
+function Remove-RecordedPathEntry([string]$Dir, [bool]$ValueCreated) {
+    $key = [Microsoft.Win32.Registry]::CurrentUser.OpenSubKey('Environment', $true)
+    if ($null -eq $key) { throw 'Could not open HKCU\Environment to update PATH.' }
+    try {
+        $raw = [string]$key.GetValue('Path', '', [Microsoft.Win32.RegistryValueOptions]::DoNotExpandEnvironmentNames)
+        if ($key.GetValueNames() -notcontains 'Path') { return }
+        $kind = $key.GetValueKind('Path')
+        $entries = [Collections.Generic.List[string]]::new()
+        foreach ($entry in $raw.Split([char]';')) { $entries.Add($entry) }
+        # The installer appends the literal path. Remove one matching entry, from the end.
+        for ($i = $entries.Count - 1; $i -ge 0; $i--) {
+            if ($entries[$i] -ieq $Dir) {
+                $entries.RemoveAt($i)
+                if ($ValueCreated -and ($entries -join ';') -eq '') { $key.DeleteValue('Path', $false) } else { $key.SetValue('Path', ($entries -join ';'), $kind) }
+                Send-EnvironmentChange
+                return
+            }
+        }
+        Write-Warning "The recorded PATH entry $Dir is no longer present; inspect your user PATH manually."
+    } finally { $key.Close() }
+}
+
+function Remove-RecordedTree([string]$Parent, [string]$Name, $Inventory) {
+    $target = Join-Path $Parent $Name
+    Assert-RecordedTree $target $Inventory
+    # A mapped executable or DLL cannot be opened for writing, even after its process closed the handle.
+    foreach ($file in (Get-ChildItem -LiteralPath $target -Recurse -File -Force)) {
+        if (($file.Attributes -band [IO.FileAttributes]::ReadOnly) -ne 0) { continue }
+        $stream = [IO.File]::Open($file.FullName, 'Open', 'ReadWrite', 'ReadWrite, Delete')
+        $stream.Dispose()
+    }
+    $isolated = '.uninstall-' + [Guid]::NewGuid().ToString('N')
+    $isolatedPath = Join-Path $Parent $isolated
+    Move-Item -LiteralPath $target -Destination $isolatedPath
+    $cmd = Join-Path $env:SystemRoot 'System32\cmd.exe'
+    Push-Location -LiteralPath $Parent
+    try {
+        & $cmd /d /c rd /s /q $isolated
+        if ($LASTEXITCODE -ne 0 -or (Test-Path -LiteralPath $isolatedPath)) { throw "Could not remove $isolatedPath. Inspect it and remove it manually, then run the installer again." }
+    } finally { Pop-Location }
+}
+
+function Invoke-Uninstall {
+    if ($Prefix -eq '') {
+        if (-not $env:USERPROFILE) { throw 'USERPROFILE is not set; pass -Prefix.' }
+        $Prefix = Join-Path $env:USERPROFILE '.azito'
+    }
+    $Prefix = $ExecutionContext.SessionState.Path.GetUnresolvedProviderPathFromPSPath($Prefix).TrimEnd('\')
+    if ($Prefix -eq '' -or [IO.Path]::GetPathRoot($Prefix).TrimEnd('\') -ieq $Prefix) { throw 'A drive root cannot be uninstalled.' }
+    $hubRoot = Join-Path $Prefix 'hub'
+    $recordPath = Join-Path $hubRoot '.install-record.json'
+    if (-not (Test-Path -LiteralPath $recordPath -PathType Leaf)) {
+        Write-Warning "No installation record at $recordPath. Nothing was removed. Inspect $hubRoot, $Prefix\bin and $Prefix\data in Explorer, the user PATH in Windows environment settings, and AzitoHub / AzitoMisao in Task Scheduler before manual removal."
+        return
+    }
+    Assert-RealPathChain $recordPath
+    $record = [IO.File]::ReadAllText($recordPath) | ConvertFrom-Json
+    if ($record.version -ne 1 -or -not (Test-ReleaseVersion $record.release)) { throw 'The installation record is invalid; nothing is removed.' }
+    $pointer = Join-Path $hubRoot 'current.txt'
+    if (-not (Test-Path -LiteralPath $pointer) -and -not (Test-Path -LiteralPath (Join-Path $hubRoot $record.release))) {
+        Write-Host "The recorded release was already removed. Inspect the retained files, data, PATH and shared misao under $Prefix manually."
+        return
+    }
+    if ($record.consumed -ne $false) { throw "A previous uninstall started removing items. Inspect $hubRoot (including .uninstall-*), $Prefix\bin, $Prefix\data, and the user PATH in Windows environment settings before manual removal." }
+    Assert-RealPathChain $pointer
+    if (([IO.File]::ReadAllText($pointer)).Trim() -cne $record.release) { throw 'The current release differs from the installation record. Inspect the installation and remove it manually.' }
+    $release = Join-Path $hubRoot $record.release
+    Assert-RecordedTree $release $record.inventory
+    Write-Host "Uninstalling the recorded AZITO installation at $Prefix."
+    if ($RemoveData) { Write-Host 'The recorded database and unchanged recorded data are selected for removal when their identity can be verified.' } else { Write-Host 'Data will be retained.' }
+    Write-Host 'AzitoMisao and the misao folder are retained. To remove them manually, first verify that no agent uses them; see the Windows uninstall documentation.'
+    Write-Host 'Unrecorded files will be retained.'
+    if (-not $Yes) {
+        if ([Console]::IsInputRedirected) { throw 'Confirmation requires an interactive terminal or -Yes.' }
+        if ((Read-Host 'Proceed with uninstall? [y/N]') -notmatch '^[Yy]$') { Write-Host 'Aborted.'; return }
+    }
+    # A verified copy keeps the existing hub lock while this script removes the original executable.
+    $tempParent = $hubRoot
+    Assert-RealPathChain $tempParent
+    $tempName = 'azito-uninstall-' + [Guid]::NewGuid().ToString('N')
+    $tempRoot = Join-Path $tempParent $tempName
+    $holder = $null
+    $stderrTask = $null
+    $line = $null
+    $resultLine = $null
+    try {
+        New-Item -ItemType Directory -Path $tempRoot | Out-Null
+        Copy-Item -LiteralPath $release -Destination $tempRoot -Recurse -Force
+        $copy = Join-Path $tempRoot $record.release
+        Assert-RecordedTree $copy $record.inventory
+        if ($release.Contains('"') -or $copy.Contains('"') -or $release -match '[\r\n]' -or $copy -match '[\r\n]') { throw 'The prefix cannot contain quotes or line breaks.' }
+        $info = New-Object Diagnostics.ProcessStartInfo
+        $info.FileName = Join-Path $copy 'node.exe'
+        $info.Arguments = '"' + (Join-Path $copy 'azito-hub.cjs') + '" windows-uninstall-prepare --bundle-root "' + $release + '"'
+        if ($RemoveData) { $info.Arguments += ' --remove-data' }
+        $info.UseShellExecute = $false
+        $info.RedirectStandardInput = $true
+        $info.RedirectStandardOutput = $true
+        $info.RedirectStandardError = $true
+        $info.CreateNoWindow = $true
+        $holder = [Diagnostics.Process]::Start($info)
+        $stderrTask = $holder.StandardError.ReadToEndAsync()
+        $line = $holder.StandardOutput.ReadLine()
+        if (-not $line) { throw "Uninstall preparation failed (the verified task may already have been removed): no JSON response from helper" }
+        $prepared = $line | ConvertFrom-Json -ErrorAction Stop
+        if ($prepared.error) {
+            if ($prepared.taskMayHaveBeenRemoved) { throw "Uninstall preparation failed (the verified task may already have been removed): $($prepared.error)" }
+            throw "Nothing was removed: $($prepared.error)"
+        }
+        if ($prepared.release -cne $record.release) { throw 'The uninstall preparation did not identify the recorded release.' }
+        if ($holder.HasExited) { throw 'The uninstall lock holder exited; inspect retained files and PATH manually.' }
+        foreach ($message in @($prepared.retained)) { if ($message) { Write-Warning $message } }
+        if ($prepared.pathAdded) { Remove-RecordedPathEntry (Join-Path $Prefix 'bin') ([bool]$prepared.pathValueCreated) }
+        else { Write-Host 'PATH was not recorded as added by this installer; inspect it manually.' }
+        if ($prepared.wrapper) {
+            if ($holder.HasExited) { throw 'The uninstall lock holder exited; inspect the CLI wrapper manually.' }
+            $wrapper = Join-Path $Prefix 'bin\azito.cmd'
+            Assert-RealPathChain $wrapper
+            if ((Get-FileHash -LiteralPath $wrapper -Algorithm SHA256).Hash -ine $record.wrapperSha256) { throw 'The CLI wrapper changed; it is retained.' }
+            Remove-Item -LiteralPath $wrapper
+        }
+        if ($holder.HasExited) { throw 'The uninstall lock holder exited; inspect retained files manually.' }
+        $commandBytes = (New-Object System.Text.UTF8Encoding($false)).GetBytes("remove`n")
+        $holder.StandardInput.BaseStream.Write($commandBytes, 0, $commandBytes.Length)
+        $holder.StandardInput.BaseStream.Flush()
+        $holder.StandardInput.Close()
+        $resultLine = $holder.StandardOutput.ReadLine()
+        if (-not $resultLine) { throw "Uninstall stopped before reporting the result. Inspect remaining files manually: no JSON response from helper" }
+        $result = $resultLine | ConvertFrom-Json -ErrorAction Stop
+        if (-not $result.removed) { throw "Uninstall stopped after a partial removal: $($result.error)" }
+        if (-not $holder.WaitForExit(60000)) { throw 'The uninstall helper did not exit after reporting its result.' }
+        if ($holder.ExitCode -ne 0) { throw 'The uninstall helper reported success but exited with an error.' }
+        foreach ($message in @($result.retained)) { if ($message) { Write-Warning $message } }
+    } catch {
+        $reason = $_.Exception.Message
+        if ($null -ne $holder) {
+            if (-not $holder.HasExited) {
+                try { $holder.StandardInput.Close() } catch { }
+                if (-not $holder.WaitForExit(60000)) { $holder.Kill(); $holder.WaitForExit() }
+            }
+            $stderr = if ($null -ne $stderrTask) { $stderrTask.GetAwaiter().GetResult() } else { '' }
+            $remainingOutput = $holder.StandardOutput.ReadToEnd()
+            throw "${reason}`nUninstall helper exit code: $($holder.ExitCode)`nHelper stdout: $line`n$resultLine`n$remainingOutput`nHelper stderr: $stderr"
+        }
+        throw $reason
+    } finally {
+        if ($null -ne $holder) {
+            if (-not $holder.HasExited) { try { $holder.StandardInput.Close() } catch { } }
+            if (-not $holder.WaitForExit(60000)) { $holder.Kill(); $holder.WaitForExit() }
+            $holder.Dispose()
+        }
+        if (Test-Path -LiteralPath $tempRoot) {
+            try {
+                if (Test-Path -LiteralPath (Join-Path $tempRoot $record.release)) { Remove-RecordedTree $tempRoot $record.release $record.inventory }
+                Remove-Item -LiteralPath $tempRoot
+            } catch { Write-Warning "The temporary copy remains at $tempRoot; inspect it and remove it manually: $($_.Exception.Message)" }
+        }
+    }
+    # The helper has released the lock. Remove its key only if it is the same protected file.
+    $lockKey = Join-Path $hubRoot '.lock-key'
+    try {
+        Assert-RealPathChain $lockKey
+        $item = Get-Item -LiteralPath $lockKey -Force
+        if ($item.PSIsContainer -or ($item.Attributes -band [IO.FileAttributes]::ReparsePoint) -ne 0) { throw 'not a regular file' }
+        $acl = Get-Acl -LiteralPath $lockKey
+        $sid = [Security.Principal.WindowsIdentity]::GetCurrent().User
+        $rules = @($acl.GetAccessRules($true, $true, [Security.Principal.SecurityIdentifier]))
+        if ($acl.GetOwner([Security.Principal.SecurityIdentifier]).Value -ne $sid.Value -or -not $acl.AreAccessRulesProtected -or $rules.Count -ne 1 -or $rules[0].IdentityReference.Value -ne $sid.Value -or $rules[0].AccessControlType -ne 'Allow' -or $rules[0].FileSystemRights -ne [Security.AccessControl.FileSystemRights]::FullControl -or $rules[0].InheritanceFlags -ne 'None' -or $rules[0].PropagationFlags -ne 'None') { throw 'not owner-only' }
+        if ((Get-FileHash -LiteralPath $lockKey -Algorithm SHA256).Hash -ine $result.lockKeyHash) { throw 'key changed after inspection' }
+        Remove-Item -LiteralPath $lockKey
+    } catch { Write-Warning "Retained $lockKey; inspect manually: $($_.Exception.Message)" }
+    # Remove only recorded, empty directories without entering reparse points.
+    foreach ($dir in @((Join-Path $Prefix 'bin'), $hubRoot, $Prefix)) {
+        if (-not (Test-Path -LiteralPath $dir -PathType Container)) { continue }
+        try {
+            Assert-RealPathChain $dir
+            $remaining = @(Get-ChildItem -LiteralPath $dir -Force)
+            $key = if ($dir -eq $Prefix) { 'prefix' } elseif ($dir -eq $hubRoot) { 'hub' } else { Split-Path -Leaf $dir }
+            if ($remaining.Count -eq 0 -and @($result.emptyDirectoryCandidates) -contains $key) { [IO.Directory]::Delete($dir) }
+            elseif ($remaining.Count -eq 0) { Write-Host "Retained empty directory $dir (its creation was not recorded)." }
+            else { Write-Host ("Retained ${dir}: " + (($remaining | ForEach-Object { $_.Name }) -join ', ')) }
+        } catch { Write-Warning "Retained $dir; inspect manually: $($_.Exception.Message)" }
+    }
+    Write-Host "Recorded release removed. Inspect retained files in $hubRoot, $Prefix\bin, $Prefix\data and $Prefix\logs in Explorer before any manual removal."
+    Write-Host 'Misao is retained. Before manual removal verify that no agent or other hub uses it.'
+    Write-Host 'Inspect: schtasks /Query /TN AzitoMisao /XML; set MISAO_SOCKET to its pipe and run the task release misao.exe stop (this closes all panes).'
+    Write-Host 'Then remove the task with schtasks /Delete /TN AzitoMisao /F and inspect the misao folder before deleting it.'
+    Write-Host 'Inspect the user PATH in Windows environment settings.'
+}
+
 function Invoke-Node([string]$Node, [string[]]$NodeArgs) {
     & $Node @NodeArgs
     if ($LASTEXITCODE -ne 0) { throw "azito-hub $($NodeArgs[1]) failed (exit code $LASTEXITCODE)" }
@@ -480,8 +750,19 @@ function Invoke-Install {
             Assert-ZipSha256 $zip $sums
         }
 
+        $freshPrefix = -not (Test-Path -LiteralPath $Prefix)
+        $freshHub = -not (Test-Path -LiteralPath $hubRoot)
+        $freshBin = -not (Test-Path -LiteralPath (Join-Path $Prefix 'bin'))
         New-Item -ItemType Directory -Force -Path $hubRoot | Out-Null
         $installDir = Join-Path $hubRoot $tag
+        $freshBundle = -not (Test-Path -LiteralPath $installDir)
+        $dataPath = Join-Path $Prefix 'data'
+        $freshData = $false
+        if (-not (Test-Path -LiteralPath $dataPath)) {
+            New-Item -ItemType Directory -Path $dataPath | Out-Null
+            $freshData = $true
+        }
+        $freshWrapper = -not (Test-Path -LiteralPath (Join-Path $Prefix 'bin\azito.cmd'))
         # No pointer means nothing uses this folder: it is what an interrupted earlier run left behind.
         if (Test-Path -LiteralPath $installDir) { Remove-Item -LiteralPath $installDir -Recurse -Force }
         $staging = Join-Path $hubRoot ".staging-$tag"
@@ -500,6 +781,7 @@ function Invoke-Install {
 
         # data\ and hub\.env hold secrets: the hub's own code creates them, so the owner-only access rules come from the
         # one SecretFileGuard instead of being written again here in PowerShell.
+        $freshEnv = -not (Test-Path -LiteralPath (Join-Path $hubRoot '.env'))
         $initArgs = @($hub, 'init-env', '--prefix', $Prefix, '--port', [string]$Port)
         if ($dns) { $initArgs += @('--tailscale-dns', $dns) }
         Invoke-Node $node $initArgs
@@ -541,9 +823,14 @@ function Invoke-Install {
         [System.IO.File]::WriteAllText((Join-Path $bin 'azito.cmd'), $wrapper, (New-Object System.Text.ASCIIEncoding))
         Write-Host "CLI installed at $bin\azito.cmd"
 
+        $pathAdded = $false
+        $pathKey = [Microsoft.Win32.Registry]::CurrentUser.OpenSubKey('Environment', $false)
+        if ($null -eq $pathKey) { throw 'Could not read the user environment.' }
+        try { $pathValueMissing = $pathKey.GetValueNames() -notcontains 'Path' } finally { $pathKey.Close() }
         if ($NoPath) {
             Write-Host "Skipping the PATH change (-NoPath). Add $bin to your PATH to use azito from any folder."
         } elseif (Add-UserPathEntry $bin) {
+            $pathAdded = $true
             Write-Host "Added $bin to your user PATH. Open a new terminal to use azito."
         } else {
             Write-Host "$bin is already in your user PATH."
@@ -569,6 +856,26 @@ function Invoke-Install {
             } catch {
                 Write-Warning "The misao service could not be installed (see the error above): $($_.Exception.Message)"
                 Write-Host '  AZITO is installed, but its panes need misao. Fix the problem and run: azito misao install'
+            }
+        }
+
+        # Record only what this invocation created. Existing releases and shared misao are never claimed.
+        if ($freshBundle) {
+            $recordArgs = @($hub, 'windows-install-record')
+            if ($freshWrapper) { $recordArgs += '--wrapper-created' }
+            if ($freshData) { $recordArgs += '--data-created' }
+            if ($pathAdded) { $recordArgs += '--path-added'; if ($pathValueMissing) { $recordArgs += '--path-value-created' } }
+            if ($freshEnv) { $recordArgs += '--env-created' }
+            if ($freshPrefix) { $recordArgs += '--prefix-created' }
+            if ($freshHub) { $recordArgs += '--hub-created' }
+            if ($freshBin) { $recordArgs += '--bin-created' }
+            try {
+                Assert-ProtectedTree $installDir
+                if ($freshData) { Assert-ProtectedTree (Join-Path $Prefix 'data') }
+                if ($freshWrapper) { Assert-RealPathChain (Join-Path $Prefix 'bin\azito.cmd') }
+                Invoke-Node $node $recordArgs
+            } catch {
+                Write-Warning "The installation ownership could not be recorded: $($_.Exception.Message). The install continues, but its files must be inspected manually before removal."
             }
         }
 
@@ -604,7 +911,12 @@ function Invoke-Install {
     Write-Host '  Version: azito version'
 }
 
-Invoke-Install
+if ($Uninstall) {
+    Invoke-Uninstall
+} else {
+    if ($RemoveData) { throw '-RemoveData requires -Uninstall.' }
+    Invoke-Install
+}
 } @args
 } catch {
     # Never `exit` here: for `irm | iex` or a script block that would end the caller's PowerShell, and nothing tells those apart

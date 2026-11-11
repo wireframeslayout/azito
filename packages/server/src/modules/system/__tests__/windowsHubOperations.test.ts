@@ -7,7 +7,7 @@ import { powershellEncodedArgs } from '../../../shared/os/shellDialect';
 import { buildHubTaskXml, buildSingleRunLauncherScript, hubWindowsLayout } from '../windowsHubService';
 import { UnixSecretFileGuard } from '../../../shared/os/secretFileGuard';
 import { runCommandSpec } from '../../../shared/exec/runCommandSpec';
-import { installWindowsTask, requireOwnTask, type ServiceCommandContext, type WindowsHub } from '../windowsHubOperations';
+import { installWindowsTask, requireOwnTask, uninstallWindowsTask, type ServiceCommandContext, type WindowsHub } from '../windowsHubOperations';
 
 const MINE = 'C:\\Users\\me\\.azito';
 const OTHER = 'C:\\Users\\other\\.azito';
@@ -60,6 +60,72 @@ describe('requireOwnTask', () => {
     await expect(requireOwnTask(setup(undefined, xmlFor(MINE)).manager, setup(undefined, xmlFor(MINE)).hub)).rejects.toThrow(/deleted/);
     const none = setup(undefined, undefined);
     await expect(requireOwnTask(none.manager, none.hub)).rejects.toThrow(/not installed/);
+  });
+});
+
+describe('uninstallWindowsTask', () => {
+  beforeEach(() => {
+    vi.mocked(runCommandSpec).mockReset().mockResolvedValueOnce({ exitCode: 0, stdout: Buffer.from('PC\\me').toString('base64'), stderr: '' } as never).mockResolvedValue({ exitCode: 0, stdout: '', stderr: '' } as never);
+  });
+
+  it('deletes the stopped task owned by this install', async () => {
+    const { hub, manager } = setup(xmlFor(MINE), xmlFor(MINE));
+    const remove = vi.fn(async () => undefined);
+    hub.client.delete = remove;
+    vi.mocked(hub.client.query).mockImplementation(async (name) => name === 'AzitoHubUpdate' ? { exists: false } : { exists: true, running: false, failed: false, lastResult: 0 });
+    await uninstallWindowsTask(manager, hub, context);
+    expect(remove).toHaveBeenCalledWith('AzitoHub');
+  });
+
+  it('marks deletion as attempted immediately before deleting the task', async () => {
+    const { hub, manager } = setup(xmlFor(MINE), xmlFor(MINE));
+    const beforeDelete = vi.fn();
+    hub.client.delete = vi.fn(async () => { expect(beforeDelete).toHaveBeenCalledOnce(); throw new Error('delete failed'); });
+    vi.mocked(hub.client.query).mockImplementation(async (name) => name === 'AzitoHubUpdate' ? { exists: false } : { exists: true, running: false, failed: false, lastResult: 0 });
+    await expect(uninstallWindowsTask(manager, hub, context, beforeDelete)).rejects.toThrow('delete failed');
+  });
+
+  it('leaves the task when a hub process is running', async () => {
+    const { hub, manager } = setup(xmlFor(MINE), xmlFor(MINE));
+    const remove = vi.fn();
+    hub.client.delete = remove;
+    vi.mocked(hub.client.query).mockImplementation(async (name) => name === 'AzitoHubUpdate' ? { exists: false } : { exists: true, running: false, failed: false, lastResult: 0 });
+    vi.mocked(runCommandSpec).mockResolvedValue({ exitCode: 0, stdout: '42 1234\n', stderr: '' } as never);
+    await expect(uninstallWindowsTask(manager, hub, context)).rejects.toThrow(/hub process is still running/);
+    expect(remove).not.toHaveBeenCalled();
+  });
+
+  it('refuses a running foreground hub even when no task is registered', async () => {
+    const { hub, manager } = setup(undefined, undefined);
+    vi.mocked(runCommandSpec).mockReset().mockResolvedValue({ exitCode: 0, stdout: '42 1234\n', stderr: '' } as never);
+    await expect(uninstallWindowsTask(manager, hub, context)).rejects.toThrow(/hub process is still running/);
+  });
+
+  it('does not delete another install’s task', async () => {
+    const { hub, manager } = setup(xmlFor(OTHER), xmlFor(MINE));
+    const remove = vi.fn();
+    hub.client.delete = remove;
+    vi.mocked(hub.client.query).mockImplementation(async (name) => name === 'AzitoHubUpdate' ? { exists: false } : { exists: true, running: false, failed: false, lastResult: 0 });
+    await expect(uninstallWindowsTask(manager, hub, context)).rejects.toThrow(/another install/);
+    expect(remove).not.toHaveBeenCalled();
+  });
+
+  it('does not delete a task running as another account', async () => {
+    const foreign = xmlFor(MINE).replaceAll('<UserId>PC\\me</UserId>', '<UserId>PC\\other</UserId>');
+    const { hub, manager } = setup(foreign, xmlFor(MINE));
+    const remove = vi.fn();
+    hub.client.delete = remove;
+    vi.mocked(hub.client.query).mockImplementation(async (name) => name === 'AzitoHubUpdate' ? { exists: false } : { exists: true, running: false, failed: false, lastResult: 0 });
+    await expect(uninstallWindowsTask(manager, hub, context)).rejects.toThrow(/different or unrecognised Windows account/);
+    expect(remove).not.toHaveBeenCalled();
+  });
+
+  it('refuses while an update task exists', async () => {
+    const { hub, manager } = setup(xmlFor(MINE), xmlFor(MINE));
+    const remove = vi.fn();
+    hub.client.delete = remove;
+    await expect(uninstallWindowsTask(manager, hub, context)).rejects.toThrow(/AzitoHubUpdate/);
+    expect(remove).not.toHaveBeenCalled();
   });
 });
 
