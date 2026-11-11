@@ -441,10 +441,6 @@ export default function ConversationView({ windowId, sessionId, agentType, paneI
               {(() => {
                 const groups = groupEntries(entries);
 
-                // グループを「日付コンテナ」単位にまとめ直す（Minor #5）: sticky 日付チップの
-                // containing block を1グループの高さに閉じ込めず、その日の全グループを包む
-                // コンテナに広げることで、スクロール中その日の間ずっとチップが上端に留まるようにする。
-                // content-visibility は個々のグループ側に残す（仮想化の粒度は変えない）。
                 interface DayContainer {
                   key: string;
                   dateLabel: string | null;
