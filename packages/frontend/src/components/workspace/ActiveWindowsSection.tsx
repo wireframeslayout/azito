@@ -178,7 +178,7 @@ export default function ActiveWindowsSection({ titleData, connectPane, openTask,
                     </div>
                   </div>
                 </button>
-                {isFinished && <span style={{ fontSize: 'var(--font-2xs)', color: row.seenAt != null ? 'var(--text-dim)' : 'var(--success)', background: 'var(--bg)', borderRadius: 'var(--radius-sm)', padding: '0 var(--space-1)', flexShrink: 0, whiteSpace: 'nowrap' }}>{t('activeWindows.done')}{row.finishedAt != null && ` · ${formatRelativeTime(row.finishedAt)}`}</span>}
+                {isFinished && row.seenAt == null && <span style={{ fontSize: 'var(--font-2xs)', color: 'var(--success)', background: 'var(--bg)', borderRadius: 'var(--radius-sm)', padding: '0 var(--space-1)', flexShrink: 0, whiteSpace: 'nowrap' }}>{t('activeWindows.done')}{row.finishedAt != null && ` · ${formatRelativeTime(row.finishedAt)}`}</span>}
                 {isBlocked && (
                   <span
                     style={{
@@ -199,7 +199,7 @@ export default function ActiveWindowsSection({ titleData, connectPane, openTask,
                     #{taskId}
                   </span>
                 )}
-                {isFinished && <IconButton size="sm" style={{ marginBlock: 'calc(-1 * var(--space-1))', visibility: row.seenAt != null ? undefined : 'hidden' }} tabIndex={row.seenAt != null ? undefined : -1} className="icon-btn aw-history-delete" type="button" aria-label={t('activeWindows.deleteHistory')} onClick={() => dismissFinished(row.serverName, row.target, row.windowId)}><Icon name="close" size={14} /></IconButton>}
+                {isFinished && row.seenAt != null && <span className="aw-history-action"><span className="aw-history-time" style={{ fontSize: 'var(--font-2xs)', color: 'var(--text-dim)', whiteSpace: 'nowrap' }}>{row.finishedAt != null && formatRelativeTime(row.finishedAt)}</span><IconButton size="sm" style={{ marginBlock: 'calc(-1 * var(--space-1))' }} className="aw-history-delete" type="button" aria-label={t('activeWindows.deleteHistory')} onClick={() => dismissFinished(row.serverName, row.target, row.windowId)}><Icon name="close" size={14} /></IconButton></span>}
               </div>
               </div>
             );

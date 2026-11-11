@@ -212,7 +212,7 @@
     "muxSwitchTitle": "Reopen with misao?",
     "muxKeepTmux": "Open with tmux",
     "muxUseMisao": "Open with misao",
-    "muxSwitchDescription": "{{title}} will be reopened with the same working directory and conversation. Current processes are not moved.",
+    "muxSwitchDescription": "“{{title}}” will be reopened with the same working directory and conversation. Current processes are not moved.",
     "muxRemember": "Open the same way next time without asking",
     "muxRetryTmux": "Open with tmux instead",
     "muxInstallLink": "Install misao",
