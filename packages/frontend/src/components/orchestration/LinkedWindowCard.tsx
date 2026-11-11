@@ -8,7 +8,7 @@ import { parseSourceRef } from '../../lib/issueRef';
 
 interface Props {
   source?: string; sourceRef?: string | null;
-  title: string; status: string; windowId?: number; statusTone?: 'attention' | 'running' | 'completed'; detail?: string; timestamp?: string; snapshot?: ReactNode;
+  title: string; status: string; windowId?: number; statusTone?: 'attention' | 'running' | 'idle' | 'completed' | 'unknown'; detail?: string; timestamp?: string; snapshot?: ReactNode;
   openLabel: string; unlinkLabel: string; onOpen?: () => void; onUnlink: () => void; expandLabel?: string; onExpand?: () => void;
   attention?: boolean; waitingLabel?: string; closedLabel?: string; sleepingLabel?: string;
   wakeLabel?: string; onWake?: () => void; waking?: boolean;

@@ -24,24 +24,43 @@ export function buildAttentionContext(entries: Map<string, AgentActivityInfo>, a
   return { activityByWindowId, taskById: new Map(allTasks.map((task) => [task.id, task])) };
 }
 
-const ATTENTION_STATUSES = new Set(['waiting_input', 'waiting_for_human', 'phase_review', 'pending_approval', 'failed']);
+const ATTENTION_STATUSES = new Set(['waiting_input', 'phase_review', 'pending_approval', 'failed']);
+export function isAttentionTask(task: Task | undefined): boolean {
+  return task !== undefined && ATTENTION_STATUSES.has(task.status);
+}
 export function isAttentionTarget(target: AttentionTarget, ctx: AttentionContext): boolean {
   if (target.kind === 'operation') return false;
   const activity = target.windowId === null ? undefined : ctx.activityByWindowId.get(target.windowId);
   const task = target.taskId === null ? undefined : ctx.taskById.get(target.taskId);
-  return activity?.status === 'blocked' || (task !== undefined && ATTENTION_STATUSES.has(task.status));
+  return activity?.status === 'blocked' || isAttentionTask(task);
+}
+
+export type ActivityClassification = 'attention' | 'running' | 'idle' | 'completed' | 'unknown';
+export function classifyActivity(input: { attention: boolean; working: boolean; completed: boolean; known: boolean }): ActivityClassification {
+  if (input.attention) return 'attention';
+  if (input.completed) return 'completed';
+  if (!input.known) return 'unknown';
+  if (input.working) return 'running';
+  return 'idle';
+}
+
+export function matchesActivityWindow(entry: { windowId?: number; serverName: string; target: string }, window: Window): boolean {
+  return entry.windowId === window.id || (entry.serverName === window.serverName && isSameWindowTarget(entry.target, window.tmuxTarget));
 }
 
 export function orchestratorStatus(w: Window, activity: Map<string, AgentActivityInfo>): OrchestratorStatus {
   if (w.sleeping) return 'sleeping';
   for (const entry of activity.values()) {
-    if (entry.running && (entry.windowId === w.id || (entry.serverName === w.serverName && isSameWindowTarget(entry.target, w.tmuxTarget)))) return 'active';
+    if (entry.running && matchesActivityWindow(entry, w)) return 'active';
   }
   return 'idle';
 }
 
 export function countAttention(node: OrchestratorNode): number | null {
   return countAttentionForest([node]);
+}
+export function childAttentionIds(nodes: readonly OrchestratorNode[]): Set<number> {
+  return new Set(nodes.filter(node => (countAttention(node) ?? 0) > 0).map(node => node.window.id));
 }
 export function countAttentionForest(nodes: readonly OrchestratorNode[]): number | null {
   const ids = new Set<string>();

@@ -9,7 +9,7 @@ import { TabBar } from '../ui/TabBar';
 import type { Window } from '../../pages/workspace/types';
 
 const activity = vi.hoisted(() => ({ status: 'ready' as 'ready' | 'loading' | 'error', updatedAt: 1 as number | null, values: new Map<string, 'working' | 'blocked'>(), finished: undefined as { finishedAt: number; seenAt: number | null } | undefined }));
-vi.mock('../../hooks/useAgentActivity', () => ({ useAgentActivity: () => ({ entries: new Map(), snapshotStatus: activity.status, snapshotUpdatedAt: activity.updatedAt, activityStatus: (server: string, target: string) => activity.values.get(`${server}:${target.replace(/\.\d+$/, '')}`) ?? null, findFinished: (server: string, target: string) => server === 'host' && target === 'one' ? activity.finished : undefined }) }));
+vi.mock('../../hooks/useAgentActivity', () => ({ useAgentActivity: () => ({ entries: new Map(), finishedEntries: [], snapshotStatus: activity.status, snapshotUpdatedAt: activity.updatedAt, activityStatus: (server: string, target: string) => activity.values.get(`${server}:${target.replace(/\.\d+$/, '')}`) ?? null, findFinished: (server: string, target: string) => server === 'host' && target === 'one' ? activity.finished : undefined }) }));
 afterEach(() => { activity.status = 'ready'; activity.updatedAt = 1; activity.values.clear(); activity.finished = undefined; });
 const orchestrationState = vi.hoisted(() => ({ tree: [] as unknown[], read: vi.fn() }));
 vi.mock('../../hooks/useOrchestrationModel', () => ({ useOrchestrationModel: () => { orchestrationState.read(); return { tree: orchestrationState.tree }; } }));
@@ -204,7 +204,7 @@ describe('maximized window', () => {
 
   it('shows child orchestrators with their label and icon', async () => {
     const child = { ...second, id: 7, label: 'Coordinator', role: 'orchestrator' };
-    orchestrationState.tree = [{ window: first, children: [{ window: child, children: [] }] }];
+    orchestrationState.tree = [{ window: first, attentionIds: [], children: [{ window: child, attentionIds: [], children: [] }] }];
     render(<HotkeyProvider><MaximizedWindowProvider><Workspace /><MaximizedWindow /></MaximizedWindowProvider></HotkeyProvider>);
     fireEvent.click(screen.getByText('Launch'));
     const row = await screen.findByRole('treeitem', { name: /Coordinator/ });
