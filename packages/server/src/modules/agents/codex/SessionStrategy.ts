@@ -6,7 +6,7 @@ import { raceDeadline } from '../../../shared/fs/deadline';
 import { pathApiFor } from '../../../shared/os/hostPath';
 import { findFilesByMtime, firstLineOf, normalizeCwd, parseRolloutMeta, ROLLOUT_HEAD_BYTES, SESSION_SCAN_BUDGET_MS, type RolloutCandidate } from '../sessionScanUtils';
 import { codexHomeOf, type LocalAgentHomes } from '../agentHomes';
-import type { LaunchOptions } from '../AgentProvider';
+import type { LaunchOptions } from '../launchOptions';
 import type { RespawnConversation } from '../SessionStrategy';
 import type { WorkerLaunch } from '../WorkerLaunch';
 import { buildCodexLaunch, buildCodexRespawnLaunch } from './launchCommand';

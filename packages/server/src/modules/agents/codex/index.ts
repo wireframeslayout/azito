@@ -1,4 +1,5 @@
-import type { AgentDefinition, IAgentProvider, LaunchOptions, SessionStrategyDeps } from '../AgentProvider';
+import type { LaunchOptions } from '../launchOptions';
+import type { AgentDefinition, IAgentProvider, SessionStrategyDeps } from '../AgentProvider';
 import type { ISessionStrategy } from '../SessionStrategy';
 import type { WorkerLaunch } from '../WorkerLaunch';
 import { buildCodexLaunch, buildCodexHeadlessCommand } from './launchCommand';

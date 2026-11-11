@@ -1,6 +1,6 @@
 import type { ServerConfig } from '../servers/Server';
 import type { WorkerLaunch } from './WorkerLaunch';
-import type { LaunchOptions } from './AgentProvider';
+import type { LaunchOptions } from './launchOptions';
 
 /**
  * How a respawn starts the conversation it has an id for: `resume` the existing one, `new` = start it fresh under the

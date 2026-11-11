@@ -1,5 +1,5 @@
 import { shellQuote } from '../../../shared/shellQuote';
-import type { LaunchOptions } from '../AgentProvider';
+import type { LaunchOptions } from '../launchOptions';
 import { extraArgValues, flag, value, type LaunchArg, type ProgramLaunch } from '../WorkerLaunch';
 
 /**

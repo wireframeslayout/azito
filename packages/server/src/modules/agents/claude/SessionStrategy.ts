@@ -3,7 +3,7 @@ import type { ServerConfig } from '../../servers/Server';
 import type { TransportFactory } from '../../servers/transport/TransportFactory';
 import { findFilesByMtime, SESSION_SCAN_BUDGET_MS } from '../sessionScanUtils';
 import { pathApiFor } from '../../../shared/os/hostPath';
-import type { LaunchOptions } from '../AgentProvider';
+import type { LaunchOptions } from '../launchOptions';
 import type { WorkerLaunch } from '../WorkerLaunch';
 import { buildClaudeAttachLaunch, buildClaudeLaunch } from './launchCommand';
 import { claudeProjectDirNames } from './projectDirName';
