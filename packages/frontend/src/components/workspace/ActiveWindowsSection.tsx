@@ -140,7 +140,7 @@ export default function ActiveWindowsSection({ titleData, connectPane, openTask,
             const historyStart = row.seenAt != null && (index === 0 || rows[index - 1].seenAt == null);
             return (
               <div key={row.key}>
-              {historyStart && <div style={{ display: 'flex', alignItems: 'center', padding: 'var(--space-1) var(--space-2)', color: 'var(--text-dim)', fontSize: 'var(--font-xs)' }}><span style={{ flex: 1 }}>{t('activeWindows.history', { count: historyCount, max: retention.maxCount })}</span><IconButton size="sm" type="button" title={t('activeWindows.clearHistory')} aria-label={t('activeWindows.clearHistory')} onClick={clearSeenFinished}><Icon name="trash" size={14} /></IconButton></div>}
+              {historyStart && <div style={{ display: 'flex', alignItems: 'center', padding: 'var(--space-1) var(--space-2)', color: 'var(--text-dim)', fontSize: 'var(--font-xs)' }}><Icon name="history" size={14} /><span style={{ flex: 1 }}>{t('activeWindows.history', { count: historyCount, max: retention.maxCount })}</span><IconButton size="sm" type="button" title={t('activeWindows.clearHistory')} aria-label={t('activeWindows.clearHistory')} onClick={clearSeenFinished}><Icon name="trash" size={14} /></IconButton></div>}
               <div
                 className={`row-hover aw-history-row${!isFinished && !isBlocked ? ' aw-row-working' : ''}`}
                 style={{
@@ -152,7 +152,7 @@ export default function ActiveWindowsSection({ titleData, connectPane, openTask,
                   background: isBlocked ? 'var(--warning-a08)' : undefined,
                 }}
               >
-                {isFinished ? <FinishedIndicator seen={row.seenAt != null} /> : isBlocked ? <BlockedDot /> : <BrailleSpinner />}
+                {isFinished ? (row.seenAt != null ? <Icon name="check" size={14} style={{ color: 'var(--text-dim)' }} /> : <FinishedIndicator />) : isBlocked ? <BlockedDot /> : <BrailleSpinner />}
                 <button
                   type="button"
                   onClick={handleRowOpen}
@@ -175,19 +175,10 @@ export default function ActiveWindowsSection({ titleData, connectPane, openTask,
                       <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
                         {displayName}
                       </span>
-                      {isFinished && row.finishedAt != null && (
-                        <span style={{ fontSize: 'var(--font-2xs)', color: row.seenAt != null ? 'var(--text-dim)' : 'var(--success)', flexShrink: 0, whiteSpace: 'nowrap' }}>
-                          {t('activeWindows.done')} · {formatRelativeTime(row.finishedAt)}
-                        </span>
-                      )}
-                      {isBlocked && (
-                        <span style={{ fontSize: 'var(--font-2xs)', color: 'var(--warning)', flexShrink: 0, whiteSpace: 'nowrap' }}>
-                          {t('activeWindows.planReview')}
-                        </span>
-                      )}
                     </div>
                   </div>
                 </button>
+                {isFinished && <span style={{ fontSize: 'var(--font-2xs)', color: row.seenAt != null ? 'var(--text-dim)' : 'var(--success)', background: 'var(--bg)', borderRadius: 'var(--radius-sm)', padding: 'var(--space-1)', flexShrink: 0, whiteSpace: 'nowrap' }}>{t('activeWindows.done')}{row.finishedAt != null && ` · ${formatRelativeTime(row.finishedAt)}`}</span>}
                 {isBlocked && (
                   <span
                     style={{
