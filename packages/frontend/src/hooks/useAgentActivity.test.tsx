@@ -15,7 +15,7 @@ const running: AgentActivityPayload = { serverName: 'local', target: 's:1', runn
 let pending: Array<{ resolve: (value: AgentActivityPayload[]) => void; reject: (reason: Error) => void }>;
 function View() {
   const activity = useAgentActivity();
-  return <><output>{JSON.stringify({ entries: [...activity.entries.values()], finished: activity.finishedEntries, indicator: activity.windowIndicator('local', 's:1'), snapshotStatus: activity.snapshotStatus })}</output>
+  return <><output>{JSON.stringify({ entries: [...activity.entries.values()], finished: activity.finishedEntries, indicator: activity.windowIndicator('local', 's:1'), snapshotStatus: activity.snapshotStatus, snapshotUpdatedAt: activity.snapshotUpdatedAt })}</output>
     <button onClick={() => activity.retrySnapshot()}>retry</button>
     <button onClick={() => activity.markFinishedSeen('local', 's:1')}>seen</button>
     <button onClick={() => activity.setRetention({ maxCount: 0, retentionMs: 3600000 })}>zero</button></>;
@@ -152,6 +152,17 @@ it('exposes failure and retries while preserving events received during the retr
   send({ ...running, status: 'blocked' });
   await resolve(1, [running]);
   expect(state()).toMatchObject({ snapshotStatus: 'ready', entries: [{ status: 'blocked' }] });
+});
+
+it('retains the last successful snapshot time after a refresh fails', async () => {
+  mount();
+  expect(state().snapshotUpdatedAt).toBeNull();
+  await resolve(0, []);
+  const updatedAt = state().snapshotUpdatedAt;
+  expect(updatedAt).toEqual(expect.any(Number));
+  act(() => screen.getByText('retry').click());
+  await act(async () => pending[1].reject(new Error('offline')));
+  expect(state()).toMatchObject({ snapshotStatus: 'error', snapshotUpdatedAt: updatedAt });
 });
 
 it('ignores failure from an older request after a retry succeeds', async () => {
