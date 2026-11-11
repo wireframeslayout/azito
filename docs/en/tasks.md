@@ -33,6 +33,8 @@ AZITO disables prompt suggestions when it starts a new Claude Code process. A wi
 | tmux Window | Specify the tmux window name (optional) |
 | Subagent Override | Override the Unit's default review/implementation subagent settings (provider/model) |
 
+For task and subagent models, select “Other (enter ID)” to enter a valid model ID that is not listed. Availability depends on the CLI version and account access.
+
 4. Click the **Create** button.
 
 > Task creation/editing happens in a dedicated form screen (tab), not a modal. Canceling returns you to the original task list / detail view.
