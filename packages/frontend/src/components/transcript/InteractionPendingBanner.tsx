@@ -20,7 +20,7 @@ export function InteractionPendingBanner({ onChangeViewMode }: InteractionPendin
   const { t } = useTranslation('transcript');
 
   return (
-    <div className="floating-surface"
+    <div
       role="status"
       aria-live="polite"
       style={{

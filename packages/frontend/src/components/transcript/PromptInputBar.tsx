@@ -339,7 +339,7 @@ export default function PromptInputBar({ readOnlyReason, relay, windowId, paneId
             border: '1px solid var(--border)',
             boxShadow: 'var(--shadow-2)',
             fontSize: 'var(--font-2xs)',
-            color: 'var(--text-dim)',
+            color: 'var(--floating-text)',
             whiteSpace: 'nowrap',
             pointerEvents: 'none',
           }}
