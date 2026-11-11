@@ -238,7 +238,7 @@ export function TerminalContainer({ registeredWindow, serverName, target: rawTar
       setWakeMux(mux);
       const res = await api<{ tmuxTarget: string; error?: string; reason?: string; message?: string; windowId?: number; sessionId?: string }>(`/windows/${respawnWindowId}/respawn`, {
         method: 'POST',
-        body: JSON.stringify({ force, mux }),
+        body: JSON.stringify({ force, mux, ...(windowMissing ? { allowMissing: true } : {}) }),
       });
       if (isInsufficientResources(res)) {
         setResourceWarning({
@@ -275,7 +275,7 @@ export function TerminalContainer({ registeredWindow, serverName, target: rawTar
       setWakeMux(null);
       setRespawning(false);
     }
-  }, [respawnWindowId, serverName, onRetargetTab, onWindowChanged, wake.choose, dbWindow, registeredWindow, target]);
+  }, [respawnWindowId, serverName, onRetargetTab, onWindowChanged, wake.choose, dbWindow, registeredWindow, target, windowMissing]);
 
   // The pane-unavailable notice can open a pane in the window, which needs the window's MuxRef.
   const windowMuxRef = useMemo<string | null>(() => {

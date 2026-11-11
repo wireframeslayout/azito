@@ -719,7 +719,7 @@ describe('POST /api/tasks/:id/approve-execution (Issue #328 review)', () => {
     await new Promise((r) => setImmediate(r));
 
     expect(res.statusCode).toBe(200);
-    expect(opts.respawnService.respawn).toHaveBeenCalledWith(5, expect.objectContaining({ name: 'test-server' }));
+    expect(opts.respawnService.respawn).toHaveBeenCalledWith(5, expect.objectContaining({ name: 'test-server' }), { allowMissing: true });
     expect(opts.executeTaskUseCase.resumeStateMachine).not.toHaveBeenCalled();
     expect(opts.executeTaskUseCase.execute).not.toHaveBeenCalled();
     expect(opts.taskRestoreService.restore).not.toHaveBeenCalled();
@@ -1231,7 +1231,7 @@ describe('GET fingerprint satisfies POST (Issue #328 fourteenth-round review —
     // Before this round's fix, this was ALWAYS 409 fingerprint_mismatch —
     // GET resolved a different manifest than POST re-hashed.
     expect(postRes.statusCode).toBe(200);
-    expect(opts.respawnService.respawn).toHaveBeenCalledWith(5, expect.objectContaining({ name: 'test-server' }));
+    expect(opts.respawnService.respawn).toHaveBeenCalledWith(5, expect.objectContaining({ name: 'test-server' }), { allowMissing: true });
     expect(getTask().status).toBe('running');
   });
 

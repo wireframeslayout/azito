@@ -154,7 +154,7 @@ describe('POST /api/windows/:id/launch-agent', () => {
     ['POST', '/api/tasks/1/windows', ['server_name', 'tmux_target', 'ref', 'label', 'window_type', 'worker_type', 'worker_model', 'working_directory']],
     ['PUT', '/api/windows/1', ['label', 'agent_session_id', 'launch_command', 'worker_model', 'working_directory', 'window_type', 'worker_type']],
     ['POST', '/api/windows/1/launch-agent', ['command', 'force']],
-    ['POST', '/api/windows/1/respawn', ['force', 'mux']],
+    ['POST', '/api/windows/1/respawn', ['force', 'mux', 'allowMissing']],
     ['PUT', '/api/windows/1/rename', ['name']],
     ['POST', '/api/windows/1/panes', ['ordinal', 'direction']],
     ['POST', '/api/windows/1/panes/1/send-keys', ['keys']],
@@ -587,11 +587,19 @@ describe('POST /api/windows/:id/respawn — execution gate (Issue #328 second-ro
     expect(failing).toHaveBeenCalledWith(server.name);
   });
 
+  it.each([true, false])('passes the explicit missing-window confirmation: %s', async (allowMissing) => {
+    const respawn = vi.fn(async () => ({ tmuxTarget: 'proj:win1' }));
+    app = await setup(respawn);
+    const res = await app.inject({ method: 'POST', url: `/api/windows/${window.id}/respawn`, payload: { allowMissing } });
+    expect(res.statusCode).toBe(200);
+    expect(respawn).toHaveBeenCalledWith(window.id, expect.anything(), expect.objectContaining({ allowMissing }));
+  });
+
   it('explains when the registered tmux window cannot be identified', async () => {
     app = await setup(vi.fn(async () => { throw new WindowIdentityUnresolvedError('window_name_missing', 'task-1'); }));
     const res = await app.inject({ method: 'POST', url: `/api/windows/${window.id}/respawn` });
     expect(res.statusCode).toBe(409);
-    expect(res.json()).toMatchObject({ error: 'window_identity_unresolved', reason: 'window_name_missing', message: expect.stringContaining('register it again') });
+    expect(res.json()).toMatchObject({ error: 'window_identity_unresolved', reason: 'window_name_missing', message: expect.stringContaining('recreate button') });
   });
 
   it('answers 501 { error, code: unsupported_os } for a host that cannot run a worker in a pane (Windows, #371)', async () => {

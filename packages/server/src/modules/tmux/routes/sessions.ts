@@ -848,7 +848,7 @@ const sessionsRoutes: FastifyPluginCallback<SessionsRouteOptions> = (fastify, op
           const result = await tmux.renameWindow(srv, target, name);
           const err = execResultError(result);
           if (err) return reply.status(err.status).send({ error: err.error });
-          if (!persistRenamedWindowLabel(() => { if (windowRow) windowRow.muxRef?.kind === 'misao' ? opts.windowRepo!.update(windowRow.id, renamedWindowUpdate(windowRow, name)) : opts.windowRepo!.renameTmuxWindow(windowRow.id, name); }, () => notifySessionsChanged(request.params.name), request.log, windowRow?.id)) {
+          if (!persistRenamedWindowLabel(() => { if (windowRow) windowRow.muxRef?.kind === 'misao' ? opts.windowRepo!.update(windowRow.id, renamedWindowUpdate(name)) : opts.windowRepo!.renameTmuxWindow(windowRow.id, name); }, () => notifySessionsChanged(request.params.name), request.log, windowRow?.id)) {
             return reply.status(500).send({ error: 'Window renamed, but saving its label failed' });
           }
           notifySessionsChanged(request.params.name);
@@ -1022,7 +1022,7 @@ const sessionsRoutes: FastifyPluginCallback<SessionsRouteOptions> = (fastify, op
         const result = await muxClient.renameWindowByRef(srv, ref, name);
         const err = execResultError(result);
         if (err) return reply.status(err.status).send({ error: err.error });
-        if (!persistRenamedWindowLabel(() => { if (windowRow) windowRow.muxRef?.kind === 'misao' ? opts.windowRepo!.update(windowRow.id, renamedWindowUpdate(windowRow, name)) : opts.windowRepo!.renameTmuxWindow(windowRow.id, name); }, () => notifySessionsChanged(request.params.name), request.log, windowRow?.id)) {
+        if (!persistRenamedWindowLabel(() => { if (windowRow) windowRow.muxRef?.kind === 'misao' ? opts.windowRepo!.update(windowRow.id, renamedWindowUpdate(name)) : opts.windowRepo!.renameTmuxWindow(windowRow.id, name); }, () => notifySessionsChanged(request.params.name), request.log, windowRow?.id)) {
           return reply.status(500).send({ error: 'Window renamed, but saving its label failed' });
         }
         notifySessionsChanged(request.params.name);

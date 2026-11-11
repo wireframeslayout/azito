@@ -1177,7 +1177,7 @@ const tasksRoutes: FastifyPluginCallback<TasksRouteOptions> = (fastify, opts, do
         // execute|follow-up and /api/windows/:id/respawn.
         let result: { tmuxTarget: string };
         try {
-          result = await respawnService.respawn(primaryWindow.id, srv);
+          result = await respawnService.respawn(primaryWindow.id, srv, { allowMissing: true });
         } catch (err) {
           if (replyToExecutionGateError(err, reply)) return;
           if (err instanceof DuplicateAgentSessionError) {

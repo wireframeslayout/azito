@@ -523,5 +523,6 @@ describe('tasks routes while the mux daemon is down', () => {
 
     expect(res.statusCode).toBe(200);
     expect(JSON.parse(res.payload)).toEqual({ tmuxWindow: 'w_01J9Z8Y7X6W5V4T3S2R1Q0P9N9', tmuxTarget: 'azito:w_01J9Z8Y7X6W5V4T3S2R1Q0P9N9' });
+    expect(opts.respawnService.respawn).toHaveBeenCalledWith(expect.any(Number), expect.anything(), { allowMissing: true });
   });
 });

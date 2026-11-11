@@ -73,7 +73,7 @@ export class WindowIdentityUnresolvedError extends Error {
   constructor(readonly reason: WindowIdentityUnresolvedReason, windowName: string) {
     super(reason === 'ambiguous_name'
       ? `More than one tmux window is named ${windowName}, so the registered window cannot be identified. Rename or close the extra windows, check the window and register it again before respawning.`
-      : `Cannot find the registered tmux window ${windowName}; it may have been renamed or closed. Check the window and register it again before respawning.`);
+      : `Cannot find the registered tmux window ${windowName}; it may have been renamed or closed. If it is closed, recreate it using the terminal's recreate button; otherwise check and register the window again.`);
     this.name = 'WindowIdentityUnresolvedError';
   }
 }
@@ -252,7 +252,7 @@ export class WindowRespawnService {
     return this.muxDriverRegistry.resolve(server);
   }
 
-  async respawn(windowId: number, server: ServerConfig, opts?: { skipAgentLaunch?: boolean; gateAlreadyEnforced?: boolean; inLockGate?: (freshServer: ServerConfig) => void; mux?: MuxDriverKind; autoSwitch?: boolean; isBusy?: (windowId: number) => boolean }): Promise<{ tmuxTarget: string }> {
+  async respawn(windowId: number, server: ServerConfig, opts?: { skipAgentLaunch?: boolean; gateAlreadyEnforced?: boolean; inLockGate?: (freshServer: ServerConfig) => void; mux?: MuxDriverKind; autoSwitch?: boolean; allowMissing?: boolean; isBusy?: (windowId: number) => boolean }): Promise<{ tmuxTarget: string }> {
     const win = this.windowRepo.findById(windowId);
     if (!win) throw new Error('Window not found');
     // Before the window is destroyed or any row changes: what a host that starts a worker as a program (Windows, #371) cannot restore keeps the window as it is.
@@ -544,12 +544,12 @@ export class WindowRespawnService {
         }
 
         const driver = this.resolveDriver(freshServer);
-        const workspaces = await driver.listWorkspacesStrict(freshServer);
+        const workspaces = await this.muxDriverRegistry.resolveKind(sourceKind, freshServer).listWorkspacesStrict(freshServer);
         // Only a workspace of the window's own mux counts (a same-named session of the other mux is another one).
         const workspace = workspaces.find((s) => s.name === sessionName && (s.kind ?? sourceKind) === sourceKind);
         const workspaceExists = workspace !== undefined;
         const storedRef = windowRefOf(currentWin, sourceKind);
-        const oldRef = sourceKind === 'tmux' && !workspaceExists ? null : await resolveLiveWindow(driver, freshServer, storedRef, windowPart, currentWin.sleeping);
+        const oldRef = sourceKind === 'tmux' && !workspaceExists ? null : await resolveLiveWindow(driver, freshServer, storedRef, windowPart, currentWin.sleeping || opts?.allowMissing === true);
         const windowAlive = oldRef !== null;
 
         if (windowKind !== sourceKind) {
@@ -578,8 +578,8 @@ export class WindowRespawnService {
           // typed into its shell below), so the host's Claude Code settings are prepared before the window exists. Only for a task's window:
           // a window that is not a task's (Add Window) is looked at by a person, who can accept the dialog.
           if (!opts?.skipAgentLaunch && task && this.launchesClaude(win)) await this.prepareClaudeLaunchFor(fs, task.id, unitId);
-          const freshWorkspaces = await createDriver.listWorkspacesStrict(fs);
-          const freshWorkspaceExists = freshWorkspaces.some((s) => s.name === sessionName && (s.kind ?? sourceKind) === windowKind);
+          const freshWorkspaces = await this.muxDriverRegistry.resolveKind(windowKind, fs).listWorkspacesStrict(fs);
+          const freshWorkspaceExists = freshWorkspaces.some((s) => s.name === sessionName && (s.kind ?? windowKind) === windowKind);
           createdViaNewSession = !freshWorkspaceExists;
           try {
             if (!freshWorkspaceExists) {

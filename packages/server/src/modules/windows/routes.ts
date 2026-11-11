@@ -672,7 +672,7 @@ const windowsRoutes: FastifyPluginCallback<WindowsRouteOptions> = (fastify, opts
 
       const parsedBody = parseStrictBody(respawnBody, request.body);
       if (!parsedBody.ok) return reply.status(400).send(parsedBody.body);
-      const { force, mux } = parsedBody.data;
+      const { force, mux, allowMissing } = parsedBody.data;
       const sourceMux = windowKindOf(win);
       if (sourceMux === 'misao' && mux === 'tmux') return reply.status(400).send({ error: 'unsupported_switch' });
       if (mux === 'misao') {
@@ -694,7 +694,7 @@ const windowsRoutes: FastifyPluginCallback<WindowsRouteOptions> = (fastify, opts
       // /api/tasks/:id/recover-session and /api/units/:id/execute|follow-up.
       let result: { tmuxTarget: string };
       try {
-        result = await respawnService.respawn(id, srv, { mux, isBusy: (windowId) => {
+        result = await respawnService.respawn(id, srv, { mux, allowMissing, isBusy: (windowId) => {
           const current = windowRepo.findById(windowId);
           return opts.agentActivityMonitor.snapshot().some((entry) => entry.windowId === windowId || (current !== undefined && entry.serverName === current.serverName && isSameWindowTarget(entry.target, current.tmuxTarget)));
         } });
@@ -860,7 +860,7 @@ const windowsRoutes: FastifyPluginCallback<WindowsRouteOptions> = (fastify, opts
         const result = await driverFor(srv).renameWindowByRef(srv, ref, name);
         const err = execResultError(result);
         if (err) return reply.status(err.status).send({ error: err.error });
-        if (!persistRenamedWindowLabel(() => ref.kind === 'tmux' ? windowRepo.renameTmuxWindow(win.id, name) : windowRepo.update(win.id, renamedWindowUpdate(win, name)), () => notifyWindowsChanged(win.serverName), request.log, win.id)) {
+        if (!persistRenamedWindowLabel(() => ref.kind === 'tmux' ? windowRepo.renameTmuxWindow(win.id, name) : windowRepo.update(win.id, renamedWindowUpdate(name)), () => notifyWindowsChanged(win.serverName), request.log, win.id)) {
           return reply.status(500).send({ error: 'Window renamed, but saving its label failed' });
         }
         notifyWindowsChanged(win.serverName);

@@ -613,7 +613,7 @@ export async function decideExecutionApproval(
     if (!win || !srv) {
       failApprovedOperation('respawn', new Error(`Window ${pendingWindowId ?? 'null'} or its server no longer exists`));
     } else {
-      respawnService.respawn(win.id, srv)
+      respawnService.respawn(win.id, srv, { allowMissing: true })
         .then(() => {
           // Success-callback emit (Issue #328 review round fix 3): before
           // this fix, respawn's real transition back to priorStatus was
