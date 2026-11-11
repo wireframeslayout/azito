@@ -8,6 +8,6 @@ export function LinkedSnapshot({ snapshot, loadingLabel, errorLabel, closedLabel
     {!snapshot ? <div role="status"><span>{loadingLabel}</span><span aria-hidden="true" style={{ display: 'block', height: 'var(--space-2)', width: '80%', marginTop: 'var(--space-2)', borderRadius: 'var(--radius-sm)', background: 'var(--border)' }} /><span aria-hidden="true" style={{ display: 'block', height: 'var(--space-2)', width: '55%', marginTop: 'var(--space-2)', borderRadius: 'var(--radius-sm)', background: 'var(--border)' }} /></div>
       : snapshot.error?.code === 'window_not_found' ? <span>{closedLabel}</span>
       : snapshot.error ? <div><span>{errorLabel}</span> <Button size="sm" style={{ position: 'relative', zIndex: 1 }} onClick={onRetry}>{retryLabel}</Button></div>
-      : <pre aria-hidden="true" style={{ margin: 0, minWidth: 0, overflowWrap: 'anywhere', whiteSpace: 'pre-wrap', fontFamily: 'var(--font-mono)', fontSize: 'var(--font-xs)' }}>{snapshot.content}</pre>}
+      : <pre className="linked-snapshot-output" tabIndex={0} style={{ position: 'relative', zIndex: 1, margin: 0, minWidth: 0, maxHeight: 'calc(var(--space-6) * 4)', overflowY: 'auto', overflowWrap: 'anywhere', whiteSpace: 'pre-wrap', fontFamily: 'var(--font-mono)', fontSize: 'var(--font-xs)' }}>{snapshot.content}</pre>}
   </div>;
 }
