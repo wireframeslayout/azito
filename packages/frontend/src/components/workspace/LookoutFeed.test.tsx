@@ -46,6 +46,9 @@ describe('Lookout workspace feeds', () => {
     render(<HomeFeed {...props} allProjects={[]} onAddWindow={vi.fn()} />);
     for (const key of ['attention', 'active', 'finished', 'failed']) expect(screen.getByText(`counts.${key}`).previousElementSibling?.textContent).toBe('—');
     expect(screen.getByRole('heading', { name: /sections.active —/ })).toBeTruthy();
+    expect(screen.getByRole('heading', { name: /sections.attention —/ })).toBeTruthy();
+    expect(screen.queryByText('empty')).toBeNull();
+    expect(screen.queryByText('workspace:home.noActive')).toBeNull();
     activity.snapshotStatus = 'ready';
   });
   it('selects the blocked task window when opened', () => {

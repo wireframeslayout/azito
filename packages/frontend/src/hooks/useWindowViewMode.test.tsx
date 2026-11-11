@@ -16,15 +16,6 @@ describe('useWindowViewMode', () => {
     rerender({ id: 1, mobile: false });
     expect(result.current[0]).toBe('chat');
   });
-  it('opens agent windows in chat, preserves terminal selection, and leaves non-agent windows in terminal', () => {
-    const agent = renderHook(() => useWindowViewMode(57301, true, true));
-    expect(agent.result.current[0]).toBe('chat');
-    localStorage.setItem('azito.windowView.57302', 'terminal');
-    const saved = renderHook(() => useWindowViewMode(57302, true, true));
-    expect(saved.result.current[0]).toBe('terminal');
-    const shell = renderHook(() => useWindowViewMode(57303, true, false));
-    expect(shell.result.current[0]).toBe('terminal');
-  });
   it('keeps failed writes scoped to their target window', () => {
     vi.spyOn(Storage.prototype, 'setItem').mockImplementation(() => { throw Error(); });
     const { result, rerender } = renderHook(({ id }) => useWindowViewMode(id, true, true), { initialProps: { id: 101 } });

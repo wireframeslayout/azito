@@ -27,6 +27,7 @@
     "loadError": "Could not load orchestrators",
     "retry": "Retry",
     "empty": "No orchestrators yet",
+    "connectedCompact": "Linked {{count}}",
     "connected": "Linked {{count}}",
     "connectedUnknown": "Linked",
     "attention": "{{count}} need attention",

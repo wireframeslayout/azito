@@ -133,7 +133,7 @@ export function MobileTabChipRow({
         )}
       </button>
 
-      {linked && <button type="button" className="icon-btn" style={{ minHeight: 'calc(var(--space-6) + var(--space-5))', flexShrink: 0 }} onClick={linked.onOpen}><Chip tone="orange">{t('orchestration.connectedCompact', { count: linked.count, defaultValue: t('orchestration.connected', { count: linked.count }) })}</Chip></button>}
+      {linked && <button type="button" className="icon-btn" style={{ minHeight: 'calc(var(--space-6) + var(--space-5))', flexShrink: 0 }} onClick={linked.onOpen}><Chip tone="orange">{t('orchestration.connectedCompact', { count: linked.count })}</Chip></button>}
       <button
         type="button"
         onClick={onOpenMenu}
