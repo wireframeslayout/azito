@@ -140,13 +140,14 @@ export default function ActiveWindowsSection({ titleData, connectPane, openTask,
             const historyStart = row.seenAt != null && (index === 0 || rows[index - 1].seenAt == null);
             return (
               <div key={row.key}>
-              {historyStart && <div style={{ display: 'flex', alignItems: 'center', padding: 'var(--space-1) var(--space-2)', color: 'var(--text-dim)', fontSize: 'var(--font-xs)' }}><span style={{ flex: 1 }}>{t('activeWindows.history', { count: historyCount, max: retention.maxCount })}</span><IconButton type="button" title={t('activeWindows.clearHistory')} aria-label={t('activeWindows.clearHistory')} onClick={clearSeenFinished}><Icon name="trash" size={14} /></IconButton></div>}
+              {historyStart && <div style={{ display: 'flex', alignItems: 'center', padding: 'var(--space-1) var(--space-2)', color: 'var(--text-dim)', fontSize: 'var(--font-xs)' }}><span style={{ flex: 1 }}>{t('activeWindows.history', { count: historyCount, max: retention.maxCount })}</span><IconButton size="sm" type="button" title={t('activeWindows.clearHistory')} aria-label={t('activeWindows.clearHistory')} onClick={clearSeenFinished}><Icon name="trash" size={14} /></IconButton></div>}
               <div
                 className={`row-hover aw-history-row${!isFinished && !isBlocked ? ' aw-row-working' : ''}`}
                 style={{
                   display: 'flex',
                   alignItems: 'center',
-                  gap: 6,
+                  gap: 'var(--space-2)',
+                  minHeight: 'var(--space-6)',
                   padding: 'var(--space-2)',
                   borderRadius: 'var(--radius-sm)',
                   background: isBlocked ? 'var(--warning-a08)' : undefined,
@@ -208,7 +209,7 @@ export default function ActiveWindowsSection({ titleData, connectPane, openTask,
                     #{taskId}
                   </span>
                 )}
-                {row.seenAt != null && <IconButton className="icon-btn aw-history-delete" type="button" aria-label={t('activeWindows.deleteHistory')} onClick={() => dismissFinished(row.serverName, row.target, row.windowId)}><Icon name="close" size={14} /></IconButton>}
+                {row.seenAt != null && <IconButton size="sm" className="icon-btn aw-history-delete" type="button" aria-label={t('activeWindows.deleteHistory')} onClick={() => dismissFinished(row.serverName, row.target, row.windowId)}><Icon name="close" size={14} /></IconButton>}
               </div>
               </div>
             );
