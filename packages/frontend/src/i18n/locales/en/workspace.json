@@ -426,6 +426,7 @@
     "sleeping": "Sleeping",
     "wake": "Wake",
     "acknowledge": "Mark completed as seen",
+    "previewTitle": "Screen of {{title}}",
     "snapshotError": "Could not load snapshot",
     "back": "Back to links",
     "previous": "Previous",

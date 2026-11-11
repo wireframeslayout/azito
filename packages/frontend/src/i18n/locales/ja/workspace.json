@@ -426,6 +426,7 @@
     "sleeping": "スリープ中",
     "wake": "起動",
     "acknowledge": "完了を確認",
+    "previewTitle": "{{title}} の画面",
     "snapshotError": "写しを取得できませんでした",
     "back": "連携一覧に戻る",
     "previous": "前へ",

@@ -8,7 +8,7 @@ it('keeps snapshot retry above the card open target and retries without opening'
   const onOpen = vi.fn();
   const onRetry = vi.fn();
   render(<LinkedWindowCard title="Window" status="running" openLabel="Open Window" unlinkLabel="Unlink" onOpen={onOpen} onUnlink={vi.fn()}
-    snapshot={<LinkedSnapshot snapshot={{ id: 1, content: '', activity: null, error: { code: 'capture_failed', message: 'failed' } }} loadingLabel="Loading" errorLabel="Error" closedLabel="Closed" retryLabel="Retry" onRetry={onRetry} />} />);
+    snapshot={<LinkedSnapshot previewLabel="Preview" snapshot={{ id: 1, content: '', activity: null, error: { code: 'capture_failed', message: 'failed' } }} loadingLabel="Loading" errorLabel="Error" closedLabel="Closed" retryLabel="Retry" onRetry={onRetry} />} />);
   const retry = screen.getByRole('button', { name: 'Retry' });
   expect(retry.style.position).toBe('relative');
   expect(retry.style.zIndex).toBe('1');
