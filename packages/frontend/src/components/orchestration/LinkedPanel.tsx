@@ -1,3 +1,4 @@
+import { useServerStatuses } from '../../hooks/useServerStatuses';
 import { formatWindowTitleLine, resolveWindowTitle } from '@azito/shared';
 import { windowTitleInput } from '../../lib/windowDisplay';
 import { useCallback, useEffect, useRef, useState, type ReactNode } from 'react';
@@ -10,7 +11,7 @@ import { useOrchestrationLinks, type LinkTarget } from '../../hooks/useOrchestra
 import { useVisibleIds } from '../../hooks/useVisibleIds';
 import { useWindowSnapshots } from '../../hooks/useWindowSnapshots';
 import { useWorkspaceCatalog } from '../../hooks/useWorkspaceCatalog';
-import { buildAttentionContext, countAttention, orchestratorStatus, type OrchestratorNode } from '../../lib/orchestrationModel';
+import { childAttentionIds, countAttention, orchestratorStatus, type OrchestratorNode } from '../../lib/orchestrationModel';
 import { acknowledgeLinkedCompletion, isLinkedCompletionAcknowledged, groupLinkedWindows, resolveLinkedWindows, type LinkedFilter } from '../../lib/linkedWindowsModel';
 import type { Server, Session, Window } from '../../pages/workspace/types';
 import { Button } from '../ui/Button';
@@ -35,6 +36,7 @@ export function LinkedPanel({ windowId, enabled, onOpen, onExpand, onProject, ex
   const [wakeError, setWakeError] = useState(false);
   const { windows: orchestrators } = useOrchestrators();
   const { entries, finishedEntries, snapshotStatus } = useAgentActivity();
+  const { statuses } = useServerStatuses();
   const previousAttention = useRef<Set<number> | null>(null);
   const [announcement, setAnnouncement] = useState('');
   const [focused, setFocused] = useState(false);
@@ -65,8 +67,8 @@ export function LinkedPanel({ windowId, enabled, onOpen, onExpand, onProject, ex
   const windows = [...new Map([...allProjects.flatMap(project => project.windows ?? []), ...allTasks.flatMap(task => task.windows ?? []), ...orchestrators].map(window => [window.id, window])).values()];
   const titleOf = (window: Window, taskTitle?: string) => resolveWindowTitle({ ...windowTitleInput(window), tmuxTarget: window.tmuxTarget, taskTitle });
   const childById = new Map(children.map(child => [child.window.id, child]));
-  const childAttention = new Set(children.filter(child => (countAttention(child) ?? 0) > 0).map(child => child.window.id));
-  const items = resolveLinkedWindows(links, [...windows, ...children.map(child => child.window)], allTasks, allProjects, buildAttentionContext(snapshotStatus === 'ready' ? entries : new Map(), allTasks), entries, finishedEntries, snapshotStatus === 'ready', childAttention);
+  const childAttention = childAttentionIds(children);
+  const items = resolveLinkedWindows(links, [...windows, ...children.map(child => child.window)], allTasks, allProjects, entries, finishedEntries, snapshotStatus === 'ready', childAttention, new Set(Object.entries(statuses).filter(([, value]) => value.status === 'offline').map(([name]) => name)));
   const attentionKey = items.filter(item => item.status === 'attention').map(item => item.link.id).sort((a, b) => a - b).join(',');
   useEffect(() => {
     if (loading || !projectsLoaded || catalogError || snapshotStatus !== 'ready') return;
@@ -110,7 +112,7 @@ export function LinkedPanel({ windowId, enabled, onOpen, onExpand, onProject, ex
   };
   return <div style={{ display: 'flex', flexDirection: 'column', height: '100%', minHeight: 0 }}>
     <div style={{ display: 'flex', flexWrap: 'wrap', gap: 'var(--space-2)', padding: 'var(--space-3)' }}>
-      <SegmentedToggle ariaLabel={t('linkedPanel.title')} wrap value={filter} onChange={setFilter} options={(['all', 'attention', 'running', 'idle', 'completed'] as const).map(value => ({ value, label: `${t(`linkedPanel.${value}`)} ${loading || !projectsLoaded || !!catalogError || snapshotStatus !== 'ready' || items.some(item => item.status === 'unknown') ? '—' : value === 'all' ? items.length : items.filter(item => item.status === value).length}` }))} />
+      <SegmentedToggle ariaLabel={t('linkedPanel.title')} wrap value={filter} onChange={setFilter} options={(['all', 'attention', 'running', 'idle', 'completed'] as const).map(value => ({ value, label: `${t(`linkedPanel.${value}`)} ${loading || !projectsLoaded || !!catalogError || snapshotStatus !== 'ready' ? '—' : value === 'all' ? items.length : items.filter(item => item.status === value).length}` }))} />
       <Button size="sm" onClick={openAdd}>{t('linkedPanel.add')}</Button>
     </div>
     <AddLinkPopover open={adding} onClose={() => { candidateRequest.current++; setAdding(false); }} candidates={candidates} searchLabel={t('linkedPanel.search')} emptyLabel={t('linkedPanel.empty')} error={operationError?.kind === 'add' ? t(`linkedPanel.${operationError.code}`, { defaultValue: t('linkedPanel.addError') }) : candidateError ? t('linkedPanel.candidateError') : null} excludedWindowIds={excludedWindowIds} linkedTargets={targets} onAdd={runAdd} />

@@ -24,7 +24,7 @@ export function buildAttentionContext(entries: Map<string, AgentActivityInfo>, a
   return { activityByWindowId, taskById: new Map(allTasks.map((task) => [task.id, task])) };
 }
 
-const ATTENTION_STATUSES = new Set(['waiting_input', 'waiting_for_human', 'phase_review', 'pending_approval', 'failed']);
+const ATTENTION_STATUSES = new Set(['waiting_input', 'phase_review', 'pending_approval', 'failed']);
 export function isAttentionTask(task: Task | undefined): boolean {
   return task !== undefined && ATTENTION_STATUSES.has(task.status);
 }
@@ -37,10 +37,10 @@ export function isAttentionTarget(target: AttentionTarget, ctx: AttentionContext
 
 export type ActivityClassification = 'attention' | 'running' | 'idle' | 'completed' | 'unknown';
 export function classifyActivity(input: { attention: boolean; working: boolean; completed: boolean; known: boolean }): ActivityClassification {
-  if (!input.known) return 'unknown';
   if (input.attention) return 'attention';
-  if (input.working) return 'running';
   if (input.completed) return 'completed';
+  if (!input.known) return 'unknown';
+  if (input.working) return 'running';
   return 'idle';
 }
 
@@ -58,6 +58,9 @@ export function orchestratorStatus(w: Window, activity: Map<string, AgentActivit
 
 export function countAttention(node: OrchestratorNode): number | null {
   return countAttentionForest([node]);
+}
+export function childAttentionIds(nodes: readonly OrchestratorNode[]): Set<number> {
+  return new Set(nodes.filter(node => (countAttention(node) ?? 0) > 0).map(node => node.window.id));
 }
 export function countAttentionForest(nodes: readonly OrchestratorNode[]): number | null {
   const ids = new Set<string>();

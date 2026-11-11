@@ -1,4 +1,4 @@
-import { classifyActivity, isAttentionTarget, matchesActivityWindow, type ActivityClassification, type AttentionContext } from './orchestrationModel';
+import { classifyActivity, isAttentionTask, matchesActivityWindow, type ActivityClassification } from './orchestrationModel';
 import type { AgentActivityInfo, FinishedEntry } from '../hooks/useAgentActivity';
 import type { ProjectListItem, Task, Window, WindowLinkView } from '../pages/workspace/types';
 
@@ -19,7 +19,7 @@ const rank: Record<LinkedStatus, number> = { attention: 0, running: 1, idle: 2, 
 // A task that finished successfully ends in `review` (or `done` once merged); there is no `completed` task status.
 const COMPLETED_TASK_STATUSES = new Set(['review', 'done']);
 
-export function resolveLinkedWindows(links: WindowLinkView[], windows: Window[], tasks: Task[], projects: ProjectListItem[], context: AttentionContext, entries: Map<string, AgentActivityInfo>, finished: FinishedEntry[], activityReady: boolean, childAttention: ReadonlySet<number>): LinkedWindow[] {
+export function resolveLinkedWindows(links: WindowLinkView[], windows: Window[], tasks: Task[], projects: ProjectListItem[], entries: Map<string, AgentActivityInfo>, finished: FinishedEntry[], activityReady: boolean, childAttention: ReadonlySet<number>, offlineServers: ReadonlySet<string> = new Set()): LinkedWindow[] {
   return links.filter(link => link.kind === 'orchestration' && link.unlinkedAt === null).map(link => {
     const task = tasks.find(item => item.id === link.resolvedTaskId) ?? null;
     const resolvedId = link.resolvedWindowId ?? link.targetWindowId;
@@ -28,12 +28,13 @@ export function resolveLinkedWindows(links: WindowLinkView[], windows: Window[],
     const projectId = task?.projectId ?? window?.projectId;
     const project = projects.find(item => item.id === projectId);
     const serverName = window?.serverName ?? task?.serverName;
-    const matching = activityReady && window ? [...entries.values()].filter(entry => matchesActivityWindow(entry, window) && entry.running) : [];
-    const status = classifyActivity({
-      attention: isAttentionTarget({ windowId: window?.id ?? link.resolvedWindowId, taskId: link.resolvedTaskId, kind: link.kind }, context) || matching.some(entry => entry.status === 'blocked') || (window !== null && childAttention.has(window.id)),
+    const known = activityReady && window !== null && !offlineServers.has(window.serverName);
+    const matching = known && window ? [...entries.values()].filter(entry => matchesActivityWindow(entry, window) && entry.running) : [];
+    const status = isAttentionTask(task ?? undefined) ? 'attention' : task && COMPLETED_TASK_STATUSES.has(task.status) ? 'completed' : classifyActivity({
+      attention: matching.some(entry => entry.status === 'blocked') || (window !== null && childAttention.has(window.id)),
       working: matching.some(entry => entry.status === 'working'),
-      completed: !!task && COMPLETED_TASK_STATUSES.has(task.status) || !!window && finished.some(entry => matchesActivityWindow(entry, window)),
-      known: activityReady && window !== null,
+      completed: known && !!window && finished.some(entry => entry.seenAt == null && matchesActivityWindow(entry, window)),
+      known,
     });
     return { link, window, task, status, groupKey: projectId != null ? `project:${projectId}` : `server:${serverName ?? ''}`, groupLabel: project?.name ?? (projectId != null ? String(projectId) : serverName ?? '') };
   });

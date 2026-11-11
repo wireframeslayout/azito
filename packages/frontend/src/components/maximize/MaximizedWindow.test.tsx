@@ -110,7 +110,7 @@ describe('maximized window', () => {
 
   it('shows child orchestrators with their label and icon', async () => {
     const child = { ...second, id: 7, label: 'Coordinator', role: 'orchestrator' };
-    orchestrationState.tree = [{ window: first, children: [{ window: child, children: [] }] }];
+    orchestrationState.tree = [{ window: first, attentionIds: [], children: [{ window: child, attentionIds: [], children: [] }] }];
     render(<HotkeyProvider><MaximizedWindowProvider><Workspace /><MaximizedWindow /></MaximizedWindowProvider></HotkeyProvider>);
     fireEvent.click(screen.getByText('Launch'));
     const row = await screen.findByRole('treeitem', { name: /Coordinator/ });
