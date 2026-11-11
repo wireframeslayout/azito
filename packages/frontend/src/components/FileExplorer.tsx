@@ -117,7 +117,7 @@ function FileExplorerTree({ serverName, rootPath, projectId, onFileSelect, onRef
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', flex: 1, overflow: 'hidden' }}>
-      <FormInput className="icon-btn" aria-label={t('explorer.filterLoaded')} placeholder={t('explorer.filterLoaded')} value={filter} onChange={(event) => setFilter(event.target.value)} style={{ margin: 'var(--space-2)', width: 'auto' }} />
+      <FormInput className="icon-btn file-name-filter" aria-label={t('explorer.filterLoaded')} placeholder={t('explorer.filterLoaded')} value={filter} onChange={(event) => setFilter(event.target.value)} style={{ margin: 'var(--space-2)', width: 'auto' }} />
       <div
         style={{ flex: 1, overflowY: 'auto', padding: '4px 0', ...longPressStyle }}
         onContextMenu={(e) => showContextMenu(e, buildAreaMenuItems())}
