@@ -2,7 +2,7 @@ import { describeUnavailable } from '../RoutingMuxClient';
 import { tmuxErrorReason, tmuxFailureReason } from '../tmuxFailureReason';
 import { misaoFailureReason } from '../misao/misaoFailureReason';
 import { directionBody, nameBody, titleBody, keysBody, paneBody, refBody, workspaceRenameBody } from './actionBodies';
-import { persistRenamedWindowLabel, renamedWindowUpdate } from '../windowIdentity';
+import { persistRenamedWindowLabel, renamedWindowUpdate, renameRefusalReason } from '../windowIdentity';
 import type { FastifyPluginCallback, FastifyReply } from 'fastify';
 import { resourceCheckBody, type ResourceGuard, type ResourceUnavailable } from '../../servers/resources/ResourceGuard';
 import type { IServerRepository, ServerConfig } from '../../servers/Server';
@@ -840,6 +840,8 @@ const sessionsRoutes: FastifyPluginCallback<SessionsRouteOptions> = (fastify, op
         if (!name) return reply.status(400).send({ error: 'New name required' });
         const target = decodeURIComponent(request.params.target);
         const windowRow = opts.windowRepo?.findByServerAndTarget(request.params.name, target);
+        const refusal = windowRow ? renameRefusalReason(windowRow, name) : null;
+        if (refusal) return reply.status(400).send({ error: refusal });
         try {
           const result = await tmux.renameWindow(srv, target, name);
           const err = execResultError(result);
@@ -1011,6 +1013,8 @@ const sessionsRoutes: FastifyPluginCallback<SessionsRouteOptions> = (fastify, op
         const { name } = parsedBody.data;
         if (!name) return reply.status(400).send({ error: 'New name required' });
         const windowRow = opts.windowRepo?.findByServerAndRef(request.params.name, ref);
+        const refusal = windowRow ? renameRefusalReason(windowRow, name) : null;
+        if (refusal) return reply.status(400).send({ error: refusal });
         const muxClient = opts.muxDriverRegistry?.resolve(srv) ?? tmux;
         const result = await muxClient.renameWindowByRef(srv, ref, name);
         const err = execResultError(result);

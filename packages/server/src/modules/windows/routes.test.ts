@@ -587,10 +587,10 @@ describe('POST /api/windows/:id/respawn — execution gate (Issue #328 second-ro
   });
 
   it('explains when the registered tmux window cannot be identified', async () => {
-    app = await setup(vi.fn(async () => { throw new WindowIdentityUnresolvedError(); }));
+    app = await setup(vi.fn(async () => { throw new WindowIdentityUnresolvedError('window_name_missing', 'task-1'); }));
     const res = await app.inject({ method: 'POST', url: `/api/windows/${window.id}/respawn` });
     expect(res.statusCode).toBe(409);
-    expect(res.json()).toMatchObject({ error: 'window_identity_unresolved', message: expect.stringContaining('register it again') });
+    expect(res.json()).toMatchObject({ error: 'window_identity_unresolved', reason: 'window_name_missing', message: expect.stringContaining('register it again') });
   });
 
   it('answers 501 { error, code: unsupported_os } for a host that cannot run a worker in a pane (Windows, #371)', async () => {
@@ -817,10 +817,8 @@ describe('POST /api/windows/:id/sleep', () => {
 });
 
 describe('PUT /api/windows/:id/rename', () => {
-  it.each([0, 1])('updates the label only when mux returns %i', async (code) => {
+  async function buildRenameApp(renameWindowByRef: ReturnType<typeof vi.fn>, update: ReturnType<typeof vi.fn>, emit: ReturnType<typeof vi.fn>) {
     const win = makeWindow();
-    const update = vi.fn();
-    const emit = vi.fn();
     const app = Fastify();
     await app.register(windowsRoutes, {
     attribution: { recordInteraction: vi.fn() }, windowRoles: {} as never,
@@ -832,7 +830,7 @@ describe('PUT /api/windows/:id/rename', () => {
       projectRepo: {} as IProjectRepository,
       taskRepo: {} as ITaskRepository,
       tmux: {} as TmuxClient,
-      muxDriverRegistry: { resolve: () => ({ renameWindowByRef: async () => ({ code, stdout: '', stderr: 'failure' }) }) } as any,
+      muxDriverRegistry: { resolve: () => ({ renameWindowByRef }) } as any,
       serverRepo: { findByName: () => makeServer() } as unknown as IServerRepository,
       transportFactory: { hostProfileFor: () => null },
       respawnService: {} as WindowRespawnService,
@@ -843,11 +841,29 @@ describe('PUT /api/windows/:id/rename', () => {
       windowSnapshotService: {} as never, windowActivityStatusService: makeWindowActivityStatusService(),
       uiToken: 'test-token', serverIsolationMutex: new KeyedMutex(), buildSecondaryWindowEnv: () => ({}),
     });
+    return app;
+  }
+
+  it.each([0, 1])('updates the label only when mux returns %i', async (code) => {
+    const update = vi.fn();
+    const emit = vi.fn();
+    const app = await buildRenameApp(vi.fn(async () => ({ code, stdout: '', stderr: 'failure' })), update, emit);
     const res = await app.inject({ method: 'PUT', url: '/api/windows/1/rename', payload: { name: 'chosen' } });
     expect(res.statusCode).toBe(code === 0 ? 200 : 500);
     if (code === 0) expect(update).toHaveBeenCalledWith(1, { label: 'chosen', labelSource: 'user', tmuxTarget: 'proj:chosen' });
     else expect(update).not.toHaveBeenCalled();
     expect(emit.mock.calls.some(([event]) => event.type === 'window:renamed')).toBe(code === 0);
+    await app.close();
+  });
+
+  it('refuses a tmux name the row could not store before renaming the window', async () => {
+    const rename = vi.fn(async () => ({ code: 0, stdout: '', stderr: '' }));
+    const update = vi.fn();
+    const app = await buildRenameApp(rename, update, vi.fn());
+    const res = await app.inject({ method: 'PUT', url: '/api/windows/1/rename', payload: { name: 'v1.2' } });
+    expect(res.statusCode).toBe(400);
+    expect(rename).not.toHaveBeenCalled();
+    expect(update).not.toHaveBeenCalled();
     await app.close();
   });
 });

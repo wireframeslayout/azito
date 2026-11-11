@@ -54,3 +54,11 @@ export function isMissingBinaryError(err: unknown): boolean {
 export function isMissingBinaryResult(result: { code: number; stderr: string; stdout: string }): boolean {
   return result.code === 127 || /command not found/i.test(`${result.stderr}\n${result.stdout}`);
 }
+
+/** More than one window of the workspace carries the name a stored ref names, so the ref cannot pick one. */
+export class MuxWindowAmbiguousError extends Error {
+  constructor(readonly windowName: string) {
+    super(`More than one window is named ${windowName}`);
+    this.name = 'MuxWindowAmbiguousError';
+  }
+}

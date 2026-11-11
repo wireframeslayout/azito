@@ -5,7 +5,7 @@ export { ServerConfig } from '../servers/Server';
 import type { ServerConfig } from '../servers/Server';
 import { generateWindowName, extractWindowId } from './windowNameUtils';
 import type { IMuxClient, PaneLocation, PaneProgram, PaneWindowLabels } from './IMuxClient';
-import { MuxDriverUnavailableError, MuxOperationUnsupportedError } from './MuxCapabilityError';
+import { MuxDriverUnavailableError, MuxOperationUnsupportedError, MuxWindowAmbiguousError } from './MuxCapabilityError';
 import { AgentUnreachableError } from '../servers/transport/AgentUnreachableError';
 import { HostProfileError } from '../../shared/os/hostProfile';
 import { composePaneEnv, type HubPaneEnvConfig } from './hubPaneEnv';
@@ -658,21 +658,21 @@ export class TmuxClient implements IMuxClient {
   }
 
   async closeWindow(server: ServerConfig, ref: MuxRef): Promise<ExecResult> {
-    return this.runTmuxCommand(server, ['kill-window', '-t', ref.workspace === '' && /^@\d+$/.test(ref.window) ? ref.window : tmuxTargetFromMuxRef(ref)]);
+    return this.runTmuxCommand(server, ['kill-window', '-t', tmuxTargetFromMuxRef(ref)]);
   }
   async closeWorkspace(server: ServerConfig, workspace: string) { return this.killSession(server, workspace); }
   async renameWindowByRef(server: ServerConfig, ref: MuxRef, name: string) { return this.renameWindow(server, tmuxTargetFromMuxRef(ref), name); }
   async renameWorkspace(server: ServerConfig, from: string, to: string) { return this.renameSession(server, from, to); }
   async windowExists(server: ServerConfig, ref: MuxRef) { return this.checkPaneExists(server, tmuxTargetFromMuxRef(ref)); }
   async resolveWindowForRespawn(server: ServerConfig, ref: MuxRef): Promise<MuxRef | null> {
-    const result = await this.runTmuxCommand(server, ['list-windows', '-t', ref.workspace, '-F', '#{window_id}\t#{window_name}']);
+    const result = await this.runTmuxCommand(server, ['list-windows', '-t', `=${ref.workspace}`, '-F', '#{window_id}\t#{window_name}']);
     if (result.code !== 0) {
       if (/can't find target|no such session|no server running on tmux socket/.test(result.stderr)) return null;
       throw new Error(`Cannot verify tmux window: ${result.stderr}`);
     }
     const matches = result.stdout.split('\n').map(line => line.split('\t')).filter(parts => parts[1] === ref.window && /^@\d+$/.test(parts[0]));
-    if (matches.length !== 1) return null;
-    return { kind: 'tmux', workspace: '', window: matches[0][0] };
+    if (matches.length > 1) throw new MuxWindowAmbiguousError(ref.window);
+    return matches.length === 1 ? { kind: 'tmux', workspace: ref.workspace, window: matches[0][0] } : null;
   }
   async focusWindow(server: ServerConfig, ref: MuxRef) { return this.runTmuxCommand(server, ['select-window', '-t', tmuxTargetFromMuxRef(ref)]); }
 

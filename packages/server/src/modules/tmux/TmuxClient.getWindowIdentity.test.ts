@@ -1,5 +1,6 @@
 import { describe, it, expect, vi } from 'vitest';
 import { TmuxClient } from './TmuxClient';
+import { MuxWindowAmbiguousError } from './MuxCapabilityError';
 import type { ServerConfig } from '../servers/Server';
 import type { TransportFactory } from '../servers/transport/TransportFactory';
 
@@ -92,26 +93,34 @@ describe('TmuxClient.getWindowActivity', () => {
 describe('TmuxClient.resolveWindowForRespawn', () => {
   const ref = { kind: 'tmux' as const, workspace: 'azito', window: 'renamed' };
 
-  it('finds the exact name and closes by its window id', async () => {
+  it('matches the exact name in the exact session and closes by its window id', async () => {
     const exec = vi.fn(async (request: { args: string[] }) => request.args[0] === 'list-windows'
       ? { stdout: '@2\trenamed\n@3\tother\n', stderr: '', code: 0 }
       : { stdout: '', stderr: '', code: 0 });
     const client = new TmuxClient({ getTransport: () => ({ execMux: exec }) } as unknown as TransportFactory, '', '', '', '', '');
     const resolved = await client.resolveWindowForRespawn(srv, ref);
-    expect(resolved).toEqual({ kind: 'tmux', workspace: '', window: '@2' });
+    expect(exec).toHaveBeenCalledWith({ kind: 'tmux', args: ['list-windows', '-t', '=azito', '-F', '#{window_id}\t#{window_name}'] });
+    expect(resolved).toEqual({ kind: 'tmux', workspace: 'azito', window: '@2' });
     await client.closeWindow(srv, resolved!);
-    expect(exec).toHaveBeenLastCalledWith({ kind: 'tmux', args: ['kill-window', '-t', '@2'] });
+    expect(exec).toHaveBeenLastCalledWith({ kind: 'tmux', args: ['kill-window', '-t', 'azito:@2'] });
   });
 
-  it('refuses missing and ambiguous names', async () => {
+  it('answers null for a missing name or session', async () => {
     const missing = makeClient(async () => ({ stdout: '@3\tother\n', stderr: '', code: 0 }));
-    const duplicate = makeClient(async () => ({ stdout: '@2\trenamed\n@3\trenamed\n', stderr: '', code: 0 }));
+    const noSession = makeClient(async () => ({ stdout: '', stderr: "can't find session: azito", code: 1 }));
     await expect(missing.resolveWindowForRespawn(srv, ref)).resolves.toBeNull();
-    await expect(duplicate.resolveWindowForRespawn(srv, ref)).resolves.toBeNull();
+    await expect(noSession.resolveWindowForRespawn(srv, ref)).resolves.toBeNull();
   });
 
-  it('propagates a transport failure', async () => {
-    const client = makeClient(async () => { throw new Error('connection refused'); });
-    await expect(client.resolveWindowForRespawn(srv, ref)).rejects.toThrow('connection refused');
+  it('refuses a name more than one window carries', async () => {
+    const duplicate = makeClient(async () => ({ stdout: '@2\trenamed\n@3\trenamed\n', stderr: '', code: 0 }));
+    await expect(duplicate.resolveWindowForRespawn(srv, ref)).rejects.toBeInstanceOf(MuxWindowAmbiguousError);
+  });
+
+  it('propagates a failure it cannot read as "gone"', async () => {
+    const thrown = makeClient(async () => { throw new Error('connection refused'); });
+    const failed = makeClient(async () => ({ stdout: '', stderr: 'permission denied', code: 1 }));
+    await expect(thrown.resolveWindowForRespawn(srv, ref)).rejects.toThrow('connection refused');
+    await expect(failed.resolveWindowForRespawn(srv, ref)).rejects.toThrow('Cannot verify tmux window');
   });
 });

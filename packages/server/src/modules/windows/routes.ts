@@ -47,7 +47,7 @@ import { muxRefFromTmuxTarget, parseMuxRef, type MuxRef, type PaneOrdinal, type 
 import { MuxDriverUnavailableError, type MuxDriverUnavailableReason } from '../tmux/MuxCapabilityError';
 import { muxWindowTarget } from '../tmux/muxWindowTarget';
 import { labelAddedWindowOrRemove } from '../tmux/labelRegisteredWindow';
-import { kindOfStoredWindow, windowKindOf, persistRenamedWindowLabel, renamedWindowUpdate } from '../tmux/windowIdentity';
+import { kindOfStoredWindow, windowKindOf, persistRenamedWindowLabel, renamedWindowUpdate, renameRefusalReason } from '../tmux/windowIdentity';
 import { AmbiguousWindowKindError, rawTargetProbeOf, resolveRawTarget } from '../tmux/storedWindowKind';
 import { resolveWindowById, isRefKindCompatible, resolvePaneHandle, closePaneInWindow, resolvePaneAddEnv, killWindowCore, execResultError, type KillWindowDeps } from './windowPaneOps';
 import type { SessionCaptureService } from './SessionCaptureService';
@@ -706,7 +706,7 @@ const windowsRoutes: FastifyPluginCallback<WindowsRouteOptions> = (fastify, opts
         if (replyToExecutionGateError(err, reply)) return;
         if (err instanceof MuxDriverUnavailableError && err.kind === 'misao') return reply.status(409).send({ error: 'misao_unavailable', reason: err.reason });
         if (err instanceof WindowBusyError) return reply.status(409).send({ error: 'window_busy' });
-        if (err instanceof WindowIdentityUnresolvedError) return reply.status(409).send({ error: 'window_identity_unresolved', message: err.message });
+        if (err instanceof WindowIdentityUnresolvedError) return reply.status(409).send({ error: 'window_identity_unresolved', reason: err.reason, message: err.message });
         if (err instanceof UnsupportedMuxSwitchError) return reply.status(400).send({ error: 'unsupported_switch' });
         if (err instanceof DuplicateAgentSessionError) {
           return reply.status(409).send({ error: 'session_already_running', windowId: err.windowId, sessionId: err.sessionId, message: err.message });
@@ -854,6 +854,8 @@ const windowsRoutes: FastifyPluginCallback<WindowsRouteOptions> = (fastify, opts
         if (!parsedBody.ok) return reply.status(400).send(parsedBody.body);
         const { name } = parsedBody.data;
         if (!name) return reply.status(400).send({ error: 'New name required' });
+        const refusal = renameRefusalReason(win, name);
+        if (refusal) return reply.status(400).send({ error: refusal });
         const result = await driverFor(srv).renameWindowByRef(srv, ref, name);
         const err = execResultError(result);
         if (err) return reply.status(err.status).send({ error: err.error });

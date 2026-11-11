@@ -15,7 +15,7 @@ import type { IServerRepository } from '../servers/Server';
 import type { WorktreeServiceFactory } from '../git/WorktreeServiceFactory';
 import type { TransportFactory } from '../servers/transport/TransportFactory';
 import type { IWindowRepository } from '../windows/Window';
-import type { WindowRespawnService } from '../windows/WindowRespawnService';
+import { WindowIdentityUnresolvedError, type WindowRespawnService } from '../windows/WindowRespawnService';
 import type { TaskRestoreService } from './TaskRestoreService';
 import type { MuxDriverRegistry } from '../tmux/MuxDriverRegistry';
 import { TaskCleanupService } from './TaskCleanupService';
@@ -1183,6 +1183,7 @@ const tasksRoutes: FastifyPluginCallback<TasksRouteOptions> = (fastify, opts, do
           if (err instanceof DuplicateAgentSessionError) {
             return reply.status(409).send({ error: 'session_already_running', windowId: err.windowId, sessionId: err.sessionId, message: err.message });
           }
+          if (err instanceof WindowIdentityUnresolvedError) return reply.status(409).send({ error: 'window_identity_unresolved', reason: err.reason, message: err.message });
           throw err;
         }
         // respawn() has already pointed task.tmuxWindow at the new window; report that identity

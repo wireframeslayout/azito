@@ -60,16 +60,38 @@ import type { KeyedMutex } from '../../shared/keyedMutex';
 import { resolveKillOutcome } from '../tmux/killOutcome';
 import { labelRegisteredWindow } from '../tmux/labelRegisteredWindow';
 import { muxWindowTarget } from '../tmux/muxWindowTarget';
-import { MuxDriverUnavailableError } from '../tmux/MuxCapabilityError';
+import { MuxDriverUnavailableError, MuxWindowAmbiguousError } from '../tmux/MuxCapabilityError';
 import { windowDisplayName, windowKindOf, windowRefOf } from '../tmux/windowIdentity';
 import type { UnitTypeLoader } from '../sidekicks/UnitTypeLoader';
 import type { SidekickPackageLoader } from '../sidekicks/SidekickPackageLoader';
 import type { EventEmitter } from 'events';
 
+export type WindowIdentityUnresolvedReason = 'window_name_missing' | 'ambiguous_name';
+
+/** A tmux row whose name cannot be matched to exactly one live window: respawning could strand a live window, so it is refused. */
 export class WindowIdentityUnresolvedError extends Error {
-  constructor() {
-    super('Cannot find the registered tmux window. Check the window and register it again before respawning.');
+  constructor(readonly reason: WindowIdentityUnresolvedReason, windowName: string) {
+    super(reason === 'ambiguous_name'
+      ? `More than one tmux window is named ${windowName}, so the registered window cannot be identified. Rename or close the extra windows, check the window and register it again before respawning.`
+      : `Cannot find the registered tmux window ${windowName}; it may have been renamed or closed. Check the window and register it again before respawning.`);
+    this.name = 'WindowIdentityUnresolvedError';
   }
+}
+
+/**
+ * The live window a row names, right before respawn. tmux: the row's name must match exactly one window of its session
+ * (then addressed by its id, @N); anything else stops the respawn. misao: the window id (mux_ref) decides; gone = null.
+ */
+async function resolveLiveWindow(driver: IMuxClient, server: ServerConfig, storedRef: MuxRef, windowPart: string): Promise<MuxRef | null> {
+  let live: MuxRef | null;
+  try {
+    live = await driver.resolveWindowForRespawn(server, storedRef);
+  } catch (err) {
+    if (err instanceof MuxWindowAmbiguousError) throw new WindowIdentityUnresolvedError('ambiguous_name', windowPart);
+    throw err;
+  }
+  if (!live && storedRef.kind === 'tmux') throw new WindowIdentityUnresolvedError('window_name_missing', windowPart);
+  return live;
 }
 
 function sleep(ms: number): Promise<void> {
@@ -526,12 +548,10 @@ export class WindowRespawnService {
         // Only a workspace of the window's own mux counts (a same-named session of the other mux is another one).
         const workspace = workspaces.find((s) => s.name === sessionName && (s.kind ?? sourceKind) === sourceKind);
         const workspaceExists = workspace !== undefined;
-        if (sourceKind === 'tmux' && !workspaceExists) throw new WindowIdentityUnresolvedError();
         const storedRef = windowRefOf(currentWin, sourceKind);
-        const oldRef = await driver.resolveWindowForRespawn(freshServer, storedRef);
-        if (sourceKind === 'tmux' && !oldRef) {
-          throw new WindowIdentityUnresolvedError();
-        }
+        // A tmux row whose session is gone names no window either: it is stopped like any other missing name.
+        if (sourceKind === 'tmux' && !workspaceExists) throw new WindowIdentityUnresolvedError('window_name_missing', windowPart);
+        const oldRef = await resolveLiveWindow(driver, freshServer, storedRef, windowPart);
         const windowAlive = oldRef !== null;
 
         if (windowKind !== sourceKind) {

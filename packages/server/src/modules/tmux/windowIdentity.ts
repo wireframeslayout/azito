@@ -86,3 +86,11 @@ export function renamedWindowUpdate(win: Pick<WindowRowIdentity, 'muxRef' | 'tmu
     ? { label: name, labelSource: 'user', tmuxTarget: `${ref.workspace}:${name}` }
     : { label: name, labelSource: 'user' };
 }
+
+/**
+ * Why a registered window cannot take `name`, checked before the mux is renamed so the row never falls behind:
+ * a tmux row keeps the name in `tmux_target`, where a trailing `.<digits>` reads back as a pane suffix.
+ */
+export function renameRefusalReason(win: Pick<WindowRowIdentity, 'muxRef'>, name: string): string | null {
+  return windowKindOf(win) === 'tmux' && /\.\d+$/.test(name) ? 'A tmux window name must not end in "." followed by digits' : null;
+}
