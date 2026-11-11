@@ -28,7 +28,7 @@ export function parseWorkerLaunchRecord(command: string): WorkerLaunchRecord | n
       if (!session || !/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(session)) return null;
       continue;
     }
-    if (arg === '--model' || arg === '-m') {
+    if (arg === '--model' || (workerType === 'codex' && arg === '-m')) {
       const model = words[++i];
       if (!model || !isValidModelId(model)) return null;
       args.push(arg, model); continue;

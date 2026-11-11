@@ -15,6 +15,8 @@ describe('worker launch records', () => {
     expect(parseWorkerLaunchRecord("claude --permission-mode auto --model 'claude-opus-5-5[1m]'")?.args).toEqual(['--permission-mode', 'auto', '--model', 'claude-opus-5-5[1m]']);
     expect(parseWorkerLaunchRecord('codex --approve-for-me -a on-request -s workspace-write')?.args).toEqual(['--approve-for-me', '-a', 'on-request', '-s', 'workspace-write']);
     expect(parseWorkerLaunchRecord('codex --full-auto')).toBeNull();
+    expect(parseWorkerLaunchRecord('claude -m opus')).toBeNull();
+    expect(parseWorkerLaunchRecord('codex -m opus')?.args).toEqual(['-m', 'opus']);
   });
   it('rejects the whole launch if an argument is outside the allowlist', () => {
     expect(parseWorkerLaunchRecord('claude --dangerously-skip-permissions --append-system-prompt secret')).toBeNull();
