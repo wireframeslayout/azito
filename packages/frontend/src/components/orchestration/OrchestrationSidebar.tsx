@@ -1,4 +1,4 @@
-import { resolveWindowTitle } from '@azito/shared';
+import { formatWindowTitleLine, resolveWindowTitle } from '@azito/shared';
 import { windowTitleInput } from '../../lib/windowDisplay';
 import { useState } from 'react';
 import type { ReactNode } from 'react';
@@ -66,7 +66,7 @@ export function OrchestrationSidebar({ selectedId, onSelect }: OrchestrationSide
     const origin = allProjects.find((project) => project.id === window.originProjectId);
     const items = () => actions.getWindowMenuItems(window, { online: !window.sleeping }).filter((item) => ['maximize', 'rename-label', 'sleep', 'delete-window'].includes(item.kind ?? '') || (item.kind === 'change-role' && origin !== undefined)).map((item) => item.kind === 'change-role' ? { ...item, label: t('orchestration.returnToProject', { name: origin!.name }) } : item);
     const projects = window.links.projectIds.map((id) => allProjects.find((project) => project.id === id)).filter((project) => project !== undefined);
-    return <div key={window.id} id={`orchestration-row-${window.id}`} role="treeitem" aria-label={display.title} aria-describedby={`orchestration-description-${window.id}`} tabIndex={activeFocus === window.id ? 0 : -1} aria-level={depth + 1} aria-expanded={node.children.length ? expanded : undefined} aria-selected={selectedId === window.id} onFocus={(event) => { if (event.target === event.currentTarget) setFocusedId(window.id); }} onClick={(event) => { if ((event.target as HTMLElement).closest('[role=treeitem]') === event.currentTarget && (event.target === event.currentTarget || (event.target as HTMLElement).closest('.list-row'))) onSelect(window.id); }} onKeyDown={(event) => {
+    return <div key={window.id} id={`orchestration-row-${window.id}`} role="treeitem" aria-label={formatWindowTitleLine(display)} aria-describedby={`orchestration-description-${window.id}`} tabIndex={activeFocus === window.id ? 0 : -1} aria-level={depth + 1} aria-expanded={node.children.length ? expanded : undefined} aria-selected={selectedId === window.id} onFocus={(event) => { if (event.target === event.currentTarget) setFocusedId(window.id); }} onClick={(event) => { if ((event.target as HTMLElement).closest('[role=treeitem]') === event.currentTarget && (event.target === event.currentTarget || (event.target as HTMLElement).closest('.list-row'))) onSelect(window.id); }} onKeyDown={(event) => {
       if (event.target !== event.currentTarget) return;
       if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); onSelect(window.id); }
       if (event.key === 'ArrowDown' || event.key === 'ArrowUp') { event.preventDefault(); focus(visible[visible.indexOf(window.id) + (event.key === 'ArrowDown' ? 1 : -1)]); }

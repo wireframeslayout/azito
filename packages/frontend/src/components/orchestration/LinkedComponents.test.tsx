@@ -30,3 +30,16 @@ it('opens a card and hides closed snapshots', () => {
   rerender(<LinkedWindowCard title="Task" status="Completed" openLabel="Open" unlinkLabel="Unlink" onOpen={open} onUnlink={() => {}} acknowledged detail="detail" snapshot={<span>Snapshot</span>} />);
   expect(screen.queryByText('Snapshot')).toBeNull(); expect(screen.queryByText('detail')).toBeNull(); expect(screen.queryByText('Unlink')).toBeNull();
 });
+it('uses a consistent snapshot frame for loading, error and content, and hides empty content', () => {
+  const props = { loadingLabel: 'Loading', closedLabel: 'Closed', errorLabel: 'Error', retryLabel: 'Retry', onRetry: vi.fn() };
+  const { container, rerender } = render(<LinkedSnapshot {...props} />);
+  const frameStyle = container.firstElementChild?.getAttribute('style');
+  rerender(<LinkedSnapshot {...props} snapshot={{ id: 1, content: '', activity: null, error: { code: 'failed', message: 'error' } }} />);
+  expect(container.firstElementChild?.getAttribute('style')).toBe(frameStyle);
+  fireEvent.click(screen.getByRole('button', { name: 'Retry' }));
+  expect(props.onRetry).toHaveBeenCalledOnce();
+  rerender(<LinkedSnapshot {...props} snapshot={{ id: 1, content: 'long content', activity: null }} />);
+  expect(container.firstElementChild?.getAttribute('style')).toBe(frameStyle);
+  rerender(<LinkedSnapshot {...props} snapshot={{ id: 1, content: '', activity: null }} />);
+  expect(container.firstElementChild).toBeNull();
+});
