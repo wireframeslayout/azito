@@ -25,11 +25,14 @@ export function buildAttentionContext(entries: Map<string, AgentActivityInfo>, a
 }
 
 const ATTENTION_STATUSES = new Set(['waiting_input', 'waiting_for_human', 'phase_review', 'pending_approval', 'failed']);
+export function isAttentionTask(task: Task | undefined): boolean {
+  return task !== undefined && ATTENTION_STATUSES.has(task.status);
+}
 export function isAttentionTarget(target: AttentionTarget, ctx: AttentionContext): boolean {
   if (target.kind === 'operation') return false;
   const activity = target.windowId === null ? undefined : ctx.activityByWindowId.get(target.windowId);
   const task = target.taskId === null ? undefined : ctx.taskById.get(target.taskId);
-  return activity?.status === 'blocked' || (task !== undefined && ATTENTION_STATUSES.has(task.status));
+  return activity?.status === 'blocked' || isAttentionTask(task);
 }
 
 export type ActivityClassification = 'attention' | 'running' | 'idle' | 'completed' | 'unknown';

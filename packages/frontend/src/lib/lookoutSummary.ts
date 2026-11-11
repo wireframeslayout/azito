@@ -1,6 +1,6 @@
 import type { ActiveWindowRow } from '../hooks/useActiveWindowRows';
 import type { Task } from '../pages/workspace/types';
-import { classifyActivity, isAttentionTarget } from './orchestrationModel';
+import { classifyActivity, isAttentionTask } from './orchestrationModel';
 import { groupRunningRows } from './activityPillLogic';
 
 export type LookoutStatus = 'blocked' | 'waiting_input' | 'pending_approval' | 'phase_review' | 'failed' | 'working' | 'finished';
@@ -32,13 +32,11 @@ export interface LookoutInput {
   scope?: { windowIds: ReadonlySet<number> };
 }
 
-const ATTENTION_STATUSES = new Set(['waiting_input', 'waiting_for_human', 'pending_approval', 'phase_review', 'failed']);
-
 function makeItem(key: string, task: Task | undefined, rows: ActiveWindowRow[]): LookoutItem {
   const blockedRow = rows.find((row) => row.activityStatus === 'blocked');
   const primaryRow = blockedRow ?? rows[0];
   const hasBlocked = blockedRow != null;
-  const classification = classifyActivity({ attention: hasBlocked || isAttentionTarget({ windowId: null, taskId: task?.id ?? null }, { activityByWindowId: new Map(), taskById: new Map(task ? [[task.id, task]] : []) }), working: rows.length > 0, completed: false, known: true });
+  const classification = classifyActivity({ attention: hasBlocked || isAttentionTask(task), working: rows.length > 0, completed: false, known: true });
   const status: LookoutStatus = hasBlocked ? 'blocked' : classification === 'attention' && task ? (task.status === 'waiting_for_human' ? 'waiting_input' : task.status as LookoutStatus) : 'working';
   return {
     key, title: task?.title ?? primaryRow!.title, status, task, primaryRow,
@@ -68,7 +66,7 @@ export function buildLookoutSections({ rows, allTasks, lastSeenMs, scope }: Look
     groups.set(group.groupKey, { task: taskId != null ? taskById.get(taskId) : undefined, rows: group.rows });
   }
   for (const task of scopedTasks) {
-    if (!ATTENTION_STATUSES.has(task.status)) continue;
+    if (!isAttentionTask(task)) continue;
     const key = `task:${task.id}`;
     if (!groups.has(key)) groups.set(key, { task, rows: [] });
   }
