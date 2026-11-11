@@ -14,6 +14,8 @@ import { buildAttentionContext, countAttention, orchestratorStatus, type Orchest
 import { acknowledgeLinkedCompletion, isLinkedCompletionAcknowledged, groupLinkedWindows, resolveLinkedWindows, type LinkedFilter } from '../../lib/linkedWindowsModel';
 import type { Server, Session, Window } from '../../pages/workspace/types';
 import { Button } from '../ui/Button';
+import { IconButton } from '../ui/IconButton';
+import { Icon } from '../ui/Icon';
 import { SegmentedToggle } from '../ui/SegmentedToggle';
 import { useOrchestrators } from '../../hooks/useOrchestrators';
 import { AddLinkPopover, type LinkCandidate } from './AddLinkPopover';
@@ -111,9 +113,9 @@ export function LinkedPanel({ windowId, enabled, onOpen, onExpand, onProject, ex
     } catch { setWakeError(true); } finally { setWaking(null); }
   };
   return <div style={{ display: 'flex', flexDirection: 'column', height: '100%', minHeight: 0 }}>
-    <div style={{ display: 'flex', flexWrap: 'wrap', gap: 'var(--space-2)', padding: 'var(--space-3)' }}>
-      <SegmentedToggle ariaLabel={t('linkedPanel.title')} wrap value={filter} onChange={setFilter} options={(['all', 'attention', 'running', 'completed'] as const).map(value => ({ value, label: `${t(`linkedPanel.${value}`)} ${value === 'all' ? items.length : items.filter(item => item.status === value).length}` }))} />
-      <Button size="sm" style={{ marginLeft: 'auto' }} onClick={openAdd}>{t('linkedPanel.add')}</Button>
+    <div style={{ display: 'flex', alignItems: 'flex-start', gap: 'var(--space-2)', padding: 'var(--space-3)', minWidth: 0 }}>
+      <div style={{ flex: 1, minWidth: 0 }}><SegmentedToggle ariaLabel={t('linkedPanel.title')} wrap value={filter} onChange={setFilter} options={(['all', 'attention', 'running', 'completed'] as const).map(value => ({ value, label: `${t(`linkedPanel.${value}`)} ${value === 'all' ? items.length : items.filter(item => item.status === value).length}` }))} /></div>
+      <IconButton aria-label={t('linkedPanel.add')} title={t('linkedPanel.add')} onClick={openAdd}><Icon name="plus" size={16} /></IconButton>
     </div>
     <AddLinkPopover open={adding} onClose={() => { candidateRequest.current++; setAdding(false); }} candidates={candidates} searchLabel={t('linkedPanel.search')} emptyLabel={t('linkedPanel.empty')} error={operationError?.kind === 'add' ? t(`linkedPanel.${operationError.code}`, { defaultValue: t('linkedPanel.addError') }) : candidateError ? t('linkedPanel.candidateError') : null} excludedWindowIds={excludedWindowIds} linkedTargets={targets} onAdd={runAdd} />
     <span aria-live="polite" className="sr-only">{announcement}</span>

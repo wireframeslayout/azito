@@ -2,6 +2,7 @@ import { useState } from 'react';
 import { SectionHeader } from '../ui/SectionHeader';
 import { ListRow, ListRowGroup } from '../ui/ListRow';
 import { FormInput } from '../ui/FormInput';
+import { Icon } from '../ui/Icon';
 import { GlassPopover } from '../ui/GlassPopover';
 import type { LinkTarget } from '../../hooks/useOrchestrationLinks';
 
@@ -17,7 +18,7 @@ export function AddLinkPopover({ open, onClose, candidates, searchLabel, emptyLa
   });
   const groups = [...new Set(matches.map(candidate => candidate.group))];
   return <GlassPopover open={open} onClose={onClose} ariaLabel={searchLabel}>
-    <FormInput aria-label={searchLabel} value={query} onChange={event => setQuery(event.target.value)} />
+    <div style={{ position: 'relative', minWidth: 0 }}><span aria-hidden="true" style={{ position: 'absolute', left: 'var(--space-2)', top: '50%', transform: 'translateY(-50%)', color: 'var(--text-dim)', pointerEvents: 'none' }}><Icon name="search" size={16} /></span><FormInput style={{ paddingLeft: 'calc(var(--space-6) + var(--space-2))' }} aria-label={searchLabel} placeholder={searchLabel} value={query} onChange={event => setQuery(event.target.value)} /></div>
     {error && <p role="alert">{error}</p>}
     {matches.length === 0 ? <p>{emptyLabel}</p> : groups.map(group => <section key={group}><SectionHeader>{group}</SectionHeader><ListRowGroup>{matches.filter(candidate => candidate.group === group).map(candidate => <ListRow key={candidate.key} title={candidate.label} disabled={candidate.disabled} onClick={() => onAdd(candidate.target)} />)}</ListRowGroup></section>)}
   </GlassPopover>;

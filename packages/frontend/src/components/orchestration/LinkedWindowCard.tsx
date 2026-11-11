@@ -1,5 +1,7 @@
 import type { ReactNode } from 'react';
 import { Button } from '../ui/Button';
+import { IconButton } from '../ui/IconButton';
+import { Icon } from '../ui/Icon';
 import { WindowIdChip } from '../ui/WindowIdChip';
 import { Chip } from '../ui/Chip';
 import { parseSourceRef, buildIssueUrl } from '../../lib/issueRef';
@@ -25,7 +27,7 @@ export function LinkedWindowCard({ source, sourceRef, title, status, detail, tim
     {!acknowledged && !closedLabel && <div onClick={event => event.stopPropagation()} onKeyDown={event => event.stopPropagation()}>{snapshot}</div>}
     {issueChip && <div style={{ position: 'relative', zIndex: 1, marginBottom: 'var(--space-2)' }}>{issueUrl ? <a href={issueUrl} target="_blank" rel="noopener noreferrer" style={{ color: 'inherit', textDecoration: 'none' }}>{issueChip}</a> : issueChip}</div>}
     {!acknowledged && <div style={{ position: 'relative', zIndex: 1, display: 'flex', flexWrap: 'wrap', gap: 'var(--space-2)' }}>
-      {onExpand && <Button size="sm" onClick={onExpand}>{expandLabel}</Button>}
+      {onExpand && <IconButton aria-label={expandLabel} title={expandLabel} onClick={onExpand}><Icon name="external-link" size={16} /></IconButton>}
       {onWake && <Button size="sm" loading={waking} onClick={onWake}>{wakeLabel}</Button>}
       {onAcknowledge && !acknowledged && <Button size="sm" onClick={onAcknowledge}>{acknowledgeLabel}</Button>}
       <Button size="sm" onClick={onUnlink}>{unlinkLabel}</Button>
