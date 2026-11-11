@@ -10,6 +10,7 @@ import { runCommandSpec, runHostOf, type RunCommandOptions } from '../../shared/
 import { SchtasksClient, rawRunnerOf } from '../../shared/os/taskScheduler/schtasks';
 import { HUB_SERVICE } from './serviceManager';
 import type { SecretFileGuard } from '../../shared/os/secretFileGuard';
+import { HUB_UPDATE_TASK } from './windowsHubUpdateTask';
 
 /**
  * Operations on the Windows hub's Task Scheduler task (`azito service ...`, and the restart the in-app update does). They live here, not
@@ -138,4 +139,18 @@ export async function runOnWindows(command: 'start' | 'stop' | 'restart' | 'relo
   if (forced.length > 0) console.warn(`azito service: the hub did not end within ${HUB_GRACE_MS / 1000}s of the task being ended, so it was ended forcibly (process ${forced.join(', ')})`);
   // restart and reload are the same here: the registered task is the installed definition, so making it current is a restart.
   if (command !== 'stop') await manager.start();
+}
+
+/** Remove only this install's registered task. The caller holds the hub lock. */
+export async function uninstallWindowsTask(manager: ServiceManager, hub: WindowsHub, context: ServiceCommandContext): Promise<void> {
+  if ((await hub.client.query(HUB_UPDATE_TASK)).exists) throw new Error('An AzitoHubUpdate task exists. Wait for the update to finish and retry; if it remains, inspect it manually.');
+  if (!(await taskExists(hub))) return;
+  await requireOwnTask(manager, hub);
+  // A foreground hub must be stopped at its terminal; stopping the task would also end it.
+  const run: SpecRunner = (spec) => runCommandSpec(spec, hub.runHost);
+  const processes = await findHubProcesses(run, hub.systemRoot, hub.hubRoots, context.pid);
+  if (processes.length > 0) throw new Error('A hub process is still running. Stop the service and any `azito run` window, then retry.');
+  const state = await hub.client.query(HUB_SERVICE.windowsTaskName);
+  if (state.running) throw new Error('The hub task is running. Stop it with `azito stop`, then retry.');
+  await hub.client.delete(HUB_SERVICE.windowsTaskName);
 }
