@@ -2,10 +2,10 @@
   "globalSearch": {
     "title": "検索",
     "close": "閉じる",
-    "placeholder": "窓・タスク・プロジェクトを検索",
+    "placeholder": "ウィンドウ・タスク・プロジェクトを検索",
     "categories": "種類",
     "all": "すべて",
-    "window": "窓",
+    "window": "ウィンドウ",
     "task": "タスク",
     "project": "プロジェクト",
     "results": "検索結果",
@@ -18,9 +18,12 @@
     "empty": "最近の項目はありません",
     "more": "ほか {{count}} 件（Tab で絞り込み）",
     "count": "{{count}} 件",
-    "hint": "Tab: 種類切替 · ↑↓: 選択 · Enter: 開く",
     "sleeping": "スリープ中",
     "offline": "オフライン",
-    "orchestrator": "オーケストレーター"
+    "orchestrator": "オーケストレーター",
+    "categoryHint": "種類切替",
+    "selectHint": "選択",
+    "openHint": "開く",
+    "maximizeHint": "ウィンドウ・オーケストレーターを拡大"
   }
 }

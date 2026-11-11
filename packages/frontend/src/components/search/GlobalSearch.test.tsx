@@ -3,7 +3,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { HotkeyProvider } from '../../hooks/useHotkeys';
 import { GlobalSearchProvider, useOpenGlobalSearch } from './GlobalSearch';
 
-const mocks = vi.hoisted(() => ({ openTask: vi.fn(), openTerminal: vi.fn(), navigate: vi.fn(), fetch: vi.fn(), refresh: vi.fn(), catalogError: false, withWindow: false, role: '', muxKind: 'tmux', activity: '', standalone: false }));
+const mocks = vi.hoisted(() => ({ openTask: vi.fn(), openTerminal: vi.fn(), navigate: vi.fn(), fetch: vi.fn(), refresh: vi.fn(), catalogError: false, withWindow: false, role: '', muxKind: 'tmux', activity: '', standalone: false, maximize: vi.fn(), mobile: false }));
 vi.mock('react-i18next', () => ({ useTranslation: () => ({ t: (key: string, values?: { count?: number; query?: string }) => values?.query ? `${key} ${values.query}` : values?.count == null ? key : `${key} ${values.count}` }) }));
 vi.mock('../ui/WindowActivityIndicator', () => ({ BrailleSpinner: () => <span data-testid="working" />, BlockedDot: () => <span data-testid="blocked" /> }));
 vi.mock('react-router-dom', () => ({ useNavigate: () => mocks.navigate }));
@@ -13,7 +13,8 @@ vi.mock('../../hooks/useCrossProjectNavigation', () => ({ useCrossProjectNavigat
 vi.mock('../../hooks/useNotificationChannel', () => ({ useNotificationChannel: () => {} }));
 vi.mock('../../hooks/useRecentTasks', () => ({ useRecentTasks: () => ({ openedAt: { 371: 10 } }) }));
 vi.mock('../../hooks/useProjectRail', () => ({ useProjectRail: () => ({ recentIds: [1], touch: vi.fn() }) }));
-vi.mock('../../hooks/useIsMobile', () => ({ useIsMobile: () => false }));
+vi.mock('../../hooks/useIsMobile', () => ({ useIsMobile: () => mocks.mobile }));
+vi.mock('../../hooks/useMaximizedWindow', () => ({ useOptionalMaximizedWindow: () => ({ open: mocks.maximize }) }));
 vi.mock('../../hooks/useVirtualKeyboard', () => ({ useVirtualKeyboard: () => false }));
 vi.mock('../../hooks/useActiveWindowRows', () => ({ useActiveWindowRows: () => ({ rows: mocks.activity ? [{ status: 'running', activityStatus: mocks.activity, windowId: 806, serverName: 'broken', target: 's:1' }] : [] }) }));
 vi.mock('../../lib/fetchServerSessions', () => ({ fetchSessionListing: mocks.fetch, keepUnavailableKinds: (_previous: unknown, listing: { sessions: unknown[] }) => listing.sessions }));
@@ -21,7 +22,7 @@ function OpenButton() { const open = useOpenGlobalSearch(); return <button onCli
 function setup() { return render(<HotkeyProvider><GlobalSearchProvider><OpenButton /></GlobalSearchProvider></HotkeyProvider>); }
 
 describe('global search', () => {
-  beforeEach(() => { localStorage.clear(); vi.clearAllMocks(); mocks.catalogError = false; mocks.withWindow = false; mocks.role = ''; mocks.muxKind = 'tmux'; mocks.activity = ''; mocks.standalone = false; });
+  beforeEach(() => { localStorage.clear(); vi.clearAllMocks(); mocks.catalogError = false; mocks.withWindow = false; mocks.role = ''; mocks.muxKind = 'tmux'; mocks.activity = ''; mocks.standalone = false; mocks.mobile = false; });
   it('searches tasks and opens a result using the keyboard', async () => {
     setup(); fireEvent.click(screen.getByText('Open'));
     const input = screen.getByRole('combobox');
@@ -74,6 +75,34 @@ describe('global search', () => {
     expect(screen.getByRole('option')).toHaveTextContent('Independent');
     fireEvent.keyDown(input, { key: 'Enter' });
     expect(mocks.navigate).toHaveBeenCalledWith('/orchestration/902');
+  });
+  it('maximizes a window with Shift+Enter and leaves tasks unchanged', () => {
+    mocks.withWindow = true;
+    mocks.fetch.mockResolvedValue({ sessions: [], unavailable: [] });
+    setup(); fireEvent.click(screen.getByText('Open'));
+    const input = screen.getByRole('combobox');
+    fireEvent.change(input, { target: { value: '#371' } });
+    fireEvent.keyDown(input, { key: 'Enter', shiftKey: true });
+    expect(mocks.openTask).not.toHaveBeenCalled();
+    expect(mocks.maximize).not.toHaveBeenCalled();
+    fireEvent.change(input, { target: { value: '806' } });
+    fireEvent.keyDown(input, { key: 'Enter', shiftKey: true });
+    expect(mocks.maximize).toHaveBeenCalledWith(806, expect.objectContaining({ id: 806 }), expect.any(HTMLElement));
+  });
+  it('maximizes an orchestrator with Shift+Enter', () => {
+    mocks.standalone = true;
+    mocks.fetch.mockResolvedValue({ sessions: [], unavailable: [] });
+    setup(); fireEvent.click(screen.getByText('Open'));
+    const input = screen.getByRole('combobox');
+    fireEvent.change(input, { target: { value: 'Independent' } });
+    fireEvent.keyDown(input, { key: 'Enter', shiftKey: true });
+    expect(mocks.maximize).toHaveBeenCalledWith(902, expect.objectContaining({ id: 902 }), expect.any(HTMLElement));
+    expect(mocks.navigate).not.toHaveBeenCalled();
+  });
+  it('does not offer maximization on mobile', () => {
+    mocks.mobile = true;
+    setup(); fireEvent.click(screen.getByText('Open'));
+    expect(screen.queryByText('globalSearch.maximizeHint')).toBeNull();
   });
   it('does not close when two spaces are typed into the search input', async () => {
     setup(); fireEvent.click(screen.getByText('Open'));
