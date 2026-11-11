@@ -107,7 +107,7 @@ function DefaultFileTree({
             {isDir ? <Icon name="chevron-right" size={14} rotate={node.expanded ? 90 : 0} /> : null}
           </span>
           <span style={{ width: 18, display: 'inline-flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}>
-            <Icon name={isDir ? (node.expanded ? 'folder-open' : 'files') : 'file'} size={14} />
+            <Icon name={isDir ? (node.expanded ? 'folder-open' : 'files') : /\.(png|jpe?g|gif|webp|svg)$/i.test(node.name) ? 'image' : /\.(tsx?|jsx?|json|css|html|py|rs|sh)$/i.test(node.name) ? 'file-code' : 'file'} size={14} style={{ color: isDir ? 'var(--accent)' : /\.(png|jpe?g|gif|webp|svg)$/i.test(node.name) ? 'var(--purple)' : 'var(--text-dim)' }} />
           </span>
           <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', fontFamily: 'var(--font-mono)' }}>{node.name}</span>
           {!isDir && node.size != null && (
