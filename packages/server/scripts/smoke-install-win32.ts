@@ -280,7 +280,7 @@ function checkTailscaleDns(installPs1: string, work: string): void {
     "'@",
     "if ($env:AZITO_TEST_TAILSCALE_MODE -eq 'start') { $fake = Join-Path $fake 'missing.exe' }",
     '$result = @(Get-TailscaleDns $fake *>&1)',
-    '$result | ForEach-Object { Write-Output $_.ToString() }',
+    '$result | Where-Object { $null -ne $_ } | ForEach-Object { Write-Output $_.ToString() }',
     '',
   ].join('\r\n'));
   // Each run compiles an isolated fake executable.
