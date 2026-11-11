@@ -317,10 +317,10 @@ export function useWindowActions(
       description: d.disabledReasonKey ? t(d.disabledReasonKey) : undefined,
       onClick: () => actions[d.kind].run(d),
     }));
-    if (deps.maximizeWindow) items.unshift({ kind: 'maximize', label: t('maximize.action'), icon: <Icon name="external-link" size={16} />, onClick: () => deps.maximizeWindow?.(w.id) });
+    if (deps.maximizeWindow) items.unshift({ kind: 'maximize', label: t('maximize.action'), icon: <Icon name="maximize" size={16} />, onClick: () => deps.maximizeWindow?.(w.id) });
     if (w.windowType === 'agent' && w.ownerType !== 'task' && w.ownerType !== undefined) {
       const role = w.role === 'orchestrator' ? null : 'orchestrator';
-      items.push({ kind: 'change-role', label: t(role ? 'orchestration.makeOrchestrator' : 'orchestration.removeRole'), onClick: () => { void changeRole(w.id, role); } });
+      items.push({ kind: 'change-role', label: t(role ? 'orchestration.makeOrchestrator' : 'orchestration.removeRole'), icon: <Icon name="orchestration" size={16} />, onClick: () => { void changeRole(w.id, role); } });
     }
     items.push(
       { label: '', separator: true, onClick: () => {} },
@@ -342,7 +342,7 @@ export function useWindowActions(
     if (!tab) return [];
     const items: ContextMenuItem[] = [];
     const windowId = deps.resolveTabWindow?.(tab);
-    if (windowId != null && deps.maximizeWindow) items.push({ label: t('maximize.action'), icon: <Icon name="external-link" size={16} />, onClick: () => deps.maximizeWindow?.(windowId) });
+    if (windowId != null && deps.maximizeWindow) items.push({ label: t('maximize.action'), icon: <Icon name="maximize" size={16} />, onClick: () => deps.maximizeWindow?.(windowId) });
     if (tab.type === 'terminal' && tab.target) {
       const linkedTask = findTaskByTarget(tab.target);
       if (linkedTask) {
