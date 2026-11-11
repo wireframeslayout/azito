@@ -1,36 +1,67 @@
 import { spawn } from 'child_process';
 import { buildAllowedEnv } from './execEnv';
+import { findWindowsHeadlessCommand, windowsShimCommand, windowsSystemCommand, UnsafeShimArgumentError, type CliSearchDetails } from './windowsHeadlessCommand';
 
 export type CliFailureReason = 'cli_not_found' | 'not_logged_in' | 'timeout' | 'failed';
 export class HeadlessCliError extends Error {
-  constructor(readonly reason: CliFailureReason) { super(reason); }
+  constructor(readonly reason: CliFailureReason, readonly search?: CliSearchDetails, readonly detail?: 'unsafe_argument') { super(reason); }
 }
 export function classifyCliFailure(text: string): CliFailureReason {
   return /(?:not logged in|not authenticated|please (?:log|sign) in|authentication required|invalid api key|unauthorized|http 401)/i.test(text) ? 'not_logged_in' : 'failed';
 }
 
-const PLATFORM_ENV_KEYS = ['USERPROFILE', 'SystemRoot', 'ComSpec', 'TEMP', 'TMP'] as const;
+const PLATFORM_ENV_KEYS = ['USERPROFILE', 'SystemRoot', 'ComSpec', 'TEMP', 'TMP', 'PATHEXT'] as const;
 const CLAUDE_ENV_KEYS = ['CLAUDE_CONFIG_DIR', 'ANTHROPIC_API_KEY', 'ANTHROPIC_AUTH_TOKEN', 'CLAUDE_CODE_OAUTH_TOKEN'] as const;
 const CODEX_ENV_KEYS = ['CODEX_HOME', 'CODEX_API_KEY', 'OPENAI_API_KEY', 'CODEX_ACCESS_TOKEN', 'CODEX_CA_CERTIFICATE'] as const;
 
 export async function runHeadlessCommand(binary: string, args: string[], cwd: string, input: string, timeoutMs = 120_000): Promise<string> {
-  return new Promise((resolve, reject) => {
-    const env = binary === 'claude'
+  const deadline = Date.now() + timeoutMs;
+  const env = binary === 'claude'
       ? buildAllowedEnv([...PLATFORM_ENV_KEYS, ...CLAUDE_ENV_KEYS], CODEX_ENV_KEYS)
       : buildAllowedEnv(PLATFORM_ENV_KEYS);
-    const proc = spawn(binary, args, { cwd, env, stdio: ['pipe', 'pipe', 'pipe'], detached: process.platform !== 'win32' });
+  let command = binary;
+  let commandArgs = args;
+  let verbatim = false;
+  if (process.platform === 'win32') {
+    const controller = new AbortController();
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    let result: Awaited<ReturnType<typeof findWindowsHeadlessCommand>>;
+    try {
+      result = await Promise.race([
+        findWindowsHeadlessCommand(binary, env, undefined, controller.signal),
+        new Promise<never>((_, reject) => { timer = setTimeout(() => { controller.abort(); reject(new HeadlessCliError('timeout')); }, Math.max(0, deadline - Date.now())); }),
+      ]);
+    } finally { if (timer) clearTimeout(timer); }
+    if (Date.now() >= deadline) throw new HeadlessCliError('timeout');
+    if (!result.file) throw new HeadlessCliError('cli_not_found', result.search);
+    command = result.file;
+    if (/\.(cmd|bat)$/i.test(command)) {
+      try { const shim = windowsShimCommand(command, args, env); command = shim.command; commandArgs = shim.args; verbatim = true; }
+      catch (error) { throw new HeadlessCliError('failed', undefined, error instanceof UnsafeShimArgumentError ? 'unsafe_argument' : undefined); }
+    }
+  }
+  const remaining = deadline - Date.now();
+  if (remaining <= 0) throw new HeadlessCliError('timeout');
+  return new Promise((resolve, reject) => {
+    const proc = spawn(command, commandArgs, { cwd, env, stdio: ['pipe', 'pipe', 'pipe'], detached: process.platform !== 'win32', windowsVerbatimArguments: verbatim });
     let stdout = '';
     let stderr = '';
     let reason: CliFailureReason | null = null;
-    const terminate = () => {
-      reason = reason ?? 'failed';
+    // Ends the process tree once; later overflow chunks or the timer must not start another taskkill.
+    const terminate = (cause: CliFailureReason) => {
+      if (reason) return;
+      reason = cause;
       if (process.platform !== 'win32' && proc.pid) {
         try { process.kill(-proc.pid, 'SIGKILL'); } catch { proc.kill('SIGKILL'); }
+      } else if (proc.pid && windowsSystemCommand(env.SystemRoot, 'taskkill.exe')) {
+        const killer = spawn(windowsSystemCommand(env.SystemRoot, 'taskkill.exe')!, ['/pid', String(proc.pid), '/t', '/f'], { stdio: 'ignore' });
+        killer.on('error', () => proc.kill('SIGKILL'));
+        killer.on('close', code => { if (code !== 0) proc.kill('SIGKILL'); });
       } else proc.kill('SIGKILL');
     };
-    const timer = setTimeout(() => { reason = 'timeout'; terminate(); }, timeoutMs);
+    const timer = setTimeout(() => terminate('timeout'), remaining);
     proc.stdout.on('data', (chunk: Buffer) => {
-      if (stdout.length + chunk.length > 1_000_000) { terminate(); return; }
+      if (stdout.length + chunk.length > 1_000_000) { terminate('failed'); return; }
       stdout += chunk.toString();
     });
     proc.stderr.on('data', (chunk: Buffer) => { if (stderr.length < 16_384) stderr += chunk.toString().slice(0, 16_384 - stderr.length); });

@@ -46,7 +46,7 @@ while [ "$#" -gt 0 ]; do if [ "$1" = '-o' ]; then shift; printf 'done' > "$1"; f
     expect(await runLookoutLlm({ enabled: true, provider: 'codex', model: 'test-model', updatedAt: '' }, 'private prompt')).toBe('done');
     const args = readFileSync(capture, 'utf8');
     expect(args).toContain('shell_tool');
-    expect(args).toContain('web_search="disabled"');
+    expect(args).toContain("web_search='disabled'");
     expect(args).toContain('test-model');
     expect(args).not.toContain('private prompt');
   });

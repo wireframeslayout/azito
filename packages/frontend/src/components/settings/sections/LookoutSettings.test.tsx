@@ -33,4 +33,27 @@ describe('LookoutSettings', () => {
     await waitFor(() => expect(screen.getByText('lookout.saveFailed')).toBeTruthy());
     expect(request).toHaveBeenCalledWith('/settings/lookout', expect.objectContaining({ method: 'PUT' }));
   });
+  it('shows the searched directories and extensions after a probe miss', async () => {
+    request.mockImplementation(async (path: string) => {
+      if (path === '/settings/lookout/probe') return { status: 200, body: { ok: false, cli: { found: false, version: null }, reason: 'cli_not_found', stage: 'version', search: { directories: ['C:\\npm'], extensions: ['.CMD'] } } };
+      if (path === '/settings/lookout') return { status: 200, body: { enabled: true, provider: 'claude', model: 'haiku', updatedAt: '' } };
+      return { status: 200, body: [{ id: 'haiku', label: 'Haiku' }] };
+    });
+    render(<LookoutSettings />);
+    fireEvent.click(await screen.findByRole('button', { name: 'lookout.probe' }));
+    expect(await screen.findByText(/C:\\npm/)).toBeTruthy();
+    expect(screen.getByText(/\.CMD/)).toBeTruthy();
+  });
+
+  it('shows a fixed explanation for unsafe shim arguments', async () => {
+    request.mockImplementation(async (path: string) => {
+      if (path === '/settings/lookout/probe') return { status: 200, body: { ok: false, cli: { found: true, version: '1' }, reason: 'failed', stage: 'summary', detail: 'unsafe_argument' } };
+      if (path === '/settings/lookout') return { status: 200, body: { enabled: true, provider: 'claude', model: 'haiku', updatedAt: '' } };
+      return { status: 200, body: [{ id: 'haiku', label: 'Haiku' }] };
+    });
+    render(<LookoutSettings />);
+    fireEvent.click(await screen.findByRole('button', { name: 'lookout.probe' }));
+    expect(await screen.findByText('lookout.details.unsafe_argument')).toBeTruthy();
+  });
+
 });

@@ -10,7 +10,7 @@ import { InlineToggle } from '../../ui/InlineToggle';
 
 type Provider = 'claude' | 'codex';
 interface Settings { enabled: boolean; provider: Provider; model: string; updatedAt: string }
-interface Probe { ok: boolean; cli: { found: boolean; version: string | null }; reason?: string; stage?: string }
+interface Probe { ok: boolean; cli: { found: boolean; version: string | null }; reason?: string; stage?: string; detail?: 'unsafe_argument'; search?: { directories: string[]; extensions: string[] } }
 interface Model { id: string; label: string }
 
 export function LookoutSettings() {
@@ -56,7 +56,7 @@ export function LookoutSettings() {
       <span id="lookout-model-label">{t('lookout.model')}</span>
       <div role="group" aria-labelledby="lookout-model-label"><ModelSelect ariaLabel={t('lookout.model')} models={models[settings.provider]} value={settings.model} disabled={!settings.enabled || saving} onChange={model => { setSettings({ ...settings, model }); setDirty(true); }} onValidityChange={setValid} /></div>
       <div style={{ display: 'flex', flexWrap: 'wrap', gap: 'var(--space-2)' }}><Button onClick={save} disabled={!valid || !settings.model} loading={saving} loadingLabel={t('lookout.saving')}>{t('lookout.save')}</Button><Button onClick={runProbe} disabled={!settings.enabled || saving || dirty} loading={probing} loadingLabel={t('lookout.probing')}>{t('lookout.probe')}</Button></div>
-      {probe && <Notice tone={probe.ok ? 'success' : 'warning'} sub={!probe.ok && probe.stage ? t(`lookout.hints.${probe.stage}`) : undefined}>{probe.ok ? t('lookout.detected', { version: probe.cli.version }) : t(`lookout.reasons.${probe.reason ?? 'failed'}`)}</Notice>}
+      {probe && <Notice tone={probe.ok ? 'success' : 'warning'} sub={!probe.ok && probe.stage ? t(`lookout.hints.${probe.stage}`) : undefined}>{probe.ok ? t('lookout.detected', { version: probe.cli.version }) : t(`lookout.reasons.${probe.reason ?? 'failed'}`)}{probe.detail && <div style={{ marginTop: 'var(--space-2)' }}>{t(`lookout.details.${probe.detail}`)}</div>}{probe.search && <div style={{ overflowWrap: 'anywhere', marginTop: 'var(--space-2)' }}><div>{t('lookout.searchDirectories')}: {probe.search.directories.join(', ')}</div><div>{t('lookout.searchExtensions')}: {probe.search.extensions.join(', ')}</div></div>}</Notice>}
     </>}
   </section>;
 }

@@ -292,6 +292,9 @@
     ]
   },
   "lookout": {
+    "details": { "unsafe_argument": "A command argument contains characters that cannot be used with a Windows command shim." },
+    "searchDirectories": "Searched directories",
+    "searchExtensions": "Extensions",
     "title": "Lookout",
     "enabled": "Use summaries",
     "description": "Summarize the end of conversations in one line. Counts and status remain available when off.",
