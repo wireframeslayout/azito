@@ -542,7 +542,7 @@ export default function ConversationView({ windowId, sessionId, agentType, paneI
 
       {(subagentId || (!loading && !notFound)) && (
         <PromptInputBar
-          readOnlyReason={subagentId && subagentRelay?.kind !== 'available' ? t(subagentRelay?.kind === 'unavailable' && subagentRelay.reason === 'agent_outdated' ? 'subagents.errors.agent_outdated' : 'subagents.unavailable') : undefined}
+          readOnlyReason={subagentId && subagentRelay?.kind !== 'available' ? t(subagentRelay?.kind === 'unavailable' ? `subagents.relayUnavailable.${subagentRelay.reason}` : 'subagents.unavailable') : undefined}
           relay={subagentId && subagentRelay?.kind === 'available' ? { sessionId, agentId: subagentId, name: subagentRelay.name, status: subagentRelay.status } : undefined}
           windowId={windowId}
           paneId={paneId}

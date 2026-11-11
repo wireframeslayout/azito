@@ -636,3 +636,5 @@ On an agent server, an older agent without this feature reports `agent_outdated`
 use it.
 
 Subagent selection is saved per window and parent session in this browser. Start and stop hooks refresh the list; a missing stop notification can leave the state unknown. A relay requests that the parent send a message and does not guarantee delivery. Only a uniquely named child not explicitly finished can be addressed, and the parent must be ready for input. Agent servers require an updated agent for relay.
+
+Claude Code 2.1.322 was observed creating unnamed background subagents. Their IDs have not been verified as relay targets, so the input is hidden and the reason is shown. The metadata was observed without `finished` during execution and with `finished: true` after the parent exited; the precise completion timing was not verified. Other Claude Code versions are unverified. A remote agent that omits routing names must be updated before relay can be used.
