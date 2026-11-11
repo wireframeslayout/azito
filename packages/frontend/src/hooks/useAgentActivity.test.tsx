@@ -15,7 +15,7 @@ const running: AgentActivityPayload = { serverName: 'local', target: 's:1', runn
 let pending: Array<{ resolve: (value: AgentActivityPayload[]) => void; reject: (reason: Error) => void }>;
 function View() {
   const activity = useAgentActivity();
-  return <><output>{JSON.stringify({ entries: [...activity.entries.values()], finished: activity.finishedEntries, indicator: activity.windowIndicator('local', 's:1'), snapshotStatus: activity.snapshotStatus, snapshotUpdatedAt: activity.snapshotUpdatedAt })}</output>
+  return <><output>{JSON.stringify({ entries: [...activity.entries.values()], finished: activity.finishedEntries, indicator: activity.windowIndicator('local', 's:1'), paneActivity: activity.activityStatus('local', 's:1.0'), snapshotStatus: activity.snapshotStatus, snapshotUpdatedAt: activity.snapshotUpdatedAt })}</output>
     <button onClick={() => activity.retrySnapshot()}>retry</button>
     <button onClick={() => activity.markFinishedSeen('local', 's:1')}>seen</button>
     <button onClick={() => activity.setRetention({ maxCount: 0, retentionMs: 3600000 })}>zero</button></>;
@@ -215,4 +215,16 @@ it('updates a registered active row title when its window label changes', async 
   act(() => events.handlers.onWindowRenamed({ serverName: 'local', target: 's:1', newName: 'New', windowId: 42 }));
   view.rerender(<AgentActivityProvider><Rows label="New" /></AgentActivityProvider>);
   expect(screen.getByRole('status')).toHaveTextContent('New · W-42');
+});
+
+it('classifies a watched window activity through a pane target', async () => {
+  targets.focusedTarget = 'local::s:1';
+  const focus = vi.spyOn(document, 'hasFocus').mockReturnValue(true);
+  mount();
+  await resolve(0, [running]);
+  expect(state().paneActivity).toBe('working');
+  expect(state().indicator).toBeNull();
+  send({ ...running, status: 'blocked' });
+  expect(state().paneActivity).toBe('blocked');
+  focus.mockRestore();
 });

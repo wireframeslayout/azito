@@ -1,5 +1,5 @@
 import { fireEvent, render, screen, waitFor } from '@testing-library/react';
-import { beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { useEffect, useState } from 'react';
 import { HotkeyProvider, useHotkeyBindings } from '../../hooks/useHotkeys';
 import { parseKeySpec } from '../../lib/hotkeys/keySpec';
@@ -8,6 +8,9 @@ import { MaximizedWindow } from './MaximizedWindow';
 import { TabBar } from '../ui/TabBar';
 import type { Window } from '../../pages/workspace/types';
 
+const activity = vi.hoisted(() => ({ status: 'ready' as 'ready' | 'loading' | 'error', updatedAt: 1 as number | null, values: new Map<string, 'working' | 'blocked'>(), finished: undefined as { finishedAt: number; seenAt: number | null } | undefined }));
+vi.mock('../../hooks/useAgentActivity', () => ({ useAgentActivity: () => ({ entries: new Map(), finishedEntries: [], snapshotStatus: activity.status, snapshotUpdatedAt: activity.updatedAt, activityStatus: (server: string, target: string) => activity.values.get(`${server}:${target.replace(/\.\d+$/, '')}`) ?? null, findFinished: (server: string, target: string) => server === 'host' && target === 'one' ? activity.finished : undefined }) }));
+afterEach(() => { activity.status = 'ready'; activity.updatedAt = 1; activity.values.clear(); activity.finished = undefined; });
 const orchestrationState = vi.hoisted(() => ({ tree: [] as unknown[], read: vi.fn() }));
 vi.mock('../../hooks/useOrchestrationModel', () => ({ useOrchestrationModel: () => { orchestrationState.read(); return { tree: orchestrationState.tree }; } }));
 const linkedState = vi.hoisted(() => ({ links: [] as unknown[], error: null as Error | null, refresh: vi.fn() }));
@@ -38,6 +41,54 @@ function ShortcutControls() {
 }
 describe('maximized window', () => {
   beforeEach(() => localStorage.clear());
+  it('shows the unread completion indicator alongside idle only', async () => {
+    activity.finished = { finishedAt: Date.now(), seenAt: null };
+    const view = render(<HotkeyProvider><MaximizedWindowProvider><Workspace /><MaximizedWindow /></MaximizedWindowProvider></HotkeyProvider>);
+    fireEvent.click(screen.getByText('Launch'));
+    const header = (await screen.findByRole('dialog')).querySelector('header')!;
+    expect(header).toHaveTextContent('Idle');
+    expect(header).toHaveTextContent('Done');
+    expect(header.querySelector('svg path')).toBeInTheDocument();
+    activity.finished.seenAt = Date.now();
+    view.rerender(<HotkeyProvider><MaximizedWindowProvider><Workspace /><MaximizedWindow /></MaximizedWindowProvider></HotkeyProvider>);
+    expect(header).not.toHaveTextContent('Done');
+    activity.finished.seenAt = null;
+    activity.values.set('host:one', 'working');
+    view.rerender(<HotkeyProvider><MaximizedWindowProvider><Workspace /><MaximizedWindow /></MaximizedWindowProvider></HotkeyProvider>);
+    expect(header).toHaveTextContent('Working');
+    expect(header).not.toHaveTextContent('Done');
+    activity.status = 'error';
+    view.rerender(<HotkeyProvider><MaximizedWindowProvider><Workspace /><MaximizedWindow /></MaximizedWindowProvider></HotkeyProvider>);
+    expect(header).toHaveTextContent('Status unavailable');
+    expect(header).not.toHaveTextContent('Done');
+  });
+  it('shows the selected window activity and distinguishes unavailable snapshots from idle', async () => {
+    activity.status = 'loading'; activity.updatedAt = null; activity.values.clear();
+    const view = render(<HotkeyProvider><MaximizedWindowProvider><Workspace /><MaximizedWindow /></MaximizedWindowProvider></HotkeyProvider>);
+    fireEvent.click(screen.getByText('Launch'));
+    const header = (await screen.findByRole('dialog')).querySelector('header')!;
+    expect(header).toHaveTextContent('Status unavailable');
+    activity.status = 'ready'; activity.updatedAt = 1;
+    view.rerender(<HotkeyProvider><MaximizedWindowProvider><Workspace /><MaximizedWindow /></MaximizedWindowProvider></HotkeyProvider>);
+    expect(header).toHaveTextContent('Idle');
+    activity.status = 'loading';
+    view.rerender(<HotkeyProvider><MaximizedWindowProvider><Workspace /><MaximizedWindow /></MaximizedWindowProvider></HotkeyProvider>);
+    expect(header).toHaveTextContent('Idle');
+    activity.status = 'ready'; activity.values.set('host:one', 'working'); activity.values.set('host:two', 'blocked');
+    view.rerender(<HotkeyProvider><MaximizedWindowProvider><Workspace /><MaximizedWindow /></MaximizedWindowProvider></HotkeyProvider>);
+    expect(header).toHaveTextContent('Working');
+    fireEvent.click(screen.getByRole('treeitem', { name: /Two/ }));
+    expect(header).toHaveTextContent('Needs attention');
+    activity.status = 'error';
+    view.rerender(<HotkeyProvider><MaximizedWindowProvider><Workspace /><MaximizedWindow /></MaximizedWindowProvider></HotkeyProvider>);
+    expect(header).toHaveTextContent('Status unavailable');
+    activity.status = 'loading';
+    view.rerender(<HotkeyProvider><MaximizedWindowProvider><Workspace /><MaximizedWindow /></MaximizedWindowProvider></HotkeyProvider>);
+    expect(header).toHaveTextContent('Status unavailable');
+    activity.status = 'ready';
+    view.rerender(<HotkeyProvider><MaximizedWindowProvider><Workspace /><MaximizedWindow /></MaximizedWindowProvider></HotkeyProvider>);
+    expect(header).toHaveTextContent('Needs attention');
+  });
   it('reflects the configured shortcut and terminal focus in its footer', async () => {
     render(<HotkeyProvider><MaximizedWindowProvider><Workspace /><ShortcutControls /><MaximizedWindow /></MaximizedWindowProvider></HotkeyProvider>);
     fireEvent.click(screen.getByText('Change shortcut'));
