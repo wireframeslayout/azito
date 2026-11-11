@@ -1,6 +1,7 @@
 import { useTranslation } from 'react-i18next';
 import type { LookoutItem, LookoutSections } from '../../lib/lookoutSummary';
-import { Button, Icon, IconButton, Notice } from '../ui';
+import { Button, IconButton, Notice } from '../ui';
+import { Icon } from '../ui/Icon';
 import { useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { formatRelativeTime } from '../../utils/time';
 import { createPortal } from 'react-dom';
