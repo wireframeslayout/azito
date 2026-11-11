@@ -1,6 +1,7 @@
 type Rgb = [number, number, number];
 
 function parseHex(value: string): Rgb | null {
+  value = value.trim();
   if (!/^#(?:[0-9a-f]{3}|[0-9a-f]{6})$/i.test(value)) return null;
   const raw = value.slice(1);
   const hex = raw.length === 3 ? [...raw].map((c) => c + c).join('') : raw;

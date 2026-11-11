@@ -137,7 +137,7 @@ export default function BrowserDialog({ dialog, onResponse, onAuthResponse }: Br
         {isAuth && dialog.origin && (
           <p style={{
             fontSize: 'var(--font-xs)',
-            color: 'var(--floating-text)',
+            color: 'var(--text-dim)',
             lineHeight: 1.4,
             margin: '0 0 var(--space-3) 0',
             wordBreak: 'break-all',

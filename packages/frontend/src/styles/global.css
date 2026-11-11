@@ -34,6 +34,7 @@
   --input-bg-active: color-mix(in srgb, var(--surface-fg) 16%, var(--surface-base));
   /* 浮遊UI（メニュー/モーダル/ドロップダウン/トースト）専用の常時不透明サーフェス。
      Workspaceスコープ時に --bg/--bg-card は半透明化されるため、浮遊UIはこちらを参照する */
+  /* Keep these mixes in sync with themes/floatingText.ts. */
   --bg-solid:        color-mix(in srgb, var(--surface-fg) 14%, var(--surface-base));
   --bg-elevated:     color-mix(in srgb, var(--surface-fg) 19%, var(--surface-base));
 
@@ -147,6 +148,7 @@
   --ws-surface:      color-mix(in srgb, color-mix(in srgb, var(--surface-fg) 6%, var(--surface-base)) 58%, transparent);
   --ws-surface-card: color-mix(in srgb, color-mix(in srgb, var(--surface-fg) 9%, var(--surface-base)) 66%, transparent);
   --bg-card:         color-mix(in srgb, color-mix(in srgb, var(--surface-fg) 9%, var(--surface-base)) 66%, transparent);
+  /* Keep this mix in sync with themes/floatingText.ts. */
   --bg-hover:        color-mix(in srgb, var(--surface-fg) 13%, transparent);
   --ws-content: transparent;
   /* 不透明を保つ面: 浮遊UI・記入面（可読性の不変則） */
