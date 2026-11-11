@@ -126,8 +126,6 @@
     },
     "unavailable": "このサブエージェントには中継できません。",
     "relayUnavailable": {
-      "agent_outdated": "$t(subagents.errors.agent_outdated)",
-      "unavailable": "$t(subagents.unavailable)",
       "unnamed": "中継先の名前がないため、親に伝言を依頼できません。",
       "finished": "このサブエージェントは終了しています。",
       "invalid_name": "中継先の名前が不正か、他のサブエージェントと重複しています。"
