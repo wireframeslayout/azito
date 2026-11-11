@@ -126,8 +126,8 @@
     },
     "unavailable": "Relay is unavailable for this subagent.",
     "relayUnavailable": {
-      "agent_outdated": "Update the agent to use relay.",
-      "unavailable": "Relay is unavailable for this subagent.",
+      "agent_outdated": "$t(subagents.errors.agent_outdated)",
+      "unavailable": "$t(subagents.unavailable)",
       "unnamed": "This subagent has no routing name, so the parent cannot be asked to relay a message to it.",
       "finished": "This subagent has finished.",
       "invalid_name": "The subagent name is invalid or shared by another subagent."
