@@ -99,6 +99,7 @@ describe('POST /api/windows/:id/launch-agent', () => {
 
     const windowRepo: Partial<IWindowRepository> = {
       findById: (id: number) => (id === window.id ? window : undefined),
+      findByProject: () => [window], findByTask: () => [window],
       updateAgentSessionIdByWindow: updateByWindowFn,
       findByServerAndTarget: vi.fn(() => undefined), findByServerAndRef: vi.fn(() => undefined),
       add: vi.fn(() => 2), update: windowUpdate,
@@ -161,6 +162,25 @@ describe('POST /api/windows/:id/launch-agent', () => {
     expect(JSON.stringify(res.json())).not.toContain('dangerously');
     const forged = await app.inject({ method: 'POST', url: '/api/projects/1/windows', payload: { server_name: 'local-server', ref: JSON.stringify(ref), worker_launch_command: 'claude --dangerously-skip-permissions' } });
     expect(forged.statusCode).toBe(400);
+  });
+
+  it('hides launch arguments in window list responses', async () => {
+    window.workerLaunch = { workerType: 'claude', args: ['--permission-mode', 'manual'] };
+    for (const url of ['/api/projects/1/windows', '/api/tasks/1/windows']) {
+      const response = await app.inject({ method: 'GET', url });
+      expect(response.statusCode).toBe(200);
+      expect(response.json()[0]).not.toHaveProperty('workerLaunch');
+    }
+  });
+
+  it('updates and clears recorded models when the window model changes', async () => {
+    window.workerLaunch = { workerType: 'claude', args: ['--permission-mode', 'auto', '-m', 'opus'] };
+    const response = await app.inject({ method: 'PUT', url: '/api/windows/1', payload: { worker_model: 'claude-opus-5-5[1m]' } });
+    expect(response.statusCode).toBe(200);
+    expect(windowUpdate).toHaveBeenLastCalledWith(1, { workerModel: 'claude-opus-5-5[1m]', workerLaunch: { workerType: 'claude', args: ['--permission-mode', 'auto', '--model', 'claude-opus-5-5[1m]'] } });
+    const cleared = await app.inject({ method: 'PUT', url: '/api/windows/1', payload: { worker_model: null } });
+    expect(cleared.statusCode).toBe(200);
+    expect(windowUpdate).toHaveBeenLastCalledWith(1, { workerModel: null, workerLaunch: { workerType: 'claude', args: ['--permission-mode', 'auto'] } });
   });
 
   it.each([
@@ -371,6 +391,7 @@ describe('POST /api/windows/:id/launch-agent', () => {
       harnessPrefix: '',
       windowRepo: {
         findById: (id: number) => (id === window.id ? window : undefined),
+      findByProject: () => [window], findByTask: () => [window],
         updateAgentSessionIdByWindow: codexUpdateByWindowFn,
         update: vi.fn(),
       } as unknown as IWindowRepository,
@@ -554,6 +575,7 @@ describe('POST /api/windows/:id/respawn — execution gate (Issue #328 second-ro
   async function setup(respawn: WindowRespawnService['respawn'], invalidateSessionCache?: (serverName: string) => void): Promise<FastifyInstance> {
     const windowRepo: Partial<IWindowRepository> = {
       findById: (id: number) => (id === window.id ? window : undefined),
+      findByProject: () => [window], findByTask: () => [window],
     };
     const serverRepo: Partial<IServerRepository> = {
       findByName: (name: string) => (name === server.name ? server : null),

@@ -3,6 +3,7 @@ import type { ServerConfig } from '../../servers/Server';
 import type { TransportFactory } from '../../servers/transport/TransportFactory';
 import { findFilesByMtime, SESSION_SCAN_BUDGET_MS } from '../sessionScanUtils';
 import { pathApiFor } from '../../../shared/os/hostPath';
+import type { LaunchOptions } from '../AgentProvider';
 import type { WorkerLaunch } from '../WorkerLaunch';
 import { buildClaudeAttachLaunch, buildClaudeLaunch } from './launchCommand';
 import { claudeProjectDirNames } from './projectDirName';
@@ -28,12 +29,12 @@ export class ClaudeSessionStrategy implements ISessionStrategy {
     return ['--resume', sessionId];
   }
 
-  buildRespawnLaunch(agentSessionId: string | null, model: string | null, extraArgs: string | null, blockMcp = true, conversation: RespawnConversation = 'resume', attachId: string | null = null): WorkerLaunch {
+  buildRespawnLaunch(agentSessionId: string | null, model: string | null, extraArgs: string | null, blockMcp = true, conversation: RespawnConversation = 'resume', attachId: string | null = null, options?: Pick<LaunchOptions, 'defaultPermissionFlags' | 'recordedArgs'>): WorkerLaunch {
     // `attach`: the daemon holds the conversation, so the launch is its client — no flags of a new claude process.
     if (conversation === 'attach' && (attachId || agentSessionId)) {
       return buildClaudeAttachLaunch(attachId || agentSessionId!.slice(0, 8));
     }
-    return buildClaudeLaunch({ model, extraArgs, blockMcp }, agentSessionId, conversation === 'new');
+    return buildClaudeLaunch({ model, extraArgs, blockMcp, ...options }, agentSessionId, conversation === 'new');
   }
 
   async scanSessionId(server: ServerConfig, workingDirectory: string | null, afterTimestamp?: Date): Promise<string | null> {

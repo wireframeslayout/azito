@@ -294,9 +294,9 @@ describe('POST /api/windows/:id/launch-agent — MCP blocking', () => {
   it('records only a successful launch and clears unsupported arguments', async () => {
     app = await buildApp({ win: makeWindow({ taskId: null }) });
     const path = `/api/windows/${window.id}/launch-agent`;
-    const first = await app.inject({ method: 'POST', url: path, payload: { command: "claude --permission-mode 'default' --model sonnet" } });
+    const first = await app.inject({ method: 'POST', url: path, payload: { command: "claude --permission-mode 'manual' --model sonnet" } });
     expect(first.statusCode).toBe(200);
-    expect(updateWindow).toHaveBeenLastCalledWith(window.id, { workerLaunch: { workerType: 'claude', args: ['--permission-mode', 'default', '--model', 'sonnet'] } });
+    expect(updateWindow).toHaveBeenLastCalledWith(window.id, { workerLaunch: { workerType: 'claude', args: ['--permission-mode', 'manual', '--model', 'sonnet'] } });
     const second = await app.inject({ method: 'POST', url: path, payload: { command: 'claude --append-system-prompt secret' } });
     expect(second.statusCode).toBe(200);
     expect(updateWindow).toHaveBeenLastCalledWith(window.id, { workerLaunch: null });

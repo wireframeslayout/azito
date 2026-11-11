@@ -23,16 +23,17 @@ const STRICT_MCP_CONFIG_FLAG = '--strict-mcp-config';
  * With `startNew`, the given id is the one the new conversation is created under (`claude --session-id <id> ...`): for an id whose
  * conversation was never written (Claude creates the file at the first message).
  */
-export function buildClaudeLaunch({ model, extraArgs, blockMcp = true }: LaunchOptions, agentSessionId: string | null = null, startNew = false): ProgramLaunch {
+export function buildClaudeLaunch({ model, extraArgs, blockMcp = true, defaultPermissionFlags = true, recordedArgs }: LaunchOptions, agentSessionId: string | null = null, startNew = false): ProgramLaunch {
   return {
     kind: 'program',
     file: 'claude',
     env: CLAUDE_LAUNCH_ENV,
     args: [
       ...(agentSessionId ? [flag(startNew ? '--session-id' : '--resume'), flag(agentSessionId)] : []),
-      flag('--dangerously-skip-permissions'),
+      ...(defaultPermissionFlags ? [flag('--dangerously-skip-permissions')] : []),
       ...(blockMcp ? [flag(STRICT_MCP_CONFIG_FLAG)] : []),
-      ...(model ? [flag('--model'), value(model)] : []),
+      ...(recordedArgs === undefined && model ? [flag('--model'), value(model)] : []),
+      ...(recordedArgs?.map(value) ?? []),
       ...(agentSessionId ? resumeExtraArgs(extraArgs) : extraArgValues(extraArgs)),
     ],
   };

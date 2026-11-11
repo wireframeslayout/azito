@@ -282,7 +282,7 @@ describe('worker launch storage', () => {
     repo.update(id, { workerLaunch: record });
     const found = repo.findById(id)!;
     expect(found.workerLaunch).toEqual(record);
-    expect(JSON.stringify(found)).not.toContain('workerLaunch');
+    expect(Object.keys(found)).toContain('workerLaunch');
     repo.update(id, { label: 'new label' });
     expect(repo.findById(id)?.workerLaunch).toEqual(record);
     repo.update(id, { agentSessionId: 'first-session' });

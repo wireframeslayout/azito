@@ -148,3 +148,8 @@ export interface IWindowRepository {
   removeByServerAndTarget(serverName: string, tmuxTarget: string): number;
   updatePaneLayout(id: number, layout: PaneLayout): void;
 }
+
+export function publicWindow(window: Window): Omit<Window, 'workerLaunch'> {
+  const { workerLaunch: _workerLaunch, ...visible } = window;
+  return visible;
+}

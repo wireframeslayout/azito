@@ -23,7 +23,7 @@ import { HostProfileError } from '../../shared/os/hostProfile';
 import { isAgentSessionId } from '../agents/agentSessionId';
 import { shellDialectFor } from '../../shared/os/shellDialect';
 import { randomUUID } from 'node:crypto';
-import { isPrimaryTaskWindow, type IWindowRepository, type Window } from './Window';
+import { publicWindow, isPrimaryTaskWindow, type IWindowRepository, type Window } from './Window';
 import type { IProjectRepository } from '../projects/Project';
 import type { ITaskRepository } from '../tasks/Task';
 import type { ServerConfig } from '../servers/Server';
@@ -225,7 +225,7 @@ const windowsRoutes: FastifyPluginCallback<WindowsRouteOptions> = (fastify, opts
       const id = parseInt(request.params.id, 10);
       if (!projectRepo.findById(id))
         return reply.status(404).send({ error: 'Project not found' });
-      return windowRepo.findByProject(id);
+      return windowRepo.findByProject(id).map(publicWindow);
     },
   );
 
@@ -400,7 +400,7 @@ const windowsRoutes: FastifyPluginCallback<WindowsRouteOptions> = (fastify, opts
       const id = parseInt(request.params.id, 10);
       if (!taskRepo.findById(id))
         return reply.status(404).send({ error: 'Task not found' });
-      return windowRepo.findByTask(id);
+      return windowRepo.findByTask(id).map(publicWindow);
     },
   );
 
@@ -524,6 +524,16 @@ const windowsRoutes: FastifyPluginCallback<WindowsRouteOptions> = (fastify, opts
           return reply.code(400).send({ error: 'Invalid worker_model format' });
         }
         data['workerModel'] = body.worker_model;
+        if (win.workerLaunch) {
+          const args = win.workerLaunch.args;
+          const updated: string[] = [];
+          for (let i = 0; i < args.length; i++) {
+            if (args[i] === '--model' || args[i] === '-m') { i++; continue; }
+            updated.push(args[i]);
+          }
+          if (body.worker_model) updated.push('--model', body.worker_model);
+          data['workerLaunch'] = { ...win.workerLaunch, args: updated };
+        }
       }
       if ('working_directory' in body) data['workingDirectory'] = body.working_directory;
 

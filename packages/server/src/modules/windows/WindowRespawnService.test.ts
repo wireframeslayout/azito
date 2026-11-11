@@ -8,6 +8,7 @@ import { WindowRespawnService, buildRespawnManifestInput } from './WindowRespawn
 import { DuplicateAgentSessionError } from './DuplicateAgentSessionError';
 import type { ConversationProbe } from './ConversationProbe';
 import { ConversationCheckError } from '../agents/ConversationCheckError';
+import { buildClaudeLaunch } from '../agents/claude/launchCommand';
 import { ClaudeSessionStrategy } from '../agents/claude/SessionStrategy';
 import { CodexSessionStrategy } from '../agents/codex/SessionStrategy';
 import { TranscriptConversationProbe } from '../transcripts/TranscriptConversationProbe';
@@ -248,7 +249,7 @@ function buildService(opts: {
   const stubStrategyFactory = {
     create: vi.fn(() => ({
       supportsSession: true,
-      buildRespawnLaunch: vi.fn(() => (opts.noRespawnLaunch ? null : { ...program('claude', ['--resume', 'abc', '--dangerously-skip-permissions']), env: { CLAUDE_CODE_ENABLE_PROMPT_SUGGESTION: 'false' } })),
+      buildRespawnLaunch: vi.fn((id, model, _extra, blockMcp, conversation, _attach, options) => (opts.noRespawnLaunch ? null : options ? buildClaudeLaunch({ model, blockMcp, ...options }, id, conversation === 'new') : { ...program('claude', ['--resume', 'abc', '--dangerously-skip-permissions']), env: { CLAUDE_CODE_ENABLE_PROMPT_SUGGESTION: 'false' } })),
       conversationLogAgentType: null,
     })),
   };

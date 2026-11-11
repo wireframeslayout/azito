@@ -377,6 +377,7 @@ export function toWindow(row: WindowRow): Window {
       windowType: row.window_type as Window['windowType'],
       workerType: row.worker_type,
       workerModel: row.worker_model,
+      workerLaunch: row.worker_launch ? JSON.parse(row.worker_launch) : null,
       agentSessionId: row.agent_session_id,
       claudeConfigDir: row.claude_config_dir,
       claudeConfigDirExplicit: row.claude_config_dir_explicit === null ? null : row.claude_config_dir_explicit === 1,
@@ -387,6 +388,5 @@ export function toWindow(row: WindowRow): Window {
       sleeping: row.sleeping === 1,
       createdAt: row.created_at,
     };
-    Object.defineProperty(window, 'workerLaunch', { value: row.worker_launch ? JSON.parse(row.worker_launch) : null, enumerable: false });
     return window;
   }
