@@ -1149,8 +1149,9 @@ input[aria-invalid="true"]:focus-visible { outline-color: var(--danger) !importa
 .global-search-header {
   display:flex;
   align-items:center;
-  justify-content:space-between;
+  gap:var(--space-2);
   padding:var(--space-3) var(--space-4);
+  border-bottom:1px solid var(--border);
 }
 .global-search-header h2 {
   margin:0;
@@ -1173,11 +1174,11 @@ input[aria-invalid="true"]:focus-visible { outline-color: var(--danger) !importa
   outline:2px solid var(--accent);
 }
 .global-search input {
-  margin:0 var(--space-4);
+  flex:1;
+  margin:0;
   padding:var(--space-3);
-  border:1px solid var(--border);
-  border-radius:var(--radius-md);
-  background:var(--input-bg);
+  border:0;
+  background:transparent;
   color:var(--text);
   font:inherit;
   min-width:0;
