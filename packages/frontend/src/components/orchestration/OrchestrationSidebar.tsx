@@ -21,6 +21,7 @@ import { ProjectAvatar } from '../ui/ProjectAvatar';
 import WindowActivityIndicator from '../ui/WindowActivityIndicator';
 import ObjectSection from '../workspace/objects/ObjectSection';
 import { Icon } from '../ui/Icon';
+import { AgentIcon } from '../ui/AgentIcons';
 
 function RowContent({ children, onMenu, onMenuAt }: { children: ReactNode; onMenu: (event: React.MouseEvent) => void; onMenuAt: (x: number, y: number) => void }) {
   const bindLongPress = useLongPress();
@@ -75,7 +76,7 @@ export function OrchestrationSidebar({ selectedId, onSelect }: OrchestrationSide
     }} style={{ paddingLeft: `calc(var(--space-3) * ${depth})` }}>
       <RowContent onMenu={(event) => contextMenu.show(event, items())} onMenuAt={(x, y) => contextMenu.showAt(x, y, items())}>
         {node.children.length > 0 && <IconButton tabIndex={-1} aria-label={expanded ? t('orchestration.collapse') : t('orchestration.expand')} onClick={(event) => { event.stopPropagation(); toggle(); }}><Icon name="chevron-right" rotate={expanded ? 90 : 0} size={14} /></IconButton>}
-        <ListRow as="div" size="sm" selected={selectedId === window.id} title={<>{display.idLabel && <WindowIdChip id={window.id} />} {display.title}</>} chips={<WindowActivityIndicator status={activityStatus(window.serverName, window.tmuxTarget)} />} description={<span id={`orchestration-description-${window.id}`} style={{ display: 'flex', alignItems: 'center', gap: 'var(--space-1)', flexWrap: 'wrap' }}>{projects.slice(0, 3).map((project) => <ProjectAvatar key={project.id} project={project} size={18} />)}{projects.length > 3 && `+${projects.length - 3}`} {t(`orchestration.${orchestratorStatus(window, activity)}`)} · {t('orchestration.links', { count: window.links.total })} {countAttention(node) ? ` · ${t('orchestration.attention', { count: countAttention(node) })}` : ''} {window.links.serverNames.filter((name) => name !== window.serverName).join(', ')} {window.lastInteractionAt && formatRelativeTime(window.lastInteractionAt)}</span>} style={{ flex: 1, minWidth: 0, listStyle: 'none' }} />
+        <ListRow as="div" size="sm" icon={<AgentIcon workerType={window.workerType} windowType={window.windowType} size={16} />} selected={selectedId === window.id} title={<>{display.idLabel && <WindowIdChip id={window.id} />} {display.title}</>} chips={<WindowActivityIndicator status={activityStatus(window.serverName, window.tmuxTarget)} />} description={<span id={`orchestration-description-${window.id}`} style={{ display: 'flex', alignItems: 'center', gap: 'var(--space-1)', flexWrap: 'wrap' }}>{projects.slice(0, 3).map((project) => <ProjectAvatar key={project.id} project={project} size={18} />)}{projects.length > 3 && `+${projects.length - 3}`} {t(`orchestration.${orchestratorStatus(window, activity)}`)} · {t('orchestration.links', { count: window.links.total })} {countAttention(node) ? <span style={{ color: 'var(--warning)' }}> · {t('orchestration.attention', { count: countAttention(node) })}</span> : null} {window.links.serverNames.filter((name) => name !== window.serverName).join(', ')} {window.lastInteractionAt && formatRelativeTime(window.lastInteractionAt)}</span>} style={{ flex: 1, minWidth: 0, listStyle: 'none' }} />
       </RowContent>
       {expanded && node.children.length > 0 && <div role="group">{node.children.map((child) => renderNode(child, depth + 1))}</div>}
     </div>;

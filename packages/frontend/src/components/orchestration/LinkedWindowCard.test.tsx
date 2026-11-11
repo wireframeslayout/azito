@@ -16,3 +16,11 @@ it('keeps snapshot retry above the card open target and retries without opening'
   expect(onRetry).toHaveBeenCalledOnce();
   expect(onOpen).not.toHaveBeenCalled();
 });
+
+it('shows a linked issue only for a valid reference and highlights attention', () => {
+  const { rerender, container } = render(<LinkedWindowCard title="Window" status="attention" attention source="github" sourceRef="owner/repo#123" openLabel="Open" unlinkLabel="Unlink" onUnlink={vi.fn()} />);
+  expect(screen.getByRole('link').getAttribute('href')).toBe('https://github.com/owner/repo/issues/123');
+  expect(container.querySelector('article')?.style.border).toContain('var(--warning)');
+  rerender(<LinkedWindowCard title="Window" status="running" openLabel="Open" unlinkLabel="Unlink" onUnlink={vi.fn()} />);
+  expect(screen.queryByRole('link')).toBeNull();
+});
