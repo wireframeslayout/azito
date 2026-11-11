@@ -483,6 +483,18 @@ describe('user window launch records', () => {
     expect(commands[1]).toContain('--dangerously-skip-permissions');
   });
 
+  it('does not guess which pane has recorded settings when session ids collide', async () => {
+    const win = makeWindow({ taskId: null, workerType: 'claude', agentSessionId: 'abc', workerLaunch: { workerType: 'claude', args: ['--dangerously-skip-permissions'] }, paneLayout: { layout: '', panes: [
+      { index: 0, workerType: 'claude', agentSessionId: 'abc', workingDirectory: null, command: null, title: null },
+      { index: 1, workerType: 'claude', agentSessionId: 'abc', workingDirectory: null, command: null, title: null },
+    ] } });
+    const { service, tmux, sentCommands } = buildService({ window: win, task: null });
+    tmux.listPanesByRef.mockResolvedValue([{ ordinal: 1, handle: '%0', title: '', command: 'bash', active: true }, { ordinal: 2, handle: '%1', title: '', command: 'bash', active: false }]);
+    await service.respawn(1, makeServer());
+    expect(sentCommands.filter((command) => command.includes('claude'))).toHaveLength(2);
+    expect(sentCommands.join('\n')).not.toContain('--dangerously-skip-permissions');
+  });
+
   it('does not add bypass for a legacy window with no launch record', async () => {
     const win = makeWindow({ taskId: null, workerType: 'claude', workerLaunch: null });
     const { service, sentCommands } = buildService({ window: win, task: null });

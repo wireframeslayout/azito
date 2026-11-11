@@ -1468,6 +1468,7 @@ export class WindowRespawnService {
     }
 
     const panesToRestore = paneLayout.panes;
+    const recordedSessionPaneCount = win.agentSessionId ? panesToRestore.filter((pane) => pane.agentSessionId === win.agentSessionId).length : 0;
     for (const pane of panesToRestore) {
       const paneId = paneIdMap.get(pane.index);
       if (!paneId) continue;
@@ -1481,7 +1482,10 @@ export class WindowRespawnService {
         const workerType = pane.workerType || (pane.index === paneLayout.panes[0]?.index ? win.workerType : null);
         if (workerType) {
           const plan = panePlans?.get(pane.index);
-          const launch = this.buildWindowLaunch(win, workerType, plan, blockMcp, pane.agentSessionId ? pane.agentSessionId === win.agentSessionId : pane.index === paneLayout.panes[0]?.index && !paneLayout.panes.some((other) => other.agentSessionId && other.agentSessionId === win.agentSessionId));
+          const hasRecordedLaunch = pane.agentSessionId
+            ? pane.agentSessionId === win.agentSessionId && recordedSessionPaneCount === 1
+            : pane.index === paneLayout.panes[0]?.index && recordedSessionPaneCount === 0;
+          const launch = this.buildWindowLaunch(win, workerType, plan, blockMcp, hasRecordedLaunch);
           if (launch) {
             const wrapped = this.wrapIfSupervised(launch, server, baseTarget, supervision);
             const sendCmd = plan?.configDirExplicit === true ? `CLAUDE_CONFIG_DIR="$AZITO_RESUME_CLAUDE_CONFIG_DIR_${pane.index}" ${wrapped}` : plan?.configDirExplicit === false ? this.dialectOf(server).withoutEnv('CLAUDE_CONFIG_DIR', wrapped, await driver.paneCommandByHandle(server, paneId).catch(() => null)) : wrapped;
