@@ -5,7 +5,7 @@ import { OrchestrationSidebar } from './OrchestrationSidebar';
 
 vi.mock('../../hooks/useIsMobile', () => ({ useIsMobile: () => false }));
 const removeRole = vi.fn();
-vi.mock('../../hooks/useOrchestrationModel', async () => { const { buildOrchestratorTree } = await import('../../lib/orchestrationModel'); return { useOrchestrationModel: () => ({ tree: buildOrchestratorTree([{ id: 1, originProjectId: 10, parentWindowId: null, label: 'Parent', tmuxTarget: 's:p', serverName: 'local', links: { targets: [], total: 0, projectIds: [], serverNames: [] } }, { id: 2, originProjectId: 10, parentWindowId: 1, label: 'Child', tmuxTarget: 's:c', serverName: 'local', links: { targets: [{ windowId: null, taskId: 8 }], total: 1, projectIds: [10], serverNames: [] } }] as never, { activityByWindowId: new Map(), taskById: new Map([[8, { id: 8, status: 'failed' } as never]]) }), activity: new Map() }) }; });
+vi.mock('../../hooks/useOrchestrationModel', async () => { const { buildOrchestratorTree } = await import('../../lib/orchestrationModel'); return { useOrchestrationModel: () => ({ tree: buildOrchestratorTree([{ id: 1, originProjectId: 10, parentWindowId: null, label: 'Parent', tmuxTarget: 's:p', serverName: 'local', links: { targets: [], total: 0, projectIds: [], serverNames: [] } }, { id: 2, originProjectId: 10, parentWindowId: 1, label: 'Child', tmuxTarget: 's:c', serverName: 'local', links: { targets: [{ windowId: null, taskId: 8 }], total: 1, projectIds: [10], serverNames: [] } }, { id: 3, originProjectId: 10, parentWindowId: null, label: null, tmuxTarget: 's:w_01M741SYR07', serverName: 'local', links: { targets: [], total: 0, projectIds: [], serverNames: [] } }] as never, { activityByWindowId: new Map(), taskById: new Map([[8, { id: 8, status: 'failed' } as never]]) }), activity: new Map() }) }; });
 vi.mock('../../hooks/useWindowActions', () => ({ useWindowActions: () => ({ getWindowMenuItems: (window: { id: number }) => [{ kind: 'change-role', label: 'orchestration.removeRole', onClick: () => removeRole(window.id) }], confirmDialog: null, respawnResourceWarning: null }) }));
 vi.mock('../../hooks/useWorkspaceCatalog', () => ({ useWorkspaceCatalog: () => ({ allProjects: [{ id: 10, name: 'Project Alpha' }] }) }));
 vi.mock('../../hooks/useAgentActivity', () => ({ useAgentActivity: () => ({ activityStatus: () => null, snapshotStatus: 'ready', retrySnapshot: vi.fn() }) }));
@@ -23,6 +23,14 @@ describe('OrchestrationSidebar', () => {
     expect(screen.getByText(/Parent/)).toBeTruthy();
     fireEvent.click(screen.getByText(/Child/));
     expect(select).toHaveBeenCalledWith(2);
+  });
+  it('shows and searches the resolved name for an unnamed window', () => {
+    render(<OrchestrationSidebar onSelect={vi.fn()} />);
+    fireEvent.change(screen.getByRole('textbox'), { target: { value: 'W-3' } });
+    const row = screen.getByRole('treeitem', { name: 'W-3' });
+    expect(row).toHaveTextContent('W-3');
+    expect(row).not.toHaveTextContent('w_01M741SYR07');
+    expect(row.textContent?.match(/W-3/g)).toHaveLength(1);
   });
   it('finds a child by linked project name', () => {
     render(<OrchestrationSidebar onSelect={vi.fn()} />);
