@@ -260,7 +260,7 @@ function checkTailscaleDns(installPs1: string, work: string): void {
     `$ast = [System.Management.Automation.Language.Parser]::ParseFile('${installPs1.replace(/'/g, "''")}', [ref]$null, [ref]$null)`,
     "$found = $ast.FindAll({ param($n) ($n -is [System.Management.Automation.Language.FunctionDefinitionAst]) -and $n.Name -eq 'Get-TailscaleDns' }, $true)",
     "if (@($found).Count -ne 1) { throw 'Get-TailscaleDns not found' }",
-    '. ([scriptblock]::Create($found[0].Extent.Text))',
+    '. ([scriptblock]::Create(@($found)[0].Extent.Text))',
     `$fake = '${fake.replace(/'/g, "''")}'`,
     "Add-Type -OutputAssembly $fake -OutputType ConsoleApplication -TypeDefinition @'",
     'using System;',
