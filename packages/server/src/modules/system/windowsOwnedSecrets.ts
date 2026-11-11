@@ -4,6 +4,7 @@ import path from 'path';
 import { z } from 'zod';
 import type { DataPaths } from '../../shared/dataDir';
 import type { SecretFileGuard } from '../../shared/os/secretFileGuard';
+import { resolveRealPath } from '../../shared/os/realPath';
 import { readWindowsInstallRecord, type WindowsInstallRecord } from './windowsHubUninstall';
 import { assertRealDirectoryChain, readInstallFileIdentity, installIdentitySchema, sameInstallFileIdentity, type InstallFileIdentity } from './windowsInstallInventory';
 
@@ -75,18 +76,46 @@ function writeMarker(hubDir: string, name: string, identity: InstallFileIdentity
   }
 }
 
+/** Resolve spelling aliases only after checking that no existing ancestor is a link. */
+function sameOwnedDirectory(first: string, second: string): boolean {
+  const resolve = (value: string): string => {
+    const absolute = path.resolve(value);
+    let existing = absolute;
+    for (;;) {
+      try { fs.lstatSync(existing); break; } catch (err) {
+        if ((err as NodeJS.ErrnoException).code !== 'ENOENT') throw err;
+        const parent = path.dirname(existing);
+        if (parent === existing) throw err;
+        existing = parent;
+      }
+    }
+    assertRealDirectoryChain(existing);
+    return resolveRealPath(absolute).toLowerCase();
+  };
+  return resolve(first) === resolve(second);
+}
+
 interface OwnedRoot { hubDir: string; dataDir: string; root: InstallFileIdentity }
 
 function resolveOwnedRoot(base: SecretFileGuard, bundleRoot: string | null, paths: DataPaths, platform: NodeJS.Platform): OwnedRoot | undefined {
   if (platform !== 'win32' || bundleRoot === null) return undefined;
   const hubDir = path.dirname(bundleRoot);
   const dataDir = path.join(path.dirname(hubDir), 'data');
-  if (path.resolve(paths.dir).toLowerCase() !== path.resolve(dataDir).toLowerCase()) return undefined;
-  if (!fs.existsSync(path.join(hubDir, '.install-record.json'))) return undefined;
   try {
+    if (!sameOwnedDirectory(paths.dir, dataDir)) {
+      console.warn('[azito] Cannot track newly created data files: the data directory differs from the installed prefix.');
+      return undefined;
+    }
+    if (!fs.existsSync(path.join(hubDir, '.install-record.json'))) {
+      console.warn('[azito] Cannot track newly created data files: the installation record is missing.');
+      return undefined;
+    }
     const record = readWindowsInstallRecord(hubDir, base);
     const root = readInstallFileIdentity(dataDir);
-    if (record.consumed || !sameInstallFileIdentity(record.dataRootIdentity, root) || !base.inspect(dataDir, 'dir').ok) return undefined;
+    if (record.consumed || !sameInstallFileIdentity(record.dataRootIdentity, root) || !base.inspect(dataDir, 'dir').ok) {
+      console.warn('[azito] Cannot track newly created data files: the recorded data directory is not available or protected.');
+      return undefined;
+    }
     return { hubDir, dataDir, root };
   } catch (err) {
     console.warn(`[azito] Cannot track newly created data files: ${err instanceof Error ? err.message : String(err)}`);
@@ -100,8 +129,9 @@ export function createOwnedCanaryRecorder(base: SecretFileGuard, bundleRoot: str
   if (!context) return undefined;
   return (file) => {
     const name = path.basename(file);
-    if (!CANARY_NAME.test(name) || path.resolve(path.dirname(file)).toLowerCase() !== path.resolve(context.dataDir).toLowerCase()) return;
+    if (!CANARY_NAME.test(name)) return;
     try {
+      if (!sameOwnedDirectory(path.dirname(file), context.dataDir)) return;
       const current = readWindowsInstallRecord(context.hubDir, base);
       if (current.consumed || !sameInstallFileIdentity(current.dataRootIdentity, context.root)) return;
       if (!sameInstallFileIdentity(context.root, readInstallFileIdentity(context.dataDir)) || !base.inspect(file, 'file').ok) throw new Error('The data directory or file is not protected.');
@@ -120,7 +150,12 @@ export function trackWindowsOwnedSecrets(base: SecretFileGuard, bundleRoot: stri
   const names = new Set<string>(OWNED_SECRET_NAMES);
   const write = (file: string, content: string): void => {
     const name = path.basename(file);
-    if (!names.has(name) || path.resolve(path.dirname(file)).toLowerCase() !== path.resolve(dataDir).toLowerCase()) {
+    let matches = false;
+    try { matches = names.has(name) && sameOwnedDirectory(path.dirname(file), dataDir); } catch (err) {
+      console.warn(`[azito] Cannot track ownership of ${file}: ${err instanceof Error ? err.message : String(err)}`);
+    }
+    if (!matches) {
+      if (names.has(name)) console.warn(`[azito] Cannot track ownership of ${file}: its parent is not the recorded data directory.`);
       base.writeSecretFile(file, content);
       return;
     }

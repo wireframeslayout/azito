@@ -47,6 +47,54 @@ describe('tracked Windows secrets', () => {
     expect(() => readOwnedSecret(root, hub, 'master.key', record, guard)).toThrow(/not the recorded/);
   });
 
+  it('tracks files and canaries when the data path uses relative components and a trailing separator', () => {
+    const { hub, bundle, paths, guard } = setup();
+    const alias = `${path.relative(process.cwd(), paths.dir)}${path.sep}`;
+    const tracked = trackWindowsOwnedSecrets(guard, bundle, { ...paths, dir: alias }, 'win32');
+    tracked.writeSecretFile(path.join(alias, 'webhook-token'), 'generated');
+    expect(fs.existsSync(ownedSecretMarker(hub, 'webhook-token'))).toBe(true);
+    const observer = createOwnedCanaryRecorder(guard, bundle, { ...paths, dir: alias }, 'win32');
+    expect(observer).toBeDefined();
+    const canary = writeHubCanary(alias, observer);
+    expect(canary).not.toBeNull();
+    expect(fs.existsSync(ownedSecretMarker(hub, path.basename(canary!.path)))).toBe(true);
+  });
+
+  it('matches real paths whose spellings differ only in case', () => {
+    const { hub, bundle, paths, guard } = setup();
+    const native = fs.realpathSync.native;
+    let dataCalls = 0;
+    const spy = vi.spyOn(fs.realpathSync, 'native').mockImplementation((name, options) => {
+      const result = native(name, options as never);
+      if (typeof result === 'string' && result === paths.dir && ++dataCalls % 4 === 2) {
+        return path.join(path.dirname(result), path.basename(result).toUpperCase());
+      }
+      return result;
+    });
+    try {
+      trackWindowsOwnedSecrets(guard, bundle, paths, 'win32').writeSecretFile(paths.webhookToken, 'generated');
+      expect(fs.existsSync(ownedSecretMarker(hub, 'webhook-token'))).toBe(true);
+      expect(dataCalls).toBeGreaterThanOrEqual(4);
+    } finally { spy.mockRestore(); }
+  });
+
+  it('does not track a linked alias of the data directory', () => {
+    const { root, hub, bundle, paths, guard } = setup();
+    const alias = path.join(root, 'data-link');
+    fs.symlinkSync(paths.dir, alias, process.platform === 'win32' ? 'junction' : 'dir');
+    const warning = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    try {
+      const tracked = trackWindowsOwnedSecrets(guard, bundle, { ...paths, dir: alias }, 'win32');
+      expect(tracked).toBe(guard);
+      tracked.writeSecretFile(path.join(alias, 'webhook-token'), 'generated');
+      expect(fs.existsSync(ownedSecretMarker(hub, 'webhook-token'))).toBe(false);
+      expect(warning).toHaveBeenCalled();
+    } finally {
+      warning.mockRestore();
+      if (process.platform === 'win32') fs.rmdirSync(alias); else fs.unlinkSync(alias);
+    }
+  });
+
   it('does not claim a file that already exists', () => {
     const { hub, bundle, paths, guard } = setup();
     guard.writeSecretFile(paths.webhookToken, 'user');

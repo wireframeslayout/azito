@@ -175,14 +175,14 @@ async function checkRemoveData(installPs1: string, zip: string, sums: string, pr
   const changedPrefix = `${prefix}-changed`;
   const changedInstall = install(installPs1, ['-ZipPath', zip, '-Sha256Sums', sums, '-Prefix', changedPrefix, '-Yes', '-NoPath', '-NoService']);
   assert(changedInstall.status === 0, 'install for changed data failed', changedInstall.output);
-  await checkStart(installPs1, path.join(changedPrefix, 'bin', 'azito.cmd'), changedPrefix);
+  const hubOutput = await checkStart(installPs1, path.join(changedPrefix, 'bin', 'azito.cmd'), changedPrefix);
   const extra = path.join(changedPrefix, 'data', 'user-file');
   fs.writeFileSync(extra, 'keep');
   const database = path.join(changedPrefix, 'data', 'data.db');
   const webhook = path.join(changedPrefix, 'data', 'webhook-token');
-  assert(fs.existsSync(path.join(changedPrefix, 'hub', '.owned-data-webhook-token.json')), 'the generated webhook token must have an ownership record');
+  assert(fs.existsSync(path.join(changedPrefix, 'hub', '.owned-data-webhook-token.json')), 'the generated webhook token must have an ownership record', hubOutput);
   const canary = fs.readdirSync(path.join(changedPrefix, 'data')).find((name) => /^\.azito-hub-canary-[a-f0-9]{32}$/.test(name));
-  assert(canary !== undefined && fs.existsSync(path.join(changedPrefix, 'hub', `.owned-data-${canary}.json`)), 'the generated canary must have an ownership record');
+  assert(canary !== undefined && fs.existsSync(path.join(changedPrefix, 'hub', `.owned-data-${canary}.json`)), 'the generated canary must have an ownership record', hubOutput);
   const changedRemoval = install(installPs1, ['-Uninstall', '-RemoveData', '-Prefix', changedPrefix, '-Yes']);
   assert(changedRemoval.status === 0 && fs.existsSync(extra) && /Data retained/.test(changedRemoval.output), 'changed data must be retained and reported', changedRemoval.output);
   if (fs.existsSync(`${database}-wal`) || fs.existsSync(`${database}-shm`)) assert(fs.existsSync(database), 'database must be kept with SQLite sidecars', changedRemoval.output);
@@ -291,7 +291,7 @@ function checkCli(azitoCmd: string, prefix: string, version: string): void {
   assert(unknown.status === 1 && /Unknown command/.test(unknown.output), 'an unknown command must fail', unknown.output);
 }
 
-async function checkStart(installPs1: string, azitoCmd: string, prefix: string): Promise<void> {
+async function checkStart(installPs1: string, azitoCmd: string, prefix: string): Promise<string> {
   step('azito run runs the hub in the foreground with hub/.env and /api/health answers');
   const envFile = path.join(prefix, 'hub', '.env');
   const port = await freePort();
@@ -326,6 +326,7 @@ async function checkStart(installPs1: string, azitoCmd: string, prefix: string):
       await new Promise((r) => setTimeout(r, 1500));
     }
   }
+  return output;
 }
 
 function checkAccessRules(prefix: string): void {
