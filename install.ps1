@@ -340,18 +340,18 @@ function Assert-RecordedTree([string]$Root, $Inventory) {
         if (-not $entry -or $dirs.ContainsKey([string]$entry)) { throw 'Invalid installation record.' }
         $dirs[[string]$entry] = $true
     }
-    $pending = New-Object 'System.Collections.Generic.Stack[string]'
-    $pending.Push($Root)
+    $pending = New-Object 'System.Collections.Generic.Stack[object]'
+    $pending.Push(@{ FullPath = $Root; RelativePath = '' })
     while ($pending.Count -gt 0) {
         $directory = $pending.Pop()
-        foreach ($entry in (Get-ChildItem -LiteralPath $directory -Force)) {
+        foreach ($entry in (Get-ChildItem -LiteralPath $directory.FullPath -Force)) {
             if (($entry.Attributes -band [IO.FileAttributes]::ReparsePoint) -ne 0) { throw "$($entry.FullName) is a link or mount point; nothing is removed." }
             Assert-OwnerWritableOnly $entry.FullName
-            $relative = $entry.FullName.Substring($Root.Length).TrimStart('\')
+            $relative = if ($directory.RelativePath -eq '') { $entry.Name } else { Join-Path $directory.RelativePath $entry.Name }
             if ($entry.PSIsContainer) {
                 if (-not $dirs.ContainsKey($relative)) { throw "$relative was not recorded; nothing is removed." }
                 $dirs.Remove($relative)
-                $pending.Push($entry.FullName)
+                $pending.Push(@{ FullPath = $entry.FullName; RelativePath = $relative })
             } else {
                 if (-not $files.ContainsKey($relative) -or (Get-FileHash -LiteralPath $entry.FullName -Algorithm SHA256).Hash -ine $files[$relative]) { throw "$relative differs from the record; nothing is removed." }
                 $files.Remove($relative)
