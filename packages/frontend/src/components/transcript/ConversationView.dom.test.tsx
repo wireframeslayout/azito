@@ -13,6 +13,10 @@ describe('child conversation input', () => {
   });
   it('explains that an outdated agent needs an update for relay', () => {
     render(<ConversationView windowId={1} sessionId="parent" agentType="claude" paneId="%1" agentDetected subagentId="child" subagentRelay={{ kind: 'unavailable', reason: 'agent_outdated' }} />);
-    expect(screen.getByTestId('input')).toHaveTextContent('subagents.errors.agent_outdated');
+    expect(screen.getByTestId('input')).toHaveTextContent('subagents.relayUnavailable.agent_outdated');
+  });
+  it('explains why an unnamed child cannot receive a relay', () => {
+    render(<ConversationView windowId={1} sessionId="parent" agentType="claude" paneId="%1" agentDetected subagentId="child" subagentRelay={{ kind: 'unavailable', reason: 'unnamed' }} />);
+    expect(screen.getByTestId('input')).toHaveTextContent('subagents.relayUnavailable.unnamed');
   });
 });
