@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import type { MuxRef } from '@azito/shared';
-import { isSameWindow, kindOfStoredWindow, taskWindowRef, windowDisplayName, windowRefOf } from './windowIdentity';
+import { isSameWindow, kindOfStoredWindow, renameRefusalReason, taskWindowRef, windowDisplayName, windowRefOf } from './windowIdentity';
 
 const ID_A = 'w_01M3XFD8H97JCPKS5Y5BH3JZQH';
 const ID_B = 'w_01M3XFD8H97JCPKS5Y5BH3JZQJ';
@@ -73,5 +73,21 @@ describe('kindOfStoredWindow (stored data: the ref decides, else tmux)', () => {
     expect(kindOfStoredWindow({ muxRef: tmux('ws', ID_A) })).toBe('tmux');
     expect(kindOfStoredWindow({})).toBe('tmux');
     expect(kindOfStoredWindow(undefined)).toBe('tmux');
+  });
+});
+
+describe('renameRefusalReason', () => {
+  const tmuxRow = { muxRef: tmux('sess', 'win--ab') };
+
+  it.each(['2', '@5', '%3', '+1', '-', '!', '^', '$', '{last}', '=x', 'v1.2', 'feature.x'])('refuses a tmux name tmux would read as another window: %s', (name) => {
+    expect(renameRefusalReason(tmuxRow, name)).toMatch(/must not/);
+  });
+
+  it.each(['renamed', 'task-1--ab12', 'a1', 'fix:bug'])('accepts an ordinary tmux name: %s', (name) => {
+    expect(renameRefusalReason(tmuxRow, name)).toBeNull();
+  });
+
+  it('never refuses a misao window name (the row keeps its window id)', () => {
+    expect(renameRefusalReason({ muxRef: misao('ws', ID_A) }, 'v1.2')).toBeNull();
   });
 });

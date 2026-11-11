@@ -88,9 +88,14 @@ export function renamedWindowUpdate(win: Pick<WindowRowIdentity, 'muxRef' | 'tmu
 }
 
 /**
- * Why a registered window cannot take `name`, checked before the mux is renamed so the row never falls behind:
- * a tmux row keeps the name in `tmux_target`, where a trailing `.<digits>` reads back as a pane suffix.
+ * Why a registered window cannot take `name`, checked before the mux is renamed so the row never falls behind.
+ * A tmux row keeps the name in `tmux_target` (`<session>:<name>`), and tmux reads that window part before it looks for
+ * a name: all digits = an index, a leading `@` / `%` = an id, `+` / `-` / `!` / `^` / `$` / `{` / `=` = a relative or
+ * special window, and a `.` starts the pane. Such a name would address another window (kill / send-keys / capture).
  */
 export function renameRefusalReason(win: Pick<WindowRowIdentity, 'muxRef'>, name: string): string | null {
-  return windowKindOf(win) === 'tmux' && /\.\d+$/.test(name) ? 'A tmux window name must not end in "." followed by digits' : null;
+  if (windowKindOf(win) !== 'tmux') return null;
+  return /^\d+$/.test(name) || /^[@%+\-!^${=]/.test(name) || name.includes('.')
+    ? 'A tmux window name must not be only digits, start with one of @ % + - ! ^ $ { =, or contain "."'
+    : null;
 }
