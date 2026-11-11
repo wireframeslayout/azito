@@ -1499,8 +1499,8 @@ export class WindowRespawnService {
   private buildWindowLaunch(win: Window, workerType: string, plan: AgentLaunchPlan | null | undefined, blockMcp: boolean, firstPane: boolean) {
     if (win.taskId === null) {
       const record = firstPane ? win.workerLaunch ?? null : null;
-      if (workerType === 'claude') return buildRecordedClaudeLaunch(record, plan?.sessionId ?? null, blockMcp, plan?.conversation, plan?.attachId ?? null);
-      if (workerType === 'codex') return buildRecordedCodexLaunch(record, plan?.sessionId ?? null, blockMcp);
+      if (workerType === 'claude') return buildRecordedClaudeLaunch(record, win.workerModel, plan?.sessionId ?? null, blockMcp, plan?.conversation, plan?.attachId ?? null);
+      if (workerType === 'codex') return buildRecordedCodexLaunch(record, win.workerModel, plan?.sessionId ?? null, blockMcp);
     }
     return this.sessionStrategyFactory.create(workerType).buildRespawnLaunch(plan?.sessionId ?? null, win.workerModel, null, blockMcp, plan?.conversation, plan?.attachId ?? null);
   }

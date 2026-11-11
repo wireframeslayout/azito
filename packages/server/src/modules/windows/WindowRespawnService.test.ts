@@ -2642,7 +2642,7 @@ describe('WindowRespawnService.respawn — a host that starts a worker as a prog
     await service.respawn(7, makeServer());
 
     const created = tmux.openWindow.mock.calls[0] as unknown as [unknown, string, string, { program: { argv: string[]; cwd: string; cols: number; rows: number }; extraEnv: Record<string, string> }];
-    expect(created[3].program).toEqual({ argv: ['claude', '--resume', 'abc', '--strict-mcp-config'], env: { CLAUDE_CODE_ENABLE_PROMPT_SUGGESTION: 'false' }, cwd: 'C:\\work\\app', cols: 120, rows: 40 });
+    expect(created[3].program).toEqual({ argv: ['claude', '--resume', 'abc', '--strict-mcp-config', '--model', 'opus'], env: { CLAUDE_CODE_ENABLE_PROMPT_SUGGESTION: 'false' }, cwd: 'C:\\work\\app', cols: 120, rows: 40 });
     expect(created[3].extraEnv).toEqual({ AZITO_UI_TOKEN: 'ui-token-fixture', AZITO_WINDOW_ID: '7' });
     expect(sentCommands).toEqual([]);
     expect(tmux.resolvePane).not.toHaveBeenCalled();
