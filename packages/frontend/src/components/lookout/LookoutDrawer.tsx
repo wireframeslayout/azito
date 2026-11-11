@@ -27,10 +27,15 @@ export function LookoutDrawer({ open, onClose, sections, summaries, snapshotStat
   const displayedSummaries = summaries ?? fetchedSummaries;
   const [, setClock] = useState(0);
   useEffect(() => {
-    if (!open) return;
-    const timer = setInterval(() => setClock(value => value + 1), 60_000);
-    return () => clearInterval(timer);
-  }, [open]);
+    if (!open || snapshotUpdatedAt == null) return;
+    let interval: ReturnType<typeof setInterval> | undefined;
+    const elapsed = Math.max(0, Date.now() - snapshotUpdatedAt);
+    const timeout = setTimeout(() => {
+      setClock(value => value + 1);
+      interval = setInterval(() => setClock(value => value + 1), 60_000);
+    }, 60_000 - elapsed % 60_000);
+    return () => { clearTimeout(timeout); clearInterval(interval); };
+  }, [open, snapshotUpdatedAt]);
   const ref = useRef<HTMLDivElement>(null);
   const modalOpen = useModalOpen();
   const closeRef = useRef(onClose);

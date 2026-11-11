@@ -1,5 +1,5 @@
 import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
-import { expect, it, vi } from 'vitest';
+import { afterEach, expect, it, vi } from 'vitest';
 import { useState } from 'react';
 import { HotkeyProvider } from '../../hooks/useHotkeys';
 import { resolveActivityTitle } from '../../lib/windowDisplay';
@@ -7,6 +7,8 @@ import { buildLookoutSections } from '../../lib/lookoutSummary';
 import { LookoutDrawer } from './LookoutDrawer';
 import { Overlay } from '../ui/Overlay';
 import type { LookoutItem } from '../../lib/lookoutSummary';
+
+afterEach(() => vi.useRealTimers());
 
 const mocks = vi.hoisted(() => ({ openTask: vi.fn(), openTerminal: vi.fn(), retry: vi.fn() }));
 const row = { key: 'a', title: 'Blocked task', status: 'blocked' as const, task: { id: 5 }, hasBlocked: true, activeWindows: 1, totalWindows: 1, windowNames: [] } as unknown as LookoutItem;
@@ -103,15 +105,16 @@ it('updates the relative time only while open and disables refresh during loadin
   vi.useFakeTimers();
   vi.setSystemTime(new Date('2026-01-01T00:00:00Z'));
   const sections = { attention: [], active: [], finished: [], counts: { attention: 0, active: 0, finished: 0, failed: 0 } };
-  const props = { onClose: () => {}, sections, onRetry: mocks.retry, onOpenItem: () => {}, snapshotUpdatedAt: Date.now() };
+  const props = { onClose: () => {}, sections, onRetry: mocks.retry, onOpenItem: () => {}, snapshotUpdatedAt: Date.now() - 30_000 };
   const { rerender, unmount } = render(<HotkeyProvider><LookoutDrawer {...props} open snapshotStatus="loading" /></HotkeyProvider>);
   expect(screen.getByRole('button', { name: /refresh/i })).toBeDisabled();
   expect(screen.getByText(/^Updated now$/i)).toBeInTheDocument();
-  act(() => vi.advanceTimersByTime(60_000));
+  act(() => vi.advanceTimersByTime(29_999));
+  expect(screen.getByText(/^Updated now$/i)).toBeInTheDocument();
+  act(() => vi.advanceTimersByTime(1));
   rerender(<HotkeyProvider><LookoutDrawer {...props} open snapshotStatus="ready" /></HotkeyProvider>);
   expect(screen.getByText(/1m ago/i)).toBeInTheDocument();
   rerender(<HotkeyProvider><LookoutDrawer {...props} open={false} snapshotStatus="ready" /></HotkeyProvider>);
   expect(vi.getTimerCount()).toBe(0);
   unmount();
-  vi.useRealTimers();
 });
