@@ -171,7 +171,9 @@ export function TerminalThemeProvider({ children }: { children: React.ReactNode 
       root.dataset.bgScope = 'app';
       root.style.setProperty('--surface-base', resolvedTheme.palette.background);
       root.style.setProperty('--surface-fg', resolvedTheme.palette.foreground);
-      root.style.setProperty('--floating-text', floatingTextColor(resolvedTheme.palette.background, resolvedTheme.palette.foreground));
+      const floatingText = floatingTextColor(resolvedTheme.palette.background, resolvedTheme.palette.foreground);
+      if (floatingText) root.style.setProperty('--floating-text', floatingText);
+      else root.style.removeProperty('--floating-text');
     } else {
       clear();
     }

@@ -222,7 +222,7 @@ function RootSwitcherReady({ serverName, projectId, selectedPath, onSelect, onWo
 
       {/* Picker popover */}
       {open && (
-        <div
+        <div className="floating-surface"
           style={{
             position: 'absolute',
             top: '100%',

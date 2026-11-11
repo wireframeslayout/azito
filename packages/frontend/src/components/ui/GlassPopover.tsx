@@ -44,6 +44,7 @@ export function GlassPopover({ open, onClose, label, items = [], children, align
   return (
     <GlassPopoverSurface
       ref={ref}
+      className={solid ? "floating-surface" : undefined}
       open={open && isTop}
       onOutside={onClose}
       role={children ? "dialog" : "menu"}

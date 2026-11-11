@@ -31,7 +31,7 @@ export function HistoryPopover({ entries: allEntries, onSelect, onClose }: Histo
   const entries = allEntries.slice(0, MAX_SHOWN);
 
   return (
-    <div
+    <div className="floating-surface"
       ref={ref}
       role="menu"
       aria-label={t('promptBar.history')}

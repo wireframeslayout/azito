@@ -1,7 +1,9 @@
 type Rgb = [number, number, number];
 
-function parseHex(value: string): Rgb {
-  const hex = value.slice(1);
+function parseHex(value: string): Rgb | null {
+  if (!/^#(?:[0-9a-f]{3}|[0-9a-f]{6})$/i.test(value)) return null;
+  const raw = value.slice(1);
+  const hex = raw.length === 3 ? [...raw].map((c) => c + c).join('') : raw;
   return [0, 2, 4].map((i) => parseInt(hex.slice(i, i + 2), 16)) as Rgb;
 }
 
@@ -22,8 +24,9 @@ function contrast(a: Rgb, b: Rgb): number {
 }
 
 /** A muted theme color that remains readable on both opaque floating surfaces. */
-export function floatingTextColor(background: string, foreground: string): string {
+export function floatingTextColor(background: string, foreground: string): string | null {
   const base = parseHex(background), fg = parseHex(foreground);
+  if (!base || !fg) return null;
   const elevated = mix(base, fg, 0.19), solid = mix(base, fg, 0.14);
   const black: Rgb = [0, 0, 0], white: Rgb = [255, 255, 255];
   const end = Math.min(contrast(white, elevated), contrast(white, solid)) > Math.min(contrast(black, elevated), contrast(black, solid)) ? white : black;
