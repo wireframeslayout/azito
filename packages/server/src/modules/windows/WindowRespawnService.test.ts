@@ -221,7 +221,7 @@ function buildService(opts: {
   const tmux = {
     kind: 'tmux' as const,
     caps: { changeEvents: true, agentState: false, independentClients: true, copyMode: true },
-    resolveWindowForRespawn: vi.fn(async (_server: unknown, ref: { kind: 'tmux' | 'misao'; workspace: string; window: string }) => ref),
+    resolveWindowForRespawn: vi.fn(async (_server: unknown, ref: { kind: 'tmux' | 'misao'; workspace: string; window: string }): Promise<typeof ref | null> => ref),
     listWorkspaces: vi.fn(async () => [{ name: 'azito', windowCount: 0, attached: false, created: 0, windows: [] as { name: string; index: number; active: boolean; panes: unknown[]; activity: number }[] }]),
     openWorkspace: vi.fn(async (_server: unknown, name: string, options?: { windowName?: string; exactName?: boolean; extraEnv?: Record<string, string> }) => ({
       ref: { kind: 'tmux' as const, workspace: name, window: options?.windowName || 'default' },
@@ -2455,7 +2455,7 @@ describe('WindowRespawnService — misao window identity', () => {
 
   function misaoService(win: Window, task: Task | null) {
     const built = buildService({ window: win, task, unit: task ? makeUnit({ id: 10 }) : null });
-    const driver = built.tmux as unknown as { kind: string; windowExists: ReturnType<typeof vi.fn> };
+    const driver = built.tmux as unknown as { kind: string; windowExists: ReturnType<typeof vi.fn<(server: unknown, ref: { kind: 'tmux' | 'misao'; workspace: string; window: string }) => Promise<boolean>>> };
     driver.kind = 'misao';
     driver.windowExists = vi.fn(async () => true);
     built.tmux.resolveWindowForRespawn.mockImplementation(async (server, ref) => await driver.windowExists(server, ref) ? ref : null);

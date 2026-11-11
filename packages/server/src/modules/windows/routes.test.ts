@@ -9,7 +9,7 @@ import { ConversationCheckError } from '../agents/ConversationCheckError';
 import type { Window, IWindowRepository } from './Window';
 import type { ServerConfig, IServerRepository } from '../servers/Server';
 import type { TmuxClient } from '../tmux/TmuxClient';
-import type { WindowRespawnService } from './WindowRespawnService';
+import { WindowIdentityUnresolvedError, type WindowRespawnService } from './WindowRespawnService';
 import type { WindowSleepService } from './WindowSleepService';
 import type { ISessionStrategyFactory } from '../agents/SessionStrategy';
 import type { IProjectRepository } from '../projects/Project';
@@ -587,7 +587,6 @@ describe('POST /api/windows/:id/respawn — execution gate (Issue #328 second-ro
   });
 
   it('explains when the registered tmux window cannot be identified', async () => {
-    const { WindowIdentityUnresolvedError } = await import('./WindowRespawnService');
     app = await setup(vi.fn(async () => { throw new WindowIdentityUnresolvedError(); }));
     const res = await app.inject({ method: 'POST', url: `/api/windows/${window.id}/respawn` });
     expect(res.statusCode).toBe(409);
