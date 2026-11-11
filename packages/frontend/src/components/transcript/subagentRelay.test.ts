@@ -14,13 +14,13 @@ describe('resolveSubagentRelay', () => {
     expect(resolveSubagentRelay(null, 'a')).toEqual({ kind: 'unavailable', reason: 'unavailable' });
   });
   it.each([
-    ['finished', [{ ...child, status: 'finished' as const }]],
-    ['unnamed', [{ ...child, routingName: null }]],
-    ['duplicate', [child, { ...child, id: 'b' }]],
-    ['whitespace', [{ ...child, routingName: ' worker' }]],
-    ['control character', [{ ...child, routingName: 'worker\n' }]],
-    ['too long', [{ ...child, routingName: 'x'.repeat(129) }]],
-  ])('refuses a %s child', (_label, agents) => {
-    expect(resolveSubagentRelay(agents, 'a')).toEqual({ kind: 'unavailable', reason: 'unavailable' });
+    ['finished', [{ ...child, status: 'finished' as const }], 'finished'],
+    ['unnamed', [{ ...child, routingName: null }], 'unnamed'],
+    ['duplicate', [child, { ...child, id: 'b' }], 'invalid_name'],
+    ['whitespace', [{ ...child, routingName: ' worker' }], 'invalid_name'],
+    ['control character', [{ ...child, routingName: 'worker\n' }], 'invalid_name'],
+    ['too long', [{ ...child, routingName: 'x'.repeat(129) }], 'invalid_name'],
+  ])('refuses a %s child', (_label, agents, reason) => {
+    expect(resolveSubagentRelay(agents, 'a')).toEqual({ kind: 'unavailable', reason });
   });
 });

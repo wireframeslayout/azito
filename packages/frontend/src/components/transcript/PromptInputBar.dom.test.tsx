@@ -21,3 +21,10 @@ it('keeps an unsuccessful relay draft and confirms only a successful request to 
   await screen.findByText('subagents.relaySent');
   await waitFor(() => expect(input).toHaveValue(''));
 });
+
+ it('shows the reason without relay input when unavailable', () => {
+  render(<PromptInputBar windowId={1} paneId="%1" draftKey="parent.child" agentDetected contextHistory={[]} onSent={() => {}} readOnlyReason="No routing name" />);
+  expect(screen.getByRole('note')).toHaveTextContent('No routing name');
+  expect(screen.queryByRole('textbox')).not.toBeInTheDocument();
+  expect(screen.queryByRole('button', { name: 'promptBar.sendWithShortcut' })).not.toBeInTheDocument();
+});
