@@ -39,7 +39,7 @@ Both are git-ignored. Templates live in `.env.example`.
 
 | Variable | Required | Default | Description |
 |---|---|---|---|
-| `AZITO_UI_TOKEN` | No | auto-generates `$AZITO_DATA_DIR/ui-token` | Token for API / WebSocket auth (the operator's full-power credential). Resolution order: env -> file -> auto-generate. Use `azito token show` to view, `azito token rotate` to rotate. For source checkouts, check `packages/server/.env` or `data/ui-token` directly. `azito token rotate` auto-updates the local `~/.azito/operator.env` and the MCP token in `~/.claude/settings.json` (only if already present). **It does not touch `~/.azito/azitoctl*.env`** (Issue #28 Phase B — that file must never carry this token) |
+| `AZITO_UI_TOKEN` | No | auto-generates `$AZITO_DATA_DIR/ui-token` | Token for API / WebSocket auth (the operator's full-power credential). Resolution order: env -> file -> auto-generate. Use `azito token show` to view, `azito token rotate` to rotate. For source checkouts, check `packages/server/.env` or `data/ui-token` directly. `azito token rotate` updates the selected local operator profile if present, and the MCP token in `~/.claude/settings.json` only for the default profile. **It does not touch `~/.azito/azitoctl*.env`** (Issue #28 Phase B — that file must never carry this token) |
 | `AZITO_DATA_DIR` | No | repo root (`data.db`, `data/*`) | Persistent data directory. When set, `data.db`, `master.key`, `vapid-keys.json`, `ui-token`, `webhook-token`, `browser-profile/`, `sidekicks/` are consolidated under this directory (mode 700). Required for versioned directory deployments |
 | `AZITO_BIND` | No | `127.0.0.1` | Listen address. `0.0.0.0` and `::` are explicitly rejected. Use a Tailscale IP for remote access |
 | `AZITO_ALLOWED_ORIGINS` | No | `http://localhost:5173,http://localhost:3001` | Comma-separated origins allowed by CORS and the WebSocket Origin check |
@@ -145,7 +145,7 @@ machine holding the hub's DB (normally the hub itself). Run it on a non-hub host
 that it can't check anything there, rather than a false "nothing to check" green.
 
 - (a) no `AZITO_UI_TOKEN` line remains in any `~/.azito/azitoctl*.env`
-- (b) `~/.azito/operator.env` (if present) is mode 600
+- (b) every `~/.azito/operator*.env` (if present) is mode 600
 - (c) the MCP token in `~/.claude/settings.json` (if present) matches the hub's current token, as
   far as it can be read locally
 - (d) the Codex-side `azt-mcp` token matches the hub's current token (only when the `codex` CLI is
@@ -359,7 +359,7 @@ The harness token delivery path changed. Skip this and `/azt-*` skill API calls 
   --server-name local
 ```
 
-> **Pass all three options.** `~/.azito/azitoctl.env` (mode 600) is only written when both `--azito-url` and `--webhook-token` are given; `--ui-token` is appended to that file. `--ui-token` alone writes nothing.
+> **Pass all three options.** `~/.azito/azitoctl.env` (mode 600) is only written when both `--azito-url` and `--webhook-token` are given; `--ui-token` writes the selected operator profile separately.
 
 On remote servers, run the same command there (`--azito-url` points at the hub, `--server-name` is the server's name in AZITO):
 
@@ -640,3 +640,5 @@ Host removal deletes Claude and Codex `azt-mcp` registrations only when their co
 For a Windows agent installation using a non-elevated SSH account, prepare the following. Arrange an inbound firewall rule in advance using an administrator account: allow the agent's `node.exe`, its Tailscale address and configured TCP port, from the Tailscale address range. The non-elevated firewall inspection cannot establish the effective policy in every configuration. When it is unknown, AZITO stops before installation or update and reports the reason. In a non-elevated session the local and Group Policy registry rules are inspected, but they do not establish the complete effective policy; installation and update therefore stop at this check even when a rule is configured. An elevated session uses ActiveStore. Rules created by AZITO use the same display name and a Windows-generated unique rule ID. The uninstall report leaves them in place for manual inspection; a non-elevated inspection reports an inconclusive result when no matching rule is visible. If process ownership or command lines cannot be read, removal may stop until the affected processes can be identified.
 
 The non-elevated local Windows process and firewall API paths were checked on Windows build 26200. A non-administrator OpenSSH session and the complete install, update and uninstall sequence have not yet been verified on a real machine.
+
+Operator profiles are `~/.azito/operator.env` by default and `~/.azito/operator-<prefix>.env` for `--prefix` / `AZITO_PREFIX`; explicitly load the desired file. `azito token rotate` chooses the prefix from `AZITO_HARNESS_PREFIX` in the process environment, then the target hub’s `.env`, and updates only that profile if present. The shared Claude MCP token is updated only for the default profile. `azito auth doctor` checks permissions on every operator profile. Existing files are not migrated automatically.

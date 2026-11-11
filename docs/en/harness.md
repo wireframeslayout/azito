@@ -153,7 +153,7 @@ A Windows host (the hub itself, or a Windows agent) gets the harness through Nod
 | Hooks | `hooks/azito-*.sh` (bash + curl) | `hooks/azito-hook.mjs <activity start\|activity stop\|interaction\|question\|session\|notify> [--prefix <name>]` |
 | Skills (`/azt-*`) | symlink into `~/.claude/skills/` | **directory junction** (no Developer Mode or administrator rights needed) |
 | Rules | symlink into `~/.claude/rules/` | **copy**; a copy is replaced on update only while it is still what was copied last time (hash in `~/.azito/harness-copies.json`), an edited file is left alone |
-| `azitoctl*.env`, `operator.env` | `KEY=<printf %q>`, mode 600 | `KEY="<JSON string>"`, one line each, only the current user can read them (a protected ACL, the same one the hub puts on its own secret files) |
+| `azitoctl*.env`, `operator*.env` | `KEY=<printf %q>`, mode 600 | `KEY="<JSON string>"`, one line each, only the current user can read them (a protected ACL, the same one the hub puts on its own secret files) |
 | Install from the hub | SSH + `setup.sh` | the agent's own file API + `node setup.mjs` (no SSH); the tokens go in the environment of the command, not its arguments |
 | Auto-update at hub start | over SSH | through the agent, like the install |
 
@@ -168,3 +168,5 @@ A Windows agent cannot be declared an isolated server (`isolationIntent`) in thi
 ## Answering task questions through the API
 
 `POST /api/tasks/:id/answer` takes `{"answers":[{"index":0,"value":1}],"additionalComment":"Note"}`. Each `index` is a zero-based integer question index; `value` is a string or number. For a select question it must be a zero-based integer option index or an exact option string. `additionalComment` is an optional string. Partial answers are accepted. An empty array is accepted only when there are no questions (confirmation); a nonempty array with no questions, invalid types, and out-of-range values receive a 400 with a reason, without changing task state or logs.
+
+Operator credentials use `~/.azito/operator.env` by default and `~/.azito/operator-<prefix>.env` with `--prefix` (or `AZITO_PREFIX`); select and load the desired file explicitly. Windows writes JSON-quoted values with an owner-only ACL.

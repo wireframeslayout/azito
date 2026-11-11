@@ -60,9 +60,9 @@ usage_exit() {
   echo "                   シグナルを送る場合は、ハブごとに --prefix を変えて実行する" >&2
   echo "                   （URL・トークン・サーバー名はプロファイル単位でまとめて解決され、" >&2
   echo "                   変数単位の部分上書きはできない）。" >&2
-  echo "  --purge-operator-token  operator.env / Claude settings.json の MCP env /" >&2
+  echo "  --purge-operator-token  選択した operator[-<prefix>].env / Claude settings.json の MCP env /" >&2
   echo "                   Codex MCP 設定から、AZITO が過去に書き込んだ" >&2
-  echo "                   AZITO_UI_TOKEN をすべて除去する。--ui-token 省略時の" >&2
+  echo "                   AZITO_UI_TOKEN を除去する。他の operator プロファイルは残る。--ui-token 省略時の" >&2
   echo "                   既定動作（既存トークンを温存する）を上書きする。" >&2
   echo "                   サーバーを isolation_intent=1 に切り替えた後の" >&2
   echo "                   資格情報掃除に使う。--ui-token と同時指定はエラー。" >&2
@@ -142,6 +142,12 @@ while [[ $# -gt 0 ]]; do
       ;;
   esac
 done
+
+# A prefix is a filename component, never a path.
+if [[ "$AZITO_PREFIX" == */* || "$AZITO_PREFIX" == *$'\n'* || "$AZITO_PREFIX" == *$'\r'* ]]; then
+  echo "Error: --prefix must not contain / or line breaks" >&2
+  exit 1
+fi
 
 # Issue #29 review, Important finding 2: --purge-operator-token exists to
 # guarantee a server ends this run with NO AZITO_UI_TOKEN anywhere it writes
@@ -451,7 +457,7 @@ fi
 echo ""
 echo "=== operator.env ==="
 if [[ "$AZITO_PURGE_OPERATOR_TOKEN" == "1" ]]; then
-  OPERATOR_ENV_FILE="$HOME/.azito/operator.env"
+  OPERATOR_ENV_FILE="$HOME/.azito/operator${AZITO_PREFIX:+-$AZITO_PREFIX}.env"
   # operator.env はこの2行（AZITO_URL/AZITO_UI_TOKEN）専用のファイル
   # （上の節コメント参照）なので、行単位の除去ではなくファイルごと削除する
   # ——トークンを抜いた「空の資格情報ファイル」を残す理由がない。存在しな
@@ -476,7 +482,7 @@ if [[ "$AZITO_PURGE_OPERATOR_TOKEN" == "1" ]]; then
 fi
 if [[ -n "$AZITO_UI_TOKEN" ]]; then
   OPERATOR_ENV_DIR="$HOME/.azito"
-  OPERATOR_ENV_FILE="$OPERATOR_ENV_DIR/operator.env"
+  OPERATOR_ENV_FILE="$OPERATOR_ENV_DIR/operator${AZITO_PREFIX:+-$AZITO_PREFIX}.env"
   mkdir -p "$OPERATOR_ENV_DIR"
   # AZITO_UI_TOKEN（全権トークン）を含むため、書き込み中も world-readable に
   # ならないよう umask 077 のサブシェルで隣接一時ファイルに書き、chmod 600
@@ -489,7 +495,7 @@ if [[ -n "$AZITO_UI_TOKEN" ]]; then
     {
       echo "# AZITO operator credentials"
       echo "#"
-      echo "# このファイルは人間が明示的に \`source ~/.azito/operator.env\` して使う"
+      echo "# このファイルは人間が明示的に \`source $OPERATOR_ENV_FILE\` して使う"
       echo "# ためのものです。setup.sh を含むいかなるスクリプトからも自動 source"
       echo "# してはいけません。source した時点でそのシェルはオペレーター権限"
       echo "# （全権）で動作します。"

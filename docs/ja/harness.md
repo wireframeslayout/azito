@@ -153,7 +153,7 @@ Windows のホスト（ハブ自身、または Windows の agent）では、bas
 | フック | `hooks/azito-*.sh`（bash + curl） | `hooks/azito-hook.mjs <activity start\|activity stop\|interaction\|question\|session\|notify> [--prefix <名前>]` |
 | スキル（`/azt-*`） | `~/.claude/skills/` へシンボリックリンク | **ディレクトリジャンクション**（開発者モードも管理者権限も要りません） |
 | ルール | `~/.claude/rules/` へシンボリックリンク | **コピー**。更新で置き換えるのは、前回コピーしたままのファイルだけ（ハッシュは `~/.azito/harness-copies.json`）。編集されたファイルは触りません |
-| `azitoctl*.env`・`operator.env` | `KEY=<printf %q>`、mode 600 | `KEY="<JSON 文字列>"` を 1 行ずつ。現在のユーザーだけが読める（保護された ACL。ハブが自分の秘密ファイルに付けるものと同じ） |
+| `azitoctl*.env`・`operator*.env` | `KEY=<printf %q>`、mode 600 | `KEY="<JSON 文字列>"` を 1 行ずつ。現在のユーザーだけが読める（保護された ACL。ハブが自分の秘密ファイルに付けるものと同じ） |
 | ハブからの導入 | SSH + `setup.sh` | agent 自身のファイル API + `node setup.mjs`（SSH なし）。トークンはコマンドの引数ではなく環境変数で渡す |
 | ハブ起動時の自動更新 | SSH 経由 | 導入と同じく agent 経由 |
 
@@ -168,3 +168,5 @@ Windows の agent は、このリリースでは隔離サーバー（`isolationI
 ## API でタスクの質問に回答する
 
 `POST /api/tasks/:id/answer` の body は `{"answers":[{"index":0,"value":1}],"additionalComment":"補足"}`。各 `index` は質問の 0 始まりの整数添字、`value` は文字列または数値。select の値は選択肢の 0 始まりの整数添字か、選択肢と完全に一致する文字列。`additionalComment` は任意の文字列。部分回答は可能。空配列は質問がない確認の場合のみ受け付ける。質問がない場合の非空配列、不正な型や範囲外の値は、理由付き 400 で拒否され、タスクの状態やログは変更されない。
+
+運用者資格情報は既定では `~/.azito/operator.env`、`--prefix`（または `AZITO_PREFIX`）指定時は `~/.azito/operator-<prefix>.env` に保存します。使うプロファイルを明示的に選んで読み込んでください。Windows では JSON 形式の値を保存し、本人のみの ACL で保護します。

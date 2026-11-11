@@ -1,7 +1,7 @@
 import fs from 'fs';
 import path from 'path';
 import { execFileSync } from 'child_process';
-import { findAzitoctlEnvFiles, hasUiTokenLine } from '../shared/azitoctlEnv';
+import { findAzitoctlEnvFiles, findOperatorEnvFiles, hasUiTokenLine } from '../shared/azitoctlEnv';
 import { extractClaudeMcpUiToken, type McpUiTokenExtraction } from '../shared/mcpTokenStores';
 import { resolveCurrentUiToken } from '../shared/currentUiToken';
 import { resolveScopedAuthEnabled } from '../shared/auth/scopedAuthFlag';
@@ -53,10 +53,6 @@ interface CheckResult {
    * planned `AZITO_SCOPED_AUTH` migration step), not a doctor failure.
    */
   warning?: boolean;
-}
-
-function operatorEnvPath(homeDir: string): string {
-  return path.join(homeDir, '.azito', 'operator.env');
 }
 
 function mcpSettingsPath(homeDir: string): string {
@@ -119,20 +115,15 @@ function checkAzitoctlEnvNoUiToken(homeDir: string): CheckResult {
 // (b) operator.env のパーミッションが 0600 か
 function checkOperatorEnvPermissions(homeDir: string, guard: SecretFileGuard): CheckResult {
   const label = `operator.env の${guard.policyDescription}`;
-  const filePath = operatorEnvPath(homeDir);
-  if (!fs.existsSync(filePath)) {
-    return { ok: true, label, detail: `${filePath} は存在しません（--ui-token 未使用、または未セットアップ）` };
+  const files = findOperatorEnvFiles(homeDir);
+  if (files.length === 0) {
+    return { ok: true, label, detail: '~/.azito/operator*.env は存在しません' };
   }
-
-  const result = guard.inspect(filePath, 'file');
-  if (result.ok) {
-    return { ok: true, label, detail: filePath };
-  }
-  return {
-    ok: false,
-    label,
-    detail: `${filePath} の${result.summary}\n  修正: ${result.fix}`,
-  };
+  const failures = files.flatMap(file => {
+    const result = guard.inspect(file, 'file');
+    return result.ok ? [] : [`${file} の${result.summary}\n  修正: ${result.fix}`];
+  });
+  return { ok: failures.length === 0, label, detail: failures.length ? failures.join('\n') : files.join(', ') };
 }
 
 // Issue #28 review Minor finding: a broken/unreadable settings.json used to

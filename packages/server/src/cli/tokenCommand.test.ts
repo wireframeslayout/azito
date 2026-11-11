@@ -37,6 +37,7 @@ vi.mock('../shared/envFile', async (importOriginal) => {
 describe('tokenCommand', () => {
   let originalEnv: string | undefined;
   let originalHome: string | undefined;
+  let originalPrefix: string | undefined;
   let exitSpy: ReturnType<typeof vi.spyOn>;
   let errorSpy: ReturnType<typeof vi.spyOn>;
   let logSpy: ReturnType<typeof vi.spyOn>;
@@ -46,6 +47,8 @@ describe('tokenCommand', () => {
     tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'token-cmd-test-'));
     uiTokenPath = path.join(tmpDir, 'data', 'ui-token');
     dotEnvPath = path.join(tmpDir, '.env');
+    originalPrefix = process.env.AZITO_HARNESS_PREFIX;
+    delete process.env.AZITO_HARNESS_PREFIX;
     originalEnv = process.env.AZITO_UI_TOKEN;
     delete process.env.AZITO_UI_TOKEN;
 
@@ -64,6 +67,8 @@ describe('tokenCommand', () => {
   });
 
   afterEach(() => {
+    if (originalPrefix === undefined) delete process.env.AZITO_HARNESS_PREFIX;
+    else process.env.AZITO_HARNESS_PREFIX = originalPrefix;
     if (originalEnv !== undefined) {
       process.env.AZITO_UI_TOKEN = originalEnv;
     } else {
@@ -207,6 +212,40 @@ describe('tokenCommand', () => {
       await tokenCommand(['rotate'], fakeHome, secretFileGuard);
 
       expect(fs.readFileSync(azitoctlEnvPath, 'utf-8')).toBe(before);
+    });
+
+    it('rotates only the profile from the environment, leaving shared MCP settings alone', async () => {
+      const dir = path.join(fakeHome, '.azito');
+      fs.mkdirSync(dir, { recursive: true });
+      fs.mkdirSync(path.join(fakeHome, '.claude'));
+      fs.writeFileSync(path.join(dir, 'operator.env'), 'AZITO_UI_TOKEN=default\n');
+      fs.writeFileSync(path.join(dir, 'operator-prod.eu.env'), 'AZITO_UI_TOKEN=old\n');
+      const settings = path.join(fakeHome, '.claude', 'settings.json');
+      fs.writeFileSync(settings, '{"mcpServers":{"azt-mcp":{"env":{"AZITO_UI_TOKEN":"default"}}}}');
+      fs.writeFileSync(dotEnvPath, 'AZITO_HARNESS_PREFIX=other\n');
+      process.env.AZITO_HARNESS_PREFIX = 'prod.eu';
+      const { tokenCommand } = await import('./tokenCommand.js');
+      await tokenCommand(['rotate'], fakeHome, secretFileGuard);
+      expect(fs.readFileSync(path.join(dir, 'operator.env'), 'utf8')).toBe('AZITO_UI_TOKEN=default\n');
+      expect(fs.readFileSync(path.join(dir, 'operator-prod.eu.env'), 'utf8')).toContain(fs.readFileSync(uiTokenPath, 'utf8'));
+      expect(fs.readFileSync(settings, 'utf8')).toContain('default');
+    });
+
+    it('uses the target hub .env prefix when the environment is unset', async () => {
+      const dir = path.join(fakeHome, '.azito');
+      fs.mkdirSync(dir, { recursive: true });
+      fs.writeFileSync(path.join(dir, 'operator-prod.eu.env'), 'AZITO_UI_TOKEN=old\n');
+      fs.writeFileSync(dotEnvPath, 'AZITO_HARNESS_PREFIX=prod.eu\n');
+      const { tokenCommand } = await import('./tokenCommand.js');
+      await tokenCommand(['rotate'], fakeHome, secretFileGuard);
+      expect(fs.readFileSync(path.join(dir, 'operator-prod.eu.env'), 'utf8')).toContain(fs.readFileSync(uiTokenPath, 'utf8'));
+    });
+
+    it('validates the configured prefix before rotating', async () => {
+      fs.writeFileSync(dotEnvPath, 'AZITO_HARNESS_PREFIX=../bad\n');
+      const { tokenCommand } = await import('./tokenCommand.js');
+      await expect(tokenCommand(['rotate'], fakeHome, secretFileGuard)).rejects.toThrow(/AZITO_HARNESS_PREFIX/);
+      expect(fs.existsSync(uiTokenPath)).toBe(false);
     });
 
     it('updates AZITO_UI_TOKEN in ~/.azito/operator.env when present', async () => {

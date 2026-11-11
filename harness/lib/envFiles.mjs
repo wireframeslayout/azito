@@ -54,8 +54,8 @@ export function writeAzitoctlEnv(azitoDir, { prefix, azitoUrl, webhookToken, ser
   return file;
 }
 
-export function writeOperatorEnv(azitoDir, { azitoUrl, uiToken }, secrets) {
-  const file = path.join(azitoDir, 'operator.env');
+export function writeOperatorEnv(azitoDir, { prefix, azitoUrl, uiToken }, secrets) {
+  const file = path.join(azitoDir, `operator${prefix ? `-${prefix}` : ''}.env`);
   const lines = [
     '# AZITO operator credentials',
     '#',

@@ -134,6 +134,33 @@ describe('setup.mjs', () => {
     expect(settings.mcpServers['azt-mcp'].env.AZITO_URL).toBe('http://hub.example:3001');
   });
 
+  it('keeps operator profiles separate and protects the prefixed file', async () => {
+    await runSetup(FULL);
+    const original = fs.readFileSync(path.join(home, '.azito', 'operator.env'), 'utf8');
+    const result = await runSetup(['--prefix', 'prod.eu', '--azito-url', 'http://prod', '--ui-token', 'prod-ui']);
+    expect(result.code).toBe(0);
+    const file = path.join(home, '.azito', 'operator-prod.eu.env');
+    expect(fs.readFileSync(file, 'utf8')).toContain('prod-ui');
+    expect(fs.readFileSync(path.join(home, '.azito', 'operator.env'), 'utf8')).toBe(original);
+    if (!isWindows) expect(fs.statSync(file).mode & 0o777).toBe(0o600);
+  });
+
+  it.skipIf(isWindows)('setup.sh writes and purges only its selected operator profile', async () => {
+    const script = path.join(HARNESS_DIR, 'setup.sh');
+    const run = (args: string[]) => new Promise<number>((resolve) => {
+      execFile('/bin/bash', [script, ...args], { env: { ...baseEnv(), PATH: process.env.PATH! }, timeout: 120_000 }, err => resolve(err ? 1 : 0));
+    });
+    expect(await run(['--azito-url', 'http://default', '--ui-token', 'default'])).toBe(0);
+    const file = path.join(home, '.azito', 'operator.env');
+    const original = fs.readFileSync(file, 'utf8');
+    expect(await run(['--prefix', 'prod.eu', '--azito-url', 'http://prod', '--ui-token', 'prod'])).toBe(0);
+    const prefixed = path.join(home, '.azito', 'operator-prod.eu.env');
+    expect(fs.readFileSync(prefixed, 'utf8')).toContain('prod');
+    expect(await run(['--prefix', 'prod.eu', '--purge-operator-token'])).toBe(0);
+    expect(fs.existsSync(prefixed)).toBe(false);
+    expect(fs.readFileSync(file, 'utf8')).toBe(original);
+  });
+
   it('refuses a prefix that could make a file name leave ~/.azito, before writing anything', async () => {
     for (const prefix of ['../evil', 'a/b', '.hidden', 'x..y']) {
       const result = await runSetup(['--prefix', prefix, '--azito-url', 'http://x', '--webhook-token', 't']);

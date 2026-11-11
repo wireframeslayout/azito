@@ -2,7 +2,8 @@ import crypto from 'crypto';
 import fs from 'fs';
 import path from 'path';
 import { resolveDataDir } from '../shared/dataDir';
-import { resolveServerEnvPath } from '../shared/envFile';
+import { readEnvValue, resolveServerEnvPath } from '../shared/envFile';
+import { resolveHarnessPrefix } from '../app/harnessPrefix';
 import { resolveCurrentUiToken } from '../shared/currentUiToken';
 import type { SecretFileGuard } from '../shared/os/secretFileGuard';
 
@@ -14,16 +15,16 @@ interface McpSettingsFile {
   mcpServers?: Record<string, McpServerEnv>;
 }
 
-function operatorEnvPath(homeDir: string): string {
-  return path.join(homeDir, '.azito', 'operator.env');
+function operatorEnvPath(homeDir: string, prefix: string): string {
+  return path.join(homeDir, '.azito', `operator${prefix ? `-${prefix}` : ''}.env`);
 }
 
 // operator.env は `KEY=value` を1行1エントリで持つ（harness/setup.sh が
 // printf %q で書き出す形式）。ローテート後は AZITO_UI_TOKEN 行だけを
 // 書き換える。新トークンは crypto.randomBytes(32).toString('hex') で
 // 常に英数字のみなのでシェルクォートは不要（生値のまま書いてよい）。
-function updateOperatorEnvToken(newToken: string, homeDir: string, guard: SecretFileGuard): boolean {
-  const filePath = operatorEnvPath(homeDir);
+function updateOperatorEnvToken(newToken: string, homeDir: string, guard: SecretFileGuard, prefix: string): boolean {
+  const filePath = operatorEnvPath(homeDir, prefix);
   if (!fs.existsSync(filePath)) return false;
   const content = fs.readFileSync(filePath, 'utf-8');
   const lines = content.split('\n');
@@ -126,6 +127,7 @@ export async function tokenCommand(args: string[], homeDir: string, guard: Secre
       process.exit(1);
     }
 
+    const prefix = resolveHarnessPrefix(process.env.AZITO_HARNESS_PREFIX ?? readEnvValue(resolveServerEnvPath(), 'AZITO_HARNESS_PREFIX'));
     const newToken = crypto.randomBytes(32).toString('hex');
 
     guard.writeSecretFile(paths.uiToken, newToken);
@@ -135,10 +137,10 @@ export async function tokenCommand(args: string[], homeDir: string, guard: Secre
     // 再配置しない（全権トークンをタスク実行プロセスが source するファイルに
     // 置かない、という配布分離の方針。設計 §9/§12）。ローカルにある operator.env
     // と MCP settings（人間が操作する経路）だけを更新する。
-    if (updateOperatorEnvToken(newToken, homeDir, guard)) {
-      console.log(`Updated AZITO_UI_TOKEN in ${operatorEnvPath(homeDir)}`);
+    if (updateOperatorEnvToken(newToken, homeDir, guard, prefix)) {
+      console.log(`Updated AZITO_UI_TOKEN in ${operatorEnvPath(homeDir, prefix)}`);
     }
-    if (updateMcpSettingsToken(newToken, homeDir)) {
+    if (!prefix && updateMcpSettingsToken(newToken, homeDir)) {
       console.log(`Updated AZITO_UI_TOKEN in ${mcpSettingsPath(homeDir)}`);
     }
 

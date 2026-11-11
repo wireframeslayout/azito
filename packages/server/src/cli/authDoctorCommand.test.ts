@@ -208,14 +208,14 @@ describe('authDoctorCommand', () => {
   it('fails when operator.env permissions are not 0600', async () => {
     const azitoDir = path.join(fakeHome, '.azito');
     fs.mkdirSync(azitoDir, { recursive: true });
-    const operatorEnvPath = path.join(azitoDir, 'operator.env');
+    const operatorEnvPath = path.join(azitoDir, 'operator-prod.eu.env');
     fs.writeFileSync(operatorEnvPath, 'AZITO_UI_TOKEN=x\n', { mode: 0o644 });
 
     const { authDoctorCommand } = await import('./authDoctorCommand.js');
     await authDoctorCommand(doctorHostEnv(fakeHome), secretFileGuard, doctorTaskTempFiles);
 
     expect(process.exitCode).toBe(1);
-    expect(allLogLines()).toContain('operator.env');
+    expect(allLogLines()).toContain('operator-prod.eu.env');
   });
 
   it('passes this one check when operator.env is restricted to the owner (overall exit is 3: hub DB + codex CLI still unverifiable in this test env)', async () => {
