@@ -6,6 +6,7 @@ interface StatusBarItemProps {
   label: string;
   dot?: DotLevel;
   mono?: boolean;
+  bordered?: boolean;
   badge?: number;
   badgeLabel?: string;
   popup?: 'dialog' | 'true';
@@ -18,7 +19,7 @@ export interface StatusBarItemRef {
 }
 
 export const StatusBarItem = forwardRef<StatusBarItemRef, StatusBarItemProps>(
-  function StatusBarItem({ label, dot, active, onClick, badge, badgeLabel, mono = false, popup = 'true' }, ref) {
+  function StatusBarItem({ label, dot, active, onClick, badge, badgeLabel, mono = false, bordered = false, popup = 'true' }, ref) {
     const btnRef = useRef<HTMLButtonElement>(null);
 
     useImperativeHandle(ref, () => ({
@@ -42,7 +43,7 @@ export const StatusBarItem = forwardRef<StatusBarItemRef, StatusBarItemProps>(
           cursor: 'pointer',
           background: active ? 'var(--bg-hover)' : 'transparent',
           color: active ? 'var(--text)' : 'var(--text-dim)',
-          border: popup === 'dialog' ? '1px solid var(--border)' : 'none',
+          border: bordered ? '1px solid var(--border)' : 'none',
           fontFamily: mono ? 'var(--font-mono)' : undefined,
           fontSize: 'var(--font-xs)',
           transition: 'background 0.15s, color 0.15s',

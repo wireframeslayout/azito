@@ -20,7 +20,7 @@ interface Props {
   onOpenItem: (item: LookoutItem) => void;
 }
 export function LookoutDrawer({ open, onClose, sections, summaries, snapshotStatus, snapshotUpdatedAt, onRetry, onOpenItem }: Props) {
-  const { t } = useTranslation('lookout');
+  const { t, i18n } = useTranslation('lookout');
   const fetchedSummaries = useLookoutSummaries([...sections.attention, ...sections.active, ...sections.finished], open && !summaries);
   const displayedSummaries = summaries ?? fetchedSummaries;
   const ref = useRef<HTMLDivElement>(null);
@@ -43,8 +43,8 @@ export function LookoutDrawer({ open, onClose, sections, summaries, snapshotStat
   if (!open) return null;
   return createPortal(<div ref={ref} role="dialog" aria-labelledby="lookout-title" inert={modalOpen} tabIndex={-1} className="overlay-panel" onKeyDown={(event) => {
     if (event.key === 'Escape' && !event.defaultPrevented) { event.preventDefault(); event.stopPropagation(); closeRef.current(); }
-  }} style={{ position: 'fixed', zIndex: 140, inset: '0 0 0 auto', width: 'min(100vw, calc(20 * var(--space-6)))', height: '100dvh', borderRadius: 0, background: 'var(--bg-solid)', overflowY: 'auto' }}>
-    <header style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 'var(--space-3)', flexWrap: 'wrap' }}><h2 id="lookout-title" style={{ margin: 0 }}>{t('currentSituation')}</h2><span style={{ color: 'var(--text-dim)', fontSize: 'var(--font-xs)' }}>{snapshotUpdatedAt != null ? t('updated', { time: new Date(snapshotUpdatedAt).toLocaleTimeString() }) : t('notUpdated')}</span><Button size="sm" variant="ghost" onClick={onRetry} disabled={snapshotStatus === 'loading'}>{t('refresh')}</Button><Button size="sm" variant="ghost" onClick={onClose} aria-label={t('close')}>×</Button></header>
+  }} style={{ position: 'fixed', zIndex: 140, inset: '0 0 var(--status-bar-height) auto', width: 'min(100vw, calc(20 * var(--space-6)))', height: 'calc(100dvh - var(--status-bar-height))', borderRadius: 0, background: 'var(--bg-solid)', overflowY: 'auto' }}>
+    <header style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 'var(--space-3)', flexWrap: 'wrap' }}><h2 id="lookout-title" style={{ margin: 0 }}>{t('currentSituation')}</h2><span style={{ color: 'var(--text-dim)', fontSize: 'var(--font-xs)' }}>{snapshotUpdatedAt != null ? t('updated', { time: new Date(snapshotUpdatedAt).toLocaleTimeString(i18n.language) }) : t('notUpdated')}</span><Button size="sm" variant="ghost" onClick={onRetry} disabled={snapshotStatus === 'loading'}>{t('refresh')}</Button><Button size="sm" variant="ghost" onClick={onClose} aria-label={t('close')}>×</Button></header>
     <LookoutCounts counts={sections.counts} activityKnown={snapshotStatus === 'ready'} />
     {snapshotStatus === 'error' && <Notice tone="warning" action={<Button size="sm" onClick={onRetry}>{t('retry')}</Button>}>{t('loadError')}</Notice>}
     {snapshotStatus === 'loading' && <p role="status" style={{ color: 'var(--text-dim)' }}>{t('loading')}</p>}

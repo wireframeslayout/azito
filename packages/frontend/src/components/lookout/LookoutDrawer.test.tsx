@@ -93,3 +93,17 @@ it('makes the drawer inert while a modal is open and restores it afterwards', as
   fireEvent.keyDown(screen.getByRole('dialog', { name: 'Modal' }), { key: 'Escape' });
   await waitFor(() => expect(drawer).not.toHaveAttribute('inert'));
 });
+
+it('allows the status bar trigger to close the open drawer', () => {
+  function ToggleHarness() {
+    const [open, setOpen] = useState(false);
+    const sections = { attention: [], active: [], finished: [], counts: { attention: 0, active: 0, finished: 0, failed: 0 } };
+    return <HotkeyProvider><button onClick={() => setOpen(value => !value)}>Lookout</button><LookoutDrawer open={open} onClose={() => setOpen(false)} sections={sections} snapshotStatus="ready" onRetry={() => {}} onOpenItem={() => {}} /></HotkeyProvider>;
+  }
+  render(<ToggleHarness />);
+  const trigger = screen.getByRole('button', { name: 'Lookout' });
+  fireEvent.click(trigger);
+  expect(screen.getByRole('dialog').getAttribute('style')).toContain('var(--status-bar-height)');
+  fireEvent.click(trigger);
+  expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
+});
