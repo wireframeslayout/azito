@@ -1,3 +1,4 @@
+import type { WorkerLaunchRecord } from './workerLaunchRecord';
 import type { MuxDriverKind, MuxRef } from '@azito/shared';
 
 export type WindowType = 'terminal' | 'agent';
@@ -23,6 +24,7 @@ export interface Window {
   claudeConfigDir?: string | null;
   claudeConfigDirExplicit?: boolean | null;
   claudePaneSessions?: Array<{ sessionId: string; configDir: string }>;
+  workerLaunch?: WorkerLaunchRecord | null;
   launchCommand: string | null;
   workingDirectory: string | null;
   paneLayout: PaneLayout | null;
@@ -138,7 +140,7 @@ export interface IWindowRepository {
    */
   adoptForTask(id: number, taskId: number): void;
   update(id: number, data: Partial<Pick<Window,
-    'tmuxTarget' | 'muxRef' | 'label' | 'labelSource' | 'agentSessionId' | 'launchCommand' | 'paneLayout' | 'workerModel' | 'workingDirectory' | 'windowType' | 'workerType' | 'sleeping' | 'projectId'
+    'workerLaunch' | 'tmuxTarget' | 'muxRef' | 'label' | 'labelSource' | 'agentSessionId' | 'launchCommand' | 'paneLayout' | 'workerModel' | 'workingDirectory' | 'windowType' | 'workerType' | 'sleeping' | 'projectId'
   >>): void;
   updateAgentSessionIdByWindow(serverName: string, tmuxTarget: string, sessionId: string): void;
   updateClaudeSessionByPane(serverName: string, tmuxTarget: string, paneOrdinal: number | null, sessionId: string, configDir: string, configDirExplicit: boolean): void;

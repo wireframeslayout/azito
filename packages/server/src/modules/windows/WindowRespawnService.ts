@@ -1,3 +1,4 @@
+import { buildRecordedClaudeLaunch, buildRecordedCodexLaunch } from './workerLaunchRecord';
 import { resolveWindowTitle, formatWindowTitleLine } from '@azito/shared';
 import { recordAuditBestEffort } from '../../shared/audit/recordAuditBestEffort';
 import { selectAutoWakeMux, misaoStatusFor, decideAutoWake, WindowBusyError, UnsupportedMuxSwitchError } from './muxSwitchPolicy';
@@ -348,7 +349,7 @@ export class WindowRespawnService {
     if (this.startsWorkerAsProgram(server) && win.workerType && !opts?.skipAgentLaunch) {
       if (shouldSupervise(server.type, win.windowType, opts?.mux ?? windowKindOf(win))) throw new Error(`A worker started as a program cannot run under a supervisor (${server.name}).`);
       const single = launchPlan?.single;
-      const launch = this.sessionStrategyFactory.create(win.workerType).buildRespawnLaunch(single?.sessionId ?? null, win.workerModel, null, blockMcp, single?.conversation, single?.attachId ?? null);
+      const launch = this.buildWindowLaunch(win, win.workerType, single, blockMcp, true);
       // A window whose launch cannot be rebuilt (a custom command is not stored, so a generic worker has none) would be destroyed and
       // recreated as a bare shell with nothing started: refused before anything is touched.
       if (!launch) {
@@ -1429,7 +1430,7 @@ export class WindowRespawnService {
     ref: MuxRef,
     baseTarget: string,
     paneLayout: PaneLayout,
-    win: { workerType: string | null; agentSessionId: string | null; workerModel: string | null; workingDirectory: string | null },
+    win: Window,
     supervision: SupervisionContext,
     paneCwds: Map<number, string>,
     // `paneEnv` (Issue #28 review Critical finding): the SAME env the
@@ -1479,9 +1480,8 @@ export class WindowRespawnService {
       if (!skipAgentLaunch) {
         const workerType = pane.workerType || (pane.index === paneLayout.panes[0]?.index ? win.workerType : null);
         if (workerType) {
-          const strategy = this.sessionStrategyFactory.create(workerType);
           const plan = panePlans?.get(pane.index);
-          const launch = strategy.buildRespawnLaunch(plan?.sessionId ?? null, win.workerModel, null, blockMcp, plan?.conversation, plan?.attachId ?? null);
+          const launch = this.buildWindowLaunch(win, workerType, plan, blockMcp, pane.agentSessionId ? pane.agentSessionId === win.agentSessionId : pane.index === paneLayout.panes[0]?.index && !paneLayout.panes.some((other) => other.agentSessionId && other.agentSessionId === win.agentSessionId));
           if (launch) {
             const wrapped = this.wrapIfSupervised(launch, server, baseTarget, supervision);
             const sendCmd = plan?.configDirExplicit === true ? `CLAUDE_CONFIG_DIR="$AZITO_RESUME_CLAUDE_CONFIG_DIR_${pane.index}" ${wrapped}` : plan?.configDirExplicit === false ? this.dialectOf(server).withoutEnv('CLAUDE_CONFIG_DIR', wrapped, await driver.paneCommandByHandle(server, paneId).catch(() => null)) : wrapped;
@@ -1492,11 +1492,20 @@ export class WindowRespawnService {
     }
   }
 
+  private buildWindowLaunch(win: Window, workerType: string, plan: AgentLaunchPlan | null | undefined, blockMcp: boolean, firstPane: boolean) {
+    if (win.taskId === null) {
+      const record = firstPane ? win.workerLaunch ?? null : null;
+      if (workerType === 'claude') return buildRecordedClaudeLaunch(record, plan?.sessionId ?? null, blockMcp, plan?.conversation, plan?.attachId ?? null);
+      if (workerType === 'codex') return buildRecordedCodexLaunch(record, plan?.sessionId ?? null, blockMcp);
+    }
+    return this.sessionStrategyFactory.create(workerType).buildRespawnLaunch(plan?.sessionId ?? null, win.workerModel, null, blockMcp, plan?.conversation, plan?.attachId ?? null);
+  }
+
   private async setupSinglePane(
     server: ServerConfig,
     handle: PaneHandle,
     supervisorTarget: string,
-    win: { workerType: string | null; workerModel: string | null },
+    win: Window,
     supervision: SupervisionContext,
     singleCwd: string | null,
     blockMcp = true,
@@ -1510,8 +1519,7 @@ export class WindowRespawnService {
     }
 
     if (win.workerType) {
-      const strategy = this.sessionStrategyFactory.create(win.workerType);
-      const launch = strategy.buildRespawnLaunch(plan?.sessionId ?? null, win.workerModel, null, blockMcp, plan?.conversation, plan?.attachId ?? null);
+      const launch = this.buildWindowLaunch(win, win.workerType, plan, blockMcp, true);
       if (launch) {
         const wrapped = this.wrapIfSupervised(launch, server, supervisorTarget, supervision);
         const sendCmd = plan?.configDirExplicit === true ? `CLAUDE_CONFIG_DIR="$AZITO_RESUME_CLAUDE_CONFIG_DIR" ${wrapped}` : plan?.configDirExplicit === false ? this.dialectOf(server).withoutEnv('CLAUDE_CONFIG_DIR', wrapped, await driver.paneCommandByHandle(server, handle).catch(() => null)) : wrapped;

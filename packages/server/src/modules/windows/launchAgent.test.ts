@@ -137,6 +137,7 @@ describe('POST /api/windows/:id/launch-agent — MCP blocking', () => {
   let server: ServerConfig;
   let sendKeys: ReturnType<typeof vi.fn>;
   let resolvePane: ReturnType<typeof vi.fn>;
+  let updateWindow: ReturnType<typeof vi.fn>;
   let taskStore: Map<number, Task>;
 
   async function buildApp(opts: {
@@ -151,12 +152,14 @@ describe('POST /api/windows/:id/launch-agent — MCP blocking', () => {
     const strategy = opts.strategy ?? claudeStrategy();
     taskStore = new Map((opts.tasks ?? []).map(t => [t.id, t]));
 
+    updateWindow = vi.fn();
     sendKeys = vi.fn().mockResolvedValue(undefined);
     resolvePane = vi.fn().mockResolvedValue('%0');
 
     const windowRepo: Partial<IWindowRepository> = {
       findById: (id: number) => (id === window.id ? window : undefined),
       updateAgentSessionIdByWindow: vi.fn(),
+      update: updateWindow as IWindowRepository['update'],
     };
     const serverRepo: Partial<IServerRepository> = {
       findByName: (name: string) => (name === server.name ? server : null),
@@ -285,6 +288,23 @@ describe('POST /api/windows/:id/launch-agent — MCP blocking', () => {
     const cmd = sentCommand();
     expect(cmd).not.toContain('CLAUDE_CODE_ENABLE_PROMPT_SUGGESTION');
     expect(cmd).toContain('-c mcp_servers.azt-mcp.enabled=false -c mcp_servers.azt-mcp.command=azt-mcp-disabled');
+    await app.close();
+  });
+
+  it('records only a successful launch and clears unsupported arguments', async () => {
+    app = await buildApp({ win: makeWindow({ taskId: null }) });
+    const path = `/api/windows/${window.id}/launch-agent`;
+    const first = await app.inject({ method: 'POST', url: path, payload: { command: "claude --permission-mode 'default' --model sonnet" } });
+    expect(first.statusCode).toBe(200);
+    expect(updateWindow).toHaveBeenLastCalledWith(window.id, { workerLaunch: { workerType: 'claude', args: ['--permission-mode', 'default', '--model', 'sonnet'] } });
+    const second = await app.inject({ method: 'POST', url: path, payload: { command: 'claude --append-system-prompt secret' } });
+    expect(second.statusCode).toBe(200);
+    expect(updateWindow).toHaveBeenLastCalledWith(window.id, { workerLaunch: null });
+    updateWindow.mockClear();
+    sendKeys.mockRejectedValueOnce(new Error('send failed'));
+    const failed = await app.inject({ method: 'POST', url: path, payload: { command: 'claude' } });
+    expect(failed.statusCode).toBe(500);
+    expect(updateWindow).not.toHaveBeenCalled();
     await app.close();
   });
 

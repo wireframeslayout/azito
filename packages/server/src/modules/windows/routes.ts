@@ -1,3 +1,4 @@
+import { parseWorkerLaunchRecord } from './workerLaunchRecord';
 import { z } from 'zod';
 import { parseWindowId, formatWindowId, asPaneHandle } from '@azito/shared';
 import { WindowMessageService } from './WindowMessageService';
@@ -310,6 +311,9 @@ const windowsRoutes: FastifyPluginCallback<WindowsRouteOptions> = (fastify, opts
         paneLayout: null,
         sleeping: false,
       });
+      if (body.worker_launch_command && srv && workerStartsAsProgram(opts.transportFactory.hostProfileFor(srv))) {
+        windowRepo.update(winId, { workerLaunch: parseWorkerLaunchRecord(body.worker_launch_command) });
+      }
       if (givenRef && srv) await labelOrRemoveWindow(srv, givenRef, winId);
       sessionCaptureService.scheduleInitialScan(winId, workerType, serverName, workingDirectory);
       notifyWindowsChanged(serverName);
@@ -598,19 +602,20 @@ const windowsRoutes: FastifyPluginCallback<WindowsRouteOptions> = (fastify, opts
 
       const strategy = sessionStrategyFactory.create(win.workerType);
       let effectiveCommand = command;
+      let launchedSessionId: string | null = null;
 
       // Session ID processing first (operates on the original command)
       if (strategy.supportsSession && !strategy.needsPostLaunchScan) {
         const existingId = /(?:^|\s)--session-id\s+(\S+)/.exec(effectiveCommand)?.[1]
           ?? /(?:^|\s)--resume\s+(\S+)/.exec(effectiveCommand)?.[1];
         if (existingId) {
-          windowRepo.updateAgentSessionIdByWindow(win.serverName, win.tmuxTarget, existingId);
+          launchedSessionId = existingId;
         } else {
           const sessionId = randomUUID();
           const sessionArgs = strategy.buildNewSessionArgs(sessionId);
           if (sessionArgs.length > 0) {
             effectiveCommand = `${effectiveCommand} ${sessionArgs.join(' ')}`;
-            windowRepo.updateAgentSessionIdByWindow(win.serverName, win.tmuxTarget, sessionId);
+            launchedSessionId = sessionId;
           }
         }
       }
@@ -642,6 +647,8 @@ const windowsRoutes: FastifyPluginCallback<WindowsRouteOptions> = (fastify, opts
       // Exported into the pane's shell (a POSIX one: Windows hosts are refused above) rather than prefixed onto the command, so every
       // part of a compound command (`cd x && claude`) sees it; the pane belongs to this window, so the value stays right afterwards too.
       await driverFor(srv).sendKeysToHandle(srv, paneHandle, [`export AZITO_WINDOW_ID=${win.id}; ${cmd}`, 'Enter']);
+      if (launchedSessionId) windowRepo.updateAgentSessionIdByWindow(win.serverName, win.tmuxTarget, launchedSessionId);
+      windowRepo.update(win.id, { workerLaunch: parseWorkerLaunchRecord(command) });
       return { ok: true, supervised, ...resourceCheckBody(resourceSkipped) };
     },
   );
