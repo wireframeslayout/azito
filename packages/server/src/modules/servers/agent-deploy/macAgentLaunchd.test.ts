@@ -1,6 +1,14 @@
 import { describe, expect, it, vi } from 'vitest';
 import { MacAgentLaunchd, renderMacAgentPlist } from './macAgentLaunchd';
 
+function fakeExec(fn: (host: string, command: string) => Promise<{ stdout: string; stderr: string; code: number }>) {
+  return vi.fn(async (host: string, command: string) => {
+    const marker = /; printf '\\n(AZITO_EXIT_[a-f0-9]+):%s\\n' "\$\?"$/.exec(command);
+    const result = await fn(host, marker ? command.slice(0, marker.index) : command);
+    return marker ? { ...result, stdout: `${result.stdout}\n${marker[1]}:${result.code}\n`, code: 0 } : result;
+  });
+}
+
 function unwrapCommand(command: string): string {
   const prefix = "/bin/bash -c '";
   return command.startsWith(prefix) ? command.slice(prefix.length, -1).replaceAll("'\\''", "'") : command;
@@ -15,11 +23,11 @@ describe('Mac agent launchd definition', () => {
     expect(plist).not.toContain('AZITO_AGENT_TOKEN');
   });
   it('refuses to replace an unrelated loaded job', async () => {
-    const execIsolated = vi.fn(async (_host: string, rawCommand: string) => {
+    const execIsolated = fakeExec(async (_host: string, rawCommand: string) => {
       const command = unwrapCommand(rawCommand);
       if (command.includes('id -u')) return { code: 0, stdout: '/Users/me\n501\n', stderr: '' };
       if (command.startsWith('if [ -f')) return { code: 0, stdout: 'AZITO_NO_PLIST', stderr: '' };
-      if (command.includes('print')) return { code: 0, stdout: 'path = /Users/me/other.plist', stderr: '' };
+      if (command.includes('print')) return { code: 0, stdout: `${command.includes('gui/501') ? 'gui' : 'user'}/501/com.azito.agent = {\npath = /Users/me/other.plist`, stderr: '' };
       throw new Error(`Unexpected mutation: ${command}`);
     });
     const manager = await MacAgentLaunchd.connect({ execIsolated } as never, 'host');
@@ -28,11 +36,11 @@ describe('Mac agent launchd definition', () => {
   });
 
   it('releases the cleanup lock without stopping or removing a different installation', async () => {
-    const execIsolated = vi.fn(async (_host: string, rawCommand: string) => {
+    const execIsolated = fakeExec(async (_host: string, rawCommand: string) => {
       const command = unwrapCommand(rawCommand);
       if (command.includes('id -u')) return { code: 0, stdout: '/Users/me\n501\n', stderr: '' };
       if (command.startsWith('mkdir ')) return { code: 0, stdout: '', stderr: '' };
-      if (command.startsWith('[ ')) return { code: 1, stdout: '', stderr: '' };
+      if (command.startsWith('[ ')) return { code: 113, stdout: '', stderr: 'Could not find service' };
       if (command.startsWith('rm -rf ')) return { code: 0, stdout: '', stderr: '' };
       throw new Error(`Unexpected command: ${command}`);
     });
@@ -45,11 +53,11 @@ describe('Mac agent launchd definition', () => {
   it('restores a previous definition and restarts its job when bootstrap fails', async () => {
     let loaded = true;
     const home = '/Users/me';
-    const execIsolated = vi.fn(async (_host: string, rawCommand: string) => {
+    const execIsolated = fakeExec(async (_host: string, rawCommand: string) => {
       const command = unwrapCommand(rawCommand);
       if (command.includes('id -u')) return { code: 0, stdout: `${home}\n501\n`, stderr: '' };
       if (command.startsWith('if [ -f') && command.includes('com.azito.agent.plist') && !command.includes('agent-launchd-backup')) return { code: 0, stdout: renderMacAgentPlist(home, '100.64.0.1', 3002, 'system'), stderr: '' };
-      if (command.includes("'launchctl' 'print'")) return command.includes('user/501') && loaded ? { code: 0, stdout: `path = ${home}/Library/LaunchAgents/com.azito.agent.plist\n${home}/.azito/agent/current/run.sh`, stderr: '' } : { code: 1, stdout: '', stderr: '' };
+      if (command.includes("'launchctl' 'print'")) return command.includes('user/501') && loaded ? { code: 0, stdout: `user/501/com.azito.agent = {\npath = ${home}/Library/LaunchAgents/com.azito.agent.plist\n${home}/.azito/agent/current/run.sh`, stderr: '' } : { code: 113, stdout: '', stderr: 'Could not find service' };
       if (command.includes('agent-launchd-backup.XXXXXX')) return { code: 0, stdout: `${home}/.azito/agent-launchd-backup.abc123\n`, stderr: '' };
       if (command.includes("'launchctl' 'bootout'")) { loaded = false; return { code: 0, stdout: '', stderr: '' }; }
       if (command.includes("'launchctl' 'bootstrap'")) {
@@ -65,12 +73,12 @@ describe('Mac agent launchd definition', () => {
   });
 
   it('has no installation once the agent folder is gone, so nothing would be started again', async () => {
-    const execIsolated = vi.fn(async (_host: string, rawCommand: string) => {
+    const execIsolated = fakeExec(async (_host: string, rawCommand: string) => {
       const command = unwrapCommand(rawCommand);
       if (command.includes('id -u')) return { code: 0, stdout: '/Users/me\n501\n', stderr: '' };
       if (command.startsWith('if [ -f') && command.includes('install.id')) return { code: 0, stdout: 'AZITO_ABSENT', stderr: '' };
       if (command.startsWith('if [ -f')) return { code: 0, stdout: 'AZITO_NO_PLIST', stderr: '' };
-      if (command.includes("'launchctl' 'print'")) return { code: 1, stdout: '', stderr: '' };
+      if (command.includes("'launchctl' 'print'")) return { code: 113, stdout: '', stderr: 'Could not find service' };
       throw new Error(`Unexpected command: ${command}`);
     });
     const manager = await MacAgentLaunchd.connect({ execIsolated } as never, 'host');
@@ -78,11 +86,11 @@ describe('Mac agent launchd definition', () => {
   });
 
   it('restores the previous current link only when the new version still owns it', async () => {
-    const execIsolated = vi.fn(async (_host: string, rawCommand: string) => {
+    const execIsolated = fakeExec(async (_host: string, rawCommand: string) => {
       const command = unwrapCommand(rawCommand);
       if (command.includes('id -u')) return { code: 0, stdout: '/Users/me\n501\n', stderr: '' };
       if (command.startsWith('if [ -L')) return { code: 0, stdout: '/Users/me/.azito/agent/old\n', stderr: '' };
-      if (command.startsWith('[ ')) return { code: 1, stdout: '', stderr: '' };
+      if (command.startsWith('[ ')) return { code: 113, stdout: '', stderr: 'Could not find service' };
       throw new Error(`Unexpected command: ${command}`);
     });
     const manager = await MacAgentLaunchd.connect({ execIsolated } as never, 'host');

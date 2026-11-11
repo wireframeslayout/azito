@@ -10,6 +10,14 @@ import { DEFAULT_WINDOWS_AGENT_OPTIONS } from './windowsAgentConfig';
 
 const VERSION = 'bundlehash1';
 
+function fakeExec(fn: (host: string, command: string) => Promise<{ stdout: string; stderr: string; code: number }>) {
+  return vi.fn(async (host: string, command: string) => {
+    const marker = /; printf '\\n(AZITO_EXIT_[a-f0-9]+):%s\\n' "\$\?"$/.exec(command);
+    const result = await fn(host, marker ? command.slice(0, marker.index) : command);
+    return marker ? { ...result, stdout: `${result.stdout}\n${marker[1]}:${result.code}\n`, code: 0 } : result;
+  });
+}
+
 function unwrapCommand(command: string): string {
   const prefix = "/bin/bash -c '";
   return command.startsWith(prefix) ? command.slice(prefix.length, -1).replaceAll("'\\''", "'") : command;
@@ -53,14 +61,14 @@ interface FakeHost { folderId: string; folderExists: boolean }
 /** An SSH client whose host answers the preflight and accepts every other command, recording them all. */
 function makeSsh(opts: HostOptions = {}, host: FakeHost = { folderId: '', folderExists: false }) {
   const commands: string[] = [];
-  const execIsolated = vi.fn(async (_host: string, rawCommand: string) => {
+  const execIsolated = fakeExec(async (_host: string, rawCommand: string) => {
     const command = unwrapCommand(rawCommand);
     commands.push(command);
     if (command.includes('agent-launchd-backup.XXXXXX')) return { stdout: '/Users/test/.azito/agent-launchd-backup.abc123\n', stderr: '', code: 0 };
     if (command.startsWith('if [ -L') && command.includes('/.azito/agent/current')) return { stdout: '/Users/test/.azito/agent/old\n', stderr: '', code: 0 };
     if (command.includes('$(id -u)')) return { stdout: '/Users/test\n501\n', stderr: '', code: 0 };
     if (command.startsWith('if [ -f') && command.includes('com.azito.agent.plist')) return { stdout: 'AZITO_NO_PLIST', stderr: '', code: 0 };
-    if (command.includes("'launchctl' 'print'")) return { stdout: '', stderr: '', code: 1 };
+    if (command.includes("'launchctl' 'print'")) return { stdout: '', stderr: 'Could not find service', code: 113 };
     if (opts.cleanupMark && (command === AGENT_PRESENCE_COMMAND || command.includes('echo AZITO_CLEANUP_IDLE'))) return { stdout: `AZITO_CLEANUP_MARK:${opts.cleanupMark}\n`, stderr: '', code: 0 };
     if (command.includes('echo AZITO_CLEANUP_IDLE')) return { stdout: 'AZITO_CLEANUP_IDLE\n', stderr: '', code: 0 };
     if (opts.presenceThrows && command === AGENT_PRESENCE_COMMAND) throw new Error('connection reset');
@@ -257,7 +265,7 @@ describe('AgentInstaller', () => {
     const steps: InstallProgress[] = [];
     const result = await installer.install('user@host', (p) => steps.push(p));
     expect(result.success).toBe(false);
-    expect(result.error).toBe('Could not check the host for an existing agent: connection reset');
+    expect(result.error).toBe('Could not check the host for an existing agent: Remote command transport failed');
     expect(steps.at(-1)).toEqual({ step: 'transfer', status: 'error', message: result.error });
     expect(commands.some((c) => c.includes('systemctl --user enable'))).toBe(false);
   });
@@ -651,7 +659,7 @@ describe('AgentInstaller', () => {
 
     it('fails with a reason when neither the OS probe nor the POSIX fallback can identify the host', async () => {
       const commands: string[] = [];
-      const execIsolated = vi.fn(async (_host: string, command: string) => { commands.push(command); return { stdout: 'weird\n', stderr: '', code: 0 }; });
+      const execIsolated = fakeExec(async (_host: string, command: string) => { commands.push(command); return { stdout: 'weird\n', stderr: '', code: 0 }; });
       const installer = new AgentInstaller({ execIsolated, resolveHost: (h: string) => ({ username: 'user', host: h.replace(/^.*@/, '').replace(/:\d+$/, ''), port: 22 }) } as never, makeBundler() as never, DEFAULT_WINDOWS_AGENT_OPTIONS, {} as never, okMisao());
       const result = await installer.install('user@host');
       expect(result.success).toBe(false);
