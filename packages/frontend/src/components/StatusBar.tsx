@@ -8,6 +8,7 @@ import { openLookoutItem } from '../lib/lookoutOpen';
 import { useOpenGlobalSearch } from './search/GlobalSearch';
 import { useState, useMemo, useEffect, useRef, useCallback } from 'react';
 import { useTranslation } from 'react-i18next';
+import { useServerStatuses } from '../hooks/useServerStatuses';
 import { useWorkspaceTargets } from '../hooks/useWorkspaceTargets';
 import { StatusBarItem } from './statusbar/StatusBarItem';
 import type { StatusBarItemRef } from './statusbar/StatusBarItem';
@@ -59,6 +60,7 @@ export function StatusBar({ servers }: StatusBarProps) {
   const openSearch = useOpenGlobalSearch();
   const { bindings } = useHotkeyBindings();
   const { focusedTargetDisplay } = useWorkspaceTargets();
+  const { servers: configuredServers, serversLoaded } = useServerStatuses();
   const { status: updateStatus, startUpdate, checkNow } = useSystemUpdate();
   const { showToast } = useToast();
   const [openItemId, setOpenItemId] = useState<string | null>(null);
@@ -79,6 +81,7 @@ export function StatusBar({ servers }: StatusBarProps) {
   const focusedServer = focusedTargetDisplay?.serverName ?? null;
   const contextLabel = focusedTargetDisplay?.label ?? null;
   const displayedServer = focusedServer ?? servers.find((server) => server.type === 'local')?.serverName;
+  const defaultMux = serversLoaded ? configuredServers.find((server) => server.name === displayedServer)?.defaultMux : undefined;
 
   const handleStartUpdate = useCallback(async () => {
     const res = await startUpdate();
@@ -205,7 +208,7 @@ export function StatusBar({ servers }: StatusBarProps) {
           flexShrink: 0,
         }}
       >
-        {displayedServer && <span style={{ whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{displayedServer}</span>}
+        {displayedServer && <span style={{ whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{displayedServer}{defaultMux && ` · ${t('statusbar.defaultMux', { mux: defaultMux })}`}</span>}
         {contextLabel && (
           <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
             ❯_ {contextLabel}

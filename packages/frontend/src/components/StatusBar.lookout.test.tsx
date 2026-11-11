@@ -4,6 +4,7 @@ import { expect, it, vi } from 'vitest';
 import { StatusBar } from './StatusBar';
 import { HotkeyProvider } from '../hooks/useHotkeys';
 const mocks = vi.hoisted(() => ({ open: vi.fn(), close: vi.fn(), openTask: vi.fn(), attention: 2 }));
+vi.mock('../hooks/useServerStatuses', () => ({ useServerStatuses: () => ({ servers: [], serversLoaded: true }) }));
 vi.mock('../hooks/useIsMobile', () => ({ useIsMobile: () => false }));
 vi.mock('../hooks/useAgentActivity', () => ({ useAgentActivity: () => ({ snapshotStatus: 'ready', retrySnapshot: vi.fn() }) }));
 vi.mock('../hooks/useCrossProjectNavigation', () => ({ useCrossProjectNavigation: () => ({ openTask: mocks.openTask, openTerminal: vi.fn() }) }));
