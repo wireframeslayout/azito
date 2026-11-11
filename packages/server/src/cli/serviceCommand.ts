@@ -80,15 +80,12 @@ export async function serviceCommand(argv: string[], host: ServiceHost, context:
       return;
     }
     if (command === 'install' && !windowsHub) {
-      throw new Error(`\`azito service ${command}\` is for Windows. On Linux and macOS install.sh sets the service up.`);
+      throw new Error('`azito service install` is for Windows. On Linux and macOS install.sh sets the service up.');
     }
     if (windowsHub) {
       // One at a time with the in-app update, which stops and starts the same task.
       const lock = createHubLock(windowsHub.layout.hubRoot, context.secretFileGuard, windowsHub.systemRoot);
-      await underHubLock(lock, () => {
-        if (command === 'install') return installWindowsTask(manager, windowsHub, yes);
-        return runOnWindows(command, manager, windowsHub, context);
-      });
+      await underHubLock(lock, () => (command === 'install' ? installWindowsTask(manager, windowsHub, yes) : runOnWindows(command, manager, windowsHub, context)));
     } else {
       if (!manager.isInstalled()) throw new Error(notInstalledMessage(manager));
       if (command === 'start') await manager.start();

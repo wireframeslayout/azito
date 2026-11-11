@@ -26,8 +26,7 @@ const recordSchema = z.object({
   dataRootIdentity: installIdentitySchema.nullable(),
   dbIdentity: installIdentitySchema.nullable(),
   envIdentity: installIdentitySchema.nullable().optional(),
-  directories: z.object({ prefix: installIdentitySchema.optional(), hub: installIdentitySchema.optional(), bin: installIdentitySchema.optional(), logs: installIdentitySchema.optional() }).strict().optional(),
-  misao: z.unknown().optional(),
+  directories: z.object({ prefix: installIdentitySchema.optional(), hub: installIdentitySchema.optional(), bin: installIdentitySchema.optional() }).strict().optional(),
 }).strict();
 
 export type WindowsInstallRecord = z.infer<typeof recordSchema>;

@@ -150,10 +150,22 @@ async function checkRemoveData(installPs1: string, zip: string, sums: string, pr
   assert(removed.status === 0, 'uninstall with data removal failed', removed.output);
   assert(!fs.existsSync(path.join(prefix, 'data')), 'unchanged recorded data must be removed', removed.output);
   assert(!fs.existsSync(path.join(prefix, 'hub', '.env')), 'recorded .env must be removed', removed.output);
+  assert(!fs.existsSync(prefix), 'an unused NoService install must remove its empty prefix', removed.output);
   const reinstalled = install(installPs1, ['-ZipPath', zip, '-Sha256Sums', sums, '-Prefix', prefix, '-Yes', '-NoPath', '-NoService']);
   assert(reinstalled.status === 0, 'reinstall failed', reinstalled.output);
   const removedAgain = install(installPs1, ['-Uninstall', '-RemoveData', '-Prefix', prefix, '-Yes']);
   assert(removedAgain.status === 0 && !fs.existsSync(path.join(prefix, 'hub', 'current.txt')), 'uninstall after reinstall failed', removedAgain.output);
+
+  const envPrefix = `${prefix}-env-replaced`;
+  const envInstall = install(installPs1, ['-ZipPath', zip, '-Sha256Sums', sums, '-Prefix', envPrefix, '-Yes', '-NoPath', '-NoService']);
+  assert(envInstall.status === 0, 'install for changed env failed', envInstall.output);
+  const envFile = path.join(envPrefix, 'hub', '.env');
+  const envCopy = `${envFile}.replacement`;
+  fs.copyFileSync(envFile, envCopy);
+  fs.renameSync(envCopy, envFile);
+  const envRemoval = install(installPs1, ['-Uninstall', '-RemoveData', '-Prefix', envPrefix, '-Yes']);
+  assert(envRemoval.status === 0 && fs.existsSync(envFile) && /env changed after install; retained/i.test(envRemoval.output), 'a replaced env must be kept while uninstall completes', envRemoval.output);
+  assert(!fs.existsSync(path.join(envPrefix, 'hub', 'current.txt')), 'changed env must not prevent release removal', envRemoval.output);
 
   const changedPrefix = `${prefix}-changed`;
   const changedInstall = install(installPs1, ['-ZipPath', zip, '-Sha256Sums', sums, '-Prefix', changedPrefix, '-Yes', '-NoPath', '-NoService']);

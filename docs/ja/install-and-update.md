@@ -167,12 +167,12 @@ CLI は `current.txt` を読んで同梱のハブを実行します:
 
 ```powershell
 powershell -NoProfile -ExecutionPolicy Bypass -File .\install.ps1 -Uninstall [-Prefix <dir>]
-# One-liner: & ([scriptblock]::Create((irm https://github.com/wireframeslayout/azito/releases/latest/download/install.ps1))) -Uninstall # add -RemoveData if desired
+# One-liner: [Net.ServicePointManager]::SecurityProtocol = [Net.ServicePointManager]::SecurityProtocol -bor 3072; & ([scriptblock]::Create((irm https://github.com/wireframeslayout/azito/releases/latest/download/install.ps1))) -Uninstall # add -RemoveData if desired
 # 記録された識別情報を確認できるデータファイルも削除する場合:
 powershell -NoProfile -ExecutionPolicy Bypass -File .\install.ps1 -Uninstall -RemoveData [-Prefix <dir>]
 ```
 
-先に `azito stop` でタスクを停止し、`azito run` の端末があればその端末で Ctrl+C を押してください。登録タスクの定義と実行アカウントを確認し、ハブや更新が動いている間は削除を拒否します。Windows のパスには複数の表記があるため、別のハブや識別できない Node プロセスが動いている場合も拒否します。内容を確認し、必要なら自分で停止してから再実行してください。`-Yes` は確認を省くための指定で、データ削除は選びません。データは `-RemoveData` を付けない限り保持します。指定した場合、導入時に作成したデータベースと記録済みの鍵・トークン・canary は、ファイルの識別情報が記録と一致すれば削除します。別のファイルに置き換わっている場合や、そのほかのデータの所有を確認できない場合は保持します。外部の `AZITO_DATA_DIR` は削除しません。
+先に `azito stop` でタスクを停止し、`azito run` の端末があればその端末で Ctrl+C を押してください。登録タスクの定義と実行アカウントを確認し、ハブや更新が動いている間は削除を拒否します。Windows のパスには複数の表記があるため、別のハブや識別できない Node プロセスが動いている場合も拒否します。内容を確認し、必要なら自分で停止してから再実行してください。`-Yes` は確認を省くための指定で、データ削除は選びません。データは `-RemoveData` を付けない限り保持します。指定した場合、導入時に作成したデータベースと記録済みの鍵・トークン・canary は、ファイルの識別情報が記録と一致すれば削除します。別のファイルに置き換わっている場合や、そのほかのデータの所有を確認できない場合は保持します。外部の `AZITO_DATA_DIR` は削除しません。 `-RemoveData` は識別情報が一致する記録済みの `hub\.env` も削除し、変更されたものは保持します。記録済みの `bin`、`hub`、プレフィックスは空なら削除します。
 
 インストーラーは自分が作成したファイルを記録します。アンインストール時には内容・リンク・アクセス権を確認し、未記録または変更されたファイルは保持します。記録のない旧導入、記録にない更新後のバージョン、リンク、安全性を確認できないアクセス権は手動確認が必要です。アンインストーラーは `AzitoMisao` タスクと `<prefix>\misao` を残します。手動で消す前に agent が共有していないことを確認してください。`schtasks /Query /TN AzitoMisao /XML` でタスクを確認し、対象のパイプを `MISAO_SOCKET` に設定して対象の `misao.exe stop` を実行した後、`schtasks /Delete /TN AzitoMisao /F` でタスクを削除し、フォルダーを確認して削除します。停止するとすべてのペインが閉じます。残った設定やログなどはコマンドに表示されます。手動で削除する前に、エクスプローラーでファイル、Windows の環境変数設定でユーザー PATH、タスクスケジューラでタスクを確認してください。削除を始めてから失敗すると記録が使用済みになり、再実行時には表示された退避先を含む残存物を保持します。内容を手動で確認してください。
 

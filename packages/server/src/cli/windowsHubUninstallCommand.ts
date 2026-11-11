@@ -1,5 +1,6 @@
 import path from 'path';
 import fs from 'fs';
+import { createHash } from 'crypto';
 import { createServiceManager } from '../modules/system/createServiceManager';
 import { HUB_SERVICE, runCommand } from '../modules/system/serviceManager';
 import { createHubLock, underHubLock } from '../modules/system/hubLock';
@@ -84,7 +85,6 @@ export async function windowsHubUninstallCommand(host: HostEnv, context: Service
       process.stdin.resume();
     });
     if (action !== 'remove') return;
-    const misaoNote = 'AzitoMisao and the misao folder were retained. Verify that no agent uses them before removing them manually; see the Windows uninstall documentation.';
     try {
       if ((await hub.client.query(HUB_SERVICE.windowsTaskName)).exists || (await hub.client.query(HUB_UPDATE_TASK)).exists) throw new Error('A hub or update task appeared while preparing removal; inspect it and retry manually.');
       if ((await findHubProcesses(run, hub.systemRoot, hub.hubRoots, context.pid)).length > 0) throw new Error('A hub process started while preparing removal; stop it and inspect the retained files.');
@@ -106,17 +106,20 @@ export async function windowsHubUninstallCommand(host: HostEnv, context: Service
         }
         if (fs.readdirSync(dir).length === 0) fs.rmdirSync(dir);
       }
-      if (removeData && record.envIdentity) {
-        const env = path.join(hub.layout.hubRoot, '.env');
-        const stat = fs.lstatSync(env);
-        if (!stat.isFile() || stat.isSymbolicLink() || !sameInstallFileIdentity(record.envIdentity, readInstallFileIdentity(env)) || !context.secretFileGuard.inspect(env, 'file').ok) {
-          throw new Error('The hub .env is not the recorded protected file; it is retained.');
-        }
-        fs.unlinkSync(env);
-      }
       await assertHubDirsOnlyOwnerWritable(run, hub.systemRoot, [release, ...record.inventory.directories.map((dir) => path.join(release, dir))]);
       verifyRecordedRelease(hub.layout.hubRoot, record);
       await removeRecordedTree(hub.layout.hubRoot, record.release, run, hub.systemRoot);
+      if (removeData && record.envIdentity) {
+        const env = path.join(hub.layout.hubRoot, '.env');
+        try {
+          const stat = fs.lstatSync(env);
+          if (!stat.isFile() || stat.isSymbolicLink() || !sameInstallFileIdentity(record.envIdentity, readInstallFileIdentity(env)) || !context.secretFileGuard.inspect(env, 'file').ok) {
+            retained.push('hub\\.env changed after install; retained');
+          } else fs.unlinkSync(env);
+        } catch (err) {
+          if ((err as NodeJS.ErrnoException).code !== 'ENOENT') retained.push(`hub\\.env could not be removed; retained: ${err instanceof Error ? err.message : String(err)}`);
+        }
+      }
       const pointer = path.join(hub.layout.hubRoot, 'current.txt');
       const stat = fs.lstatSync(pointer);
       if (!stat.isFile() || stat.isSymbolicLink() || fs.readFileSync(pointer, 'utf8').trim() !== record.release) throw new Error(`The pointer ${pointer} changed and is retained.`);
@@ -127,7 +130,7 @@ export async function windowsHubUninstallCommand(host: HostEnv, context: Service
       if (!context.secretFileGuard.inspect(recordPath, 'file').ok || fs.lstatSync(recordPath).isSymbolicLink()) throw new Error('The installation record changed; it is retained.');
       fs.unlinkSync(recordPath);
       const emptyDirectoryCandidates: string[] = [];
-      for (const [name, dir] of [['bin', path.join(hub.layout.prefix, 'bin')], ['logs', path.join(hub.layout.prefix, 'logs')], ['hub', hub.layout.hubRoot], ['prefix', hub.layout.prefix]] as const) {
+      for (const [name, dir] of [['bin', path.join(hub.layout.prefix, 'bin')], ['hub', hub.layout.hubRoot], ['prefix', hub.layout.prefix]] as const) {
         const identity = record.directories?.[name];
         if (!identity) continue;
         try {
@@ -135,9 +138,11 @@ export async function windowsHubUninstallCommand(host: HostEnv, context: Service
           if (sameInstallFileIdentity(identity, readInstallFileIdentity(dir))) emptyDirectoryCandidates.push(name);
         } catch { retained.push(`Directory retained: ${dir} could not be verified.`); }
       }
-      console.log(JSON.stringify({ removed: true, misaoNote, retained, emptyDirectoryCandidates }));
+      const lockKey = path.join(hub.layout.hubRoot, '.lock-key');
+      const lockKeyHash = createHash('sha256').update(fs.readFileSync(lockKey)).digest('hex');
+      console.log(JSON.stringify({ removed: true, retained, emptyDirectoryCandidates, lockKeyHash }));
     } catch (err) {
-      console.log(JSON.stringify({ error: err instanceof Error ? err.message : String(err), misaoNote }));
+      console.log(JSON.stringify({ error: err instanceof Error ? err.message : String(err) }));
       process.exitCode = 1;
     }
   });

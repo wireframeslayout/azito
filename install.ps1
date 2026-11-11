@@ -493,8 +493,7 @@ function Invoke-Uninstall {
         $resultLine = $holder.StandardOutput.ReadLine()
         if (-not $resultLine) { throw "Uninstall stopped before reporting the result. Inspect remaining files manually: $($holder.StandardError.ReadToEnd())" }
         $result = $resultLine | ConvertFrom-Json
-        if (-not $result.removed) { throw "Uninstall stopped after a partial removal: $($result.error). $($result.misaoNote)" }
-        if ($result.misaoNote) { Write-Host $result.misaoNote }
+        if (-not $result.removed) { throw "Uninstall stopped after a partial removal: $($result.error)" }
         foreach ($message in @($result.retained)) { if ($message) { Write-Warning $message } }
     } finally {
         if ($null -ne $holder) {
@@ -509,8 +508,21 @@ function Invoke-Uninstall {
             } catch { Write-Warning "The temporary copy remains at $tempRoot; inspect it and remove it manually: $($_.Exception.Message)" }
         }
     }
-    # Directory creation was not recorded; show what remains without entering reparse points.
-    foreach ($dir in @((Join-Path $Prefix 'bin'), (Join-Path $Prefix 'logs'), $hubRoot, $Prefix)) {
+    # The helper has released the lock. Remove its key only if it is the same protected file.
+    $lockKey = Join-Path $hubRoot '.lock-key'
+    try {
+        Assert-RealPathChain $lockKey
+        $item = Get-Item -LiteralPath $lockKey -Force
+        if ($item.PSIsContainer -or ($item.Attributes -band [IO.FileAttributes]::ReparsePoint) -ne 0) { throw 'not a regular file' }
+        $acl = Get-Acl -LiteralPath $lockKey
+        $sid = [Security.Principal.WindowsIdentity]::GetCurrent().User
+        $rules = @($acl.GetAccessRules($true, $true, [Security.Principal.SecurityIdentifier]))
+        if ($acl.GetOwner([Security.Principal.SecurityIdentifier]).Value -ne $sid.Value -or -not $acl.AreAccessRulesProtected -or $rules.Count -ne 1 -or $rules[0].IdentityReference.Value -ne $sid.Value -or $rules[0].AccessControlType -ne 'Allow' -or $rules[0].FileSystemRights -ne [Security.AccessControl.FileSystemRights]::FullControl -or $rules[0].InheritanceFlags -ne 'None' -or $rules[0].PropagationFlags -ne 'None') { throw 'not owner-only' }
+        if ((Get-FileHash -LiteralPath $lockKey -Algorithm SHA256).Hash -ine $result.lockKeyHash) { throw 'key changed after inspection' }
+        Remove-Item -LiteralPath $lockKey
+    } catch { Write-Warning "Retained $lockKey; inspect manually: $($_.Exception.Message)" }
+    # Remove only recorded, empty directories without entering reparse points.
+    foreach ($dir in @((Join-Path $Prefix 'bin'), $hubRoot, $Prefix)) {
         if (-not (Test-Path -LiteralPath $dir -PathType Container)) { continue }
         try {
             Assert-RealPathChain $dir
@@ -797,11 +809,10 @@ function Invoke-Install {
             # A failure is a warning: the hub is installed either way, and `azito misao install` repeats the step.
             Write-Host 'Installing the misao service...'
             try {
-                $misaoArgs = @($hub, 'misao', 'install', '--prefix', $Prefix)
-                Invoke-Node $node $misaoArgs
+                Invoke-Node $node @($hub, 'misao', 'install', '--prefix', $Prefix)
             } catch {
-                Write-Warning "The misao installation failed (see the error above): $($_.Exception.Message)"
-                Write-Host '  Check azito misao status. If misao is not running, fix the problem and run: azito misao install'
+                Write-Warning "The misao service could not be installed (see the error above): $($_.Exception.Message)"
+                Write-Host '  AZITO is installed, but its panes need misao. Fix the problem and run: azito misao install'
             }
         }
 
