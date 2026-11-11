@@ -78,3 +78,11 @@ export function persistRenamedWindowLabel(update: () => void, notify: () => void
     return false;
   }
 }
+
+/** The persisted values after a successful rename. Misao's window id stays stable. */
+export function renamedWindowUpdate(win: Pick<WindowRowIdentity, 'muxRef' | 'tmuxTarget'>, name: string): { label: string; labelSource: 'user'; tmuxTarget?: string } {
+  const ref = windowRefOf(win, windowKindOf(win));
+  return ref.kind === 'tmux'
+    ? { label: name, labelSource: 'user', tmuxTarget: `${ref.workspace}:${name}` }
+    : { label: name, labelSource: 'user' };
+}

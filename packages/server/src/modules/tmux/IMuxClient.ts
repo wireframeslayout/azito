@@ -50,6 +50,8 @@ export interface IMuxClient {
   renameWindowByRef(server: ServerConfig, ref: MuxRef, name: string): Promise<ExecResult>;
   renameWorkspace(server: ServerConfig, from: string, to: string, opts?: { kind?: MuxDriverKind }): Promise<ExecResult>;
   windowExists(server: ServerConfig, ref: MuxRef): Promise<boolean>;
+  /** Resolve a temporary close-only ref; tmux uses an empty workspace and a window id, never persisted. */
+  resolveWindowForRespawn(server: ServerConfig, ref: MuxRef): Promise<MuxRef | null>;
   focusWindow(server: ServerConfig, ref: MuxRef): Promise<ExecResult>;
   resolveRef(server: ServerConfig, target: string, opts?: { kind?: MuxDriverKind }): Promise<MuxRef | null>;
   /** Stamps every pane of the window with the hub window/task identity. Only valid when `supportsPaneLabels`. */

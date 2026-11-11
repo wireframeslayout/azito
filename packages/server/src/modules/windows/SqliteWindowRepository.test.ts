@@ -270,3 +270,17 @@ describe('Claude configuration directories', () => {
     db.close();
   });
 });
+
+describe('window rename persistence', () => {
+  it('updates a primary tmux row and its task in the same update', () => {
+    const db = buildSeededDb();
+    const projectId = insertProject(db, 'Rename');
+    const taskId = insertTask(db, projectId, 'Task');
+    db.prepare('UPDATE tasks SET tmux_window = ? WHERE id = ?').run('win1', taskId);
+    const repo = new SqliteWindowRepository(db);
+    const id = repo.add(baseWindow({ ownerType: 'task', projectId: null, taskId, isPrimary: true }));
+    repo.update(id, { tmuxTarget: 'proj:renamed', label: 'renamed', labelSource: 'user' });
+    expect(repo.findById(id)).toMatchObject({ tmuxTarget: 'proj:renamed', muxRef: { kind: 'tmux', workspace: 'proj', window: 'renamed' } });
+    expect(db.prepare('SELECT tmux_window FROM tasks WHERE id = ?').get(taskId)).toEqual({ tmux_window: 'renamed' });
+  });
+});

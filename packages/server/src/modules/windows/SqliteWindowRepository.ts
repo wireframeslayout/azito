@@ -232,6 +232,15 @@ export class SqliteWindowRepository implements IWindowRepository {
     const fields: string[] = [];
     const values: unknown[] = [];
 
+    if (data.tmuxTarget !== undefined && data.labelSource === 'user') {
+      const row = this.findByIdStmt.get(id) as WindowRow | undefined;
+      if (row && rowKind(row) === 'tmux' && row.owner_type === 'task' && row.is_primary && row.task_id !== null) {
+        const oldName = muxRefFromTmuxTarget(row.tmux_target).window;
+        const newName = muxRefFromTmuxTarget(data.tmuxTarget).window;
+        this.db.prepare("UPDATE tasks SET tmux_window = ?, updated_at = datetime('now') WHERE id = ? AND tmux_window = ?").run(newName, row.task_id, oldName);
+      }
+    }
+
     if (data.projectId !== undefined) { fields.push('project_id = ?'); values.push(data.projectId); }
     if (data.tmuxTarget !== undefined && /\.\d+$/.test(data.tmuxTarget)) {
       throw new Error(`tmuxTarget must not contain pane suffix: ${data.tmuxTarget}`);

@@ -66,6 +66,12 @@ import type { UnitTypeLoader } from '../sidekicks/UnitTypeLoader';
 import type { SidekickPackageLoader } from '../sidekicks/SidekickPackageLoader';
 import type { EventEmitter } from 'events';
 
+export class WindowIdentityUnresolvedError extends Error {
+  constructor() {
+    super('Cannot find the registered tmux window. Check the window and register it again before respawning.');
+  }
+}
+
 function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
@@ -457,6 +463,10 @@ export class WindowRespawnService {
         server: respawnServer,
         ref,
       } = await withServerLock(this.serverIsolationLock, server, true, async (freshServer) => {
+        const lockedWindow = this.windowRepo.findById(windowId);
+        if (!lockedWindow || lockedWindow.tmuxTarget !== currentWin.tmuxTarget || JSON.stringify(lockedWindow.muxRef) !== JSON.stringify(currentWin.muxRef)) {
+          throw new Error('Window changed while waiting to respawn. Retry the operation.');
+        }
         // Issue #29 Step 3a review round, Important finding 2: re-verify the
         // untrusted-execution gate against `freshServer` — re-read once this
         // lock is actually acquired — BEFORE confirmOldWindowGone below kills
@@ -516,12 +526,13 @@ export class WindowRespawnService {
         // Only a workspace of the window's own mux counts (a same-named session of the other mux is another one).
         const workspace = workspaces.find((s) => s.name === sessionName && (s.kind ?? sourceKind) === sourceKind);
         const workspaceExists = workspace !== undefined;
-        const oldRef = windowRefOf(currentWin, sourceKind);
-        // misao: the window id (mux_ref) decides, in whichever workspace the window is now; the
-        // window part of tmux_target is an id there, not a name. tmux matches the name in its session.
-        const windowAlive = sourceKind === 'misao'
-          ? await driver.windowExists(freshServer, oldRef)
-          : workspaceExists && (workspace?.windows.some((w: { name: string }) => w.name === windowPart) ?? false);
+        if (sourceKind === 'tmux' && !workspaceExists) throw new WindowIdentityUnresolvedError();
+        const storedRef = windowRefOf(currentWin, sourceKind);
+        const oldRef = await driver.resolveWindowForRespawn(freshServer, storedRef);
+        if (sourceKind === 'tmux' && !oldRef) {
+          throw new WindowIdentityUnresolvedError();
+        }
+        const windowAlive = oldRef !== null;
 
         if (windowKind !== sourceKind) {
           const availability = misaoStatusFor(this.muxDriverRegistry, freshServer);
@@ -538,7 +549,7 @@ export class WindowRespawnService {
         await confirmOldWindowGone(
           driver,
           freshServer,
-          windowAlive ? { kind: 'window', ref: oldRef } : null,
+          oldRef ? { kind: 'window', ref: oldRef } : null,
           isPrimary ? task!.id : null,
         );
 

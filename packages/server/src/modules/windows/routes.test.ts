@@ -586,6 +586,14 @@ describe('POST /api/windows/:id/respawn — execution gate (Issue #328 second-ro
     expect(failing).toHaveBeenCalledWith(server.name);
   });
 
+  it('explains when the registered tmux window cannot be identified', async () => {
+    const { WindowIdentityUnresolvedError } = await import('./WindowRespawnService');
+    app = await setup(vi.fn(async () => { throw new WindowIdentityUnresolvedError(); }));
+    const res = await app.inject({ method: 'POST', url: `/api/windows/${window.id}/respawn` });
+    expect(res.statusCode).toBe(409);
+    expect(res.json()).toMatchObject({ error: 'window_identity_unresolved', message: expect.stringContaining('register it again') });
+  });
+
   it('answers 501 { error, code: unsupported_os } for a host that cannot run a worker in a pane (Windows, #371)', async () => {
     app = await setup(vi.fn(async () => { throw new HostProfileError('unsupported_os', 'Resuming a worker is not available on Windows hosts yet (tracked in #371).'); }));
 
@@ -838,7 +846,7 @@ describe('PUT /api/windows/:id/rename', () => {
     });
     const res = await app.inject({ method: 'PUT', url: '/api/windows/1/rename', payload: { name: 'chosen' } });
     expect(res.statusCode).toBe(code === 0 ? 200 : 500);
-    if (code === 0) expect(update).toHaveBeenCalledWith(1, { label: 'chosen', labelSource: 'user' });
+    if (code === 0) expect(update).toHaveBeenCalledWith(1, { label: 'chosen', labelSource: 'user', tmuxTarget: 'proj:chosen' });
     else expect(update).not.toHaveBeenCalled();
     expect(emit.mock.calls.some(([event]) => event.type === 'window:renamed')).toBe(code === 0);
     await app.close();
