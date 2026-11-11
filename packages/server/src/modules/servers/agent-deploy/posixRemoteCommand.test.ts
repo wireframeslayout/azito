@@ -12,6 +12,7 @@ const ssh = { execIsolated: async (_host: string, command: string) => {
 } };
 
 describe('execPosixRemote', () => {
+  describe.skipIf(process.platform === 'win32')('with a POSIX shell', () => {
   it.each([['printf foo; exit 7', 'foo', 7], ['exit 113', '', 113], ["printf 'first\\nsecond'", 'first\nsecond', 0], ["printf 'hello\\n'", 'hello\n', 0]])('preserves output and exit status: %s', async (script, stdout, code) => {
     await expect(execPosixRemote(ssh as never, 'host', script)).resolves.toMatchObject({ stdout, code });
   });
@@ -20,6 +21,15 @@ describe('execPosixRemote', () => {
     await execPosixRemote({ execIsolated: async (host: string, raw: string) => { command = raw; return ssh.execIsolated(host, raw); } } as never, 'host', 'exit 7');
     expect(command).toMatch(/^\/bin\/bash -c '/);
     expect(command.endsWith("'")).toBe(true);
+  });
+  it('keeps a fake marker line in command output', async () => {
+    await expect(execPosixRemote(ssh as never, 'host', "printf 'AZITO_EXIT_fake:0\\nother'")).resolves.toMatchObject({ stdout: 'AZITO_EXIT_fake:0\nother', code: 0 });
+  });
+  it('does not match its own shells when searching with a bracketed pattern', async () => {
+    const suffix = randomBytes(16).toString('hex');
+    const result = await execPosixRemote(ssh as never, 'host', `pgrep -f '[a]zito_test_${suffix}' >/dev/null; status=$?; printf '%s' "$status"; true`);
+    expect(result).toMatchObject({ stdout: '1', code: 0 });
+  });
   });
   it('preserves transport diagnostics and local network permission errors', async () => {
     const denied = new LocalNetworkPermissionError('network denied');
@@ -30,13 +40,12 @@ describe('execPosixRemote', () => {
   it('rejects a nonzero SSH transport status', async () => {
     await expect(execPosixRemote({ execIsolated: async () => ({ stdout: '', stderr: '', code: 7 }) } as never, 'host', 'true')).rejects.toThrow(/transport failed/);
   });
-  it('keeps a fake marker line in command output', async () => {
-    await expect(execPosixRemote(ssh as never, 'host', "printf 'AZITO_EXIT_fake:0\\nother'")).resolves.toMatchObject({ stdout: 'AZITO_EXIT_fake:0\nother', code: 0 });
-  });
-  it.skipIf(process.platform === 'win32')('does not match its own shells when searching with a bracketed pattern', async () => {
-    const suffix = randomBytes(16).toString('hex');
-    const result = await execPosixRemote(ssh as never, 'host', `pgrep -f '[a]zito_test_${suffix}' >/dev/null; status=$?; printf '%s' "$status"; true`);
-    expect(result).toMatchObject({ stdout: '1', code: 0 });
+  it('preserves a fake marker in the output when parsing the real marker', async () => {
+    const fake = { execIsolated: async (_host: string, command: string) => {
+      const marker = command.match(/AZITO_EXIT_[a-f0-9]{32}/)?.[0];
+      return { stdout: `AZITO_EXIT_fake:0\nother\n${marker}:0\n`, stderr: '', code: 0 };
+    } };
+    await expect(execPosixRemote(fake as never, 'host', 'true')).resolves.toMatchObject({ stdout: 'AZITO_EXIT_fake:0\nother', code: 0 });
   });
   it('rejects missing or malformed markers', async () => {
     const broken = { execIsolated: async () => ({ stdout: 'no marker', stderr: '', code: 0 }) };
