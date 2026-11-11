@@ -187,7 +187,7 @@ export default function RepositoryCandidateInput({ value, onChange, onSelectCand
         autoComplete="off"
       />
       {open && (
-        <div
+        <div className="floating-surface"
           ref={listRef}
           id={listboxId}
           role="listbox"

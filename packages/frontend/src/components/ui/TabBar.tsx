@@ -248,7 +248,7 @@ export function TabBar({ tabs, activeId, onSelect, onClose, onReorder, draggable
         <div style={{ position: 'relative', flexShrink: 0 }}>
           <button onClick={(e) => { e.stopPropagation(); setShowTabMenu(!showTabMenu); }} className="icon-btn" style={{ border: 'none', color: 'var(--text-dim)', cursor: 'pointer', padding: '8px 10px', minHeight: 44, display: 'flex', alignItems: 'center' }}><Icon name="chevrons-up-down" size={14} /></button>
           {showTabMenu && (
-            <div onClick={(e) => e.stopPropagation()} style={{ position: 'absolute', top: '100%', right: 0, zIndex: 100, background: 'var(--bg-elevated)', border: '1px solid var(--border)', borderRadius: 'var(--radius-md)', boxShadow: '0 4px 16px rgba(0,0,0,0.3)', minWidth: 220, maxHeight: 400, overflowY: 'auto', padding: '4px 0' }}>
+            <div className="floating-surface" onClick={(e) => e.stopPropagation()} style={{ position: 'absolute', top: '100%', right: 0, zIndex: 100, background: 'var(--bg-elevated)', border: '1px solid var(--border)', borderRadius: 'var(--radius-md)', boxShadow: '0 4px 16px rgba(0,0,0,0.3)', minWidth: 220, maxHeight: 400, overflowY: 'auto', padding: '4px 0' }}>
               {tabs.map(tab => (
                 <div key={tab.id} onClick={() => { onSelect(tab.id); setShowTabMenu(false); }}
                   title={tab.title}

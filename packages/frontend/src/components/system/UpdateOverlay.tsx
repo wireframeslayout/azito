@@ -42,7 +42,7 @@ export function UpdateOverlay() {
         justifyContent: 'center',
       }}
     >
-      <div style={{
+      <div className="floating-surface" style={{
         width: 480,
         maxWidth: 'calc(100vw - 32px)',
         maxHeight: 'calc(100vh - 64px)',

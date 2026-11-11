@@ -123,7 +123,7 @@ export default function ActiveWindowIcons({ titleData, connectPane, openTask, ta
         </button>
       )}
       {overflowOpen && overflowCount > 0 && (
-        <div
+        <div className="floating-surface"
           ref={overflowRef}
           role="menu"
           aria-label={t('activeWindows.title')}

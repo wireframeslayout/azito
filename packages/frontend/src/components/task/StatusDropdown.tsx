@@ -25,7 +25,7 @@ const badgeColors: Record<string, { bg: string; color: string }> = {
   in_progress: { bg: 'var(--warning-a15)', color: 'var(--warning)' },
   done: { bg: 'var(--success-a15)', color: 'var(--success)' },
   failed: { bg: 'var(--danger-a15)', color: 'var(--danger)' },
-  archived: { bg: 'var(--bg-elevated)', color: 'var(--text-dim)' },
+  archived: { bg: 'var(--bg-elevated)', color: 'var(--floating-text)' },
 };
 
 function statusLabel(status: string, t: (key: string) => string): string {

@@ -324,6 +324,7 @@ export default function PromptInputBar({ readOnlyReason, relay, windowId, paneId
       {/* 復元注記はレイアウト幅に影響させないよう、バー上に絶対配置の1.5秒オーバーレイとして表示する（F2/SP狭幅対策）。 */}
       {!readOnlyReason && showRestoredHint && (
         <div
+          className="floating-surface"
           role="status"
           style={{
             position: 'absolute',

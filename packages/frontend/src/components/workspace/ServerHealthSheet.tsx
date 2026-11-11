@@ -76,7 +76,7 @@ export function ServerHealthSheet({ open, onClose }: ServerHealthSheetProps) {
         role="dialog"
         aria-modal="true"
         aria-label={t('workspace:mobile.serverHealth')}
-        className="server-health-sheet"
+        className="server-health-sheet floating-surface"
         style={{
           position: 'fixed',
           left: 0,

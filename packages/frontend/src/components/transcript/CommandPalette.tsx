@@ -43,7 +43,7 @@ export function CommandPalette({ stage, commands, activeCommand, activeValue, on
   };
 
   return (
-    <div
+    <div className="floating-surface"
       ref={ref}
       role="menu"
       aria-label={t('promptBar.commandPalette.ariaLabel')}

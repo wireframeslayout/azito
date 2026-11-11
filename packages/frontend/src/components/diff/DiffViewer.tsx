@@ -248,7 +248,7 @@ export default function DiffViewer({ serverName, path, baseBranch, commit: commi
             position: 'relative',
           }}
         >
-          <div
+          <div className="floating-surface"
             style={{
               position: 'absolute',
               top: 0,

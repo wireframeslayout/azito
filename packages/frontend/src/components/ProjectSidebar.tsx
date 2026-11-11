@@ -231,7 +231,7 @@ export default function ProjectSidebar() {
       </button>
 
       {menuOpen && (
-        <div
+        <div className="floating-surface"
           role="menu"
           aria-label={t('sidebar.azitoMenu')}
           style={{

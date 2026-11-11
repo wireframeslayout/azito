@@ -162,7 +162,7 @@ export default function DirectoryInput({ id, value, onChange, serverName, placeh
         autoComplete="off"
       />
       {open && suggestions.length > 0 && (
-        <div
+        <div className="floating-surface"
           ref={listRef}
           style={{
             position: 'absolute',

@@ -235,7 +235,7 @@ export default function UsageDropdown({ align = 'right' }: UsageDropdownProps) {
       </button>
 
       {open && (
-        <div
+        <div className="floating-surface"
           role="menu"
           style={{
             position: 'fixed', top: panelPos.top,

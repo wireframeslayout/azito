@@ -127,7 +127,7 @@ export function MobileNavSheet({
       {open && (
         <>
           <div onClick={onClose} style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.5)', zIndex: 49 }} />
-          <div
+          <div className="floating-surface"
             role="dialog"
             aria-modal="true"
             aria-label={t('workspace:mobile.navMenu')}
