@@ -1171,8 +1171,7 @@ input[aria-invalid="true"]:focus-visible { outline-color: var(--danger) !importa
   background:var(--bg-elevated);
 }
 .global-search button:focus-visible {
-  outline: none;
-  box-shadow: 0 2px 0 var(--accent);
+  outline:2px solid var(--accent);
 }
 .global-search input {
   flex:1;
@@ -1185,7 +1184,8 @@ input[aria-invalid="true"]:focus-visible { outline-color: var(--danger) !importa
   min-width:0;
 }
 .global-search input:focus-visible {
-  outline:2px solid var(--accent);
+  outline: none;
+  box-shadow: 0 2px 0 var(--accent);
 }
 .global-search-tabs {
   display:flex;
