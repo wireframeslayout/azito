@@ -1,5 +1,7 @@
 type Rgb = [number, number, number];
 
+export const FLOATING_SURFACE_MIX = { solid: 0.14, elevated: 0.19, hover: 0.13, accent: 0.15 } as const;
+
 function parseHex(value: string): Rgb | null {
   value = value.trim();
   if (!/^#(?:[0-9a-f]{3}|[0-9a-f]{6})$/i.test(value)) return null;
@@ -25,12 +27,12 @@ function contrast(a: Rgb, b: Rgb): number {
 }
 
 /** A muted theme color that remains readable on both opaque floating surfaces. */
-export function floatingTextColor(background: string, foreground: string): string | null {
-  const base = parseHex(background), fg = parseHex(foreground);
-  if (!base || !fg) return null;
+export function floatingTextColor(background: string, foreground: string, accent: string): string | null {
+  const base = parseHex(background), fg = parseHex(foreground), accentRgb = parseHex(accent);
+  if (!base || !fg || !accentRgb) return null;
   // Keep these surface mixes in sync with global.css, including app-scope row hover.
-  const elevated = mix(base, fg, 0.19), solid = mix(base, fg, 0.14);
-  const surfaces = [elevated, solid, mix(elevated, fg, 0.13)];
+  const elevated = mix(base, fg, FLOATING_SURFACE_MIX.elevated), solid = mix(base, fg, FLOATING_SURFACE_MIX.solid);
+  const surfaces = [elevated, solid, mix(elevated, fg, FLOATING_SURFACE_MIX.hover), mix(elevated, accentRgb, FLOATING_SURFACE_MIX.accent)];
   const minimumContrast = (color: Rgb) => Math.min(...surfaces.map(surface => contrast(color, surface)));
   const black: Rgb = [0, 0, 0], white: Rgb = [255, 255, 255];
   const end = minimumContrast(white) > minimumContrast(black) ? white : black;

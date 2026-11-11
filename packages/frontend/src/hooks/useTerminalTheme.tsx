@@ -164,19 +164,21 @@ export function TerminalThemeProvider({ children }: { children: React.ReactNode 
     };
     // アクセントはスコープに関係なくテーマへ追随させる:
     // cursor が有彩色（テーマの署名色）ならそれ、無彩色なら blue スロット
-    root.style.setProperty('--surface-accent', pickUiAccent(resolvedTheme.palette));
+    const accent = pickUiAccent(resolvedTheme.palette);
+    root.style.setProperty('--surface-accent', accent);
     // 意匠切替: 常に値を持つため clear() 側でのクリーンアップは不要
     root.dataset.design = store.global.design ?? 'shade';
     if (wsScope === 'app') {
       root.dataset.bgScope = 'app';
       root.style.setProperty('--surface-base', resolvedTheme.palette.background);
       root.style.setProperty('--surface-fg', resolvedTheme.palette.foreground);
-      const floatingText = floatingTextColor(resolvedTheme.palette.background, resolvedTheme.palette.foreground);
-      if (floatingText) root.style.setProperty('--floating-text', floatingText);
-      else root.style.removeProperty('--floating-text');
     } else {
       clear();
     }
+    const surface = getComputedStyle(root);
+    const floatingText = floatingTextColor(surface.getPropertyValue('--surface-base'), surface.getPropertyValue('--surface-fg'), accent);
+    if (floatingText) root.style.setProperty('--floating-text', floatingText);
+    else root.style.removeProperty('--floating-text');
     return () => {
       clear();
       root.style.removeProperty('--surface-accent');
@@ -380,7 +382,7 @@ export function TerminalThemeProvider({ children }: { children: React.ReactNode 
 // Kasumi: テーマの UI アクセント選定。cursor が有彩色（彩度・明度が
 // アクセントとして成立する範囲）ならテーマの署名色として採用し、
 // 白/グレー系カーソルのテーマでは blue スロットへフォールバックする。
-function pickUiAccent(palette: { cursor: string; blue: string }): string {
+export function pickUiAccent(palette: { cursor: string; blue: string }): string {
   const rgb = parseHexColor(palette.cursor);
   if (rgb) {
     const { s, l } = rgbToHsl(rgb);
