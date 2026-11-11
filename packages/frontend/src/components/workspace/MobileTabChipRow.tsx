@@ -1,3 +1,4 @@
+import { Chip } from '../ui/Chip';
 import { useTranslation } from 'react-i18next';
 import { Icon } from '../ui/Icon';
 import { useLongPress, longPressStyle } from '../../hooks/useLongPress';
@@ -132,7 +133,7 @@ export function MobileTabChipRow({
         )}
       </button>
 
-      {linked && <button type="button" className="btn btn-sm" style={{ minHeight: 44, color: 'var(--warning)', borderColor: 'var(--warning)', flexShrink: 0 }} onClick={linked.onOpen}>{t('orchestration.connectedCompact', { count: linked.count })}</button>}
+      {linked && <button type="button" className="icon-btn" style={{ minHeight: 'calc(var(--space-6) + var(--space-5))', flexShrink: 0 }} onClick={linked.onOpen}><Chip tone="orange">{t('orchestration.connectedCompact', { count: linked.count, defaultValue: t('orchestration.connected', { count: linked.count }) })}</Chip></button>}
       <button
         type="button"
         onClick={onOpenMenu}

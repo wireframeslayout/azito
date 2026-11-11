@@ -1446,12 +1446,13 @@ export default function TaskPanel({
     const win = parseWindowTabId(tabId);
     if (win) {
       const { serverName, target, windowId } = resolveWindowTabTarget(win);
+      const registeredWindow = windows.find((w) => w.id === windowId && w.serverName === serverName);
       return (
         <TerminalContainer
           key={`terminal-${serverName}-${target}`}
           serverName={serverName}
           target={target}
-          registeredWindow={isMobile && windowId !== undefined ? { id: windowId, taskId: taskData.id } : undefined}
+          registeredWindow={isMobile ? registeredWindow : undefined}
           terminalRef={windowId !== undefined ? { kind: 'windowId', serverName, windowId, pane: 1 } satisfies LibTerminalRef : undefined}
           taskId={taskData.id}
           allTasks={allTasks}

@@ -31,6 +31,7 @@
     "connected": "連携中 {{count}}",
     "connectedUnknown": "連携中",
     "attention": "要対応 {{count}}",
+    "totalCount": "オーケストレーション {{count}} 件",
     "railAttention": "オーケストレーション、要対応 {{count}} 件",
     "active": "稼働中",
     "returnToProject": "プロジェクトの窓に戻す（元: {{name}}）",

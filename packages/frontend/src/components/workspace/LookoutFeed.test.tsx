@@ -44,7 +44,7 @@ describe('Lookout workspace feeds', () => {
   it.each(['loading', 'error'] as const)('shows unknown activity counts when snapshot is %s', (status) => {
     activity.snapshotStatus = status;
     render(<HomeFeed {...props} allProjects={[]} onAddWindow={vi.fn()} />);
-    expect(screen.getByText('counts.active').previousElementSibling?.textContent).toBe('—');
+    for (const key of ['attention', 'active', 'finished', 'failed']) expect(screen.getByText(`counts.${key}`).previousElementSibling?.textContent).toBe('—');
     expect(screen.getByRole('heading', { name: /sections.active —/ })).toBeTruthy();
     activity.snapshotStatus = 'ready';
   });
@@ -79,7 +79,7 @@ describe('Lookout workspace feeds', () => {
     sections = buildLookoutSections({ rows: [], allTasks: [], lastSeenMs: 0 });
     render(<MobileStatusBar {...props} />);
     fireEvent.click(screen.getByRole('button', { name: 'workspace:activityPill.ariaLabel' }));
-    expect(screen.getByText('counts.active').previousElementSibling?.textContent).toBe('—');
+    for (const key of ['attention', 'active', 'finished', 'failed']) expect(screen.getByText(`counts.${key}`).previousElementSibling?.textContent).toBe('—');
     expect(screen.getByText(status === 'error' ? 'lookout:loadError' : 'lookout:loading')).toBeTruthy();
     expect(screen.queryByText('lookout:emptyAttention')).toBeNull();
     activity.snapshotStatus = 'ready';

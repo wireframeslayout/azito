@@ -165,7 +165,7 @@ export function MobileStatusBar({ openTask, connectPane }: MobileStatusBarProps)
           <LookoutCounts counts={sections.counts} activityKnown={snapshotStatus === 'ready'} />
           {snapshotStatus === 'error' && <Notice tone="warning" role="alert" action={<Button size="sm" onClick={retrySnapshot}>{t('lookout:retry')}</Button>}>{t('lookout:loadError')}</Notice>}
           {snapshotStatus === 'loading' && <p role="status" style={{ color: 'var(--text-dim)' }}>{t('lookout:loading')}</p>}
-          <LookoutSection name="attention" items={sections.attention} onOpen={handleWorkingRowOpen} summaries={summaries} empty={snapshotStatus === 'ready' ? <p>{t('lookout:emptyAttention')}</p> : <></>} />
+          <LookoutSection name="attention" countKnown={snapshotStatus === 'ready'} items={sections.attention} onOpen={handleWorkingRowOpen} summaries={summaries} empty={snapshotStatus === 'ready' ? undefined : <></>} />
           {sections.active.length > 0 && (
             <section>
               <div style={sectionHeaderStyle}>{t('workspace:activityPill.workingSection', { count: sections.active.length })}</div>
