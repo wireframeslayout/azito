@@ -212,7 +212,7 @@
     "muxSwitchTitle": "misao で開き直しますか？",
     "muxKeepTmux": "tmux のまま開く",
     "muxUseMisao": "misao で開く",
-    "muxSwitchDescription": "{{title}} を同じ作業ディレクトリで開き直し、会話を再開します。現在のプロセスは移送されません。",
+    "muxSwitchDescription": "「{{title}}」を同じ作業ディレクトリで開き直し、会話を再開します。現在のプロセスは移送されません。",
     "muxRemember": "次からは確認せずに同じ方法で開く",
     "muxRetryTmux": "もう一度 tmux で開く",
     "muxInstallLink": "misao を入れる",

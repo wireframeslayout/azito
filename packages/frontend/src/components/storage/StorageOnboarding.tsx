@@ -36,7 +36,7 @@ export function StorageOnboarding({ onboarding, onConfigured, onLater }: Props) 
   };
 
   const text = getOnboardingText(onboarding, t);
-  return <div style={{ padding: 'var(--space-4)', display: 'grid', gridTemplateColumns: 'minmax(0, 1fr)', gap: 'var(--space-3)', minWidth: 0, overflowY: 'auto', overflowWrap: 'anywhere' }}>
+  return <div style={{ padding: 'var(--space-4)', display: 'grid', gridTemplateColumns: 'minmax(0, 1fr)', gap: 'var(--space-3)', minWidth: 0, overflowY: 'auto', overflowWrap: 'anywhere', fontFamily: 'var(--font-prose)' }}>
     <div style={{ display: 'grid', gap: 'var(--space-1)' }}>
       <h2 style={{ fontSize: 'var(--font-md)' }}>{text.heading}</h2>
       <p style={{ color: 'var(--text-dim)', fontSize: 'var(--font-sm)' }}>{text.body}</p>
@@ -57,6 +57,6 @@ export function StorageOnboarding({ onboarding, onConfigured, onLater }: Props) 
     {saving && <p role="status">{t('saving')}</p>}
     {error && <p role="alert" style={{ color: 'var(--danger)' }}>{t('saveError')}</p>}
     <p style={{ color: 'var(--text-dim)', fontSize: 'var(--font-xs)' }}>{t('onboarding.later')}</p>
-    {onboarding.dismissible && <Button variant="ghost" onClick={onLater}>{t('onboarding.configureLater')}</Button>}
+    {onboarding.dismissible && <Button onClick={onLater}>{t('onboarding.configureLater')}</Button>}
   </div>;
 }
