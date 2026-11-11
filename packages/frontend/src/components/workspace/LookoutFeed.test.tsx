@@ -52,6 +52,8 @@ describe('Lookout workspace feeds', () => {
     const review = { ...task, id: 3, title: 'Phase review', status: 'phase_review' };
     sections = buildLookoutSections({ rows: [row, { ...row, key: 'blocked', title: 'Blocked', target: 'blocked', taskId: undefined, activityStatus: 'blocked' }, { ...row, key: 'working', title: 'Working', target: 'working', taskId: undefined }], allTasks: [task, failed, review], lastSeenMs: 0 });
     render(<HomeFeed {...props} allProjects={[]} onAddWindow={vi.fn()} />);
+    expect(screen.getByText('counts.attention').previousElementSibling?.textContent).toBe('4');
+    expect(screen.getByText('counts.active').previousElementSibling?.textContent).toBe('1');
     expect(screen.getByRole('heading', { name: /sections.attention 4/ })).toBeTruthy();
     expect(screen.getByRole('heading', { name: /sections.active 1/ })).toBeTruthy();
     sections = buildLookoutSections({ rows: [row], allTasks: [task], lastSeenMs: 0 });

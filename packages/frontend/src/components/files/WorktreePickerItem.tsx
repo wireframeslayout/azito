@@ -72,7 +72,7 @@ export function WorktreePickerItem({ item, pathApi, isSelected, isHighlighted, o
           style={{
             fontSize: 'var(--font-xs)',
             color: 'var(--text-dim)',
-            fontFamily: 'var(--mono)',
+            fontFamily: 'var(--font-mono)',
             marginTop: 2,
             overflow: 'hidden',
             textOverflow: 'ellipsis',

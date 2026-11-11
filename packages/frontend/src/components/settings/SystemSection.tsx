@@ -96,10 +96,10 @@ export default function SystemSection() {
           <Chip>{DEPLOY_MODE_LABEL[status.deployMode]}</Chip>
         </SectionRow>
         <SectionRow label={t('system.repository')}>
-          <span style={{ fontSize: 'var(--font-md)', fontFamily: 'var(--mono)', color: 'var(--text)' }}>{status.repo ?? '—'}</span>
+          <span style={{ fontSize: 'var(--font-md)', fontFamily: 'var(--font-mono)', color: 'var(--text)' }}>{status.repo ?? '—'}</span>
         </SectionRow>
         <SectionRow label={t('system.currentVersion')}>
-          <span style={{ fontSize: 'var(--font-md)', fontFamily: 'var(--mono)', color: 'var(--text)' }}>
+          <span style={{ fontSize: 'var(--font-md)', fontFamily: 'var(--font-mono)', color: 'var(--text)' }}>
             {status.currentVersion ?? '—'} <span style={{ color: 'var(--text-dim)' }}>({shortSha(status.currentCommit)})</span>
           </span>
         </SectionRow>
@@ -258,7 +258,7 @@ function VersionRow({ entry, isCurrent, hasBorder, onInstall, disabled }: {
       background: isCurrent ? 'var(--accent-a08)' : 'transparent',
     }}>
       <div style={{ display: 'flex', alignItems: 'center', gap: 8, minWidth: 0, flex: 1 }}>
-        <span style={{ fontSize: 'var(--font-md)', fontFamily: 'var(--mono)', color: 'var(--text)' }}>{entry.version}</span>
+        <span style={{ fontSize: 'var(--font-md)', fontFamily: 'var(--font-mono)', color: 'var(--text)' }}>{entry.version}</span>
         {entry.prerelease && <Chip tone="purple">rc</Chip>}
         {isCurrent && <Chip tone="green">{t('system.current')}</Chip>}
         <span style={{ fontSize: 'var(--font-xs)', color: 'var(--text-dim)', marginLeft: 'auto', flexShrink: 0 }}>

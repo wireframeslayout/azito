@@ -109,7 +109,7 @@ function DefaultFileTree({
           <span style={{ width: 18, display: 'inline-flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}>
             <Icon name={isDir ? (node.expanded ? 'folder-open' : 'files') : 'file'} size={14} />
           </span>
-          <span style={{ overflow: 'hidden', textOverflow: 'ellipsis' }}>{node.name}</span>
+          <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', fontFamily: 'var(--font-mono)' }}>{node.name}</span>
           {!isDir && node.size != null && (
             <span style={{ marginLeft: 'auto', fontSize: 'var(--font-2xs)', color: 'var(--text-dim)', flexShrink: 0 }}>
               {node.size < 1024 ? node.size + 'B' : Math.round(node.size / 1024) + 'KB'}

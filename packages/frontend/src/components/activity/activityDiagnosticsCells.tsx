@@ -34,7 +34,7 @@ export const STATE_LABEL_KEYS: Record<ActivityDecidedState, string> = {
 
 export const DIM: React.CSSProperties = { color: 'var(--text-dim)' };
 export const MONO: React.CSSProperties = {
-  fontFamily: 'var(--mono)', fontSize: 'var(--font-sm)', color: 'var(--text)',
+  fontFamily: 'var(--font-mono)', fontSize: 'var(--font-sm)', color: 'var(--text)',
 };
 
 /**

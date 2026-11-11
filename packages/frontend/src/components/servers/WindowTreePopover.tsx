@@ -68,7 +68,7 @@ export default function WindowTreePopover({
   const content = (
     <>
       <div style={{
-        fontFamily: 'var(--mono)', fontSize: 'var(--font-xs)',
+        fontFamily: 'var(--font-mono)', fontSize: 'var(--font-xs)',
         letterSpacing: '.1em', color: 'var(--text-dim)',
         padding: '4px 8px 6px',
         display: 'flex', justifyContent: 'space-between',
@@ -93,7 +93,7 @@ export default function WindowTreePopover({
               <span style={{ display: 'inline-flex', alignItems: 'center', width: 10, color: 'var(--text-dim)' }}>
                 <Icon name="chevron-right" size={14} rotate={expanded ? 90 : 0} />
               </span>
-              <span style={{ fontFamily: 'var(--mono)', opacity: sess.stale ? DIMMED_PANE_OPACITY : undefined }}>{sess.name}</span>
+              <span style={{ fontFamily: 'var(--font-mono)', opacity: sess.stale ? DIMMED_PANE_OPACITY : undefined }}>{sess.name}</span>
               {showKind && <Chip>{t(kind === 'misao' ? 'overview.defaultMuxMisao' : 'overview.defaultMuxTmux')}</Chip>}
               {/* Kept from an earlier listing: its mux cannot be listed right now. */}
               {sess.stale && <Chip>{t('status.offline')}</Chip>}
@@ -124,7 +124,7 @@ export default function WindowTreePopover({
                     <span style={{ display: 'inline-flex', alignItems: 'center', width: 10, color: 'var(--text-dim)' }}>
                       <Icon name="chevron-right" size={14} />
                     </span>
-                    <span style={{ fontFamily: 'var(--mono)', flex: 1, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{
+                    <span style={{ fontFamily: 'var(--font-mono)', flex: 1, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{
                       (() => {
                         const regWin = win.windowId != null ? windowById.get(win.windowId) : undefined;
                         const display = resolveWindowTitle({
@@ -172,8 +172,8 @@ export default function WindowTreePopover({
                         onClick={() => onSelect(paneRef)}
                         selected={selectedId === terminalTabId(paneRef)}
                       >
-                        <span style={{ fontFamily: 'var(--mono)', color: 'var(--text-dim)' }}>{paneRowBadge(pane)}</span>
-                        <span style={{ fontFamily: 'var(--mono)', opacity: isPaneLive(pane) ? undefined : DIMMED_PANE_OPACITY }}>{pane.title || pane.command}</span>
+                        <span style={{ fontFamily: 'var(--font-mono)', color: 'var(--text-dim)' }}>{paneRowBadge(pane)}</span>
+                        <span style={{ fontFamily: 'var(--font-mono)', opacity: isPaneLive(pane) ? undefined : DIMMED_PANE_OPACITY }}>{pane.title || pane.command}</span>
                         <PaneStateChip pane={pane} />
                         {!isPaneLive(pane) && (
                           <IconButton
