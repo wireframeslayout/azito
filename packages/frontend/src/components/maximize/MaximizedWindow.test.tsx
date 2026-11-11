@@ -16,9 +16,9 @@ vi.mock('../../hooks/useWorkspaceCatalog', () => ({ useWorkspaceCatalog: () => (
 vi.mock('../../hooks/useWorkspaceTargets', () => ({ useWorkspaceTargets: () => ({ onOpenTask: null }) }));
 vi.mock('../../hooks/useOperationLinks', () => ({ useOperationLinks: () => ({ parents: new Map(), error: false, reload: vi.fn() }) }));
 const mounts = vi.hoisted(() => ({ connect: vi.fn(), disconnect: vi.fn(), wake: vi.fn(async () => {}) }));
-vi.mock('../TerminalContainer', () => ({ TerminalContainer: ({ registeredWindow }: { registeredWindow: { id: number } }) => {
+vi.mock('../TerminalContainer', () => ({ TerminalContainer: ({ registeredWindow, viewMode }: { registeredWindow: { id: number }; viewMode: string }) => {
   useEffect(() => { mounts.connect(registeredWindow.id); return () => mounts.disconnect(registeredWindow.id); }, [registeredWindow.id]);
-  return <div className="xterm"><textarea aria-label="terminal" /></div>;
+  return <div className="xterm" data-view-mode={viewMode}><textarea aria-label="terminal" /></div>;
 } }));
 const media = { narrow: false };
 beforeAll(() => { HTMLElement.prototype.scrollIntoView = vi.fn(); Object.defineProperty(globalThis, 'matchMedia', { configurable: true, value: () => ({ matches: media.narrow, addEventListener: vi.fn(), removeEventListener: vi.fn() }) }); });
@@ -49,6 +49,14 @@ describe('maximized window', () => {
     await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument());
     await waitFor(() => expect(mounts.disconnect).toHaveBeenCalledWith(2));
     await waitFor(() => expect(screen.getByText('Launch')).toHaveFocus());
+  });
+  it('switches the maximized content from the header control', async () => {
+    localStorage.removeItem('azito.windowView.1');
+    render(<HotkeyProvider><MaximizedWindowProvider><Workspace /><MaximizedWindow /></MaximizedWindowProvider></HotkeyProvider>);
+    fireEvent.click(screen.getByText('Launch'));
+    await screen.findByRole('dialog');
+    fireEvent.click(screen.getByRole('tab', { name: 'Chat' }));
+    expect(screen.getByLabelText('terminal').parentElement).toHaveAttribute('data-view-mode', 'chat');
   });
   it('opens an unresolved ID without substituting another window', async () => {
     render(<HotkeyProvider><MaximizedWindowProvider><Workspace /><MaximizedWindow /></MaximizedWindowProvider></HotkeyProvider>);

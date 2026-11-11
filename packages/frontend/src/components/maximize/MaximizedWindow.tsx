@@ -8,6 +8,7 @@ import { GlassPopoverSurface } from '../ui/GlassPopoverSurface';
 import { TerminalContainer } from '../TerminalContainer';
 import { MaximizeHeader } from './MaximizeHeader';
 import { MaximizeTreeRow } from './MaximizeTreeRow';
+import { useWindowViewMode } from '../../hooks/useWindowViewMode';
 import { useMaximizedWindow } from '../../hooks/useMaximizedWindow';
 import { useWorkspaceCatalog } from '../../hooks/useWorkspaceCatalog';
 import { useWorkspaceTargets } from '../../hooks/useWorkspaceTargets';
@@ -74,6 +75,7 @@ function MaximizedWindowContent() {
   const task = window ? allTasks.find(item => item.windows?.some(w => w.id === window.id)) : undefined;
   const project = window ? allProjects.find(item => item.id === (task?.projectId ?? window.projectId)) : undefined;
   const status = window ? windowIndicator(window.serverName, window.tmuxTarget) : null;
+  const [viewMode, setViewMode] = useWindowViewMode(selectedWindowId, false, window?.windowType === 'agent');
   const knownKeys = useRef(new Set<string>());
   const treeSelection = useRef<number | null>(null);
   const allRows = [...rows, ...linkedRows];
@@ -135,7 +137,7 @@ function MaximizedWindowContent() {
   // Overlay owns its stack entry; local shortcuts are registered inside it below.
   return <Overlay open={open} onClose={close} labelledBy="maximize-title" fallbackFocusTo={fallbackFocus} toggleAction="maximize.open" toggleWhen="always" surface="solid" maxWidth="min(1400px, 96vw)" maxHeight="96vh" style={{ width: '96vw', height: '96vh', display: 'flex', flexDirection: 'column', padding: 0 }} onPrevious={() => move(-1)} onNext={() => move(1)} shouldCloseOnEscape={event => !(event.target instanceof HTMLElement && (event.target.closest('.xterm') || event.target.closest('[data-maximize-input]')))}>
 
-    <MaximizeHeader window={window} task={task} project={project} status={status} onFocus={() => setInputFocused(false)} onOpenTask={() => { if (task) onOpenTask?.(task.id); close(); }} onOpenTab={() => { if (window) { if (workspace?.windows.has(window.id)) workspace.openWindowTab(window.id); else onOpenInTerminal?.({ serverName: window.serverName, target: window.tmuxTarget, windowId: window.id }); } close(); }} onClose={close} />
+    <MaximizeHeader window={window} task={task} project={project} status={status} viewMode={viewMode} onViewModeChange={mode => setViewMode(mode, selectedWindowId)} onFocus={() => setInputFocused(false)} onOpenTask={() => { if (task) onOpenTask?.(task.id); close(); }} onOpenTab={() => { if (window) { if (workspace?.windows.has(window.id)) workspace.openWindowTab(window.id); else onOpenInTerminal?.({ serverName: window.serverName, target: window.tmuxTarget, windowId: window.id }); } close(); }} onClose={close} />
     <div onFocusCapture={event => setInputFocused(event.target instanceof HTMLElement && !!event.target.closest('.xterm, [data-maximize-input]'))} className="maximize-content" style={{ display: 'flex', flex: 1, minHeight: 0, minWidth: 0, position: 'relative' }}>
       <button ref={treeToggleRef} type="button" className="maximize-tree-toggle btn" aria-expanded={treeOpen} onClick={() => setTreeOpen(value => !value)}>{t('maximize.openTabs')}</button>
       <GlassPopoverSurface onKeyDown={event => { if (event.key === 'Escape' && narrow && treeOpen) { event.preventDefault(); event.stopPropagation(); setTreeOpen(false); requestAnimationFrame(() => treeToggleRef.current?.focus()); } }} open={open && narrow && treeOpen} onOutside={event => { if (!(event.target instanceof Element && event.target.closest('.maximize-tree-toggle'))) setTreeOpen(false); }} className={`maximize-tree ${treeOpen ? 'is-open' : ''}`} style={{ order: 2, overflow: 'auto', padding: 'var(--space-2)', background: 'var(--bg-elevated)' }}>
@@ -157,7 +159,7 @@ function MaximizedWindowContent() {
         </section>}
       </GlassPopoverSurface>
       <div ref={terminalRef} style={{ order: 1, flex: 1, minWidth: 0, minHeight: 0, display: 'flex', flexDirection: 'column', position: 'relative', zIndex: 0 }}>
-        {!window ? <p role="status">{t('maximize.missing')}</p> : window.sleeping ? <div><p>{t('maximize.sleeping')}</p><Button loading={waking} disabled={!workspace} onClick={() => { if (!workspace) return; setWaking(true); void workspace.wakeWindow(window).then(() => Promise.all([refresh(), orchestration.refresh()])).finally(() => setWaking(false)); }}>{t('maximize.wake')}</Button></div> : <TerminalContainer key={window.id} registeredWindow={{ id: window.id, taskId: window.taskId }} serverName={window.serverName} target={window.tmuxTarget} terminalRef={{ kind: 'windowId', serverName: window.serverName, windowId: window.id, pane: 1 }} projectId={window.projectId ?? task?.projectId} taskId={task?.id} allTasks={allTasks} />}
+        {!window ? <p role="status">{t('maximize.missing')}</p> : window.sleeping ? <div><p>{t('maximize.sleeping')}</p><Button loading={waking} disabled={!workspace} onClick={() => { if (!workspace) return; setWaking(true); void workspace.wakeWindow(window).then(() => Promise.all([refresh(), orchestration.refresh()])).finally(() => setWaking(false)); }}>{t('maximize.wake')}</Button></div> : <TerminalContainer key={window.id} viewMode={viewMode} onViewModeChange={mode => setViewMode(mode, selectedWindowId)} registeredWindow={{ id: window.id, taskId: window.taskId }} serverName={window.serverName} target={window.tmuxTarget} terminalRef={{ kind: 'windowId', serverName: window.serverName, windowId: window.id, pane: 1 }} projectId={window.projectId ?? task?.projectId} taskId={task?.id} allTasks={allTasks} />}
       </div>
     </div>
     <footer style={{ padding: 'var(--space-2)', color: 'var(--text-dim)', fontSize: 'var(--font-sm)' }}>{t(inputFocused ? 'maximize.inputHint' : 'maximize.hint')} {bindings['maximize.open'] && ` · ${formatKeySpec(bindings['maximize.open'])}: ${t('maximize.close')}`}</footer>
