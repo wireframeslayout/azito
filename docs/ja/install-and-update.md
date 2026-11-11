@@ -157,6 +157,8 @@ CLI は `current.txt` を読んで同梱のハブを実行します:
 | `azito service status\|start\|stop\|restart\|reload\|install` | Unix のサービスと同じ操作。`install` はタスクを登録する（install.ps1 が呼ぶ）。同じ定義の再登録は何もせず、違う定義はハブが動いている間は拒否される |
 | `azito misao status\|install\|update\|start` | ハブ自身の misao をタスクスケジューラのタスク `AzitoMisao` として扱う（下と `misao.md`）。`install.ps1` が `install` を実行する。`update` は先にすべてのペインを終了する |
 
+`-NoService` で導入した場合は、端末で `azito run` を実行し、停止するときはその端末で Ctrl+C を押します。これはタスクとして実行されないため、タスクスケジューラの `/End` では停止できません。
+
 **未対応:** ハブのアンインストーラー。アプリ内の更新は [Windows のハブのアプリ内更新](#windows-のハブのアプリ内更新) です。
 
 ### Windows のハブから SSH / エージェントのサーバーを使う準備

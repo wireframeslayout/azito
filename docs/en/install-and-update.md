@@ -157,6 +157,8 @@ The CLI reads `current.txt` and runs the bundled hub:
 | `azito service status\|start\|stop\|restart\|reload\|install` | The same operations the Unix service has. `install` registers the task (install.ps1 calls it); registering the same definition again does nothing, and a different one is refused while the hub runs |
 | `azito misao status\|install\|update\|start` | The hub's own misao as the Task Scheduler task `AzitoMisao` (below and `misao.md`). `install.ps1` runs `install` for you; `update` ends every pane first |
 
+For an installation made with `-NoService`, run `azito run` in a terminal and press Ctrl+C in that terminal to stop it. It does not run as a task, so Task Scheduler's `/End` cannot stop it.
+
 **Not supported yet:** a hub uninstaller. The in-app update is [In-app update of a Windows hub](#in-app-update-of-a-windows-hub).
 
 ### Using SSH / agent servers from a Windows hub
