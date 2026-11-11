@@ -87,6 +87,12 @@ describe('uninstallWindowsTask', () => {
     expect(remove).not.toHaveBeenCalled();
   });
 
+  it('refuses a running foreground hub even when no task is registered', async () => {
+    const { hub, manager } = setup(undefined, undefined);
+    vi.mocked(runCommandSpec).mockResolvedValue({ exitCode: 0, stdout: '42 1234\n', stderr: '' } as never);
+    await expect(uninstallWindowsTask(manager, hub, context)).rejects.toThrow(/hub process is still running/);
+  });
+
   it('does not delete another install’s task', async () => {
     const { hub, manager } = setup(xmlFor(OTHER), xmlFor(MINE));
     const remove = vi.fn();

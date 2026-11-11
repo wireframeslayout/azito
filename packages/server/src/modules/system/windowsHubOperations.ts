@@ -144,12 +144,13 @@ export async function runOnWindows(command: 'start' | 'stop' | 'restart' | 'relo
 /** Remove only this install's registered task. The caller holds the hub lock. */
 export async function uninstallWindowsTask(manager: ServiceManager, hub: WindowsHub, context: ServiceCommandContext): Promise<void> {
   if ((await hub.client.query(HUB_UPDATE_TASK)).exists) throw new Error('An AzitoHubUpdate task exists. Wait for the update to finish and retry; if it remains, inspect it manually.');
-  if (!(await taskExists(hub))) return;
-  await requireOwnTask(manager, hub);
+  const exists = await taskExists(hub);
+  if (exists) await requireOwnTask(manager, hub);
   // A foreground hub must be stopped at its terminal; stopping the task would also end it.
   const run: SpecRunner = (spec) => runCommandSpec(spec, hub.runHost);
   const processes = await findHubProcesses(run, hub.systemRoot, hub.hubRoots, context.pid);
   if (processes.length > 0) throw new Error('A hub process is still running. Stop the service and any `azito run` window, then retry.');
+  if (!exists) return;
   const state = await hub.client.query(HUB_SERVICE.windowsTaskName);
   if (state.running) throw new Error('The hub task is running. Stop it with `azito stop`, then retry.');
   await hub.client.delete(HUB_SERVICE.windowsTaskName);
