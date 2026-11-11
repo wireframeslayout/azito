@@ -1809,6 +1809,7 @@ describe('action bodies reject unknown fields', () => {
     const success = { code: 0, stdout: '', stderr: '' };
     const tmux = {
       resolvePane: vi.fn(async () => '%0'), getWindowIdentity: vi.fn(async () => null), resolveRef: vi.fn(async () => null),
+      resolveWindowForRespawn: vi.fn(async () => null),
       splitPane: vi.fn(async () => success), renameSession: vi.fn(async () => success), renameWindow: vi.fn(async () => success),
       renamePane: vi.fn(async () => success), sendKeysToHandle: vi.fn(async () => undefined), renameWindowByRef: vi.fn(async () => success),
       splitPaneByHandle: vi.fn(async () => ({ result: success })), setPaneTitle: vi.fn(async () => success),
