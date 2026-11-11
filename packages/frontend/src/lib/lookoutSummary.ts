@@ -32,7 +32,7 @@ export interface LookoutInput {
   scope?: { windowIds: ReadonlySet<number> };
 }
 
-const ATTENTION_STATUSES = new Set(['waiting_input', 'pending_approval', 'phase_review', 'failed']);
+const ATTENTION_STATUSES = new Set(['waiting_input', 'waiting_for_human', 'pending_approval', 'phase_review', 'failed']);
 
 function makeItem(key: string, task: Task | undefined, rows: ActiveWindowRow[]): LookoutItem {
   const blockedRow = rows.find((row) => row.activityStatus === 'blocked');

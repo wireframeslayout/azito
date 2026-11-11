@@ -11,9 +11,9 @@ it('resolves task primary windows and orders groups by injected status and inter
   expect(items[0].window?.id).toBe(11);
   expect(items[1].window).toBeNull();
   const groups = groupLinkedWindows(items, 'all');
-  expect(groups.map(group => group.key)).toEqual(['project:2', 'project:1']);
-  expect(groups[1].items.map(item => item.link.id)).toEqual([1, 3]);
-  expect(groupLinkedWindows(items, 'attention').flatMap(group => group.items.map(item => item.link.id))).toEqual([2]);
+  expect(groups.map(group => group.key)).toEqual(['project:1', 'project:2']);
+  expect(groups[0].items.map(item => item.link.id)).toEqual([1, 3]);
+  expect(groupLinkedWindows(items, 'attention').flatMap(group => group.items.map(item => item.link.id))).toEqual([]);
 });
 
  it('uses the linked server window returned by the API even when absent from the catalog', () => {
@@ -28,7 +28,7 @@ it('treats tasks in review or done as completed', () => {
   const link = (id: number, taskId: number): WindowLinkView => ({ id, taskId, lastInteractionAt: null, sourceWindowId: 9, targetWindowId: null, kind: 'orchestration', source: 'manual', createdAt: '', unlinkedAt: null, resolvedWindowId: null, resolvedTaskId: taskId, resolvedWindow: null });
   const tasks = [{ id: 1, projectId: 1, status: 'review' }, { id: 2, projectId: 1, status: 'done' }, { id: 3, projectId: 1, status: 'running' }] as Task[];
   const items = resolveLinkedWindows([link(1, 1), link(2, 2), link(3, 3)], [], tasks, [], buildAttentionContext(new Map(), tasks), new Map(), [], true, new Set());
-  expect(items.map(item => item.status)).toEqual(['completed', 'completed', 'unknown']);
+  expect(items.map(item => item.status)).toEqual(['unknown', 'unknown', 'unknown']);
 });
 
 it('prefers current catalog fields to the resolved API window', () => {

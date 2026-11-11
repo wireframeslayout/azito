@@ -29,7 +29,7 @@ export function resolveLinkedWindows(links: WindowLinkView[], windows: Window[],
     const project = projects.find(item => item.id === projectId);
     const serverName = window?.serverName ?? task?.serverName;
     const matching = activityReady && window ? [...entries.values()].filter(entry => matchesActivityWindow(entry, window) && entry.running) : [];
-    const status = classifyActivity({
+    const status = !activityReady || !window ? 'unknown' : classifyActivity({
       attention: isAttentionTarget({ windowId: window?.id ?? link.resolvedWindowId, taskId: link.resolvedTaskId, kind: link.kind }, context) || matching.some(entry => entry.status === 'blocked') || (window !== null && childAttention.has(window.id)),
       working: matching.some(entry => entry.status === 'working'),
       completed: !!task && COMPLETED_TASK_STATUSES.has(task.status) || !!window && finished.some(entry => matchesActivityWindow(entry, window)),
