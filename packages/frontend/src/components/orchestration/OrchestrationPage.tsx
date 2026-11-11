@@ -40,7 +40,7 @@ function OrchestrationWindow({ window, isMobile, showTab = false }: { window: Wi
   const [viewMode, setViewMode] = useWindowViewMode(window.id, false, window.windowType === 'agent');
   const changeMode = (mode: WindowViewMode) => setViewMode(mode, window.id);
   return <div style={{ display: 'flex', flexDirection: 'column', flex: 1, minHeight: 0, minWidth: 0 }}>
-    {showTab && <TabBar tabs={[{ id: String(window.id), label: titleOf(window), closable: false }]} activeId={String(window.id)} onSelect={() => {}} trailing={!isMobile ? <SegmentedToggle<WindowViewMode> ariaLabel={t('terminal.viewMode.ariaLabel')} value={viewMode} onChange={changeMode} options={[{ value: 'terminal', label: t('terminal.viewMode.terminal'), icon: 'terminal' }, { value: 'chat', label: t('terminal.viewMode.chat'), icon: 'transcript' }]} /> : undefined} />}
+    {showTab && <TabBar showTabList={false} tabs={[{ id: String(window.id), label: titleOf(window), closable: false }]} activeId={String(window.id)} onSelect={() => {}} trailing={!isMobile ? <SegmentedToggle<WindowViewMode> ariaLabel={t('terminal.viewMode.ariaLabel')} value={viewMode} onChange={changeMode} options={[{ value: 'terminal', label: t('terminal.viewMode.terminal'), icon: 'terminal' }, { value: 'chat', label: t('terminal.viewMode.chat'), icon: 'transcript' }]} /> : undefined} />}
     <TerminalContainer viewMode={viewMode} onViewModeChange={changeMode} serverName={window.serverName} target={window.tmuxTarget} terminalRef={{ kind: 'windowId', serverName: window.serverName, windowId: window.id, pane: 1 }} registeredWindow={{ id: window.id }} />
   </div>;
 }
@@ -102,7 +102,7 @@ export default function OrchestrationPage({ rightPanel }: OrchestrationPageProps
     <main style={{ flex: 1, minWidth: 0, display: 'flex', flexDirection: 'column' }}>
       {status === 'error' && <Notice tone="danger" action={<Button onClick={refresh}>{t('orchestration.retry')}</Button>}>{t('orchestration.loadError')}</Notice>}
       {selected && <nav aria-label={t('orchestration.title')}>{ancestors.slice().reverse().map(ancestorId => { const ancestor = windows.find(window => window.id === ancestorId); return ancestor && <Button key={ancestorId} size="sm" onClick={() => navigate(paths.orchestration(ancestorId))}>{titleOf(ancestor)}</Button>; })}</nav>}
-      {selected ? <OrchestrationWindow key={selected.id} window={selected} isMobile={isMobile} showTab /> : windows.length === 0 ? <EmptyState title={t('orchestration.empty')} action={<OrchestrationCreate showButton />} /> : <EmptyState title={t('orchestration.selectWindow')} />}
+      {selected ? <OrchestrationWindow key={selected.id} window={selected} isMobile={isMobile} showTab={!isMobile} /> : windows.length === 0 ? <EmptyState title={t('orchestration.empty')} action={<OrchestrationCreate showButton />} /> : <EmptyState title={t('orchestration.selectWindow')} />}
       {!isMobile && !open && <RightPanelToggle open={false} onToggle={() => setOpen(true)} controls="orchestration-right-panel" buttonRef={toggleRef} />}
     </main>
     {!isMobile && <RightPanel id="orchestration-right-panel" title={selected ? t('orchestration.connected', { count: selected.links.total }) : t('orchestration.connectedUnknown')} open={open} onOpenChange={setOpen} toggleRef={toggleRef}>{rightPanel ?? panel}</RightPanel>}

@@ -59,3 +59,9 @@ it('passes the selected window and controlled view mode to the terminal', () => 
   expect(state.terminal).toHaveBeenLastCalledWith(expect.objectContaining({ viewMode: 'chat' }));
   state.mobile = true;
 });
+
+it('does not show the tab row on mobile', () => {
+  state.mobile = true;
+  render(<WorkspaceTargetsProvider><OrchestrationPage /></WorkspaceTargetsProvider>);
+  expect(screen.queryByRole('tablist')).not.toBeInTheDocument();
+});
