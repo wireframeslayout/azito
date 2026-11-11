@@ -32,6 +32,10 @@ function MaximizedWindowContent() {
   const { allTasks, allProjects, refresh } = useWorkspaceCatalog();
   const { onOpenTask, onOpenInTerminal } = useWorkspaceTargets();
   const { activityStatus, snapshotStatus, snapshotUpdatedAt, entries } = useAgentActivity();
+  const [snapshotHistory, setSnapshotHistory] = useState({ status: snapshotStatus, failed: snapshotStatus === 'error' });
+  if (snapshotHistory.status !== snapshotStatus) {
+    setSnapshotHistory({ status: snapshotStatus, failed: snapshotStatus === 'error' || (snapshotStatus === 'loading' && snapshotHistory.failed) });
+  }
   const { tree: orchestrators } = useOrchestrationModel();
   const [expanded, setExpanded] = useState<Set<string>>(new Set());
   const [focused, setFocused] = useState<string | null>(null);
@@ -74,7 +78,7 @@ function MaximizedWindowContent() {
   const visible = visibleMaximizeWindows([...rows, ...linkedRows], expanded);
   const task = window ? allTasks.find(item => item.windows?.some(w => w.id === window.id)) : undefined;
   const project = window ? allProjects.find(item => item.id === (task?.projectId ?? window.projectId)) : undefined;
-  const status = snapshotStatus === 'error' || (snapshotStatus === 'loading' && snapshotUpdatedAt === null)
+  const status = snapshotStatus === 'error' || (snapshotStatus === 'loading' && (snapshotUpdatedAt === null || snapshotHistory.failed))
     ? 'unknown'
     : window ? activityStatus(window.serverName, window.tmuxTarget) ?? 'idle' : 'unknown';
   const [viewMode, setViewMode] = useWindowViewMode(selectedWindowId, false, window?.windowType === 'agent');

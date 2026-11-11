@@ -55,6 +55,12 @@ describe('maximized window', () => {
     activity.status = 'error';
     view.rerender(<HotkeyProvider><MaximizedWindowProvider><Workspace /><MaximizedWindow /></MaximizedWindowProvider></HotkeyProvider>);
     expect(header).toHaveTextContent('Status unavailable');
+    activity.status = 'loading';
+    view.rerender(<HotkeyProvider><MaximizedWindowProvider><Workspace /><MaximizedWindow /></MaximizedWindowProvider></HotkeyProvider>);
+    expect(header).toHaveTextContent('Status unavailable');
+    activity.status = 'ready';
+    view.rerender(<HotkeyProvider><MaximizedWindowProvider><Workspace /><MaximizedWindow /></MaximizedWindowProvider></HotkeyProvider>);
+    expect(header).toHaveTextContent('Needs attention');
   });
   it('switches connections and returns focus to its opener', async () => {
     mounts.connect.mockClear(); mounts.disconnect.mockClear();
