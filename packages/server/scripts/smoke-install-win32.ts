@@ -252,6 +252,54 @@ function checkUserPath(installPs1: string, work: string): void {
   assert(lines.includes('path=%USERPROFILE%\\.azito-test-bin;C:\\Existing;C:\\Foo Bar (x)\\bin'), 'existing entries must be kept as they were', r.output);
 }
 
+function checkTailscaleDns(installPs1: string, work: string): void {
+  step('Tailscale status exposes only the local DNS name or a fixed failure reason');
+  const fake = path.join(work, 'fake-tailscale.exe');
+  const script = path.join(work, 'tailscale-check.ps1');
+  fs.writeFileSync(script, [
+    `$ast = [System.Management.Automation.Language.Parser]::ParseFile('${installPs1.replace(/'/g, "''")}', [ref]$null, [ref]$null)`,
+    "$found = $ast.FindAll({ param($n) ($n -is [System.Management.Automation.Language.FunctionDefinitionAst]) -and $n.Name -eq 'Get-TailscaleDns' }, $true)",
+    "if (@($found).Count -ne 1) { throw 'Get-TailscaleDns not found' }",
+    '. ([scriptblock]::Create(@($found)[0].Extent.Text))',
+    `$fake = '${fake.replace(/'/g, "''")}'`,
+    "Add-Type -OutputAssembly $fake -OutputType ConsoleApplication -TypeDefinition @'",
+    'using System;',
+    'using System.Threading;',
+    'public class FakeTailscale {',
+    '  public static int Main() {',
+    '    string mode = Environment.GetEnvironmentVariable("AZITO_TEST_TAILSCALE_MODE");',
+    '    Console.Error.WriteLine("person@example.com fictional-peer 192.0.2.55");',
+    '    if (mode == "timeout") { Thread.Sleep(30000); return 0; }',
+    '    if (mode == "exit") { Console.WriteLine("person@example.com fictional-peer 192.0.2.55"); return 1; }',
+    '    if (mode == "invalid") { Console.WriteLine("person@example.com fictional-peer 192.0.2.55 {"); return 0; }',
+    '    if (mode == "missing") { Console.WriteLine("{\\"Self\\":{},\\"Peer\\":\\"fictional-peer\\"}"); return 0; }',
+    '    Console.WriteLine("{\\"Self\\":{\\"DNSName\\":\\"local.example.ts.net.\\"},\\"User\\":\\"person@example.com\\",\\"Peer\\":\\"fictional-peer 192.0.2.55\\"}");',
+    '    return 0;',
+    '  }',
+    '}',
+    "'@",
+    "if ($env:AZITO_TEST_TAILSCALE_MODE -eq 'start') { $fake = Join-Path $fake 'missing.exe' }",
+    '$result = @(Get-TailscaleDns $fake *>&1)',
+    '$result | Where-Object { $null -ne $_ } | ForEach-Object { Write-Output $_.ToString() }',
+    '',
+  ].join('\r\n'));
+  // Each run compiles an isolated fake executable.
+  const cases: Array<[string, string]> = [
+    ['success', 'local.example.ts.net'],
+    ['start', 'could not start Tailscale'],
+    ['invalid', 'Tailscale status returned invalid JSON'],
+    ['exit', 'Tailscale status failed'],
+    ['missing', 'Tailscale status has no DNS name'],
+    ['timeout', 'Tailscale status timed out'],
+  ];
+  for (const [mode, expected] of cases) {
+    if (fs.existsSync(fake)) fs.rmSync(fake);
+    const r = powershell(['-File', script], { ...process.env, AZITO_TEST_TAILSCALE_MODE: mode });
+    assert(r.status === 0 && r.output.trim() === expected, `${mode}: expected only the DNS or fixed reason`, r.output);
+    assert(!/person@example\.com|fictional-peer|192\.0\.2\.55/.test(r.output), `${mode}: Tailscale response leaked`, r.output);
+  }
+}
+
 async function main(): Promise<void> {
   const [zipArg, sumsArg, installArg] = process.argv.slice(2);
   if (!zipArg || !sumsArg || !installArg) throw new Error('usage: smoke-install-win32.ts <zip> <SHA256SUMS> <install.ps1>');
@@ -266,6 +314,7 @@ async function main(): Promise<void> {
 
   const work = fs.mkdtempSync(path.join(os.tmpdir(), 'azito-install-smoke-'));
   try {
+    checkTailscaleDns(installPs1, work);
     checkVerification(installPs1, zip, sums, work);
     // Spaces and parentheses in the prefix: the shape of a profile folder like "C:\Users\Foo Bar (Work)".
     const prefix = path.join(work, 'Foo Bar (Work)', '.azito');
