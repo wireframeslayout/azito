@@ -1,11 +1,27 @@
 import { describe, expect, it, vi } from 'vitest';
 import type { CommandSpec } from '../../../shared/exec/commandSpec';
-import { findHubVersionsInUse, parseHubDirAcl, parseVersionsInUse, removeFolderWithRd, whyHubDirIsWritableByOthers } from '../windowsHubFolderOps';
+import { assertHubDirsOnlyOwnerWritable, findHubVersionsInUse, parseHubDirAcl, parseVersionsInUse, removeFolderWithRd, whyHubDirIsWritableByOthers } from '../windowsHubFolderOps';
 
 const ME = 'S-1-5-21-1-2-3-1001';
 const FULL = 2032127;
 const READ = 1179785;
 const MODIFY = 1245631;
+
+describe('batched folder ACL checks', () => {
+  it('allows creation rights on an ancestor but refuses replacement rights', () => {
+    const acl = { me: ME, owner: ME, allows: [{ sid: 'S-1-5-21-8-8-8-1002', rights: 4 }] };
+    expect(whyHubDirIsWritableByOthers(acl, true)).toBeUndefined();
+    expect(whyHubDirIsWritableByOthers(acl)).toMatch(/changed by others/);
+    expect(whyHubDirIsWritableByOthers({ ...acl, allows: [{ ...acl.allows[0]!, rights: 0x40 }] }, true)).toMatch(/changed by others/);
+  });
+  it('rejects a writable folder and incomplete answers', async () => {
+    const line = (index: number, extra = '') => `dir ${index}\r\nme ${ME}\r\nowner ${ME}\r\n${extra}`;
+    const run = vi.fn(async () => ({ exitCode: 0, stdout: line(0) + line(1, `allow S-1-5-21-8-8-8-1002 ${MODIFY}\r\n`), stderr: '', signal: null }));
+    await expect(assertHubDirsOnlyOwnerWritable(run, 'C:\\Windows', ['C:\\a', 'C:\\b'])).rejects.toThrow(/C:\\b.*changed by others/);
+    run.mockResolvedValueOnce({ exitCode: 0, stdout: line(0), stderr: '', signal: null });
+    await expect(assertHubDirsOnlyOwnerWritable(run, 'C:\\Windows', ['C:\\a', 'C:\\b'])).rejects.toThrow(/every install folder/);
+  });
+});
 
 describe('findHubVersionsInUse', () => {
   const ok = (stdout: string) => vi.fn(async (_spec: CommandSpec) => ({ exitCode: 0, stdout, stderr: '', signal: null }));

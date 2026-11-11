@@ -2,7 +2,7 @@ import * as fs from 'fs';
 import type { ServiceManager } from './serviceManager';
 import type { ServiceHost } from './createServiceManager';
 import {
-  HUB_GRACE_MS, buildHubTaskXml, endHubProcesses, findHubProcesses, hubWindowsLayout, inspectRegisteredHub, readWindowsUserId, samePrefix, sameTaskDefinition,
+  HUB_GRACE_MS, buildHubTaskXml, endHubProcesses, findHubProcesses, hubWindowsLayout, inspectRegisteredHub, readWindowsUserId, samePrefix, sameTaskDefinition, windowsPowershell,
   type HubWindowsLayout, type SpecRunner,
 } from './windowsHubService';
 import { resolveInstallPrefix } from './misao/misaoPaths';
@@ -14,7 +14,6 @@ import { HUB_UPDATE_TASK } from './windowsHubUpdateTask';
 import { taskHasUserId, taskPrincipalId } from '../../shared/os/taskScheduler/taskXmlRead';
 import { buildCommandSpec } from '../../shared/exec/commandSpec';
 import { powershellEncodedArgs } from '../../shared/os/shellDialect';
-import { windowsPowershell } from './windowsHubService';
 
 /**
  * Operations on the Windows hub's Task Scheduler task (`azito service ...`, and the restart the in-app update does). They live here, not

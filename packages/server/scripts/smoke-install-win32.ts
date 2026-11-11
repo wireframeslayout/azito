@@ -99,6 +99,7 @@ function checkInstall(installPs1: string, zip: string, sums: string, prefix: str
     assert(fs.existsSync(path.join(hubDir, file)), `missing after install: hub/${file}`, first.output);
   }
   assert(fs.existsSync(path.join(prefix, 'bin', 'azito.cmd')), 'missing bin/azito.cmd', first.output);
+  assert(fs.existsSync(path.join(hubDir, '.install-record.json')), 'missing installation ownership record', first.output);
   assert(fs.readFileSync(path.join(hubDir, 'current.txt'), 'utf-8').trim() === version, 'current.txt must name the installed version');
   const token = readEnvValue(path.join(hubDir, '.env'), 'AZITO_UI_TOKEN');
   assert(/^[0-9a-f]{64}$/.test(token ?? ''), 'hub/.env must hold a 64-hex UI token');
@@ -110,6 +111,48 @@ function checkInstall(installPs1: string, zip: string, sums: string, prefix: str
   const second = install(installPs1, args);
   assert(second.status === 0 && /already installed/.test(second.output), 'a re-run must report the install and succeed', second.output);
   assert(fs.readFileSync(path.join(hubDir, '.env'), 'utf-8') === envBefore, 'a re-run must not touch hub/.env');
+}
+
+function checkUninstall(installPs1: string, prefix: string, version: string): void {
+  step('uninstall refuses an unrecorded file, then retains data and is repeatable');
+  const release = path.join(prefix, 'hub', version);
+  const extra = path.join(release, 'user-file');
+  fs.writeFileSync(extra, 'leave this');
+  const args = ['-Uninstall', '-Prefix', prefix, '-Yes'];
+  const refused = install(installPs1, args);
+  assert(refused.status !== 0 && fs.existsSync(extra), 'an unrecorded file must prevent removal', refused.output);
+  fs.unlinkSync(extra);
+  const target = path.join(path.dirname(prefix), 'junction-target');
+  fs.mkdirSync(target);
+  fs.writeFileSync(path.join(target, 'keep'), 'outside');
+  const junction = path.join(release, 'user-junction');
+  fs.symlinkSync(target, junction, 'junction');
+  const linked = install(installPs1, args);
+  assert(linked.status !== 0 && fs.existsSync(path.join(target, 'keep')), 'a junction must be refused without entering it', linked.output);
+  fs.rmdirSync(junction);
+  const removed = install(installPs1, args);
+  assert(removed.status === 0, 'uninstall failed', removed.output);
+  assert(!fs.existsSync(release), 'the recorded release must be removed', removed.output);
+  assert(fs.existsSync(path.join(prefix, 'data', 'data.db')), 'data must be retained by default', removed.output);
+  const again = install(installPs1, args);
+  assert(again.status === 0 && /already removed/.test(again.output), 'a repeat must report the retained files', again.output);
+}
+
+function checkRemoveData(installPs1: string, zip: string, sums: string, prefix: string): void {
+  step('an explicit -RemoveData removes an unchanged recorded data directory');
+  const installed = install(installPs1, ['-ZipPath', zip, '-Sha256Sums', sums, '-Prefix', prefix, '-Yes', '-NoPath', '-NoService']);
+  assert(installed.status === 0, 'install for data removal failed', installed.output);
+  const removed = install(installPs1, ['-Uninstall', '-RemoveData', '-Prefix', prefix, '-Yes']);
+  assert(removed.status === 0, 'uninstall with data removal failed', removed.output);
+  assert(!fs.existsSync(path.join(prefix, 'data')), 'unchanged recorded data must be removed', removed.output);
+
+  const changedPrefix = `${prefix}-changed`;
+  const changedInstall = install(installPs1, ['-ZipPath', zip, '-Sha256Sums', sums, '-Prefix', changedPrefix, '-Yes', '-NoPath', '-NoService']);
+  assert(changedInstall.status === 0, 'install for changed data failed', changedInstall.output);
+  const extra = path.join(changedPrefix, 'data', 'user-file');
+  fs.writeFileSync(extra, 'keep');
+  const changedRemoval = install(installPs1, ['-Uninstall', '-RemoveData', '-Prefix', changedPrefix, '-Yes']);
+  assert(changedRemoval.status === 0 && fs.existsSync(extra) && /Data retained/.test(changedRemoval.output), 'changed data must be retained and reported', changedRemoval.output);
 }
 
 /** An install that stopped part-way (a version folder, no current.txt, no CLI) is repaired by running the installer again; the CLI refuses a bad pointer and survives `&` in the prefix. */
@@ -173,7 +216,7 @@ function checkCli(azitoCmd: string, prefix: string, version: string): void {
   assert(unknown.status === 1 && /Unknown command/.test(unknown.output), 'an unknown command must fail', unknown.output);
 }
 
-async function checkStart(azitoCmd: string, prefix: string): Promise<void> {
+async function checkStart(installPs1: string, azitoCmd: string, prefix: string): Promise<void> {
   step('azito run runs the hub in the foreground with hub/.env and /api/health answers');
   const envFile = path.join(prefix, 'hub', '.env');
   const port = await freePort();
@@ -192,6 +235,9 @@ async function checkStart(azitoCmd: string, prefix: string): Promise<void> {
     const status = await waitForHealth(`http://127.0.0.1:${port}/api/health`, () => failure);
     console.log(`[smoke-install] /api/health -> ${status}`);
     assert(fs.existsSync(path.join(prefix, 'data', 'data.db')), 'the hub must use the AZITO_DATA_DIR from hub/.env', output);
+    const refused = install(installPs1, ['-Uninstall', '-Prefix', prefix, '-Yes']);
+    assert(refused.status !== 0 && /hub process is still running/.test(refused.output), 'uninstall must leave a foreground hub running', refused.output);
+    assert((await fetch(`http://127.0.0.1:${port}/api/health`)).ok, 'uninstall must not stop the foreground hub');
   } catch (err) {
     console.error(`[smoke-install] hub output:\n${output}`);
     throw err;
@@ -225,8 +271,8 @@ function checkUserPath(installPs1: string, work: string): void {
   fs.writeFileSync(script, [
     // install.ps1 keeps its functions inside one script block (so `irm | iex` leaves nothing behind): take the two under test out of its syntax tree.
     `$ast = [System.Management.Automation.Language.Parser]::ParseFile('${installPs1.replace(/'/g, "''")}', [ref]$null, [ref]$null)`,
-    "$found = $ast.FindAll({ param($n) ($n -is [System.Management.Automation.Language.FunctionDefinitionAst]) -and (($n.Name -eq 'Add-UserPathEntry') -or ($n.Name -eq 'Send-EnvironmentChange')) }, $true)",
-    "if (@($found).Count -ne 2) { throw 'Add-UserPathEntry / Send-EnvironmentChange not found in install.ps1' }",
+    "$found = $ast.FindAll({ param($n) ($n -is [System.Management.Automation.Language.FunctionDefinitionAst]) -and (($n.Name -eq 'Add-UserPathEntry') -or ($n.Name -eq 'Remove-RecordedPathEntry') -or ($n.Name -eq 'Send-EnvironmentChange')) }, $true)",
+    "if (@($found).Count -ne 3) { throw 'PATH functions not found in install.ps1' }",
     'foreach ($function in $found) { . ([scriptblock]::Create($function.Extent.Text)) }',
     "$key = [Microsoft.Win32.Registry]::CurrentUser.OpenSubKey('Environment', $true)",
     "$had = $key.GetValueNames() -contains 'Path'",
@@ -238,6 +284,8 @@ function checkUserPath(installPs1: string, work: string): void {
     "  $again = Add-UserPathEntry 'C:\\Foo Bar (x)\\bin\\'",
     "  $now = $key.GetValue('Path', '', [Microsoft.Win32.RegistryValueOptions]::DoNotExpandEnvironmentNames)",
     "  Write-Output \"first=$first\"; Write-Output \"again=$again\"; Write-Output \"kind=$($key.GetValueKind('Path'))\"; Write-Output \"path=$now\"",
+    "  Remove-RecordedPathEntry 'C:\\Foo Bar (x)\\bin'",
+    "  Write-Output \"after=$($key.GetValue('Path', '', [Microsoft.Win32.RegistryValueOptions]::DoNotExpandEnvironmentNames))\"",
     '} finally {',
     "  if ($had) { $key.SetValue('Path', $orig, $origKind) } else { $key.DeleteValue('Path', $false) }",
     '  $key.Close()',
@@ -250,6 +298,7 @@ function checkUserPath(installPs1: string, work: string): void {
   assert(lines.includes('first=True') && lines.includes('again=False'), 'the entry must be added once', r.output);
   assert(lines.includes('kind=ExpandString'), 'the registry type must be kept', r.output);
   assert(lines.includes('path=%USERPROFILE%\\.azito-test-bin;C:\\Existing;C:\\Foo Bar (x)\\bin'), 'existing entries must be kept as they were', r.output);
+  assert(lines.includes('after=%USERPROFILE%\\.azito-test-bin;C:\\Existing'), 'only the recorded entry must be removed', r.output);
 }
 
 async function main(): Promise<void> {
@@ -273,9 +322,11 @@ async function main(): Promise<void> {
     const azitoCmd = path.join(prefix, 'bin', 'azito.cmd');
     checkCli(azitoCmd, prefix, version as string);
     checkRepairAndDiagnostics(installPs1, zip, sums, path.join(work, 'Amp&Co', '.azito'), version as string);
-    await checkStart(azitoCmd, prefix);
+    await checkStart(installPs1, azitoCmd, prefix);
     checkAccessRules(prefix);
     checkUserPath(installPs1, work);
+    checkUninstall(installPs1, prefix, version as string);
+    checkRemoveData(installPs1, zip, sums, path.join(work, 'remove-data', '.azito'));
   } finally {
     // A leftover file must not replace the failure that got us here.
     try {

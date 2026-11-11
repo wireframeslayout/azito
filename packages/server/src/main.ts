@@ -25,6 +25,8 @@ import { authDoctorCommand } from './cli/authDoctorCommand';
 import { misaoCommand } from './cli/misaoCommand';
 import { serviceCommand } from './cli/serviceCommand';
 import { initEnvCommand } from './cli/initEnvCommand';
+import { windowsInstallRecordCommand } from './cli/windowsInstallRecordCommand';
+import { windowsHubUninstallCommand } from './cli/windowsHubUninstallCommand';
 import { hostRunsTmux } from './modules/servers/muxKinds';
 import { hasMisaoToRelyOn } from './modules/system/misao/misaoPaths';
 import { misaoWindowsTaskExists } from './modules/system/misao/misaoLocalWindows';
@@ -60,6 +62,18 @@ async function main(): Promise<void> {
 
   if (process.argv[2] === 'service') {
     await serviceCommand(process.argv.slice(3), hostEnv, { bundleRoot: getBundleRoot(), pid: process.pid, secretFileGuard });
+    return;
+  }
+
+  if (process.argv[2] === 'windows-install-record') {
+    windowsInstallRecordCommand(getBundleRoot(), process.argv.slice(3), secretFileGuard);
+    return;
+  }
+
+  if (process.argv[2] === 'windows-uninstall-prepare') {
+    const args = process.argv.slice(3);
+    if (args[0] !== '--bundle-root' || !args[1] || args.length > 3 || (args.length === 3 && args[2] !== '--remove-data')) throw new Error('Invalid uninstall options.');
+    await windowsHubUninstallCommand(hostEnv, { bundleRoot: args[1], pid: process.pid, secretFileGuard }, args.length === 3);
     return;
   }
 
