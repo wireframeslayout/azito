@@ -292,6 +292,9 @@
     ]
   },
   "lookout": {
+    "details": { "unsafe_argument": "コマンドの引数に Windows のコマンド shim で使えない文字が含まれています。" },
+    "searchDirectories": "検索したディレクトリ",
+    "searchExtensions": "拡張子",
     "title": "Lookout",
     "enabled": "要約を使う",
     "description": "会話ログの末尾を１行にまとめます。オフでも件数と状態は表示します。",
