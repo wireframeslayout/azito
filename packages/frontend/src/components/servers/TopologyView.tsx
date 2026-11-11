@@ -237,8 +237,8 @@ function ServerNode({
         fontSize: 'var(--font-xs)', color: 'var(--text-dim)',
         marginTop: 4, display: 'flex', gap: 8, flexWrap: 'wrap',
       }}>
-        {host && <span>{host}</span>}
-        {version && <span>{version.slice(0, 7)}</span>}
+        {host && <span style={{ fontFamily: 'var(--font-mono)' }}>{host}</span>}
+        {version && <span style={{ fontFamily: 'var(--font-mono)' }}>{version.slice(0, 7)}</span>}
       </div>
       {hasDrift && (
         <div style={{

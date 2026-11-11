@@ -102,8 +102,8 @@ export function MisaoServicePanel({ onChanged }: MisaoServicePanelProps) {
           : chipState
           ? <Chip tone={STATE_CHIP[chipState].tone}>{t(`misaoService.${STATE_CHIP[chipState].key}`)}</Chip>
           : <Chip tone="orange">{t('misaoService.stateNotInstalled')}</Chip>}
-        {versions.bundled && <span style={{ ...mutedStyle, fontFamily: 'var(--font-prose)' }}>{t('misaoService.bundledVersion', { version: versions.bundled })}</span>}
-        {versions.running && <span style={{ ...mutedStyle, fontFamily: 'var(--font-prose)' }}>{t('misaoService.runningVersion', { version: versions.running })}</span>}
+        {versions.bundled && <span style={{ ...mutedStyle, fontFamily: 'var(--font-mono)' }}>{t('misaoService.bundledVersion', { version: versions.bundled })}</span>}
+        {versions.running && <span style={{ ...mutedStyle, fontFamily: 'var(--font-mono)' }}>{t('misaoService.runningVersion', { version: versions.running })}</span>}
       </div>
 
       {(mode === 'other_task' || mode === 'unknown_task') && <Notice tone="warning">{t(`misaoService.${mode === 'other_task' ? (otherTaskRunning ? 'otherTaskRunning' : 'otherTaskDetail') : 'unknownTaskDetail'}`)}</Notice>}

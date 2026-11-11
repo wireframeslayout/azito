@@ -263,7 +263,7 @@ export default function ProjectGeneralFields({ name, setName, slug, setSlug, slu
       )}
       {setDefaultBranch && (
         <FormField label={t('general.defaultBranch')}>
-          <FormInput value={defaultBranch ?? ''} onChange={(e) => setDefaultBranch(e.target.value)} placeholder={t('general.defaultBranchPlaceholder')} />
+          <FormInput style={{ fontFamily: 'var(--font-mono)' }} value={defaultBranch ?? ''} onChange={(e) => setDefaultBranch(e.target.value)} placeholder={t('general.defaultBranchPlaceholder')} />
         </FormField>
       )}
       <FormField label={t('general.unitPrompt')} hint={t('general.unitPromptHint')}>

@@ -27,7 +27,7 @@ export default function TaskRefBadges({ taskId, sourceRef, source, prUrl }: Task
 
   return (
     <span style={{ display: 'inline-flex', alignItems: 'center', gap: 4, flexShrink: 0 }}>
-      <Chip>#{taskId}</Chip>
+      <Chip style={{ fontFamily: 'var(--font-mono)' }}>#{taskId}</Chip>
       {parsed && (
         issueUrl ? (
           <a

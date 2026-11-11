@@ -88,6 +88,7 @@ export default function TaskUnitSetupForm({
         <FormField label={t('unitSetup.branchName')} hint={t('unitSetup.branchHint')}>
           <FormInput
             type="text"
+            style={{ fontFamily: 'var(--font-mono)' }}
             value={branchName}
             onChange={(e) => setBranchName(e.target.value)}
             placeholder={t('unitSetup.branchPlaceholder')}
@@ -107,6 +108,7 @@ export default function TaskUnitSetupForm({
         <FormField label={t('unitSetup.workingDirectory')} hint={t('unitSetup.workingDirectoryHint')}>
           <FormInput
             type="text"
+            style={{ fontFamily: 'var(--font-mono)' }}
             value={workingDirectory}
             onChange={(e) => setWorkingDirectory(e.target.value)}
             placeholder={t('unitSetup.workingDirectoryPlaceholder')}

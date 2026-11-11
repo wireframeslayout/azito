@@ -489,9 +489,7 @@ export default function OverviewSection({
               <span style={{ fontSize: 'var(--font-xs)', color: 'var(--text-dim)' }}>{tmuxBlockReason}</span>
             ) : (
               <span style={{ fontSize: 'var(--font-xs)' }}>
-                {server.muxRuntime === 'managed'
-                  ? t('overview.muxManaged')
-                  : `${t('overview.muxSystem')}${status?.mux?.tmux?.version ? ` ${status.mux.tmux.version}` : ''}`}
+                {server.muxRuntime === 'managed' ? t('overview.muxManaged') : <>{t('overview.muxSystem')}{status?.mux?.tmux?.version && <> <span style={{ fontFamily: 'var(--font-mono)' }}>{status.mux.tmux.version}</span></>}</>}
               </span>
             )}
             <span style={{ display: 'block', fontSize: 'var(--font-xs)', color: 'var(--text-dim)' }}>{t('overview.muxRuntimeNote')}</span>

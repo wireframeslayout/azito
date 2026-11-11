@@ -5,6 +5,7 @@ import { Chip, WindowActivityIndicator, Button } from '../ui';
 import { useLookoutSummaries } from '../../hooks/useLookoutSummaries';
 import { LookoutSummaryText } from '../lookout/LookoutSummaryText';
 import type { LookoutSummary } from '../lookout/LookoutRow';
+import { useAgentActivity } from '../../hooks/useAgentActivity';
 import { useLookout } from '../../hooks/useLookout';
 import type { LookoutItem } from '../../lib/lookoutSummary';
 import { LookoutSection } from '../lookout/LookoutSection';
@@ -40,6 +41,7 @@ export default function HomeFeed({ allProjects, openTask, connectPane, onAddWind
   const openTerminal = useOpenTerminalTarget(connectPane);
   const { t } = useTranslation(['workspace', 'common', 'lookout']);
   const { sections } = useLookout();
+  const activityKnown = useAgentActivity().snapshotStatus === 'ready';
 
   const projectById = useMemo(() => new Map(allProjects.map((p) => [p.id, p])), [allProjects]);
   const attentionEntries = sections.attention;
@@ -48,17 +50,17 @@ export default function HomeFeed({ allProjects, openTask, connectPane, onAddWind
 
   return (
     <div style={{ height: '100%', overflowY: 'auto', display: 'flex', justifyContent: 'center' }}>
-      <div style={{ width: '100%', maxWidth: 720, padding: 'var(--space-4) var(--space-3)', display: 'flex', flexDirection: 'column', gap: 'var(--space-4)' }}>
+      <div style={{ width: '100%', maxWidth: 720, padding: 'var(--space-4) var(--space-3)', display: 'flex', flexDirection: 'column', gap: 'var(--space-2)' }}>
         <section aria-label={t('lookout:title')}>
           <h2 style={{ margin: 0, fontSize: 'var(--font-base)', fontWeight: 600 }}>{t('lookout:title')}</h2>
-          <LookoutCounts counts={sections.counts} />
+          <LookoutCounts counts={sections.counts} activityKnown={activityKnown} />
         </section>
         <LookoutSection name="attention" items={attentionEntries} renderItem={(entry) => (
           <AttentionCard key={entry.key} entry={entry}
             project={entry.projectId != null ? projectById.get(entry.projectId) : undefined}
             onClick={() => handleItemClick(entry)} summary={summaries.get(entry.key)} t={t} />
         )} />
-        <LookoutSection name="active" items={sections.active} renderItem={(item) => <ActiveGroupCard key={item.key} group={item}
+        <LookoutSection name="active" countKnown={activityKnown} items={sections.active} renderItem={(item) => <ActiveGroupCard key={item.key} group={item}
             project={item.projectId != null ? projectById.get(item.projectId) : undefined}
             onClick={() => handleItemClick(item)} summary={summaries.get(item.key)} t={t} />} empty={<div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 'var(--space-3)',
           padding: 'var(--space-5) var(--space-4)', background: 'var(--bg-card)', borderRadius: 'var(--radius-lg)', textAlign: 'center' }}>

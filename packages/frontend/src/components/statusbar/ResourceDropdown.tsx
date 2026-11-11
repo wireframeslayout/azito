@@ -199,13 +199,12 @@ export function MetricRow({ label, value, detail, warning, meterWidth }: {
       display: 'flex',
       alignItems: 'center',
       gap: 8,
-
       fontSize: 'var(--font-xs)',
       color: 'var(--text-dim)',
     }}>
       <b style={{ color: 'var(--text)', fontWeight: 600, minWidth: 34 }}>{label}</b>
       <ResourceMeter value={value} warning={warning} width={meterWidth} />
-      <span>{detail}</span>
+      <span style={{ fontFamily: 'var(--font-mono)', fontVariantNumeric: 'tabular-nums' }}>{detail}</span>
     </div>
   );
 }

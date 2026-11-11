@@ -193,7 +193,6 @@ export function StatusBar({ servers }: StatusBarProps) {
           alignItems: 'center',
           gap: 14,
           padding: '0 12px',
-
           fontSize: 'var(--font-xs)',
           color: 'var(--text-dim)',
           flexShrink: 0,

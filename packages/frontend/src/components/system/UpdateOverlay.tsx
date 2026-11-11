@@ -84,7 +84,7 @@ export function UpdateOverlay() {
             overflowY: 'auto',
             background: 'var(--bg-solid)',
             padding: '10px 20px',
-
+            fontFamily: 'var(--font-mono)',
             fontSize: 'var(--font-xs)',
             color: 'var(--text-dim)',
             whiteSpace: 'pre-wrap',

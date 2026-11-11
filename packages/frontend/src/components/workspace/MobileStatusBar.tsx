@@ -270,7 +270,6 @@ export function MobileStatusBar({ openTask, connectPane }: MobileStatusBarProps)
             border: 'none',
             background: 'transparent',
             color: 'var(--text)',
-
             fontSize: 'var(--font-2xs)',
             cursor: 'pointer',
           }}
@@ -293,7 +292,7 @@ export function MobileStatusBar({ openTask, connectPane }: MobileStatusBarProps)
 
           <span style={{ position: 'relative', display: 'flex', alignItems: 'center', gap: 6, flexShrink: 0 }}>
             <HealthDot level={worstHealth} size={7} />
-            <span style={{ color: memTextColor }}>
+            <span style={{ color: memTextColor, fontFamily: 'var(--font-mono)', fontVariantNumeric: 'tabular-nums' }}>
               MEM {worstMemUsedPercent !== null ? `${Math.round(worstMemUsedPercent)}%` : '--%'}
             </span>
           </span>

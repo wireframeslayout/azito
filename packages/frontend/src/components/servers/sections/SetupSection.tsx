@@ -557,7 +557,7 @@ function TmuxSetupCards({ server, refresh }: { server: Server; refresh: () => vo
                     display: 'flex', alignItems: 'center', gap: 8,
                     background: 'var(--bg)', border: '1px solid var(--border)', borderRadius: 'var(--radius-md)', padding: '8px 12px',
                   }}>
-                    <code style={{ flex: 1, fontSize: 'var(--font-sm)', color: 'var(--text)', wordBreak: 'break-all', fontFamily: 'inherit' }}>{c.cmd}</code>
+                    <code style={{ flex: 1, fontSize: 'var(--font-sm)', color: 'var(--text)', wordBreak: 'break-all', fontFamily: 'var(--font-mono)' }}>{c.cmd}</code>
                     <CopyButton text={c.cmd} />
                   </div>
                 </div>
@@ -639,7 +639,7 @@ function StepRow({
           </div>
           {(item.version || item.detail) && (
             <div style={{ fontSize: 'var(--font-xs)', color: 'var(--text-dim)', marginTop: 2 }}>
-              {item.version}{item.version && item.detail ? ' · ' : ''}{item.detail}
+              {item.version && <span style={{ fontFamily: 'var(--font-mono)' }}>{item.version}</span>}{item.version && item.detail ? ' · ' : ''}{item.detail}
             </div>
           )}
           {description && (
@@ -664,7 +664,7 @@ function StepRow({
                 display: 'flex', alignItems: 'center', gap: 8,
                 background: 'var(--bg)', border: '1px solid var(--border)', borderRadius: 'var(--radius-md)', padding: '8px 12px',
               }}>
-                <code style={{ flex: 1, fontSize: 'var(--font-sm)', color: 'var(--text)', wordBreak: 'break-all', fontFamily: 'inherit' }}>{c.cmd}</code>
+                <code style={{ flex: 1, fontSize: 'var(--font-sm)', color: 'var(--text)', wordBreak: 'break-all', fontFamily: 'var(--font-mono)' }}>{c.cmd}</code>
                 <CopyButton text={c.cmd} />
               </div>
             </div>
