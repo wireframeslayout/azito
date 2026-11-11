@@ -19,7 +19,7 @@ export function LinkedWindowCard({ source, sourceRef, title, status, detail, tim
     {!acknowledged && <div style={{ color: 'var(--text-dim)', fontSize: 'var(--font-xs)' }}>{detail} {timestamp}</div>}
     {!acknowledged && waitingLabel && <p>{waitingLabel}</p>}{!acknowledged && closedLabel && <p>{closedLabel}</p>}{!acknowledged && sleepingLabel && <p>{sleepingLabel}</p>}
     {!acknowledged && !closedLabel && <div onClick={event => event.stopPropagation()} onKeyDown={event => event.stopPropagation()}>{snapshot}</div>}
-    {sourceRef && <div style={{ position: 'relative', zIndex: 1, marginBottom: 'var(--space-2)' }}><IssueRefChip source={source} sourceRef={sourceRef} /></div>}
+    {sourceRef && <div className="linked-window-card-issue" style={{ position: 'relative', zIndex: 1, marginBottom: 'var(--space-2)' }}><IssueRefChip source={source} sourceRef={sourceRef} /></div>}
     {!acknowledged && <div style={{ position: 'relative', zIndex: 1, display: 'flex', flexWrap: 'wrap', gap: 'var(--space-2)' }}>
       {onExpand && <IconButton aria-label={expandLabel} title={expandLabel} onClick={onExpand}><Icon name="external-link" size={16} /></IconButton>}
       {onWake && <Button size="sm" loading={waking} onClick={onWake}>{wakeLabel}</Button>}

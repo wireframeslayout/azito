@@ -24,3 +24,9 @@ it('shows a linked issue only for a valid reference and highlights attention', (
   rerender(<LinkedWindowCard title="Window" status="running" openLabel="Open" unlinkLabel="Unlink" onUnlink={vi.fn()} />);
   expect(screen.queryByRole('link')).toBeNull();
 });
+
+it('leaves the issue row empty (hidden by :empty) for an unparseable reference', () => {
+  const { container } = render(<LinkedWindowCard title="Window" status="running" source="github" sourceRef="not-a-ref" openLabel="Open" unlinkLabel="Unlink" onUnlink={vi.fn()} />);
+  expect(screen.queryByRole('link')).toBeNull();
+  expect(container.querySelector('.linked-window-card-issue')?.childNodes.length).toBe(0);
+});
