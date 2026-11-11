@@ -29,7 +29,9 @@
     "nameDuplicate": "同名のファイルまたはフォルダが既に存在します",
     "createFailed": "作成に失敗しました",
     "deleteFailed": "削除に失敗しました",
-    "renameFailed": "名前の変更に失敗しました"
+    "renameFailed": "名前の変更に失敗しました",
+    "filterLoaded": "表示中の名前を絞り込み…",
+    "noFiltered": "一致する名前はありません"
   },
   "preview": {
     "downloadFile": "ファイルをダウンロード",
@@ -85,6 +87,7 @@
     "pathCopied": "パスをコピーしました"
   },
   "editor": {
+    "languages": {"markdown": "Markdown", "typescript": "TypeScript", "javascript": "JavaScript", "json": "JSON", "css": "CSS", "html": "HTML", "python": "Python", "shell": "Shell", "yaml": "YAML", "sql": "SQL", "toml": "TOML"},
     "viewMode": "Markdown 表示モード",
     "saving": "保存中…",
     "save": "保存",
@@ -107,6 +110,10 @@
       "invalid_utf8": "UTF-8 ではないファイルは編集できません。",
       "not_text": "テキストファイルではないため編集できません。",
       "forbidden": "このファイルを読み込む権限がありません。"
-    }
+    },
+    "restore": "元に戻す",
+    "restoreConfirm": "変更を破棄して最後に保存した内容に戻しますか？",
+    "lineCount_one": "{{count}} 行",
+    "lineCount_other": "{{count}} 行"
   }
 }

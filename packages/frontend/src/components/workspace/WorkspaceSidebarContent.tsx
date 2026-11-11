@@ -13,6 +13,7 @@ import FileExplorer from '../FileExplorer';
 import { FileSearchPanel } from '../files/FileSearchPanel';
 import { RootSwitcher, type WorktreeItem } from '../files/RootSwitcher';
 import { FileSidebarHeader } from '../files/FileSidebarHeader';
+import { useServerPath } from '../../hooks/useServerPath';
 import { PathBreadcrumb } from '../files/PathBreadcrumb';
 import { Notice } from '../ui/Notice';
 import RepoSidebar from '../RepoSidebar';
@@ -265,7 +266,7 @@ export default function WorkspaceSidebarContent({
                     onWorktreeChange={setCurrentWorktree}
                   />
                 )}
-                <PathBreadcrumb path={effectiveRoot} />
+                <ServerPathBreadcrumb path={effectiveRoot} serverName={selectedFileServer} />
                 {currentWorktree?.orphaned && (
                   <div style={{ padding: '0 12px 4px', flexShrink: 0 }}>
                     <Notice tone="warning">{tf('rootSwitcher.orphanedNotice')}</Notice>
@@ -312,4 +313,9 @@ export default function WorkspaceSidebarContent({
       )}
     </>
   );
+}
+
+function ServerPathBreadcrumb({ path, serverName }: { path: string; serverName: string }) {
+  const pathApi = useServerPath(serverName);
+  return pathApi ? <PathBreadcrumb path={path} separator={pathApi.sep} /> : null;
 }

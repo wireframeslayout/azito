@@ -14,5 +14,10 @@ test('keeps active and finished rows at the same height', async ({ app, harness 
   await expect(rows.filter({ hasText: new RegExp(`W-${blockedId}`) }).locator('.aw-blocked-dot')).toBeVisible({ timeout: 20000 });
   await expect(rows).toHaveCount(4);
   const sizes = await rows.evaluateAll(elements => elements.map(element => element.getBoundingClientRect().height));
-  expect(new Set(sizes).size).toBe(1);
+  expect(sizes).toEqual([31, 31, 31, 31]);
+  const history = rows.filter({ has: app.getByRole('button', { name: '履歴から削除' }) });
+  await history.getByRole('button', { name: '履歴から削除' }).focus();
+  await expect(history.locator('.aw-history-delete')).toHaveCSS('opacity', '1');
+  await history.getByRole('button', { name: '履歴から削除' }).click();
+  await expect(rows).toHaveCount(3);
 });

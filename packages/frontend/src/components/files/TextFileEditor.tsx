@@ -40,6 +40,7 @@ export function TextFileEditor({ backend, path, name, initialLine, headerActions
   const [vim, setVim] = useState(() => !mobile && localStorage.getItem('azito-editor-vim-mode') === 'true');
   const [vimDisplay, setVimDisplay] = useState('');
   const [cursor, setCursor] = useState({ line: initialLine ?? 1, col: 1 });
+  const [restoreCount, setRestoreCount] = useState(0);
   const [diff, setDiff] = useState<DiffLine[] | null | undefined>(undefined);
   const doc = useTextFileDocument(backend, path, onDirtyChange);
   const currentMode = mobile && mode === 'split' ? 'source' : mode;
@@ -55,7 +56,7 @@ export function TextFileEditor({ backend, path, name, initialLine, headerActions
   const canSave = doc.dirty && !doc.saving && doc.conflict === undefined;
   const save = () => { if (canSave) void doc.save(); };
   const editor = <div style={{ display: 'flex', flexDirection: 'column', height: '100%' }}>
-    <div style={{ flex: 1, minHeight: 0 }}><Suspense fallback={<LoadingState />}><CodeEditorView value={doc.content} language={doc.document?.language ?? 'text'} initialLine={initialLine} vimMode={vim} onChange={doc.change} onSave={save} onInsertReady={(insert) => { insertRef.current = insert; }} onCursorChange={(line, col) => setCursor({ line, col })} onVimModeDisplay={setVimDisplay} /></Suspense></div>
+    <div style={{ flex: 1, minHeight: 0 }}><Suspense fallback={<LoadingState />}><CodeEditorView key={restoreCount} value={doc.content} language={doc.document?.language ?? 'text'} initialLine={initialLine} vimMode={vim} onChange={doc.change} onSave={save} onInsertReady={(insert) => { insertRef.current = insert; }} onCursorChange={(line, col) => setCursor({ line, col })} onVimModeDisplay={setVimDisplay} /></Suspense></div>
     <Suspense fallback={null}><EditorStatusBar line={cursor.line} col={cursor.col} vimModeDisplay={vimDisplay} vimEnabled={vim} onVimToggle={() => setVim((previous) => { localStorage.setItem('azito-editor-vim-mode', String(!previous)); return !previous; })} saveStatus={doc.conflict !== undefined ? 'conflict' : doc.saving ? 'saving' : doc.dirty ? 'dirty' : doc.saved ? 'saved' : 'clean'} /></Suspense>
   </div>;
   return (
@@ -68,8 +69,10 @@ export function TextFileEditor({ backend, path, name, initialLine, headerActions
         {markdown && <SegmentedToggle options={options} value={currentMode} onChange={selectMode} ariaLabel={t('editor.viewMode')} />}
         {doc.dirty && <span style={{ color: 'var(--warning)', fontSize: 'var(--font-sm)' }}>● {t('editor.unsaved')}</span>}
         <Button size="sm" variant={canSave ? 'primary' : 'default'} disabled={!canSave} onClick={save} title={`${t('editor.save')} (Ctrl+S)`}>{doc.saving ? t('editor.saving') : t('editor.save')} <kbd aria-hidden="true">Ctrl+S</kbd></Button>
+        <Button size="sm" disabled={!doc.dirty || doc.saving || doc.conflict !== undefined} onClick={async () => { if (await confirm({ title: t('editor.restoreConfirm'), confirmLabel: t('editor.restore'), danger: true }) && doc.restore()) setRestoreCount((count) => count + 1); }}>{t('editor.restore')}</Button>
         {headerActions}
       </div>
+      {doc.document && <div style={{ display: 'flex', flexWrap: 'wrap', gap: 'var(--space-3)', padding: 'var(--space-1) var(--space-4)', color: 'var(--text)', fontSize: 'var(--font-xs)' }}><span>{t(`editor.languages.${doc.document.language}`, { defaultValue: doc.document.language })}</span><span aria-hidden="true">·</span><span>UTF-8</span><span aria-hidden="true">·</span><span>{t('editor.lineCount', { count: doc.content.split('\n').length })}</span></div>}
       <div className="sr-only" role="status" aria-live="polite" aria-atomic="true">{doc.conflict !== undefined ? t('editor.conflict') : doc.saving ? t('editor.saving') : doc.dirty ? t('editor.unsaved') : doc.saved ? t('editor.saved') : ''}</div>
       {doc.conflict !== undefined && <Notice tone="warning" style={{ margin: 'var(--space-2)', flexShrink: 0 }} sub={doc.conflict === null ? t('editor.latestUnavailable') : doc.conflict.kind === 'unavailable' ? unavailableText(doc.conflict) : undefined}
         action={<div style={{ display: 'flex', flexWrap: 'wrap', gap: 'var(--space-2)' }}>

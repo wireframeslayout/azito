@@ -55,7 +55,7 @@ export default function HomeFeed({ allProjects, openTask, connectPane, onAddWind
           <h2 style={{ margin: 0, fontSize: 'var(--font-base)', fontWeight: 600 }}>{t('lookout:title')}</h2>
           <LookoutCounts counts={sections.counts} activityKnown={activityKnown} />
         </section>
-        <LookoutSection name="attention" countKnown={activityKnown} items={attentionEntries} empty={activityKnown ? undefined : <></>} renderItem={(entry) => (
+        <LookoutSection name="attention" countKnown={activityKnown} items={attentionEntries} empty={activityKnown ? undefined : false} renderItem={(entry) => (
           <AttentionCard key={entry.key} entry={entry}
             project={entry.projectId != null ? projectById.get(entry.projectId) : undefined}
             onClick={() => handleItemClick(entry)} summary={summaries.get(entry.key)} t={t} />
@@ -66,7 +66,7 @@ export default function HomeFeed({ allProjects, openTask, connectPane, onAddWind
           padding: 'var(--space-5) var(--space-4)', background: 'var(--bg-card)', borderRadius: 'var(--radius-lg)', textAlign: 'center' }}>
           <span style={{ color: 'var(--text-dim)', fontSize: 'var(--font-md)' }}>{t('workspace:home.noActive')}</span>
           <Button size="sm" onClick={onAddWindow}><Icon name="plus" size={14} />{t('workspace:windows.addWindow')}</Button>
-        </div> : <></>} />
+        </div> : false} />
       </div>
 
       <style>{`
