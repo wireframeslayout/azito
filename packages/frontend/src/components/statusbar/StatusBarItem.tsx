@@ -5,6 +5,7 @@ import type { DotLevel } from './HealthDot';
 interface StatusBarItemProps {
   label: string;
   dot?: DotLevel;
+  mono?: boolean;
   badge?: number;
   badgeLabel?: string;
   popup?: 'dialog' | 'true';
@@ -17,7 +18,7 @@ export interface StatusBarItemRef {
 }
 
 export const StatusBarItem = forwardRef<StatusBarItemRef, StatusBarItemProps>(
-  function StatusBarItem({ label, dot, active, onClick, badge, badgeLabel, popup = 'true' }, ref) {
+  function StatusBarItem({ label, dot, active, onClick, badge, badgeLabel, mono = false, popup = 'true' }, ref) {
     const btnRef = useRef<HTMLButtonElement>(null);
 
     useImperativeHandle(ref, () => ({
@@ -42,7 +43,7 @@ export const StatusBarItem = forwardRef<StatusBarItemRef, StatusBarItemProps>(
           background: active ? 'var(--bg-hover)' : 'transparent',
           color: active ? 'var(--text)' : 'var(--text-dim)',
           border: 'none',
-          fontFamily: 'var(--mono)',
+          fontFamily: mono ? 'var(--font-mono)' : undefined,
           fontSize: 'var(--font-xs)',
           transition: 'background 0.15s, color 0.15s',
         }}

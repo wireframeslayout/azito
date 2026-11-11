@@ -26,7 +26,7 @@ export function CopyableCommand({ command }: CopyableCommandProps) {
       <code
         tabIndex={0}
         style={{
-          flex: 1, minWidth: 0, fontFamily: 'var(--mono)', fontSize: 'var(--font-xs)', color: 'var(--text)', background: 'var(--bg)',
+          flex: 1, minWidth: 0, fontFamily: 'var(--font-mono)', fontSize: 'var(--font-xs)', color: 'var(--text)', background: 'var(--bg)',
           border: '1px solid var(--border)', borderRadius: 'var(--radius-sm)', padding: 'var(--space-2)', overflowWrap: 'anywhere', userSelect: 'all',
         }}
       >

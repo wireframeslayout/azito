@@ -1,3 +1,4 @@
+import { StatusBarItem } from './statusbar/StatusBarItem';
 import { fireEvent, render, screen } from '@testing-library/react';
 import { expect, it, vi } from 'vitest';
 import { StatusBar } from './StatusBar';
@@ -29,4 +30,11 @@ it('opens a referenced task when its catalog entry is unavailable', () => {
   render(<StatusBar servers={[]} />);
   fireEvent.click(screen.getByText('open row'));
   expect(mocks.openTask).toHaveBeenCalledWith(42);
+});
+
+it('uses monospace only for the requested status labels', () => {
+  const { rerender } = render(<StatusBarItem label="稼働検知" active={false} onClick={() => {}} />);
+  expect(screen.getByRole('button', { name: '稼働検知' }).style.fontFamily).toBe('');
+  rerender(<StatusBarItem label="Hub" mono active={false} onClick={() => {}} />);
+  expect(screen.getByRole('button', { name: 'Hub' }).style.fontFamily).toBe('var(--font-mono)');
 });

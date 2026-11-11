@@ -137,7 +137,7 @@ export default function EnvironmentFormFields({
         </>
       )}
       <FormField label={t('settings.servers.branch')}>
-        <FormInput value={branch} onChange={(e) => onBranchChange(e.target.value)} placeholder={t('settings.servers.branchPlaceholder')} />
+        <FormInput style={{ fontFamily: 'var(--font-mono)' }} value={branch} onChange={(e) => onBranchChange(e.target.value)} placeholder={t('settings.servers.branchPlaceholder')} />
       </FormField>
       <FormField label={t('settings.servers.tmuxSession')} hint={t('settings.servers.tmuxSessionHint')}>
         <FormInput value={tmuxSession} onChange={(e) => onTmuxSessionChange(e.target.value)} placeholder={t('settings.servers.tmuxSessionPlaceholder')} />

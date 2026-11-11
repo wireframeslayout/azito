@@ -158,7 +158,7 @@ export default function DirectoryInput({ id, value, onChange, serverName, placeh
         onBlur={handleBlur}
         onFocus={handleFocus}
         placeholder={placeholder}
-        style={{ ...baseInputStyle, ...style }}
+        style={{ ...baseInputStyle, ...style, fontFamily: 'var(--font-mono)' }}
         autoComplete="off"
       />
       {open && suggestions.length > 0 && (

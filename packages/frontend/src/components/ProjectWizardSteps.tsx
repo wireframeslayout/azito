@@ -352,7 +352,7 @@ export function CodeStep({
             <DirectoryInput value={cloneDirectory} onChange={setCloneDirectory} serverName={selectedServer} placeholder={t('wizard.code.cloneDirectoryPlaceholder')} style={baseInputStyle} />
           </FormField>
           <FormField label={t('wizard.code.cloneBranchLabel')}>
-            <FormInput value={cloneBranch} onChange={(e) => setCloneBranch(e.target.value)} placeholder="main" />
+            <FormInput style={{ fontFamily: 'var(--font-mono)' }} value={cloneBranch} onChange={(e) => setCloneBranch(e.target.value)} placeholder="main" />
           </FormField>
           {!isolated && (
             <p style={{ fontSize: 'var(--font-sm)', color: 'var(--text-dim)' }}>

@@ -104,7 +104,7 @@ export default function TerminalSection() {
             <ul style={{ listStyle: 'none', margin: '0 0 12px', padding: 0, display: 'grid', gap: 6 }} aria-live="polite">
               {settings.servers.map((server) => (
                 <li key={server.name} style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 'var(--font-sm)', minWidth: 0 }}>
-                  <span style={{ fontFamily: 'var(--mono)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{server.name}</span>
+                  <span style={{ fontFamily: 'var(--font-mono)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{server.name}</span>
                   <Chip>{server.defaultMux}</Chip>
                   {results[server.name] && (
                     <Chip tone={results[server.name] === 'updated' ? 'green' : 'red'}>{t(results[server.name] === 'updated' ? 'terminal.updated' : 'terminal.updateFailed')}</Chip>

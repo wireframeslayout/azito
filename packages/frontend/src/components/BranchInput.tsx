@@ -158,7 +158,7 @@ export default function BranchInput({ value, onChange, serverName, projectId, wo
         onBlur={handleBlur}
         onFocus={handleFocus}
         placeholder={placeholder}
-        style={{ ...baseInputStyle, ...style }}
+        style={{ ...baseInputStyle, ...style, fontFamily: 'var(--font-mono)' }}
         autoComplete="off"
         aria-describedby={gitNotFoundReason ? reasonId : undefined}
       />
