@@ -30,13 +30,17 @@ import { OrchestrationSidebar } from './OrchestrationSidebar';
 
 export interface OrchestrationPageProps { rightPanel?: ReactNode }
 
+function titleOf(window: Window): string {
+  return formatWindowTitleLine(resolveWindowTitle({ ...windowTitleInput(window), tmuxTarget: window.tmuxTarget }));
+}
+
 function OrchestrationWindow({ window, isMobile, showTab = false }: { window: Window; isMobile: boolean; showTab?: boolean }) {
   const { t } = useTranslation('common');
+  // isMobile=false keeps the terminal as the default on phones too; changing that default is #719.
   const [viewMode, setViewMode] = useWindowViewMode(window.id, false, window.windowType === 'agent');
   const changeMode = (mode: WindowViewMode) => setViewMode(mode, window.id);
-  const title = formatWindowTitleLine(resolveWindowTitle({ ...windowTitleInput(window), tmuxTarget: window.tmuxTarget }));
   return <div style={{ display: 'flex', flexDirection: 'column', flex: 1, minHeight: 0, minWidth: 0 }}>
-    {showTab && <TabBar tabs={[{ id: String(window.id), label: title, closable: false }]} activeId={String(window.id)} onSelect={() => {}} trailing={!isMobile ? <SegmentedToggle<WindowViewMode> ariaLabel={t('terminal.viewMode.ariaLabel')} value={viewMode} onChange={changeMode} options={[{ value: 'terminal', label: t('terminal.viewMode.terminal'), icon: 'terminal' }, { value: 'chat', label: t('terminal.viewMode.chat'), icon: 'transcript' }]} /> : undefined} />}
+    {showTab && <TabBar tabs={[{ id: String(window.id), label: titleOf(window), closable: false }]} activeId={String(window.id)} onSelect={() => {}} trailing={!isMobile ? <SegmentedToggle<WindowViewMode> ariaLabel={t('terminal.viewMode.ariaLabel')} value={viewMode} onChange={changeMode} options={[{ value: 'terminal', label: t('terminal.viewMode.terminal'), icon: 'terminal' }, { value: 'chat', label: t('terminal.viewMode.chat'), icon: 'transcript' }]} /> : undefined} />}
     <TerminalContainer viewMode={viewMode} onViewModeChange={changeMode} serverName={window.serverName} target={window.tmuxTarget} terminalRef={{ kind: 'windowId', serverName: window.serverName, windowId: window.id, pane: 1 }} registeredWindow={{ id: window.id }} />
   </div>;
 }
@@ -63,7 +67,6 @@ export default function OrchestrationPage({ rightPanel }: OrchestrationPageProps
   const toggleRef = useRef<HTMLButtonElement>(null);
   const listRef = useRef<HTMLButtonElement>(null);
   const id = pathname.split('/')[2];
-  const titleOf = (window: Window) => formatWindowTitleLine(resolveWindowTitle({ ...windowTitleInput(window), tmuxTarget: window.tmuxTarget }));
   const selected = windows.find((window) => String(window.id) === id);
   const ancestors: number[] = [];
   let parent = selected?.parentWindowId;
