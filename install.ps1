@@ -496,8 +496,9 @@ function Invoke-Uninstall {
             Remove-Item -LiteralPath $wrapper
         }
         if ($holder.HasExited) { throw 'The uninstall lock holder exited; inspect retained files manually.' }
-        $holder.StandardInput.WriteLine('remove')
-        $holder.StandardInput.Flush()
+        $commandBytes = (New-Object System.Text.UTF8Encoding($false)).GetBytes("remove`n")
+        $holder.StandardInput.BaseStream.Write($commandBytes, 0, $commandBytes.Length)
+        $holder.StandardInput.BaseStream.Flush()
         $holder.StandardInput.Close()
         $resultLine = $holder.StandardOutput.ReadLine()
         if (-not $resultLine) { throw "Uninstall stopped before reporting the result. Inspect remaining files manually: no JSON response from helper" }

@@ -1,6 +1,8 @@
 import path from 'path';
 import fs from 'fs';
 import { createHash } from 'crypto';
+import { createInterface } from 'readline';
+import type { Readable } from 'stream';
 import { createServiceManager } from '../modules/system/createServiceManager';
 import { HUB_SERVICE, runCommand } from '../modules/system/serviceManager';
 import { createHubLock, underHubLock } from '../modules/system/hubLock';
@@ -25,6 +27,27 @@ export async function withUninstallPreparation<T>(action: (beforeDelete: () => v
   } catch (err) {
     throw new UninstallPreparationError(err instanceof Error ? err.message : String(err), taskMayHaveBeenRemoved);
   }
+}
+
+/** Read one UTF-8 line even when the input is split across chunks. */
+export async function confirmUninstall(input: Readable, report: (message: string) => void, fail: () => void): Promise<boolean> {
+  const line = await new Promise<string | null>((resolve, reject) => {
+    const reader = createInterface({ input, crlfDelay: Infinity });
+    let received = false;
+    reader.once('line', (value) => {
+      received = true;
+      reader.close();
+      resolve(value);
+    });
+    reader.once('close', () => { if (!received) resolve(null); });
+    input.once('error', reject);
+  });
+  const action = line === null ? '' : line.replace(/^\uFEFF/, '').trim();
+  if (action === 'remove') return true;
+  const error = line === null ? 'cancelled' : `unexpected uninstall action: ${JSON.stringify(action.slice(0, 120))}`;
+  report(JSON.stringify({ removed: false, error }));
+  fail();
+  return false;
 }
 
 /** Prepares the installer to remove only items proved by its record. */
@@ -96,12 +119,7 @@ async function runUninstall(host: HostEnv, context: ServiceCommandContext, remov
     await uninstallWindowsTask(created.manager, hub, context, beforeDelete);
     consumeWindowsInstallRecord(hub.layout.hubRoot, record, context.secretFileGuard);
     console.log(JSON.stringify({ release: path.basename(release), data, dataDb, dataFiles, wrapper, pathAdded: record.pathAdded, pathValueCreated: record.pathValueCreated === true, retained }));
-    const action = await new Promise<string>((resolve) => {
-      process.stdin.once('data', (chunk: Buffer) => resolve(chunk.toString('utf8').trim()));
-      process.stdin.once('end', () => resolve(''));
-      process.stdin.resume();
-    });
-    if (action !== 'remove') return;
+    if (!(await confirmUninstall(process.stdin, (message) => console.log(message), () => { process.exitCode = 1; }))) return;
     try {
       console.error('Uninstall helper: checking tasks and running processes.');
       if ((await hub.client.query(HUB_SERVICE.windowsTaskName)).exists || (await hub.client.query(HUB_UPDATE_TASK)).exists) throw new Error('A hub or update task appeared while preparing removal; inspect it and retry manually.');
