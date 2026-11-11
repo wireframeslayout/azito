@@ -31,7 +31,7 @@ import { OrchestrationSidebar } from './OrchestrationSidebar';
 export interface OrchestrationPageProps { rightPanel?: ReactNode }
 
 function OrchestrationWindow({ window, isMobile, showTab = false }: { window: Window; isMobile: boolean; showTab?: boolean }) {
-  const { t } = useTranslation('workspace');
+  const { t } = useTranslation('common');
   const [viewMode, setViewMode] = useWindowViewMode(window.id, false, window.windowType === 'agent');
   const changeMode = (mode: WindowViewMode) => setViewMode(mode, window.id);
   const title = formatWindowTitleLine(resolveWindowTitle({ ...windowTitleInput(window), tmuxTarget: window.tmuxTarget }));
