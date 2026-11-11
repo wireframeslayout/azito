@@ -66,7 +66,7 @@ async function main(): Promise<void> {
   }
 
   if (process.argv[2] === 'windows-install-record') {
-    windowsInstallRecordCommand(getBundleRoot(), process.argv.slice(3), secretFileGuard);
+    windowsInstallRecordCommand(getBundleRoot(), process.argv.slice(3), secretFileGuard, hostEnv.platform);
     return;
   }
 

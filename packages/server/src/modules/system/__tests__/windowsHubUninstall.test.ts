@@ -3,11 +3,11 @@ import fs from 'fs';
 import os from 'os';
 import path from 'path';
 import { UnixSecretFileGuard } from '../../../shared/os/secretFileGuard';
-import { readInstallInventory } from '../windowsInstallInventory';
+import { readInstallFileIdentity, readInstallInventory } from '../windowsInstallInventory';
 vi.mock('../windowsHubFolderOps', async (importOriginal) => ({ ...(await importOriginal<typeof import('../windowsHubFolderOps')>()), removeFolderWithRd: vi.fn() }));
 
 import { removeFolderWithRd } from '../windowsHubFolderOps';
-import { consumeWindowsInstallRecord, readWindowsInstallRecord, removeRecordedTree, verifyRecordedData, verifyRecordedRelease } from '../windowsHubUninstall';
+import { consumeWindowsInstallRecord, readWindowsInstallRecord, removeRecordedTree, verifyRecordedData, verifyRecordedDatabase, verifyRecordedRelease } from '../windowsHubUninstall';
 
 const roots: string[] = [];
 afterEach(() => { for (const root of roots.splice(0)) fs.rmSync(root, { recursive: true, force: true }); });
@@ -21,7 +21,7 @@ function setup() {
   fs.writeFileSync(path.join(release, 'node.exe'), 'bundle');
   const guard = new UnixSecretFileGuard();
   guard.inspect = () => ({ ok: true });
-  const record = { version: 1, consumed: false, release: 'v1.2.3', inventory: readInstallInventory(release), wrapperSha256: null, pathAdded: false, dataInventory: null };
+  const record = { version: 1, consumed: false, release: 'v1.2.3', inventory: readInstallInventory(release), wrapperSha256: null, pathAdded: false, dataInventory: null, dataRootIdentity: null, dbIdentity: null };
   guard.writeSecretFile(path.join(hub, '.install-record.json'), JSON.stringify(record));
   return { hub, release, guard };
 }
@@ -47,12 +47,19 @@ describe('recorded release verification', () => {
     const prefix = path.dirname(hub);
     const data = path.join(prefix, 'data');
     fs.mkdirSync(data);
+    const db = path.join(data, 'data.db');
+    fs.writeFileSync(db, 'original');
     const record = readWindowsInstallRecord(hub, guard);
     expect(() => verifyRecordedData(prefix, record)).toThrow(/did not create/);
-    const withData = { ...record, dataInventory: readInstallInventory(data) };
+    const withData = { ...record, dataInventory: readInstallInventory(data), dataRootIdentity: readInstallFileIdentity(data), dbIdentity: readInstallFileIdentity(db) };
     expect(verifyRecordedData(prefix, withData)).toBe(data);
+    fs.writeFileSync(db, 'changed contents');
+    expect(verifyRecordedDatabase(prefix, withData, guard)).toBe(db);
     fs.writeFileSync(path.join(data, 'user-file'), 'keep');
     expect(() => verifyRecordedData(prefix, withData)).toThrow(/differ/);
+    fs.renameSync(db, path.join(data, 'old-db'));
+    fs.writeFileSync(db, 'replacement');
+    expect(() => verifyRecordedDatabase(prefix, withData, guard)).toThrow(/not the recorded file/);
   });
 
   it('reports the isolated folder when removal fails', async () => {

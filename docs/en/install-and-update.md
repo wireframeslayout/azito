@@ -125,7 +125,7 @@ All three forms do the same. The `[Net.ServicePointManager]... -bor 3072;` in fr
 | `-NoPath` | Do not add `<prefix>\bin` to the user's PATH |
 | `-NoService` | Do not register the Task Scheduler task. Run the hub with `azito run`, or register it later with `azito service install` |
 | `-Uninstall` | Remove the verified installation items; keep data by default |
-| `-RemoveData` | With `-Uninstall`, also remove data that still matches its installation record |
+| `-RemoveData` | With `-Uninstall`, also remove the recorded database and verified unchanged data |
 
 With `irm | iex` there is no way to pass arguments, so each option can also be given by an environment variable set before the command: `AZITO_INSTALL_VERSION`, `AZITO_INSTALL_PREFIX`, `AZITO_INSTALL_PORT`, `AZITO_INSTALL_ZIPPATH`, `AZITO_INSTALL_SHA256SUMS`, and `AZITO_INSTALL_YES` / `AZITO_INSTALL_NOPATH` / `AZITO_INSTALL_NOSERVICE` / `AZITO_INSTALL_UNINSTALL` / `AZITO_INSTALL_REMOVEDATA` (set to `1`); an argument wins over the variable. A zip named by `AZITO_INSTALL_ZIPPATH` is never used unverified: the installer stops, before writing anything, unless `-Sha256Sums` or `AZITO_INSTALL_SHA256SUMS` names the checksum file (a variable left over in the session must not switch a normal install to an unchecked zip). Run it in a PowerShell window and remove the variable afterwards so it does not stay in the session, for example `$env:AZITO_INSTALL_PORT = 3010; [Net.ServicePointManager]::SecurityProtocol = [Net.ServicePointManager]::SecurityProtocol -bor 3072; irm https://github.com/wireframeslayout/azito/releases/latest/download/install.ps1 | iex; Remove-Item Env:AZITO_INSTALL_PORT`.
 
@@ -167,11 +167,11 @@ Download and verify `install.ps1` as above, then run it from Windows PowerShell 
 
 ```powershell
 powershell -NoProfile -ExecutionPolicy Bypass -File .\install.ps1 -Uninstall [-Prefix <dir>]
-# To also remove unchanged data recorded at installation:
+# To also remove the recorded database and verified unchanged data:
 powershell -NoProfile -ExecutionPolicy Bypass -File .\install.ps1 -Uninstall -RemoveData [-Prefix <dir>]
 ```
 
-Stop the task with `azito stop` first, and stop any `azito run` window with Ctrl+C. The uninstaller checks the registered task's identity and account, and refuses while a hub or update is running. `-Yes` skips the confirmation; it does not select data for removal. Data is retained unless `-RemoveData` is specified, and even then is retained if its contents changed or its ownership cannot be verified. An external `AZITO_DATA_DIR` is never removed.
+Stop the task with `azito stop` first, and stop any `azito run` window with Ctrl+C. The uninstaller checks the registered task's identity and account, and refuses while a hub or update is running. `-Yes` skips the confirmation; it does not select data for removal. Data is retained unless `-RemoveData` is specified. With it, the database created at installation can be removed after use if its filesystem identity still matches the record; a replacement is retained. Other data is retained if it has changed or its ownership cannot be verified. An external `AZITO_DATA_DIR` is never removed.
 
 The installer records the files it created. The uninstaller verifies their contents, links and access rules before removing them, and retains unrecorded or changed files. An older installation without a record, an updated release not in the record, a link, or an unsafe access list requires manual inspection. Shared misao is always retained; inspect `AzitoMisao`, its users, and any Windows agent before deciding whether to remove it. The command prints what remains, including configuration and logs. Inspect retained files in Explorer, the user PATH in Windows environment settings, and tasks in Task Scheduler before removing anything manually. If removal starts but fails, the record is marked as used: a later run will retain the remaining items for manual inspection, including any isolated folder it reports.
 

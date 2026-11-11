@@ -443,7 +443,7 @@ function Invoke-Uninstall {
     $release = Join-Path $hubRoot $record.release
     Assert-RecordedTree $release $record.inventory
     Write-Host "Uninstalling the recorded AZITO installation at $Prefix."
-    if ($RemoveData) { Write-Host 'Recorded data is selected for removal if it is unchanged.' } else { Write-Host 'Data will be retained.' }
+    if ($RemoveData) { Write-Host 'The recorded database and unchanged recorded data are selected for removal when their identity can be verified.' } else { Write-Host 'Data will be retained.' }
     Write-Host 'Shared misao and unrecorded files will be retained.'
     if (-not $Yes) {
         if ([Console]::IsInputRedirected) { throw 'Confirmation requires an interactive terminal or -Yes.' }
@@ -680,7 +680,12 @@ function Invoke-Install {
         New-Item -ItemType Directory -Force -Path $hubRoot | Out-Null
         $installDir = Join-Path $hubRoot $tag
         $freshBundle = -not (Test-Path -LiteralPath $installDir)
-        $freshData = -not (Test-Path -LiteralPath (Join-Path $Prefix 'data'))
+        $dataPath = Join-Path $Prefix 'data'
+        $freshData = $false
+        if (-not (Test-Path -LiteralPath $dataPath)) {
+            New-Item -ItemType Directory -Path $dataPath | Out-Null
+            $freshData = $true
+        }
         $freshWrapper = -not (Test-Path -LiteralPath (Join-Path $Prefix 'bin\azito.cmd'))
         # No pointer means nothing uses this folder: it is what an interrupted earlier run left behind.
         if (Test-Path -LiteralPath $installDir) { Remove-Item -LiteralPath $installDir -Recurse -Force }

@@ -3,13 +3,14 @@ import path from 'path';
 import crypto from 'crypto';
 import { z } from 'zod';
 import type { SecretFileGuard } from '../../shared/os/secretFileGuard';
-import { assertRealDirectoryChain, hashInstallFile, readInstallInventory } from './windowsInstallInventory';
+import { assertRealDirectoryChain, hashInstallFile, readInstallFileIdentity, readInstallInventory, type InstallFileIdentity } from './windowsInstallInventory';
 import { isReleaseTag } from './hubVersion';
 import { assertHubDirsOnlyOwnerWritable, removeFolderWithRd } from './windowsHubFolderOps';
 import type { SpecRunner } from './windowsHubService';
 import { whyAFileIsHeld } from './windowsHubPrune';
 
 const fileSchema = z.object({ path: z.string(), sha256: z.string().regex(/^[a-f0-9]{64}$/) }).strict();
+const identitySchema = z.object({ device: z.string().regex(/^\d+$/), file: z.string().regex(/^\d+$/), created: z.string().regex(/^\d+$/) }).strict();
 const recordSchema = z.object({
   version: z.literal(1),
   consumed: z.boolean(),
@@ -18,6 +19,8 @@ const recordSchema = z.object({
   wrapperSha256: z.string().regex(/^[a-f0-9]{64}$/).nullable(),
   pathAdded: z.boolean(),
   dataInventory: z.object({ directories: z.array(z.string()), files: z.array(fileSchema) }).strict().nullable(),
+  dataRootIdentity: identitySchema.nullable(),
+  dbIdentity: identitySchema.nullable(),
 }).strict();
 
 export type WindowsInstallRecord = z.infer<typeof recordSchema>;
@@ -53,10 +56,30 @@ export function verifyRecordedWrapper(prefix: string, record: WindowsInstallReco
 export function verifyRecordedData(prefix: string, record: WindowsInstallRecord): string {
   if (record.dataInventory === null) throw new Error('This installer did not create the data directory; it is retained.');
   const data = path.join(prefix, 'data');
+  if (!sameFile(record.dataRootIdentity, readInstallFileIdentity(data))) throw new Error('The data directory is not the recorded directory.');
+  if (record.dataInventory.directories.length !== 0 || record.dataInventory.files.length !== 1 || record.dataInventory.files[0]?.path !== 'data.db'
+    || !sameFile(record.dbIdentity, readInstallFileIdentity(path.join(data, 'data.db')))) throw new Error('The data directory contains items whose identity was not recorded.');
   if (JSON.stringify(readInstallInventory(data)) !== JSON.stringify(record.dataInventory)) {
     throw new Error('The data contents differ from the installation record; the directory is retained.');
   }
   return data;
+}
+
+function sameFile(expected: InstallFileIdentity | null, actual: InstallFileIdentity): boolean {
+  return expected !== null && expected.file !== '0' && expected.created !== '0'
+    && expected.device === actual.device && expected.file === actual.file && expected.created === actual.created;
+}
+
+/** The database may change contents; a replacement, link, or changed data root is not the recorded file. */
+export function verifyRecordedDatabase(prefix: string, record: WindowsInstallRecord, guard: SecretFileGuard): string {
+  const data = path.join(prefix, 'data');
+  assertRealDirectoryChain(data);
+  if (!sameFile(record.dataRootIdentity, readInstallFileIdentity(data))) throw new Error('The data directory is not the recorded directory.');
+  const db = path.join(data, 'data.db');
+  const stat = fs.lstatSync(db);
+  if (!stat.isFile() || stat.isSymbolicLink() || !sameFile(record.dbIdentity, readInstallFileIdentity(db))) throw new Error('The database is not the recorded file.');
+  if (!guard.inspect(db, 'file').ok) throw new Error('The database is not owner-protected.');
+  return db;
 }
 
 /** Check the directory access lists before trusting the record and again before returning a removal candidate. */
@@ -86,7 +109,8 @@ export function consumeWindowsInstallRecord(hubDir: string, record: WindowsInsta
   }
 }
 
-export async function prepareRecordedData(prefix: string, record: WindowsInstallRecord, run: SpecRunner, systemRoot: string): Promise<string> {
+export async function prepareRecordedData(prefix: string, record: WindowsInstallRecord, guard: SecretFileGuard, run: SpecRunner, systemRoot: string): Promise<string> {
+  verifyRecordedDatabase(prefix, record, guard);
   const data = verifyRecordedData(prefix, record);
   const dirs = [data, ...record.dataInventory!.directories.map((dir) => path.join(data, dir))];
   await assertHubDirsOnlyOwnerWritable(run, systemRoot, dirs);

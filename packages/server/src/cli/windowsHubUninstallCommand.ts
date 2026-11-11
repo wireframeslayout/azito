@@ -4,7 +4,7 @@ import { createServiceManager, type ServiceHost } from '../modules/system/create
 import { HUB_SERVICE, runCommand } from '../modules/system/serviceManager';
 import { createHubLock, underHubLock } from '../modules/system/hubLock';
 import { resolveWindowsHub, uninstallWindowsTask, type ServiceCommandContext } from '../modules/system/windowsHubOperations';
-import { consumeWindowsInstallRecord, prepareRecordedData, prepareRecordedRelease, removeRecordedTree, verifyRecordedRelease, verifyRecordedWrapper } from '../modules/system/windowsHubUninstall';
+import { consumeWindowsInstallRecord, prepareRecordedData, prepareRecordedRelease, removeRecordedTree, verifyRecordedDatabase, verifyRecordedRelease, verifyRecordedWrapper } from '../modules/system/windowsHubUninstall';
 import { assertHubDirsOnlyOwnerWritable } from '../modules/system/windowsHubFolderOps';
 import { runCommandSpec } from '../shared/exec/runCommandSpec';
 
@@ -21,13 +21,21 @@ export async function windowsHubUninstallCommand(host: ServiceHost, context: Ser
     const { record, release } = await prepareRecordedRelease(hub.layout.prefix, context.secretFileGuard, run, hub.systemRoot);
     const retained: string[] = [];
     let data = false;
+    let dataDb = false;
     let wrapper = false;
     if (removeData) {
       try {
-        await prepareRecordedData(hub.layout.prefix, record, run, hub.systemRoot);
+        await prepareRecordedData(hub.layout.prefix, record, context.secretFileGuard, run, hub.systemRoot);
         data = true;
       } catch (err) {
-        retained.push(`Data retained: ${err instanceof Error ? err.message : String(err)}`);
+        try {
+          await assertHubDirsOnlyOwnerWritable(run, hub.systemRoot, [path.join(hub.layout.prefix, 'data')]);
+          verifyRecordedDatabase(hub.layout.prefix, record, context.secretFileGuard);
+          dataDb = true;
+          retained.push('Data retained: only the recorded database can be removed; other data will be kept.');
+        } catch (dbErr) {
+          retained.push(`Data retained: ${err instanceof Error ? err.message : String(err)}; database: ${dbErr instanceof Error ? dbErr.message : String(dbErr)}`);
+        }
       }
     }
     if (record.wrapperSha256 !== null) {
@@ -40,7 +48,7 @@ export async function windowsHubUninstallCommand(host: ServiceHost, context: Ser
       }
     } else retained.push('The CLI wrapper was not recorded as created by this installer; inspect it manually.');
     consumeWindowsInstallRecord(hub.layout.hubRoot, record, context.secretFileGuard);
-    console.log(JSON.stringify({ release: path.basename(release), data, wrapper, pathAdded: record.pathAdded, retained }));
+    console.log(JSON.stringify({ release: path.basename(release), data, dataDb, wrapper, pathAdded: record.pathAdded, retained }));
     const action = await new Promise<string>((resolve) => {
       process.stdin.once('data', (chunk: Buffer) => resolve(chunk.toString('utf8').trim()));
       process.stdin.once('end', () => resolve(''));
@@ -49,8 +57,14 @@ export async function windowsHubUninstallCommand(host: ServiceHost, context: Ser
     if (action !== 'remove') return;
     try {
       if (data) {
-        await prepareRecordedData(hub.layout.prefix, record, run, hub.systemRoot);
+        await prepareRecordedData(hub.layout.prefix, record, context.secretFileGuard, run, hub.systemRoot);
         await removeRecordedTree(hub.layout.prefix, 'data', run, hub.systemRoot);
+      } else if (dataDb) {
+        const dir = path.join(hub.layout.prefix, 'data');
+        await assertHubDirsOnlyOwnerWritable(run, hub.systemRoot, [dir]);
+        const database = verifyRecordedDatabase(hub.layout.prefix, record, context.secretFileGuard);
+        fs.unlinkSync(database);
+        if (fs.readdirSync(dir).length === 0) fs.rmdirSync(dir);
       }
       await assertHubDirsOnlyOwnerWritable(run, hub.systemRoot, [release, ...record.inventory.directories.map((dir) => path.join(release, dir))]);
       verifyRecordedRelease(hub.layout.hubRoot, record);

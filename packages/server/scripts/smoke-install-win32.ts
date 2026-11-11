@@ -151,8 +151,11 @@ function checkRemoveData(installPs1: string, zip: string, sums: string, prefix: 
   assert(changedInstall.status === 0, 'install for changed data failed', changedInstall.output);
   const extra = path.join(changedPrefix, 'data', 'user-file');
   fs.writeFileSync(extra, 'keep');
+  const database = path.join(changedPrefix, 'data', 'data.db');
+  fs.writeFileSync(database, 'changed database');
   const changedRemoval = install(installPs1, ['-Uninstall', '-RemoveData', '-Prefix', changedPrefix, '-Yes']);
   assert(changedRemoval.status === 0 && fs.existsSync(extra) && /Data retained/.test(changedRemoval.output), 'changed data must be retained and reported', changedRemoval.output);
+  assert(!fs.existsSync(database), 'the changed database with the recorded identity must be removed', changedRemoval.output);
 }
 
 /** An install that stopped part-way (a version folder, no current.txt, no CLI) is repaired by running the installer again; the CLI refuses a bad pointer and survives `&` in the prefix. */

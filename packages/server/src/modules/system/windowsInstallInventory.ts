@@ -7,6 +7,19 @@ export interface InstallInventory {
   files: Array<{ path: string; sha256: string }>;
 }
 
+export interface InstallFileIdentity {
+  device: string;
+  file: string;
+  created: string;
+}
+
+/** Stable filesystem identity lets a recorded data file change without treating a replacement as the same file. */
+export function readInstallFileIdentity(target: string): InstallFileIdentity {
+  const stat = fs.lstatSync(target, { bigint: true });
+  if (stat.isSymbolicLink()) throw new Error(`${target} is a link`);
+  return { device: stat.dev.toString(), file: stat.ino.toString(), created: stat.birthtimeNs.toString() };
+}
+
 /** Refuse a link or volume mount at any point in the path, including the root itself. */
 export function assertRealDirectoryChain(target: string): void {
   let current = path.resolve(target);
