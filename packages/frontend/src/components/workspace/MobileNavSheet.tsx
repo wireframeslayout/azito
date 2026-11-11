@@ -9,6 +9,7 @@ import { OrchestrationSidebar } from '../orchestration/OrchestrationSidebar';
 import { MobileNavMenu } from './MobileNavMenu';
 import { MobileActiveWindowsPanel } from './MobileActiveWindowsPanel';
 import type { ConnectPaneFn } from '../../lib/terminalRef';
+import { useOrchestrators } from '../../hooks/useOrchestrators';
 import { useOrchestrationModel } from '../../hooks/useOrchestrationModel';
 import { useActiveWindowRows } from '../../hooks/useActiveWindowRows';
 import { paths } from '../../paths';
@@ -88,6 +89,7 @@ export function MobileNavSheet({
   const [activeWindowsOpen, setActiveWindowsOpen] = useState(false);
 
   const { attention: orchestrationAttention } = useOrchestrationModel();
+  const { windows: orchestrators, status: orchestrationStatus } = useOrchestrators();
   const { totalCount: awCount, blockedCount: awBlockedCount } = useActiveWindowRows(titleData);
   const currentProjectItem = allProjects.find((p) => p.id === project?.id) ?? null;
 
@@ -177,7 +179,7 @@ export function MobileNavSheet({
               </button>
             </div>
 
-            <div style={{ flex: 1, overflow: 'auto', display: 'flex', flexDirection: 'column' }}>
+            <div style={{ flex: 1, minHeight: 0, overflow: 'auto', display: 'flex', flexDirection: 'column', paddingBottom: 'env(safe-area-inset-bottom)' }}>
               {top === 'menu' && (
                 <MobileNavMenu
                   onOpenSearch={() => {
@@ -191,6 +193,7 @@ export function MobileNavSheet({
                   onSelectMode={handleSelectMode}
                   onNavigateGlobal={(path) => { if (path === paths.orchestration()) push('orchestration'); else { navigate(path); onClose(); } }}
                   onOpenActiveWindows={handleOpenActiveWindows}
+                  orchestrationCount={orchestrationStatus === 'ready' ? orchestrators.length : undefined}
                   attentionCount={orchestrationAttention ?? undefined}
                   activeWindowsCount={awCount}
                   activeWindowsBlockedCount={awBlockedCount}

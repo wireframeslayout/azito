@@ -9,6 +9,8 @@ import { openLookoutItem } from '../../lib/lookoutOpen';
 import { useOpenTerminalTarget } from '../../hooks/useTerminalTargetOpener';
 import type { ConnectPaneFn } from '../../lib/terminalRef';
 import { useLookoutSummaries } from '../../hooks/useLookoutSummaries';
+import { LookoutCounts } from '../lookout/LookoutCounts';
+import { LookoutSection } from '../lookout/LookoutSection';
 import { LookoutSummaryText } from '../lookout/LookoutSummaryText';
 import { useLookout } from '../../hooks/useLookout';
 import type { LookoutItem } from '../../lib/lookoutSummary';
@@ -75,7 +77,7 @@ export function MobileStatusBar({ openTask, connectPane }: MobileStatusBarProps)
   const openTerminal = useOpenTerminalTarget(connectPane);
   const { t } = useTranslation(['workspace', 'common', 'lookout']);
   const { sections, rows, historyCount, open, openDrawer, closeDrawer } = useLookout();
-  const { markFinishedSeen, dismissFinished, clearSeenFinished, retention } = useAgentActivity();
+  const { markFinishedSeen, dismissFinished, clearSeenFinished, retention, snapshotStatus, retrySnapshot } = useAgentActivity();
   const [historyOpen, setHistoryOpen] = useState(false);
   const [healthOpen, setHealthOpen] = useState(false);
   const openedUnread = useRef<ActiveWindowRow[]>([]);
@@ -153,15 +155,19 @@ export function MobileStatusBar({ openTask, connectPane }: MobileStatusBarProps)
             zIndex: 100,
             maxHeight: '60vh',
             overflowY: 'auto',
-            background: 'var(--bg-elevated)',
+            background: 'var(--bg-solid)',
             borderRadius: 'var(--radius-lg) var(--radius-lg) 0 0',
             boxShadow: 'var(--shadow-3)',
             padding: 'var(--space-2)',
           }}
         >
-          {[sections.attention, sections.active].map((items, index) => items.length > 0 && (
+          <LookoutCounts counts={sections.counts} activityKnown={snapshotStatus === 'ready'} />
+          {snapshotStatus === 'error' && <div role="alert">{t('lookout:loadError')} <button type="button" onClick={retrySnapshot}>{t('lookout:retry')}</button></div>}
+          {snapshotStatus === 'loading' && <p role="status">{t('lookout:loading')}</p>}
+          <LookoutSection name="attention" items={sections.attention} onOpen={handleWorkingRowOpen} summaries={summaries} empty={<p>{t('lookout:emptyAttention')}</p>} />
+          {[sections.active].map((items, index) => items.length > 0 && (
             <section key={index}>
-              <div style={sectionHeaderStyle}>{index === 0 ? `${t('lookout:sections.attention')} (${items.length})` : t('workspace:activityPill.workingSection', { count: items.length })}</div>
+              <div style={sectionHeaderStyle}>{t('workspace:activityPill.workingSection', { count: items.length })}</div>
               {items.map((group) => (
                 <button
                   key={group.key}
@@ -208,7 +214,7 @@ export function MobileStatusBar({ openTask, connectPane }: MobileStatusBarProps)
               ))}
             </section>
           )}
-          {workingGroups.length === 0 && finishedRows.length === 0 && (
+          {snapshotStatus === 'ready' && workingGroups.length === 0 && finishedRows.length === 0 && (
             <div style={{ padding: '12px 8px', textAlign: 'center', color: 'var(--text-dim)', fontSize: 'var(--font-sm)' }}>
               {t('workspace:activityPill.empty')}
             </div>
@@ -279,7 +285,7 @@ export function MobileStatusBar({ openTask, connectPane }: MobileStatusBarProps)
           <span style={{ position: 'relative', display: 'flex', alignItems: 'center', gap: 6, flex: 1, minWidth: 0, overflow: 'hidden' }}>
             {workingCount > 0 ? <BrailleSpinner /> : <span aria-hidden="true" style={{ color: 'var(--text-dim)' }}>⠿</span>}
             <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-              {t('workspace:activityPill.statusBarWorking', { count: workingCount })}
+              {snapshotStatus === 'ready' ? t('workspace:activityPill.statusBarWorking', { count: workingCount }) : t('workspace:activityPill.statusBarUnknown')}
             </span>
             {unreadFinishedCount > 0 && (
               <span style={{ display: 'inline-flex', alignItems: 'center', gap: 4, flexShrink: 0 }}>

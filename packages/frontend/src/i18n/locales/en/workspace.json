@@ -27,6 +27,7 @@
     "loadError": "Could not load orchestrators",
     "retry": "Retry",
     "empty": "No orchestrators yet",
+    "connectedCompact": "Linked {{count}}",
     "connected": "Linked {{count}}",
     "connectedUnknown": "Linked",
     "attention": "{{count}} need attention",
@@ -87,6 +88,7 @@
   },
   "activityPill": {
     "ariaLabel": "Activity status",
+    "statusBarUnknown": "Activity unavailable",
     "statusBarWorking": "{{count}} working",
     "workingSection": "Working {{count}}",
     "finishedSection": "Recently finished {{count}}",
@@ -253,6 +255,7 @@
     "pinToastUnpinned": "Unpinned"
   },
   "mobileNav": {
+    "attention": "{{count}} need attention",
     "sectionGlobal": "AZITO",
     "switchLabel": "Switch",
     "projectSwitch": "Switch project",

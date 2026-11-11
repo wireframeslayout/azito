@@ -27,6 +27,7 @@
     "loadError": "オーケストレーターを取得できませんでした",
     "retry": "再試行",
     "empty": "オーケストレーターはまだありません",
+    "connectedCompact": "連携 {{count}}",
     "connected": "連携中 {{count}}",
     "connectedUnknown": "連携中",
     "attention": "要対応 {{count}}",
@@ -87,6 +88,7 @@
   },
   "activityPill": {
     "ariaLabel": "稼働ステータス",
+    "statusBarUnknown": "稼働状況を取得中",
     "statusBarWorking": "{{count}} 稼働中",
     "workingSection": "稼働中 {{count}}",
     "finishedSection": "最近完了 {{count}}",
@@ -253,6 +255,7 @@
     "pinToastUnpinned": "ピン止めを解除しました"
   },
   "mobileNav": {
+    "attention": "要対応 {{count}}",
     "sectionGlobal": "AZITO 全体",
     "switchLabel": "切替",
     "projectSwitch": "プロジェクトを切替",

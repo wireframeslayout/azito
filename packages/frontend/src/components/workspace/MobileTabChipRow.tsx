@@ -132,7 +132,7 @@ export function MobileTabChipRow({
         )}
       </button>
 
-      {linked && <button type="button" className="btn btn-sm" style={{ minHeight: 44 }} onClick={linked.onOpen}>{t('orchestration.connected', { count: linked.count })}</button>}
+      {linked && <button type="button" className="btn btn-sm" style={{ minHeight: 44, color: 'var(--warning)', borderColor: 'var(--warning)', flexShrink: 0 }} onClick={linked.onOpen}>{t('orchestration.connectedCompact', { count: linked.count })}</button>}
       <button
         type="button"
         onClick={onOpenMenu}

@@ -75,6 +75,15 @@ describe('Lookout workspace feeds', () => {
     expect(screen.queryByText('workspace:activityPill.empty')).toBeNull();
     sections = buildLookoutSections({ rows: [row], allTasks: [task], lastSeenMs: 0 });
   });
+  it.each(['loading', 'error'] as const)('reports unavailable mobile activity when %s', (status) => {
+    activity.snapshotStatus = status;
+    render(<MobileStatusBar {...props} />);
+    fireEvent.click(screen.getByRole('button', { name: 'workspace:activityPill.ariaLabel' }));
+    expect(screen.getByText('counts.active').previousElementSibling?.textContent).toBe('—');
+    expect(screen.getByText(status === 'error' ? 'lookout:loadError' : 'lookout:loading')).toBeTruthy();
+    expect(screen.queryByText('workspace:activityPill.empty')).toBeNull();
+    activity.snapshotStatus = 'ready';
+  });
   it('shows the same attention task once in the mobile panel and opens it', () => {
     render(<MobileStatusBar {...props} />);
     fireEvent.click(screen.getByRole('button', { name: 'workspace:activityPill.ariaLabel' }));
