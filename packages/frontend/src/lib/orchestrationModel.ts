@@ -32,6 +32,18 @@ export function isAttentionTarget(target: AttentionTarget, ctx: AttentionContext
   return activity?.status === 'blocked' || (task !== undefined && ATTENTION_STATUSES.has(task.status));
 }
 
+export type ActivityClassification = 'attention' | 'running' | 'idle' | 'completed' | 'unknown';
+export function classifyActivity(input: { attention: boolean; working: boolean; completed: boolean; known: boolean }): ActivityClassification {
+  if (input.attention) return 'attention';
+  if (input.working) return 'running';
+  if (input.completed) return 'completed';
+  return input.known ? 'idle' : 'unknown';
+}
+
+export function matchesActivityWindow(entry: { windowId?: number; serverName: string; target: string }, window: Window): boolean {
+  return entry.windowId === window.id || (entry.serverName === window.serverName && isSameWindowTarget(entry.target, window.tmuxTarget));
+}
+
 export function orchestratorStatus(w: Window, activity: Map<string, AgentActivityInfo>): OrchestratorStatus {
   if (w.sleeping) return 'sleeping';
   for (const entry of activity.values()) {

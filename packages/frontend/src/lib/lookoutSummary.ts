@@ -1,5 +1,6 @@
 import type { ActiveWindowRow } from '../hooks/useActiveWindowRows';
 import type { Task } from '../pages/workspace/types';
+import { classifyActivity, isAttentionTarget } from './orchestrationModel';
 import { groupRunningRows } from './activityPillLogic';
 
 export type LookoutStatus = 'blocked' | 'waiting_input' | 'pending_approval' | 'phase_review' | 'failed' | 'working' | 'finished';
@@ -37,8 +38,8 @@ function makeItem(key: string, task: Task | undefined, rows: ActiveWindowRow[]):
   const blockedRow = rows.find((row) => row.activityStatus === 'blocked');
   const primaryRow = blockedRow ?? rows[0];
   const hasBlocked = blockedRow != null;
-  const status: LookoutStatus = hasBlocked ? 'blocked'
-    : task && ATTENTION_STATUSES.has(task.status) ? task.status as LookoutStatus : 'working';
+  const classification = classifyActivity({ attention: hasBlocked || isAttentionTarget({ windowId: null, taskId: task?.id ?? null }, { activityByWindowId: new Map(), taskById: new Map(task ? [[task.id, task]] : []) }), working: rows.length > 0, completed: false, known: true });
+  const status: LookoutStatus = hasBlocked ? 'blocked' : classification === 'attention' && task ? (task.status === 'waiting_for_human' ? 'waiting_input' : task.status as LookoutStatus) : 'working';
   return {
     key, title: task?.title ?? primaryRow!.title, status, task, primaryRow,
     projectId: task?.projectId ?? primaryRow?.projectId,
