@@ -55,14 +55,14 @@ describe('Claude subagents', () => {
     expect(source.listSubagents(session)?.map(({ name }) => name)).toEqual(['First', 'Second']);
   });
 
-  it('tracks an unnamed background child using its metadata completion marker', () => {
+  it('keeps an unnamed background child unknown even when metadata says finished', () => {
     const { source, dir } = fixture();
     const file = path.join(dir, 'agent-a.meta.json');
     const metadata = { agentType: 'general-purpose', description: 'Example task', requestShape: 'background', requestNonInteractive: true };
     fs.writeFileSync(file, JSON.stringify(metadata));
     expect(source.listSubagents(session)).toEqual([{ id: 'a', name: 'Example task', routingName: null, description: 'Example task', agentType: 'general-purpose', model: null, status: 'unknown' }]);
     fs.writeFileSync(file, JSON.stringify({ ...metadata, finished: true }));
-    expect(source.listSubagents(session)?.[0].status).toBe('finished');
+    expect(source.listSubagents(session)?.[0].status).toBe('unknown');
     fs.writeFileSync(file, JSON.stringify({ ...metadata, finished: false }));
     expect(source.listSubagents(session)?.[0].status).toBe('unknown');
     fs.writeFileSync(file, JSON.stringify({ ...metadata, finished: 'true' }));
