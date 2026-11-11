@@ -36,8 +36,10 @@ export async function runHeadlessCommand(binary: string, args: string[], cwd: st
     let stdout = '';
     let stderr = '';
     let reason: CliFailureReason | null = null;
-    const terminate = () => {
-      reason = reason ?? 'failed';
+    // Ends the process tree once; later overflow chunks or the timer must not start another taskkill.
+    const terminate = (cause: CliFailureReason) => {
+      if (reason) return;
+      reason = cause;
       if (process.platform !== 'win32' && proc.pid) {
         try { process.kill(-proc.pid, 'SIGKILL'); } catch { proc.kill('SIGKILL'); }
       } else if (proc.pid && env.SystemRoot) {
@@ -46,9 +48,9 @@ export async function runHeadlessCommand(binary: string, args: string[], cwd: st
         killer.on('close', code => { if (code !== 0) proc.kill('SIGKILL'); });
       } else proc.kill('SIGKILL');
     };
-    const timer = setTimeout(() => { reason = 'timeout'; terminate(); }, timeoutMs);
+    const timer = setTimeout(() => terminate('timeout'), timeoutMs);
     proc.stdout.on('data', (chunk: Buffer) => {
-      if (stdout.length + chunk.length > 1_000_000) { terminate(); return; }
+      if (stdout.length + chunk.length > 1_000_000) { terminate('failed'); return; }
       stdout += chunk.toString();
     });
     proc.stderr.on('data', (chunk: Buffer) => { if (stderr.length < 16_384) stderr += chunk.toString().slice(0, 16_384 - stderr.length); });
