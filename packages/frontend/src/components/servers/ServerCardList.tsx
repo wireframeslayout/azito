@@ -93,7 +93,7 @@ function ServerCard({
         <Chip tone={server.type === 'local' ? 'accent' : 'purple'} style={{ marginLeft: 'auto' }}>{server.type}</Chip>
       </div>
       <div style={{
-        fontFamily: 'var(--mono)', fontSize: 'var(--font-xs)', color: 'var(--text-dim)',
+        fontFamily: 'var(--font-mono)', fontSize: 'var(--font-xs)', color: 'var(--text-dim)',
         marginTop: 4, display: 'flex', gap: 8, flexWrap: 'wrap',
       }}>
         {host && <span>{host}</span>}

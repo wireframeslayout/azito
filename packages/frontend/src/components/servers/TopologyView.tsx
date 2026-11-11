@@ -148,7 +148,7 @@ export default function TopologyView({ servers, statuses }: TopologyViewProps) {
             position: 'absolute',
             left: e.labelX - 80,
             top: e.labelY,
-            fontFamily: 'var(--mono)',
+            fontFamily: 'var(--font-mono)',
             fontSize: 'var(--font-xs)',
             color: 'var(--text-dim)',
             background: 'var(--bg)',
@@ -234,7 +234,7 @@ function ServerNode({
         <Chip tone={typeTone(server.type)}>{server.type}</Chip>
       </div>
       <div style={{
-        fontFamily: 'var(--mono)', fontSize: 'var(--font-xs)', color: 'var(--text-dim)',
+        fontSize: 'var(--font-xs)', color: 'var(--text-dim)',
         marginTop: 4, display: 'flex', gap: 8, flexWrap: 'wrap',
       }}>
         {host && <span>{host}</span>}
@@ -242,7 +242,7 @@ function ServerNode({
       </div>
       {hasDrift && (
         <div style={{
-          fontFamily: 'var(--mono)', fontSize: 'var(--font-xs)', color: 'var(--warning)',
+          fontSize: 'var(--font-xs)', color: 'var(--warning)',
           marginTop: 2,
         }}>
           {t('status.versionDrift', { version: (server.agentVersion ?? '').slice(0, 7) })}

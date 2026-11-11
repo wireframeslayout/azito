@@ -45,7 +45,7 @@ export function ResourceDropdownContent({ serverName, health, unavailable, meter
     <div>
       <div style={{
         padding: '6px 10px 8px',
-        fontFamily: 'var(--mono)',
+
         fontSize: 'var(--font-xs)',
         letterSpacing: '0.1em',
         color: 'var(--text-dim)',
@@ -124,7 +124,7 @@ export function ServerHealthDetailBody({ detail, meterWidth, onDeleteWindow, del
             meterWidth={meterWidth}
           />
         ) : (
-          <div style={{ display: 'flex', alignItems: 'center', gap: 8, fontFamily: 'var(--mono)', fontSize: 'var(--font-xs)', color: 'var(--text-dim)' }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 'var(--font-xs)', color: 'var(--text-dim)' }}>
             <b style={{ color: 'var(--text)', fontWeight: 600, minWidth: 34 }}>CPU</b>
             <span>— {t('statusbar.loadNotMeasured')}</span>
           </div>
@@ -155,10 +155,10 @@ export function ServerHealthDetailBody({ detail, meterWidth, onDeleteWindow, del
                 fontSize: 'var(--font-sm)',
               }}
             >
-              <span style={{ fontFamily: 'var(--mono)', fontSize: 'var(--font-xs)', flex: 1, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+              <span style={{ fontFamily: 'var(--font-mono)', fontSize: 'var(--font-xs)', flex: 1, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
                 {w.target}
               </span>
-              <span style={{ fontFamily: 'var(--mono)', fontSize: 'var(--font-xs)', color: 'var(--text-dim)', flexShrink: 0 }}>
+              <span style={{ fontFamily: 'var(--font-mono)', fontSize: 'var(--font-xs)', color: 'var(--text-dim)', flexShrink: 0 }}>
                 {formatBytes(w.rssBytes)}
               </span>
               <button
@@ -199,7 +199,7 @@ export function MetricRow({ label, value, detail, warning, meterWidth }: {
       display: 'flex',
       alignItems: 'center',
       gap: 8,
-      fontFamily: 'var(--mono)',
+
       fontSize: 'var(--font-xs)',
       color: 'var(--text-dim)',
     }}>

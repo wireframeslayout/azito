@@ -42,7 +42,7 @@ export const StatusBarItem = forwardRef<StatusBarItemRef, StatusBarItemProps>(
           background: active ? 'var(--bg-hover)' : 'transparent',
           color: active ? 'var(--text)' : 'var(--text-dim)',
           border: 'none',
-          fontFamily: 'var(--mono)',
+
           fontSize: 'var(--font-xs)',
           transition: 'background 0.15s, color 0.15s',
         }}

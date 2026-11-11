@@ -51,7 +51,7 @@ function SetupHeading() {
   const { t } = useTranslation('servers');
   return (
     <h3 style={{
-      fontFamily: 'var(--mono)',
+
       fontSize: 'var(--font-xs)',
       letterSpacing: '.12em',
       textTransform: 'uppercase',
@@ -638,7 +638,7 @@ function StepRow({
             <Chip tone={stateChip.tone}>{stateChip.label}</Chip>
           </div>
           {(item.version || item.detail) && (
-            <div style={{ fontFamily: 'var(--mono)', fontSize: 'var(--font-xs)', color: 'var(--text-dim)', marginTop: 2 }}>
+            <div style={{ fontSize: 'var(--font-xs)', color: 'var(--text-dim)', marginTop: 2 }}>
               {item.version}{item.version && item.detail ? ' · ' : ''}{item.detail}
             </div>
           )}

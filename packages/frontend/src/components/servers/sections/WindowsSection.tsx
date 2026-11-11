@@ -257,7 +257,7 @@ export default function WindowsSection({ server, sessions, sessionsState = 'read
             border: '1px solid color-mix(in srgb, var(--accent) 40%, transparent)',
             borderRadius: 'var(--radius-md)',
             padding: '6px 12px',
-            fontFamily: 'var(--mono)',
+
             fontSize: 'var(--font-xs)',
             color: 'var(--text)',
             cursor: 'pointer',

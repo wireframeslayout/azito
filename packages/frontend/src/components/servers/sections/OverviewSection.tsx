@@ -251,7 +251,7 @@ export default function OverviewSection({
               <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginTop: 4, fontSize: 'var(--font-xs)', color: 'var(--text-dim)' }}>
                 {isAgent && (
                   <>
-                    <span style={{ fontFamily: 'var(--mono)' }}>
+                    <span style={{ fontFamily: 'var(--font-mono)' }}>
                       agent {(server.agentVersion ?? '').slice(0, 7) || '—'}
                     </span>
                     {status?.versionMatch === true && <Chip tone="green">{t('overview.hubMatch')}</Chip>}
@@ -425,18 +425,18 @@ export default function OverviewSection({
       }}>
         <KvCard title={t('overview.connectionTitle')}>
           <KvRow label={t('overview.typeLabel')}>
-            <span style={{ fontFamily: 'var(--mono)', fontSize: 'var(--font-xs)' }}>{server.type}</span>
+            <span style={{ fontFamily: 'var(--font-mono)', fontSize: 'var(--font-xs)' }}>{server.type}</span>
           </KvRow>
           {(server.host || isAgent) && (
             <KvRow label={t('overview.hostLabel')}>
-              <span style={{ fontFamily: 'var(--mono)', fontSize: 'var(--font-xs)' }}>
+              <span style={{ fontFamily: 'var(--font-mono)', fontSize: 'var(--font-xs)' }}>
                 {server.host}{isAgent && server.agentPort ? `:${server.agentPort}` : ''}
               </span>
             </KvRow>
           )}
           <KvRow label={t('overview.osLabel')}>
             {hostOs ? (
-              <span style={{ fontFamily: 'var(--mono)', fontSize: 'var(--font-xs)' }}>
+              <span style={{ fontSize: 'var(--font-xs)' }}>
                 {t(`overview.os.${hostOs.osKey}`)} {hostOs.arch}
               </span>
             ) : (
@@ -448,7 +448,7 @@ export default function OverviewSection({
           </KvRow>
           {server.sshHost && (
             <KvRow label={t('overview.sshBootstrap')}>
-              <span style={{ fontFamily: 'var(--mono)', fontSize: 'var(--font-xs)' }}>{server.sshHost}</span>
+              <span style={{ fontFamily: 'var(--font-mono)', fontSize: 'var(--font-xs)' }}>{server.sshHost}</span>
             </KvRow>
           )}
           {isAgent && (
@@ -472,7 +472,7 @@ export default function OverviewSection({
 
         <KvCard title={t('overview.runtimeTitle')}>
           <KvRow label={t('overview.defaultMuxLabel')}>
-            <span style={{ display: 'inline-flex', alignItems: 'center', flexWrap: 'wrap', gap: 'var(--space-2)', fontFamily: 'var(--mono)', fontSize: 'var(--font-xs)' }}>
+            <span style={{ display: 'inline-flex', alignItems: 'center', flexWrap: 'wrap', gap: 'var(--space-2)', fontSize: 'var(--font-xs)' }}>
               {server.defaultMux === 'misao' ? t('overview.defaultMuxMisao') : t('overview.defaultMuxTmux')}
               {server.defaultMux === 'misao' && muxFetchState !== 'ready' && (
                 <span role="status">
@@ -488,7 +488,7 @@ export default function OverviewSection({
             {tmuxBlockReason ? (
               <span style={{ fontSize: 'var(--font-xs)', color: 'var(--text-dim)' }}>{tmuxBlockReason}</span>
             ) : (
-              <span style={{ fontFamily: 'var(--mono)', fontSize: 'var(--font-xs)' }}>
+              <span style={{ fontSize: 'var(--font-xs)' }}>
                 {server.muxRuntime === 'managed'
                   ? t('overview.muxManaged')
                   : `${t('overview.muxSystem')}${status?.mux?.tmux?.version ? ` ${status.mux.tmux.version}` : ''}`}
@@ -498,7 +498,7 @@ export default function OverviewSection({
           </KvRow>
           {isAgent && (
             <KvRow label={t('overview.agentVersionLabel')}>
-              <span style={{ fontFamily: 'var(--mono)', fontSize: 'var(--font-xs)' }}>
+              <span style={{ fontFamily: 'var(--font-mono)', fontSize: 'var(--font-xs)' }}>
                 {(server.agentVersion ?? '').slice(0, 7) || '—'}
               </span>
             </KvRow>
@@ -518,7 +518,7 @@ export default function OverviewSection({
             </span>
           </KvRow>
           <KvRow label={t('overview.sessionsLabel')}>
-            <span role="status" style={{ fontFamily: 'var(--mono)', fontSize: 'var(--font-xs)' }}>{sessionsSummary}</span>
+            <span role="status" style={{ fontSize: 'var(--font-xs)' }}>{sessionsSummary}</span>
           </KvRow>
         </KvCard>
       </div>
@@ -546,7 +546,7 @@ function GaugeTile({ label, value, detail, warning, loading, measuringLabel }: {
       minWidth: 0,
     }}>
       <span style={{
-        fontFamily: 'var(--mono)',
+
         fontSize: 'var(--font-xs)',
         letterSpacing: '.1em',
         textTransform: 'uppercase',
@@ -569,7 +569,7 @@ function GaugeTile({ label, value, detail, warning, loading, measuringLabel }: {
       ) : (
         <>
           <span style={{
-            fontFamily: 'var(--mono)',
+            fontFamily: 'var(--font-mono)',
             fontSize: 'var(--font-lg)',
             fontWeight: 700,
             color: value === null ? 'var(--text-dim)' : warning ? 'var(--warning)' : 'var(--text)',
@@ -593,7 +593,7 @@ function KvCard({ title, children }: { title: string; children: React.ReactNode 
       padding: 'var(--space-4)',
     }}>
       <div style={{
-        fontFamily: 'var(--mono)',
+
         fontSize: 'var(--font-xs)',
         letterSpacing: '.1em',
         textTransform: 'uppercase',
@@ -619,7 +619,7 @@ function KvCard({ title, children }: { title: string; children: React.ReactNode 
 function SectionHeading({ children }: { children: React.ReactNode }) {
   return (
     <h3 style={{
-      fontFamily: 'var(--mono)',
+
       fontSize: 'var(--font-xs)',
       letterSpacing: '.12em',
       textTransform: 'uppercase',

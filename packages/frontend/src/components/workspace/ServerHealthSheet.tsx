@@ -138,7 +138,7 @@ function ServerHealthSection({ server, isFirst }: { server: ServerResourceEntry;
   return (
     <section style={{ padding: '10px 10px 4px', borderTop: isFirst ? 'none' : '1px solid var(--border)' }}>
       <div style={{
-        fontFamily: 'var(--mono)', fontSize: 'var(--font-xs)', letterSpacing: '0.1em',
+        fontSize: 'var(--font-xs)', letterSpacing: '0.1em',
         color: 'var(--text-dim)', textTransform: 'uppercase', padding: '0 0 8px',
       }}>
         {(detail?.type ?? server.type)} · {server.serverName}

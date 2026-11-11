@@ -64,7 +64,7 @@ export function UpdateOverlay() {
             </span>
           </div>
           {state && (
-            <div style={{ fontSize: 'var(--font-xs)', color: 'var(--text-dim)', fontFamily: 'var(--mono)', marginTop: 6, display: 'flex', alignItems: 'center', gap: 4 }}>
+            <div style={{ fontSize: 'var(--font-xs)', color: 'var(--text-dim)', fontFamily: 'var(--font-mono)', marginTop: 6, display: 'flex', alignItems: 'center', gap: 4 }}>
               {formatUpdateVersion(state.fromVersion)} <Icon name="arrow-right" size={14} /> {formatUpdateVersion(state.toVersion)}
             </div>
           )}
@@ -84,7 +84,7 @@ export function UpdateOverlay() {
             overflowY: 'auto',
             background: 'var(--bg-solid)',
             padding: '10px 20px',
-            fontFamily: 'var(--mono)',
+
             fontSize: 'var(--font-xs)',
             color: 'var(--text-dim)',
             whiteSpace: 'pre-wrap',

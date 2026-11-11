@@ -193,7 +193,7 @@ export function StatusBar({ servers }: StatusBarProps) {
           alignItems: 'center',
           gap: 14,
           padding: '0 12px',
-          fontFamily: 'var(--mono)',
+
           fontSize: 'var(--font-xs)',
           color: 'var(--text-dim)',
           flexShrink: 0,
@@ -205,7 +205,7 @@ export function StatusBar({ servers }: StatusBarProps) {
           </span>
         )}
         <span style={{ flex: 1 }} />
-        <button type="button" onClick={() => openSearch()} className="row-hover" style={{ padding: '2px 10px', borderRadius: 'var(--radius-sm)', color: 'var(--text-dim)', border: 'none', cursor: 'pointer', fontFamily: 'var(--mono)', fontSize: 'var(--font-xs)' }}>{tn('globalSearch.title')}</button>
+        <button type="button" onClick={() => openSearch()} className="row-hover" style={{ padding: '2px 10px', borderRadius: 'var(--radius-sm)', color: 'var(--text-dim)', border: 'none', cursor: 'pointer', fontSize: 'var(--font-xs)' }}>{tn('globalSearch.title')}</button>
         <StatusBarItem label={tl('title')} active={lookout.open} popup="dialog" badge={lookout.sections.counts.attention} badgeLabel={tl('attentionCount', { count: lookout.sections.counts.attention })} onClick={() => { setOpenItemId(null); if (lookout.open) lookout.closeDrawer(); else lookout.openDrawer(); }} />
         {registry.map((item) => (
           <StatusBarItem
