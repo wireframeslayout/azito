@@ -31,7 +31,7 @@ function MaximizedWindowContent() {
   const { selectedWindowId, workspace, extraWindows, rememberWindow, forgetWindow, select, close, isMobile } = useMaximizedWindow();
   const { allTasks, allProjects, refresh } = useWorkspaceCatalog();
   const { onOpenTask, onOpenInTerminal } = useWorkspaceTargets();
-  const { activityStatus, snapshotStatus, snapshotUpdatedAt, entries } = useAgentActivity();
+  const { activityStatus, snapshotStatus, snapshotUpdatedAt, entries, findFinished } = useAgentActivity();
   const [snapshotHistory, setSnapshotHistory] = useState({ status: snapshotStatus, failed: snapshotStatus === 'error' });
   if (snapshotHistory.status !== snapshotStatus) {
     setSnapshotHistory({ status: snapshotStatus, failed: snapshotStatus === 'error' || (snapshotStatus === 'loading' && snapshotHistory.failed) });
@@ -81,6 +81,7 @@ function MaximizedWindowContent() {
   const status = snapshotStatus === 'error' || (snapshotStatus === 'loading' && (snapshotUpdatedAt === null || snapshotHistory.failed))
     ? 'unknown'
     : window ? activityStatus(window.serverName, window.tmuxTarget) ?? 'idle' : 'unknown';
+  const finished = status === 'idle' && window ? findFinished(window.serverName, window.tmuxTarget) : undefined;
   const [viewMode, setViewMode] = useWindowViewMode(selectedWindowId, false, window?.windowType === 'agent');
   const knownKeys = useRef(new Set<string>());
   const treeSelection = useRef<number | null>(null);
@@ -143,7 +144,7 @@ function MaximizedWindowContent() {
   // Overlay owns its stack entry; local shortcuts are registered inside it below.
   return <Overlay open={open} onClose={close} labelledBy="maximize-title" fallbackFocusTo={fallbackFocus} toggleAction="maximize.open" toggleWhen="always" surface="solid" maxWidth="min(1400px, 96vw)" maxHeight="96vh" style={{ width: '96vw', height: '96vh', display: 'flex', flexDirection: 'column', padding: 0 }} onPrevious={() => move(-1)} onNext={() => move(1)} shouldCloseOnEscape={event => !(event.target instanceof HTMLElement && (event.target.closest('.xterm') || event.target.closest('[data-maximize-input]')))}>
 
-    <MaximizeHeader window={window} task={task} project={project} status={status} viewMode={viewMode} onViewModeChange={mode => setViewMode(mode, selectedWindowId)} onFocus={() => setInputFocused(false)} onOpenTask={() => { if (task) onOpenTask?.(task.id); close(); }} onOpenTab={() => { if (window) { if (workspace?.windows.has(window.id)) workspace.openWindowTab(window.id); else onOpenInTerminal?.({ serverName: window.serverName, target: window.tmuxTarget, windowId: window.id }); } close(); }} onClose={close} />
+    <MaximizeHeader window={window} task={task} project={project} status={status} finishedAt={finished && finished.seenAt == null ? finished.finishedAt : undefined} viewMode={viewMode} onViewModeChange={mode => setViewMode(mode, selectedWindowId)} onFocus={() => setInputFocused(false)} onOpenTask={() => { if (task) onOpenTask?.(task.id); close(); }} onOpenTab={() => { if (window) { if (workspace?.windows.has(window.id)) workspace.openWindowTab(window.id); else onOpenInTerminal?.({ serverName: window.serverName, target: window.tmuxTarget, windowId: window.id }); } close(); }} onClose={close} />
     <div onFocusCapture={event => setInputFocused(event.target instanceof HTMLElement && !!event.target.closest('.xterm, [data-maximize-input]'))} className="maximize-content" style={{ display: 'flex', flex: 1, minHeight: 0, minWidth: 0, position: 'relative' }}>
       <button ref={treeToggleRef} type="button" className="maximize-tree-toggle btn" aria-expanded={treeOpen} onClick={() => setTreeOpen(value => !value)}>{t('maximize.openTabs')}</button>
       <GlassPopoverSurface onKeyDown={event => { if (event.key === 'Escape' && narrow && treeOpen) { event.preventDefault(); event.stopPropagation(); setTreeOpen(false); requestAnimationFrame(() => treeToggleRef.current?.focus()); } }} open={open && narrow && treeOpen} onOutside={event => { if (!(event.target instanceof Element && event.target.closest('.maximize-tree-toggle'))) setTreeOpen(false); }} className={`maximize-tree ${treeOpen ? 'is-open' : ''}`} style={{ order: 2, overflow: 'auto', padding: 'var(--space-2)', background: 'var(--bg-elevated)' }}>
