@@ -23,7 +23,7 @@ interface GroupHeadingProps {
 export function GroupHeading({ isUser, timeLabel, agentLabel, model }: GroupHeadingProps) {
   const { t } = useTranslation('transcript');
   return (
-    <div style={{ display: 'flex', alignItems: 'center', gap: 'var(--space-2)', width: '100%', marginBottom: 'var(--space-2)' }}>
+    <div style={{ display: 'flex', alignItems: 'center', gap: 'var(--space-2)', flexWrap: 'wrap', minWidth: 0, width: '100%', marginBottom: 'var(--space-2)' }}>
       <span
         aria-hidden="true"
         style={{
@@ -46,7 +46,7 @@ export function GroupHeading({ isUser, timeLabel, agentLabel, model }: GroupHead
         {isUser ? t('styleSwitcher.flow.userLabel') : agentLabel}
       </span>
       {!isUser && model && (
-        <span style={{ fontSize: 'var(--font-2xs)', color: 'var(--text-dim)' }}>· {model}</span>
+        <span style={{ fontSize: 'var(--font-2xs)', color: 'var(--text-dim)', overflowWrap: 'anywhere', minWidth: 0 }}>· {model}</span>
       )}
       <span style={{ flex: 1 }} />
       {timeLabel && (

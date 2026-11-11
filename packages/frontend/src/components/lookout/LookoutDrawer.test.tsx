@@ -67,7 +67,11 @@ it('shows empty states and renders supplied summaries independently of counts', 
 it('does not show an idle message or active count while activity is unavailable', () => {
   const sections = { attention: [], active: [], finished: [], counts: { attention: 0, active: 0, finished: 0, failed: 0 } };
   render(<HotkeyProvider><LookoutDrawer open onClose={() => {}} sections={sections} snapshotStatus="error" onRetry={() => {}} onOpenItem={() => {}} /></HotkeyProvider>);
-  expect(screen.getAllByText('—')).toHaveLength(2);
+  expect(screen.getAllByText('—')).toHaveLength(7);
+  expect(screen.getByRole('heading', { name: /attention.*—/i })).toBeInTheDocument();
+  expect(screen.getByRole('heading', { name: /completed.*—/i })).toBeInTheDocument();
+  expect(screen.queryByText(/nothing needs your attention/i)).not.toBeInTheDocument();
+  expect(screen.queryByText(/no items to display/i)).not.toBeInTheDocument();
   expect(screen.getByRole('heading', { name: /in progress.*—/i })).toBeInTheDocument();
   expect(screen.queryByText(/nothing is currently running/i)).not.toBeInTheDocument();
 });

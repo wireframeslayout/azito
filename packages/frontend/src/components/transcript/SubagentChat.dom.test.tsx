@@ -14,8 +14,20 @@ const props = { windowId: 1, sessionId: 'first', agentType: 'claude', paneId: '%
 
 describe('subagent selection', () => {
   const scrollIntoView = vi.fn();
-  beforeEach(() => { localStorage.clear(); api.mockReset(); scrollIntoView.mockClear(); Object.defineProperty(HTMLElement.prototype, 'scrollIntoView', { configurable: true, value: scrollIntoView }); });
+  beforeEach(() => { vi.stubGlobal('ResizeObserver', class { observe() {} disconnect() {} }); localStorage.clear(); api.mockReset(); scrollIntoView.mockClear(); Object.defineProperty(HTMLElement.prototype, 'scrollIntoView', { configurable: true, value: scrollIntoView }); });
   afterEach(() => { delete (HTMLElement.prototype as Partial<HTMLElement>).scrollIntoView; });
+  it('shows the continuation indicator only while content remains to the right', async () => {
+    api.mockResolvedValue({ status: 200, body: { sessionId: 'first', subagents: [agent] } });
+    const view = render(<SubagentChat {...props} />);
+    await screen.findByText('view:parent');
+    const strip = screen.getByRole('button', { name: 'subagents.parent' }).parentElement!;
+    Object.defineProperties(strip, { clientWidth: { configurable: true, value: 100 }, scrollWidth: { configurable: true, value: 200 }, scrollLeft: { configurable: true, writable: true, value: 0 } });
+    fireEvent.scroll(strip);
+    expect(view.container.querySelector('.lucide-chevron-right')).toBeInTheDocument();
+    strip.scrollLeft = 100;
+    fireEvent.scroll(strip);
+    expect(view.container.querySelector('.lucide-chevron-right')).not.toBeInTheDocument();
+  });
   it('brings a restored child into view', async () => {
     localStorage.setItem('azito.subagent.1.first', 'third');
     api.mockResolvedValue({ status: 200, body: { sessionId: 'first', subagents: [agent, { ...agent, id: 'second' }, { ...agent, id: 'third' }] } });

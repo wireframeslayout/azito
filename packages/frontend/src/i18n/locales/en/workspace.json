@@ -27,9 +27,11 @@
     "loadError": "Could not load orchestrators",
     "retry": "Retry",
     "empty": "No orchestrators yet",
+    "connectedCompact": "Linked {{count}}",
     "connected": "Linked {{count}}",
     "connectedUnknown": "Linked",
     "attention": "{{count}} need attention",
+    "totalCount": "Orchestration, {{count}} total",
     "railAttention": "Orchestration, {{count}} need attention",
     "active": "Running",
     "returnToProject": "Return to project windows (from: {{name}})",
@@ -87,10 +89,10 @@
   },
   "activityPill": {
     "ariaLabel": "Activity status",
+    "statusBarUnknown": "Activity unavailable",
     "statusBarWorking": "{{count}} working",
     "workingSection": "Working {{count}}",
     "finishedSection": "Recently finished {{count}}",
-    "empty": "No agents running",
     "viewHealthDetails": "View details ▸"
   },
   "home": {
@@ -253,6 +255,7 @@
     "pinToastUnpinned": "Unpinned"
   },
   "mobileNav": {
+    "attention": "{{count}} need attention",
     "sectionGlobal": "AZITO",
     "switchLabel": "Switch",
     "projectSwitch": "Switch project",

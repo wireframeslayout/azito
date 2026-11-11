@@ -56,8 +56,8 @@ export function LookoutDrawer({ open, onClose, sections, summaries, snapshotStat
     <LookoutCounts counts={sections.counts} activityKnown={snapshotStatus === 'ready'} />
     {snapshotStatus === 'error' && <Notice tone="warning" action={<Button size="sm" onClick={onRetry}>{t('retry')}</Button>}>{t('loadError')}</Notice>}
     {snapshotStatus === 'loading' && <p role="status" style={{ color: 'var(--text-dim)' }}>{t('loading')}</p>}
-    <LookoutSection name="attention" items={sections.attention} onOpen={onOpenItem} summaries={displayedSummaries} empty={t('emptyAttention')} />
+    <LookoutSection name="attention" countKnown={snapshotStatus === 'ready'} items={sections.attention} onOpen={onOpenItem} summaries={displayedSummaries} empty={snapshotStatus === 'ready' ? t('emptyAttention') : false} />
     <LookoutSection name="active" countKnown={snapshotStatus === 'ready'} items={sections.active} onOpen={onOpenItem} summaries={displayedSummaries} empty={snapshotStatus === 'ready' ? t('emptyActive') : false} />
-    <LookoutSection name="finished" items={sections.finished} onOpen={onOpenItem} summaries={displayedSummaries} />
+    <LookoutSection name="finished" countKnown={snapshotStatus === 'ready'} items={sections.finished} onOpen={onOpenItem} summaries={displayedSummaries} empty={snapshotStatus === 'ready' ? undefined : false} />
   </div>, document.body);
 }

@@ -9,6 +9,7 @@ import { OrchestrationSidebar } from '../orchestration/OrchestrationSidebar';
 import { MobileNavMenu } from './MobileNavMenu';
 import { MobileActiveWindowsPanel } from './MobileActiveWindowsPanel';
 import type { ConnectPaneFn } from '../../lib/terminalRef';
+import { useOrchestrators } from '../../hooks/useOrchestrators';
 import { useOrchestrationModel } from '../../hooks/useOrchestrationModel';
 import { useActiveWindowRows } from '../../hooks/useActiveWindowRows';
 import { paths } from '../../paths';
@@ -88,6 +89,7 @@ export function MobileNavSheet({
   const [activeWindowsOpen, setActiveWindowsOpen] = useState(false);
 
   const { attention: orchestrationAttention } = useOrchestrationModel();
+  const { windows: orchestrators, status: orchestrationStatus } = useOrchestrators();
   const { totalCount: awCount, blockedCount: awBlockedCount } = useActiveWindowRows(titleData);
   const currentProjectItem = allProjects.find((p) => p.id === project?.id) ?? null;
 
@@ -132,7 +134,7 @@ export function MobileNavSheet({
             aria-modal="true"
             aria-label={t('workspace:mobile.navMenu')}
             style={{
-              position: 'fixed', top: 0, right: 0, bottom: 0, left: 0,
+              position: 'fixed', top: 0, right: 0, bottom: 'calc(var(--status-bar-height) + env(safe-area-inset-bottom))', left: 0,
               display: 'flex', flexDirection: 'column', overflow: 'hidden',
               background: 'var(--bg-solid)', zIndex: 50,
               boxShadow: 'var(--shadow-3)',
@@ -177,7 +179,7 @@ export function MobileNavSheet({
               </button>
             </div>
 
-            <div style={{ flex: 1, overflow: 'auto', display: 'flex', flexDirection: 'column' }}>
+            <div style={{ flex: 1, minHeight: 0, overflow: 'auto', display: 'flex', flexDirection: 'column', paddingBottom: 'env(safe-area-inset-bottom)' }}>
               {top === 'menu' && (
                 <MobileNavMenu
                   onOpenSearch={() => {
@@ -191,6 +193,7 @@ export function MobileNavSheet({
                   onSelectMode={handleSelectMode}
                   onNavigateGlobal={(path) => { if (path === paths.orchestration()) push('orchestration'); else { navigate(path); onClose(); } }}
                   onOpenActiveWindows={handleOpenActiveWindows}
+                  orchestrationCount={orchestrationStatus === 'ready' ? orchestrators.length : undefined}
                   attentionCount={orchestrationAttention ?? undefined}
                   activeWindowsCount={awCount}
                   activeWindowsBlockedCount={awBlockedCount}
