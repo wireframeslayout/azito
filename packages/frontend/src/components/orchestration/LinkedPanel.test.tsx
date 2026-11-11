@@ -29,6 +29,12 @@ describe('LinkedPanel', () => {
     vi.mocked(api).mockImplementation(async (path) => path === '/servers' ? [{ name: 'local' }] : [{ name: 'session', windows: [{ name: 'candidate', windowId: 42 }] }]);
     render(<LinkedPanel windowId={9} enabled onOpen={vi.fn()} onExpand={vi.fn()} onProject={vi.fn()} excludedWindowIds={[9]} children={[]} onEnter={vi.fn()} />);
     fireEvent.click(screen.getByRole('button', { name: 'linkedPanel.add' }));
-    expect(await screen.findByRole('button', { name: 'candidate' })).toBeTruthy();
+    expect(await screen.findByRole('button', { name: 'candidate · W-42' })).toBeTruthy();
+  });
+  it('labels an unnamed candidate window by its id once', async () => {
+    vi.mocked(api).mockImplementation(async (path) => path === '/servers' ? [{ name: 'local' }] : [{ name: 'session', windows: [{ name: '', windowId: 43 }] }]);
+    render(<LinkedPanel windowId={9} enabled onOpen={vi.fn()} onExpand={vi.fn()} onProject={vi.fn()} excludedWindowIds={[9]} children={[]} onEnter={vi.fn()} />);
+    fireEvent.click(screen.getByRole('button', { name: 'linkedPanel.add' }));
+    expect(await screen.findByRole('button', { name: 'W-43' })).toBeTruthy();
   });
 });
