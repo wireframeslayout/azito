@@ -88,23 +88,23 @@ export default function SubagentChat({ windowId, sessionId, onParentChanged, ...
     onConnected: refresh,
   });
   return (
-    <div style={{ display: 'flex', flexDirection: 'column', height: '100%', minHeight: 0 }}>
-      <section aria-label={t('subagents.title')} style={{ padding: 'var(--space-2) var(--space-3)', borderBottom: '1px solid var(--border)', maxHeight: '35%', overflowY: 'auto' }}>
-        <div style={{ display: 'flex', alignItems: 'center', gap: 'var(--space-2)', flexWrap: 'wrap' }}>
-          <strong style={{ fontSize: 'var(--font-sm)' }}>{t('subagents.title')}</strong>
-          <Button style={{ minHeight: 44 }} size="sm" variant={selected === null ? 'primary' : 'default'} aria-pressed={selected === null} onClick={() => select(null)}>{t('subagents.parent')}</Button>
+    <div style={{ display: 'flex', flexDirection: 'column', height: '100%', minHeight: 0, minWidth: 0 }}>
+      <section aria-label={t('subagents.title')} style={{ padding: 'var(--space-2) var(--space-3)', borderBottom: '1px solid var(--border)', minWidth: 0 }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 'var(--space-2)', overflowX: 'auto', minWidth: 0, padding: 'var(--space-1)' }}>
+          <strong style={{ fontSize: 'var(--font-sm)', flexShrink: 0 }}>{t('subagents.title')}</strong>
+          <Button style={{ minHeight: 'calc(var(--space-6) + var(--space-5))', flexShrink: 0 }} size="sm" variant={selected === null ? 'primary' : 'default'} aria-pressed={selected === null} onClick={() => select(null)}>{t('subagents.parent')}</Button>
           {list.kind === 'ready' && list.agents.map((agent) => (
-            <div key={agent.id} style={{ maxWidth: '100%', overflowWrap: 'anywhere' }}>
-              <Button style={{ maxWidth: '100%', overflowWrap: 'anywhere', textAlign: 'left', minHeight: 44 }} size="sm" variant={selected === agent.id ? 'primary' : 'default'} aria-pressed={selected === agent.id} onClick={() => select(agent.id)}>
+            <div key={agent.id} style={{ flexShrink: 0, width: 'var(--right-panel-width)', maxWidth: '100%', minWidth: 0 }}>
+              <Button title={`${agent.name} · ${agent.agentType}${agent.model ? ` · ${agent.model}` : ''} · ${t(`subagents.status.${agent.status}`)} — ${agent.description}`} aria-describedby={`subagent-description-${agent.id}`} style={{ display: 'block', width: '100%', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', textAlign: 'left', minHeight: 'calc(var(--space-6) + var(--space-5))' }} size="sm" variant={selected === agent.id ? 'primary' : 'default'} aria-pressed={selected === agent.id} onClick={() => select(agent.id)}>
                 {agent.name} · {agent.agentType}{agent.model && ` · ${agent.model}`} · {t(`subagents.status.${agent.status}`)}
               </Button>
-              <div style={{ color: 'var(--text-dim)', fontSize: 'var(--font-xs)', marginTop: 'var(--space-1)' }}>{agent.description}</div>
+              <div id={`subagent-description-${agent.id}`} title={agent.description} style={{ color: 'var(--text-dim)', fontSize: 'var(--font-xs)', marginTop: 'var(--space-1)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{agent.description}</div>
             </div>
           ))}
         </div>
         <div aria-live="polite" style={{ color: 'var(--text-dim)', fontSize: 'var(--font-xs)', marginTop: 'var(--space-1)' }}>
           {list.kind === 'loading' ? t('subagents.loading') : list.kind === 'ready' && list.agents.length === 0 ? t('subagents.empty') : null}
-          {list.kind === 'error' ? <>{list.reason ? t(`windowChat.notFound.${list.reason}`) : t('subagents.error')} <Button style={{ minHeight: 44 }} size="sm" onClick={refresh}>{t('windowChat.retry')}</Button></> : null}
+          {list.kind === 'error' ? <>{list.reason ? t(`windowChat.notFound.${list.reason}`) : t('subagents.error')} <Button style={{ minHeight: 'calc(var(--space-6) + var(--space-5))' }} size="sm" onClick={refresh}>{t('windowChat.retry')}</Button></> : null}
         </div>
       </section>
       <div style={{ flex: 1, minHeight: 0 }}>

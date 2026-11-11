@@ -26,6 +26,24 @@ describe('subagent selection', () => {
     view.rerender(<SubagentChat {...props} sessionId="second" />);
     await waitFor(() => expect(screen.getByText('view:parent')).toBeTruthy());
   });
+  it('keeps long descriptions available and selects among multiple agents', async () => {
+    const longName = 'A very long agent name '.repeat(20);
+    const description = 'A detailed description '.repeat(20);
+    api.mockResolvedValue({ status: 200, body: { sessionId: 'first', subagents: [agent, { ...agent, id: 'long', name: longName, description, routingName: 'long' }] } });
+    render(<SubagentChat {...props} />);
+    const button = await screen.findByRole('button', { name: new RegExp('A very long agent name') });
+    expect(button).toHaveAccessibleDescription(description.trim());
+    expect(button).toHaveAttribute('title', expect.stringContaining(description));
+    fireEvent.click(button);
+    expect(button).toHaveAttribute('aria-pressed', 'true');
+    expect(screen.getByText('view:long:relay')).toBeInTheDocument();
+  });
+  it('shows the empty state and allows retry after an error', async () => {
+    api.mockRejectedValueOnce(new Error('offline')).mockResolvedValueOnce({ status: 200, body: { sessionId: 'first', subagents: [] } });
+    render(<SubagentChat {...props} />);
+    fireEvent.click(await screen.findByRole('button', { name: 'windowChat.retry' }));
+    expect(await screen.findByText('subagents.empty')).toBeInTheDocument();
+  });
   it('disables relay for duplicate or missing names', async () => {
     api.mockResolvedValue({ status: 200, body: { sessionId: 'first', subagents: [agent, { ...agent, id: 'other' }] } });
     render(<SubagentChat {...props} />);
