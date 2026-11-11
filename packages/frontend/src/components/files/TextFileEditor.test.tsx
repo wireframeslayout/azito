@@ -25,7 +25,7 @@ describe('TextFileEditor', () => {
     fireEvent.change(editor, { target: { value: 'one\ntwo\n' } });
     expect(restore.disabled).toBe(false);
     fireEvent.click(restore);
-    await waitFor(() => expect((editor as HTMLTextAreaElement).value).toBe('base'));
+    await waitFor(() => expect((screen.getByRole('textbox', { name: 'editor' }) as HTMLTextAreaElement).value).toBe('base'));
     expect(restore.disabled).toBe(true);
   });
   it('retains local text and presents a comparison when saving conflicts', async () => {

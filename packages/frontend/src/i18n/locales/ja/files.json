@@ -58,16 +58,8 @@
     "includePlaceholder": "例: *.ts, src/**",
     "excludePlaceholder": "node_modules, .git, dist, .worktrees",
     "summary": "{{files}} ファイル · {{hits}} 件 ({{engine}}, {{time}}ms)",
-    "engine": {
-      "rg": "ripgrep",
-      "grep": "grep",
-      "builtin": "内蔵"
-    },
-    "engineHint": {
-      "rg": "ripgrep で検索しました",
-      "grep": "grep で検索しました",
-      "builtin": "内蔵の検索で検索しました。ホストに ripgrep (rg) を入れると速くなります。"
-    },
+    "engine": { "rg": "ripgrep", "grep": "grep", "builtin": "内蔵" },
+    "engineHint": { "rg": "ripgrep で検索しました", "grep": "grep で検索しました", "builtin": "内蔵の検索で検索しました。ホストに ripgrep (rg) を入れると速くなります。" },
     "truncated": "上位 200 件を表示しています — 絞り込んでください",
     "noMatch": "一致するものがありません",
     "noMatchHint": "除外パターンを確認してください",
@@ -95,6 +87,7 @@
     "pathCopied": "パスをコピーしました"
   },
   "editor": {
+    "languages": {"markdown": "Markdown", "typescript": "TypeScript", "javascript": "JavaScript", "json": "JSON", "css": "CSS", "html": "HTML", "python": "Python", "shell": "Shell", "yaml": "YAML", "sql": "SQL", "toml": "TOML"},
     "viewMode": "Markdown 表示モード",
     "saving": "保存中…",
     "save": "保存",

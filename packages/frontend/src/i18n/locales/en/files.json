@@ -58,16 +58,8 @@
     "includePlaceholder": "e.g. *.ts, src/**",
     "excludePlaceholder": "node_modules, .git, dist, .worktrees",
     "summary": "{{files}} files · {{hits}} hits ({{engine}}, {{time}}ms)",
-    "engine": {
-      "rg": "ripgrep",
-      "grep": "grep",
-      "builtin": "built-in"
-    },
-    "engineHint": {
-      "rg": "Searched with ripgrep",
-      "grep": "Searched with grep",
-      "builtin": "Searched with the built-in search. Installing ripgrep (rg) on the host makes it faster."
-    },
+    "engine": { "rg": "ripgrep", "grep": "grep", "builtin": "built-in" },
+    "engineHint": { "rg": "Searched with ripgrep", "grep": "Searched with grep", "builtin": "Searched with the built-in search. Installing ripgrep (rg) on the host makes it faster." },
     "truncated": "Showing top 200 results — refine your query",
     "noMatch": "No matches found",
     "noMatchHint": "Check excluded patterns",
@@ -95,6 +87,7 @@
     "pathCopied": "Path copied"
   },
   "editor": {
+    "languages": {"markdown": "Markdown", "typescript": "TypeScript", "javascript": "JavaScript", "json": "JSON", "css": "CSS", "html": "HTML", "python": "Python", "shell": "Shell", "yaml": "YAML", "sql": "SQL", "toml": "TOML"},
     "viewMode": "Markdown view mode",
     "saving": "Saving…",
     "save": "Save",
