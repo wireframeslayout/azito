@@ -200,7 +200,7 @@ function buildService(opts: {
 }) {
   const windowRepo: IWindowRepository = {
     add: vi.fn(() => 1),
-    adoptForTask: vi.fn(), findOrchestrators: vi.fn(() => []),
+    renameTmuxWindow: vi.fn(), adoptForTask: vi.fn(), findOrchestrators: vi.fn(() => []),
     findAll: vi.fn(() => []),
     findById: vi.fn(() => opts.window),
     findByProject: vi.fn(() => []),
@@ -224,6 +224,7 @@ function buildService(opts: {
     kind: 'tmux' as const,
     caps: { changeEvents: true, agentState: false, independentClients: true, copyMode: true },
     resolveWindowForRespawn: vi.fn(async (_server: unknown, ref: { kind: 'tmux' | 'misao'; workspace: string; window: string }): Promise<typeof ref | null> => ref),
+    listWorkspacesStrict: vi.fn(async () => [{ name: 'azito', windowCount: 0, attached: false, created: 0, windows: [] as { name: string; index: number; active: boolean; panes: unknown[]; activity: number }[] }]),
     listWorkspaces: vi.fn(async () => [{ name: 'azito', windowCount: 0, attached: false, created: 0, windows: [] as { name: string; index: number; active: boolean; panes: unknown[]; activity: number }[] }]),
     openWorkspace: vi.fn(async (_server: unknown, name: string, options?: { windowName?: string; exactName?: boolean; extraEnv?: Record<string, string> }) => ({
       ref: { kind: 'tmux' as const, workspace: name, window: options?.windowName || 'default' },
@@ -1023,15 +1024,12 @@ describe('WindowRespawnService.respawn — window name preservation', () => {
     await expect(service.respawn(1, makeServer())).rejects.toThrow('Invalid tmuxTarget');
   });
 
-  it('refuses a tmux row whose session is gone instead of guessing a new window', async () => {
-    const win = makeWindow({ tmuxTarget: 'azito:task-1--ab12' });
-    const { service, tmux } = buildService({ window: win });
-    tmux.listWorkspaces.mockResolvedValue([]);
-
-    await expect(service.respawn(1, makeServer())).rejects.toMatchObject({ reason: 'window_name_missing', message: expect.stringContaining('register it again') });
+  it('creates a missing session with the target window', async () => {
+    const { service, tmux } = buildService({ window: makeWindow({ tmuxTarget: 'azito:task-1--ab12' }) });
+    tmux.listWorkspacesStrict.mockResolvedValue([]);
+    await service.respawn(1, makeServer());
     expect(tmux.closeWindow).not.toHaveBeenCalled();
-    expect(tmux.openWorkspace).not.toHaveBeenCalled();
-    expect(tmux.openWindow).not.toHaveBeenCalled();
+    expect(tmux.openWorkspace).toHaveBeenCalled();
   });
 });
 
@@ -1762,7 +1760,7 @@ describe('WindowRespawnService.respawn — concurrent respawns for the same task
     let windowRow: Window = makeWindow({ id: 1, taskId: 1, ownerType: 'task', role: null, originProjectId: null, isPrimary: true, tmuxTarget: 'sess:win-0' });
     const windowRepo: IWindowRepository = {
       add: vi.fn(() => 1),
-      adoptForTask: vi.fn(), findOrchestrators: vi.fn(() => []),
+      renameTmuxWindow: vi.fn(), adoptForTask: vi.fn(), findOrchestrators: vi.fn(() => []),
       findAll: vi.fn(() => []),
       findById: vi.fn(() => windowRow),
       findByProject: vi.fn(() => []),
@@ -1809,6 +1807,7 @@ describe('WindowRespawnService.respawn — concurrent respawns for the same task
           windows: windows.map((w, i) => ({ name: w, index: i, active: true, panes: [] as unknown[], activity: 0 })),
         }));
       }),
+      listWorkspacesStrict: vi.fn(async () => tmux.listWorkspaces()),
       openWorkspace: vi.fn(async (_server: unknown, sessionName: string, options?: { windowName?: string }) => {
         createCounter += 1;
         const windowName = `win-${createCounter}`;
@@ -3354,7 +3353,6 @@ describe('respawn window identity', () => {
   it.each([
     ['an old row whose label carries a rename', { tmuxTarget: 'azito:task-1', label: 'renamed', labelSource: 'user' as const }],
     ['a row whose name was never changed', { label: 'task-1', labelSource: 'auto' as const }],
-    ['a sleeping row', { label: 'renamed', labelSource: 'user' as const, sleeping: true }],
   ])('refuses a tmux row whose name no window carries: %s', async (_case, overrides) => {
     const { service, tmux, windowRepo } = buildService({ window: makeWindow(overrides) });
     tmux.resolveWindowForRespawn.mockResolvedValue(null as never);
@@ -3365,6 +3363,14 @@ describe('respawn window identity', () => {
     expect(tmux.openWorkspace).not.toHaveBeenCalled();
     expect(tmux.openWindow).not.toHaveBeenCalled();
     expect(windowRepo.update).not.toHaveBeenCalled();
+  });
+
+  it('wakes a sleeping tmux window when its old window is gone', async () => {
+    const { service, tmux } = buildService({ window: makeWindow({ sleeping: true }) });
+    tmux.resolveWindowForRespawn.mockResolvedValue(null);
+    await service.respawn(1, makeServer());
+    expect(tmux.closeWindow).not.toHaveBeenCalled();
+    expect(tmux.openWindow).toHaveBeenCalled();
   });
 
   it('refuses a name that more than one tmux window carries', async () => {

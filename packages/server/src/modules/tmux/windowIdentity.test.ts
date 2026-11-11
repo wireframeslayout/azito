@@ -83,7 +83,11 @@ describe('renameRefusalReason', () => {
     expect(renameRefusalReason(tmuxRow, name)).toMatch(/must not/);
   });
 
-  it.each(['renamed', 'task-1--ab12', 'a1', 'fix:bug'])('accepts an ordinary tmux name: %s', (name) => {
+  it.each(['fix:bug', '   '])('rejects an unrepresentable name: %s', (name) => {
+    expect(renameRefusalReason({ muxRef: { kind: 'tmux', workspace: 's', window: 'w' } }, name)).not.toBeNull();
+  });
+
+  it.each(['renamed', 'task-1--ab12', 'a1'])('accepts an ordinary tmux name: %s', (name) => {
     expect(renameRefusalReason(tmuxRow, name)).toBeNull();
   });
 

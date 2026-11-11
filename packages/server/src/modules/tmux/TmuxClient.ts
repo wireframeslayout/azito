@@ -222,7 +222,7 @@ export class TmuxClient implements IMuxClient {
     } catch (err) {
       result = { stdout: '', stderr: err instanceof Error ? err.message : String(err), code: 1 };
     }
-    if (result.code === 0) {
+    if (result.code === 0 && !result.stderr.trim()) {
       return parseSessionLines(result.stdout);
     }
     const output = `${result.stderr || ''}${result.stdout || ''}`;
@@ -665,10 +665,15 @@ export class TmuxClient implements IMuxClient {
   async renameWorkspace(server: ServerConfig, from: string, to: string) { return this.renameSession(server, from, to); }
   async windowExists(server: ServerConfig, ref: MuxRef) { return this.checkPaneExists(server, tmuxTargetFromMuxRef(ref)); }
   async resolveWindowForRespawn(server: ServerConfig, ref: MuxRef): Promise<MuxRef | null> {
-    const result = await this.runTmuxCommand(server, ['list-windows', '-t', `=${ref.workspace}`, '-F', '#{window_id}\t#{window_name}']);
-    if (result.code !== 0) {
-      if (/can't find target|no such session|no server running on tmux socket/.test(result.stderr)) return null;
-      throw new Error(`Cannot verify tmux window: ${result.stderr}`);
+    let result: ExecResult;
+    try {
+      result = await this.runTmuxCommand(server, ['list-windows', '-t', `=${ref.workspace}`, '-F', '#{window_id}\t#{window_name}']);
+    } catch (err) {
+      result = { code: 1, stdout: '', stderr: err instanceof Error ? err.message : String(err) };
+    }
+    if (result.code !== 0 || result.stderr.trim()) {
+      if (/can't find session:|no such session|can't find target/i.test(result.stderr) || isTmuxNoServerRunning(result.stderr)) return null;
+      throw new Error(`Cannot verify tmux window: ${result.stderr || `exit ${result.code}`}`);
     }
     const matches = result.stdout.split('\n').map(line => line.split('\t')).filter(parts => parts[1] === ref.window && /^@\d+$/.test(parts[0]));
     if (matches.length > 1) throw new MuxWindowAmbiguousError(ref.window);

@@ -151,7 +151,7 @@ function makeOpts(existingTask: Task | null): TasksRouteOptions {
     windowRepo: {
       findByTaskIds: vi.fn(() => new Map()),
       add: vi.fn(() => 100),
-      adoptForTask: vi.fn(), findOrchestrators: vi.fn(() => []),
+      renameTmuxWindow: vi.fn(), adoptForTask: vi.fn(), findOrchestrators: vi.fn(() => []),
       findAll: vi.fn(() => []),
       findById: vi.fn(() => undefined),
       findByProject: vi.fn(() => []),

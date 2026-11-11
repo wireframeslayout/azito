@@ -26,6 +26,7 @@ function makeServerRepo(): IServerRepository {
 
 function makeWindowRepo(): SqliteWindowRepository {
   return {
+    renameTmuxWindow: vi.fn(),
     removeByServerAndTarget: vi.fn(() => 0),
     remove: vi.fn(),
     findByServerAndTarget: vi.fn(() => undefined),
@@ -42,6 +43,7 @@ async function buildApp(muxOverrides: Partial<IMuxClient>, windowRepo = makeWind
     kind: 'tmux',
     caps: { zoom: true, paneTitle: true, paneLabels: false, outputStream: true },
     supportsPaneLabels: false,
+    resolveWindowForRespawn: vi.fn(async () => null),
     resolvePane: vi.fn(async () => paneHandle),
     ...muxOverrides,
   } as unknown as IMuxClient;
@@ -76,8 +78,16 @@ describe('PUT /api/servers/:name/mux/windows/:ref/rename error handling', () => 
     app = await buildApp({ renameWindowByRef: vi.fn(async () => ({ code: 0, stdout: '', stderr: '' })) }, repo);
     const res = await app.inject({ method: 'PUT', url: `/api/servers/srv1/mux/windows/${encodedRef}/rename`, payload: { name: 'chosen' } });
     expect(res.statusCode).toBe(200);
-    expect(repo.update).toHaveBeenCalledWith(4, { label: 'chosen', labelSource: 'user', tmuxTarget: 'main:chosen' });
+    expect(repo.renameTmuxWindow).toHaveBeenCalledWith(4, 'chosen');
     expect(emit).toHaveBeenCalledWith({ type: 'window:renamed', payload: { serverName: 'srv1', target: 'main:1', newName: 'chosen', windowId: 4 } });
+  });
+
+  it('returns 409 without renaming when the name already exists', async () => {
+    const rename = vi.fn(async () => ({ code: 0, stdout: '', stderr: '' }));
+    app = await buildApp({ renameWindowByRef: rename, resolveWindowForRespawn: vi.fn(async () => ({ kind: 'tmux' as const, workspace: 'main', window: '@5' })) });
+    const res = await app.inject({ method: 'PUT', url: `/api/servers/srv1/mux/windows/${encodedRef}/rename`, payload: { name: 'chosen' } });
+    expect(res.statusCode).toBe(409);
+    expect(rename).not.toHaveBeenCalled();
   });
 
   it('emits the old target for an unregistered window', async () => {
@@ -90,7 +100,7 @@ describe('PUT /api/servers/:name/mux/windows/:ref/rename error handling', () => 
   it('reports a database failure after the mux rename', async () => {
     const repo = makeWindowRepo();
     repo.findByServerAndRef = vi.fn(() => ({ id: 4, tmuxTarget: 'main:1' }) as never);
-    repo.update = vi.fn(() => { throw new Error('database failure'); });
+    repo.renameTmuxWindow = vi.fn(() => { throw new Error('database failure'); });
     app = await buildApp({ renameWindowByRef: vi.fn(async () => ({ code: 0, stdout: '', stderr: '' })) }, repo);
     const res = await app.inject({ method: 'PUT', url: `/api/servers/srv1/mux/windows/${encodedRef}/rename`, payload: { name: 'chosen' } });
     expect(res.statusCode).toBe(500);
@@ -169,11 +179,11 @@ describe('legacy window rename', () => {
     const repo = makeWindowRepo();
     repo.findByServerAndTarget = vi.fn(() => ({ id: 4, tmuxTarget: 'main:1' }) as never);
     repo.update = vi.fn();
-    const tmux = { renameWindow: vi.fn(async () => ({ code, stdout: '', stderr: 'failure' })) } as unknown as TmuxClient;
+    const tmux = { resolveWindowForRespawn: vi.fn(async () => null), renameWindow: vi.fn(async () => ({ code, stdout: '', stderr: 'failure' })) } as unknown as TmuxClient;
     const app = await buildApp({}, repo, tmux);
     const res = await app.inject({ method: 'PUT', url: '/api/servers/srv1/windows/main%3A1/rename', payload: { name: 'chosen' } });
     expect(res.statusCode).toBe(code === 0 ? 200 : 500);
-    if (code === 0) expect(repo.update).toHaveBeenCalledWith(4, { label: 'chosen', labelSource: 'user', tmuxTarget: 'main:chosen' });
+    if (code === 0) expect(repo.renameTmuxWindow).toHaveBeenCalledWith(4, 'chosen');
     else expect(repo.update).not.toHaveBeenCalled();
     expect(emit.mock.calls.some(([event]) => event.type === 'window:renamed')).toBe(code === 0);
     await app.close();

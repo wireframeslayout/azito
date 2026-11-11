@@ -140,6 +140,7 @@ export interface IWindowRepository {
   update(id: number, data: Partial<Pick<Window,
     'tmuxTarget' | 'muxRef' | 'label' | 'labelSource' | 'agentSessionId' | 'launchCommand' | 'paneLayout' | 'workerModel' | 'workingDirectory' | 'windowType' | 'workerType' | 'sleeping' | 'projectId'
   >>): void;
+  renameTmuxWindow(id: number, name: string): void;
   updateAgentSessionIdByWindow(serverName: string, tmuxTarget: string, sessionId: string): void;
   updateClaudeSessionByPane(serverName: string, tmuxTarget: string, paneOrdinal: number | null, sessionId: string, configDir: string, configDirExplicit: boolean): void;
   remove(id: number): void;

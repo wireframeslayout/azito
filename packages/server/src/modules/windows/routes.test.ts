@@ -99,7 +99,7 @@ describe('POST /api/windows/:id/launch-agent', () => {
       findById: (id: number) => (id === window.id ? window : undefined),
       updateAgentSessionIdByWindow: updateByWindowFn,
       findByServerAndTarget: vi.fn(() => undefined), findByServerAndRef: vi.fn(() => undefined),
-      add: vi.fn(() => 2), update: windowUpdate,
+      add: vi.fn(() => 2), update: windowUpdate, renameTmuxWindow: vi.fn(),
     };
     const serverRepo: Partial<IServerRepository> = {
       findByName: (name: string) => (name === server.name ? server : null),
@@ -108,6 +108,7 @@ describe('POST /api/windows/:id/launch-agent', () => {
       sendKeysToHandle: sendKeys as unknown as TmuxClient['sendKeysToHandle'],
       resolvePane: vi.fn().mockResolvedValue('%0') as unknown as TmuxClient['resolvePane'],
       listWorkspaces: vi.fn(async () => [{ name: 's', windows: [] }]),
+      resolveWindowForRespawn: vi.fn(async () => null),
       renameWindowByRef: vi.fn(async () => ({ code: 0, stdout: '', stderr: '' })),
       splitPaneByHandle: vi.fn(async () => ({ result: { code: 0, stdout: '', stderr: '' } })),
       setPaneTitle: vi.fn(async () => ({ code: 0, stdout: '', stderr: '' })),
@@ -826,11 +827,11 @@ describe('PUT /api/windows/:id/rename', () => {
       notificationBus: { emit } as never,
       muxSwitchSettingsRepo: {} as never, auditLogService: {} as never, agentActivityMonitor: {} as never,
       harnessPrefix: '',
-      windowRepo: { findById: () => win, update } as unknown as IWindowRepository,
+      windowRepo: { findById: () => win, update, renameTmuxWindow: update } as unknown as IWindowRepository,
       projectRepo: {} as IProjectRepository,
       taskRepo: {} as ITaskRepository,
       tmux: {} as TmuxClient,
-      muxDriverRegistry: { resolve: () => ({ renameWindowByRef }) } as any,
+      muxDriverRegistry: { resolve: () => ({ renameWindowByRef, resolveWindowForRespawn: vi.fn(async () => null) }) } as any,
       serverRepo: { findByName: () => makeServer() } as unknown as IServerRepository,
       transportFactory: { hostProfileFor: () => null },
       respawnService: {} as WindowRespawnService,
@@ -850,7 +851,7 @@ describe('PUT /api/windows/:id/rename', () => {
     const app = await buildRenameApp(vi.fn(async () => ({ code, stdout: '', stderr: 'failure' })), update, emit);
     const res = await app.inject({ method: 'PUT', url: '/api/windows/1/rename', payload: { name: 'chosen' } });
     expect(res.statusCode).toBe(code === 0 ? 200 : 500);
-    if (code === 0) expect(update).toHaveBeenCalledWith(1, { label: 'chosen', labelSource: 'user', tmuxTarget: 'proj:chosen' });
+    if (code === 0) expect(update).toHaveBeenCalledWith(1, 'chosen');
     else expect(update).not.toHaveBeenCalled();
     expect(emit.mock.calls.some(([event]) => event.type === 'window:renamed')).toBe(code === 0);
     await app.close();

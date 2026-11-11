@@ -112,6 +112,13 @@ describe('TmuxClient.resolveWindowForRespawn', () => {
     await expect(noSession.resolveWindowForRespawn(srv, ref)).resolves.toBeNull();
   });
 
+  it.each(["can't find session: azito", 'no server running on /tmp/tmux-1000/default', 'error connecting to /tmp/tmux-1000/default (No such file or directory)'])('recognizes confirmed absence: %s', async (stderr) => {
+    await expect(makeClient(async () => ({ stdout: '', stderr, code: 0 })).resolveWindowForRespawn(srv, ref)).resolves.toBeNull();
+  });
+  it('rejects an SSH success status with unrecognized stderr', async () => {
+    await expect(makeClient(async () => ({ stdout: '', stderr: 'permission denied', code: 0 })).resolveWindowForRespawn(srv, ref)).rejects.toThrow('Cannot verify');
+  });
+
   it('refuses a name more than one window carries', async () => {
     const duplicate = makeClient(async () => ({ stdout: '@2\trenamed\n@3\trenamed\n', stderr: '', code: 0 }));
     await expect(duplicate.resolveWindowForRespawn(srv, ref)).rejects.toBeInstanceOf(MuxWindowAmbiguousError);

@@ -2,7 +2,7 @@ import { describeUnavailable } from '../RoutingMuxClient';
 import { tmuxErrorReason, tmuxFailureReason } from '../tmuxFailureReason';
 import { misaoFailureReason } from '../misao/misaoFailureReason';
 import { directionBody, nameBody, titleBody, keysBody, paneBody, refBody, workspaceRenameBody } from './actionBodies';
-import { persistRenamedWindowLabel, renamedWindowUpdate, renameRefusalReason } from '../windowIdentity';
+import { persistRenamedWindowLabel, renamedWindowUpdate, renameRefusalReason, tmuxRenameConflict } from '../windowIdentity';
 import type { FastifyPluginCallback, FastifyReply } from 'fastify';
 import { resourceCheckBody, type ResourceGuard, type ResourceUnavailable } from '../../servers/resources/ResourceGuard';
 import type { IServerRepository, ServerConfig } from '../../servers/Server';
@@ -840,13 +840,15 @@ const sessionsRoutes: FastifyPluginCallback<SessionsRouteOptions> = (fastify, op
         if (!name) return reply.status(400).send({ error: 'New name required' });
         const target = decodeURIComponent(request.params.target);
         const windowRow = opts.windowRepo?.findByServerAndTarget(request.params.name, target);
-        const refusal = windowRow ? renameRefusalReason(windowRow, name) : null;
+        const refusal = renameRefusalReason(windowRow ?? { muxRef: { kind: 'tmux', workspace: '', window: '' } }, name);
         if (refusal) return reply.status(400).send({ error: refusal });
         try {
+          const ref = muxRefFromTmuxTarget(target);
+          if (await tmuxRenameConflict(tmux, srv, ref, name)) return reply.status(409).send({ error: 'window_name_conflict' });
           const result = await tmux.renameWindow(srv, target, name);
           const err = execResultError(result);
           if (err) return reply.status(err.status).send({ error: err.error });
-          if (!persistRenamedWindowLabel(() => { if (windowRow) opts.windowRepo!.update(windowRow.id, renamedWindowUpdate(windowRow, name)); }, () => notifySessionsChanged(request.params.name), request.log, windowRow?.id)) {
+          if (!persistRenamedWindowLabel(() => { if (windowRow) windowRow.muxRef?.kind === 'misao' ? opts.windowRepo!.update(windowRow.id, renamedWindowUpdate(windowRow, name)) : opts.windowRepo!.renameTmuxWindow(windowRow.id, name); }, () => notifySessionsChanged(request.params.name), request.log, windowRow?.id)) {
             return reply.status(500).send({ error: 'Window renamed, but saving its label failed' });
           }
           notifySessionsChanged(request.params.name);
@@ -1013,13 +1015,14 @@ const sessionsRoutes: FastifyPluginCallback<SessionsRouteOptions> = (fastify, op
         const { name } = parsedBody.data;
         if (!name) return reply.status(400).send({ error: 'New name required' });
         const windowRow = opts.windowRepo?.findByServerAndRef(request.params.name, ref);
-        const refusal = windowRow ? renameRefusalReason(windowRow, name) : null;
+        const refusal = renameRefusalReason(windowRow ?? { muxRef: ref }, name);
         if (refusal) return reply.status(400).send({ error: refusal });
         const muxClient = opts.muxDriverRegistry?.resolve(srv) ?? tmux;
+        if (await tmuxRenameConflict(muxClient, srv, ref, name)) return reply.status(409).send({ error: 'window_name_conflict' });
         const result = await muxClient.renameWindowByRef(srv, ref, name);
         const err = execResultError(result);
         if (err) return reply.status(err.status).send({ error: err.error });
-        if (!persistRenamedWindowLabel(() => { if (windowRow) opts.windowRepo!.update(windowRow.id, renamedWindowUpdate(windowRow, name)); }, () => notifySessionsChanged(request.params.name), request.log, windowRow?.id)) {
+        if (!persistRenamedWindowLabel(() => { if (windowRow) windowRow.muxRef?.kind === 'misao' ? opts.windowRepo!.update(windowRow.id, renamedWindowUpdate(windowRow, name)) : opts.windowRepo!.renameTmuxWindow(windowRow.id, name); }, () => notifySessionsChanged(request.params.name), request.log, windowRow?.id)) {
           return reply.status(500).send({ error: 'Window renamed, but saving its label failed' });
         }
         notifySessionsChanged(request.params.name);

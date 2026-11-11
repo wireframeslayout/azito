@@ -1,3 +1,4 @@
+import { MuxWindowAmbiguousError } from './MuxCapabilityError';
 import { isMisaoWindowId, muxRefFromTmuxTarget, type MuxDriverKind, type MuxRef } from '@azito/shared';
 
 /** The fields of a window row these helpers read (structural, so this base module does not import the windows module). */
@@ -95,7 +96,18 @@ export function renamedWindowUpdate(win: Pick<WindowRowIdentity, 'muxRef' | 'tmu
  */
 export function renameRefusalReason(win: Pick<WindowRowIdentity, 'muxRef'>, name: string): string | null {
   if (windowKindOf(win) !== 'tmux') return null;
-  return /^\d+$/.test(name) || /^[@%+\-!^${=]/.test(name) || name.includes('.')
-    ? 'A tmux window name must not be only digits, start with one of @ % + - ! ^ $ { =, or contain "."'
+  return !name.trim() || name.includes(':') || /^\d+$/.test(name) || /^[@%+\-!^${=]/.test(name) || name.includes('.')
+    ? 'A tmux window name must not be only digits, start with one of @ % + - ! ^ $ { =, or contain "." or ":", and must not be blank'
     : null;
+}
+
+/** Check the target name against the live tmux session before changing it. */
+export async function tmuxRenameConflict(driver: import('./IMuxClient').IMuxClient, server: import('../servers/Server').ServerConfig, ref: MuxRef, name: string): Promise<boolean> {
+  if (ref.kind !== 'tmux' || ref.window === name) return false;
+  try {
+    return (await driver.resolveWindowForRespawn(server, { ...ref, window: name })) !== null;
+  } catch (err) {
+    if (err instanceof MuxWindowAmbiguousError) return true;
+    throw err;
+  }
 }
