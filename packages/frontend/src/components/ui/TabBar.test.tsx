@@ -56,3 +56,11 @@ it('moves through tabs with arrows, Home and End and leaves the strip with Tab',
   await user.tab();
   expect(screen.getByRole('button', { name: 'After' })).toHaveFocus();
 });
+
+it('hides the tab list only when explicitly requested', () => {
+  const props = { tabs: [{ id: 'one', label: 'One', closable: false }], activeId: 'one', onSelect: () => {} };
+  const view = render(<TabBar {...props} />);
+  expect(view.container.querySelector('button.icon-btn')).toBeInTheDocument();
+  view.rerender(<TabBar {...props} showTabList={false} />);
+  expect(view.container.querySelector('button.icon-btn')).not.toBeInTheDocument();
+});

@@ -1,6 +1,7 @@
 import type { CSSProperties } from 'react';
 import { useTranslation } from 'react-i18next';
 import { Icon, type IconName } from '../ui/Icon';
+import { Chip } from '../ui/Chip';
 import { ProjectAvatar } from '../ui/ProjectAvatar';
 import { GLOBAL_NAV_ITEMS, SETTINGS_NAV_ITEM, ORCHESTRATION_NAV_ITEM } from './globalNavItems';
 import type { SidebarMode } from '../../pages/workspace/types';
@@ -45,6 +46,7 @@ interface MobileNavMenuProps {
   activeWindowsCount?: number;
   activeWindowsBlockedCount?: number;
   attentionCount?: number;
+  orchestrationCount?: number;
 }
 
 // モック（S6/M1）は行高36〜40px・節間の余白も詰まっている。タップターゲットは本来44pxが
@@ -150,12 +152,13 @@ export function MobileNavMenu({
   activeWindowsCount,
   activeWindowsBlockedCount,
   attentionCount,
+  orchestrationCount,
 }: MobileNavMenuProps) {
   const { t } = useTranslation(['workspace', 'projects', 'common']);
 
   return (
     <div style={{ padding: '0 4px 16px' }}>
-      <button type="button" style={{ ...rowStyle, minHeight: 44 }} className="glass-popover-item" onClick={onOpenSearch}><Icon name="search" size={16} /><span style={rowLabelStyle}>{t('navigation:globalSearch.title')}</span></button>
+      <button type="button" style={{ ...rowStyle, minHeight: 44, background: 'var(--input-bg)', marginBottom: 'var(--space-2)', color: 'var(--text-dim)' }} className="glass-popover-item" onClick={onOpenSearch}><Icon name="search" size={16} /><span style={rowLabelStyle}>{t('navigation:globalSearch.placeholder')}</span></button>
       <div style={projectCardStyle}>
         <button type="button" onClick={onOpenProjectSwitch} style={selectionRowStyle} className="glass-popover-item">
           <ProjectAvatar project={project} size={22} />
@@ -185,7 +188,7 @@ export function MobileNavMenu({
 
       <div style={sectionLabelStyle}>{t('workspace:mobileNav.sectionGlobal')}</div>
       <button type="button" onClick={() => onNavigateGlobal(ORCHESTRATION_NAV_ITEM.path)} style={{ ...rowStyle, minHeight: 44, color: 'var(--purple)' }} className="glass-popover-item">
-        <Icon name={ORCHESTRATION_NAV_ITEM.icon} size={16} /><span style={rowLabelStyle}>{t(ORCHESTRATION_NAV_ITEM.labelKey)}</span>{attentionCount !== undefined && attentionCount > 0 && <span aria-label={t('workspace:orchestration.railAttention', { count: attentionCount })} style={rowMetaStyle}>{attentionCount}</span>}
+        <Icon name={ORCHESTRATION_NAV_ITEM.icon} size={16} /><span style={rowLabelStyle}>{t(ORCHESTRATION_NAV_ITEM.labelKey)}</span>{attentionCount !== undefined && attentionCount > 0 && <span aria-label={t('workspace:orchestration.railAttention', { count: attentionCount })}><Chip tone="orange">{t('workspace:mobileNav.attention', { count: attentionCount })}</Chip></span>}{orchestrationCount !== undefined && <span aria-label={t('workspace:orchestration.totalCount', { count: orchestrationCount })} style={rowMetaStyle}>{orchestrationCount}</span>}
       </button>
       {GLOBAL_NAV_ITEMS.map((item) => (
         <button key={item.path} type="button" onClick={() => onNavigateGlobal(item.path)} style={rowStyle} className="glass-popover-item">
