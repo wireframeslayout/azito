@@ -42,6 +42,7 @@ let current: HubCanary | null = null;
 // again per request (Resolve at the Boundary: dataDir itself is still only
 // ever resolved once, at startup, by main.ts's writeHubCanary call).
 let knownDataDir: string | null = null;
+let knownCreatedObserver: ((file: string) => void) | undefined;
 
 /**
  * Writes a fresh canary file directly under the hub's data directory.
@@ -52,13 +53,15 @@ let knownDataDir: string | null = null;
  * is the correct fail-closed behavior for "we could not even attempt the
  * measurement".
  */
-export function writeHubCanary(dataDir: string): HubCanary | null {
+export function writeHubCanary(dataDir: string, onCreated?: (file: string) => void): HubCanary | null {
   knownDataDir = dataDir;
+  knownCreatedObserver = onCreated;
   try {
     const suffix = crypto.randomBytes(16).toString('hex');
     const filePath = path.join(dataDir, `.azito-hub-canary-${suffix}`);
-    fs.writeFileSync(filePath, CANARY_CONTENT, { mode: 0o600 });
+    fs.writeFileSync(filePath, CANARY_CONTENT, { mode: 0o600, flag: 'wx' });
     current = { path: filePath, content: CANARY_CONTENT };
+    try { onCreated?.(filePath); } catch (err) { console.warn(`[azito] Could not record canary ownership: ${err instanceof Error ? err.message : String(err)}`); }
     removeStaleCanaries(dataDir, filePath);
     return current;
   } catch {
@@ -128,7 +131,7 @@ export function getVerifiedHubCanary(): HubCanary | null {
   // — try to (re)write a fresh one into the same data directory before
   // giving up.
   if (knownDataDir) {
-    const rewritten = writeHubCanary(knownDataDir);
+    const rewritten = writeHubCanary(knownDataDir, knownCreatedObserver);
     if (rewritten && isCanaryIntact(rewritten)) return rewritten;
   }
   current = null;

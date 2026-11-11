@@ -27,6 +27,7 @@ import { serviceCommand } from './cli/serviceCommand';
 import { initEnvCommand } from './cli/initEnvCommand';
 import { windowsInstallRecordCommand } from './cli/windowsInstallRecordCommand';
 import { windowsHubUninstallCommand } from './cli/windowsHubUninstallCommand';
+import { createOwnedCanaryRecorder, trackWindowsOwnedSecrets } from './modules/system/windowsOwnedSecrets';
 import { hostRunsTmux } from './modules/servers/muxKinds';
 import { hasMisaoToRelyOn } from './modules/system/misao/misaoPaths';
 import { misaoWindowsTaskExists } from './modules/system/misao/misaoLocalWindows';
@@ -44,7 +45,7 @@ const RECOVERY_DRAIN_MS = 4000;
 
 async function main(): Promise<void> {
   const hostEnv = resolveCurrentHostEnv();
-  const secretFileGuard = createSecretFileGuard(hostEnv.platform, process.env);
+  let secretFileGuard = createSecretFileGuard(hostEnv.platform, process.env);
   if (process.argv[2] === 'token') {
     await tokenCommand(process.argv.slice(3), hostEnv.homeDir, secretFileGuard);
     return;
@@ -118,6 +119,7 @@ async function main(): Promise<void> {
   }
 
   migrateDataIfNeeded(paths, legacy, secretFileGuard);
+  secretFileGuard = trackWindowsOwnedSecrets(secretFileGuard, getBundleRoot(), paths, hostEnv.platform);
 
   initSecretBox(paths.masterKey, secretFileGuard);
   initVapidKeyManager(paths.vapidKeys, secretFileGuard);
@@ -125,7 +127,8 @@ async function main(): Promise<void> {
   // Isolation doctor FS-boundary canary (Issue #29 review, Critical finding
   // 1): best-effort, write failure only warns — never blocks startup. See
   // hubCanary.ts's own doc comment.
-  if (writeHubCanary(paths.dir) === null) {
+  const canaryRecorder = createOwnedCanaryRecorder(secretFileGuard, getBundleRoot(), paths, hostEnv.platform);
+  if (writeHubCanary(paths.dir, canaryRecorder) === null) {
     console.warn('[azito] Failed to write isolation-doctor FS-boundary canary — the FS-boundary check will report "unknown" for every agent server until the hub restarts with a writable data directory');
   }
 

@@ -125,7 +125,7 @@ powershell -NoProfile -ExecutionPolicy Bypass -File .\install.ps1 [-Version v0.1
 | `-NoPath` | `<prefix>\bin` をユーザーの PATH に足さない |
 | `-NoService` | タスクスケジューラのタスクを登録しない。`azito run` で起動するか、あとから `azito service install` で登録する |
 | `-Uninstall` | 所有を確認できた導入物を削除する。データは既定で保持する |
-| `-RemoveData` | `-Uninstall` と共に指定し、記録済みデータベースと確認済みの未変更データも削除する |
+| `-RemoveData` | `-Uninstall` と共に指定し、記録された識別情報を確認できるデータファイルも削除する |
 
 `irm | iex` では引数を渡せないので、各オプションは、コマンドの前に設定した環境変数でも指定できます: `AZITO_INSTALL_VERSION`・`AZITO_INSTALL_PREFIX`・`AZITO_INSTALL_PORT`・`AZITO_INSTALL_ZIPPATH`・`AZITO_INSTALL_SHA256SUMS`、および `AZITO_INSTALL_YES` / `AZITO_INSTALL_NOPATH` / `AZITO_INSTALL_NOSERVICE` / `AZITO_INSTALL_UNINSTALL` / `AZITO_INSTALL_REMOVEDATA`（`1` を設定）。引数と環境変数の両方があれば引数が優先されます。`AZITO_INSTALL_ZIPPATH` で指定した zip は、照合なしでは使われません。`-Sha256Sums` または `AZITO_INSTALL_SHA256SUMS` でチェックサムのファイルを指定しないと、何も書く前に止まります（セッションに残った変数のせいで、通常の導入が未検証の zip に切り替わらないようにするためです）。PowerShell の窓で実行し、終わったら変数を消して、セッションに残さないでください。例: `$env:AZITO_INSTALL_PORT = 3010; [Net.ServicePointManager]::SecurityProtocol = [Net.ServicePointManager]::SecurityProtocol -bor 3072; irm https://github.com/wireframeslayout/azito/releases/latest/download/install.ps1 | iex; Remove-Item Env:AZITO_INSTALL_PORT`。
 
@@ -167,11 +167,11 @@ CLI は `current.txt` を読んで同梱のハブを実行します:
 
 ```powershell
 powershell -NoProfile -ExecutionPolicy Bypass -File .\install.ps1 -Uninstall [-Prefix <dir>]
-# 記録済みデータベースと確認済みの未変更データも削除する場合:
+# 記録された識別情報を確認できるデータファイルも削除する場合:
 powershell -NoProfile -ExecutionPolicy Bypass -File .\install.ps1 -Uninstall -RemoveData [-Prefix <dir>]
 ```
 
-先に `azito stop` でタスクを停止し、`azito run` の端末があればその端末で Ctrl+C を押してください。登録タスクの定義と実行アカウントを確認し、ハブや更新が動いている間は削除を拒否します。`-Yes` は確認を省くための指定で、データ削除は選びません。データは `-RemoveData` を付けない限り保持します。指定した場合、導入時に作成したデータベースは、使用後でもファイルの識別情報が記録と一致すれば削除します。別のファイルに置き換わっている場合は保持します。そのほかのデータは、変更されている場合や所有を確認できない場合に保持します。外部の `AZITO_DATA_DIR` は削除しません。
+先に `azito stop` でタスクを停止し、`azito run` の端末があればその端末で Ctrl+C を押してください。登録タスクの定義と実行アカウントを確認し、ハブや更新が動いている間は削除を拒否します。`-Yes` は確認を省くための指定で、データ削除は選びません。データは `-RemoveData` を付けない限り保持します。指定した場合、導入時に作成したデータベースと記録済みの鍵・トークン・canary は、ファイルの識別情報が記録と一致すれば削除します。別のファイルに置き換わっている場合や、そのほかのデータの所有を確認できない場合は保持します。外部の `AZITO_DATA_DIR` は削除しません。
 
 インストーラーは自分が作成したファイルを記録します。アンインストール時には内容・リンク・アクセス権を確認し、未記録または変更されたファイルは保持します。記録のない旧導入、記録にない更新後のバージョン、リンク、安全性を確認できないアクセス権は手動確認が必要です。共有され得る misao は常に保持します。削除を判断する前に `AzitoMisao` のタスクと利用者、Windows agent を確認してください。残った設定やログなどはコマンドに表示されます。手動で削除する前に、エクスプローラーでファイル、Windows の環境変数設定でユーザー PATH、タスクスケジューラでタスクを確認してください。削除を始めてから失敗すると記録が使用済みになり、再実行時には表示された退避先を含む残存物を保持します。内容を手動で確認してください。
 

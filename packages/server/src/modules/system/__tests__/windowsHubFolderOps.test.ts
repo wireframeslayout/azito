@@ -43,6 +43,14 @@ describe('findHubVersionsInUse', () => {
     await expect(findHubVersionsInUse(run, 'C:\\Windows', ['C:\\h'])).rejects.toThrow(/exit 1.*boom/);
   });
 
+  it('rejects an unrecognised hub folder for uninstall, and recognises Windows case variants', async () => {
+    const run = ok('version V1.2.3\r\nversion AZITO~1\r\n');
+    await expect(findHubVersionsInUse(run, 'C:\\Windows', ['C:\\h'], { rejectUnknownVersions: true, excludePid: 123 })).rejects.toThrow(/unrecognised hub folder \(AZITO~1\)/);
+    expect(parseVersionsInUse('version V1.2.3\r\n', true)).toEqual(new Set(['v1.2.3']));
+    const spec = run.mock.calls[0]![0];
+    expect(Buffer.from(spec.args[spec.args.indexOf('-EncodedCommand') + 1]!, 'base64').toString('utf16le')).toContain('$p.ProcessId -eq 123');
+  });
+
   it('stops everything when a process whose path cannot be read might be using a version (the query succeeded, the path is missing)', async () => {
     const run = ok('version v0.1.0\r\nunknown 4242 Foo.exe\r\nunknown 77 Bar.exe\r\n');
     await expect(findHubVersionsInUse(run, 'C:\\Windows', ['C:\\h'])).rejects.toThrow(/process 4242 \(Foo.exe\), 77 \(Bar.exe\).*no old version is removed/);

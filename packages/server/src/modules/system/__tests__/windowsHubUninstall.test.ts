@@ -7,7 +7,7 @@ import { readInstallFileIdentity, readInstallInventory } from '../windowsInstall
 vi.mock('../windowsHubFolderOps', async (importOriginal) => ({ ...(await importOriginal<typeof import('../windowsHubFolderOps')>()), removeFolderWithRd: vi.fn() }));
 
 import { removeFolderWithRd } from '../windowsHubFolderOps';
-import { consumeWindowsInstallRecord, readWindowsInstallRecord, removeRecordedTree, verifyRecordedData, verifyRecordedDatabase, verifyRecordedRelease } from '../windowsHubUninstall';
+import { assertNoHubLaunchers, consumeWindowsInstallRecord, readWindowsInstallRecord, removeRecordedTree, verifyRecordedData, verifyRecordedDatabase, verifyRecordedRelease } from '../windowsHubUninstall';
 
 const roots: string[] = [];
 afterEach(() => { for (const root of roots.splice(0)) fs.rmSync(root, { recursive: true, force: true }); });
@@ -73,5 +73,38 @@ describe('recorded release verification', () => {
     const { hub, guard } = setup();
     consumeWindowsInstallRecord(hub, readWindowsInstallRecord(hub, guard), guard);
     expect(readWindowsInstallRecord(hub, guard).consumed).toBe(true);
+  });
+});
+
+describe('hub launcher check', () => {
+  it('checks PowerShell processes and refuses an encoded command mentioning the hub', async () => {
+    const run = vi.fn().mockResolvedValueOnce({ exitCode: 0, stdout: 'absent', stderr: '' }).mockResolvedValueOnce({ exitCode: 0, stdout: 'present', stderr: '' });
+    await expect(assertNoHubLaunchers(['C:\\Users\\me\\.azito\\hub'], run, 'C:\\Windows', 123)).rejects.toThrow(/launcher is still running/);
+    expect(run).toHaveBeenCalledTimes(2);
+    const spec = run.mock.calls[0]![0];
+    const check = Buffer.from(spec.args.at(-1)!, 'base64').toString('utf16le');
+    expect(check).toContain('C:\\Users\\me\\.azito\\hub');
+    expect(check).toContain('FromBase64String');
+    expect(check).toContain('OrdinalIgnoreCase');
+    expect(check).toContain("IndexOf('$hubRoot'");
+    expect(check).toContain('if ($p.Id -eq 123) { continue }');
+    expect(check).toContain('throw "Cannot identify process $($p.Id)"');
+    expect(check).not.toContain('if ($owner -ne $me) { continue }');
+  });
+
+  it('refuses when a process check fails or gives an unrecognised answer', async () => {
+    const run = vi.fn().mockResolvedValueOnce({ exitCode: 1, stdout: '', stderr: 'unreadable' });
+    await expect(assertNoHubLaunchers(['C:\\Users\\me\\.azito\\hub'], run, 'C:\\Windows', 123)).rejects.toThrow(/unreadable/);
+    run.mockResolvedValueOnce({ exitCode: 0, stdout: 'unknown', stderr: '' });
+    await expect(assertNoHubLaunchers(['C:\\Users\\me\\.azito\\hub'], run, 'C:\\Windows', 123)).rejects.toThrow(/Cannot determine/);
+  });
+
+  it('checks both literal and PowerShell-escaped path spellings', async () => {
+    const run = vi.fn().mockResolvedValue({ exitCode: 0, stdout: 'absent', stderr: '' });
+    await assertNoHubLaunchers(["C:\\Users\\O'Brien\\.azito\\hub"], run, 'C:\\Windows', 123);
+    const spec = run.mock.calls[0]![0];
+    const check = Buffer.from(spec.args.at(-1)!, 'base64').toString('utf16le');
+    expect(check).toContain("O''Brien");
+    expect(check).toContain("O''''Brien");
   });
 });

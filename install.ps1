@@ -457,7 +457,7 @@ function Invoke-Uninstall {
     $holder = $null
     try {
         New-Item -ItemType Directory -Path $tempRoot | Out-Null
-        Copy-Item -LiteralPath $release -Destination $tempRoot -Recurse
+        Copy-Item -LiteralPath $release -Destination $tempRoot -Recurse -Force
         $copy = Join-Path $tempRoot $record.release
         Assert-RecordedTree $copy $record.inventory
         if ($release.Contains('"') -or $copy.Contains('"') -or $release -match '[\r\n]' -or $copy -match '[\r\n]') { throw 'The prefix cannot contain quotes or line breaks.' }

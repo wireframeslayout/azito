@@ -6,8 +6,11 @@ import type { SecretFileGuard } from '../../shared/os/secretFileGuard';
 import { assertRealDirectoryChain, hashInstallFile, readInstallFileIdentity, readInstallInventory, type InstallFileIdentity } from './windowsInstallInventory';
 import { isReleaseTag } from './hubVersion';
 import { assertHubDirsOnlyOwnerWritable, removeFolderWithRd } from './windowsHubFolderOps';
-import type { SpecRunner } from './windowsHubService';
+import { windowsPowershell, type SpecRunner } from './windowsHubService';
 import { whyAFileIsHeld } from './windowsHubPrune';
+import { buildCommandSpec } from '../../shared/exec/commandSpec';
+import { powershellDialect, powershellEncodedArgs } from '../../shared/os/shellDialect';
+import { buildProcessPresentScript, parseProcessPresent } from '../../shared/os/windowsProcessSweep';
 
 const fileSchema = z.object({ path: z.string(), sha256: z.string().regex(/^[a-f0-9]{64}$/) }).strict();
 const identitySchema = z.object({ device: z.string().regex(/^\d+$/), file: z.string().regex(/^\d+$/), created: z.string().regex(/^\d+$/) }).strict();
@@ -129,5 +132,16 @@ export async function removeRecordedTree(parent: string, name: string, run: Spec
     await removeFolderWithRd(run, systemRoot, parent, isolated, fs.existsSync);
   } catch (err) {
     throw new Error(`Removal failed; inspect ${isolatedPath} manually: ${err instanceof Error ? err.message : String(err)}`);
+  }
+}
+
+/** A launcher can outlive a manually deleted task and later start another hub. Never stop it here. */
+export async function assertNoHubLaunchers(hubRoots: readonly string[], run: SpecRunner, systemRoot: string, callerPid: number): Promise<void> {
+  const mentions = hubRoots.flatMap((root) => [root, powershellDialect.quote(root).slice(1, -1)]);
+  for (const image of ['powershell.exe', 'pwsh.exe']) {
+    const check = buildProcessPresentScript(image, '', mentions, callerPid);
+    const result = await run(buildCommandSpec(windowsPowershell(systemRoot), powershellEncodedArgs(check), { timeoutMs: 60_000 }));
+    if (result.exitCode !== 0) throw new Error(`Could not inspect hub launchers: ${(result.stderr || result.stdout).trim().slice(0, 400)}`);
+    if (parseProcessPresent(result.stdout)) throw new Error('A hub launcher is still running. Stop it and inspect the retained files.');
   }
 }

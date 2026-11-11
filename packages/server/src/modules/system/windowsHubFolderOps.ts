@@ -110,13 +110,17 @@ export async function assertHubDirsOnlyOwnerWritable(run: SpecRunner, systemRoot
 // ── which versions a process uses ────────────────────────────────────────
 
 /** Reads the answer of the in-use script: the versions found, and the processes whose use could not be told. Throws on the latter. */
-export function parseVersionsInUse(output: string): Set<string> {
+export function parseVersionsInUse(output: string, rejectUnknownVersions = false): Set<string> {
   const found = new Set<string>();
   const unknown: string[] = [];
   for (const raw of output.split(/\r?\n/)) {
     const line = raw.trim();
     const version = /^version (\S+)$/.exec(line)?.[1];
-    if (version !== undefined && isHubPointerVersion(version)) found.add(version);
+    if (version !== undefined) {
+      const normalised = version.startsWith('V') ? `v${version.slice(1)}` : version;
+      if (isHubPointerVersion(normalised)) found.add(normalised);
+      else if (rejectUnknownVersions) throw new Error(`A process uses an unrecognised hub folder (${version}); nothing is removed`);
+    }
     const missing = /^unknown (\d+) (\S+)$/.exec(line);
     if (missing) unknown.push(`${missing[1]} (${missing[2]})`);
   }
@@ -183,7 +187,7 @@ public static class AzitoImage {
  * is given (`INTERPRETERS`), the missing command line does not matter (protected system and antivirus components have none). One that is gone by
  * the time it is looked at is not counted. PowerShell prints only version names (ASCII), so a code page cannot garble them.
  */
-export async function findHubVersionsInUse(run: SpecRunner, systemRoot: string, hubRoots: readonly string[]): Promise<Set<string>> {
+export async function findHubVersionsInUse(run: SpecRunner, systemRoot: string, hubRoots: readonly string[], options?: { rejectUnknownVersions: boolean; excludePid: number }): Promise<Set<string>> {
   const q = powershellDialect.quote;
   const pattern = `(?:${hubRoots.map(rootPattern).join('|')})([^\\\\/"\\s]+)(?=[\\\\/"\\s]|$)`;
   const script = [
@@ -193,6 +197,7 @@ export async function findHubVersionsInUse(run: SpecRunner, systemRoot: string, 
     `$interpreters = @(${INTERPRETERS.map((n) => q(n)).join(', ')})`,
     '$me = [Security.Principal.WindowsIdentity]::GetCurrent().User.Value',
     'foreach ($p in @(Get-CimInstance Win32_Process)) {',
+    ...(options ? [`  if ($p.ProcessId -eq ${Math.trunc(options.excludePid)}) { continue }`] : []),
     '  $path = $p.ExecutablePath',
     '  $cmd = $p.CommandLine',
     '  $hit = $false',
@@ -221,7 +226,7 @@ export async function findHubVersionsInUse(run: SpecRunner, systemRoot: string, 
     '  "unknown $($p.ProcessId) $name"',
     '}',
   ].join('\n');
-  return parseVersionsInUse(await powershell(run, systemRoot, script, 'Looking for the version folders in use'));
+  return parseVersionsInUse(await powershell(run, systemRoot, script, 'Looking for the version folders in use'), options?.rejectUnknownVersions);
 }
 
 // ── removing a folder ────────────────────────────────────────────────────

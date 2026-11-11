@@ -68,26 +68,37 @@ export function buildEndProcessesScript(input: ProcessSweepInput): string {
   ].join('\n');
 }
 
-/** Check for an owned process with an exact command-line argument without stopping it. */
-export function buildProcessPresentScript(image: string, argument: string): string {
+/** Check an owned process argument, or inspect decoded PowerShell commands across accounts, without stopping processes. */
+export function buildProcessPresentScript(image: string, argument: string, decodedScriptMentions?: readonly string[], excludePid?: number): string {
   const q = powershellDialect.quote;
   return [
     '# AZITO_PROCESS_PRESENT',
-    `$arg = ${q(argument)}`,
-    "$pattern = '(^|[\\s\"])' + [regex]::Escape($arg) + '([\\s\"]|$)'",
+    ...(decodedScriptMentions ? [
+      `$mentions = @(${decodedScriptMentions.map(q).join(',')})`,
+      "$pattern = '(?:^|\\s)-EncodedCommand\\s+([A-Za-z0-9+/=]+)(?:\\s|$)'",
+    ] : [
+      `$arg = ${q(argument)}`,
+      "$pattern = '(^|[\\s\"])' + [regex]::Escape($arg) + '([\\s\"]|$)'",
+    ]),
     '$me = [Security.Principal.WindowsIdentity]::GetCurrent().User.Value',
     WINDOWS_PROCESS_INFO,
     '$elevated = ([Security.Principal.WindowsPrincipal][Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)',
     `$ps = @(Get-Process -Name ${q(image.replace(/\.exe$/i, ''))} -ErrorAction SilentlyContinue)`,
     'foreach ($p in $ps) {',
+    '  if ($p.Id -eq $PID) { continue }',
+    ...(excludePid !== undefined ? [`  if ($p.Id -eq ${Math.trunc(excludePid)}) { continue }`] : []),
     '  $owner = [AzitoProcessList]::Owner($p.Id)',
-    '  if (-not $owner) { if (-not (Get-Process -Id $p.Id -ErrorAction SilentlyContinue) -or -not $elevated) { continue }; throw "Cannot identify process $($p.Id)" }',
-    '  if ($owner -ne $me) { continue }',
+    decodedScriptMentions
+      ? '  if (-not $owner) { if (-not (Get-Process -Id $p.Id -ErrorAction SilentlyContinue)) { continue }; throw "Cannot identify process $($p.Id)" }'
+      : '  if (-not $owner) { if (-not (Get-Process -Id $p.Id -ErrorAction SilentlyContinue) -or -not $elevated) { continue }; throw "Cannot identify process $($p.Id)" }',
+    ...(decodedScriptMentions ? [] : ['  if ($owner -ne $me) { continue }']),
     '  $started = $p.StartTime.ToUniversalTime(); $data = [AzitoProcessList]::Read($p.Id)',
     '  $current = Get-Process -Id $p.Id -ErrorAction SilentlyContinue; if (-not $current) { continue }',
     '  if ($current.StartTime.ToUniversalTime() -ne $started) { throw "Process changed while inspected" }',
     '  if (-not $data[1]) { throw "Cannot read process command line" }',
-    '  if ($data[1] -match $pattern) { Write-Output "present"; exit 0 }',
+    ...(decodedScriptMentions ? [
+      "  if ($data[1] -match $pattern) { try { $body = [Text.Encoding]::Unicode.GetString([Convert]::FromBase64String($Matches[1])) } catch { throw 'Cannot decode a PowerShell process command' }; foreach ($mention in $mentions) { if ($body.IndexOf($mention, [StringComparison]::OrdinalIgnoreCase) -ge 0) { Write-Output 'present'; exit 0 } }; if ($body.IndexOf('$hubRoot', [StringComparison]::OrdinalIgnoreCase) -ge 0 -and $body.IndexOf('run.ps1', [StringComparison]::OrdinalIgnoreCase) -ge 0 -and $body.IndexOf('current.txt', [StringComparison]::OrdinalIgnoreCase) -ge 0) { Write-Output 'present'; exit 0 } }",
+    ] : ['  if ($data[1] -match $pattern) { Write-Output "present"; exit 0 }']),
     '}',
     'Write-Output "absent"',
   ].join('\n');

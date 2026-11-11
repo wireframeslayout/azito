@@ -5,6 +5,10 @@ import * as os from 'os';
 import * as path from 'path';
 import { createSecretFileGuard } from '../src/shared/os/secretFileGuard';
 import { readEnvValue } from '../src/shared/envFile';
+import { assertNoHubLaunchers } from '../src/modules/system/windowsHubUninstall';
+import { powershellDialect, powershellEncodedArgs } from '../src/shared/os/shellDialect';
+import { runCommandSpec, runHostOf } from '../src/shared/exec/runCommandSpec';
+import { resolveCurrentHostEnv } from '../src/shared/os/hostEnv';
 
 /**
  * End-to-end check of the Windows install path (install.ps1, the `azito` CLI, run.ps1) on a real Windows PowerShell 5.1:
@@ -138,7 +142,7 @@ function checkUninstall(installPs1: string, prefix: string, version: string): vo
   assert(again.status === 0 && /already removed/.test(again.output), 'a repeat must report the retained files', again.output);
 }
 
-function checkRemoveData(installPs1: string, zip: string, sums: string, prefix: string): void {
+async function checkRemoveData(installPs1: string, zip: string, sums: string, prefix: string): Promise<void> {
   step('an explicit -RemoveData removes an unchanged recorded data directory');
   const installed = install(installPs1, ['-ZipPath', zip, '-Sha256Sums', sums, '-Prefix', prefix, '-Yes', '-NoPath', '-NoService']);
   assert(installed.status === 0, 'install for data removal failed', installed.output);
@@ -149,13 +153,40 @@ function checkRemoveData(installPs1: string, zip: string, sums: string, prefix: 
   const changedPrefix = `${prefix}-changed`;
   const changedInstall = install(installPs1, ['-ZipPath', zip, '-Sha256Sums', sums, '-Prefix', changedPrefix, '-Yes', '-NoPath', '-NoService']);
   assert(changedInstall.status === 0, 'install for changed data failed', changedInstall.output);
+  await checkStart(installPs1, path.join(changedPrefix, 'bin', 'azito.cmd'), changedPrefix);
   const extra = path.join(changedPrefix, 'data', 'user-file');
   fs.writeFileSync(extra, 'keep');
   const database = path.join(changedPrefix, 'data', 'data.db');
-  fs.writeFileSync(database, 'changed database');
+  const webhook = path.join(changedPrefix, 'data', 'webhook-token');
+  assert(fs.existsSync(path.join(changedPrefix, 'hub', '.owned-data-webhook-token.json')), 'the generated webhook token must have an ownership record');
+  const canary = fs.readdirSync(path.join(changedPrefix, 'data')).find((name) => /^\.azito-hub-canary-[a-f0-9]{32}$/.test(name));
+  assert(canary !== undefined && fs.existsSync(path.join(changedPrefix, 'hub', `.owned-data-${canary}.json`)), 'the generated canary must have an ownership record');
   const changedRemoval = install(installPs1, ['-Uninstall', '-RemoveData', '-Prefix', changedPrefix, '-Yes']);
   assert(changedRemoval.status === 0 && fs.existsSync(extra) && /Data retained/.test(changedRemoval.output), 'changed data must be retained and reported', changedRemoval.output);
   assert(!fs.existsSync(database), 'the changed database with the recorded identity must be removed', changedRemoval.output);
+  assert(!fs.existsSync(webhook), 'the recorded generated token must be removed', changedRemoval.output);
+  assert(!fs.existsSync(path.join(changedPrefix, 'data', canary as string)), 'the recorded canary must be removed', changedRemoval.output);
+}
+
+async function checkOrphanLauncher(prefix: string): Promise<void> {
+  step('a synthetic orphan launcher mentioning the hub is detected without being stopped');
+  const hub = path.join(prefix, 'hub');
+  const script = `$hubRoot = ${powershellDialect.quote(hub)}; Start-Sleep -Seconds 90`;
+  const child = spawn(POWERSHELL, powershellEncodedArgs(script), { stdio: 'ignore' });
+  try {
+    await new Promise((resolve) => setTimeout(resolve, 1500));
+    const host = runHostOf(resolveCurrentHostEnv());
+    let reason = '';
+    try { await assertNoHubLaunchers([hub], (spec) => runCommandSpec(spec, host), SYSTEM_ROOT, process.pid); } catch (err) { reason = err instanceof Error ? err.message : String(err); }
+    assert(/launcher is still running/.test(reason), 'the orphan launcher must be reported', reason);
+    assert(child.exitCode === null, 'the launcher check must not stop the process');
+  } finally {
+    if (child.exitCode === null && child.signalCode === null) {
+      const exited = new Promise<void>((resolve) => child.once('exit', () => resolve()));
+      child.kill();
+      await exited;
+    }
+  }
 }
 
 /** An install that stopped part-way (a version folder, no current.txt, no CLI) is repaired by running the installer again; the CLI refuses a bad pointer and survives `&` in the prefix. */
@@ -229,7 +260,10 @@ async function checkStart(installPs1: string, azitoCmd: string, prefix: string):
   let output = '';
   let failure: Error | null = null;
   let exited = false;
-  const child: ChildProcess = spawn(CMD, cmdLine(azitoCmd, 'run'), { stdio: ['ignore', 'pipe', 'pipe'], windowsVerbatimArguments: true });
+  const env = { ...process.env };
+  delete env.AZITO_WEBHOOK_TOKEN;
+  delete env.AZITO_MASTER_KEY;
+  const child: ChildProcess = spawn(CMD, cmdLine(azitoCmd, 'run'), { stdio: ['ignore', 'pipe', 'pipe'], windowsVerbatimArguments: true, env });
   child.stdout?.on('data', (chunk: Buffer) => { output += chunk.toString(); });
   child.stderr?.on('data', (chunk: Buffer) => { output += chunk.toString(); });
   child.on('error', (err) => { failure = new Error(`could not start azito run: ${err.message}`); exited = true; });
@@ -324,12 +358,13 @@ async function main(): Promise<void> {
     checkInstall(installPs1, zip, sums, prefix, version as string);
     const azitoCmd = path.join(prefix, 'bin', 'azito.cmd');
     checkCli(azitoCmd, prefix, version as string);
+    await checkOrphanLauncher(prefix);
     checkRepairAndDiagnostics(installPs1, zip, sums, path.join(work, 'Amp&Co', '.azito'), version as string);
     await checkStart(installPs1, azitoCmd, prefix);
     checkAccessRules(prefix);
     checkUserPath(installPs1, work);
     checkUninstall(installPs1, prefix, version as string);
-    checkRemoveData(installPs1, zip, sums, path.join(work, 'remove-data', '.azito'));
+    await checkRemoveData(installPs1, zip, sums, path.join(work, 'remove-data', '.azito'));
   } finally {
     // A leftover file must not replace the failure that got us here.
     try {
