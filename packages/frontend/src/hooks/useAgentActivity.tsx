@@ -66,6 +66,7 @@ export type ActivityIndicator = 'working' | 'blocked' | 'finished' | null;
 interface AgentActivityContextValue {
   entries: Map<string, AgentActivityInfo>;
   snapshotStatus: 'loading' | 'ready' | 'error';
+  snapshotUpdatedAt: number | null;
   retrySnapshot: () => void;
   isRunning: (serverName: string, target: string) => boolean;
   shouldShowActivity: (serverName: string, target: string) => boolean;
@@ -96,6 +97,7 @@ interface AgentActivityContextValue {
 const AgentActivityContext = createContext<AgentActivityContextValue>({
   entries: new Map(),
   snapshotStatus: 'loading',
+  snapshotUpdatedAt: null,
   retrySnapshot: () => {},
   isRunning: () => false,
   shouldShowActivity: () => false,
@@ -214,6 +216,7 @@ export function AgentActivityProvider({ children }: { children: React.ReactNode 
   const [entries, setEntries] = useState<Map<string, AgentActivityInfo>>(new Map());
   const entriesRef = useRef(entries);
   const [snapshotStatus, setSnapshotStatus] = useState<'loading' | 'ready' | 'error'>('loading');
+  const [snapshotUpdatedAt, setSnapshotUpdatedAt] = useState<number | null>(null);
   const { activeTabId, focusedTarget } = useWorkspaceTargets();
   const browserFocused = useBrowserFocused();
   const [retention, setRetentionState] = useState(loadFinishedRetention);
@@ -268,6 +271,7 @@ export function AgentActivityProvider({ children }: { children: React.ReactNode 
         pendingRenames.current = null;
         entriesRef.current = next;
         setEntries(next);
+        setSnapshotUpdatedAt(Date.now());
         setSnapshotStatus('ready');
       })
       .catch(() => {
@@ -442,6 +446,7 @@ export function AgentActivityProvider({ children }: { children: React.ReactNode 
       value={{
         entries,
         snapshotStatus,
+        snapshotUpdatedAt,
         retrySnapshot: fetchSnapshot,
         isRunning,
         shouldShowActivity,

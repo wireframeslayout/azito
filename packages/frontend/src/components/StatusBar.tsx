@@ -19,6 +19,8 @@ import type { ServerResourceEntry } from '../hooks/useServerResources';
 import { useSystemUpdate } from '../hooks/useSystemUpdate';
 import { useToast } from '../hooks/useToast';
 import { useActivityDiagnostics, DIAGNOSTICS_POLL_INTERVAL_MS } from '../hooks/useActivityDiagnostics';
+import { useHotkeyBindings } from '../hooks/useHotkeys';
+import { formatKeySpec } from '../lib/hotkeys/keySpec';
 import { activityDotState } from '../lib/activityDiagnostics';
 import { ActivityDiagnosticsDropdown } from './activity/ActivityDiagnosticsDropdown';
 
@@ -47,7 +49,7 @@ export function StatusBar({ servers }: StatusBarProps) {
   const { t: tl } = useTranslation('lookout');
   const lookout = useLookout();
   const isMobile = useIsMobile();
-  const { snapshotStatus, retrySnapshot } = useAgentActivity();
+  const { snapshotStatus, snapshotUpdatedAt, retrySnapshot } = useAgentActivity();
   const { openTask, openTerminal } = useCrossProjectNavigation();
   const handleOpenLookoutItem = (item: LookoutItem) => {
     openLookoutItem(item, id => openTask(id), openTerminal);
@@ -55,6 +57,7 @@ export function StatusBar({ servers }: StatusBarProps) {
   };
   const { t: tn } = useTranslation('navigation');
   const openSearch = useOpenGlobalSearch();
+  const { bindings } = useHotkeyBindings();
   const { focusedTargetDisplay } = useWorkspaceTargets();
   const { status: updateStatus, startUpdate, checkNow } = useSystemUpdate();
   const { showToast } = useToast();
@@ -75,6 +78,7 @@ export function StatusBar({ servers }: StatusBarProps) {
 
   const focusedServer = focusedTargetDisplay?.serverName ?? null;
   const contextLabel = focusedTargetDisplay?.label ?? null;
+  const displayedServer = focusedServer ?? servers.find((server) => server.type === 'local')?.serverName;
 
   const handleStartUpdate = useCallback(async () => {
     const res = await startUpdate();
@@ -201,13 +205,14 @@ export function StatusBar({ servers }: StatusBarProps) {
           flexShrink: 0,
         }}
       >
+        {displayedServer && <span style={{ whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{displayedServer}</span>}
         {contextLabel && (
           <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
             ❯_ {contextLabel}
           </span>
         )}
         <span style={{ flex: 1 }} />
-        <button type="button" onClick={() => openSearch()} className="row-hover" style={{ padding: '2px 10px', borderRadius: 'var(--radius-sm)', color: 'var(--text-dim)', border: 'none', cursor: 'pointer', fontSize: 'var(--font-xs)' }}>{tn('globalSearch.title')}</button>
+        <button type="button" onClick={() => openSearch()} className="row-hover" style={{ padding: 'var(--space-1) var(--space-2)', borderRadius: 'var(--radius-sm)', color: 'var(--text)', border: '1px solid var(--border)', cursor: 'pointer', fontSize: 'var(--font-xs)' }}>{tn('globalSearch.title')} {bindings['search.open'] && <kbd>{formatKeySpec(bindings['search.open'])}</kbd>}</button>
         <StatusBarItem mono label={tl('title')} active={lookout.open} popup="dialog" badge={lookout.sections.counts.attention} badgeLabel={tl('attentionCount', { count: lookout.sections.counts.attention })} onClick={() => { setOpenItemId(null); if (lookout.open) lookout.closeDrawer(); else lookout.openDrawer(); }} />
         {registry.map((item) => (
           <StatusBarItem
@@ -225,7 +230,7 @@ export function StatusBar({ servers }: StatusBarProps) {
         ))}
       </div>
 
-      <LookoutDrawer open={lookout.open && !isMobile} onClose={lookout.closeDrawer} sections={lookout.sections} snapshotStatus={snapshotStatus} onRetry={retrySnapshot} onOpenItem={handleOpenLookoutItem} />
+      <LookoutDrawer open={lookout.open && !isMobile} onClose={lookout.closeDrawer} sections={lookout.sections} snapshotStatus={snapshotStatus} snapshotUpdatedAt={snapshotUpdatedAt} onRetry={retrySnapshot} onOpenItem={handleOpenLookoutItem} />
 
       {openItem && (
         <div className="floating-surface"

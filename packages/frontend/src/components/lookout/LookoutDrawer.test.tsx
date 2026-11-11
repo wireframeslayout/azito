@@ -30,8 +30,19 @@ it('opens with focus, retries, navigates and restores focus', async () => {
 it('closes using Escape', async () => {
   render(<Harness />);
   fireEvent.click(screen.getByText('Launch'));
-  fireEvent.keyDown(document, { key: 'Escape' });
+  fireEvent.keyDown(screen.getByRole('dialog'), { key: 'Escape' });
   await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument());
+});
+
+it('does not intercept keyboard input or restore focus after focus leaves the drawer', () => {
+  render(<Harness />);
+  const trigger = screen.getByText('Launch');
+  fireEvent.click(trigger);
+  trigger.focus();
+  fireEvent.keyDown(trigger, { key: 'Escape' });
+  expect(screen.getByRole('dialog')).toBeInTheDocument();
+  fireEvent.click(screen.getByRole('button', { name: /close lookout/i }));
+  expect(trigger).toHaveFocus();
 });
 
 it('opens a task referenced by an activity row even when the catalog has not loaded it', () => {

@@ -51,5 +51,8 @@
     "mux": "{{serverName}} の {{name}} を tmux で起こしました。メニューから misao に切り替えられます。",
     "muxUnavailable": "{{serverName}} で misao を利用できないため、{{name}} を tmux で起こしました。",
     "firewall": "ファイアウォール: {{name}}"
-  }
+  },
+  "currentSituation": "いまの状況",
+  "refresh": "更新",
+  "notUpdated": "未取得"
 }
