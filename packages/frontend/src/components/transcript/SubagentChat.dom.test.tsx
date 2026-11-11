@@ -1,5 +1,5 @@
 import { fireEvent, render, screen, waitFor } from '@testing-library/react';
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import SubagentChat from './SubagentChat';
 import { HotkeyProvider } from '../../hooks/useHotkeys';
 
@@ -13,7 +13,18 @@ const agent = { id: 'child', name: 'worker', description: 'work', agentType: 'Ex
 const props = { windowId: 1, sessionId: 'first', agentType: 'claude', paneId: '%1', agentDetected: true, onParentChanged: vi.fn() };
 
 describe('subagent selection', () => {
-  beforeEach(() => { localStorage.clear(); api.mockReset(); });
+  const scrollIntoView = vi.fn();
+  beforeEach(() => { localStorage.clear(); api.mockReset(); scrollIntoView.mockClear(); Object.defineProperty(HTMLElement.prototype, 'scrollIntoView', { configurable: true, value: scrollIntoView }); });
+  afterEach(() => { delete (HTMLElement.prototype as Partial<HTMLElement>).scrollIntoView; });
+  it('brings a restored child into view', async () => {
+    localStorage.setItem('azito.subagent.1.first', 'third');
+    api.mockResolvedValue({ status: 200, body: { sessionId: 'first', subagents: [agent, { ...agent, id: 'second' }, { ...agent, id: 'third' }] } });
+    render(<SubagentChat {...props} />);
+    await screen.findByText('view:third:disabled');
+    expect(scrollIntoView).toHaveBeenCalledWith({ block: 'nearest', inline: 'nearest' });
+    const selectedButton = screen.getAllByRole('button', { name: /worker/ }).find(button => button.getAttribute('aria-pressed') === 'true');
+    expect(scrollIntoView.mock.instances).toContain(selectedButton?.parentElement?.parentElement);
+  });
   it('restores only after a successful list and isolates parent sessions', async () => {
     localStorage.setItem('azito.subagent.1.first', 'child');
     api.mockResolvedValue({ status: 200, body: { sessionId: 'first', subagents: [agent] } });
@@ -44,6 +55,17 @@ describe('subagent selection', () => {
     expect(screen.getByRole('dialog')).toHaveTextContent('Explore · test-model · subagents.status.unknown');
     fireEvent.click(screen.getByRole('button', { name: 'actions.close' }));
     expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
+  });
+  it('updates open details and closes them when the agent disappears', async () => {
+    api.mockResolvedValue({ status: 200, body: { sessionId: 'first', subagents: [agent] } });
+    render(<HotkeyProvider><SubagentChat {...props} /></HotkeyProvider>);
+    fireEvent.click(await screen.findByRole('button', { name: 'subagents.details' }));
+    api.mockResolvedValue({ status: 200, body: { sessionId: 'first', subagents: [{ ...agent, description: 'updated' }] } });
+    fireEvent(document, new Event('visibilitychange'));
+    await waitFor(() => expect(screen.getByRole('dialog')).toHaveTextContent('updated'));
+    api.mockResolvedValue({ status: 200, body: { sessionId: 'first', subagents: [] } });
+    fireEvent(document, new Event('visibilitychange'));
+    await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument());
   });
   it('shows the empty state and allows retry after an error', async () => {
     api.mockRejectedValueOnce(new Error('offline')).mockResolvedValueOnce({ status: 200, body: { sessionId: 'first', subagents: [] } });

@@ -5,6 +5,7 @@ import { apiWithStatus } from '../api/client';
 import { Overlay, Button } from '../components/ui';
 import { BottomSheet } from '../components/ui/BottomSheet';
 import { ModalContent } from '../components/Modal';
+import { MOBILE_STATUS_BAR_HEIGHT } from '../lib/mobileChrome';
 
 type Mux = 'tmux' | 'misao';
 interface Plan { serverName?: string; currentMux: Mux; mode: 'ask' | Mux; misao: { hosted: boolean; available: boolean; reason?: string; version?: string }; shouldAsk: boolean; }
@@ -38,7 +39,7 @@ export function useWakeWindow() {
     setPending(null);
   };
   const cancel = () => { pending?.resolve(null); setPending(null); };
-  const contents = <form style={{ paddingBottom: isMobile ? 'var(--status-bar-height)' : undefined }} onSubmit={(event) => { event.preventDefault(); void finish('misao'); }}>
+  const contents = <form style={{ paddingBottom: isMobile ? `${MOBILE_STATUS_BAR_HEIGHT}px` : undefined }} onSubmit={(event) => { event.preventDefault(); void finish('misao'); }}>
       <ModalContent titleId="mux-switch-title" title={t('terminal.muxSwitchTitle')} onClose={cancel} hideCancel actions={<div style={{ display: 'flex', flexDirection: isMobile ? 'column' : 'row-reverse', gap: 'var(--space-2)', width: isMobile ? '100%' : undefined }}><button ref={confirmRef} data-initial-focus type="submit" className="btn btn-primary" style={{ minHeight: 44 }}>{t('terminal.muxUseMisao')}</button><Button type="button" style={{ minHeight: 44 }} onClick={() => pending?.explicit ? cancel() : void finish('tmux')}>{t('terminal.muxKeepTmux')}</Button></div>}>
         <p>{t('terminal.muxSwitchDescription', { title: pending?.title })}</p>
         {pending?.serverName && <p>{pending.serverName} · misao {pending.version ?? t('terminal.muxVersionUnknown')}</p>}
