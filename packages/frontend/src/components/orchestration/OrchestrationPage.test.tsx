@@ -14,6 +14,7 @@ vi.mock('../../hooks/useAgentActivity', () => ({ useAgentActivity: () => ({ entr
 vi.mock('../../hooks/useOrchestrationModel', () => ({ useOrchestrationModel: () => ({ tree: [] }) }));
 vi.mock('../../hooks/useRightPanelState', () => ({ useRightPanelState: () => [true, vi.fn()] }));
 vi.mock('../../hooks/useToast', () => ({ useToast: () => ({ showToast: vi.fn() }) }));
+vi.mock('./OrchestrationCreate', () => ({ OrchestrationCreate: () => null }));
 vi.mock('./OrchestrationSidebar', () => ({ OrchestrationSidebar: () => null }));
 vi.mock('../TerminalContainer', () => ({ TerminalContainer: () => null }));
 vi.mock('./LinkedPanel', () => ({ LinkedPanel: ({ onExpand }: { onExpand: (window: typeof target) => void }) => <button onClick={() => onExpand(target)}>Expand</button> }));

@@ -1,3 +1,5 @@
+import { resolveWindowTitle } from '@azito/shared';
+import { windowTitleInput } from '../../lib/windowDisplay';
 import { useState } from 'react';
 import type { ReactNode } from 'react';
 import { useTranslation } from 'react-i18next';
@@ -43,9 +45,10 @@ export function OrchestrationSidebar({ selectedId, onSelect }: OrchestrationSide
   const [closed, setClosed] = useState<Set<number>>(new Set());
   const [sectionClosed, setSectionClosed] = useState<Set<string>>(new Set());
   const [focusedId, setFocusedId] = useState<number | null>(null);
+  const titleOf = (window: OrchestratorNode['window']) => resolveWindowTitle({ ...windowTitleInput(window), tmuxTarget: window.tmuxTarget });
   const matches = (node: OrchestratorNode): boolean => {
     const projects = node.window.links.projectIds.map((id) => allProjects.find((project) => project.id === id)?.name).filter(Boolean).join(' ');
-    return `${node.window.label ?? ''} ${node.window.tmuxTarget} ${node.window.serverName} ${projects}`.toLowerCase().includes(search.toLowerCase()) || node.children.some(matches);
+    return `${titleOf(node.window).title} ${titleOf(node.window).idLabel ?? ''} ${node.window.serverName} ${projects}`.toLowerCase().includes(search.toLowerCase()) || node.children.some(matches);
   };
   const visible: number[] = [];
   const collect = (node: OrchestratorNode): void => { if (!matches(node)) return; visible.push(node.window.id); if (!closed.has(node.window.id) || search) node.children.forEach(collect); };
@@ -56,12 +59,13 @@ export function OrchestrationSidebar({ selectedId, onSelect }: OrchestrationSide
   const renderNode = (node: OrchestratorNode, depth: number): ReactNode => {
     if (!matches(node)) return null;
     const window = node.window;
+    const display = titleOf(window);
     const expanded = !closed.has(window.id) || !!search;
     const toggle = (): void => setClosed((previous) => { const next = new Set(previous); if (next.has(window.id)) next.delete(window.id); else next.add(window.id); return next; });
     const origin = allProjects.find((project) => project.id === window.originProjectId);
     const items = () => actions.getWindowMenuItems(window, { online: !window.sleeping }).filter((item) => ['maximize', 'rename-label', 'sleep', 'delete-window'].includes(item.kind ?? '') || (item.kind === 'change-role' && origin !== undefined)).map((item) => item.kind === 'change-role' ? { ...item, label: t('orchestration.returnToProject', { name: origin!.name }) } : item);
     const projects = window.links.projectIds.map((id) => allProjects.find((project) => project.id === id)).filter((project) => project !== undefined);
-    return <div key={window.id} id={`orchestration-row-${window.id}`} role="treeitem" aria-label={window.label || window.tmuxTarget} aria-describedby={`orchestration-description-${window.id}`} tabIndex={activeFocus === window.id ? 0 : -1} aria-level={depth + 1} aria-expanded={node.children.length ? expanded : undefined} aria-selected={selectedId === window.id} onFocus={(event) => { if (event.target === event.currentTarget) setFocusedId(window.id); }} onClick={(event) => { if ((event.target as HTMLElement).closest('[role=treeitem]') === event.currentTarget && (event.target === event.currentTarget || (event.target as HTMLElement).closest('.list-row'))) onSelect(window.id); }} onKeyDown={(event) => {
+    return <div key={window.id} id={`orchestration-row-${window.id}`} role="treeitem" aria-label={display.title} aria-describedby={`orchestration-description-${window.id}`} tabIndex={activeFocus === window.id ? 0 : -1} aria-level={depth + 1} aria-expanded={node.children.length ? expanded : undefined} aria-selected={selectedId === window.id} onFocus={(event) => { if (event.target === event.currentTarget) setFocusedId(window.id); }} onClick={(event) => { if ((event.target as HTMLElement).closest('[role=treeitem]') === event.currentTarget && (event.target === event.currentTarget || (event.target as HTMLElement).closest('.list-row'))) onSelect(window.id); }} onKeyDown={(event) => {
       if (event.target !== event.currentTarget) return;
       if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); onSelect(window.id); }
       if (event.key === 'ArrowDown' || event.key === 'ArrowUp') { event.preventDefault(); focus(visible[visible.indexOf(window.id) + (event.key === 'ArrowDown' ? 1 : -1)]); }
@@ -70,7 +74,7 @@ export function OrchestrationSidebar({ selectedId, onSelect }: OrchestrationSide
     }} style={{ paddingLeft: `calc(var(--space-3) * ${depth})` }}>
       <RowContent onMenu={(event) => contextMenu.show(event, items())} onMenuAt={(x, y) => contextMenu.showAt(x, y, items())}>
         {node.children.length > 0 && <IconButton tabIndex={-1} aria-label={expanded ? t('orchestration.collapse') : t('orchestration.expand')} onClick={(event) => { event.stopPropagation(); toggle(); }}><Icon name="chevron-right" rotate={expanded ? 90 : 0} size={14} /></IconButton>}
-        <ListRow as="div" size="sm" selected={selectedId === window.id} title={<><WindowIdChip id={window.id} /> {window.label || window.tmuxTarget}</>} chips={<WindowActivityIndicator status={activityStatus(window.serverName, window.tmuxTarget)} />} description={<span id={`orchestration-description-${window.id}`} style={{ display: 'flex', alignItems: 'center', gap: 'var(--space-1)', flexWrap: 'wrap' }}>{projects.slice(0, 3).map((project) => <ProjectAvatar key={project.id} project={project} size={18} />)}{projects.length > 3 && `+${projects.length - 3}`} {t(`orchestration.${orchestratorStatus(window, activity)}`)} · {t('orchestration.links', { count: window.links.total })} {countAttention(node) ? ` · ${t('orchestration.attention', { count: countAttention(node) })}` : ''} {window.links.serverNames.filter((name) => name !== window.serverName).join(', ')} {window.lastInteractionAt && formatRelativeTime(window.lastInteractionAt)}</span>} style={{ flex: 1, minWidth: 0, listStyle: 'none' }} />
+        <ListRow as="div" size="sm" selected={selectedId === window.id} title={<>{display.idLabel && <WindowIdChip id={window.id} />} {display.title}</>} chips={<WindowActivityIndicator status={activityStatus(window.serverName, window.tmuxTarget)} />} description={<span id={`orchestration-description-${window.id}`} style={{ display: 'flex', alignItems: 'center', gap: 'var(--space-1)', flexWrap: 'wrap' }}>{projects.slice(0, 3).map((project) => <ProjectAvatar key={project.id} project={project} size={18} />)}{projects.length > 3 && `+${projects.length - 3}`} {t(`orchestration.${orchestratorStatus(window, activity)}`)} · {t('orchestration.links', { count: window.links.total })} {countAttention(node) ? ` · ${t('orchestration.attention', { count: countAttention(node) })}` : ''} {window.links.serverNames.filter((name) => name !== window.serverName).join(', ')} {window.lastInteractionAt && formatRelativeTime(window.lastInteractionAt)}</span>} style={{ flex: 1, minWidth: 0, listStyle: 'none' }} />
       </RowContent>
       {expanded && node.children.length > 0 && <div role="group">{node.children.map((child) => renderNode(child, depth + 1))}</div>}
     </div>;
@@ -80,7 +84,7 @@ export function OrchestrationSidebar({ selectedId, onSelect }: OrchestrationSide
   if (status === 'error' && !windows.length) return <Notice tone="danger" action={<Button onClick={refresh}>{t('orchestration.retry')}</Button>}>{t('orchestration.loadError')}</Notice>;
   return <>
     {status === 'error' && <Notice tone="danger" action={<Button onClick={refresh}>{t('orchestration.retry')}</Button>}>{t('orchestration.loadError')}</Notice>}
-    {!windows.length ? <EmptyState title={t('orchestration.empty')} /> : <><FormInput aria-label={t('orchestration.search')} value={search} onChange={(event) => setSearch(event.target.value)} />{states.map((state) => {
+    {!windows.length ? <EmptyState title={t('orchestration.empty')} /> : <><div style={{ display: 'flex', alignItems: 'center', gap: 'var(--space-2)', margin: 'var(--space-2)', color: 'var(--text-dim)' }}><Icon name="search" size={16} /><FormInput aria-label={t('orchestration.search')} placeholder={t('orchestration.search')} value={search} onChange={(event) => setSearch(event.target.value)} /></div>{states.map((state) => {
       const nodes = tree.filter((node) => orchestratorStatus(node.window, activity) === state && matches(node));
       return <ObjectSection key={state} id={state} label={t(`orchestration.${state}`)} count={nodes.length} collapsed={sectionClosed.has(state)} onToggleCollapse={() => setSectionClosed((prev) => { const next = new Set(prev); if (next.has(state)) next.delete(state); else next.add(state); return next; })}><div role="tree" aria-label={t(`orchestration.${state}`)}>{nodes.map((node) => renderNode(node, 0))}</div></ObjectSection>;
     })}</>}
