@@ -68,7 +68,7 @@ export function TextFileEditor({ backend, path, name, initialLine, headerActions
         {markdown && <SegmentedToggle options={options} value={currentMode} onChange={selectMode} ariaLabel={t('editor.viewMode')} />}
         {doc.dirty && <span style={{ color: 'var(--warning)', fontSize: 'var(--font-sm)' }}>● {t('editor.unsaved')}</span>}
         <Button size="sm" variant={canSave ? 'primary' : 'default'} disabled={!canSave} onClick={save} title={`${t('editor.save')} (Ctrl+S)`}>{doc.saving ? t('editor.saving') : t('editor.save')} <kbd aria-hidden="true">Ctrl+S</kbd></Button>
-        <Button size="sm" disabled={!doc.dirty || doc.saving} onClick={async () => { if (await confirm({ title: t('editor.restoreConfirm'), confirmLabel: t('editor.restore'), danger: true })) doc.restore(); }}>{t('editor.restore')}</Button>
+        <Button size="sm" disabled={!doc.dirty || doc.saving || doc.conflict !== undefined} onClick={async () => { if (await confirm({ title: t('editor.restoreConfirm'), confirmLabel: t('editor.restore'), danger: true })) doc.restore(); }}>{t('editor.restore')}</Button>
         {headerActions}
       </div>
       {doc.document && <div style={{ display: 'flex', flexWrap: 'wrap', gap: 'var(--space-3)', padding: 'var(--space-1) var(--space-4)', color: 'var(--text)', fontSize: 'var(--font-xs)' }}><span>{doc.document.language}</span><span>UTF-8</span><span>{t('editor.lineCount', { count: doc.content.split('\n').length })}</span></div>}

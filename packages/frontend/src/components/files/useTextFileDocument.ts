@@ -56,8 +56,8 @@ export function useTextFileDocument(backend: FilesBackend, path: string, onDirty
     } finally { if (savingRef.current === current) savingRef.current = null; if (generation.current === current) setSaving(false); }
   }, [path, document]);
   const restore = useCallback(() => {
-    if (!document || documentRef.current !== document || savingRef.current !== null) return;
+    if (!document || documentRef.current !== document || savingRef.current !== null || conflict !== undefined) return;
     contentRef.current = document.content; setContent(document.content); setSaved(false);
-  }, [document]);
+  }, [document, conflict]);
   return { restore, document, content, loading, error, unavailable, saving, saved, dirty, conflict, change, save, reload: load };
 }

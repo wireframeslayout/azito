@@ -117,7 +117,7 @@ function FileExplorerTree({ serverName, rootPath, projectId, onFileSelect, onRef
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', flex: 1, overflow: 'hidden' }}>
-      <FormInput className="icon-btn file-name-filter" aria-label={t('explorer.filterLoaded')} placeholder={t('explorer.filterLoaded')} value={filter} onChange={(event) => setFilter(event.target.value)} style={{ margin: 'var(--space-2)', width: 'auto' }} />
+      <FormInput className="file-name-filter" aria-label={t('explorer.filterLoaded')} placeholder={t('explorer.filterLoaded')} value={filter} onChange={(event) => setFilter(event.target.value)} style={{ margin: 'var(--space-2)', width: 'auto' }} />
       <div
         style={{ flex: 1, overflowY: 'auto', padding: '4px 0', ...longPressStyle }}
         onContextMenu={(e) => showContextMenu(e, buildAreaMenuItems())}
@@ -133,7 +133,7 @@ function FileExplorerTree({ serverName, rootPath, projectId, onFileSelect, onRef
         {!loading && !error && tree.length === 0 && (
           <div style={{ padding: 12, fontSize: 'var(--font-sm)', color: 'var(--text-dim)' }}>{t('explorer.emptyDirectory')}</div>
         )}
-        {!loading && !error && filter && !visibleTree.length && <div style={{ padding: 'var(--space-3)', color: 'var(--text)' }}>{t('explorer.noFiltered')}</div>}
+        {!loading && !error && filter && tree.length > 0 && !visibleTree.length && <div role="status" style={{ padding: 'var(--space-3)', fontSize: 'var(--font-sm)', color: 'var(--text)' }}>{t('explorer.noFiltered')}</div>}
         <FileTree
           nodes={visibleTree}
           selectedPath={selectedPath}

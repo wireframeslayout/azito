@@ -58,7 +58,8 @@ export function PathBreadcrumb({ path, onNavigate, rootLabel, navigationLabel, m
           textAlign: 'left',
         }}
       >
-        <bdi aria-label={path}>{parts.map((part, index) => <span key={index}>{index > 0 && <span aria-hidden="true" style={{ margin: '0 var(--space-1)' }}>›</span>}{part}</span>)}</bdi>
+        <span className="sr-only">{path}</span>
+        <bdi aria-hidden="true">{parts.map((part, index) => <span key={index}>{index > 0 && <span style={{ margin: '0 var(--space-1)' }}>›</span>}{part}</span>)}</bdi>
       </div>
       <button
         type="button"
