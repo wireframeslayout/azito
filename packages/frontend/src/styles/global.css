@@ -1178,13 +1178,15 @@ input[aria-invalid="true"]:focus-visible { outline-color: var(--danger) !importa
   margin:0;
   padding:var(--space-3);
   border:0;
-  background:transparent;
+  background:transparent !important;
+  border-radius:0 !important;
   color:var(--text);
   font:inherit;
   min-width:0;
 }
-.global-search input:focus-visible {
-  outline: none;
+.global-search input:not([type="checkbox"]):not([type="radio"]):not([type="range"]):focus {
+  outline: none !important;
+  background: transparent !important;
   box-shadow: 0 2px 0 var(--accent);
 }
 .global-search-tabs {
