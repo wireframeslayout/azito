@@ -72,6 +72,8 @@ be rejected with `isolation_intent_requires_scoped_auth` (409).
 
 ### `setup.sh --purge-operator-token`
 
+Unix `--purge-operator-token` removes only the selected operator profile (`operator.env` or `operator-<prefix>.env`), while retaining its existing shared MCP and legacy azitoctl cleanup. The isolation doctor checks all profiles; review and remove other credentials manually. Windows purge is not supported.
+
 Passing `--purge-operator-token` to `harness/setup.sh` proactively removes the selected profile and shared operator-equivalent
 tokens left on that server:
 
@@ -546,4 +548,3 @@ A Windows agent cannot be an isolated server: declaring `isolationIntent` is ref
 
 See also [session tracking and hooks](activity-detection.md).
 
-Unix `--purge-operator-token` removes only the selected operator profile (`operator.env` or `operator-<prefix>.env`), while retaining its existing shared MCP and legacy azitoctl cleanup. The isolation doctor checks all profiles; review and remove other credentials manually. Windows purge is not supported.

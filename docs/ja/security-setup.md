@@ -105,6 +105,8 @@ harness 配布分離（Phase B）を説明します。
 
 ### `~/.azito/operator.env`
 
+アップグレード前に接頭辞付きでセットアップした場合、トークンが接頭辞なしの `operator.env` に残っていることがあります。`setup.sh` を `--prefix` 付きで再実行し、古い `operator.env` の内容を確認してください。自動移行は行いません。
+
 `setup.sh` に `--ui-token` を渡すと、`AZITO_URL` と `AZITO_UI_TOKEN` を `~/.azito/operator.env`
 （mode 600）に書き出します。**このファイルは `setup.sh` 自身を含め、いかなるスクリプトからも
 自動的に読み込まれません。** 使うには:

@@ -231,6 +231,19 @@ describe('tokenCommand', () => {
       expect(fs.readFileSync(settings, 'utf8')).toContain('default');
     });
 
+    it('warns about an old unprefixed file without modifying it when the prefixed file is absent', async () => {
+      const dir = path.join(fakeHome, '.azito');
+      fs.mkdirSync(dir, { recursive: true });
+      const oldFile = path.join(dir, 'operator.env');
+      fs.writeFileSync(oldFile, 'AZITO_UI_TOKEN=old\n');
+      process.env.AZITO_HARNESS_PREFIX = 'prod';
+      const { tokenCommand } = await import('./tokenCommand.js');
+      await tokenCommand(['rotate'], fakeHome, secretFileGuard);
+      expect(warnSpy).toHaveBeenCalledWith(expect.stringMatching(/--prefix.*old.*operator\.env/));
+      expect(fs.readFileSync(oldFile, 'utf8')).toBe('AZITO_UI_TOKEN=old\n');
+      expect(fs.existsSync(path.join(dir, 'operator-prod.env'))).toBe(false);
+    });
+
     it('uses the target hub .env prefix when the environment is unset', async () => {
       const dir = path.join(fakeHome, '.azito');
       fs.mkdirSync(dir, { recursive: true });

@@ -108,6 +108,8 @@ setup.sh は次の処理を行います。
 5. **Env file** -- `--azito-url` と `--webhook-token` の両方が指定された場合のみ、`~/.azito/azitoctl.env`（mode 600）を書き出し。必須: `AZITO_URL`, `AZITO_WEBHOOK_TOKEN`。任意（指定時のみ）: `AZITO_SERVER_NAME`。`AZITO_SUPERVISOR_PATH` は常に追加される。**`AZITO_UI_TOKEN` はここには書かれない**（Issue #28 Phase B）
 6. **operator.env** -- `--ui-token` が指定された場合のみ、`~/.azito/operator.env`（mode 600）に `AZITO_URL` と `AZITO_UI_TOKEN` を書き出す。setup.sh 自身はこのファイルを source しない。人間が `source ~/.azito/operator.env` して明示的に有効化する運用者用ファイル
 
+運用者資格情報は既定では `~/.azito/operator.env`、`--prefix`（または `AZITO_PREFIX`）指定時は `~/.azito/operator-<prefix>.env` に保存します。使うプロファイルを明示的に選んで読み込んでください。Windows では JSON 形式の値を保存し、本人のみの ACL で保護します。
+
 `AZITO_URL`（既定値 `http://localhost:3001`）と `AZITO_WEBHOOK_TOKEN` は環境変数からも解決します。既存のリンク・設定がある場合はスキップまたは更新され、安全に再実行できます。`--ui-token`（`AZITO_UI_TOKEN`）は省略可能ですが、省略すると MCP サーバー設定にトークンが含まれない旨の警告が表示されます。全権トークンの配布分離とその限界（同一 UNIX ユーザーでは chmod 600 は保護にならない）は [security-setup.md](./security-setup.md#主体分離operator--task) を参照してください。
 
 Codex CLI がインストールされている環境（`codex` コマンドまたは `~/.codex` が存在）では、同じ skills / rules を `~/.codex/` 配下にも配置し、`codex mcp add` で azt-mcp を登録します。Claude Code と Codex の両方から同じハーネスを利用できます。
@@ -169,4 +171,3 @@ Windows の agent は、このリリースでは隔離サーバー（`isolationI
 
 `POST /api/tasks/:id/answer` の body は `{"answers":[{"index":0,"value":1}],"additionalComment":"補足"}`。各 `index` は質問の 0 始まりの整数添字、`value` は文字列または数値。select の値は選択肢の 0 始まりの整数添字か、選択肢と完全に一致する文字列。`additionalComment` は任意の文字列。部分回答は可能。空配列は質問がない確認の場合のみ受け付ける。質問がない場合の非空配列、不正な型や範囲外の値は、理由付き 400 で拒否され、タスクの状態やログは変更されない。
 
-運用者資格情報は既定では `~/.azito/operator.env`、`--prefix`（または `AZITO_PREFIX`）指定時は `~/.azito/operator-<prefix>.env` に保存します。使うプロファイルを明示的に選んで読み込んでください。Windows では JSON 形式の値を保存し、本人のみの ACL で保護します。

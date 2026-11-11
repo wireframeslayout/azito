@@ -140,6 +140,9 @@ export async function tokenCommand(args: string[], homeDir: string, guard: Secre
     if (updateOperatorEnvToken(newToken, homeDir, guard, prefix)) {
       console.log(`Updated AZITO_UI_TOKEN in ${operatorEnvPath(homeDir, prefix)}`);
     }
+    if (prefix && !fs.existsSync(operatorEnvPath(homeDir, prefix)) && fs.existsSync(operatorEnvPath(homeDir, ''))) {
+      console.warn('Re-run harness/setup.sh with --prefix for this hub, and inspect the contents of the old ~/.azito/operator.env.');
+    }
     if (!prefix && updateMcpSettingsToken(newToken, homeDir)) {
       console.log(`Updated AZITO_UI_TOKEN in ${mcpSettingsPath(homeDir)}`);
     }

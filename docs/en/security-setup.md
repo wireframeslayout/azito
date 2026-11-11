@@ -105,6 +105,8 @@ harness's stdio form (what `harness/setup.sh` / `setup.mjs` add with `codex mcp 
 
 ### `~/.azito/operator.env`
 
+After upgrading, an older prefixed setup may have left its token in the unprefixed `operator.env`. Re-run `setup.sh` with `--prefix` and inspect the old `operator.env`. No files are migrated automatically.
+
 When you pass `--ui-token` to `setup.sh`, it writes `AZITO_URL` and `AZITO_UI_TOKEN` into
 `~/.azito/operator.env` (mode 600) — **and nothing else reads or sources this file
 automatically**, not `setup.sh`, not `azitoctl`, not any hook script. To use it:

@@ -67,6 +67,8 @@ C-1（層3が前提）の帰結として、**`isolation_intent` を有効化す�
 
 ### `setup.sh --purge-operator-token`
 
+Unix の `--purge-operator-token` は選択した operator プロファイルだけを削除し、共有 MCP と旧 azitoctl 資格情報は従来どおり掃除します。隔離診断は全プロファイルを検査するため、他の資格情報は確認して手動で整理してください。Windows の purge は非対応です。
+
 `harness/setup.sh` に `--purge-operator-token` を渡すと、そのサーバー上に残っている
 operator 相当のトークンを積極的に除去します。
 
@@ -529,4 +531,3 @@ Windows の agent は隔離サーバーにできません。`isolationIntent` �
 
 [セッション ID の追従とフック](activity-detection.md#セッション-id-の追従sessionstart-フック--sessionid) も参照してください。
 
-Unix の `--purge-operator-token` は選択した operator プロファイルだけを削除し、共有 MCP と旧 azitoctl 資格情報は従来どおり掃除します。隔離診断は全プロファイルを検査するため、他の資格情報は確認して手動で整理してください。Windows の purge は非対応です。

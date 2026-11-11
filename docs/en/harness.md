@@ -108,6 +108,8 @@ setup.sh performs the following:
 5. **Env file** -- Only when both `--azito-url` and `--webhook-token` are given, writes `~/.azito/azitoctl.env` (mode 600). Always: `AZITO_URL`, `AZITO_WEBHOOK_TOKEN`, `AZITO_SUPERVISOR_PATH`. When provided: `AZITO_SERVER_NAME`. **`AZITO_UI_TOKEN` is never written here** (Issue #28 Phase B)
 6. **operator.env** -- Only when `--ui-token` is given, writes `AZITO_URL` and `AZITO_UI_TOKEN` into `~/.azito/operator.env` (mode 600). setup.sh never sources this file itself — it is meant for a human to `source ~/.azito/operator.env` explicitly to act as the operator
 
+Operator credentials use `~/.azito/operator.env` by default and `~/.azito/operator-<prefix>.env` with `--prefix` (or `AZITO_PREFIX`); select and load the desired file explicitly. Windows writes JSON-quoted values with an owner-only ACL.
+
 `AZITO_URL` (default `http://localhost:3001`) and `AZITO_WEBHOOK_TOKEN` are also resolved from environment variables. Existing links and settings are skipped or updated, so re-running is safe. `--ui-token` (`AZITO_UI_TOKEN`) can be omitted, but a warning is shown that the MCP server config will not include a token. See [security-setup.md](./security-setup.md#principal-separation-operator--task) for the credential distribution split and its limits (chmod 600 does not protect against another process running as the same Unix user).
 
 If the Codex CLI is installed (the `codex` command or `~/.codex` exists), the same skills and rules are also placed under `~/.codex/` and azt-mcp is registered via `codex mcp add`, so the same harness is available from both Claude Code and Codex.
@@ -169,4 +171,3 @@ A Windows agent cannot be declared an isolated server (`isolationIntent`) in thi
 
 `POST /api/tasks/:id/answer` takes `{"answers":[{"index":0,"value":1}],"additionalComment":"Note"}`. Each `index` is a zero-based integer question index; `value` is a string or number. For a select question it must be a zero-based integer option index or an exact option string. `additionalComment` is an optional string. Partial answers are accepted. An empty array is accepted only when there are no questions (confirmation); a nonempty array with no questions, invalid types, and out-of-range values receive a 400 with a reason, without changing task state or logs.
 
-Operator credentials use `~/.azito/operator.env` by default and `~/.azito/operator-<prefix>.env` with `--prefix` (or `AZITO_PREFIX`); select and load the desired file explicitly. Windows writes JSON-quoted values with an owner-only ACL.

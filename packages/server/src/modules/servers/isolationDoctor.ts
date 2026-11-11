@@ -1,7 +1,8 @@
+import { isOperatorEnvFilename } from '../../shared/operatorEnv';
 import type { IHostBoundTransport, IServerTransport } from './transport/ServerTransport';
 import { shellQuote } from '../../shared/shellQuote';
 import { assertPosixHost } from '../../shared/os/hostProfile';
-import { isAzitoctlEnvFilename, isOperatorEnvFilename } from '../../shared/azitoctlEnv';
+import { isAzitoctlEnvFilename } from '../../shared/azitoctlEnv';
 import { extractClaudeMcpUiToken, hasCodexConfigUiToken } from '../../shared/mcpTokenStores';
 import type { HubCanary } from './hubCanary';
 import { isCanaryStillIntact } from './hubCanary';

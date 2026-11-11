@@ -1,7 +1,8 @@
+import { findOperatorEnvFiles } from '../shared/operatorEnv';
 import fs from 'fs';
 import path from 'path';
 import { execFileSync } from 'child_process';
-import { findAzitoctlEnvFiles, findOperatorEnvFiles, hasUiTokenLine } from '../shared/azitoctlEnv';
+import { findAzitoctlEnvFiles, hasUiTokenLine } from '../shared/azitoctlEnv';
 import { extractClaudeMcpUiToken, type McpUiTokenExtraction } from '../shared/mcpTokenStores';
 import { resolveCurrentUiToken } from '../shared/currentUiToken';
 import { resolveScopedAuthEnabled } from '../shared/auth/scopedAuthFlag';
