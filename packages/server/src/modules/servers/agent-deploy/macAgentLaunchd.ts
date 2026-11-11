@@ -1,5 +1,6 @@
 import { LaunchdJobOperations, DEFAULT_LAUNCHD_TIMING, limitToBackgroundSession, type CommandRunner } from '../../../shared/os/launchd';
-import { posixRemoteCommand } from './posixRemoteCommand';
+import { execPosixRemote } from './posixRemoteCommand';
+import { diagnostics } from './hostOsProbe';
 import { shellQuote } from '../../../shared/shellQuote';
 import type { SshClient } from '../ssh/SshClient';
 
@@ -20,17 +21,24 @@ export class MacAgentLaunchd {
   private constructor(private readonly ssh: Pick<SshClient, 'execIsolated'>, private readonly host: string, private readonly home: string, private readonly plist: string, private readonly jobs: LaunchdJobOperations) {}
 
   static async connect(ssh: Pick<SshClient, 'execIsolated'>, host: string): Promise<MacAgentLaunchd> {
-    const facts = await ssh.execIsolated(host, posixRemoteCommand('printf "%s\\n%s\\n" "$HOME" "$(id -u)"'));
+    const facts = await execPosixRemote(ssh, host, 'printf "%s\\n%s\\n" "$HOME" "$(id -u)"');
     const lines = facts.stdout.trimEnd().split('\n');
     if (facts.code !== 0 || lines.length !== 2 || !lines[0].startsWith('/') || !/^\d+$/.test(lines[1])) throw new Error('Could not resolve the remote home directory and uid for launchd');
     const home = lines[0];
     const plist = `${home}/Library/LaunchAgents/${LABEL}.plist`;
-    const run: CommandRunner = (file, args) => ssh.execIsolated(host, posixRemoteCommand([file, ...args].map(shellQuote).join(' ')));
+    const run: CommandRunner = async (file, args) => {
+      const result = await execPosixRemote(ssh, host, [file, ...args].map(shellQuote).join(' '));
+      if (args[0] !== 'print') return result;
+      if (result.code === 0 && result.stdout.includes(`${args[1]} = {`)) return result;
+      if (result.code === 113 && /Could not find service/i.test(result.stderr)) return result;
+      if ((result.code === 113 || result.code === 125) && /Could not find domain/i.test(result.stderr)) return result;
+      throw new Error(`Could not determine launchd job state for ${args[1]}${diagnostics(result.stderr, result.code)}`);
+    };
     return new MacAgentLaunchd(ssh, host, home, plist, new LaunchdJobOperations(run, LABEL, Number(lines[1]), plist, DEFAULT_LAUNCHD_TIMING));
   }
 
   private execPosix(command: string): ReturnType<SshClient['execIsolated']> {
-    return this.ssh.execIsolated(this.host, posixRemoteCommand(command));
+    return execPosixRemote(this.ssh, this.host, command);
   }
 
   async assertOwned(): Promise<void> {

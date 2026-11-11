@@ -1,3 +1,6 @@
+import { mkdtempSync, writeFileSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { LocalNetworkPermissionError } from '../localNetworkDiagnosis';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { HOST_PROBE_COMMAND } from '../../../shared/os/hostProfile';
@@ -9,6 +12,15 @@ import { AGENT_PRESENCE_COMMAND, AgentInstaller, type AgentMisaoInstaller, type 
 import { DEFAULT_WINDOWS_AGENT_OPTIONS } from './windowsAgentConfig';
 
 const VERSION = 'bundlehash1';
+
+function fakeExec(fn: (host: string, command: string) => Promise<{ stdout: string; stderr: string; code: number }>) {
+  return vi.fn(async (host: string, command: string) => {
+    const inner = unwrapCommand(command);
+    const marker = /; printf '\\n(AZITO_EXIT_[a-f0-9]+):%s\\n' "\$\?"$/.exec(inner);
+    const result = await fn(host, marker ? inner.slice(0, marker.index) : command);
+    return marker ? { ...result, stdout: `${result.stdout}\n${marker[1]}:${result.code}\n`, code: 0 } : result;
+  });
+}
 
 function unwrapCommand(command: string): string {
   const prefix = "/bin/bash -c '";
@@ -53,14 +65,14 @@ interface FakeHost { folderId: string; folderExists: boolean }
 /** An SSH client whose host answers the preflight and accepts every other command, recording them all. */
 function makeSsh(opts: HostOptions = {}, host: FakeHost = { folderId: '', folderExists: false }) {
   const commands: string[] = [];
-  const execIsolated = vi.fn(async (_host: string, rawCommand: string) => {
+  const execIsolated = fakeExec(async (_host: string, rawCommand: string) => {
     const command = unwrapCommand(rawCommand);
     commands.push(command);
     if (command.includes('agent-launchd-backup.XXXXXX')) return { stdout: '/Users/test/.azito/agent-launchd-backup.abc123\n', stderr: '', code: 0 };
     if (command.startsWith('if [ -L') && command.includes('/.azito/agent/current')) return { stdout: '/Users/test/.azito/agent/old\n', stderr: '', code: 0 };
     if (command.includes('$(id -u)')) return { stdout: '/Users/test\n501\n', stderr: '', code: 0 };
     if (command.startsWith('if [ -f') && command.includes('com.azito.agent.plist')) return { stdout: 'AZITO_NO_PLIST', stderr: '', code: 0 };
-    if (command.includes("'launchctl' 'print'")) return { stdout: '', stderr: '', code: 1 };
+    if (command.includes("'launchctl' 'print'")) return { stdout: '', stderr: 'Could not find service', code: 113 };
     if (opts.cleanupMark && (command === AGENT_PRESENCE_COMMAND || command.includes('echo AZITO_CLEANUP_IDLE'))) return { stdout: `AZITO_CLEANUP_MARK:${opts.cleanupMark}\n`, stderr: '', code: 0 };
     if (command.includes('echo AZITO_CLEANUP_IDLE')) return { stdout: 'AZITO_CLEANUP_IDLE\n', stderr: '', code: 0 };
     if (opts.presenceThrows && command === AGENT_PRESENCE_COMMAND) throw new Error('connection reset');
@@ -115,6 +127,31 @@ describe('AgentInstaller', () => {
       onProgress?.('transfer');
       return { version: '0.2.0', startMethod: 'systemd' as const, updateAvailable: false };
     }),
+  });
+
+  it.each(['extract', 'link'])('reports %s failure during transfer even when SSH reports zero', async (failedStep) => {
+    const dir = mkdtempSync(join(tmpdir(), 'azito-transfer-test-'));
+    const hash = 'a'.repeat(64);
+    const commands: string[] = [];
+    try {
+      const tarball = join(dir, 'agent.tar.gz');
+      const sums = join(dir, 'SHA256SUMS');
+      writeFileSync(tarball, 'fixture');
+      writeFileSync(sums, `${hash}  azito-agent.tar.gz\n`);
+      const bundler = { ...makeBundler(), getTarballPath: () => tarball, getSha256sumsPath: () => sums };
+      const execIsolated = fakeExec(async (_host, raw) => {
+        const command = unwrapCommand(raw);
+        commands.push(command);
+        if (command.includes('sha256sum') || command.includes('shasum')) return { stdout: hash, stderr: '', code: 0 };
+        const failed = failedStep === 'extract' ? command.includes('tar ') : command.startsWith('ln -sfn');
+        return { stdout: '', stderr: failed ? 'denied' : '', code: failed ? 1 : 0 };
+      });
+      const installer = new AgentInstaller({ execIsolated } as never, bundler as never, DEFAULT_WINDOWS_AGENT_OPTIONS, {} as never);
+      const target = installer as unknown as { sftpUpload: () => Promise<void>; transferAndDeploy: (host: string, version: string) => Promise<void> };
+      target.sftpUpload = async () => undefined;
+      await expect(target.transferAndDeploy('host', VERSION)).rejects.toThrow(failedStep === 'extract' ? /Deploy failed/ : /link update failed/);
+      if (failedStep === 'extract') expect(commands.some((command) => command.startsWith('ln -sfn'))).toBe(false);
+    } finally { rmSync(dir, { recursive: true, force: true }); }
   });
 
   it('does not require tmux when misao is installed: a host without it passes', async () => {
@@ -257,7 +294,7 @@ describe('AgentInstaller', () => {
     const steps: InstallProgress[] = [];
     const result = await installer.install('user@host', (p) => steps.push(p));
     expect(result.success).toBe(false);
-    expect(result.error).toBe('Could not check the host for an existing agent: connection reset');
+    expect(result.error).toBe('Could not check the host for an existing agent: Remote command transport failed: connection reset');
     expect(steps.at(-1)).toEqual({ step: 'transfer', status: 'error', message: result.error });
     expect(commands.some((c) => c.includes('systemctl --user enable'))).toBe(false);
   });
@@ -426,7 +463,7 @@ describe('AgentInstaller', () => {
     const text = commands.join('\n');
     expect(text).not.toMatch(/azito-misao/);
     expect(text).not.toMatch(/pkill[^\n]*misao/);
-    expect(text).toContain('pkill -f azito-agent.cjs');
+    expect(text).toContain("pkill -f '[a]zito-agent[.]cjs'");
   });
 
   it('preserves a local network diagnosis in the result and progress', async () => {
@@ -507,8 +544,8 @@ describe('AgentInstaller', () => {
       expect(result.startMethod).toBe('launchd');
       expect(commands.some((c) => c.includes("'launchctl' 'bootstrap' 'user/501'"))).toBe(true);
       expect(commands.some((c) => c.includes('systemctl --user'))).toBe(false);
-      expect(commands.findIndex((c) => c.includes('pkill -f azito-agent.cjs'))).toBeLessThan(commands.findIndex((c) => c.includes("'launchctl' 'bootstrap' 'user/501'")));
-      expect(commands.some((c) => c.includes('agent.pid') && c.includes('pkill -f azito-agent.cjs'))).toBe(true);
+      expect(commands.findIndex((c) => c.includes("pkill -f '[a]zito-agent[.]cjs'"))).toBeLessThan(commands.findIndex((c) => c.includes("'launchctl' 'bootstrap' 'user/501'")));
+      expect(commands.some((c) => c.includes('agent.pid') && c.includes("pkill -f '[a]zito-agent[.]cjs'"))).toBe(true);
       expect(commands.some((c) => /pkill.*misao/.test(c))).toBe(false);
     });
 
@@ -651,7 +688,7 @@ describe('AgentInstaller', () => {
 
     it('fails with a reason when neither the OS probe nor the POSIX fallback can identify the host', async () => {
       const commands: string[] = [];
-      const execIsolated = vi.fn(async (_host: string, command: string) => { commands.push(command); return { stdout: 'weird\n', stderr: '', code: 0 }; });
+      const execIsolated = fakeExec(async (_host: string, command: string) => { commands.push(command); return { stdout: 'weird\n', stderr: '', code: 0 }; });
       const installer = new AgentInstaller({ execIsolated, resolveHost: (h: string) => ({ username: 'user', host: h.replace(/^.*@/, '').replace(/:\d+$/, ''), port: 22 }) } as never, makeBundler() as never, DEFAULT_WINDOWS_AGENT_OPTIONS, {} as never, okMisao());
       const result = await installer.install('user@host');
       expect(result.success).toBe(false);

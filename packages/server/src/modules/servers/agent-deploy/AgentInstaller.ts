@@ -7,7 +7,7 @@ import type { SshClient } from '../ssh/SshClient';
 import type { AgentBundler } from './AgentBundler';
 import { AgentTransport } from '../transport/AgentTransport';
 import { HostProfileError, parseHostProbe, type HostProfile } from '../../../shared/os/hostProfile';
-import { posixRemoteCommand } from './posixRemoteCommand';
+import { execPosixRemote, PosixRemoteProtocolError } from './posixRemoteCommand';
 import { MacAgentLaunchd } from './macAgentLaunchd';
 import { POSIX_ENVIRONMENT_COMMAND, parsePosixAgentEnvironment } from './posixAgentEnvironment';
 import { HOST_OS_PROBE_COMMAND, parseHostOsProbe } from './hostOsProbe';
@@ -307,7 +307,7 @@ export class AgentInstaller {
   }
 
   private execPosix(host: string, command: string, timeoutMs?: number): ReturnType<SshClient['execIsolated']> {
-    return this.sshClient.execIsolated(host, posixRemoteCommand(command), timeoutMs);
+    return execPosixRemote(this.sshClient, host, command, timeoutMs);
   }
 
   /** One command over SSH as a value, with errors returned to the caller. */
@@ -665,8 +665,12 @@ export class AgentInstaller {
 
     const expectedHash = readSha256FromSumsFile(this.bundler.getSha256sumsPath(), 'azito-agent.tar.gz');
 
-    const verifyCmd = buildSha256VerifyCommand(remoteTmp);
+    const verifyCmd = `set -o pipefail; ${buildSha256VerifyCommand(remoteTmp)}`;
     const shaResult = await this.execPosix(sshHost, verifyCmd);
+    if (shaResult.code !== 0) {
+      await this.execPosix(sshHost, `rm -f "${remoteTmp}"`);
+      throw new Error(`SHA256 verification failed: ${shaResult.stderr}`);
+    }
     const actualHash = shaResult.stdout.trim();
     if (actualHash !== expectedHash) {
       await this.execPosix(sshHost, `rm -f "${remoteTmp}"`);
@@ -681,7 +685,8 @@ export class AgentInstaller {
     }
 
     const linkCmd = `ln -sfn ~/.azito/agent/${version} ~/.azito/agent/current`;
-    await this.execPosix(sshHost, linkCmd);
+    const linkResult = await this.execPosix(sshHost, linkCmd);
+    if (linkResult.code !== 0) throw new Error(`Agent link update failed: ${linkResult.stderr}`);
   }
 
   private async startAgent(
@@ -698,7 +703,8 @@ export class AgentInstaller {
     // Try systemd first
     try {
       return await this.startSystemd(sshHost, tailscaleIp, token, muxRuntime);
-    } catch {
+    } catch (error) {
+      if (error instanceof PosixRemoteProtocolError || error instanceof LocalNetworkPermissionError) throw error;
       // Fall back to nohup
     }
 
@@ -794,7 +800,8 @@ export class AgentInstaller {
       'echo $! > ~/.azito/agent/agent.pid',
     ].join(' ');
 
-    await this.execPosix(sshHost, cmd);
+    const result = await this.execPosix(sshHost, cmd);
+    if (result.code !== 0) throw new Error(`Agent nohup start failed: ${result.stderr}`);
   }
 
   /** Reads (never changes) the Windows Firewall policy that decides whether the hub reaches the agent of the recognised task. */
@@ -837,7 +844,7 @@ export class AgentInstaller {
   private async stopAgent(sshHost: string, mac = false): Promise<void> {
     await this.execPosix(
       sshHost,
-      `${mac ? '' : 'systemctl --user disable --now azito-agent 2>/dev/null; '}test -f ~/.azito/agent/agent.pid && kill $(cat ~/.azito/agent/agent.pid) 2>/dev/null; pkill -f azito-agent.cjs 2>/dev/null; sleep 1; true`,
+      `${mac ? '' : 'systemctl --user disable --now azito-agent 2>/dev/null; '}test -f ~/.azito/agent/agent.pid && kill $(cat ~/.azito/agent/agent.pid) 2>/dev/null; pkill -f '[a]zito-agent[.]cjs' 2>/dev/null; sleep 1; true`,
     );
   }
 
