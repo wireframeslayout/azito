@@ -37,7 +37,7 @@ Claude Code と Codex は、タスクを実行するときに必要です。フ�
 
 ### 管理者でないときの違い
 
-**v0.12.0 では**、管理者でないユーザーの SSH セッションから Windows の WMI（`Get-CimInstance`）へのアクセスが拒否されました（確認した環境は Windows 11 Pro 26200 のワークグループ。ほかの構成は未確認）。v0.12.1 の [#559](https://github.com/wireframeslayout/azito/issues/559) で、導入の preflight が `Windows WMI is not available in this user's SSH session ...` と表示し、転送前に停止するようになりました。
+**v0.12.0 では**、管理者でないユーザーの SSH セッションから Windows の WMI（`Get-CimInstance`）へのアクセスが拒否されました（確認した環境は Windows 11 Pro 26200 のワークグループ。ほかの構成は未確認）。導入の preflight は `Windows WMI is not available in this user's SSH session ...` と表示し、転送前に停止しました。v0.12.1 の [#559](https://github.com/wireframeslayout/azito/issues/559) で preflight から CIM を除去し、この WMI の制約に対応しました。
 
 **v0.13.0-rc.1 では**、管理者でないユーザーの SSH セッションから有効なファイアウォールポリシーを確認できません。Allow 規則が既にある場合も含め、導入は理由を表示して転送前に停止します。更新も既存の agent を止める前に停止します。昇格した管理者の SSH セッションを使ってください。管理者でないユーザーへの導入は [#616](https://github.com/wireframeslayout/azito/issues/616) で対応予定です。
 
@@ -205,7 +205,7 @@ misao の更新は別です。agent の更新は misao に触れません（動�
 |---|---|
 | 操作が `unsupported_os`（501）で断られる、または入口が灰色で理由が出る | その機能が Windows のホストで閉じています。理由はそのまま画面に出ます。閉じているのは、tmux、コード配信（#464）、隔離（#464）、ブラウザー実行環境（#500）、Linux / macOS のホストからの削除（#499）、シェルの構文を含むコマンドの起動、いくつかの respawn（[使える機能](#使える機能)）です |
 | git の画面やタスクが `git_not_found`（501）になる | ホストに Git for Windows がありません。`winget install --id Git.Git -e` で入れてください（再起動は要りません。見つけた結果は 30 秒で捨てます）。標準の場所は[準備](#準備)の表にあります。探した場所はエラーにも出ます |
-| 導入が `Windows WMI is not available in this user's SSH session` で止まる | SSH で入るユーザーが管理者ではありません。v0.12.0 では、管理者のアカウントで導入します。v0.12.1 の [#559](https://github.com/wireframeslayout/azito/issues/559) で転送前にこの理由を表示するようになりました |
+| 導入が `Windows WMI is not available in this user's SSH session` で止まる | v0.12.0 では管理者でないユーザーの SSH セッションから WMI が拒否されます。管理者のアカウントで導入してください。v0.12.1 の [#559](https://github.com/wireframeslayout/azito/issues/559) で preflight から CIM を除去しました |
 | 導入や更新で有効なファイアウォールポリシーを確認できない | v0.13.0-rc.1 では、管理者でないユーザーの SSH セッションは Allow 規則があっても停止します。昇格した管理者の SSH セッションを使ってください。[#616](https://github.com/wireframeslayout/azito/issues/616) で対応予定です（[追加](#追加)の手順 1） |
 | 導入が、Block 規則の DisplayName を示して止まる | 受信の Block 規則がハブを止めます。その規則を確かめて無効にするか消してください。Block は Allow より優先されるので、AZITO は横に Allow を足しません |
 | agent に届かない（オフライン、`401`） | 次を順に見てください。(1) ユーザーがログオンしているか（ログオフすると止まります）。(2) タスク `AzitoAgent` が動いているか（`schtasks /Query /TN AzitoAgent`）。無効になっていないか。(3) ファイアウォールが TCP 3002 を許可しているか、Block が無いか。(4) Tailscale が両端でつながっているか（Windows では、ログオフすると切れます。また、別のユーザーもログオンしていると、そのユーザーのセッションでは「使用中」としてつながらないことがあります。[Tailscale と Windows のユーザー](#tailscale-と-windows-のユーザー)）。(5) トークン: 401 はハブの持つトークンとホストの `agent.env` の食い違いです。Setup の行の「Reinstall」で揃います（再導入は、新しい agent が応答するまで元に戻せる形で行います） |
