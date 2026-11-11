@@ -117,14 +117,14 @@ function GlobalSearchPalette({ onClose, fallbackFocusTo }: { onClose: () => void
     }}>
       <header className="global-search-header"><h2 id="global-search-title" className="sr-only">{t('globalSearch.title')}</h2><Icon name="search" size={16} />
         <input ref={input} role="combobox" aria-label={t('globalSearch.title')} enterKeyHint="search" aria-expanded="true" aria-controls="global-search-results" aria-activedescendant={currentId} value={query} onChange={event => { setQuery(event.target.value); setSelected(0); }} placeholder={t('globalSearch.placeholder')} />
-        <IconButton ref={closeButton} type="button" onClick={onClose} aria-label={t('globalSearch.close')}><kbd>Esc</kbd></IconButton>
+        <IconButton ref={closeButton} style={{ minWidth: 'calc(var(--space-5) + var(--space-6))', minHeight: 'calc(var(--space-5) + var(--space-6))' }} type="button" onClick={onClose} aria-label={t('globalSearch.close')}><kbd>Esc</kbd></IconButton>
       </header>
       <div className="global-search-tabs" role="tablist" aria-label={t('globalSearch.categories')}>
         {categories.map(kind => <button type="button" role="tab" aria-selected={activeCategory === kind} key={kind} onClick={() => changeCategory(kind)}>
           <Chip tone={activeCategory === kind ? 'accent' : 'default'}>{t(`globalSearch.${kind}`)} {kind === 'all' ? matches.length : groups.find(group => group.kind === kind)?.items.length}</Chip>
         </button>)}
       </div>
-      {orchestrators.status === 'error' && <Notice tone="danger" action={<button onClick={orchestrators.refresh}>{t('globalSearch.retry')}</button>}>{t('globalSearch.error')}</Notice>}
+      {orchestrators.status === 'error' && <Notice tone="danger" action={<button onClick={orchestrators.refresh}>{t('globalSearch.retry')}</button>}>{t('globalSearch.orchestratorError')}</Notice>}
       {error && <Notice tone="danger" action={<button onClick={() => void refresh()}>{t('globalSearch.retry')}</button>}>{t('globalSearch.error')}</Notice>}
       {failed.length > 0 && <Notice tone="warning" action={<button onClick={retry}>{t('globalSearch.retry')}</button>}>{t('globalSearch.failed', { servers: failed.join(', ') })}</Notice>}
       {loading ? <LoadingState message={t('globalSearch.loading')} />

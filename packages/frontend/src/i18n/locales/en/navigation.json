@@ -9,6 +9,7 @@
     "task": "Tasks",
     "project": "Projects",
     "results": "Results",
+    "orchestratorError": "Could not load orchestrators.",
     "error": "Could not load the catalog.",
     "retry": "Retry",
     "failed": "Some servers are unavailable, so results may be incomplete: {{servers}}",
