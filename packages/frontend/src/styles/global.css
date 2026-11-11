@@ -1343,3 +1343,5 @@ input[aria-invalid="true"]:focus-visible { outline-color: var(--danger) !importa
 
 .toast-action { min-height: 44px; }
 .toast-close { min-width: 44px; }
+
+.file-name-filter::placeholder { color: var(--text); opacity: 1; }

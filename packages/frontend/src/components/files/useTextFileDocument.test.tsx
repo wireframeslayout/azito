@@ -23,6 +23,30 @@ describe('useTextFileDocument', () => {
     expect(result.current.dirty).toBe(true);
     expect(result.current.document?.version).toBe('v2');
   });
+  it('restores the last successful save and refuses restoration while saving', async () => {
+    let finish!: (result: FileSaveResult) => void;
+    const instance = backend(vi.fn(() => new Promise<FileSaveResult>((resolve) => { finish = resolve; })));
+    const { result } = renderHook(() => useTextFileDocument(instance, 'file'));
+    await waitFor(() => expect(result.current.document).not.toBeNull());
+    act(() => result.current.change('saved'));
+    await act(async () => { void result.current.save(); });
+    act(() => { result.current.change('later'); result.current.restore(); });
+    expect(result.current.content).toBe('later');
+    await act(async () => finish({ kind: 'saved', version: 'v2' }));
+    act(() => result.current.restore());
+    expect(result.current.content).toBe('saved');
+    expect(result.current.dirty).toBe(false);
+  });
+  it('does not restore the stale base while a conflict is unresolved', async () => {
+    const save = vi.fn<FilesBackend['save']>().mockResolvedValue({ kind: 'conflict', latest: { kind: 'text', content: 'remote', language: 'text', version: 'v2' } });
+    const instance = backend(save);
+    const { result } = renderHook(() => useTextFileDocument(instance, 'file'));
+    await waitFor(() => expect(result.current.document).not.toBeNull());
+    act(() => result.current.change('local'));
+    await act(async () => { await result.current.save(); });
+    act(() => result.current.restore());
+    expect(result.current.content).toBe('local');
+  });
   it('preserves edits on a conflict and on save failure', async () => {
     const save = vi.fn<FilesBackend['save']>().mockResolvedValueOnce({ kind: 'conflict', latest: { kind: 'text', content: 'remote', language: 'text', version: 'v2' } }).mockRejectedValueOnce(new Error('offline'));
     const instance = backend(save);

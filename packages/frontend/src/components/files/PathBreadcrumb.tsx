@@ -8,9 +8,10 @@ interface PathBreadcrumbProps {
   rootLabel?: string;
   navigationLabel?: string;
   mobile?: boolean;
+  separator?: string;
 }
 
-export function PathBreadcrumb({ path, onNavigate, rootLabel, navigationLabel, mobile = false }: PathBreadcrumbProps) {
+export function PathBreadcrumb({ path, onNavigate, rootLabel, navigationLabel, mobile = false, separator = '/' }: PathBreadcrumbProps) {
   const { t } = useTranslation('files');
   const { showToast } = useToast();
 
@@ -28,6 +29,10 @@ export function PathBreadcrumb({ path, onNavigate, rootLabel, navigationLabel, m
       {segments.map((segment, index) => <span key={index} style={{ display: 'inline-flex', alignItems: 'center', minWidth: 0 }}>/<button type="button" className="icon-btn" style={crumbStyle} aria-current={index === segments.length - 1 ? 'location' : undefined} onClick={() => onNavigate(`${segments.slice(0, index + 1).join('/')}/`)}>{segment}</button></span>)}
     </nav>;
   }
+
+  const parts = path.split(separator === '\\' ? /[\\/]+/ : /\/+/).filter(Boolean);
+  if (separator === '\\' && path.startsWith('\\\\')) parts.unshift('\\\\');
+  else if (path.startsWith(separator)) parts.unshift(separator);
 
   return (
     <div
@@ -53,12 +58,14 @@ export function PathBreadcrumb({ path, onNavigate, rootLabel, navigationLabel, m
           textAlign: 'left',
         }}
       >
-        <bdi>{path}</bdi>
+        <span className="sr-only">{path}</span>
+        <bdi aria-hidden="true">{parts.map((part, index) => <span key={index}>{index > 0 && <span style={{ margin: '0 var(--space-1)' }}>›</span>}{part}</span>)}</bdi>
       </div>
       <button
         type="button"
         onClick={handleCopy}
         title={t('rootSwitcher.copyPath')}
+        aria-label={t('rootSwitcher.copyPath')}
         className="icon-btn"
         style={{
           border: 'none',

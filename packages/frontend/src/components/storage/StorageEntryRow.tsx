@@ -3,6 +3,7 @@ import { useTranslation } from 'react-i18next';
 import { useBlobUrl } from '../../hooks/useBlobUrl';
 import { formatSize } from '../../utils/formatSize';
 import { formatRelativeTime } from '../../utils/time';
+import { fileIconFor } from '../files/fileIconFor';
 import { Icon } from '../ui/Icon';
 import { IconButton } from '../ui';
 import type { FileEntry } from '../files/backend/FilesBackend';
@@ -35,6 +36,7 @@ export function StorageEntryRow({ entry, rawPath, isSelected, isActive, mobile, 
   const { t } = useTranslation('storage');
   const { t: filesT } = useTranslation('files');
   const bindLongPress = useLongPress();
+  const fileIcon = fileIconFor(entry.name);
   const touchSize = mobile ? 'calc(var(--space-6) + var(--space-5))' : undefined;
   const meta = entry.type === 'file'
     ? [entry.size !== undefined ? formatSize(entry.size) : null, entry.lastModified ? formatRelativeTime(entry.lastModified) : null].filter(Boolean).join(' · ')
@@ -42,7 +44,7 @@ export function StorageEntryRow({ entry, rawPath, isSelected, isActive, mobile, 
   return <div className={`row-hover${isSelected || isActive ? ' row-selected' : ''}`}
     style={{ display: 'flex', alignItems: 'center', minHeight: 'calc(var(--space-6) + var(--space-5))', gap: 'var(--space-2)', padding: '0 var(--space-2)', minWidth: 0 }}>
     <label style={{ display: 'inline-flex', alignItems: 'center', justifyContent: 'center', minWidth: touchSize, minHeight: touchSize }}><input type="checkbox" aria-label={t('list.select', { name: entry.name })} checked={isSelected} onChange={onToggle} /></label>
-    {entry.type === 'directory' ? <Icon name="files" size={16} /> : IMAGE_NAME.test(entry.name) ? <StorageThumbnail path={rawPath} /> : <Icon name="file" size={16} />}
+    {entry.type === 'directory' ? <Icon name="files" size={16} /> : IMAGE_NAME.test(entry.name) ? <StorageThumbnail path={rawPath} /> : <Icon name={fileIcon.icon} size={16} style={{ color: fileIcon.color }} />}
     <button type="button" className="icon-btn"
       {...bindLongPress(onToggle)}
       style={{ ...longPressStyle, flex: 1, minWidth: 0, display: 'flex', flexDirection: 'column', alignItems: 'flex-start', background: 'none', border: 'none', padding: 'var(--space-1) 0', color: 'var(--text)', cursor: 'pointer', textAlign: 'left' }}
