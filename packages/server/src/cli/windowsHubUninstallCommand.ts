@@ -4,7 +4,7 @@ import { createServiceManager, type ServiceHost } from '../modules/system/create
 import { HUB_SERVICE, runCommand } from '../modules/system/serviceManager';
 import { createHubLock, underHubLock } from '../modules/system/hubLock';
 import { resolveWindowsHub, uninstallWindowsTask, type ServiceCommandContext } from '../modules/system/windowsHubOperations';
-import { assertNoHubLaunchers, consumeWindowsInstallRecord, prepareRecordedData, prepareRecordedRelease, removeRecordedTree, verifyRecordedDatabase, verifyRecordedRelease, verifyRecordedWrapper } from '../modules/system/windowsHubUninstall';
+import { assertNoHubLaunchers, assertNoOtherHubProcesses, consumeWindowsInstallRecord, prepareRecordedData, prepareRecordedRelease, removeRecordedTree, verifyRecordedDatabase, verifyRecordedRelease, verifyRecordedWrapper } from '../modules/system/windowsHubUninstall';
 import { assertHubDirsOnlyOwnerWritable, findHubVersionsInUse } from '../modules/system/windowsHubFolderOps';
 import { runCommandSpec } from '../shared/exec/runCommandSpec';
 import { listOwnedDataNames, readOwnedSecret } from '../modules/system/windowsOwnedSecrets';
@@ -64,6 +64,7 @@ export async function windowsHubUninstallCommand(host: ServiceHost, context: Ser
       }
     } else retained.push('The CLI wrapper was not recorded as created by this installer; inspect it manually.');
     await assertNoHubLaunchers(hub.hubRoots, run, hub.systemRoot, process.ppid);
+    await assertNoOtherHubProcesses(hub.layout.hubRoot, run, hub.systemRoot, context.pid);
     consumeWindowsInstallRecord(hub.layout.hubRoot, record, context.secretFileGuard);
     console.log(JSON.stringify({ release: path.basename(release), data, dataDb, dataFiles, wrapper, pathAdded: record.pathAdded, retained }));
     const action = await new Promise<string>((resolve) => {
@@ -78,6 +79,7 @@ export async function windowsHubUninstallCommand(host: ServiceHost, context: Ser
       const inUse = await findHubVersionsInUse(run, hub.systemRoot, hub.hubRoots, { rejectUnknownVersions: true, excludePid: context.pid });
       if ([...inUse].some((version) => version.toLowerCase() === record.release.toLowerCase())) throw new Error('A process is using the recorded release; stop it and inspect the retained files.');
       await assertNoHubLaunchers(hub.hubRoots, run, hub.systemRoot, process.ppid);
+      await assertNoOtherHubProcesses(hub.layout.hubRoot, run, hub.systemRoot, context.pid);
       if (data) {
         await prepareRecordedData(hub.layout.prefix, record, context.secretFileGuard, run, hub.systemRoot);
         await removeRecordedTree(hub.layout.prefix, 'data', run, hub.systemRoot);

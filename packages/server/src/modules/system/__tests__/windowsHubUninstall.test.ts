@@ -7,7 +7,7 @@ import { readInstallFileIdentity, readInstallInventory } from '../windowsInstall
 vi.mock('../windowsHubFolderOps', async (importOriginal) => ({ ...(await importOriginal<typeof import('../windowsHubFolderOps')>()), removeFolderWithRd: vi.fn() }));
 
 import { removeFolderWithRd } from '../windowsHubFolderOps';
-import { assertNoHubLaunchers, consumeWindowsInstallRecord, readWindowsInstallRecord, removeRecordedTree, verifyRecordedData, verifyRecordedDatabase, verifyRecordedRelease } from '../windowsHubUninstall';
+import { assertNoHubLaunchers, assertNoOtherHubProcesses, consumeWindowsInstallRecord, readWindowsInstallRecord, removeRecordedTree, verifyRecordedData, verifyRecordedDatabase, verifyRecordedRelease } from '../windowsHubUninstall';
 
 const roots: string[] = [];
 afterEach(() => { for (const root of roots.splice(0)) fs.rmSync(root, { recursive: true, force: true }); });
@@ -106,5 +106,24 @@ describe('hub launcher check', () => {
     const check = Buffer.from(spec.args.at(-1)!, 'base64').toString('utf16le');
     expect(check).toContain("O''Brien");
     expect(check).toContain("O''''Brien");
+  });
+});
+
+describe('unrecognised hub path check', () => {
+  it('refuses a hub or an unreadable node process, excluding only the helper itself', async () => {
+    const run = vi.fn().mockResolvedValueOnce({ exitCode: 0, stdout: 'HUB 42', stderr: '' }).mockResolvedValueOnce({ exitCode: 0, stdout: 'UNKNOWN 43', stderr: '' });
+    await expect(assertNoOtherHubProcesses('C:\\Users\\me\\.azito\\hub', run, 'C:\\Windows', 123)).rejects.toThrow(/hub process \(42\)/);
+    await expect(assertNoOtherHubProcesses('C:\\Users\\me\\.azito\\hub', run, 'C:\\Windows', 123)).rejects.toThrow(/node process \(43\) could not be identified/);
+    const spec = run.mock.calls[0]![0];
+    const check = Buffer.from(spec.args.at(-1)!, 'base64').toString('utf16le');
+    expect(check).toContain('$candidate.ProcessId -eq 123');
+    expect(check).toContain('if (-not $candidate.CommandLine)');
+    expect(check).toContain("$candidate.CommandLine -match '~[0-9]+'");
+    expect(check).not.toContain("if ($owner -eq 'other') { continue }");
+  });
+
+  it('accepts only an explicit clear result', async () => {
+    const run = vi.fn().mockResolvedValue({ exitCode: 0, stdout: 'CLEAR', stderr: '' });
+    await expect(assertNoOtherHubProcesses('C:\\Users\\me\\.azito\\hub', run, 'C:\\Windows', 123)).resolves.toBeUndefined();
   });
 });

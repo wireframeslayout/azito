@@ -11,6 +11,7 @@ import { whyAFileIsHeld } from './windowsHubPrune';
 import { buildCommandSpec } from '../../shared/exec/commandSpec';
 import { powershellDialect, powershellEncodedArgs } from '../../shared/os/shellDialect';
 import { buildProcessPresentScript, parseProcessPresent } from '../../shared/os/windowsProcessSweep';
+import { misaoHubScript, parseMisaoGuardOutput } from '../servers/agent-deploy/windowsAgentOwnership';
 
 const fileSchema = z.object({ path: z.string(), sha256: z.string().regex(/^[a-f0-9]{64}$/) }).strict();
 const identitySchema = z.object({ device: z.string().regex(/^\d+$/), file: z.string().regex(/^\d+$/), created: z.string().regex(/^\d+$/) }).strict();
@@ -144,4 +145,15 @@ export async function assertNoHubLaunchers(hubRoots: readonly string[], run: Spe
     if (result.exitCode !== 0) throw new Error(`Could not inspect hub launchers: ${(result.stderr || result.stdout).trim().slice(0, 400)}`);
     if (parseProcessPresent(result.stdout)) throw new Error('A hub launcher is still running. Stop it and inspect the retained files.');
   }
+}
+
+/** An unrecognised spelling may name this install, so leave data intact while any other hub may be running. */
+export async function assertNoOtherHubProcesses(hubRoot: string, run: SpecRunner, systemRoot: string, excludePid: number): Promise<void> {
+  const check = misaoHubScript({ root: hubRoot, hubRoot: undefined, looksForHub: true, excludePid, strictUnknown: true });
+  const result = await run(buildCommandSpec(windowsPowershell(systemRoot), powershellEncodedArgs(check), { timeoutMs: 60_000 }));
+  if (result.exitCode !== 0) throw new Error(`Could not inspect hub processes: ${(result.stderr || result.stdout).trim().slice(0, 400)}`);
+  const answer = parseMisaoGuardOutput(result.stdout);
+  if (answer.kind === 'hub') throw new Error(`A hub process (${answer.pid}) may use this installation; stop it before uninstalling.`);
+  if (answer.kind === 'unknown') throw new Error(`A node process (${answer.pid}) could not be identified; nothing is removed.`);
+  if (answer.kind !== 'clear') throw new Error('A process could not be identified; nothing is removed.');
 }

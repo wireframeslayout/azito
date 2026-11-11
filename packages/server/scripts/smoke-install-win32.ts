@@ -5,7 +5,7 @@ import * as os from 'os';
 import * as path from 'path';
 import { createSecretFileGuard } from '../src/shared/os/secretFileGuard';
 import { readEnvValue } from '../src/shared/envFile';
-import { assertNoHubLaunchers } from '../src/modules/system/windowsHubUninstall';
+import { assertNoHubLaunchers, assertNoOtherHubProcesses } from '../src/modules/system/windowsHubUninstall';
 import { powershellDialect, powershellEncodedArgs } from '../src/shared/os/shellDialect';
 import { runCommandSpec, runHostOf } from '../src/shared/exec/runCommandSpec';
 import { resolveCurrentHostEnv } from '../src/shared/os/hostEnv';
@@ -189,6 +189,25 @@ async function checkOrphanLauncher(prefix: string): Promise<void> {
   }
 }
 
+async function checkShortProcessPath(prefix: string): Promise<void> {
+  step('an unidentifiable Node process with a short path is refused without being stopped');
+  const child = spawn(process.execPath, ['-e', 'setTimeout(() => {}, 90000)', 'C:\\MIXED~1\\fake'], { stdio: 'ignore' });
+  try {
+    await new Promise((resolve) => setTimeout(resolve, 1500));
+    const host = runHostOf(resolveCurrentHostEnv());
+    let reason = '';
+    try { await assertNoOtherHubProcesses(path.join(prefix, 'hub'), (spec) => runCommandSpec(spec, host), SYSTEM_ROOT, process.pid); } catch (err) { reason = err instanceof Error ? err.message : String(err); }
+    assert(reason.includes(`node process (${child.pid}) could not be identified`), 'the short-name process must be reported', reason);
+    assert(child.exitCode === null, 'the process check must not stop the process');
+  } finally {
+    if (child.exitCode === null && child.signalCode === null) {
+      const exited = new Promise<void>((resolve) => child.once('exit', () => resolve()));
+      child.kill();
+      await exited;
+    }
+  }
+}
+
 /** An install that stopped part-way (a version folder, no current.txt, no CLI) is repaired by running the installer again; the CLI refuses a bad pointer and survives `&` in the prefix. */
 function checkRepairAndDiagnostics(installPs1: string, zip: string, sums: string, prefix: string, version: string): void {
   step(`install into ${prefix} (a prefix with &), then repair a half-finished install`);
@@ -359,6 +378,7 @@ async function main(): Promise<void> {
     const azitoCmd = path.join(prefix, 'bin', 'azito.cmd');
     checkCli(azitoCmd, prefix, version as string);
     await checkOrphanLauncher(prefix);
+    await checkShortProcessPath(prefix);
     checkRepairAndDiagnostics(installPs1, zip, sums, path.join(work, 'Amp&Co', '.azito'), version as string);
     await checkStart(installPs1, azitoCmd, prefix);
     checkAccessRules(prefix);
