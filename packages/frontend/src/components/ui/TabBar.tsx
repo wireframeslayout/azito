@@ -39,6 +39,7 @@ export interface TabBarProps {
   onTabLongPress?: (x: number, y: number, tabId: string) => void;
   /** Action area rendered between the tab strip and the ▾ tab-list button (e.g. pane-mode split/close buttons). */
   trailing?: React.ReactNode;
+  showTabList?: boolean;
   /**
    * When provided, tabs become HTML5-draggable (`draggable` DOM attribute)
    * and report drag lifecycle via these callbacks instead of the mousedown-based
@@ -51,7 +52,7 @@ export interface TabBarProps {
   onTabDragEnd?: () => void;
 }
 
-export function TabBar({ tabs, activeId, onSelect, onClose, onReorder, draggable = false, renderTab, onTabDoubleClick, onTabContextMenu, onTabLongPress, trailing, onTabDragStart, onTabDragEnd }: TabBarProps) {
+export function TabBar({ tabs, activeId, onSelect, onClose, onReorder, draggable = false, renderTab, onTabDoubleClick, onTabContextMenu, onTabLongPress, trailing, showTabList = true, onTabDragStart, onTabDragEnd }: TabBarProps) {
   const { t } = useTranslation('workspace');
   const html5Draggable = onTabDragStart !== undefined || onTabDragEnd !== undefined;
   const { attachRef: attachScrollRef, elRef: tabBarRef } = useTabStripScrolling(activeId);
@@ -244,7 +245,7 @@ export function TabBar({ tabs, activeId, onSelect, onClose, onReorder, draggable
         </div>
       )}
 
-      {tabs.length > 0 && (
+      {showTabList && tabs.length > 0 && (
         <div style={{ position: 'relative', flexShrink: 0 }}>
           <button onClick={(e) => { e.stopPropagation(); setShowTabMenu(!showTabMenu); }} className="icon-btn" style={{ border: 'none', color: 'var(--text-dim)', cursor: 'pointer', padding: '8px 10px', minHeight: 44, display: 'flex', alignItems: 'center' }}><Icon name="chevrons-up-down" size={14} /></button>
           {showTabMenu && (

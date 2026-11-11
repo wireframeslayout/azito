@@ -24,3 +24,4 @@ describe('child conversation input', () => {
     expect(screen.getByTestId('input')).toHaveTextContent('subagents.relayUnavailable.unnamed');
   });
 });
+
