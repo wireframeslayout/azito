@@ -1,7 +1,18 @@
-import { describe, expect, it } from 'vitest';
+import { promises as fs } from 'fs';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { findWindowsHeadlessCommand, windowsShimCommand } from './windowsHeadlessCommand';
 
 describe('Windows headless command', () => {
+  afterEach(() => { vi.restoreAllMocks(); });
+  it('goes on past a PATH directory that cannot be read', async () => {
+    vi.spyOn(fs, 'stat').mockImplementation(async file => {
+      if (String(file).startsWith('C:\\locked\\')) throw Object.assign(new Error('denied'), { code: 'EACCES' });
+      if (String(file) === 'D:\\bin\\codex.CMD') return { isFile: () => true } as Awaited<ReturnType<typeof fs.stat>>;
+      throw Object.assign(new Error('missing'), { code: 'ENOENT' });
+    });
+    const result = await findWindowsHeadlessCommand('codex', { PATH: 'C:\\locked;D:\\bin', PATHEXT: '.CMD' });
+    expect(result.file).toBe('D:\\bin\\codex.CMD');
+  });
   it('searches absolute directories and PATHEXT in order', async () => {
     const visited: string[] = [];
     const result = await findWindowsHeadlessCommand('codex', { PATH: 'relative;"C:\\Program Files\\npm";D:\\bin', PATHEXT: '.CMD;.EXE;.JS' }, async file => { visited.push(file); return file === 'D:\\bin\\codex.CMD'; });

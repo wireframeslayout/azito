@@ -23,8 +23,7 @@ export async function runHeadlessCommand(binary: string, args: string[], cwd: st
   let commandArgs = args;
   let verbatim = false;
   if (process.platform === 'win32') {
-    let result;
-    try { result = await findWindowsHeadlessCommand(binary, env); } catch { throw new HeadlessCliError('failed'); }
+    const result = await findWindowsHeadlessCommand(binary, env);
     if (!result.file) throw new HeadlessCliError('cli_not_found', result.search);
     command = result.file;
     if (/\.(cmd|bat)$/i.test(command)) {

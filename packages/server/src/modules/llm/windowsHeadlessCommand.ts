@@ -7,9 +7,16 @@ const DEFAULT_EXTENSIONS = ['.COM', '.EXE', '.BAT', '.CMD'];
 export class UnsafeShimArgumentError extends Error {}
 const UNSAFE = /[%^&|<>"!()\r\n]/;
 
-export async function findWindowsHeadlessCommand(binary: string, env: NodeJS.ProcessEnv, isFile: (file: string) => Promise<boolean> = async file => {
-  try { return (await fs.stat(file)).isFile(); } catch (error) { if ((error as NodeJS.ErrnoException).code === 'ENOENT' || (error as NodeJS.ErrnoException).code === 'ENOTDIR') return false; throw error; }
-}): Promise<{ file: string | null; search: CliSearchDetails }> {
+/**
+ * A candidate that cannot be stat'ed (missing, or in a PATH directory this user cannot read: EACCES / EPERM, an offline share)
+ * is not a program this process can start, so the search goes on with the next one, as Windows' own PATH search does
+ * (and `GitLocator` in `shared/exec/windowsGit.ts`). Stopping on it would hide a CLI that sits in a later directory.
+ */
+async function isExistingFile(file: string): Promise<boolean> {
+  try { return (await fs.stat(file)).isFile(); } catch { return false; }
+}
+
+export async function findWindowsHeadlessCommand(binary: string, env: NodeJS.ProcessEnv, isFile: (file: string) => Promise<boolean> = isExistingFile): Promise<{ file: string | null; search: CliSearchDetails }> {
   const directories = (env.PATH ?? '').split(';').map(p => p.trim().replace(/^"(.*)"$/, '$1')).filter(isFullyQualified);
   const extensions = (!env.PATHEXT?.trim() ? DEFAULT_EXTENSIONS : env.PATHEXT.split(';')).map(e => e.trim()).filter(e => /^\.(exe|com|cmd|bat)$/i.test(e));
   const search = { directories, extensions };
