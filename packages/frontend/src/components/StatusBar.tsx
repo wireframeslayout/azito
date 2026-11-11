@@ -219,7 +219,7 @@ export function StatusBar({ servers }: StatusBarProps) {
           </span>
         )}
         <span style={{ flex: 1 }} />
-        <button type="button" aria-label={tn('globalSearch.title')} onClick={() => openSearch()} className="row-hover" style={{ padding: 'var(--space-1) var(--space-2)', borderRadius: 'var(--radius-sm)', color: 'var(--text)', border: '1px solid var(--border)', cursor: 'pointer', fontSize: 'var(--font-xs)' }}><Icon name="search" size={14} /> {tn('globalSearch.title')} {bindings['search.open'] && <kbd>{formatKeySpec(bindings['search.open'])}</kbd>}</button>
+        <button type="button" aria-label={tn('globalSearch.title')} onClick={() => openSearch()} className="row-hover" style={{ display: 'inline-flex', alignItems: 'center', gap: 'var(--space-1)', padding: 'var(--space-1) var(--space-2)', borderRadius: 'var(--radius-sm)', color: 'var(--text)', border: '1px solid var(--border)', cursor: 'pointer', fontSize: 'var(--font-xs)' }}><Icon name="search" size={14} />{tn('globalSearch.title')}{bindings['search.open'] && <kbd>{formatKeySpec(bindings['search.open'])}</kbd>}</button>
         <StatusBarItem mono bordered icon="watch" label={tl('title')} active={lookout.open} popup="dialog" badge={lookout.sections.counts.attention} badgeLabel={tl('attentionCount', { count: lookout.sections.counts.attention })} onClick={() => { setOpenItemId(null); if (lookout.open) lookout.closeDrawer(); else lookout.openDrawer(); }} />
         {registry.map((item) => (
           <StatusBarItem

@@ -2,7 +2,7 @@ import type { ReactNode } from 'react';
 import { useTranslation } from 'react-i18next';
 import type { LookoutItem } from '../../lib/lookoutSummary';
 import { LookoutRow, type LookoutSummary } from './LookoutRow';
-interface CommonProps { countKnown?: boolean; name: 'attention' | 'active' | 'finished'; items: LookoutItem[]; empty?: ReactNode; summaries?: ReadonlyMap<string, LookoutSummary> }
+interface CommonProps { countKnown?: boolean; name: 'attention' | 'active' | 'finished'; items: LookoutItem[]; /** No items: a string is shown as the section's empty text, `false` shows nothing, another node is rendered as is, omitted shows the generic text. */ empty?: ReactNode; summaries?: ReadonlyMap<string, LookoutSummary> }
 type Props = CommonProps & ({ onOpen: (item: LookoutItem) => void; renderItem?: never } | { renderItem: (item: LookoutItem) => ReactNode; onOpen?: never });
 export function LookoutSection({ name, items, onOpen, renderItem, empty, summaries, countKnown = true }: Props) {
   const { t } = useTranslation('lookout');

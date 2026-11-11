@@ -1,6 +1,6 @@
 import { StatusBarItem } from './statusbar/StatusBarItem';
 import { fireEvent, render, screen } from '@testing-library/react';
-import { expect, it, vi } from 'vitest';
+import { afterEach, expect, it, vi } from 'vitest';
 import { StatusBar } from './StatusBar';
 import { HotkeyProvider } from '../hooks/useHotkeys';
 const mocks = vi.hoisted(() => ({ open: vi.fn(), close: vi.fn(), openTask: vi.fn(), attention: 2, serverLoaded: true, mux: 'misao' as 'misao' | 'tmux', statuses: {} as Record<string, unknown>, focused: null as null | { serverName: string; label: string } }));
@@ -15,6 +15,12 @@ vi.mock('../hooks/useWorkspaceTargets', () => ({ useWorkspaceTargets: () => ({ f
 vi.mock('../hooks/useSystemUpdate', () => ({ useSystemUpdate: () => ({ status: null, startUpdate: vi.fn(), checkNow: vi.fn() }) }));
 vi.mock('../hooks/useToast', () => ({ useToast: () => ({ showToast: vi.fn() }) }));
 vi.mock('../hooks/useActivityDiagnostics', () => ({ useActivityDiagnostics: () => ({ rows: [], error: null }), DIAGNOSTICS_POLL_INTERVAL_MS: 1000 }));
+afterEach(() => {
+  mocks.attention = 2;
+  mocks.mux = 'misao';
+  mocks.statuses = {};
+  mocks.focused = null;
+});
 it('shows the Lookout button and attention badge and opens it', () => {
   render(<HotkeyProvider><StatusBar servers={[]} /></HotkeyProvider>);
   const button = screen.getByRole('button', { name: /Lookout/ });
@@ -45,7 +51,6 @@ it('shows a known default mux for the displayed server', () => {
   mocks.focused = { serverName: 'local', label: 'window' };
   render(<HotkeyProvider><StatusBar servers={[{ serverName: 'local', type: 'local', measurement: null, unavailable: false } as never]} /></HotkeyProvider>);
   expect(screen.getByText(/misao/)).toBeInTheDocument();
-  mocks.focused = null;
 });
 
 it('shows only the focused online misao daemon version', () => {
@@ -60,6 +65,4 @@ it('shows only the focused online misao daemon version', () => {
   mocks.statuses = { local: { status: 'error' } };
   rerender(<HotkeyProvider><StatusBar servers={[]} /></HotkeyProvider>);
   expect(screen.queryByText(/0.3.0/)).not.toBeInTheDocument();
-  mocks.focused = null;
-  mocks.statuses = {};
 });
