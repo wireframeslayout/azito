@@ -48,7 +48,7 @@ function MaximizedWindowContent() {
   const lastTreeFocus = useRef<HTMLElement | null>(null);
   const terminalRef = useRef<HTMLDivElement>(null);
   const open = selectedWindowId !== null && !isMobile;
-  const fallbackFocus = fallbackFocusTo ?? Array.from(document.querySelectorAll<HTMLElement>('[data-tab-id]')).find(element => element.dataset.tabId === workspace?.activeTabId) ?? null;
+  const fallbackFocus = fallbackFocusTo?.isConnected ? fallbackFocusTo : Array.from(document.querySelectorAll<HTMLElement>('[data-tab-id]')).find(element => element.dataset.tabId === workspace?.activeTabId) ?? null;
   const tabs = workspace?.tabs ?? [];
   const tabTaskIds = new Set(tabs.flatMap(tab => tab.kind === 'task' ? [tab.taskId] : []));
   const tabWindowIds = new Set(tabs.flatMap(tab => tab.kind === 'window' ? [tab.windowId] : []));

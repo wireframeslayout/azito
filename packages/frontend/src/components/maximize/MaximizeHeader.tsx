@@ -31,6 +31,6 @@ export function MaximizeHeader({ window, task, project, status, viewMode, onView
     {window && !window.sleeping && <TerminalChatToggle value={viewMode} onChange={onViewModeChange} />}
     {task && <Button size="sm" onClick={onOpenTask}><Icon name="tasks" size={14} /> {t('maximize.openTask')}</Button>}
     {window && <Button size="sm" onClick={onOpenTab}><Icon name="terminal" size={14} /> {t('maximize.openTab')}</Button>}
-    <IconButton onClick={onClose} aria-label={t('maximize.close')}><Icon name="close" size={16} /></IconButton>
+    <IconButton onClick={onClose} aria-label={t('maximize.close')} title={t('maximize.close')} style={{ minWidth: 'calc(var(--space-5) + var(--space-6))', minHeight: 'calc(var(--space-5) + var(--space-6))' }}><Icon name="close" size={16} /></IconButton>
   </header>;
 }
