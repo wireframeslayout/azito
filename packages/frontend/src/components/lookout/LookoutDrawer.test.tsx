@@ -102,7 +102,7 @@ it('updates the relative time only while open and disables refresh during loadin
   const props = { onClose: () => {}, sections, onRetry: mocks.retry, onOpenItem: () => {}, snapshotUpdatedAt: Date.now() };
   const { rerender, unmount } = render(<HotkeyProvider><LookoutDrawer {...props} open snapshotStatus="loading" /></HotkeyProvider>);
   expect(screen.getByRole('button', { name: /refresh/i })).toBeDisabled();
-  expect(screen.getByText(/now/i)).toBeInTheDocument();
+  expect(screen.getByText(/^Updated now$/i)).toBeInTheDocument();
   act(() => vi.advanceTimersByTime(60_000));
   rerender(<HotkeyProvider><LookoutDrawer {...props} open snapshotStatus="ready" /></HotkeyProvider>);
   expect(screen.getByText(/1m ago/i)).toBeInTheDocument();
