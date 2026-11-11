@@ -124,7 +124,7 @@ export function MobileTabChipRow({
             {activeTab.extra}
           </>
         ) : (
-          <span style={{ fontSize: 'var(--font-sm)', color: 'var(--text-dim)' }}>{t('mobile.noTabSelected')}</span>
+          <span style={{ fontSize: 'var(--font-sm)', color: 'var(--text-dim)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{t('mobile.noTabSelected')}</span>
         )}
       </button>
 
