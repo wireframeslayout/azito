@@ -35,6 +35,7 @@ interface StatusBarProps {
 interface RegistryItem {
   id: string;
   label: string;
+  mono?: boolean;
   dot: DotLevel;
   /** ドロップダウンの幅（既定 360px）。稼働検知は表を出すため広い器を使う。 */
   width?: number;
@@ -99,6 +100,7 @@ export function StatusBar({ servers }: StatusBarProps) {
       items.push({
         id: hubServer.serverName,
         label: 'Hub',
+        mono: true,
         dot: health,
         renderDropdown: () => <ResourceDropdownContent serverName={hubServer.serverName} health={health} unavailable={hubServer.unavailable} />,
       });
@@ -129,6 +131,7 @@ export function StatusBar({ servers }: StatusBarProps) {
         items.push({
           id: entry.serverName,
           label: entry.serverName,
+          mono: true,
           dot: health,
           renderDropdown: () => <ResourceDropdownContent serverName={entry.serverName} health={health} unavailable={entry.unavailable} />,
         });
@@ -193,7 +196,6 @@ export function StatusBar({ servers }: StatusBarProps) {
           alignItems: 'center',
           gap: 14,
           padding: '0 12px',
-          fontFamily: 'var(--mono)',
           fontSize: 'var(--font-xs)',
           color: 'var(--text-dim)',
           flexShrink: 0,
@@ -205,8 +207,8 @@ export function StatusBar({ servers }: StatusBarProps) {
           </span>
         )}
         <span style={{ flex: 1 }} />
-        <button type="button" onClick={() => openSearch()} className="row-hover" style={{ padding: '2px 10px', borderRadius: 'var(--radius-sm)', color: 'var(--text-dim)', border: 'none', cursor: 'pointer', fontFamily: 'var(--mono)', fontSize: 'var(--font-xs)' }}>{tn('globalSearch.title')}</button>
-        <StatusBarItem label={tl('title')} active={lookout.open} popup="dialog" badge={lookout.sections.counts.attention} badgeLabel={tl('attentionCount', { count: lookout.sections.counts.attention })} onClick={() => { setOpenItemId(null); if (lookout.open) lookout.closeDrawer(); else lookout.openDrawer(); }} />
+        <button type="button" onClick={() => openSearch()} className="row-hover" style={{ padding: '2px 10px', borderRadius: 'var(--radius-sm)', color: 'var(--text-dim)', border: 'none', cursor: 'pointer', fontSize: 'var(--font-xs)' }}>{tn('globalSearch.title')}</button>
+        <StatusBarItem mono label={tl('title')} active={lookout.open} popup="dialog" badge={lookout.sections.counts.attention} badgeLabel={tl('attentionCount', { count: lookout.sections.counts.attention })} onClick={() => { setOpenItemId(null); if (lookout.open) lookout.closeDrawer(); else lookout.openDrawer(); }} />
         {registry.map((item) => (
           <StatusBarItem
             key={item.id}
@@ -215,6 +217,7 @@ export function StatusBar({ servers }: StatusBarProps) {
               else itemRefs.current.delete(item.id);
             }}
             label={item.label}
+            mono={item.mono}
             dot={item.dot}
             active={openItemId === item.id}
             onClick={() => handleItemClick(item.id, item.width ?? DEFAULT_DROPDOWN_WIDTH)}

@@ -1,3 +1,4 @@
+import { parseWorkerLaunchRecord } from './workerLaunchRecord';
 import { z } from 'zod';
 import { parseWindowId, formatWindowId, asPaneHandle } from '@azito/shared';
 import { WindowMessageService } from './WindowMessageService';
@@ -22,7 +23,7 @@ import { HostProfileError } from '../../shared/os/hostProfile';
 import { isAgentSessionId } from '../agents/agentSessionId';
 import { shellDialectFor } from '../../shared/os/shellDialect';
 import { randomUUID } from 'node:crypto';
-import { isPrimaryTaskWindow, type IWindowRepository, type Window } from './Window';
+import { publicWindow, isPrimaryTaskWindow, type IWindowRepository, type Window } from './Window';
 import type { IProjectRepository } from '../projects/Project';
 import type { ITaskRepository } from '../tasks/Task';
 import type { ServerConfig } from '../servers/Server';
@@ -31,7 +32,7 @@ import type { KeyedMutex } from '../../shared/keyedMutex';
 import type { IMuxClient } from '../tmux/IMuxClient';
 import type { TmuxClient } from '../tmux/TmuxClient';
 import type { IServerRepository } from '../servers/Server';
-import type { WindowRespawnService } from './WindowRespawnService';
+import { WindowIdentityUnresolvedError, type WindowRespawnService } from './WindowRespawnService';
 import type { WindowSleepService } from './WindowSleepService';
 import type { ISessionStrategyFactory } from '../agents/SessionStrategy';
 import type { NotificationBus } from '../notifications/NotificationBus';
@@ -47,7 +48,7 @@ import { muxRefFromTmuxTarget, parseMuxRef, type MuxRef, type PaneOrdinal, type 
 import { MuxDriverUnavailableError, type MuxDriverUnavailableReason } from '../tmux/MuxCapabilityError';
 import { muxWindowTarget } from '../tmux/muxWindowTarget';
 import { labelAddedWindowOrRemove } from '../tmux/labelRegisteredWindow';
-import { kindOfStoredWindow, windowKindOf, persistRenamedWindowLabel } from '../tmux/windowIdentity';
+import { kindOfStoredWindow, windowKindOf, persistRenamedWindowLabel, renamedWindowUpdate, renameRefusalReason, tmuxRenameConflict } from '../tmux/windowIdentity';
 import { AmbiguousWindowKindError, rawTargetProbeOf, resolveRawTarget } from '../tmux/storedWindowKind';
 import { resolveWindowById, isRefKindCompatible, resolvePaneHandle, closePaneInWindow, resolvePaneAddEnv, killWindowCore, execResultError, type KillWindowDeps } from './windowPaneOps';
 import type { SessionCaptureService } from './SessionCaptureService';
@@ -86,6 +87,7 @@ export interface WindowsRouteOptions {
   uiToken: string;
   /** Masked-only env of a secondary task-owned window; see SessionsRouteOptions. */
   buildSecondaryWindowEnv: (taskId: number, server: ServerConfig) => Record<string, string>;
+  takePendingWorkerLaunch?: (serverName: string, ref: MuxRef) => import('./workerLaunchRecord').WorkerLaunchRecord | null;
   /** The shared per-server mutex (the same instance the sessions and servers routes receive). */
   serverIsolationMutex: KeyedMutex;
 }
@@ -223,7 +225,7 @@ const windowsRoutes: FastifyPluginCallback<WindowsRouteOptions> = (fastify, opts
       const id = parseInt(request.params.id, 10);
       if (!projectRepo.findById(id))
         return reply.status(404).send({ error: 'Project not found' });
-      return windowRepo.findByProject(id);
+      return windowRepo.findByProject(id).map(publicWindow);
     },
   );
 
@@ -311,6 +313,8 @@ const windowsRoutes: FastifyPluginCallback<WindowsRouteOptions> = (fastify, opts
         sleeping: false,
       });
       if (givenRef && srv) await labelOrRemoveWindow(srv, givenRef, winId);
+      const launchRecord = givenRef ? opts.takePendingWorkerLaunch?.(serverName, givenRef) : null;
+      if (launchRecord) windowRepo.update(winId, { workerLaunch: launchRecord });
       sessionCaptureService.scheduleInitialScan(winId, workerType, serverName, workingDirectory);
       notifyWindowsChanged(serverName);
       return { ok: true, id: winId };
@@ -396,7 +400,7 @@ const windowsRoutes: FastifyPluginCallback<WindowsRouteOptions> = (fastify, opts
       const id = parseInt(request.params.id, 10);
       if (!taskRepo.findById(id))
         return reply.status(404).send({ error: 'Task not found' });
-      return windowRepo.findByTask(id);
+      return windowRepo.findByTask(id).map(publicWindow);
     },
   );
 
@@ -520,6 +524,16 @@ const windowsRoutes: FastifyPluginCallback<WindowsRouteOptions> = (fastify, opts
           return reply.code(400).send({ error: 'Invalid worker_model format' });
         }
         data['workerModel'] = body.worker_model;
+        if (win.workerLaunch) {
+          const args = win.workerLaunch.args;
+          const updated: string[] = [];
+          for (let i = 0; i < args.length; i++) {
+            if (args[i] === '--model' || args[i] === '-m') { i++; continue; }
+            updated.push(args[i]);
+          }
+          if (body.worker_model) updated.push('--model', body.worker_model);
+          data['workerLaunch'] = { ...win.workerLaunch, args: updated };
+        }
       }
       if ('working_directory' in body) data['workingDirectory'] = body.working_directory;
 
@@ -598,19 +612,20 @@ const windowsRoutes: FastifyPluginCallback<WindowsRouteOptions> = (fastify, opts
 
       const strategy = sessionStrategyFactory.create(win.workerType);
       let effectiveCommand = command;
+      let launchedSessionId: string | null = null;
 
       // Session ID processing first (operates on the original command)
       if (strategy.supportsSession && !strategy.needsPostLaunchScan) {
         const existingId = /(?:^|\s)--session-id\s+(\S+)/.exec(effectiveCommand)?.[1]
           ?? /(?:^|\s)--resume\s+(\S+)/.exec(effectiveCommand)?.[1];
         if (existingId) {
-          windowRepo.updateAgentSessionIdByWindow(win.serverName, win.tmuxTarget, existingId);
+          launchedSessionId = existingId;
         } else {
           const sessionId = randomUUID();
           const sessionArgs = strategy.buildNewSessionArgs(sessionId);
           if (sessionArgs.length > 0) {
             effectiveCommand = `${effectiveCommand} ${sessionArgs.join(' ')}`;
-            windowRepo.updateAgentSessionIdByWindow(win.serverName, win.tmuxTarget, sessionId);
+            launchedSessionId = sessionId;
           }
         }
       }
@@ -642,6 +657,8 @@ const windowsRoutes: FastifyPluginCallback<WindowsRouteOptions> = (fastify, opts
       // Exported into the pane's shell (a POSIX one: Windows hosts are refused above) rather than prefixed onto the command, so every
       // part of a compound command (`cd x && claude`) sees it; the pane belongs to this window, so the value stays right afterwards too.
       await driverFor(srv).sendKeysToHandle(srv, paneHandle, [`export AZITO_WINDOW_ID=${win.id}; ${cmd}`, 'Enter']);
+      if (launchedSessionId) windowRepo.updateAgentSessionIdByWindow(win.serverName, win.tmuxTarget, launchedSessionId);
+      windowRepo.update(win.id, { workerLaunch: parseWorkerLaunchRecord(command) });
       return { ok: true, supervised, ...resourceCheckBody(resourceSkipped) };
     },
   );
@@ -672,7 +689,7 @@ const windowsRoutes: FastifyPluginCallback<WindowsRouteOptions> = (fastify, opts
 
       const parsedBody = parseStrictBody(respawnBody, request.body);
       if (!parsedBody.ok) return reply.status(400).send(parsedBody.body);
-      const { force, mux } = parsedBody.data;
+      const { force, mux, allowMissing } = parsedBody.data;
       const sourceMux = windowKindOf(win);
       if (sourceMux === 'misao' && mux === 'tmux') return reply.status(400).send({ error: 'unsupported_switch' });
       if (mux === 'misao') {
@@ -694,7 +711,10 @@ const windowsRoutes: FastifyPluginCallback<WindowsRouteOptions> = (fastify, opts
       // /api/tasks/:id/recover-session and /api/units/:id/execute|follow-up.
       let result: { tmuxTarget: string };
       try {
-        result = await respawnService.respawn(id, srv, { mux, isBusy: (windowId) => opts.agentActivityMonitor.snapshot().some((entry) => entry.windowId === windowId || (entry.serverName === win.serverName && isSameWindowTarget(entry.target, win.tmuxTarget))) });
+        result = await respawnService.respawn(id, srv, { mux, allowMissing, isBusy: (windowId) => {
+          const current = windowRepo.findById(windowId);
+          return opts.agentActivityMonitor.snapshot().some((entry) => entry.windowId === windowId || (current !== undefined && entry.serverName === current.serverName && isSameWindowTarget(entry.target, current.tmuxTarget)));
+        } });
         if (mux && mux !== sourceMux) {
           const actor = request.principal ?? OPERATOR_PRINCIPAL;
           recordAuditBestEffort(opts.auditLogService, { actorClass: actor.class, actorId: actor.id ?? null, event: 'window.mux_switched', detail: { windowId: id, serverName: srv.name, from: sourceMux, to: mux, trigger: 'manual' } }, (err) => request.log.error({ err, windowId: id }, 'Mux switch audit failed'));
@@ -703,6 +723,7 @@ const windowsRoutes: FastifyPluginCallback<WindowsRouteOptions> = (fastify, opts
         if (replyToExecutionGateError(err, reply)) return;
         if (err instanceof MuxDriverUnavailableError && err.kind === 'misao') return reply.status(409).send({ error: 'misao_unavailable', reason: err.reason });
         if (err instanceof WindowBusyError) return reply.status(409).send({ error: 'window_busy' });
+        if (err instanceof WindowIdentityUnresolvedError) return reply.status(409).send({ error: 'window_identity_unresolved', reason: err.reason, message: err.message });
         if (err instanceof UnsupportedMuxSwitchError) return reply.status(400).send({ error: 'unsupported_switch' });
         if (err instanceof DuplicateAgentSessionError) {
           return reply.status(409).send({ error: 'session_already_running', windowId: err.windowId, sessionId: err.sessionId, message: err.message });
@@ -841,22 +862,28 @@ const windowsRoutes: FastifyPluginCallback<WindowsRouteOptions> = (fastify, opts
     '/api/windows/:id/rename',
     async (request, reply) => {
       const id = parseInt(request.params.id, 10);
-      const { window: win, ref } = resolveWindowById(windowRepo, id);
-      const srv = serverRepo.findByName(win.serverName);
-      if (!srv) return reply.status(404).send({ error: 'Server not found' });
-      const parsedBody = parseStrictBody(nameBody, request.body);
-      if (!parsedBody.ok) return reply.status(400).send(parsedBody.body);
-      const { name } = parsedBody.data;
-      if (!name) return reply.status(400).send({ error: 'New name required' });
-      const result = await driverFor(srv).renameWindowByRef(srv, ref, name);
-      const err = execResultError(result);
-      if (err) return reply.status(err.status).send({ error: err.error });
-      if (!persistRenamedWindowLabel(() => windowRepo.update(win.id, { label: name, labelSource: 'user' }), () => notifyWindowsChanged(win.serverName), request.log, win.id)) {
-        return reply.status(500).send({ error: 'Window renamed, but saving its label failed' });
-      }
-      notifyWindowsChanged(win.serverName);
-      opts.notificationBus?.emit({ type: 'window:renamed', payload: { serverName: win.serverName, target: win.tmuxTarget, newName: name, windowId: win.id } });
-      return { ok: true };
+      const serverName = resolveWindowById(windowRepo, id).window.serverName;
+      return opts.serverIsolationMutex.withLock(serverName, async () => {
+        const { window: win, ref } = resolveWindowById(windowRepo, id);
+        const srv = serverRepo.findByName(win.serverName);
+        if (!srv) return reply.status(404).send({ error: 'Server not found' });
+        const parsedBody = parseStrictBody(nameBody, request.body);
+        if (!parsedBody.ok) return reply.status(400).send(parsedBody.body);
+        const { name } = parsedBody.data;
+        if (!name) return reply.status(400).send({ error: 'New name required' });
+        const refusal = renameRefusalReason(win, name);
+        if (refusal) return reply.status(400).send({ error: refusal });
+        if (await tmuxRenameConflict(driverFor(srv), srv, ref, name)) return reply.status(409).send({ error: 'window_name_conflict' });
+        const result = await driverFor(srv).renameWindowByRef(srv, ref, name);
+        const err = execResultError(result);
+        if (err) return reply.status(err.status).send({ error: err.error });
+        if (!persistRenamedWindowLabel(() => ref.kind === 'tmux' ? windowRepo.renameTmuxWindow(win.id, name) : windowRepo.update(win.id, renamedWindowUpdate(name)), () => notifyWindowsChanged(win.serverName), request.log, win.id)) {
+          return reply.status(500).send({ error: 'Window renamed, but saving its label failed' });
+        }
+        notifyWindowsChanged(win.serverName);
+        opts.notificationBus?.emit({ type: 'window:renamed', payload: { serverName: win.serverName, target: win.tmuxTarget, newName: name, windowId: win.id } });
+        return { ok: true };
+      });
     },
   );
 

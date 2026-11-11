@@ -157,7 +157,7 @@ function VersionRow({ label, sha, date }: { label: string; sha: string | null; d
   return (
     <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', fontSize: 'var(--font-sm)' }}>
       <span style={{ color: 'var(--text-dim)' }}>{label}</span>
-      <span style={{ display: 'flex', alignItems: 'center', gap: 8, fontFamily: 'var(--mono)' }}>
+      <span style={{ display: 'flex', alignItems: 'center', gap: 8, fontFamily: 'var(--font-mono)' }}>
         <span style={{ color: 'var(--purple)' }}>{sha ? shortSha(sha) : '—'}</span>
         {date && <span style={{ color: 'var(--text-dim)', fontSize: 'var(--font-xs)' }}>{formatLastChecked(date)}</span>}
       </span>
@@ -175,7 +175,7 @@ function CommitRow({ commit }: { commit: UpdateCommit }) {
       padding: '6px 14px',
       fontSize: 'var(--font-xs)',
     }}>
-      <span style={{ fontFamily: 'var(--mono)', color: 'var(--purple)', flexShrink: 0 }}>{shortSha(commit.sha)}</span>
+      <span style={{ fontFamily: 'var(--font-mono)', color: 'var(--purple)', flexShrink: 0 }}>{shortSha(commit.sha)}</span>
       {type && <Chip tone={commitTypeTone(type)}>{type}</Chip>}
       <span style={{
         color: 'var(--text)',

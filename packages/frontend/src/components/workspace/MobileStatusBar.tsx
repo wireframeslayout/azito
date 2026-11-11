@@ -270,7 +270,6 @@ export function MobileStatusBar({ openTask, connectPane }: MobileStatusBarProps)
             border: 'none',
             background: 'transparent',
             color: 'var(--text)',
-            fontFamily: 'var(--mono)',
             fontSize: 'var(--font-2xs)',
             cursor: 'pointer',
           }}
@@ -293,7 +292,7 @@ export function MobileStatusBar({ openTask, connectPane }: MobileStatusBarProps)
 
           <span style={{ position: 'relative', display: 'flex', alignItems: 'center', gap: 6, flexShrink: 0 }}>
             <HealthDot level={worstHealth} size={7} />
-            <span style={{ color: memTextColor }}>
+            <span style={{ color: memTextColor, fontFamily: 'var(--font-mono)', fontVariantNumeric: 'tabular-nums' }}>
               MEM {worstMemUsedPercent !== null ? `${Math.round(worstMemUsedPercent)}%` : '--%'}
             </span>
           </span>
@@ -307,7 +306,7 @@ export function MobileStatusBar({ openTask, connectPane }: MobileStatusBarProps)
 
 function MiniHealthRow({ label, value, warning }: { label: string; value: number; warning: boolean }) {
   return (
-    <div style={{ display: 'flex', alignItems: 'center', gap: 8, fontFamily: 'var(--mono)', fontSize: 'var(--font-xs)', color: 'var(--text-dim)' }}>
+    <div style={{ display: 'flex', alignItems: 'center', gap: 8, fontFamily: 'var(--font-mono)', fontSize: 'var(--font-xs)', color: 'var(--text-dim)' }}>
       <span style={{ minWidth: 30, color: 'var(--text)', fontWeight: 600 }}>{label}</span>
       <ResourceMeter value={value} warning={warning} width={64} height={4} />
       <span style={{ marginLeft: 'auto' }}>{Math.round(Math.max(0, Math.min(100, value)))}%</span>

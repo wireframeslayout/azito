@@ -60,11 +60,39 @@ import type { KeyedMutex } from '../../shared/keyedMutex';
 import { resolveKillOutcome } from '../tmux/killOutcome';
 import { labelRegisteredWindow } from '../tmux/labelRegisteredWindow';
 import { muxWindowTarget } from '../tmux/muxWindowTarget';
-import { MuxDriverUnavailableError } from '../tmux/MuxCapabilityError';
+import { MuxDriverUnavailableError, MuxWindowAmbiguousError } from '../tmux/MuxCapabilityError';
 import { windowDisplayName, windowKindOf, windowRefOf } from '../tmux/windowIdentity';
 import type { UnitTypeLoader } from '../sidekicks/UnitTypeLoader';
 import type { SidekickPackageLoader } from '../sidekicks/SidekickPackageLoader';
 import type { EventEmitter } from 'events';
+
+export type WindowIdentityUnresolvedReason = 'window_name_missing' | 'ambiguous_name';
+
+/** A tmux row whose name cannot be matched to exactly one live window: respawning could strand a live window, so it is refused. */
+export class WindowIdentityUnresolvedError extends Error {
+  constructor(readonly reason: WindowIdentityUnresolvedReason, windowName: string) {
+    super(reason === 'ambiguous_name'
+      ? `More than one tmux window is named ${windowName}, so the registered window cannot be identified. Rename or close the extra windows, check the window and register it again before respawning.`
+      : `Cannot find the registered tmux window ${windowName}; it may have been renamed or closed. If it is closed, recreate it using the terminal's recreate button; otherwise check and register the window again.`);
+    this.name = 'WindowIdentityUnresolvedError';
+  }
+}
+
+/**
+ * The live window a row names, right before respawn. tmux: the row's name must match exactly one window of its session
+ * (then addressed by its id, @N); anything else stops the respawn. misao: the window id (mux_ref) decides; gone = null.
+ */
+async function resolveLiveWindow(driver: IMuxClient, server: ServerConfig, storedRef: MuxRef, windowPart: string, allowMissing = false): Promise<MuxRef | null> {
+  let live: MuxRef | null;
+  try {
+    live = await driver.resolveWindowForRespawn(server, storedRef);
+  } catch (err) {
+    if (err instanceof MuxWindowAmbiguousError) throw new WindowIdentityUnresolvedError('ambiguous_name', windowPart);
+    throw err;
+  }
+  if (!live && storedRef.kind === 'tmux' && !allowMissing) throw new WindowIdentityUnresolvedError('window_name_missing', windowPart);
+  return live;
+}
 
 function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
@@ -224,7 +252,7 @@ export class WindowRespawnService {
     return this.muxDriverRegistry.resolve(server);
   }
 
-  async respawn(windowId: number, server: ServerConfig, opts?: { skipAgentLaunch?: boolean; gateAlreadyEnforced?: boolean; inLockGate?: (freshServer: ServerConfig) => void; mux?: MuxDriverKind; autoSwitch?: boolean; isBusy?: (windowId: number) => boolean }): Promise<{ tmuxTarget: string }> {
+  async respawn(windowId: number, server: ServerConfig, opts?: { skipAgentLaunch?: boolean; gateAlreadyEnforced?: boolean; inLockGate?: (freshServer: ServerConfig) => void; mux?: MuxDriverKind; autoSwitch?: boolean; allowMissing?: boolean; isBusy?: (windowId: number) => boolean }): Promise<{ tmuxTarget: string }> {
     const win = this.windowRepo.findById(windowId);
     if (!win) throw new Error('Window not found');
     // Before the window is destroyed or any row changes: what a host that starts a worker as a program (Windows, #371) cannot restore keeps the window as it is.
@@ -348,7 +376,7 @@ export class WindowRespawnService {
     if (this.startsWorkerAsProgram(server) && win.workerType && !opts?.skipAgentLaunch) {
       if (shouldSupervise(server.type, win.windowType, opts?.mux ?? windowKindOf(win))) throw new Error(`A worker started as a program cannot run under a supervisor (${server.name}).`);
       const single = launchPlan?.single;
-      const launch = this.sessionStrategyFactory.create(win.workerType).buildRespawnLaunch(single?.sessionId ?? null, win.workerModel, null, blockMcp, single?.conversation, single?.attachId ?? null);
+      const launch = this.buildWindowLaunch(win, win.workerType, single, blockMcp, true);
       // A window whose launch cannot be rebuilt (a custom command is not stored, so a generic worker has none) would be destroyed and
       // recreated as a bare shell with nothing started: refused before anything is touched.
       if (!launch) {
@@ -457,6 +485,10 @@ export class WindowRespawnService {
         server: respawnServer,
         ref,
       } = await withServerLock(this.serverIsolationLock, server, true, async (freshServer) => {
+        const lockedWindow = this.windowRepo.findById(windowId);
+        if (!lockedWindow || lockedWindow.tmuxTarget !== currentWin.tmuxTarget || JSON.stringify(lockedWindow.muxRef) !== JSON.stringify(currentWin.muxRef)) {
+          throw new Error('Window changed while waiting to respawn. Retry the operation.');
+        }
         // Issue #29 Step 3a review round, Important finding 2: re-verify the
         // untrusted-execution gate against `freshServer` — re-read once this
         // lock is actually acquired — BEFORE confirmOldWindowGone below kills
@@ -512,16 +544,13 @@ export class WindowRespawnService {
         }
 
         const driver = this.resolveDriver(freshServer);
-        const workspaces = await driver.listWorkspaces(freshServer);
+        const workspaces = await this.muxDriverRegistry.resolveKind(sourceKind, freshServer).listWorkspacesStrict(freshServer);
         // Only a workspace of the window's own mux counts (a same-named session of the other mux is another one).
         const workspace = workspaces.find((s) => s.name === sessionName && (s.kind ?? sourceKind) === sourceKind);
         const workspaceExists = workspace !== undefined;
-        const oldRef = windowRefOf(currentWin, sourceKind);
-        // misao: the window id (mux_ref) decides, in whichever workspace the window is now; the
-        // window part of tmux_target is an id there, not a name. tmux matches the name in its session.
-        const windowAlive = sourceKind === 'misao'
-          ? await driver.windowExists(freshServer, oldRef)
-          : workspaceExists && (workspace?.windows.some((w: { name: string }) => w.name === windowPart) ?? false);
+        const storedRef = windowRefOf(currentWin, sourceKind);
+        const oldRef = sourceKind === 'tmux' && !workspaceExists ? null : await resolveLiveWindow(driver, freshServer, storedRef, windowPart, currentWin.sleeping || opts?.allowMissing === true);
+        const windowAlive = oldRef !== null;
 
         if (windowKind !== sourceKind) {
           const availability = misaoStatusFor(this.muxDriverRegistry, freshServer);
@@ -538,7 +567,7 @@ export class WindowRespawnService {
         await confirmOldWindowGone(
           driver,
           freshServer,
-          windowAlive ? { kind: 'window', ref: oldRef } : null,
+          oldRef ? { kind: 'window', ref: oldRef } : null,
           isPrimary ? task!.id : null,
         );
 
@@ -549,8 +578,8 @@ export class WindowRespawnService {
           // typed into its shell below), so the host's Claude Code settings are prepared before the window exists. Only for a task's window:
           // a window that is not a task's (Add Window) is looked at by a person, who can accept the dialog.
           if (!opts?.skipAgentLaunch && task && this.launchesClaude(win)) await this.prepareClaudeLaunchFor(fs, task.id, unitId);
-          const freshWorkspaces = await createDriver.listWorkspaces(fs);
-          const freshWorkspaceExists = freshWorkspaces.some((s) => s.name === sessionName && (s.kind ?? sourceKind) === windowKind);
+          const freshWorkspaces = await this.muxDriverRegistry.resolveKind(windowKind, fs).listWorkspacesStrict(fs);
+          const freshWorkspaceExists = freshWorkspaces.some((s) => s.name === sessionName && (s.kind ?? windowKind) === windowKind);
           createdViaNewSession = !freshWorkspaceExists;
           try {
             if (!freshWorkspaceExists) {
@@ -1429,7 +1458,7 @@ export class WindowRespawnService {
     ref: MuxRef,
     baseTarget: string,
     paneLayout: PaneLayout,
-    win: { workerType: string | null; agentSessionId: string | null; workerModel: string | null; workingDirectory: string | null },
+    win: Window,
     supervision: SupervisionContext,
     paneCwds: Map<number, string>,
     // `paneEnv` (Issue #28 review Critical finding): the SAME env the
@@ -1467,6 +1496,7 @@ export class WindowRespawnService {
     }
 
     const panesToRestore = paneLayout.panes;
+    const recordedSessionPaneCount = win.agentSessionId ? panesToRestore.filter((pane) => pane.agentSessionId === win.agentSessionId).length : 0;
     for (const pane of panesToRestore) {
       const paneId = paneIdMap.get(pane.index);
       if (!paneId) continue;
@@ -1479,9 +1509,11 @@ export class WindowRespawnService {
       if (!skipAgentLaunch) {
         const workerType = pane.workerType || (pane.index === paneLayout.panes[0]?.index ? win.workerType : null);
         if (workerType) {
-          const strategy = this.sessionStrategyFactory.create(workerType);
           const plan = panePlans?.get(pane.index);
-          const launch = strategy.buildRespawnLaunch(plan?.sessionId ?? null, win.workerModel, null, blockMcp, plan?.conversation, plan?.attachId ?? null);
+          const hasRecordedLaunch = pane.agentSessionId
+            ? pane.agentSessionId === win.agentSessionId && recordedSessionPaneCount === 1
+            : pane.index === paneLayout.panes[0]?.index && recordedSessionPaneCount === 0;
+          const launch = this.buildWindowLaunch(win, workerType, plan, blockMcp, hasRecordedLaunch);
           if (launch) {
             const wrapped = this.wrapIfSupervised(launch, server, baseTarget, supervision);
             const sendCmd = plan?.configDirExplicit === true ? `CLAUDE_CONFIG_DIR="$AZITO_RESUME_CLAUDE_CONFIG_DIR_${pane.index}" ${wrapped}` : plan?.configDirExplicit === false ? this.dialectOf(server).withoutEnv('CLAUDE_CONFIG_DIR', wrapped, await driver.paneCommandByHandle(server, paneId).catch(() => null)) : wrapped;
@@ -1492,11 +1524,17 @@ export class WindowRespawnService {
     }
   }
 
+  private buildWindowLaunch(win: Window, workerType: string, plan: AgentLaunchPlan | null | undefined, blockMcp: boolean, firstPane: boolean) {
+    const record = firstPane ? win.workerLaunch : null;
+    const options = win.taskId === null ? { defaultPermissionFlags: false, recordedArgs: record?.workerType === workerType ? record.args : undefined } : undefined;
+    return this.sessionStrategyFactory.create(workerType).buildRespawnLaunch(plan?.sessionId ?? null, win.workerModel, null, blockMcp, plan?.conversation, plan?.attachId ?? null, options);
+  }
+
   private async setupSinglePane(
     server: ServerConfig,
     handle: PaneHandle,
     supervisorTarget: string,
-    win: { workerType: string | null; workerModel: string | null },
+    win: Window,
     supervision: SupervisionContext,
     singleCwd: string | null,
     blockMcp = true,
@@ -1510,8 +1548,7 @@ export class WindowRespawnService {
     }
 
     if (win.workerType) {
-      const strategy = this.sessionStrategyFactory.create(win.workerType);
-      const launch = strategy.buildRespawnLaunch(plan?.sessionId ?? null, win.workerModel, null, blockMcp, plan?.conversation, plan?.attachId ?? null);
+      const launch = this.buildWindowLaunch(win, win.workerType, plan, blockMcp, true);
       if (launch) {
         const wrapped = this.wrapIfSupervised(launch, server, supervisorTarget, supervision);
         const sendCmd = plan?.configDirExplicit === true ? `CLAUDE_CONFIG_DIR="$AZITO_RESUME_CLAUDE_CONFIG_DIR" ${wrapped}` : plan?.configDirExplicit === false ? this.dialectOf(server).withoutEnv('CLAUDE_CONFIG_DIR', wrapped, await driver.paneCommandByHandle(server, handle).catch(() => null)) : wrapped;

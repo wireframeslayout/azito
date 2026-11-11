@@ -271,6 +271,7 @@ export default function UnitFormView({ mode, unitId, onSaved, onCancel, backLabe
       )}
       <FormField label={agentDefsLoading ? t('runtime.additionalOptions') : (isGeneric ? t('runtime.command') : t('runtime.additionalOptions'))}>
         <FormInput
+          style={{ fontFamily: 'var(--font-mono)' }}
           value={workerExtraArgs}
           onChange={(e) => setWorkerExtraArgs(e.target.value)}
           placeholder={agentDefsLoading ? t('runtime.loadingAgentDefs') : (isGeneric ? t('runtime.commandPlaceholder') : t('runtime.extraArgsPlaceholder'))}

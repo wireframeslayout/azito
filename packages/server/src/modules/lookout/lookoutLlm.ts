@@ -4,6 +4,7 @@ import { tmpdir } from 'os';
 import { join } from 'path';
 import type { LookoutSettings } from './SqliteLookoutSettingsRepository';
 import { HeadlessCliError, runHeadlessCommand, type CliFailureReason } from '../llm/headlessExec';
+import type { CliSearchDetails } from '../llm/windowsHeadlessCommand';
 import { ClaudeExecClient } from '../llm/ClaudeExecClient';
 
 
@@ -12,7 +13,7 @@ export async function runLookoutLlm(settings: LookoutSettings, prompt: string): 
   return runCodexLookout(settings.model, prompt);
 }
 
-export async function probeLookoutLlm(settings: LookoutSettings): Promise<{ ok: boolean; cli: { found: boolean; version: string | null }; reason?: CliFailureReason; stage?: 'version' | 'login' | 'summary' }> {
+export async function probeLookoutLlm(settings: LookoutSettings): Promise<{ ok: boolean; cli: { found: boolean; version: string | null }; reason?: CliFailureReason; search?: CliSearchDetails; detail?: 'unsafe_argument'; stage?: 'version' | 'login' | 'summary' }> {
   const cwd = mkdtempSync(join(tmpdir(), 'azito-lookout-probe-'));
   let version: string | null = null;
   let stage: 'version' | 'login' | 'summary' = 'version';
@@ -31,7 +32,7 @@ export async function probeLookoutLlm(settings: LookoutSettings): Promise<{ ok: 
     return { ok: true, cli: { found: true, version } };
   } catch (error) {
     const reason = error instanceof HeadlessCliError ? error.reason : 'failed';
-    return { ok: false, cli: { found: reason !== 'cli_not_found', version }, reason, stage };
+    return { ok: false, cli: { found: reason !== 'cli_not_found', version }, reason, stage, ...(reason === 'cli_not_found' && error instanceof HeadlessCliError && error.search ? { search: error.search } : {}), ...(error instanceof HeadlessCliError && error.detail ? { detail: error.detail } : {}) };
   } finally {
     rmSync(cwd, { recursive: true, force: true });
   }

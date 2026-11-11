@@ -8,6 +8,8 @@ import { Icon } from '../ui/Icon';
 import type { StorageOnboardingInfo, StorageOption } from './types';
 import { getOnboardingText, getOptionText } from './onboardingText';
 
+const wrappedTextStyle = { display: 'block', whiteSpace: 'normal', overflowWrap: 'anywhere' } as const;
+
 interface Props { onboarding: StorageOnboardingInfo; onConfigured: () => void; onLater: () => void; }
 
 export function StorageOnboarding({ onboarding, onConfigured, onLater }: Props) {
@@ -34,7 +36,7 @@ export function StorageOnboarding({ onboarding, onConfigured, onLater }: Props) 
   };
 
   const text = getOnboardingText(onboarding, t);
-  return <div style={{ padding: 'var(--space-4)', display: 'grid', gap: 'var(--space-3)', overflowY: 'auto' }}>
+  return <div style={{ padding: 'var(--space-4)', display: 'grid', gridTemplateColumns: 'minmax(0, 1fr)', gap: 'var(--space-3)', minWidth: 0, overflowY: 'auto', overflowWrap: 'anywhere' }}>
     <div style={{ display: 'grid', gap: 'var(--space-1)' }}>
       <h2 style={{ fontSize: 'var(--font-md)' }}>{text.heading}</h2>
       <p style={{ color: 'var(--text-dim)', fontSize: 'var(--font-sm)' }}>{text.body}</p>
@@ -43,11 +45,11 @@ export function StorageOnboarding({ onboarding, onConfigured, onLater }: Props) 
       {onboarding.options.map((option) => {
         const { title, description } = getOptionText(onboarding, option, t);
         return <ListRow key={option.id} icon={<Icon name={option.kind === 'local-minio' ? 'servers' : option.kind === 'link' ? 'link' : 'storage'} />}
-          title={title} description={description} showChevron href={option.kind === 'link' ? option.href : undefined}
+          title={<span style={wrappedTextStyle}>{title}</span>} description={description ? <span style={wrappedTextStyle}>{description}</span> : undefined} showChevron href={option.kind === 'link' ? option.href : undefined}
           onClick={option.kind === 'link' ? undefined : () => void select(option)} disabled={saving} />;
       })}
     </ul>
-    {showMinio && <div style={{ display: 'grid', gap: 'var(--space-2)' }}>
+    {showMinio && <div style={{ display: 'grid', gridTemplateColumns: 'minmax(0, 1fr)', gap: 'var(--space-2)' }}>
       <p style={{ fontSize: 'var(--font-sm)' }}>{t('onboarding.minio.instructions')}</p>
       <CopyableCommand command="docker compose up -d" />
       <Button onClick={() => navigate(paths.settings('storage'))}>{t('openSettings')}</Button>

@@ -136,6 +136,10 @@ export class MisaoMuxClient implements IMuxClient {
     return workspaces.some((ws) => ws.windows.some((w) => w.windowId === ref.window));
   }
 
+  async resolveWindowForRespawn(server: ServerConfig, ref: MuxRef): Promise<MuxRef | null> {
+    return await this.windowExists(server, ref) ? ref : null;
+  }
+
   async focusWindow(_server: ServerConfig, _ref: MuxRef): Promise<ExecResult> {
     throw unsupported('focusWindow');
   }

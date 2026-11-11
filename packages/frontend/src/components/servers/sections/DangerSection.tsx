@@ -34,7 +34,7 @@ export default function DangerSection({ server, onDeleted }: DangerSectionProps)
   return (
     <div>
       <h3 style={{
-        fontFamily: 'var(--mono)',
+
         fontSize: 'var(--font-xs)',
         letterSpacing: '.12em',
         textTransform: 'uppercase',

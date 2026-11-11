@@ -1,5 +1,5 @@
 import { shellQuote } from '../../../shared/shellQuote';
-import type { LaunchOptions } from '../AgentProvider';
+import type { LaunchOptions } from '../launchOptions';
 import { extraArgValues, flag, value, type LaunchArg, type ProgramLaunch } from '../WorkerLaunch';
 
 /**
@@ -61,17 +61,18 @@ export const CODEX_NO_UPDATE_CHECK_TEXT = 'check_for_update_on_startup=false';
  * scoping. Both paths now go through this one function so the flag can't
  * drift out of sync again.
  */
-function buildCodexProgram(agentSessionId: string | null, { model, extraArgs, blockMcp = true }: LaunchOptions): ProgramLaunch {
+function buildCodexProgram(agentSessionId: string | null, { model, extraArgs, blockMcp = true, defaultPermissionFlags = true, recordedArgs }: LaunchOptions): ProgramLaunch {
   return {
     kind: 'program',
     file: 'codex',
     args: [
       ...(agentSessionId ? [flag('resume'), flag(agentSessionId)] : []),
-      flag('--dangerously-bypass-approvals-and-sandbox'),
+      ...(defaultPermissionFlags ? [flag('--dangerously-bypass-approvals-and-sandbox')] : []),
       flag('-c'),
       flag(CODEX_NO_UPDATE_CHECK_TEXT),
       ...(blockMcp ? CODEX_MCP_DISABLE_ARGS : []),
-      ...(model ? [flag('--model'), value(model)] : []),
+      ...(recordedArgs === undefined && model ? [flag('--model'), value(model)] : []),
+      ...(recordedArgs?.map(value) ?? []),
       ...extraArgValues(extraArgs),
     ],
   };

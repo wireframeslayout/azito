@@ -1,3 +1,4 @@
+import { publicWindow } from '../windows/Window';
 import { z } from 'zod';
 import { recordAttribution, type Attribution } from '../../shared/attribution';
 import type { FastifyPluginCallback } from 'fastify';
@@ -15,7 +16,7 @@ import type { IServerRepository } from '../servers/Server';
 import type { WorktreeServiceFactory } from '../git/WorktreeServiceFactory';
 import type { TransportFactory } from '../servers/transport/TransportFactory';
 import type { IWindowRepository } from '../windows/Window';
-import type { WindowRespawnService } from '../windows/WindowRespawnService';
+import { WindowIdentityUnresolvedError, type WindowRespawnService } from '../windows/WindowRespawnService';
 import type { TaskRestoreService } from './TaskRestoreService';
 import type { MuxDriverRegistry } from '../tmux/MuxDriverRegistry';
 import { TaskCleanupService } from './TaskCleanupService';
@@ -283,7 +284,7 @@ const tasksRoutes: FastifyPluginCallback<TasksRouteOptions> = (fastify, opts, do
       tasks = taskRepo.findAll();
     }
     const windowsByTask = windowRepo.findByTaskIds(tasks.map((t) => t.id));
-    return tasks.map((t) => toListItem(t, windowsByTask.get(t.id) ?? []));
+    return tasks.map((t) => toListItem(t, (windowsByTask.get(t.id) ?? []).map(publicWindow)));
   });
 
   // ── POST /api/tasks ──
@@ -430,7 +431,7 @@ const tasksRoutes: FastifyPluginCallback<TasksRouteOptions> = (fastify, opts, do
         }
       }
 
-      return { ...t, paneAlive, windows, unitType: unitTypeInfo };
+      return { ...t, paneAlive, windows: windows.map(publicWindow), unitType: unitTypeInfo };
     },
   );
 
@@ -1177,12 +1178,13 @@ const tasksRoutes: FastifyPluginCallback<TasksRouteOptions> = (fastify, opts, do
         // execute|follow-up and /api/windows/:id/respawn.
         let result: { tmuxTarget: string };
         try {
-          result = await respawnService.respawn(primaryWindow.id, srv);
+          result = await respawnService.respawn(primaryWindow.id, srv, { allowMissing: true });
         } catch (err) {
           if (replyToExecutionGateError(err, reply)) return;
           if (err instanceof DuplicateAgentSessionError) {
             return reply.status(409).send({ error: 'session_already_running', windowId: err.windowId, sessionId: err.sessionId, message: err.message });
           }
+          if (err instanceof WindowIdentityUnresolvedError) return reply.status(409).send({ error: 'window_identity_unresolved', reason: err.reason, message: err.message });
           throw err;
         }
         // respawn() has already pointed task.tmuxWindow at the new window; report that identity

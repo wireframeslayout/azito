@@ -156,7 +156,7 @@ export default function AddWindowModal({
           )}
           {awAgent === 'custom' && (
             <FormField label={t('addWindow.customCommand')}>
-              <FormInput value={awNewCommand} onChange={(e) => setAwNewCommand(e.target.value)} placeholder={t('addWindow.customCommandPlaceholder')} />
+              <FormInput style={{ fontFamily: 'var(--font-mono)' }} value={awNewCommand} onChange={(e) => setAwNewCommand(e.target.value)} placeholder={t('addWindow.customCommandPlaceholder')} />
             </FormField>
           )}
           <FormField label={t('addWindow.label')} hint={t('addWindow.labelHint')}>

@@ -5085,6 +5085,55 @@ describe('ExecuteTaskUseCase.followUp — primary window wake (Issue #274)', () 
     expect(waker.wake).toHaveBeenCalledWith(70, 'local-server', { skipAgentLaunch: true, gateAlreadyEnforced: true, inLockGate: expect.any(Function) });
   }, 10_000);
 
+  it('wakes a dead tmux primary window on follow-up', async () => {
+    const unit = makeUnit({ id: 84, workerType: 'claude', workerModel: 'opus' });
+    const task = makeTask({ id: 9, serverName: 'local-server', unitId: 84, tmuxWindow: 'task-9', agentSessionId: 'sess-lock' });
+    const { useCase, windowRepo, tmux } = buildUseCase({
+      task,
+      project: makeProject({ defaultUnitId: null }),
+      units: [unit],
+    });
+
+    const sleepingWindow = {
+      id: 70, ownerType: 'task' as const, isPrimary: true, taskId: 9,
+      serverName: 'local-server', tmuxTarget: 'azito:task-9',
+      muxRef: { kind: 'tmux' as const, workspace: 'azito', window: 'task-9' },
+      label: 'task-9', projectId: null, windowType: 'agent' as const,
+      workerType: 'claude', workerModel: 'opus', agentSessionId: 'sess-lock',
+      launchCommand: null, workingDirectory: null, paneLayout: null,
+      sleeping: false, createdAt: '2026-01-01T00:00:00Z',
+    };
+    (windowRepo.findByTask as ReturnType<typeof vi.fn>).mockReturnValue([sleepingWindow]);
+    (windowRepo.findById as ReturnType<typeof vi.fn>).mockReturnValue({ ...sleepingWindow, sleeping: false });
+    (tmux.windowExists as ReturnType<typeof vi.fn>).mockResolvedValue(false);
+    (tmux.listWorkspaces as ReturnType<typeof vi.fn>).mockResolvedValue([{
+      name: 'azito', windowCount: 1, attached: true, created: 0,
+      windows: [{ name: 'task-9', index: 0, active: true, panes: [], activity: 0 }],
+    }]);
+
+    const waker = (useCase as any).primaryWindowWaker;
+    // Finding 5: mock wake acquires the same per-task lock that followUp's
+    // lock phase uses — if wake were ever moved inside runExclusiveForTask,
+    // this would deadlock and the 5s timeout would fire.
+    const { runExclusiveForTask } = await import('./WindowRotation.js');
+    (waker.wake as ReturnType<typeof vi.fn>).mockImplementation(async () => {
+      await runExclusiveForTask(9, async () => {});
+      return { tmuxTarget: 'azito:task-9' };
+    });
+    (waker.findRunningSession as ReturnType<typeof vi.fn>).mockResolvedValue(null);
+
+    // The test itself is the deadlock guard: if wake() were called inside
+    // runExclusiveForTask, the lock would never release and this would hang.
+    const result = Promise.race([
+      useCase.followUp(84, 9, 'continue'),
+      new Promise((_, reject) => setTimeout(() => reject(new Error('deadlock: followUp did not complete within 5s')), 5_000)),
+    ]);
+
+    await expect(result).resolves.toBeUndefined();
+    expect(windowRepo.update).toHaveBeenCalledWith(70, { sleeping: true });
+    expect(waker.wake).toHaveBeenCalledWith(70, 'local-server', { skipAgentLaunch: true, gateAlreadyEnforced: true, inLockGate: expect.any(Function) });
+  }, 10_000);
+
   it('sends follow-up to running session even when no primary window record exists (Finding 4)', async () => {
     const unit = makeUnit({ id: 85, workerType: 'claude', workerModel: 'opus' });
     const task = makeTask({ id: 10, serverName: 'local-server', unitId: 85, tmuxWindow: 'task-10', agentSessionId: 'sess-orphan' });

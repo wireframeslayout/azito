@@ -50,6 +50,8 @@ export interface IMuxClient {
   renameWindowByRef(server: ServerConfig, ref: MuxRef, name: string): Promise<ExecResult>;
   renameWorkspace(server: ServerConfig, from: string, to: string, opts?: { kind?: MuxDriverKind }): Promise<ExecResult>;
   windowExists(server: ServerConfig, ref: MuxRef): Promise<boolean>;
+  /** The live window a stored ref names, for respawn only (tmux: `workspace:@N`, never persisted; misao: the ref). null = gone; tmux throws `MuxWindowAmbiguousError` for a duplicated name. */
+  resolveWindowForRespawn(server: ServerConfig, ref: MuxRef): Promise<MuxRef | null>;
   focusWindow(server: ServerConfig, ref: MuxRef): Promise<ExecResult>;
   resolveRef(server: ServerConfig, target: string, opts?: { kind?: MuxDriverKind }): Promise<MuxRef | null>;
   /** Stamps every pane of the window with the hub window/task identity. Only valid when `supportsPaneLabels`. */

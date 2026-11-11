@@ -122,6 +122,7 @@ export class RoutingMuxClient implements IMuxClient {
   async renameWindowByRef(server: ServerConfig, ref: MuxRef, name: string): Promise<ExecResult> { return this.forRef(server, ref).renameWindowByRef(server, ref, name); }
   async renameWorkspace(server: ServerConfig, from: string, to: string, opts?: { kind?: MuxDriverKind }): Promise<ExecResult> { return this.forKind(server, opts?.kind).renameWorkspace(server, from, to); }
   async windowExists(server: ServerConfig, ref: MuxRef): Promise<boolean> { return this.forRef(server, ref).windowExists(server, ref); }
+  async resolveWindowForRespawn(server: ServerConfig, ref: MuxRef): Promise<MuxRef | null> { return this.forRef(server, ref).resolveWindowForRespawn(server, ref); }
   async focusWindow(server: ServerConfig, ref: MuxRef): Promise<ExecResult> { return this.forRef(server, ref).focusWindow(server, ref); }
   async resolveRef(server: ServerConfig, target: string, opts?: { kind?: MuxDriverKind }): Promise<MuxRef | null> { return this.forKind(server, opts?.kind).resolveRef(server, target); }
   async labelWindowPanes(server: ServerConfig, ref: MuxRef, labels: PaneWindowLabels): Promise<void> {

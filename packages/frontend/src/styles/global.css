@@ -277,13 +277,21 @@ html {
   touch-action: manipulation;
 }
 
+button, input, select, textarea {
+  font-family: inherit;
+}
+
+pre, code, kbd, samp {
+  font-family: var(--font-mono);
+}
+
 /* Prevent iOS auto-zoom on form focus (requires font-size >= 16px) */
 input, select, textarea {
   font-size: 16px;
 }
 
 body {
-  font-family: var(--font-ui);
+  font-family: var(--font-prose);
   /* 半透明化される --bg ではなく常時不透明の土台色（透過面の最終的な下地になる） */
   background: var(--bg-solid);
   color: var(--text);

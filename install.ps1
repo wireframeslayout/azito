@@ -235,17 +235,36 @@ function Get-TailscaleDns([string]$Tailscale) {
     $info.CreateNoWindow = $true
     $info.RedirectStandardOutput = $true
     $info.RedirectStandardError = $true
-    $process = [System.Diagnostics.Process]::Start($info)
-    $stdout = $process.StandardOutput.ReadToEndAsync()
-    $stderr = $process.StandardError.ReadToEndAsync()
-    if (-not $process.WaitForExit(15000)) {
-        $process.Kill()
+    $process = $null
+    try {
+        try { $process = [System.Diagnostics.Process]::Start($info) } catch { throw 'could not start Tailscale' }
+        $stdout = $process.StandardOutput.ReadToEndAsync()
+        $stderr = $process.StandardError.ReadToEndAsync()
+        if (-not $process.WaitForExit(15000)) {
+            $process.Kill()
+            $process.WaitForExit()
+            throw 'Tailscale status timed out'
+        }
+        if ($process.ExitCode -ne 0) { throw 'Tailscale status failed' }
+        try { $status = $stdout.Result | ConvertFrom-Json -ErrorAction Stop } catch { throw 'Tailscale status returned invalid JSON' }
+        if ($null -eq $status.Self -or $status.Self.DNSName -isnot [string] -or -not $status.Self.DNSName.TrimEnd('.')) {
+            throw 'Tailscale status has no DNS name'
+        }
+        return $status.Self.DNSName.TrimEnd('.')
+    } catch {
+        $reason = switch ($_.Exception.Message) {
+            'could not start Tailscale' { 'could not start Tailscale' }
+            'Tailscale status timed out' { 'Tailscale status timed out' }
+            'Tailscale status failed' { 'Tailscale status failed' }
+            'Tailscale status returned invalid JSON' { 'Tailscale status returned invalid JSON' }
+            'Tailscale status has no DNS name' { 'Tailscale status has no DNS name' }
+            default { 'Tailscale status could not be read' }
+        }
+        Write-Warning $reason
         return $null
+    } finally {
+        if ($null -ne $process) { $process.Dispose() }
     }
-    if ($process.ExitCode -ne 0) { return $null }
-    $self = ($stdout.Result | ConvertFrom-Json).Self
-    if ($null -eq $self -or -not $self.DNSName) { return $null }
-    return ([string]$self.DNSName).TrimEnd('.')
 }
 
 # Tells running programs (Explorer, so terminals opened from the Start menu) that the user environment changed.
@@ -476,7 +495,7 @@ function Invoke-Install {
 
         $dns = $null
         if ($tailscale) {
-            try { $dns = Get-TailscaleDns $tailscale } catch { Write-Warning "Could not read the Tailscale status: $($_.Exception.Message)" }
+            try { $dns = Get-TailscaleDns $tailscale } catch { Write-Warning "Could not read the Tailscale status. Remote access may need manual configuration." }
         }
 
         # data\ and hub\.env hold secrets: the hub's own code creates them, so the owner-only access rules come from the
