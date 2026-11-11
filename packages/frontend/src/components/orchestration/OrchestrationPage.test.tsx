@@ -1,9 +1,10 @@
+import { useImperativeHandle, type Ref } from 'react';
 import { fireEvent, render, screen } from '@testing-library/react';
 import { expect, it, vi } from 'vitest';
 import OrchestrationPage from './OrchestrationPage';
 import { WorkspaceTargetsProvider, useWorkspaceTargets } from '../../hooks/useWorkspaceTargets';
 
-const state = vi.hoisted(() => ({ mobile: true, open: vi.fn(), empty: false }));
+const state = vi.hoisted(() => ({ mobile: true, open: vi.fn(), add: vi.fn(), empty: false }));
 vi.mock('../../hooks/useMaximizedWindow', () => ({ useOptionalMaximizedWindow: () => ({ open: state.open }) }));
 const target = { id: 1, serverName: 'local', tmuxTarget: 'session:1', projectId: 2, parentWindowId: null, links: { total: 0 } };
 vi.mock('react-i18next', async (importOriginal) => ({ ...await importOriginal<typeof import('react-i18next')>(), useTranslation: () => ({ t: (key: string) => key }) }));
@@ -17,7 +18,7 @@ vi.mock('../../hooks/useToast', () => ({ useToast: () => ({ showToast: vi.fn() }
 vi.mock('./OrchestrationCreate', () => ({ OrchestrationCreate: ({ showButton }: { showButton: boolean }) => showButton ? <button>orchestration.create</button> : null }));
 vi.mock('./OrchestrationSidebar', () => ({ OrchestrationSidebar: () => null }));
 vi.mock('../TerminalContainer', () => ({ TerminalContainer: () => null }));
-vi.mock('./LinkedPanel', () => ({ LinkedPanel: ({ onExpand }: { onExpand: (window: typeof target) => void }) => <button onClick={() => onExpand(target)}>Expand</button> }));
+vi.mock('./LinkedPanel', () => ({ LinkedPanel: ({ onExpand, addRef }: { onExpand: (window: typeof target) => void; addRef?: Ref<{ openAdd: () => void }> }) => { useImperativeHandle(addRef, () => ({ openAdd: state.add })); return <button onClick={() => onExpand(target)}>Expand</button>; } }));
 vi.mock('../ui/BottomSheet', () => ({ BottomSheet: ({ open, children }: { open: boolean; children: React.ReactNode }) => open ? <div>{children}</div> : null }));
 
 function Controls() {
@@ -48,4 +49,12 @@ it('offers a single create button on desktop when there are no orchestrators', (
   render(<WorkspaceTargetsProvider><OrchestrationPage /></WorkspaceTargetsProvider>);
   expect(screen.getAllByRole('button', { name: 'orchestration.create' })).toHaveLength(1);
   state.mobile = true; state.empty = false;
+});
+
+it('opens add from the desktop panel header', () => {
+  state.mobile = false; state.add.mockClear();
+  render(<WorkspaceTargetsProvider><OrchestrationPage /></WorkspaceTargetsProvider>);
+  fireEvent.click(screen.getByRole('button', { name: 'linkedPanel.add' }));
+  expect(state.add).toHaveBeenCalledOnce();
+  state.mobile = true;
 });
