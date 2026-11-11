@@ -1,9 +1,11 @@
 import { useRef, forwardRef, useImperativeHandle } from 'react';
+import { Icon, type IconName } from '../ui/Icon';
 import { HealthDot } from './HealthDot';
 import type { DotLevel } from './HealthDot';
 
 interface StatusBarItemProps {
   label: string;
+  icon?: IconName;
   dot?: DotLevel;
   mono?: boolean;
   bordered?: boolean;
@@ -19,7 +21,7 @@ export interface StatusBarItemRef {
 }
 
 export const StatusBarItem = forwardRef<StatusBarItemRef, StatusBarItemProps>(
-  function StatusBarItem({ label, dot, active, onClick, badge, badgeLabel, mono = false, bordered = false, popup = 'true' }, ref) {
+  function StatusBarItem({ label, icon, dot, active, onClick, badge, badgeLabel, mono = false, bordered = false, popup = 'true' }, ref) {
     const btnRef = useRef<HTMLButtonElement>(null);
 
     useImperativeHandle(ref, () => ({
@@ -50,6 +52,7 @@ export const StatusBarItem = forwardRef<StatusBarItemRef, StatusBarItemProps>(
         }}
       >
         {dot && <HealthDot level={dot} />}
+        {icon && <Icon name={icon} size={14} />}
         {label}
         {badge != null && badge > 0 && <span aria-hidden="true" style={{ borderRadius: 'var(--radius-sm)', padding: '0 var(--space-1)', color: 'var(--bg-solid)', background: 'var(--warning)' }}>{badge}</span>}
       </button>

@@ -28,7 +28,7 @@ export function MaximizedWindow() {
 
 function MaximizedWindowContent() {
   const { t } = useTranslation('workspace');
-  const { selectedWindowId, workspace, extraWindows, rememberWindow, forgetWindow, select, close, isMobile } = useMaximizedWindow();
+  const { selectedWindowId, workspace, extraWindows, rememberWindow, forgetWindow, select, close, isMobile, fallbackFocusTo } = useMaximizedWindow();
   const { allTasks, allProjects, refresh } = useWorkspaceCatalog();
   const { onOpenTask, onOpenInTerminal } = useWorkspaceTargets();
   const { activityStatus, snapshotStatus, snapshotUpdatedAt, entries, findFinished } = useAgentActivity();
@@ -52,7 +52,7 @@ function MaximizedWindowContent() {
   const lastTreeFocus = useRef<HTMLElement | null>(null);
   const terminalRef = useRef<HTMLDivElement>(null);
   const open = selectedWindowId !== null && !isMobile;
-  const fallbackFocus = Array.from(document.querySelectorAll<HTMLElement>('[data-tab-id]')).find(element => element.dataset.tabId === workspace?.activeTabId) ?? null;
+  const fallbackFocus = fallbackFocusTo?.isConnected ? fallbackFocusTo : Array.from(document.querySelectorAll<HTMLElement>('[data-tab-id]')).find(element => element.dataset.tabId === workspace?.activeTabId) ?? null;
   const tabs = workspace?.tabs ?? [];
   const tabTaskIds = new Set(tabs.flatMap(tab => tab.kind === 'task' ? [tab.taskId] : []));
   const tabWindowIds = new Set(tabs.flatMap(tab => tab.kind === 'window' ? [tab.windowId] : []));
@@ -169,7 +169,11 @@ function MaximizedWindowContent() {
         {!window ? <p role="status">{t('maximize.missing')}</p> : window.sleeping ? <div><p>{t('maximize.sleeping')}</p><Button loading={waking} disabled={!workspace} onClick={() => { if (!workspace) return; setWaking(true); void workspace.wakeWindow(window).then(() => Promise.all([refresh(), orchestration.refresh()])).finally(() => setWaking(false)); }}>{t('maximize.wake')}</Button></div> : <TerminalContainer key={window.id} viewMode={viewMode} onViewModeChange={mode => setViewMode(mode, selectedWindowId)} registeredWindow={{ id: window.id, taskId: window.taskId }} serverName={window.serverName} target={window.tmuxTarget} terminalRef={{ kind: 'windowId', serverName: window.serverName, windowId: window.id, pane: 1 }} projectId={window.projectId ?? task?.projectId} taskId={task?.id} allTasks={allTasks} />}
       </div>
     </div>
-    <footer style={{ padding: 'var(--space-2)', color: 'var(--text-dim)', fontSize: 'var(--font-sm)' }}>{t(inputFocused ? 'maximize.inputHint' : 'maximize.hint')} {bindings['maximize.open'] && ` · ${formatKeySpec(bindings['maximize.open'])}: ${t('maximize.close')}`}</footer>
+    <footer className="maximize-footer key-hints">
+      {inputFocused && <span><kbd className="key-chip">Esc</kbd> {t('maximize.inputHint')}</span>}
+      <span><kbd className="key-chip">Alt + ↑ / ↓</kbd> {t('maximize.hint')}</span>
+      {bindings['maximize.open'] && <span><kbd className="key-chip">{formatKeySpec(bindings['maximize.open'])}</kbd> {t('maximize.close')}</span>}
+    </footer>
     <style>{`.maximize-tree { width: var(--orchestration-sidebar-width); flex-shrink: 0; } .maximize-tree-toggle { display: none; } @media (max-width: 1100px) { .maximize-tree-toggle { display: block; position: absolute; top: var(--space-2); right: var(--space-2); z-index: 1; } .maximize-tree { display: none; position: absolute; z-index: 2; top: calc(var(--space-6) * 2); right: var(--space-2); width: min(var(--orchestration-sidebar-width), 90%); max-height: 70%; border: 1px solid var(--border); } .maximize-tree.is-open { display: block; } } .maximize-tree-row:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }`}</style>
   </Overlay>;
 }

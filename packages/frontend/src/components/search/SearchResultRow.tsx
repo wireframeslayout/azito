@@ -23,9 +23,9 @@ export function SearchResultRow({ item, selected, status, activityStatus, onSele
     {blocked ? <BlockedDot /> : item.active ? <BrailleSpinner /> : null}
     <span className="global-search-label">
       <strong>{item.title}</strong>
-      <small>{item.projectName}{item.window ? `${item.projectName ? ' · ' : ''}${item.window.serverName}` : taskStatus ? ` · #${item.id} · ${t(`common:status.${statusLabelKey(taskStatus)}`)}` : ''}{status ? ` · ${t(`navigation:globalSearch.${status}`)}` : ''}</small>
+      <small>{item.kind === 'project' ? '' : item.projectName}{item.window ? `${item.projectName ? ' · ' : ''}${item.window.serverName}` : taskStatus ? ` · #${item.id} · ${t(`common:status.${statusLabelKey(taskStatus)}`)}` : ''}{status ? ` · ${t(`navigation:globalSearch.${status}`)}` : ''}</small>
     </span>
     {item.window && <WindowIdChip id={item.id} />}
-    {selected && <kbd className="global-search-enter" aria-hidden="true">Enter</kbd>}
+    {selected && <kbd className="key-chip" aria-hidden="true">Enter</kbd>}
   </div>;
 }

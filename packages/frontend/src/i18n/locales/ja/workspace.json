@@ -1,5 +1,5 @@
 {
-  "maximize": {"expanded": "拡大表示中", "childOrchestrator": "子", "linkedTitle": "{{name}}の連携中", "linkedEmpty": "連携中の窓はありません", "status": {"idle": "待機中", "unknown": "状態未取得", "working": "稼働中", "blocked": "要対応"}, "action": "拡大して開く", "missing": "窓が見つかりません", "openTask": "タスクを開く", "openTab": "タブで開く", "close": "閉じる", "openTabs": "開いているタブ", "linksError": "窓の階層を取得できませんでした。", "retry": "再試行", "empty": "開いている窓はありません", "sleeping": "この窓はスリープ中です。", "wake": "起動する", "inputHint": "Esc は入力先へ送信 · Alt + ↑ / ↓: 窓を切り替え", "hint": "Alt + ↑ / ↓: 窓を切り替え", "collapse": "折りたたむ", "expand": "展開する"},
+  "maximize": {"expanded": "拡大表示中", "childOrchestrator": "子", "linkedTitle": "{{name}}の連携中", "linkedEmpty": "連携中の窓はありません", "status": {"idle": "待機中", "unknown": "状態未取得", "working": "稼働中", "blocked": "要対応", "finished": "完了"}, "action": "拡大して開く", "missing": "窓が見つかりません", "openTask": "タスクを開く", "openTab": "タブで開く", "close": "閉じる", "openTabs": "開いているタブ", "linksError": "窓の階層を取得できませんでした。", "retry": "再試行", "empty": "開いている窓はありません", "sleeping": "この窓はスリープ中です。", "wake": "起動する", "inputHint": "入力先へ送信", "hint": "窓を切り替え", "collapse": "折りたたむ", "expand": "展開する"},
   "orchestration": {
     "links": "連携 {{count}}",
     "showSidebar": "オーケストレーション一覧を展開",
@@ -27,9 +27,11 @@
     "loadError": "オーケストレーターを取得できませんでした",
     "retry": "再試行",
     "empty": "オーケストレーターはまだありません",
+    "connectedCompact": "連携 {{count}}",
     "connected": "連携中 {{count}}",
     "connectedUnknown": "連携中",
     "attention": "要対応 {{count}}",
+    "totalCount": "オーケストレーション {{count}} 件",
     "railAttention": "オーケストレーション、要対応 {{count}} 件",
     "active": "稼働中",
     "returnToProject": "プロジェクトの窓に戻す（元: {{name}}）",
@@ -87,10 +89,10 @@
   },
   "activityPill": {
     "ariaLabel": "稼働ステータス",
+    "statusBarUnknown": "稼働状況は不明",
     "statusBarWorking": "{{count}} 稼働中",
     "workingSection": "稼働中 {{count}}",
     "finishedSection": "最近完了 {{count}}",
-    "empty": "稼働中のエージェントはありません",
     "viewHealthDetails": "詳細を表示 ▸"
   },
   "home": {
@@ -253,6 +255,7 @@
     "pinToastUnpinned": "ピン止めを解除しました"
   },
   "mobileNav": {
+    "attention": "要対応 {{count}}",
     "sectionGlobal": "AZITO 全体",
     "switchLabel": "切替",
     "projectSwitch": "プロジェクトを切替",
@@ -426,6 +429,7 @@
     "sleeping": "スリープ中",
     "wake": "起動",
     "acknowledge": "完了を確認",
+    "previewTitle": "{{title}} の画面",
     "snapshotError": "写しを取得できませんでした",
     "back": "連携一覧に戻る",
     "previous": "前へ",

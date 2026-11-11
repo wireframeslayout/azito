@@ -1,5 +1,5 @@
-import { fireEvent, render, screen, waitFor } from '@testing-library/react';
-import { expect, it, vi } from 'vitest';
+import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { afterEach, expect, it, vi } from 'vitest';
 import { useState } from 'react';
 import { HotkeyProvider } from '../../hooks/useHotkeys';
 import { resolveActivityTitle } from '../../lib/windowDisplay';
@@ -7,6 +7,8 @@ import { buildLookoutSections } from '../../lib/lookoutSummary';
 import { LookoutDrawer } from './LookoutDrawer';
 import { Overlay } from '../ui/Overlay';
 import type { LookoutItem } from '../../lib/lookoutSummary';
+
+afterEach(() => vi.useRealTimers());
 
 const mocks = vi.hoisted(() => ({ openTask: vi.fn(), openTerminal: vi.fn(), retry: vi.fn() }));
 const row = { key: 'a', title: 'Blocked task', status: 'blocked' as const, task: { id: 5 }, hasBlocked: true, activeWindows: 1, totalWindows: 1, windowNames: [] } as unknown as LookoutItem;
@@ -67,7 +69,11 @@ it('shows empty states and renders supplied summaries independently of counts', 
 it('does not show an idle message or active count while activity is unavailable', () => {
   const sections = { attention: [], active: [], finished: [], counts: { attention: 0, active: 0, finished: 0, failed: 0 } };
   render(<HotkeyProvider><LookoutDrawer open onClose={() => {}} sections={sections} snapshotStatus="error" onRetry={() => {}} onOpenItem={() => {}} /></HotkeyProvider>);
-  expect(screen.getAllByText('—')).toHaveLength(2);
+  expect(screen.getAllByText('—')).toHaveLength(7);
+  expect(screen.getByRole('heading', { name: /attention.*—/i })).toBeInTheDocument();
+  expect(screen.getByRole('heading', { name: /completed.*—/i })).toBeInTheDocument();
+  expect(screen.queryByText(/nothing needs your attention/i)).not.toBeInTheDocument();
+  expect(screen.queryByText(/no items to display/i)).not.toBeInTheDocument();
   expect(screen.getByRole('heading', { name: /in progress.*—/i })).toBeInTheDocument();
   expect(screen.queryByText(/nothing is currently running/i)).not.toBeInTheDocument();
 });
@@ -94,3 +100,21 @@ it('makes the drawer inert while a modal is open and restores it afterwards', as
   await waitFor(() => expect(drawer).not.toHaveAttribute('inert'));
 });
 
+
+it('updates the relative time only while open and disables refresh during loading', () => {
+  vi.useFakeTimers();
+  vi.setSystemTime(new Date('2026-01-01T00:00:00Z'));
+  const sections = { attention: [], active: [], finished: [], counts: { attention: 0, active: 0, finished: 0, failed: 0 } };
+  const props = { onClose: () => {}, sections, onRetry: mocks.retry, onOpenItem: () => {}, snapshotUpdatedAt: Date.now() - 30_000 };
+  const { rerender, unmount } = render(<HotkeyProvider><LookoutDrawer {...props} open snapshotStatus="loading" /></HotkeyProvider>);
+  expect(screen.getByRole('button', { name: /refresh/i })).toBeDisabled();
+  expect(screen.getByText(/^Updated now$/i)).toBeInTheDocument();
+  act(() => vi.advanceTimersByTime(29_999));
+  expect(screen.getByText(/^Updated now$/i)).toBeInTheDocument();
+  act(() => vi.advanceTimersByTime(1));
+  rerender(<HotkeyProvider><LookoutDrawer {...props} open snapshotStatus="ready" /></HotkeyProvider>);
+  expect(screen.getByText(/1m ago/i)).toBeInTheDocument();
+  rerender(<HotkeyProvider><LookoutDrawer {...props} open={false} snapshotStatus="ready" /></HotkeyProvider>);
+  expect(vi.getTimerCount()).toBe(0);
+  unmount();
+});

@@ -37,8 +37,23 @@ describe('shared file navigation', () => {
   });
   it('keeps the existing breadcrumb copy control', () => {
     render(<PathBreadcrumb path="/home/project" />);
-    expect(screen.getByText('/home/project')).toBeTruthy();
+    expect(screen.getByText('project').closest('bdi')?.textContent).toBe('/›home›project');
+    expect(screen.getByText('/home/project').className).toBe('sr-only');
     expect(screen.getByTitle('rootSwitcher.copyPath')).toBeTruthy();
+  });
+  it('renders Windows drive and separators', () => {
+    render(<PathBreadcrumb path={'C:\\Users\\project'} separator={'\\'} />);
+    expect(screen.getByText('project').closest('bdi')?.textContent).toBe('C:›Users›project');
+    expect(screen.getByText('C:\\Users\\project').className).toBe('sr-only');
+  });
+  it('copies the unchanged Windows path', async () => {
+    const writeText = vi.fn().mockResolvedValue(undefined);
+    vi.stubGlobal('navigator', { ...navigator, clipboard: { writeText } });
+    const path = 'C:\\Users\\project';
+    render(<PathBreadcrumb path={path} separator={'\\'} />);
+    fireEvent.click(screen.getByRole('button', { name: 'rootSwitcher.copyPath' }));
+    expect(writeText).toHaveBeenCalledWith(path);
+    vi.unstubAllGlobals();
   });
   it('navigates relative storage breadcrumbs', () => {
     const navigate = vi.fn();

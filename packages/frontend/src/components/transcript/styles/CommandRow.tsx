@@ -1,7 +1,5 @@
 import type { TranscriptBlock, TranscriptEntry } from '../transcriptTypes';
 
-const MONO_FONT = "'JetBrainsMono Nerd Font', 'JetBrains Mono', monospace";
-
 function isTextBlock(block: TranscriptBlock): block is Extract<TranscriptBlock, { kind: 'text' }> {
   return block.kind === 'text';
 }
@@ -25,7 +23,7 @@ export function CommandRow({ entry }: { entry: TranscriptEntry }) {
             borderRadius: 'var(--radius-sm)',
             background: 'var(--bg-hover)',
             color: 'var(--text-dim)',
-            fontFamily: MONO_FONT,
+            fontFamily: 'var(--font-mono)',
             fontSize: 'var(--font-xs)',
           }}
         >
@@ -38,6 +36,7 @@ export function CommandRow({ entry }: { entry: TranscriptEntry }) {
             paddingLeft: entry.commandName ? 4 : 0,
             fontSize: 'var(--font-xs)',
             color: 'var(--text-dim)',
+            fontFamily: 'var(--font-mono)',
             whiteSpace: 'pre-wrap',
             wordBreak: 'break-word',
           }}

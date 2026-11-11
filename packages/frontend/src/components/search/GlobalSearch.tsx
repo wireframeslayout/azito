@@ -8,6 +8,7 @@ import { useWorkspaceCatalog } from '../../hooks/useWorkspaceCatalog';
 import { useCrossProjectNavigation } from '../../hooks/useCrossProjectNavigation';
 import { useRecentTasks } from '../../hooks/useRecentTasks';
 import { useProjectRail } from '../../hooks/useProjectRail';
+import { useOptionalMaximizedWindow } from '../../hooks/useMaximizedWindow';
 import { useIsMobile } from '../../hooks/useIsMobile';
 import { useVirtualKeyboard } from '../../hooks/useVirtualKeyboard';
 import { useActiveWindowRows } from '../../hooks/useActiveWindowRows';
@@ -40,9 +41,16 @@ const defaultCategories: Category[] = ['all', 'window', 'orchestrator', 'task', 
 
 export function GlobalSearchProvider({ children }: { children: ReactNode }) {
   const [open, setOpen] = useState(false);
+  const opener = useRef<HTMLElement | null>(null);
   const [fallbackFocusTo, setFallbackFocusTo] = useState<HTMLElement | null>(null);
-  useHotkey({ action: 'search.open', scope: 'global', when: 'not-editable', handler: () => { setFallbackFocusTo(null); setOpen(true); } });
-  return <Context.Provider value={fallback => { setFallbackFocusTo(fallback ?? null); setOpen(true); }}>{children}{open && <GlobalSearchPalette fallbackFocusTo={fallbackFocusTo} onClose={() => setOpen(false)} />}</Context.Provider>;
+  const openPalette = (fallback?: HTMLElement | null) => {
+    const active = document.activeElement;
+    opener.current = active instanceof HTMLElement && active !== document.body ? active : null;
+    setFallbackFocusTo(fallback ?? null);
+    setOpen(true);
+  };
+  useHotkey({ action: 'search.open', scope: 'global', when: 'not-editable', handler: () => openPalette() });
+  return <Context.Provider value={openPalette}>{children}{open && <GlobalSearchPalette returnFocusTo={opener.current} fallbackFocusTo={fallbackFocusTo} onClose={() => setOpen(false)} />}</Context.Provider>;
 }
 
 function resolveWindowStatus(item: SearchItem, unreachable: readonly string[], sessions: Record<string, Session[]>): 'sleeping' | 'offline' | undefined {
@@ -56,7 +64,7 @@ function resolveWindowStatus(item: SearchItem, unreachable: readonly string[], s
   return !match || match.session.stale ? 'offline' : undefined;
 }
 
-function GlobalSearchPalette({ onClose, fallbackFocusTo }: { onClose: () => void; fallbackFocusTo: HTMLElement | null }) {
+function GlobalSearchPalette({ onClose, fallbackFocusTo, returnFocusTo }: { onClose: () => void; fallbackFocusTo: HTMLElement | null; returnFocusTo: HTMLElement | null }) {
   const { t } = useTranslation('navigation');
   const { allProjects, allTasks, loading, error, refresh } = useWorkspaceCatalog();
   const orchestrators = useOrchestrators();
@@ -66,6 +74,7 @@ function GlobalSearchPalette({ onClose, fallbackFocusTo }: { onClose: () => void
   const { rows } = useActiveWindowRows({ windowById: buildWindowIndex(allProjects, allTasks, null), taskById: new Map(allTasks.map(task => [task.id, task])) });
   const navigate = useNavigate();
   const isMobile = useIsMobile();
+  const maximize = useOptionalMaximizedWindow();
   const keyboardVisible = useVirtualKeyboard();
   const [viewportHeight, setViewportHeight] = useState<number | null>(null);
   useEffect(() => {
@@ -113,7 +122,13 @@ function GlobalSearchPalette({ onClose, fallbackFocusTo }: { onClose: () => void
       if (event.key === 'F6') { event.preventDefault(); closeButton.current?.focus(); }
       if (event.key === 'Tab') { event.preventDefault(); const i = categories.indexOf(activeCategory); changeCategory(categories[(i + (event.shiftKey ? categories.length - 1 : 1)) % categories.length]); }
       if (event.key === 'ArrowDown' || event.key === 'ArrowUp') { event.preventDefault(); setSelected(shown.length ? (current + (event.key === 'ArrowDown' ? 1 : shown.length - 1)) % shown.length : 0); }
-      if (event.key === 'Enter' && shown[current]) { event.preventDefault(); choose(shown[current]); }
+      if (event.key === 'Enter' && shown[current]) {
+        event.preventDefault();
+        const item = shown[current];
+        if (event.shiftKey) {
+          if (!isMobile && maximize && item.window && (item.kind === 'window' || item.kind === 'orchestrator')) { maximize.open(item.id, item.window, returnFocusTo?.isConnected ? returnFocusTo : fallbackFocusTo); onClose(); }
+        } else choose(item);
+      }
     }}>
       <header className="global-search-header"><h2 id="global-search-title" className="sr-only">{t('globalSearch.title')}</h2><Icon name="search" size={16} />
         <input ref={input} role="combobox" aria-label={t('globalSearch.title')} enterKeyHint="search" aria-expanded="true" aria-controls="global-search-results" aria-activedescendant={currentId} value={query} onChange={event => { setQuery(event.target.value); setSelected(0); }} placeholder={t('globalSearch.placeholder')} />
@@ -138,7 +153,12 @@ function GlobalSearchPalette({ onClose, fallbackFocusTo }: { onClose: () => void
           return <SearchResultRow key={`${item.kind}-${item.id}`} activityStatus={activity} item={item} selected={position === current} status={resolveWindowStatus(item, unreachable, sessions)} onSelect={() => setSelected(position)} onOpen={() => choose(item)} />;
         }} />
       <div role="status" aria-live="polite" className="sr-only">{t('globalSearch.count', { count: activeCategory === 'all' ? matches.length : groups.find(group => group.kind === activeCategory)?.items.length ?? 0 })}</div>
-      <div className="global-search-footer">{t('globalSearch.hint')}</div>
+      <div className="global-search-footer key-hints">
+        <span><kbd className="key-chip">Tab</kbd> {t('globalSearch.categoryHint')}</span>
+        <span><kbd className="key-chip">↑ ↓</kbd> {t('globalSearch.selectHint')}</span>
+        <span><kbd className="key-chip">Enter</kbd> {t('globalSearch.openHint')}</span>
+        {!isMobile && maximize && <span><kbd className="key-chip">Shift + Enter</kbd> {t('globalSearch.maximizeHint')}</span>}
+      </div>
     </div>
   </Overlay>;
 }

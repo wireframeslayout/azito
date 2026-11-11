@@ -15,7 +15,8 @@ function loadStatusCache(): { servers: Server[]; statuses: Record<string, Server
     if (raw) {
       const parsed = JSON.parse(raw);
       if (parsed && Array.isArray(parsed.servers) && parsed.statuses && typeof parsed.statuses === 'object') {
-        return { servers: parsed.servers, statuses: parsed.statuses };
+        const statuses = Object.fromEntries(Object.entries(parsed.statuses as Record<string, ServerStatus>).map(([name, status]) => [name, { ...status, mux: undefined }]));
+        return { servers: parsed.servers, statuses };
       }
     }
   } catch { /* 破損時は空から */ }
@@ -118,6 +119,7 @@ export function ServerStatusProvider({ children }: { children: React.ReactNode }
     activeSeqRef.current = Math.max(activeSeqRef.current, seq);
     if (seq !== activeSeqRef.current) return serversRef.current;
 
+    const previousServers = serversRef.current;
     serversRef.current = srvs;
     setServers(srvs);
     setServersLoaded(true);
@@ -128,7 +130,10 @@ export function ServerStatusProvider({ children }: { children: React.ReactNode }
     setStatuses((prev) => {
       const next: Record<string, ServerStatus> = {};
       for (const srv of srvs) {
-        next[srv.name] = prev[srv.name] ?? { status: 'checking' };
+        const previous = previousServers.find((server) => server.name === srv.name);
+        next[srv.name] = previous && getServerFingerprint(previous) === getServerFingerprint(srv)
+          ? prev[srv.name] ?? { status: 'checking' }
+          : { status: 'checking' };
       }
       return next;
     });

@@ -1,7 +1,8 @@
 import { fireEvent, render, screen, waitFor } from '@testing-library/react';
-import { afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { useEffect, useState } from 'react';
-import { HotkeyProvider } from '../../hooks/useHotkeys';
+import { HotkeyProvider, useHotkeyBindings } from '../../hooks/useHotkeys';
+import { parseKeySpec } from '../../lib/hotkeys/keySpec';
 import { MaximizedWindowProvider, useMaximizedWindow } from '../../hooks/useMaximizedWindow';
 import { MaximizedWindow } from './MaximizedWindow';
 import { TabBar } from '../ui/TabBar';
@@ -32,9 +33,14 @@ function Workspace() {
   const [showSecond, setShowSecond] = useState(true);
   const [menu, setMenu] = useState(false);
   useEffect(() => { setWorkspace({ tabs: showSecond ? [{ kind: 'window', windowId: 1 }, { kind: 'window', windowId: 2 }] : [{ kind: 'window', windowId: 1 }], activeWindowId: 1, activeTabId: 'tab-one', windows: new Map(showSecond ? [[1, first], [2, second]] : [[1, first]]), openWindowTab: vi.fn(), wakeWindow: mounts.wake }); return () => setWorkspace(null); }, [setWorkspace, showSecond]);
-  return <><TabBar tabs={[{ id: 'tab-one', label: 'Tab one' }]} activeId="tab-one" onSelect={() => {}} onTabContextMenu={() => setMenu(true)} />{menu && <button onClick={() => { setMenu(false); open(1); }}>Expand from menu</button>}<button onClick={() => open(1)}>Launch</button><button onClick={() => open(99)}>Missing</button><button onClick={() => setShowSecond(value => !value)}>Change tabs</button><input aria-label="outside input" /></>;
+  return <><TabBar tabs={[{ id: 'tab-one', label: 'Tab one' }]} activeId="tab-one" onSelect={() => {}} onTabContextMenu={() => setMenu(true)} />{menu && <button onClick={() => { setMenu(false); open(1); }}>Expand from menu</button>}<button onClick={() => open(1)}>Launch</button><button onClick={event => open(1, first, event.currentTarget)}>Launch with fallback</button><button onClick={() => open(99)}>Missing</button><button onClick={() => setShowSecond(value => !value)}>Change tabs</button><input aria-label="outside input" /></>;
+}
+function ShortcutControls() {
+  const { setBinding } = useHotkeyBindings();
+  return <><button onClick={() => setBinding('maximize.open', parseKeySpec('Alt+Z'))}>Change shortcut</button><button onClick={() => setBinding('maximize.open', null)}>Disable shortcut</button></>;
 }
 describe('maximized window', () => {
+  beforeEach(() => localStorage.clear());
   it('shows the unread completion indicator alongside idle only', async () => {
     activity.finished = { finishedAt: Date.now(), seenAt: null };
     const view = render(<HotkeyProvider><MaximizedWindowProvider><Workspace /><MaximizedWindow /></MaximizedWindowProvider></HotkeyProvider>);
@@ -82,6 +88,43 @@ describe('maximized window', () => {
     activity.status = 'ready';
     view.rerender(<HotkeyProvider><MaximizedWindowProvider><Workspace /><MaximizedWindow /></MaximizedWindowProvider></HotkeyProvider>);
     expect(header).toHaveTextContent('Needs attention');
+  });
+  it('reflects the configured shortcut and terminal focus in its footer', async () => {
+    render(<HotkeyProvider><MaximizedWindowProvider><Workspace /><ShortcutControls /><MaximizedWindow /></MaximizedWindowProvider></HotkeyProvider>);
+    fireEvent.click(screen.getByText('Change shortcut'));
+    fireEvent.click(screen.getByText('Launch'));
+    const dialog = await screen.findByRole('dialog');
+    const footer = dialog.querySelector('footer')!;
+    expect(footer).toHaveTextContent('Alt+Z');
+    expect(footer).not.toHaveTextContent('send to input');
+    fireEvent.focus(screen.getByLabelText('terminal'));
+    expect(footer).toHaveTextContent('Esc');
+    expect(footer).toHaveTextContent('send to input');
+    fireEvent.focus(screen.getByRole('button', { name: 'Close' }));
+    expect(footer).not.toHaveTextContent('send to input');
+    expect(screen.getByRole('button', { name: 'Close' }).querySelector('svg')).toBeInTheDocument();
+  });
+  it('omits a disabled maximize shortcut from the footer', async () => {
+    render(<HotkeyProvider><MaximizedWindowProvider><Workspace /><ShortcutControls /><MaximizedWindow /></MaximizedWindowProvider></HotkeyProvider>);
+    fireEvent.click(screen.getByText('Disable shortcut'));
+    fireEvent.click(screen.getByText('Launch'));
+    const footer = (await screen.findByRole('dialog')).querySelector('footer')!;
+    expect(footer).not.toHaveTextContent('Close');
+    expect(footer).toHaveTextContent('switch windows');
+  });
+
+  it('returns focus to the supplied fallback when the opener disappears', async () => {
+    render(<HotkeyProvider><MaximizedWindowProvider><Workspace /><MaximizedWindow /></MaximizedWindowProvider></HotkeyProvider>);
+    const fallback = screen.getByText('Launch with fallback');
+    const opener = document.createElement('button');
+    document.body.appendChild(opener);
+    opener.focus();
+    fireEvent.click(fallback);
+    const dialog = await screen.findByRole('dialog');
+    opener.remove();
+    fireEvent.click(screen.getByRole('button', { name: 'Close' }));
+    await waitFor(() => expect(dialog).not.toBeInTheDocument());
+    await waitFor(() => expect(fallback).toHaveFocus());
   });
   it('switches connections and returns focus to its opener', async () => {
     mounts.connect.mockClear(); mounts.disconnect.mockClear();

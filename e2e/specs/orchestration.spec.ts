@@ -27,9 +27,16 @@ test('スマホのナビシートから一覧を開いて窓を選ぶ', async ({
   const agent = await harness.startFakeAgent('orchestration-mobile', 'agent', { supervised: false });
   const id = await harness.registerAgentWindow(project, agent.target);
   await harness.api(`/windows/${id}/role`, { method: 'PUT', body: JSON.stringify({ role: 'orchestrator' }) });
-  await app.setViewportSize({ width: 320, height: 800 });
+  await app.setViewportSize({ width: 320, height: 640 });
   await app.goto(`${harness.baseUrl}/workspace/${project}`);
   await app.getByRole('button', { name: 'メニュー', exact: true }).click();
+  const settings = app.getByRole('button', { name: 'AZITO設定', exact: true });
+  await settings.scrollIntoViewIfNeeded();
+  const settingsBox = await settings.boundingBox();
+  const statusBox = await app.getByRole('button', { name: '稼働ステータス', exact: true }).boundingBox();
+  expect(settingsBox).not.toBeNull();
+  expect(statusBox).not.toBeNull();
+  expect(settingsBox!.y + settingsBox!.height).toBeLessThanOrEqual(statusBox!.y);
   await app.getByRole('button', { name: /オーケストレーション/ }).click();
   await app.getByRole('treeitem').click();
   await expect(app).toHaveURL(new RegExp(`/orchestration/${id}$`));
