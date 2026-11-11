@@ -48,7 +48,8 @@ export function OrchestrationSidebar({ selectedId, onSelect }: OrchestrationSide
   const titleOf = (window: OrchestratorNode['window']) => resolveWindowTitle({ ...windowTitleInput(window), tmuxTarget: window.tmuxTarget });
   const matches = (node: OrchestratorNode): boolean => {
     const projects = node.window.links.projectIds.map((id) => allProjects.find((project) => project.id === id)?.name).filter(Boolean).join(' ');
-    return `${titleOf(node.window).title} ${titleOf(node.window).idLabel ?? ''} ${node.window.serverName} ${projects}`.toLowerCase().includes(search.toLowerCase()) || node.children.some(matches);
+    const display = titleOf(node.window);
+    return `${display.title} ${display.idLabel ?? ''} ${node.window.tmuxTarget} ${node.window.serverName} ${projects}`.toLowerCase().includes(search.toLowerCase()) || node.children.some(matches);
   };
   const visible: number[] = [];
   const collect = (node: OrchestratorNode): void => { if (!matches(node)) return; visible.push(node.window.id); if (!closed.has(node.window.id) || search) node.children.forEach(collect); };

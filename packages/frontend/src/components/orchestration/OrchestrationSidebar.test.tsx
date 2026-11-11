@@ -32,6 +32,11 @@ describe('OrchestrationSidebar', () => {
     expect(row).not.toHaveTextContent('w_01M741SYR07');
     expect(row.textContent?.match(/W-3/g)).toHaveLength(1);
   });
+  it('finds a window by its tmux target', () => {
+    render(<OrchestrationSidebar onSelect={vi.fn()} />);
+    fireEvent.change(screen.getByRole('textbox'), { target: { value: 's:p' } });
+    expect(screen.getByRole('treeitem', { name: 'Parent' })).toBeTruthy();
+  });
   it('finds a child by linked project name', () => {
     render(<OrchestrationSidebar onSelect={vi.fn()} />);
     fireEvent.change(screen.getByRole('textbox'), { target: { value: 'Project Alpha' } });

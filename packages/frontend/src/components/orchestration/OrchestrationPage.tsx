@@ -77,7 +77,7 @@ export default function OrchestrationPage({ rightPanel }: OrchestrationPageProps
   if (status === 'error' && !windows.length) return <Notice tone="danger" action={<Button onClick={refresh}>{t('orchestration.retry')}</Button>}>{t('orchestration.loadError')}</Notice>;
   return <div style={{ display: 'flex', height: '100%', minWidth: 0 }}>
     {!isMobile && <aside style={{ width: sidebarCollapsed ? 'calc(var(--space-6) * 2)' : 'var(--orchestration-sidebar-width)', maxWidth: '100%', overflow: 'auto', background: 'var(--bg-solid)', borderRight: '1px solid var(--border)' }}>
-      {sidebarCollapsed && <IconButton aria-label={sidebarCollapsed ? t('orchestration.showSidebar') : t('orchestration.hideSidebar')} onClick={() => { setSidebarCollapsed(!sidebarCollapsed); setListOpen(false); }}><Icon name={sidebarCollapsed ? 'panel-left-open' : 'panel-left-close'} size={20} /></IconButton>}
+      {sidebarCollapsed && <IconButton aria-label={t('orchestration.showSidebar')} onClick={() => { setSidebarCollapsed(false); setListOpen(false); }}><Icon name="panel-left-open" size={20} /></IconButton>}
       {sidebarCollapsed ? <>
         <IconButton ref={listRef} aria-label={t('orchestration.title')} onClick={() => setListOpen((value) => !value)}>{windows.some((window) => orchestratorStatus(window, entries) === 'active') ? <BrailleSpinner /> : <Icon name="operations" size={20} />}</IconButton>
         <GlassPopover anchorRef={listRef} open={listOpen} onClose={() => setListOpen(false)} solid ariaLabel={t('orchestration.title')} items={windows.map((window) => ({ key: String(window.id), label: titleOf(window), selected: selected?.id === window.id, onSelect: () => { navigate(paths.orchestration(window.id)); setListOpen(false); } }))} />
