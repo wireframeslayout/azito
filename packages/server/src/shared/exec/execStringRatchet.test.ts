@@ -72,7 +72,9 @@ function currentCounts(): Record<string, number> {
 describe('exec(<shell string>) ratchet', () => {
   it('keeps the Mac bootstrap shell on SSH, which is available while the agent is down', () => {
     const source = fs.readFileSync(path.join(SRC_ROOT, 'modules/servers/agent-deploy/macAgentLaunchd.ts'), 'utf8');
-    expect(source).toMatch(/private execPosix\(command: string\)[\s\S]*?this\.ssh\.execIsolated\(this\.host, posixRemoteCommand\(command\)\)/);
+    expect(source).toMatch(/private execPosix\(command: string\)[\s\S]*?execPosixRemote\(this\.ssh, this\.host, command\)/);
+    const remote = fs.readFileSync(path.join(SRC_ROOT, 'modules/servers/agent-deploy/posixRemoteCommand.ts'), 'utf8');
+    expect(remote).toMatch(/execPosixRemote\([\s\S]*?ssh\.execIsolated\(host, command, timeoutMs\)/);
     expect(source).not.toMatch(/\b(?:transport|target)\.exec\(/);
   });
 
