@@ -309,7 +309,7 @@ async function checkStart(installPs1: string, azitoCmd: string, prefix: string):
     console.log(`[smoke-install] /api/health -> ${status}`);
     assert(fs.existsSync(path.join(prefix, 'data', 'data.db')), 'the hub must use the AZITO_DATA_DIR from hub/.env', output);
     const refused = install(installPs1, ['-Uninstall', '-Prefix', prefix, '-Yes']);
-    assert(refused.status !== 0 && /hub process is still running/.test(refused.output), 'uninstall must leave a foreground hub running', refused.output);
+    assert(refused.status !== 0 && /hub process/i.test(refused.output) && /still running/i.test(refused.output) && /Nothing was removed:/i.test(refused.output) && !/Fatal error starting server:/.test(refused.output), 'uninstall must leave a foreground hub running', refused.output);
     assert((await fetch(`http://127.0.0.1:${port}/api/health`)).ok, 'uninstall must not stop the foreground hub');
   } catch (err) {
     console.error(`[smoke-install] hub output:\n${output}`);

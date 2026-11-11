@@ -26,7 +26,7 @@ import { misaoCommand } from './cli/misaoCommand';
 import { serviceCommand } from './cli/serviceCommand';
 import { initEnvCommand } from './cli/initEnvCommand';
 import { windowsInstallRecordCommand } from './cli/windowsInstallRecordCommand';
-import { windowsHubUninstallCommand } from './cli/windowsHubUninstallCommand';
+import { windowsHubUninstallCommand, UninstallPreparationError } from './cli/windowsHubUninstallCommand';
 import { createOwnedCanaryRecorder, trackWindowsOwnedSecrets } from './modules/system/windowsOwnedSecrets';
 import { hostRunsTmux } from './modules/servers/muxKinds';
 import { hasMisaoToRelyOn } from './modules/system/misao/misaoPaths';
@@ -348,6 +348,10 @@ async function main(): Promise<void> {
 }
 
 main().catch((err) => {
+  if (process.argv[2] === 'windows-uninstall-prepare') {
+    console.log(JSON.stringify({ error: err instanceof Error ? err.message : String(err), taskMayHaveBeenRemoved: err instanceof UninstallPreparationError && err.taskMayHaveBeenRemoved }));
+    process.exit(1);
+  }
   console.error('Fatal error starting server:', err);
   process.exit(1);
 });

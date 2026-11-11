@@ -14,8 +14,25 @@ import { HUB_UPDATE_TASK } from '../modules/system/windowsHubUpdateTask';
 import type { HostEnv } from '../shared/os/hostEnv';
 import { readInstallFileIdentity, sameInstallFileIdentity } from '../modules/system/windowsInstallInventory';
 
+export class UninstallPreparationError extends Error {
+  constructor(message: string, readonly taskMayHaveBeenRemoved: boolean) { super(message); }
+}
+
+export async function withUninstallPreparation<T>(action: (beforeDelete: () => void) => Promise<T>): Promise<T> {
+  let taskMayHaveBeenRemoved = false;
+  try {
+    return await action(() => { taskMayHaveBeenRemoved = true; });
+  } catch (err) {
+    throw new UninstallPreparationError(err instanceof Error ? err.message : String(err), taskMayHaveBeenRemoved);
+  }
+}
+
 /** Prepares the installer to remove only items proved by its record. */
 export async function windowsHubUninstallCommand(host: HostEnv, context: ServiceCommandContext, removeData: boolean): Promise<void> {
+  return withUninstallPreparation((beforeDelete) => runUninstall(host, context, removeData, beforeDelete));
+}
+
+async function runUninstall(host: HostEnv, context: ServiceCommandContext, removeData: boolean, beforeDelete: () => void): Promise<void> {
   if (host.platform !== 'win32') throw new Error('Windows uninstall requires Windows.');
   const created = createServiceManager(host, HUB_SERVICE, runCommand);
   if ('error' in created) throw created.error;
@@ -76,7 +93,7 @@ export async function windowsHubUninstallCommand(host: HostEnv, context: Service
     } else retained.push('The CLI wrapper was not recorded as created by this installer; inspect it manually.');
     await assertNoHubLaunchers(hub.hubRoots, run, hub.systemRoot, process.ppid);
     await assertNoOtherHubProcesses(hub.layout.hubRoot, run, hub.systemRoot, context.pid);
-    await uninstallWindowsTask(created.manager, hub, context);
+    await uninstallWindowsTask(created.manager, hub, context, beforeDelete);
     consumeWindowsInstallRecord(hub.layout.hubRoot, record, context.secretFileGuard);
     console.log(JSON.stringify({ release: path.basename(release), data, dataDb, dataFiles, wrapper, pathAdded: record.pathAdded, pathValueCreated: record.pathValueCreated === true, retained }));
     const action = await new Promise<string>((resolve) => {

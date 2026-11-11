@@ -77,6 +77,14 @@ describe('uninstallWindowsTask', () => {
     expect(remove).toHaveBeenCalledWith('AzitoHub');
   });
 
+  it('marks deletion as attempted immediately before deleting the task', async () => {
+    const { hub, manager } = setup(xmlFor(MINE), xmlFor(MINE));
+    const beforeDelete = vi.fn();
+    hub.client.delete = vi.fn(async () => { expect(beforeDelete).toHaveBeenCalledOnce(); throw new Error('delete failed'); });
+    vi.mocked(hub.client.query).mockImplementation(async (name) => name === 'AzitoHubUpdate' ? { exists: false } : { exists: true, running: false, failed: false, lastResult: 0 });
+    await expect(uninstallWindowsTask(manager, hub, context, beforeDelete)).rejects.toThrow('delete failed');
+  });
+
   it('leaves the task when a hub process is running', async () => {
     const { hub, manager } = setup(xmlFor(MINE), xmlFor(MINE));
     const remove = vi.fn();

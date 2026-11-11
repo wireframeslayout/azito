@@ -110,7 +110,7 @@ describe('recorded release verification', () => {
 describe('unrecognised hub path check', () => {
   it('refuses a hub or an unreadable node process, excluding only the helper itself', async () => {
     const run = vi.fn().mockResolvedValueOnce({ exitCode: 0, stdout: 'HUB 42', stderr: '' }).mockResolvedValueOnce({ exitCode: 0, stdout: 'UNKNOWN 43', stderr: '' });
-    await expect(assertNoOtherHubProcesses('C:\\Users\\me\\.azito\\hub', run, 'C:\\Windows', 123)).rejects.toThrow(/hub process \(42\)/);
+    await expect(assertNoOtherHubProcesses('C:\\Users\\me\\.azito\\hub', run, 'C:\\Windows', 123)).rejects.toThrow(/hub process \(pid 42\) is still running/);
     await expect(assertNoOtherHubProcesses('C:\\Users\\me\\.azito\\hub', run, 'C:\\Windows', 123)).rejects.toThrow(/node process \(43\) could not be identified/);
     const spec = run.mock.calls[0]![0];
     const check = Buffer.from(spec.args.at(-1)!, 'base64').toString('utf16le');

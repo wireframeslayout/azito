@@ -150,7 +150,7 @@ export async function assertNoOtherHubProcesses(hubRoot: string, run: SpecRunner
   const result = await run(buildCommandSpec(windowsPowershell(systemRoot), powershellEncodedArgs(check), { timeoutMs: 60_000 }));
   if (result.exitCode !== 0) throw new Error(`Could not inspect hub processes: ${(result.stderr || result.stdout).trim().slice(0, 400)}`);
   const answer = parseMisaoGuardOutput(result.stdout);
-  if (answer.kind === 'hub') throw new Error(`A hub process (${answer.pid}) may use this installation; stop it before uninstalling.`);
+  if (answer.kind === 'hub') throw new Error(`A hub process (pid ${answer.pid}) is still running from this installation; stop it (azito stop, or Ctrl+C in the window running azito run) before uninstalling.`);
   if (answer.kind === 'unknown') throw new Error(`A node process (${answer.pid}) could not be identified; nothing is removed.`);
   if (answer.kind !== 'clear') throw new Error('A process could not be identified; nothing is removed.');
 }

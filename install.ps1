@@ -475,6 +475,10 @@ function Invoke-Uninstall {
         $line = $holder.StandardOutput.ReadLine()
         if (-not $line) { throw "Uninstall preparation failed (the verified task may already have been removed): $($holder.StandardError.ReadToEnd())" }
         $prepared = $line | ConvertFrom-Json
+        if ($prepared.error) {
+            if ($prepared.taskMayHaveBeenRemoved) { throw "Uninstall preparation failed (the verified task may already have been removed): $($prepared.error)" }
+            throw "Nothing was removed: $($prepared.error)"
+        }
         if ($prepared.release -cne $record.release) { throw 'The uninstall preparation did not identify the recorded release.' }
         if ($holder.HasExited) { throw 'The uninstall lock holder exited; inspect retained files and PATH manually.' }
         foreach ($message in @($prepared.retained)) { if ($message) { Write-Warning $message } }
