@@ -24,7 +24,7 @@ describe('floatingTextColor', () => {
   it.each([...PRESET_THEMES.map(({ name, palette }) => ({ name, ...palette })), { name: 'light', background: '#ffffff', foreground: '#222222' }])('$name remains readable on both surfaces', ({ background, foreground }) => {
     const text = floatingTextColor(background, foreground)!.match(/\d+/g)!.map(Number);
     const base = rgb(background), fg = rgb(foreground);
-    for (const amount of [0.14, 0.19]) {
+    for (const amount of [0.14, 0.19, 0.19 + 0.81 * 0.13]) {
       const surface = base.map((v, i) => v * (1 - amount) + fg[i] * amount);
       expect(ratio(text, surface)).toBeGreaterThanOrEqual(4.5);
     }

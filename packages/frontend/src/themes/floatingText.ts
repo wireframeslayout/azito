@@ -27,17 +27,20 @@ function contrast(a: Rgb, b: Rgb): number {
 export function floatingTextColor(background: string, foreground: string): string | null {
   const base = parseHex(background), fg = parseHex(foreground);
   if (!base || !fg) return null;
+  // Keep these surface mixes in sync with global.css, including app-scope row hover.
   const elevated = mix(base, fg, 0.19), solid = mix(base, fg, 0.14);
+  const surfaces = [elevated, solid, mix(elevated, fg, 0.13)];
+  const minimumContrast = (color: Rgb) => Math.min(...surfaces.map(surface => contrast(color, surface)));
   const black: Rgb = [0, 0, 0], white: Rgb = [255, 255, 255];
-  const end = Math.min(contrast(white, elevated), contrast(white, solid)) > Math.min(contrast(black, elevated), contrast(black, solid)) ? white : black;
-  const foregroundPasses = Math.min(contrast(fg, elevated), contrast(fg, solid)) >= 4.6;
+  const end = minimumContrast(white) > minimumContrast(black) ? white : black;
+  const foregroundPasses = minimumContrast(fg) >= 4.6;
   const start = foregroundPasses ? base : fg;
   const target = foregroundPasses ? fg : end;
   let low = 0, high = 1;
   for (let i = 0; i < 20; i++) {
     const mid = (low + high) / 2;
     const color = mix(start, target, mid);
-    if (Math.min(contrast(color, elevated), contrast(color, solid)) >= 4.6) high = mid;
+    if (minimumContrast(color) >= 4.6) high = mid;
     else low = mid;
   }
   return `rgb(${mix(start, target, high).map(Math.round).join(', ')})`;

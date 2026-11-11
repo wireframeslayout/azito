@@ -42,7 +42,7 @@
 
   --text: #e6edf3;
   --text-dim: #8b949e;
-  --floating-text: color-mix(in srgb, var(--surface-fg) 70%, var(--surface-base));
+  --floating-text: color-mix(in srgb, var(--surface-fg) 80%, var(--surface-base));
 
   /* [3] 深さの語彙: 上端ハイライト + 影スケール */
   --edge-hi: color-mix(in srgb, var(--surface-fg) 9%, transparent);
