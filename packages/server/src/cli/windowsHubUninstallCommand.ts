@@ -1,6 +1,6 @@
 import path from 'path';
 import fs from 'fs';
-import { createServiceManager, type ServiceHost } from '../modules/system/createServiceManager';
+import { createServiceManager } from '../modules/system/createServiceManager';
 import { HUB_SERVICE, runCommand } from '../modules/system/serviceManager';
 import { createHubLock, underHubLock } from '../modules/system/hubLock';
 import { resolveWindowsHub, uninstallWindowsTask, type ServiceCommandContext } from '../modules/system/windowsHubOperations';
@@ -10,9 +10,12 @@ import { runCommandSpec } from '../shared/exec/runCommandSpec';
 import { listOwnedDataNames, readOwnedSecret } from '../modules/system/windowsOwnedSecrets';
 import { findHubProcesses } from '../modules/system/windowsHubService';
 import { HUB_UPDATE_TASK } from '../modules/system/windowsHubUpdateTask';
+import type { HostEnv } from '../shared/os/hostEnv';
+import { getBundleRoot } from '../shared/releaseInfo';
+import { uninstallRecordedMisao } from '../modules/system/misao/windowsMisaoUninstall';
 
 /** Prepares the installer to remove only items proved by its record. */
-export async function windowsHubUninstallCommand(host: ServiceHost, context: ServiceCommandContext, removeData: boolean): Promise<void> {
+export async function windowsHubUninstallCommand(host: HostEnv, context: ServiceCommandContext, removeData: boolean): Promise<void> {
   if (host.platform !== 'win32') throw new Error('Windows uninstall requires Windows.');
   const created = createServiceManager(host, HUB_SERVICE, runCommand);
   if ('error' in created) throw created.error;
@@ -73,6 +76,7 @@ export async function windowsHubUninstallCommand(host: ServiceHost, context: Ser
       process.stdin.resume();
     });
     if (action !== 'remove') return;
+    let misaoNote = 'Misao was not processed.';
     try {
       if ((await hub.client.query(HUB_SERVICE.windowsTaskName)).exists || (await hub.client.query(HUB_UPDATE_TASK)).exists) throw new Error('A hub or update task appeared while preparing removal; inspect it and retry manually.');
       if ((await findHubProcesses(run, hub.systemRoot, hub.hubRoots, context.pid)).length > 0) throw new Error('A hub process started while preparing removal; stop it and inspect the retained files.');
@@ -80,6 +84,12 @@ export async function windowsHubUninstallCommand(host: ServiceHost, context: Ser
       if ([...inUse].some((version) => version.toLowerCase() === record.release.toLowerCase())) throw new Error('A process is using the recorded release; stop it and inspect the retained files.');
       await assertNoHubLaunchers(hub.hubRoots, run, hub.systemRoot, process.ppid);
       await assertNoOtherHubProcesses(hub.layout.hubRoot, run, hub.systemRoot, context.pid);
+      try {
+        await uninstallRecordedMisao({ prefix: hub.layout.prefix, record, host, bundleRoot: getBundleRoot(), guard: context.secretFileGuard, run, systemRoot: hub.systemRoot, pid: context.pid });
+        misaoNote = 'The recorded misao task and release were removed; inspect retained files under the misao folder.';
+      } catch (err) {
+        misaoNote = `Misao cleanup was skipped or incomplete: ${err instanceof Error ? err.message : String(err)}. Inspect the task, daemon and files manually.`;
+      }
       if (data) {
         await prepareRecordedData(hub.layout.prefix, record, context.secretFileGuard, run, hub.systemRoot);
         await removeRecordedTree(hub.layout.prefix, 'data', run, hub.systemRoot);
@@ -101,9 +111,9 @@ export async function windowsHubUninstallCommand(host: ServiceHost, context: Ser
       const stat = fs.lstatSync(pointer);
       if (!stat.isFile() || stat.isSymbolicLink() || fs.readFileSync(pointer, 'utf8').trim() !== record.release) throw new Error(`The pointer ${pointer} changed and is retained.`);
       fs.unlinkSync(pointer);
-      console.log(JSON.stringify({ removed: true }));
+      console.log(JSON.stringify({ removed: true, misaoNote }));
     } catch (err) {
-      console.log(JSON.stringify({ error: err instanceof Error ? err.message : String(err) }));
+      console.log(JSON.stringify({ error: err instanceof Error ? err.message : String(err), misaoNote }));
       process.exitCode = 1;
     }
   });

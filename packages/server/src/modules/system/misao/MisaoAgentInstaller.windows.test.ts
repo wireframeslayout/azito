@@ -4,7 +4,7 @@ import { legacyMisaoTaskArgumentsOf } from '../../../shared/os/taskScheduler/mis
 import fs from 'fs';
 import os from 'os';
 import path from 'path';
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { CommandResult, CommandSpec } from '../../../shared/exec/commandSpec';
 import { buildTaskXml, decodeTaskXml } from '../../../shared/os/taskScheduler/taskDefinition';
 import { decodeEncodedCommand, FakeWindowsHost } from '../../servers/agent-deploy/testing/fakeWindowsHost';
@@ -14,6 +14,7 @@ import { writeHubBundle } from './misaoBundleFixture';
 import { MisaoAgentInstaller, type MisaoInstallStep, type MisaoInstallTarget } from './MisaoAgentInstaller';
 import { isManagedMisaoDown, MisaoWindowsInstaller } from './MisaoWindowsInstaller';
 import { ProcessLock } from '../../../shared/processLock';
+import { misaoTaskHash } from './windowsMisaoTaskRecord';
 
 const VERSION = '0.3.0';
 const OLD_VERSION = '0.2.0';
@@ -44,6 +45,7 @@ interface FakeOptions {
   /** Writing this file through the agent fails (a task XML whose registration cannot even start). */
   failWriteOf?: string;
   status?: Partial<MisaoSocketStatus>;
+  holderOwner?: 'mine' | 'other';
 }
 
 /**
@@ -157,6 +159,10 @@ class FakeWindowsAgent {
       const actual = `${ROOT}\\${this.daemonVersion ?? this.current}\\misao.exe`;
       return reply([actual, expected].map((path) => Buffer.from(path, 'utf8').toString('base64')).join('\n'));
     }
+    if (script.includes('AzitoPipeHolder')) {
+      return reply(`FORMS|${ROOT}|\nHOLDER|42|misao.exe|${this.options.holderOwner ?? 'mine'}|${ROOT}\\${this.current}\\misao.exe`);
+    }
+    if (script.includes('function Chain($path)')) return reply('CHAIN|ok|ok');
     if (script.includes('function Get-AgentNodes')) {
       if (!this.options.unstoppable) this.stopDaemon();
       return reply();
@@ -206,7 +212,100 @@ describe('MisaoAgentInstaller on a Windows agent', () => {
 
   const installer = (b: MisaoBundle | null = bundle) => new MisaoAgentInstaller(b, { windowsTaskName: TASK, readyTimeoutMs: 400, pollIntervalMs: 10, taskIdleTimeoutMs: 60 });
 
+  describe('uninstall task ownership', () => {
+    it('removes only the stopped recorded task after repeated agent checks', async () => {
+      const agent = new FakeWindowsAgent(bundle);
+      agent.seedInstalled(VERSION, false);
+      const check = vi.fn(async () => undefined);
+      const windows = new MisaoWindowsInstaller({ taskName: TASK, readyTimeoutMs: 400, pollIntervalMs: 10, taskIdleTimeoutMs: 60 });
+      await windows.removeOwnedTaskForUninstall(agent.asTarget(), bundle, VERSION, misaoTaskHash(agent.host.registeredXml!), check);
+      expect(agent.host.taskState).toBe('absent');
+      expect(check).toHaveBeenCalledTimes(2);
+      expect(agent.events).not.toContain('misao stop');
+    });
+
+    it('does not stop or delete a task when agent use cannot be ruled out', async () => {
+      const agent = new FakeWindowsAgent(bundle);
+      agent.seedInstalled(VERSION, false);
+      const windows = new MisaoWindowsInstaller({ taskName: TASK, readyTimeoutMs: 400, pollIntervalMs: 10, taskIdleTimeoutMs: 60 });
+      await expect(windows.removeOwnedTaskForUninstall(agent.asTarget(), bundle, VERSION, misaoTaskHash(agent.host.registeredXml!), async () => { throw new Error('agent found'); })).rejects.toThrow(/agent found/);
+      expect(agent.host.taskState).toBe('stopped');
+      expect(agent.events).not.toContain('misao stop');
+    });
+
+    it('stops a verified running daemon through the existing stop path', async () => {
+      const agent = new FakeWindowsAgent(bundle);
+      agent.seedInstalled(VERSION, true);
+      const check = vi.fn(async () => undefined);
+      const windows = new MisaoWindowsInstaller({ taskName: TASK, readyTimeoutMs: 400, pollIntervalMs: 10, taskIdleTimeoutMs: 60 });
+      await windows.removeOwnedTaskForUninstall(agent.asTarget(), bundle, VERSION, misaoTaskHash(agent.host.registeredXml!), check);
+      expect(agent.events).toContain('misao stop');
+      expect(agent.host.taskState).toBe('absent');
+      expect(check).toHaveBeenCalledTimes(3);
+    });
+
+    it('does not stop a daemon owned by another account', async () => {
+      const agent = new FakeWindowsAgent(bundle, { holderOwner: 'other' });
+      agent.seedInstalled(VERSION, true);
+      const windows = new MisaoWindowsInstaller({ taskName: TASK, readyTimeoutMs: 400, pollIntervalMs: 10, taskIdleTimeoutMs: 60 });
+      await expect(windows.removeOwnedTaskForUninstall(agent.asTarget(), bundle, VERSION, misaoTaskHash(agent.host.registeredXml!), async () => undefined)).rejects.toThrow(/not shown to be yours/);
+      expect(agent.events).not.toContain('misao stop');
+      expect(agent.host.taskState).toBe('running');
+    });
+
+    it('does not stop a daemon if an agent appears during ownership checks', async () => {
+      const agent = new FakeWindowsAgent(bundle);
+      agent.seedInstalled(VERSION, true);
+      const check = vi.fn().mockResolvedValueOnce(undefined).mockRejectedValueOnce(new Error('agent appeared'));
+      const windows = new MisaoWindowsInstaller({ taskName: TASK, readyTimeoutMs: 400, pollIntervalMs: 10, taskIdleTimeoutMs: 60 });
+      await expect(windows.removeOwnedTaskForUninstall(agent.asTarget(), bundle, VERSION, misaoTaskHash(agent.host.registeredXml!), check)).rejects.toThrow(/agent appeared/);
+      expect(agent.events).not.toContain('misao stop');
+      expect(agent.host.taskState).toBe('running');
+    });
+
+    it('keeps the task when agent use becomes uncertain after the daemon stops', async () => {
+      const agent = new FakeWindowsAgent(bundle);
+      agent.seedInstalled(VERSION, true);
+      const check = vi.fn().mockResolvedValueOnce(undefined).mockResolvedValueOnce(undefined).mockRejectedValueOnce(new Error('agent appeared'));
+      const windows = new MisaoWindowsInstaller({ taskName: TASK, readyTimeoutMs: 400, pollIntervalMs: 10, taskIdleTimeoutMs: 60 });
+      await expect(windows.removeOwnedTaskForUninstall(agent.asTarget(), bundle, VERSION, misaoTaskHash(agent.host.registeredXml!), check)).rejects.toThrow(/agent appeared/);
+      expect(agent.events).toContain('misao stop');
+      expect(agent.host.taskState).toBe('stopped');
+    });
+
+    it('refuses a task of another prefix', async () => {
+      const agent = new FakeWindowsAgent(bundle);
+      agent.seedInstalled(VERSION, false);
+      agent.host.registeredXml = OTHER_TASK_XML;
+      const windows = new MisaoWindowsInstaller({ taskName: TASK, readyTimeoutMs: 400, pollIntervalMs: 10, taskIdleTimeoutMs: 60 });
+      await expect(windows.removeOwnedTaskForUninstall(agent.asTarget(), bundle, VERSION, misaoTaskHash(agent.host.registeredXml!), async () => undefined)).rejects.toThrow();
+      expect(agent.host.taskState).toBe('stopped');
+    });
+
+    it('refuses a task changed after its installation record was written', async () => {
+      const agent = new FakeWindowsAgent(bundle);
+      agent.seedInstalled(VERSION, false);
+      const hash = misaoTaskHash(agent.host.registeredXml!);
+      agent.host.registeredXml = agent.host.registeredXml!.replace('previous definition', 'changed definition');
+      const windows = new MisaoWindowsInstaller({ taskName: TASK, readyTimeoutMs: 400, pollIntervalMs: 10, taskIdleTimeoutMs: 60 });
+      await expect(windows.removeOwnedTaskForUninstall(agent.asTarget(), bundle, VERSION, hash, async () => undefined)).rejects.toThrow(/does not match the installation record/);
+      expect(agent.host.taskState).toBe('stopped');
+    });
+  });
+
   describe('install', () => {
+    it('does not overwrite or delete a task that appears during a recorded new install', async () => {
+      const agent = new FakeWindowsAgent(bundle);
+      agent.host.options.raceTaskOnCreate = OTHER_TASK_XML;
+      const windows = new MisaoWindowsInstaller({ taskName: TASK, readyTimeoutMs: 400, pollIntervalMs: 10, taskIdleTimeoutMs: 60 });
+      await expect(windows.install(agent.asTarget(), bundle, () => undefined, { requireNewTask: true })).rejects.toThrow(/retained for inspection/);
+      expect(agent.host.registeredXml).toBe(OTHER_TASK_XML);
+      expect(agent.schtasks()).not.toContain('/Delete');
+      expect(agent.events).not.toContain('misao stop');
+      const create = agent.host.calls.find((call) => call.schtasksArgs?.[0] === '/Create');
+      expect(create?.schtasksArgs).not.toContain('/F');
+    });
+
     it('sends the Windows build through the agent, owner-only folder first, and starts it as a logon task', async () => {
       const agent = new FakeWindowsAgent(bundle);
       const steps: MisaoInstallStep[] = [];

@@ -51,6 +51,8 @@ export interface FakeWindowsHostOptions {
   failScript?: { containing: string; stderr: string };
   /** A script containing this text prints this on stdout (and succeeds). */
   scriptOutput?: { containing: string; stdout: string };
+  /** Simulate another task appearing exactly when a non-replacing Create is attempted. */
+  raceTaskOnCreate?: string;
 }
 
 export interface RecordedCall {
@@ -161,6 +163,12 @@ export class FakeWindowsHost {
     }
     switch (args[0]) {
       case '/Create': {
+        if (this.options.raceTaskOnCreate !== undefined) {
+          this.registeredXml = this.options.raceTaskOnCreate;
+          this.taskState = 'stopped';
+          this.options.raceTaskOnCreate = undefined;
+        }
+        if (this.taskState !== 'absent' && !args.includes('/F')) return fail('ERROR: The task already exists.');
         // The XML is the file the SFTP fake received.
         const file = args[args.indexOf('/XML') + 1]!;
         const bytes = [...this.uploaded.entries()].find(([rel]) => file.endsWith(rel.replace(/\//g, '\\')))?.[1];

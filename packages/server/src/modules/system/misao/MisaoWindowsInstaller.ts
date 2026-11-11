@@ -14,12 +14,14 @@ import { encodeTaskXml, isTaskDefinitionDisabled } from '../../../shared/os/task
 import { PROTECT_SCRIPT } from '../../../shared/os/windowsSecretFileGuard';
 import { buildEndProcessesScript, buildProcessPresentScript, parseProcessPresent } from '../../../shared/os/windowsProcessSweep';
 import { redactSecretText } from '../../../shared/redactSecretText';
+import { decideMisaoStop, decidePathChains, misaoHolderScript, parseMisaoHolderOutput, parsePathChainOutput, pathChainScript } from '../../servers/agent-deploy/windowsAgentUninstallScripts';
 import { managedEndpointOf, MISAO_RELEASE_FILE_NAMES, type AgentMisaoWindowsHost, type MisaoSocketStatus } from '../../servers/transport/agentMisaoSocket';
 import type { MisaoBundle, MisaoTargetFiles } from './MisaoBundle';
 import { bundleFilesFor, sha256Buffer } from './MisaoBundle';
 import { daemonCheckScript, parseDaemonCheck, sameProgram } from './misaoWindowsVerify';
 import { MisaoServiceError } from './MisaoServiceError';
 import { buildMisaoTaskXml, misaoTaskArguments, misaoWindowsLayout, misaoWindowsReleasePaths, type MisaoWindowsLayout } from './misaoWindowsTask';
+import { misaoTaskHash } from './windowsMisaoTaskRecord';
 import type { MisaoAgentInstallResult, MisaoInstallStep, MisaoInstallTarget } from './misaoInstallTypes';
 
 export interface MisaoWindowsInstallerOptions {
@@ -100,10 +102,43 @@ interface Session {
 export class MisaoWindowsInstaller {
   constructor(private readonly options: MisaoWindowsInstallerOptions) {}
 
-  async install(target: WindowsTarget, bundle: MisaoBundle, onProgress: (step: MisaoInstallStep) => void): Promise<MisaoAgentInstallResult> {
+  /** Stop and remove only the recorded task after the caller has established that no agent shares it. */
+  async removeOwnedTaskForUninstall(target: WindowsTarget, bundle: MisaoBundle, version: string, taskHash: string, assertUnshared: () => Promise<void>): Promise<void> {
+    const { session, status } = await this.inspect(target, bundle);
+    const state = await session.tasks.query(this.options.taskName);
+    if (!state.exists || status.installedVersion !== version) throw new MisaoServiceError('not_installed', 'The recorded misao task or release is not present.');
+    await this.refuseTaskOfAnotherRoot(session);
+    const xml = await session.tasks.exportXml(this.options.taskName);
+    if (misaoTaskHash(xml) !== taskHash) throw new MisaoServiceError('custom_socket', 'The misao task does not match the installation record.');
+    const action = soleExecAction(xml);
+    if (!action || misaoTaskVersion(action, session.windows.systemRoot, session.windows.misaoRoot, session.pipe, this.options.taskName) !== version) {
+      throw new MisaoServiceError('custom_socket', 'The misao task does not start the recorded release.');
+    }
+    if (!status.socketPresent && state.running) throw new MisaoServiceError('daemon_not_ready', 'The misao task is running but the daemon cannot be identified.');
+    await assertUnshared();
+    if (status.socketPresent) {
+      await this.verifyRelease(session, version);
+      const holder = parseMisaoHolderOutput(await this.script(session, 'Checking the misao pipe owner', misaoHolderScript(session.windows.misaoRoot, session.pipe)));
+      const decision = decideMisaoStop(session.windows.misaoRoot, holder);
+      if (!decision.stop || holder.kind !== 'holder') throw new MisaoServiceError('custom_socket', `The misao daemon cannot be verified: ${decision.stop ? 'no holder' : decision.reason}`);
+      const exe = this.layout(session, version).exe;
+      const chains = decidePathChains(parsePathChainOutput(await this.script(session, 'Checking the misao executable paths', pathChainScript(holder.exe, exe))), holder.exe, exe);
+      if (!chains.stop) throw new MisaoServiceError('custom_socket', chains.reason);
+      await assertUnshared();
+      await this.stopDaemonProcess(session, version);
+    }
+    await this.waitUntilTaskIdle(session);
+    await assertUnshared();
+    if ((await session.tasks.exportXml(this.options.taskName)) !== xml) throw new MisaoServiceError('custom_socket', 'The misao task changed during removal.');
+    await session.tasks.delete(this.options.taskName);
+    if ((await session.tasks.query(this.options.taskName)).exists) throw new MisaoServiceError('update_failed', 'The misao task is still registered.');
+  }
+
+  async install(target: WindowsTarget, bundle: MisaoBundle, onProgress: (step: MisaoInstallStep) => void, options?: { requireNewTask: boolean }): Promise<MisaoAgentInstallResult> {
     onProgress('inspect');
     const { session, status } = await this.inspect(target, bundle);
     await this.refuseTaskOfAnotherRootIfAsked(session);
+    if (options?.requireNewTask && (await session.tasks.query(this.options.taskName)).exists) throw new MisaoServiceError('custom_socket', 'The misao task appeared before installation; it was left unchanged.');
     const live = status.socketPresent;
     // The pipe probe can miss a daemon that is just starting (the logon task is on its way up): the task's own state says so.
     if (!live && (await this.taskIsRunning(session))) {
@@ -125,10 +160,12 @@ export class MisaoWindowsInstaller {
 
     onProgress('start');
     const previous = await this.snapshot(session, status.installedVersion);
+    if (options?.requireNewTask && previous.taskXml !== undefined) throw new MisaoServiceError('custom_socket', 'The misao task appeared before registration; it was left unchanged.');
     try {
-      await this.switchAndStart(session, xml);
+      await this.switchAndStart(session, xml, !options?.requireNewTask);
       return { version: bundle.version, runningVersion: bundle.version, startMethod: 'taskscheduler', updateAvailable: false };
     } catch (err) {
+      if (options?.requireNewTask) throw new MisaoServiceError('update_failed', `Installing the new misao task failed; task and files were retained for inspection: ${describeError(err)}`);
       // Nothing was running, so nothing is lost; but an older install must be startable again as it was. The old release is not started: it was not running.
       await this.undoFailedInstall(err, session, previous);
       throw err;
@@ -424,21 +461,21 @@ export class MisaoWindowsInstaller {
   }
 
   /** Registers the task from XML the agent writes beside the install (the XML holds no secret), and removes the file afterwards. */
-  private async registerXml(session: Session, xml: string): Promise<void> {
+  private async registerXml(session: Session, xml: string, replace = true): Promise<void> {
     const file = this.layout(session, session.bundle.version).taskXmlFile;
     const files = session.target.files();
     await files.write(file, encodeTaskXml(xml));
     try {
-      await session.tasks.registerFromFile(this.options.taskName, file);
+      await session.tasks.registerFromFile(this.options.taskName, file, replace);
     } finally {
       await files.remove(file).catch(() => undefined);
     }
   }
 
   /** Writes `current`, registers the task for the bundled release and starts it; the daemon must be listening when this returns. */
-  private async switchAndStart(session: Session, xml: string): Promise<void> {
+  private async switchAndStart(session: Session, xml: string, replace = true): Promise<void> {
     await this.writeCurrent(session, session.bundle.version);
-    await this.registerXml(session, xml);
+    await this.registerXml(session, xml, replace);
     await session.tasks.start(this.options.taskName);
     await this.waitUntilListening(session);
     await this.verifyRelease(session, session.bundle.version);

@@ -4,10 +4,10 @@ import os from 'os';
 import path from 'path';
 import { UnixSecretFileGuard } from '../../../shared/os/secretFileGuard';
 import { readInstallFileIdentity, readInstallInventory } from '../windowsInstallInventory';
-vi.mock('../windowsHubFolderOps', async (importOriginal) => ({ ...(await importOriginal<typeof import('../windowsHubFolderOps')>()), removeFolderWithRd: vi.fn() }));
+vi.mock('../windowsHubFolderOps', async (importOriginal) => ({ ...(await importOriginal<typeof import('../windowsHubFolderOps')>()), removeFolderWithRd: vi.fn(), assertHubDirsOnlyOwnerWritable: vi.fn(async () => undefined) }));
 
 import { removeFolderWithRd } from '../windowsHubFolderOps';
-import { assertNoHubLaunchers, assertNoOtherHubProcesses, consumeWindowsInstallRecord, readWindowsInstallRecord, removeRecordedTree, verifyRecordedData, verifyRecordedDatabase, verifyRecordedRelease } from '../windowsHubUninstall';
+import { assertNoHubLaunchers, assertNoOtherHubProcesses, consumeWindowsInstallRecord, prepareRecordedMisao, readWindowsInstallRecord, removeRecordedTree, verifyRecordedData, verifyRecordedDatabase, verifyRecordedRelease } from '../windowsHubUninstall';
 
 const roots: string[] = [];
 afterEach(() => { for (const root of roots.splice(0)) fs.rmSync(root, { recursive: true, force: true }); });
@@ -73,6 +73,44 @@ describe('recorded release verification', () => {
     const { hub, guard } = setup();
     consumeWindowsInstallRecord(hub, readWindowsInstallRecord(hub, guard), guard);
     expect(readWindowsInstallRecord(hub, guard).consumed).toBe(true);
+  });
+
+  it('refuses a modified misao release or a replaced pointer', async () => {
+    const { hub, guard } = setup();
+    const prefix = path.dirname(hub);
+    const root = path.join(prefix, 'misao');
+    const release = path.join(root, 'v1.2.3');
+    fs.mkdirSync(release, { recursive: true });
+    const exe = path.join(release, 'misao.exe');
+    const pointer = path.join(root, 'current');
+    fs.writeFileSync(exe, 'original');
+    fs.writeFileSync(pointer, 'v1.2.3');
+    const record = { ...readWindowsInstallRecord(hub, guard), misao: { version: 'v1.2.3', rootIdentity: readInstallFileIdentity(root), currentIdentity: readInstallFileIdentity(pointer), releaseIdentity: readInstallFileIdentity(release), taskHash: 'a'.repeat(64), inventory: readInstallInventory(release), fileIdentities: [{ path: 'misao.exe', identity: readInstallFileIdentity(exe) }] } };
+    await expect(prepareRecordedMisao(prefix, record, guard, vi.fn(), 'C:\\Windows')).resolves.toEqual({ root, version: 'v1.2.3' });
+    fs.writeFileSync(exe, 'modified');
+    await expect(prepareRecordedMisao(prefix, record, guard, vi.fn(), 'C:\\Windows')).rejects.toThrow(/differs/);
+    fs.writeFileSync(exe, 'original');
+    const oldExe = path.join(prefix, 'misao-old.exe');
+    fs.renameSync(exe, oldExe);
+    fs.writeFileSync(exe, 'original');
+    await expect(prepareRecordedMisao(prefix, record, guard, vi.fn(), 'C:\\Windows')).rejects.toThrow(/recorded protected/);
+    fs.unlinkSync(exe);
+    fs.renameSync(oldExe, exe);
+    fs.renameSync(pointer, `${pointer}.old`);
+    fs.writeFileSync(pointer, 'v1.2.3');
+    await expect(prepareRecordedMisao(prefix, record, guard, vi.fn(), 'C:\\Windows')).rejects.toThrow(/pointer is not the recorded/);
+  });
+
+  it('removes only an isolated release and leaves other misao files intact', async () => {
+    const { hub } = setup();
+    const root = path.join(path.dirname(hub), 'misao');
+    fs.mkdirSync(path.join(root, 'v1.2.3'), { recursive: true });
+    fs.writeFileSync(path.join(root, 'v1.2.3', 'misao.exe'), 'binary');
+    fs.writeFileSync(path.join(root, 'user-file'), 'keep');
+    vi.mocked(removeFolderWithRd).mockImplementationOnce(async (_run, _system, parent, name) => { fs.rmSync(path.join(parent, name), { recursive: true }); });
+    await removeRecordedTree(root, 'v1.2.3', vi.fn(), 'C:\\Windows');
+    expect(fs.existsSync(path.join(root, 'v1.2.3'))).toBe(false);
+    expect(fs.readFileSync(path.join(root, 'user-file'), 'utf8')).toBe('keep');
   });
 });
 
