@@ -9,12 +9,15 @@ import { openLookoutItem } from '../../lib/lookoutOpen';
 import { useOpenTerminalTarget } from '../../hooks/useTerminalTargetOpener';
 import type { ConnectPaneFn } from '../../lib/terminalRef';
 import { useLookoutSummaries } from '../../hooks/useLookoutSummaries';
+import { LookoutCounts } from '../lookout/LookoutCounts';
+import { LookoutSection } from '../lookout/LookoutSection';
 import { LookoutSummaryText } from '../lookout/LookoutSummaryText';
 import { useLookout } from '../../hooks/useLookout';
 import type { LookoutItem } from '../../lib/lookoutSummary';
 import { MOBILE_STATUS_BAR_HEIGHT } from '../../lib/mobileChrome';
 import { IconButton } from '../ui/IconButton';
 import { Icon } from '../ui/Icon';
+import { Button, Notice } from '../ui';
 import { useAgentActivity } from '../../hooks/useAgentActivity';
 import { HealthDot } from '../statusbar/HealthDot';
 import { ResourceMeter } from '../statusbar/ResourceMeter';
@@ -75,7 +78,7 @@ export function MobileStatusBar({ openTask, connectPane }: MobileStatusBarProps)
   const openTerminal = useOpenTerminalTarget(connectPane);
   const { t } = useTranslation(['workspace', 'common', 'lookout']);
   const { sections, rows, historyCount, open, openDrawer, closeDrawer } = useLookout();
-  const { markFinishedSeen, dismissFinished, clearSeenFinished, retention } = useAgentActivity();
+  const { markFinishedSeen, dismissFinished, clearSeenFinished, retention, snapshotStatus, retrySnapshot } = useAgentActivity();
   const [historyOpen, setHistoryOpen] = useState(false);
   const [healthOpen, setHealthOpen] = useState(false);
   const openedUnread = useRef<ActiveWindowRow[]>([]);
@@ -153,16 +156,20 @@ export function MobileStatusBar({ openTask, connectPane }: MobileStatusBarProps)
             zIndex: 100,
             maxHeight: '60vh',
             overflowY: 'auto',
-            background: 'var(--bg-elevated)',
+            background: 'var(--bg-solid)',
             borderRadius: 'var(--radius-lg) var(--radius-lg) 0 0',
             boxShadow: 'var(--shadow-3)',
             padding: 'var(--space-2)',
           }}
         >
-          {[sections.attention, sections.active].map((items, index) => items.length > 0 && (
-            <section key={index}>
-              <div style={sectionHeaderStyle}>{index === 0 ? `${t('lookout:sections.attention')} (${items.length})` : t('workspace:activityPill.workingSection', { count: items.length })}</div>
-              {items.map((group) => (
+          <LookoutCounts counts={sections.counts} activityKnown={snapshotStatus === 'ready'} />
+          {snapshotStatus === 'error' && <Notice tone="warning" role="alert" action={<Button size="sm" onClick={retrySnapshot}>{t('lookout:retry')}</Button>}>{t('lookout:loadError')}</Notice>}
+          {snapshotStatus === 'loading' && <p role="status" style={{ color: 'var(--text-dim)' }}>{t('lookout:loading')}</p>}
+          <LookoutSection name="attention" countKnown={snapshotStatus === 'ready'} items={sections.attention} onOpen={handleWorkingRowOpen} summaries={summaries} empty={snapshotStatus === 'ready' ? undefined : <></>} />
+          {sections.active.length > 0 && (
+            <section>
+              <div style={sectionHeaderStyle}>{t('workspace:activityPill.workingSection', { count: sections.active.length })}</div>
+              {sections.active.map((group) => (
                 <button
                   key={group.key}
                   type="button"
@@ -180,7 +187,7 @@ export function MobileStatusBar({ openTask, connectPane }: MobileStatusBarProps)
                 </button>
               ))}
             </section>
-          ))}
+          )}
           {unreadRows.length > 0 && (
             <section>
               <div style={sectionHeaderStyle}>{t('workspace:activityPill.finishedSection', { count: unreadRows.length })}</div>
@@ -208,12 +215,6 @@ export function MobileStatusBar({ openTask, connectPane }: MobileStatusBarProps)
               ))}
             </section>
           )}
-          {workingGroups.length === 0 && finishedRows.length === 0 && (
-            <div style={{ padding: '12px 8px', textAlign: 'center', color: 'var(--text-dim)', fontSize: 'var(--font-sm)' }}>
-              {t('workspace:activityPill.empty')}
-            </div>
-          )}
-
           {/* サーバーヘルス節。アイドル時（稼働0・未読完了0）でも表示する。 */}
           <section style={{ borderTop: '1px solid var(--border)', marginTop: 4, paddingTop: 6 }}>
             <div style={{ display: 'flex', alignItems: 'center', flexWrap: 'wrap', justifyContent: 'space-between', gap: 4, padding: '4px 8px 6px' }}>
@@ -279,7 +280,7 @@ export function MobileStatusBar({ openTask, connectPane }: MobileStatusBarProps)
           <span style={{ position: 'relative', display: 'flex', alignItems: 'center', gap: 6, flex: 1, minWidth: 0, overflow: 'hidden' }}>
             {workingCount > 0 ? <BrailleSpinner /> : <span aria-hidden="true" style={{ color: 'var(--text-dim)' }}>⠿</span>}
             <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-              {t('workspace:activityPill.statusBarWorking', { count: workingCount })}
+              {snapshotStatus === 'ready' ? t('workspace:activityPill.statusBarWorking', { count: workingCount }) : t('workspace:activityPill.statusBarUnknown')}
             </span>
             {unreadFinishedCount > 0 && (
               <span style={{ display: 'inline-flex', alignItems: 'center', gap: 4, flexShrink: 0 }}>

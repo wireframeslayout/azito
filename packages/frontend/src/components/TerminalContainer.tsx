@@ -55,7 +55,7 @@ interface TerminalContainerProps {
   projectId?: number;
   taskId?: number;
   /** The registered window this terminal shows, for callers that cannot pass project / allTasks to resolve it. */
-  registeredWindow?: { id: number; taskId?: number | null };
+  registeredWindow?: { id: number; taskId?: number | null; ownerType?: 'project' | 'task' | 'server' };
   project?: Project | null;
   allTasks?: Task[];
   sessions?: Session[];

@@ -62,7 +62,7 @@ export function preferredPaneOrdinal(win: WindowWithPanes): number | null {
 interface RegisteredWindowRef {
   id: number;
   taskId?: number | null;
-  ownerType?: 'project' | 'task';
+  ownerType?: 'project' | 'task' | 'server';
 }
 
 /**
