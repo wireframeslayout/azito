@@ -1,4 +1,5 @@
-import type { AgentDefinition, IAgentProvider, LaunchOptions } from '../AgentProvider';
+import type { LaunchOptions } from '../launchOptions';
+import type { AgentDefinition, IAgentProvider } from '../AgentProvider';
 import { commandLineLaunch, type WorkerLaunch } from '../WorkerLaunch';
 
 const definition: AgentDefinition = {

@@ -31,7 +31,7 @@ export default function LocalMenuPopover({ open, onClose, anchorY, children }: L
   if (!open) return null;
 
   return (
-    <div
+    <div className="floating-surface"
       ref={ref}
       role="dialog"
       aria-label={t('menu.sidebarContent')}

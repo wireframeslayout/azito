@@ -324,6 +324,7 @@ export default function PromptInputBar({ readOnlyReason, relay, windowId, paneId
       {/* 復元注記はレイアウト幅に影響させないよう、バー上に絶対配置の1.5秒オーバーレイとして表示する（F2/SP狭幅対策）。 */}
       {!readOnlyReason && showRestoredHint && (
         <div
+          className="floating-surface"
           role="status"
           style={{
             position: 'absolute',
@@ -397,9 +398,8 @@ export default function PromptInputBar({ readOnlyReason, relay, windowId, paneId
         </div>
       )}
 
-      {readOnlyReason && <div role="note" style={{ color: 'var(--text-dim)', fontSize: 'var(--font-xs)', marginBottom: 'var(--space-1)' }}>{readOnlyReason}</div>}
       <div style={{ display: 'flex', gap: 8, alignItems: 'flex-end' }}>
-        <textarea
+        {readOnlyReason ? <div role="note" style={{ flex: 1, color: 'var(--text-dim)', fontSize: 'var(--font-xs)', marginBottom: 'var(--space-1)' }}>{readOnlyReason}</div> : <textarea
           data-maximize-input
           ref={textareaRef}
           value={text}
@@ -414,7 +414,7 @@ export default function PromptInputBar({ readOnlyReason, relay, windowId, paneId
           }}
           onKeyDown={handleKeyDown}
           rows={1}
-          disabled={sending || !!readOnlyReason}
+          disabled={sending}
           placeholder={t('promptBar.placeholder')}
           aria-label={t('promptBar.placeholder')}
           style={{
@@ -431,7 +431,7 @@ export default function PromptInputBar({ readOnlyReason, relay, windowId, paneId
             minHeight: TEXTAREA_MIN_HEIGHT,
             maxHeight: TEXTAREA_MAX_HEIGHT,
           }}
-        />
+        />}
 
         {/* 🎨 表示スタイル切替（Issue #69 S8）: SP コンテンツヘッダーから撤去し、🕘 履歴の隣へ
             移設。viewMode が渡されている＝チャット表示中（TerminalContainer 経由）のときのみ
@@ -443,11 +443,10 @@ export default function PromptInputBar({ readOnlyReason, relay, windowId, paneId
           </div>
         )}
 
-        <div style={{ position: 'relative', flexShrink: 0 }}>
+        {!readOnlyReason && <><div style={{ position: 'relative', flexShrink: 0 }}>
           <button
             type="button"
             onClick={() => setHistoryOpen((o) => !o)}
-            disabled={!!readOnlyReason}
             aria-haspopup="menu"
             aria-expanded={historyOpen}
             aria-label={t('promptBar.history')}
@@ -467,7 +466,7 @@ export default function PromptInputBar({ readOnlyReason, relay, windowId, paneId
           >
             <Icon name="history" size={16} />
           </button>
-          {historyOpen && !readOnlyReason && (
+          {historyOpen && (
             <HistoryPopover entries={activeHistory()} onSelect={insertFromHistory} onClose={() => setHistoryOpen(false)} />
           )}
         </div>
@@ -494,10 +493,10 @@ export default function PromptInputBar({ readOnlyReason, relay, windowId, paneId
           }}
         >
           {sending ? <Spinner size={14} color={canSend ? 'var(--bg-solid)' : undefined} /> : <Icon name="arrow-up" size={16} />}
-        </button>
+        </button></>}
       </div>
 
-      {sendError && (
+      {!readOnlyReason && sendError && (
         <div role="alert" style={{ marginTop: 6, fontSize: 'var(--font-xs)', color: 'var(--danger)' }}>{sendError}</div>
       )}
     </div>

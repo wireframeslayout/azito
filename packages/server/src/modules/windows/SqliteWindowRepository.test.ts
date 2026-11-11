@@ -279,8 +279,36 @@ describe('window rename persistence', () => {
     db.prepare('UPDATE tasks SET tmux_window = ? WHERE id = ?').run('win1', taskId);
     const repo = new SqliteWindowRepository(db);
     const id = repo.add(baseWindow({ ownerType: 'task', projectId: null, taskId, isPrimary: true }));
+    const record = { workerType: 'claude' as const, args: ['--permission-mode', 'default'] };
+    repo.update(id, { workerLaunch: record });
     repo.renameTmuxWindow(id, 'renamed');
+    expect(repo.findById(id)?.workerLaunch).toEqual(record);
     expect(repo.findById(id)).toMatchObject({ tmuxTarget: 'proj:renamed', muxRef: { kind: 'tmux', workspace: 'proj', window: 'renamed' } });
     expect(db.prepare('SELECT tmux_window FROM tasks WHERE id = ?').get(taskId)).toEqual({ tmux_window: 'renamed' });
+    repo.update(id, { tmuxTarget: 'proj:recreated', sleeping: false });
+    expect(repo.findById(id)?.workerLaunch).toEqual(record);
+    db.close();
+  });
+});
+
+
+describe('worker launch storage', () => {
+  it('stores the record privately and keeps old rows unknown', () => {
+    const db = buildSeededDb();
+    const repo = new SqliteWindowRepository(db);
+    const id = repo.add(baseWindow({ ownerType: 'server' }));
+    expect(repo.findById(id)?.workerLaunch).toBeNull();
+    const record = { workerType: 'claude' as const, args: ['--permission-mode', 'default'] };
+    repo.update(id, { workerLaunch: record });
+    const found = repo.findById(id)!;
+    expect(found.workerLaunch).toEqual(record);
+    expect(Object.keys(found)).toContain('workerLaunch');
+    repo.update(id, { label: 'new label' });
+    expect(repo.findById(id)?.workerLaunch).toEqual(record);
+    repo.update(id, { agentSessionId: 'first-session' });
+    expect(repo.findById(id)?.workerLaunch).toEqual(record);
+    repo.update(id, { agentSessionId: 'different-session' });
+    expect(repo.findById(id)?.workerLaunch).toBeNull();
+    db.close();
   });
 });

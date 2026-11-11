@@ -50,7 +50,7 @@ export function BottomSheet({ open, onClose, title, hideTitle, children, detents
       )}
       <div
         ref={ref}
-        className="bottom-sheet"
+        className={detents ? "bottom-sheet floating-surface" : "bottom-sheet"}
         role="dialog"
         aria-modal="true"
         aria-label={title}

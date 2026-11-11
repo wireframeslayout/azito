@@ -1,3 +1,4 @@
+import type { LaunchOptions } from './launchOptions';
 import type { TransportFactory } from '../servers/transport/TransportFactory';
 import type { ISessionStrategy } from './SessionStrategy';
 import type { LocalAgentHomes } from './agentHomes';
@@ -24,12 +25,6 @@ export interface AgentDefinition {
 
 // ─── Launch command types ───
 
-export interface LaunchOptions {
-  model?: string | null;
-  extraArgs?: string | null;
-  /** When false, omit MCP blocking flags. Default true (fail-closed). */
-  blockMcp?: boolean;
-}
 
 // ─── Session strategy injection ───
 

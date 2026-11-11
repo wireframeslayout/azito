@@ -125,6 +125,11 @@
       "unknown": "Unknown"
     },
     "unavailable": "Relay is unavailable for this subagent.",
+    "relayUnavailable": {
+      "unnamed": "This subagent has no routing name, so the parent cannot be asked to relay a message to it.",
+      "finished": "This subagent has finished.",
+      "invalid_name": "The subagent name is invalid or shared by another subagent."
+    },
     "relayNotice": "Send to {{name}} through the parent.",
     "unknownNotice": "This subagent’s status is unknown. The parent may be unable to deliver the message.",
     "relaySent": "Requested from the parent.",

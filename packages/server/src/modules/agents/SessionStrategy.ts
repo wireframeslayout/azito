@@ -1,5 +1,6 @@
 import type { ServerConfig } from '../servers/Server';
 import type { WorkerLaunch } from './WorkerLaunch';
+import type { LaunchOptions } from './launchOptions';
 
 /**
  * How a respawn starts the conversation it has an id for: `resume` the existing one, `new` = start it fresh under the
@@ -20,7 +21,7 @@ export interface ISessionStrategy {
    * 再起動（respawn）の起動。ペインのシェルの行にするかプログラムと引数にするかは、起動する側が決める。
    * `conversation` が `attach` のとき `attachId`（`claude attach` に渡す短い id）を使う。attach を持たない実装では無視する。
    */
-  buildRespawnLaunch(agentSessionId: string | null, model: string | null, extraArgs: string | null, blockMcp?: boolean, conversation?: RespawnConversation, attachId?: string | null): WorkerLaunch | null;
+  buildRespawnLaunch(agentSessionId: string | null, model: string | null, extraArgs: string | null, blockMcp?: boolean, conversation?: RespawnConversation, attachId?: string | null, options?: Pick<LaunchOptions, 'defaultPermissionFlags' | 'recordedArgs'>): WorkerLaunch | null;
   /**
    * The agent type whose conversation log (transcripts) tells whether a recorded session id has a conversation, which a respawn asks
    * before it resumes it (the agent only writes the file at the first message). null: a recorded id always has one (a Codex id is

@@ -142,7 +142,7 @@ export function MobileStatusBar({ openTask, connectPane }: MobileStatusBarProps)
   return (
     <div ref={containerRef} style={{ position: 'relative' }}>
       {open && (
-        <div
+        <div className="floating-surface"
           role="dialog"
           aria-label={t('workspace:activityPill.ariaLabel')}
           style={{

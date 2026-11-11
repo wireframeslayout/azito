@@ -225,7 +225,7 @@ export function StatusBar({ servers }: StatusBarProps) {
       <LookoutDrawer open={lookout.open && !isMobile} onClose={lookout.closeDrawer} sections={lookout.sections} snapshotStatus={snapshotStatus} onRetry={retrySnapshot} onOpenItem={handleOpenLookoutItem} />
 
       {openItem && (
-        <div
+        <div className="floating-surface"
           ref={panelRef}
           style={{
             position: 'fixed',

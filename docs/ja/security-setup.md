@@ -39,7 +39,7 @@
 
 | 変数 | 必須 | 既定値 | 説明 |
 |---|---|---|---|
-| `AZITO_UI_TOKEN` | 任意 | `$AZITO_DATA_DIR/ui-token` を自動生成 | API / WebSocket 認証用トークン（operator の全権クレデンシャル）。env → ファイル → 自動生成の順で解決。`azito token show`（リリース版）で確認、`azito token rotate` でローテーション可能。ソース版では `packages/server/.env` または `data/ui-token` を直接参照。`azito token rotate` はローカルの `~/.azito/operator.env` と `~/.claude/settings.json` の MCP トークン（存在する場合のみ）を自動更新する。**`~/.azito/azitoctl*.env` は更新しない**（Issue #28 Phase B: このファイルには置かない） |
+| `AZITO_UI_TOKEN` | 任意 | `$AZITO_DATA_DIR/ui-token` を自動生成 | API / WebSocket 認証用トークン（operator の全権クレデンシャル）。env → ファイル → 自動生成の順で解決。`azito token show`（リリース版）で確認、`azito token rotate` でローテーション可能。ソース版では `packages/server/.env` または `data/ui-token` を直接参照。`azito token rotate` は選択したローカルの operator プロファイル（存在する場合のみ）と、既定プロファイルの場合は `~/.claude/settings.json` の MCP トークンを更新する。**`~/.azito/azitoctl*.env` は更新しない**（Issue #28 Phase B: このファイルには置かない） |
 | `AZITO_DATA_DIR` | 任意 | リポジトリルート直下（`data.db`, `data/*`） | 永続データディレクトリ。設定すると `data.db`, `master.key`, `vapid-keys.json`, `ui-token`, `webhook-token`, `browser-profile/`, `sidekicks/` がこのディレクトリ配下に統合される（mode 700）。バージョンディレクトリ方式での運用時に必須 |
 | `AZITO_BIND` | 任意 | `127.0.0.1` | 待ち受けアドレス。`0.0.0.0` と `::` は明示的に拒否される。リモートアクセス時は Tailscale IP を指定 |
 | `AZITO_ALLOWED_ORIGINS` | 任意 | `http://localhost:5173,http://localhost:3001` | CORS と WebSocket の Origin 検証で許可するオリジン（カンマ区切り） |
@@ -105,6 +105,8 @@ harness 配布分離（Phase B）を説明します。
 
 ### `~/.azito/operator.env`
 
+アップグレード前に接頭辞付きでセットアップした場合、トークンが接頭辞なしの `operator.env` に残っていることがあります。`setup.sh` を `--prefix` 付きで再実行し、古い `operator.env` の内容を確認してください。自動移行は行いません。
+
 `setup.sh` に `--ui-token` を渡すと、`AZITO_URL` と `AZITO_UI_TOKEN` を `~/.azito/operator.env`
 （mode 600）に書き出します。**このファイルは `setup.sh` 自身を含め、いかなるスクリプトからも
 自動的に読み込まれません。** 使うには:
@@ -145,7 +147,7 @@ azito auth doctor
 案内します。
 
 - (a) `~/.azito/azitoctl*.env` に `AZITO_UI_TOKEN` 行が残っていないか
-- (b) `~/.azito/operator.env`（存在する場合）のパーミッションが 0600 か
+- (b) 全 `~/.azito/operator*.env`（存在する場合）のパーミッションが 0600 か
 - (c) `~/.claude/settings.json` の MCP トークン（存在する場合）が、ローカルで読める範囲で
   ハブの現在のトークンと一致するか
 - (d) Codex 側の `azt-mcp` トークンがハブの現在値と一致するか（`codex` CLI がある場合のみ）
@@ -642,3 +644,5 @@ DB スキーマの追加（`servers.ssh_host_fingerprint`）は旧コードで�
 非昇格の SSH アカウントで Windows agent を導入する場合は、次の準備をしてください。事前に管理者アカウントで、agent の `node.exe`、Tailscale アドレス、設定した TCP ポートについて、Tailscale のアドレス範囲からの受信を許可するファイアウォール規則を用意してください。非昇格セッションでは、すべての構成で有効なポリシーを確定できるとは限りません。判定不能の場合、AZITO は理由を表示して導入・更新を開始せずに停止します。非昇格セッションではローカルとグループポリシーのレジストリ規則を確認しますが、実効ポリシー全体は確定できないため、規則が設定済みでもこの確認で停止します。昇格セッションでは ActiveStore を使用します。AZITO が作成する規則は同じ表示名と Windows が生成する一意の規則 ID を使用します。削除時には規則を残して手動確認を案内し、非昇格で一致する規則が見えない場合は判定不能と報告します。プロセスの所有者やコマンドラインを読み取れない場合は、対象を特定できるまで削除が停止することがあります。
 
 Windows build 26200 の非昇格ローカルセッションでプロセスとファイアウォールの API を確認しました。管理者でないユーザーの OpenSSH セッションと、導入・更新・削除の一連の動作は実機で未検証です。
+
+運用者プロファイルは既定では `~/.azito/operator.env`、`--prefix` / `AZITO_PREFIX` 指定時は `~/.azito/operator-<prefix>.env` です。使用するファイルを明示的に読み込んでください。`azito token rotate` はプロセス環境の `AZITO_HARNESS_PREFIX` を優先し、未指定なら対象ハブの `.env` を参照して、該当ファイルだけを更新します。共有 Claude MCP トークンは既定プロファイルの場合だけ更新します。`azito auth doctor` は全プロファイルの権限を検査します。既存ファイルの自動移行はありません。

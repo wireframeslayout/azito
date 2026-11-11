@@ -72,10 +72,12 @@ be rejected with `isolation_intent_requires_scoped_auth` (409).
 
 ### `setup.sh --purge-operator-token`
 
-Passing `--purge-operator-token` to `harness/setup.sh` proactively removes any operator-equivalent
+Unix `--purge-operator-token` removes only the selected operator profile (`operator.env` or `operator-<prefix>.env`), while retaining its existing shared MCP and legacy azitoctl cleanup. The isolation doctor checks all profiles; review and remove other credentials manually. Windows purge is not supported.
+
+Passing `--purge-operator-token` to `harness/setup.sh` proactively removes the selected profile and shared operator-equivalent
 tokens left on that server:
 
-- Deletes `~/.azito/operator.env` (if present)
+- Deletes the selected `~/.azito/operator[-<prefix>].env` (if present)
 - Strips `AZITO_UI_TOKEN` from `mcpServers.azt-mcp.env` in `~/.claude/settings.json`
 - Strips `AZITO_UI_TOKEN` from Codex's `config.toml` (`mcp_servers.azt-mcp.env`)
 - Cannot be combined with `--ui-token` (`setup.sh` itself rejects it with an error — distributing a
@@ -97,7 +99,7 @@ declared isolation (`agent`-type only), checking whether credentials have actual
 | `no_ssh_private_keys` | A PEM-format private key remains under `~/.ssh` |
 | `gh_unauthenticated` | `gh` still has local credentials (a token in `hosts.yml`, or `GH_TOKEN`/`GITHUB_TOKEN`/`GH_ENTERPRISE_TOKEN`/`GITHUB_ENTERPRISE_TOKEN` set) |
 | `no_git_credentials` | `git config credential.helper` resolves to something effective, or `~/.git-credentials` exists |
-| `no_operator_token` | An `AZITO_UI_TOKEN=` line remains in `~/.azito/azitoctl*.env` or `operator.env` |
+| `no_operator_token` | An `AZITO_UI_TOKEN=` line remains in `~/.azito/azitoctl*.env` or `operator*.env` |
 | `no_claude_mcp_token` | `AZITO_UI_TOKEN` remains in `mcpServers.azt-mcp.env` inside `~/.claude/settings.json` |
 | `no_codex_mcp_token` | `AZITO_UI_TOKEN` remains in Codex's `config.toml` (`mcp_servers.azt-mcp.env`) |
 | `no_operator_environment` | The execution environment `/api/exec` launches into (the inherited process environment) has any of `AZITO_UI_TOKEN`/`AZITO_WEBHOOK_TOKEN`/`AZITO_MASTER_KEY` set (`AZITO_AGENT_TOKEN` is the hub<->agent transport credential and is excluded) |
@@ -545,3 +547,4 @@ A Windows agent cannot be an isolated server: declaring `isolationIntent` is ref
 - [Code Distribution](./code-distribution.md) -- How hub-proxied code distribution works (bare mirror, bundle transfer, incremental delivery), and where it applies beyond isolated servers
 
 See also [session tracking and hooks](activity-detection.md).
+

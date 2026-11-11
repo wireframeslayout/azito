@@ -1,3 +1,4 @@
+import { publicWindow } from '../windows/Window';
 import { assertHostFeature } from '../../shared/os/hostFeature';
 import * as path from 'path';
 import type { FastifyPluginCallback } from 'fastify';
@@ -119,7 +120,7 @@ const projectsRoutes: FastifyPluginCallback<ProjectsRouteOptions> = (fastify, op
 
   // ── GET /api/projects ──
   fastify.get('/api/projects', async () => {
-    return projectRepo.findAll();
+    return projectRepo.findAll().map((project) => ({ ...project, windows: project.windows.map(publicWindow) }));
   });
 
   // ── POST /api/projects ──
@@ -148,7 +149,7 @@ const projectsRoutes: FastifyPluginCallback<ProjectsRouteOptions> = (fastify, op
     async (request, reply) => {
       const p = projectRepo.findById(parseInt(request.params.id, 10));
       if (!p) return reply.status(404).send({ error: 'Project not found' });
-      return p;
+      return { ...p, windows: p.windows.map(publicWindow) };
     },
   );
 

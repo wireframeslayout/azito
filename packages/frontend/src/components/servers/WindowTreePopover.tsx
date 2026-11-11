@@ -217,7 +217,7 @@ export default function WindowTreePopover({
           style={{ position: 'fixed', inset: 0, zIndex: 8 }}
           onClick={onClose}
         />
-        <div style={{
+        <div className="floating-surface" style={{
           position: 'fixed', left: 0, right: 0, bottom: 0, zIndex: 9,
           background: 'var(--bg-elevated)',
           border: '1px solid var(--border)',
@@ -240,7 +240,7 @@ export default function WindowTreePopover({
   return (
     <>
       <div style={{ position: 'fixed', inset: 0, zIndex: 8 }} onClick={onClose} />
-      <div style={{
+      <div className="floating-surface" style={{
         position: 'absolute', left: 14, top: 46, zIndex: 9,
         width: 440, maxHeight: '60vh', overflow: 'auto',
         background: 'var(--bg-elevated)',

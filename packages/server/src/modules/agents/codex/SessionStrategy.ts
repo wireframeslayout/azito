@@ -6,6 +6,8 @@ import { raceDeadline } from '../../../shared/fs/deadline';
 import { pathApiFor } from '../../../shared/os/hostPath';
 import { findFilesByMtime, firstLineOf, normalizeCwd, parseRolloutMeta, ROLLOUT_HEAD_BYTES, SESSION_SCAN_BUDGET_MS, type RolloutCandidate } from '../sessionScanUtils';
 import { codexHomeOf, type LocalAgentHomes } from '../agentHomes';
+import type { LaunchOptions } from '../launchOptions';
+import type { RespawnConversation } from '../SessionStrategy';
 import type { WorkerLaunch } from '../WorkerLaunch';
 import { buildCodexLaunch, buildCodexRespawnLaunch } from './launchCommand';
 
@@ -30,11 +32,11 @@ export class CodexSessionStrategy implements ISessionStrategy {
     return ['resume', sessionId];
   }
 
-  buildRespawnLaunch(agentSessionId: string | null, model: string | null, extraArgs: string | null, blockMcp = true): WorkerLaunch {
+  buildRespawnLaunch(agentSessionId: string | null, model: string | null, extraArgs: string | null, blockMcp = true, _conversation?: RespawnConversation, _attachId?: string | null, options?: Pick<LaunchOptions, 'defaultPermissionFlags' | 'recordedArgs'>): WorkerLaunch {
     if (agentSessionId) {
-      return buildCodexRespawnLaunch(agentSessionId, { model, extraArgs, blockMcp });
+      return buildCodexRespawnLaunch(agentSessionId, { model, extraArgs, blockMcp, ...options });
     }
-    return buildCodexLaunch({ model, extraArgs, blockMcp });
+    return buildCodexLaunch({ model, extraArgs, blockMcp, ...options });
   }
 
   async scanSessionId(server: ServerConfig, workingDirectory: string | null, afterTimestamp?: Date): Promise<string | null> {

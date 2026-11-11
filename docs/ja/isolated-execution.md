@@ -67,10 +67,12 @@ C-1（層3が前提）の帰結として、**`isolation_intent` を有効化す�
 
 ### `setup.sh --purge-operator-token`
 
+Unix の `--purge-operator-token` は選択した operator プロファイルだけを削除し、共有 MCP と旧 azitoctl 資格情報は従来どおり掃除します。隔離診断は全プロファイルを検査するため、他の資格情報は確認して手動で整理してください。Windows の purge は非対応です。
+
 `harness/setup.sh` に `--purge-operator-token` を渡すと、そのサーバー上に残っている
 operator 相当のトークンを積極的に除去します。
 
-- `~/.azito/operator.env` を削除する（存在すれば）
+- 選択した `~/.azito/operator[-<prefix>].env` を削除する（存在すれば）
 - `~/.claude/settings.json` の `mcpServers.azt-mcp.env` から `AZITO_UI_TOKEN` を除去する
 - Codex の `config.toml`（`mcp_servers.azt-mcp.env`）から `AZITO_UI_TOKEN` を除去する
 - `--ui-token` と同時指定はできない（トークンを配りながら除去するのは矛盾するため、`setup.sh`
@@ -92,7 +94,7 @@ operator 相当のトークンを積極的に除去します。
 | `no_ssh_private_keys` | `~/.ssh` 配下に PEM 形式の秘密鍵が残っている |
 | `gh_unauthenticated` | `gh` にローカル資格情報（`hosts.yml` のトークン、`GH_TOKEN`/`GITHUB_TOKEN`/`GH_ENTERPRISE_TOKEN`/`GITHUB_ENTERPRISE_TOKEN` 環境変数）が残っている |
 | `no_git_credentials` | `git config credential.helper` に実効設定がある、または `~/.git-credentials` が存在する |
-| `no_operator_token` | `~/.azito/azitoctl*.env` または `operator.env` に `AZITO_UI_TOKEN=` 行が残っている |
+| `no_operator_token` | `~/.azito/azitoctl*.env` または `operator*.env` に `AZITO_UI_TOKEN=` 行が残っている |
 | `no_claude_mcp_token` | `~/.claude/settings.json` の `mcpServers.azt-mcp.env` に `AZITO_UI_TOKEN` が残っている |
 | `no_codex_mcp_token` | Codex の `config.toml` の `mcp_servers.azt-mcp.env` に `AZITO_UI_TOKEN` が残っている |
 | `no_operator_environment` | `/api/exec` が起動する実行環境（プロセス継承環境）に `AZITO_UI_TOKEN`/`AZITO_WEBHOOK_TOKEN`/`AZITO_MASTER_KEY` のいずれかが存在する（`AZITO_AGENT_TOKEN` はハブ↔agent間の輸送資格情報であり対象外） |
@@ -528,3 +530,4 @@ Windows の agent は隔離サーバーにできません。`isolationIntent` �
 - [コード配信](./code-distribution.md) -- hub 代行によるコード配信の仕組み（bare mirror・bundle 転送・増分配信）、隔離サーバー以外への適用
 
 [セッション ID の追従とフック](activity-detection.md#セッション-id-の追従sessionstart-フック--sessionid) も参照してください。
+

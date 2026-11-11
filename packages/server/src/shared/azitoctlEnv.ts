@@ -52,3 +52,4 @@ export function findAzitoctlEnvFiles(homeDir: string): string[] {
     .filter(isAzitoctlEnvFilename)
     .map(f => path.join(dir, f));
 }
+

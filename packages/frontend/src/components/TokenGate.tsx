@@ -44,7 +44,7 @@ export function TokenGate({ children }: TokenGateProps) {
       zIndex: 200,
       padding: 16,
     }}>
-      <div style={{
+      <div className="floating-surface" style={{
         background: 'var(--bg-elevated)',
         border: '1px solid var(--border)',
         borderRadius: 'var(--radius-md)',

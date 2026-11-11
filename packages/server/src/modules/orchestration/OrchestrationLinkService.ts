@@ -1,5 +1,5 @@
 import type { NotificationBus } from '../notifications/NotificationBus';
-import { isPrimaryTaskWindow, type IWindowRepository } from '../windows/Window';
+import { publicWindow, isPrimaryTaskWindow, type IWindowRepository } from '../windows/Window';
 import type { ITaskRepository } from '../tasks/Task';
 import type { SqliteWindowLinkRepository, LinkSubject, LinkRow } from './SqliteWindowLinkRepository';
 import type { WindowLinkView, OrchestratorSummary } from './WindowLink';
@@ -102,7 +102,7 @@ export class OrchestrationLinkService {
     return this.windows.findOrchestrators().map(w => {
       const links = (grouped.get(w.id) ?? []).filter((link) => link.kind === 'orchestration');
       const targets = new Set(links.map((link) => link.resolved_window_id !== null ? `window:${link.resolved_window_id}` : `task:${link.task_id}`));
-      return { ...w, links: { total: targets.size,
+      return { ...publicWindow(w), links: { total: targets.size,
         projectIds: [...new Set(links.flatMap(row => row.project_id === null ? [] : [row.project_id]))],
         serverNames: [...new Set(links.flatMap(row => row.server_name === null ? [] : [row.server_name]))],
         targets: links.map(row => ({ windowId: row.resolved_window_id, taskId: row.resolved_task_id })),

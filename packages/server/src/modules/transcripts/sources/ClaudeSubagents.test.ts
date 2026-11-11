@@ -1,7 +1,12 @@
 import fs from 'fs';
 import os from 'os';
 import path from 'path';
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
+import { SubagentRelayService } from '../SubagentRelayService';
+import type { Window } from '../../windows/Window';
+import type { WindowSessionResolver } from '../WindowSessionResolver';
+import type { WindowInputService } from '../WindowInputService';
+import type { TranscriptSource } from './TranscriptSource';
 import { ClaudeTranscriptSource } from './ClaudeTranscriptSource';
 
 const session = '12345678-1234-1234-1234-123456789abc';
@@ -53,6 +58,37 @@ describe('Claude subagents', () => {
     fs.writeFileSync(path.join(dir, 'agent-a.meta.json'), JSON.stringify({ agentType: 'Task', description: 'First' }));
     fs.writeFileSync(path.join(dir, 'agent-c.meta.json'), JSON.stringify({ agentType: 'Task', description: 'x'.repeat(65536) }));
     expect(source.listSubagents(session)?.map(({ name }) => name)).toEqual(['First', 'Second']);
+  });
+
+  it('uses the metadata completion marker for an unnamed background child', () => {
+    const { source, dir } = fixture();
+    const file = path.join(dir, 'agent-a.meta.json');
+    const metadata = { agentType: 'general-purpose', description: 'Example task', requestShape: 'background', requestNonInteractive: true };
+    fs.writeFileSync(file, JSON.stringify(metadata));
+    expect(source.listSubagents(session)).toEqual([{ id: 'a', name: 'Example task', routingName: null, description: 'Example task', agentType: 'general-purpose', model: null, status: 'unknown' }]);
+    fs.writeFileSync(file, JSON.stringify({ ...metadata, finished: true }));
+    expect(source.listSubagents(session)?.[0].status).toBe('finished');
+    fs.writeFileSync(file, JSON.stringify({ ...metadata, finished: false }));
+    expect(source.listSubagents(session)?.[0].status).toBe('unknown');
+    fs.writeFileSync(file, JSON.stringify({ ...metadata, finished: 'true' }));
+    expect(source.listSubagents(session)).toEqual([]);
+    fs.writeFileSync(file, '{');
+    expect(source.listSubagents(session)).toEqual([]);
+  });
+
+  it('marks a named background child finished and refuses its relay', async () => {
+    const { source, dir } = fixture();
+    fs.writeFileSync(path.join(dir, 'agent-a.meta.json'), JSON.stringify({ name: 'worker', agentType: 'general-purpose', description: 'Example task', requestShape: 'background', finished: true }));
+    const agents = source.listSubagents(session);
+    expect(agents?.[0]).toMatchObject({ id: 'a', routingName: 'worker', status: 'finished' });
+    const sendRelayInput = vi.fn();
+    const resolver = { resolve: async () => ({ resolved: true, agentType: 'claude', sessionId: session, paneId: '%1', agentDetected: true }) } as unknown as WindowSessionResolver;
+    const input = { resolvePaneIndex: async () => 0, sendRelayInput } as unknown as WindowInputService;
+    const relay = new SubagentRelayService(resolver, input);
+    const window = { id: 1, paneLayout: { panes: [{ index: 0, agentSessionId: session }] } } as unknown as Window;
+    const relaySource = { listSubagents: async () => agents } as unknown as TranscriptSource & Required<Pick<TranscriptSource, 'listSubagents'>>;
+    await expect(relay.relay(window, session, '%1', 'a', 'hello', () => relaySource)).resolves.toEqual({ status: 409, body: { error: 'subagent_unavailable' } });
+    expect(sendRelayInput).not.toHaveBeenCalled();
   });
 
   it('rejects traversal, excludes symlinks and distinguishes missing sessions', () => {

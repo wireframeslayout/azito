@@ -165,7 +165,7 @@ export default function BranchInput({ value, onChange, serverName, projectId, wo
       {/* Always in the DOM so a screen reader announces the reason when it appears. */}
       <div id={reasonId} role="status" style={gitNotFoundReason ? { marginTop: 4, fontSize: 'var(--font-xs)', color: 'var(--text-dim)' } : undefined}>{gitNotFoundReason}</div>
       {open && suggestions.length > 0 && (
-        <div
+        <div className="floating-surface"
           ref={listRef}
           style={{
             position: 'absolute',
