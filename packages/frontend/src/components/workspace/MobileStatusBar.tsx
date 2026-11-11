@@ -17,6 +17,7 @@ import type { LookoutItem } from '../../lib/lookoutSummary';
 import { MOBILE_STATUS_BAR_HEIGHT } from '../../lib/mobileChrome';
 import { IconButton } from '../ui/IconButton';
 import { Icon } from '../ui/Icon';
+import { Button, Notice } from '../ui';
 import { useAgentActivity } from '../../hooks/useAgentActivity';
 import { HealthDot } from '../statusbar/HealthDot';
 import { ResourceMeter } from '../statusbar/ResourceMeter';
@@ -162,13 +163,13 @@ export function MobileStatusBar({ openTask, connectPane }: MobileStatusBarProps)
           }}
         >
           <LookoutCounts counts={sections.counts} activityKnown={snapshotStatus === 'ready'} />
-          {snapshotStatus === 'error' && <div role="alert">{t('lookout:loadError')} <button type="button" onClick={retrySnapshot}>{t('lookout:retry')}</button></div>}
-          {snapshotStatus === 'loading' && <p role="status">{t('lookout:loading')}</p>}
+          {snapshotStatus === 'error' && <Notice tone="warning" role="alert" action={<Button size="sm" onClick={retrySnapshot}>{t('lookout:retry')}</Button>}>{t('lookout:loadError')}</Notice>}
+          {snapshotStatus === 'loading' && <p role="status" style={{ color: 'var(--text-dim)' }}>{t('lookout:loading')}</p>}
           <LookoutSection name="attention" items={sections.attention} onOpen={handleWorkingRowOpen} summaries={summaries} empty={snapshotStatus === 'ready' ? <p>{t('lookout:emptyAttention')}</p> : <></>} />
-          {[sections.active].map((items, index) => items.length > 0 && (
-            <section key={index}>
-              <div style={sectionHeaderStyle}>{t('workspace:activityPill.workingSection', { count: items.length })}</div>
-              {items.map((group) => (
+          {sections.active.length > 0 && (
+            <section>
+              <div style={sectionHeaderStyle}>{t('workspace:activityPill.workingSection', { count: sections.active.length })}</div>
+              {sections.active.map((group) => (
                 <button
                   key={group.key}
                   type="button"
@@ -186,7 +187,7 @@ export function MobileStatusBar({ openTask, connectPane }: MobileStatusBarProps)
                 </button>
               ))}
             </section>
-          ))}
+          )}
           {unreadRows.length > 0 && (
             <section>
               <div style={sectionHeaderStyle}>{t('workspace:activityPill.finishedSection', { count: unreadRows.length })}</div>

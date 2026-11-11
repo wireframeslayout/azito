@@ -88,11 +88,10 @@
   },
   "activityPill": {
     "ariaLabel": "稼働ステータス",
-    "statusBarUnknown": "稼働状況を取得中",
+    "statusBarUnknown": "稼働状況は不明",
     "statusBarWorking": "{{count}} 稼働中",
     "workingSection": "稼働中 {{count}}",
     "finishedSection": "最近完了 {{count}}",
-    "empty": "稼働中のエージェントはありません",
     "viewHealthDetails": "詳細を表示 ▸"
   },
   "home": {

@@ -72,7 +72,6 @@ describe('Lookout workspace feeds', () => {
     fireEvent.click(screen.getByRole('button', { name: 'workspace:activityPill.ariaLabel' }));
     expect(screen.getByText('Review task')).toBeTruthy();
     expect(screen.getByText('workspace:activityPill.statusBarWorking:0')).toBeTruthy();
-    expect(screen.queryByText('workspace:activityPill.empty')).toBeNull();
     sections = buildLookoutSections({ rows: [row], allTasks: [task], lastSeenMs: 0 });
   });
   it.each(['loading', 'error'] as const)('reports unavailable mobile activity when %s', (status) => {
@@ -82,7 +81,6 @@ describe('Lookout workspace feeds', () => {
     fireEvent.click(screen.getByRole('button', { name: 'workspace:activityPill.ariaLabel' }));
     expect(screen.getByText('counts.active').previousElementSibling?.textContent).toBe('—');
     expect(screen.getByText(status === 'error' ? 'lookout:loadError' : 'lookout:loading')).toBeTruthy();
-    expect(screen.queryByText('workspace:activityPill.empty')).toBeNull();
     expect(screen.queryByText('lookout:emptyAttention')).toBeNull();
     activity.snapshotStatus = 'ready';
     sections = buildLookoutSections({ rows: [row], allTasks: [task], lastSeenMs: 0 });
