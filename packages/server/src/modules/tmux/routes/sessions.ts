@@ -71,6 +71,7 @@ export interface SessionsRouteOptions {
    * file operations belong to upper layers `tmux` must not import.
    */
   planNewWindowProgram?: (server: ServerConfig, request: NewWindowLaunchRequest) => Promise<PlannedNewWindowProgram | null>;
+  onWindowCreated?: (serverName: string, ref: MuxRef, launch: NewWindowLaunchRequest | undefined, started: boolean) => void;
   windowRepo?: SqliteWindowRepository;
   notificationBus?: NotificationBus;
   resourceGuard?: ResourceGuard;
@@ -1246,6 +1247,7 @@ const sessionsRoutes: FastifyPluginCallback<SessionsRouteOptions> = (fastify, op
             const failure = createResultFailure(kind ?? freshSrv.defaultMux, result, 'create workspace');
             return reply.status(failure.status).send(failure.body);
           }
+          opts.onWindowCreated?.(freshSrv.name, ref, launch, !!planned);
           notifySessionsChanged(request.params.name);
           // `target` is the canonical window target; `windowName` is the display name only (a misao ref.window is an id).
           return { ok: true, ref: formatMuxRef(ref), workspaceName: name, target: muxWindowTarget(ref), windowName: createdName ?? ref.window, ...(planned ? { agentSessionId: planned.agentSessionId } : {}), ...resourceCheckBody(resourceSkipped) };
@@ -1289,6 +1291,7 @@ const sessionsRoutes: FastifyPluginCallback<SessionsRouteOptions> = (fastify, op
             const failure = createResultFailure(kind ?? freshSrv.defaultMux, created.result, 'create window');
             return reply.status(failure.status).send(failure.body);
           }
+          opts.onWindowCreated?.(freshSrv.name, created.ref, launch, !!planned);
           notifySessionsChanged(request.params.name);
           return { ok: true, ref: formatMuxRef(created.ref), target: muxWindowTarget(created.ref), windowName: created.windowName ?? created.ref.window, ...(planned ? { agentSessionId: planned.agentSessionId } : {}), ...resourceCheckBody(resourceSkipped) };
         } catch (err: unknown) {

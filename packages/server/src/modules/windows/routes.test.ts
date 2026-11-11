@@ -87,10 +87,12 @@ describe('POST /api/windows/:id/launch-agent', () => {
   let sendKeys: ReturnType<typeof vi.fn>;
   let updateByWindowFn: ReturnType<typeof vi.fn<IWindowRepository['updateAgentSessionIdByWindow']>>;
   let windowUpdate: ReturnType<typeof vi.fn<IWindowRepository['update']>>;
+  let takePending: ReturnType<typeof vi.fn>;
 
   beforeEach(async () => {
     window = makeWindow();
     windowUpdate = vi.fn<IWindowRepository['update']>();
+    takePending = vi.fn(() => null);
     server = makeServer();
     sendKeys = vi.fn().mockResolvedValue(undefined);
     updateByWindowFn = vi.fn<IWindowRepository['updateAgentSessionIdByWindow']>();
@@ -120,10 +122,11 @@ describe('POST /api/windows/:id/launch-agent', () => {
       muxSwitchSettingsRepo: {} as never, auditLogService: {} as never, agentActivityMonitor: {} as never,
       harnessPrefix: '',
       windowRepo: windowRepo as IWindowRepository,
+      takePendingWorkerLaunch: takePending as unknown as NonNullable<import('./routes').WindowsRouteOptions['takePendingWorkerLaunch']>,
       projectRepo: { findById: () => ({ id: 1 }) } as unknown as IProjectRepository,
       taskRepo: { findById: () => ({ id: 1 }) } as unknown as ITaskRepository,
       tmux: tmux as TmuxClient,
-      muxDriverRegistry: { resolve: () => tmux } as any,
+      muxDriverRegistry: { resolve: () => tmux, availabilityFor: () => ({ available: true }) } as any,
       serverRepo: serverRepo as IServerRepository,
       transportFactory: { hostProfileFor: () => null },
       respawnService: { respawn: vi.fn(async () => ({ tmuxTarget: 'proj:win1' })) } as unknown as WindowRespawnService,
@@ -145,6 +148,19 @@ describe('POST /api/windows/:id/launch-agent', () => {
       uiToken: 'test-token', serverIsolationMutex: new KeyedMutex(), buildSecondaryWindowEnv: () => ({}),
     });
     await app.ready();
+  });
+
+  it('takes launch settings from the server-side record at registration', async () => {
+    const ref = { kind: 'tmux', workspace: 's', window: 'w' };
+    const record = { workerType: 'claude', args: ['--dangerously-skip-permissions'] };
+    takePending.mockReturnValue(record);
+    const res = await app.inject({ method: 'POST', url: '/api/projects/1/windows', payload: { server_name: 'local-server', ref: JSON.stringify(ref), worker_type: 'claude', window_type: 'agent' } });
+    expect(res.statusCode, res.body).toBe(200);
+    expect(takePending).toHaveBeenCalledWith('local-server', ref);
+    expect(windowUpdate).toHaveBeenCalledWith(2, { workerLaunch: record });
+    expect(JSON.stringify(res.json())).not.toContain('dangerously');
+    const forged = await app.inject({ method: 'POST', url: '/api/projects/1/windows', payload: { server_name: 'local-server', ref: JSON.stringify(ref), worker_launch_command: 'claude --dangerously-skip-permissions' } });
+    expect(forged.statusCode).toBe(400);
   });
 
   it.each([
@@ -356,6 +372,7 @@ describe('POST /api/windows/:id/launch-agent', () => {
       windowRepo: {
         findById: (id: number) => (id === window.id ? window : undefined),
         updateAgentSessionIdByWindow: codexUpdateByWindowFn,
+        update: vi.fn(),
       } as unknown as IWindowRepository,
       projectRepo: {} as IProjectRepository,
       taskRepo: {} as ITaskRepository,
@@ -657,7 +674,7 @@ describe('resource check in the answers of launch-agent and respawn (#531)', () 
       paneHandleResolver: {} as never,
       muxSwitchSettingsRepo: {} as never, auditLogService: {} as never, agentActivityMonitor: {} as never,
       harnessPrefix: '',
-      windowRepo: { findById: () => window, updateAgentSessionIdByWindow: vi.fn() } as unknown as IWindowRepository,
+      windowRepo: { findById: () => window, updateAgentSessionIdByWindow: vi.fn(), update: vi.fn() } as unknown as IWindowRepository,
       projectRepo: {} as IProjectRepository,
       taskRepo: {} as ITaskRepository,
       tmux: tmux as TmuxClient,

@@ -392,7 +392,6 @@ export function useAddWindowModal(
         const newRef = createdRef;
         // tmux keeps its target on the registered row; a misao window is identified by its ref alone.
         const windowBody: Record<string, unknown> = { server_name: awServer, ...(newKind === 'tmux' ? { tmux_target: target } : {}), ref: newRef, label, ...(createdWindow.agentSessionId ? { agent_session_id: createdWindow.agentSessionId } : {}) };
-        if (newWindowLaunch) windowBody['worker_launch_command'] = newWindowLaunch.command;
         if (awAgent !== 'none') {
           windowBody['window_type'] = 'agent';
           windowBody['worker_type'] = awAgent === 'custom' ? 'generic' : awAgent;

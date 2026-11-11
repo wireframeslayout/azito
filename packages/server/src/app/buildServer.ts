@@ -1,3 +1,5 @@
+import { PendingWorkerLaunches } from '../modules/windows/PendingWorkerLaunches';
+import { parseWorkerLaunchRecord } from '../modules/windows/workerLaunchRecord';
 import { lookoutRoutes } from '../modules/lookout/routes';
 import { LookoutSummaryService } from '../modules/lookout/LookoutSummaryService';
 import orchestrationRoutes from '../modules/orchestration/routes';
@@ -545,9 +547,11 @@ export async function buildServer(app: FastifyInstance, wiring: Wiring, port: nu
     if (!task) return { ...ISOLATION_MASKED_ENV };
     return taskPaneEnvironmentService.buildEnvForSecondaryWindow(task, server);
   };
+  const pendingWorkerLaunches = new PendingWorkerLaunches();
   await app.register(sessionsRoutes, {
     serverRepo, tmux: tmuxClient, uiToken: wiring.uiToken, muxDriverRegistry, windowRepo, notificationBus, resourceGuard, serverIsolationMutex,
     // A host that starts a worker as a program (Windows) gets the agent as its new window's first pane; any other types it into a shell.
+    onWindowCreated: (serverName, ref, launch, started) => pendingWorkerLaunches.record(serverName, ref, started && launch ? parseWorkerLaunchRecord(launch.command) : null),
     planNewWindowProgram: async (server, request) => (
       workerStartsAsProgram(transportFactory.hostProfileFor(server))
         ? planNewWindowProgram(sessionStrategyFactory, () => transportFactory.getFileOps(server), request)
@@ -619,6 +623,7 @@ export async function buildServer(app: FastifyInstance, wiring: Wiring, port: nu
   await app.register(lookoutRoutes, { settings: wiring.lookoutSettingsRepo, service: lookoutService });
   await app.register(muxSwitchSettingsRoutes, { settingsRepo: wiring.muxSwitchSettingsRepo, serverRepo, muxDriverRegistry });
   await app.register(windowsRoutes, {
+    takePendingWorkerLaunch: (serverName, ref) => pendingWorkerLaunches.take(serverName, ref),
     attribution: wiring.orchestrationLinks, windowRoles: wiring.windowRoles,
     windowRepo, projectRepo, taskRepo, tmux: tmuxClient, muxDriverRegistry, serverRepo, transportFactory, paneHandleResolver: wiring.paneHandleResolver,
     muxSwitchSettingsRepo: wiring.muxSwitchSettingsRepo, auditLogService, agentActivityMonitor,

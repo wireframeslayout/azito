@@ -87,6 +87,7 @@ export interface WindowsRouteOptions {
   uiToken: string;
   /** Masked-only env of a secondary task-owned window; see SessionsRouteOptions. */
   buildSecondaryWindowEnv: (taskId: number, server: ServerConfig) => Record<string, string>;
+  takePendingWorkerLaunch?: (serverName: string, ref: MuxRef) => import('./workerLaunchRecord').WorkerLaunchRecord | null;
   /** The shared per-server mutex (the same instance the sessions and servers routes receive). */
   serverIsolationMutex: KeyedMutex;
 }
@@ -311,10 +312,9 @@ const windowsRoutes: FastifyPluginCallback<WindowsRouteOptions> = (fastify, opts
         paneLayout: null,
         sleeping: false,
       });
-      if (body.worker_launch_command && srv && workerStartsAsProgram(opts.transportFactory.hostProfileFor(srv))) {
-        windowRepo.update(winId, { workerLaunch: parseWorkerLaunchRecord(body.worker_launch_command) });
-      }
       if (givenRef && srv) await labelOrRemoveWindow(srv, givenRef, winId);
+      const launchRecord = givenRef ? opts.takePendingWorkerLaunch?.(serverName, givenRef) : null;
+      if (launchRecord) windowRepo.update(winId, { workerLaunch: launchRecord });
       sessionCaptureService.scheduleInitialScan(winId, workerType, serverName, workingDirectory);
       notifyWindowsChanged(serverName);
       return { ok: true, id: winId };
