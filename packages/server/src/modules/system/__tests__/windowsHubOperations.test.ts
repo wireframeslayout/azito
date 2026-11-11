@@ -65,7 +65,7 @@ describe('requireOwnTask', () => {
 
 describe('uninstallWindowsTask', () => {
   beforeEach(() => {
-    vi.mocked(runCommandSpec).mockReset().mockResolvedValue({ exitCode: 0, stdout: '', stderr: '' } as never);
+    vi.mocked(runCommandSpec).mockReset().mockResolvedValueOnce({ exitCode: 0, stdout: Buffer.from('PC\\me').toString('base64'), stderr: '' } as never).mockResolvedValue({ exitCode: 0, stdout: '', stderr: '' } as never);
   });
 
   it('deletes the stopped task owned by this install', async () => {
@@ -89,7 +89,7 @@ describe('uninstallWindowsTask', () => {
 
   it('refuses a running foreground hub even when no task is registered', async () => {
     const { hub, manager } = setup(undefined, undefined);
-    vi.mocked(runCommandSpec).mockResolvedValue({ exitCode: 0, stdout: '42 1234\n', stderr: '' } as never);
+    vi.mocked(runCommandSpec).mockReset().mockResolvedValue({ exitCode: 0, stdout: '42 1234\n', stderr: '' } as never);
     await expect(uninstallWindowsTask(manager, hub, context)).rejects.toThrow(/hub process is still running/);
   });
 
@@ -99,6 +99,16 @@ describe('uninstallWindowsTask', () => {
     hub.client.delete = remove;
     vi.mocked(hub.client.query).mockImplementation(async (name) => name === 'AzitoHubUpdate' ? { exists: false } : { exists: true, running: false, failed: false, lastResult: 0 });
     await expect(uninstallWindowsTask(manager, hub, context)).rejects.toThrow(/another install/);
+    expect(remove).not.toHaveBeenCalled();
+  });
+
+  it('does not delete a task running as another account', async () => {
+    const foreign = xmlFor(MINE).replaceAll('<UserId>PC\\me</UserId>', '<UserId>PC\\other</UserId>');
+    const { hub, manager } = setup(foreign, xmlFor(MINE));
+    const remove = vi.fn();
+    hub.client.delete = remove;
+    vi.mocked(hub.client.query).mockImplementation(async (name) => name === 'AzitoHubUpdate' ? { exists: false } : { exists: true, running: false, failed: false, lastResult: 0 });
+    await expect(uninstallWindowsTask(manager, hub, context)).rejects.toThrow(/different or unrecognised Windows account/);
     expect(remove).not.toHaveBeenCalled();
   });
 

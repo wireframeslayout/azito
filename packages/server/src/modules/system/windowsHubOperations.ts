@@ -11,6 +11,10 @@ import { SchtasksClient, rawRunnerOf } from '../../shared/os/taskScheduler/schta
 import { HUB_SERVICE } from './serviceManager';
 import type { SecretFileGuard } from '../../shared/os/secretFileGuard';
 import { HUB_UPDATE_TASK } from './windowsHubUpdateTask';
+import { taskHasUserId, taskPrincipalId } from '../../shared/os/taskScheduler/taskXmlRead';
+import { buildCommandSpec } from '../../shared/exec/commandSpec';
+import { powershellEncodedArgs } from '../../shared/os/shellDialect';
+import { windowsPowershell } from './windowsHubService';
 
 /**
  * Operations on the Windows hub's Task Scheduler task (`azito service ...`, and the restart the in-app update does). They live here, not
@@ -145,13 +149,25 @@ export async function runOnWindows(command: 'start' | 'stop' | 'restart' | 'relo
 export async function uninstallWindowsTask(manager: ServiceManager, hub: WindowsHub, context: ServiceCommandContext): Promise<void> {
   if ((await hub.client.query(HUB_UPDATE_TASK)).exists) throw new Error('An AzitoHubUpdate task exists. Wait for the update to finish and retry; if it remains, inspect it manually.');
   const exists = await taskExists(hub);
-  if (exists) await requireOwnTask(manager, hub);
+  if (exists) {
+    await requireOwnTask(manager, hub);
+    const xml = await hub.client.exportXml(HUB_SERVICE.windowsTaskName);
+    const account = await readWindowsUserId((spec) => runCommandSpec(spec, hub.runHost), hub.systemRoot);
+    let owned = taskHasUserId(xml, account);
+    if (!owned && /^S-1-\d+(?:-\d+)+$/i.test(taskPrincipalId(xml) ?? '')) {
+      const result = await runCommandSpec(buildCommandSpec(windowsPowershell(hub.systemRoot), powershellEncodedArgs('[System.Security.Principal.WindowsIdentity]::GetCurrent().User.Value')), hub.runHost);
+      if (result.exitCode !== 0) throw new Error('Could not determine the current Windows account SID.');
+      owned = taskHasUserId(xml, account, result.stdout.trim());
+    }
+    if (!owned) throw new Error('The hub task belongs to a different or unrecognised Windows account. Nothing was changed.');
+  }
   // A foreground hub must be stopped at its terminal; stopping the task would also end it.
   const run: SpecRunner = (spec) => runCommandSpec(spec, hub.runHost);
   const processes = await findHubProcesses(run, hub.systemRoot, hub.hubRoots, context.pid);
   if (processes.length > 0) throw new Error('A hub process is still running. Stop the service and any `azito run` window, then retry.');
   if (!exists) return;
   const state = await hub.client.query(HUB_SERVICE.windowsTaskName);
+  if (!state.exists) throw new Error('The hub task changed while it was being inspected. Retry.');
   if (state.running) throw new Error('The hub task is running. Stop it with `azito stop`, then retry.');
   await hub.client.delete(HUB_SERVICE.windowsTaskName);
 }
