@@ -43,7 +43,7 @@ export function StorageOnboarding({ onboarding, onConfigured, onLater }: Props) 
       {onboarding.options.map((option) => {
         const { title, description } = getOptionText(onboarding, option, t);
         return <ListRow key={option.id} icon={<Icon name={option.kind === 'local-minio' ? 'servers' : option.kind === 'link' ? 'link' : 'storage'} />}
-          title={<span style={{ display: 'block', whiteSpace: 'normal', overflowWrap: 'anywhere' }}>{title}</span>} description={<span style={{ display: 'block', whiteSpace: 'normal', overflowWrap: 'anywhere' }}>{description}</span>} showChevron href={option.kind === 'link' ? option.href : undefined}
+          title={<span style={{ display: 'block', whiteSpace: 'normal', overflowWrap: 'anywhere' }}>{title}</span>} description={description ? <span style={{ display: 'block', whiteSpace: 'normal', overflowWrap: 'anywhere' }}>{description}</span> : undefined} showChevron href={option.kind === 'link' ? option.href : undefined}
           onClick={option.kind === 'link' ? undefined : () => void select(option)} disabled={saving} />;
       })}
     </ul>
