@@ -1,13 +1,15 @@
 import { test, expect } from '../fixtures/test';
 
-test('registered windows outside maximize do not gain a chat toggle', async ({ app, harness }) => {
+test('orchestration exposes the chat toggle while server details do not', async ({ app, harness }) => {
   const project = await harness.createProject('scope-regression');
   const agent = await harness.startFakeAgent('scope-regression', 'agent', { supervised: false });
   const id = await harness.registerAgentWindow(project, agent.target, { label: 'scope-regression-window' });
   await harness.api(`/windows/${id}/role`, { method: 'PUT', body: JSON.stringify({ role: 'orchestrator' }) });
   await app.goto(`${harness.baseUrl}/orchestration/${id}`);
   await expect(app.locator('.xterm').first()).toBeVisible();
-  await expect(app.getByRole('tab', { name: 'チャット' })).toHaveCount(0);
+  await expect(app.getByRole('tab', { name: 'チャット' })).toBeVisible();
+  await app.getByRole('tab', { name: 'チャット' }).click();
+  await expect(app.getByRole('tab', { name: 'チャット' })).toHaveAttribute('aria-selected', 'true');
   const connected: string[] = [];
   app.on('websocket', socket => connected.push(socket.url()));
   await app.goto(`${harness.baseUrl}/servers/local/windows`);

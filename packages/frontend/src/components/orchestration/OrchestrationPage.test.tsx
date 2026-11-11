@@ -4,7 +4,7 @@ import { expect, it, vi } from 'vitest';
 import OrchestrationPage from './OrchestrationPage';
 import { WorkspaceTargetsProvider, useWorkspaceTargets } from '../../hooks/useWorkspaceTargets';
 
-const state = vi.hoisted(() => ({ mobile: true, open: vi.fn(), add: vi.fn(), empty: false }));
+const state = vi.hoisted(() => ({ mobile: true, open: vi.fn(), add: vi.fn(), empty: false, terminal: vi.fn() }));
 vi.mock('../../hooks/useMaximizedWindow', () => ({ useOptionalMaximizedWindow: () => ({ open: state.open }) }));
 const target = { id: 1, serverName: 'local', tmuxTarget: 'session:1', projectId: 2, parentWindowId: null, links: { total: 0 } };
 vi.mock('react-i18next', async (importOriginal) => ({ ...await importOriginal<typeof import('react-i18next')>(), useTranslation: () => ({ t: (key: string) => key }) }));
@@ -17,7 +17,7 @@ vi.mock('../../hooks/useRightPanelState', () => ({ useRightPanelState: () => [tr
 vi.mock('../../hooks/useToast', () => ({ useToast: () => ({ showToast: vi.fn() }) }));
 vi.mock('./OrchestrationCreate', () => ({ OrchestrationCreate: ({ showButton }: { showButton: boolean }) => showButton ? <button>orchestration.create</button> : null }));
 vi.mock('./OrchestrationSidebar', () => ({ OrchestrationSidebar: () => null }));
-vi.mock('../TerminalContainer', () => ({ TerminalContainer: () => null }));
+vi.mock('../TerminalContainer', () => ({ TerminalContainer: (props: unknown) => { state.terminal(props); return null; } }));
 vi.mock('./LinkedPanel', () => ({ LinkedPanel: ({ onExpand, addRef }: { onExpand: (window: typeof target) => void; addRef?: Ref<{ openAdd: () => void }> }) => { useImperativeHandle(addRef, () => ({ openAdd: state.add })); return <button onClick={() => onExpand(target)}>Expand</button>; } }));
 vi.mock('../ui/BottomSheet', () => ({ BottomSheet: ({ open, children }: { open: boolean; children: React.ReactNode }) => open ? <div>{children}</div> : null }));
 
@@ -57,4 +57,19 @@ it('opens add from the desktop panel header', () => {
   fireEvent.click(screen.getByRole('button', { name: 'linkedPanel.add' }));
   expect(state.add).toHaveBeenCalledOnce();
   state.mobile = true;
+});
+it('passes the selected window and controlled view mode to the terminal', () => {
+  state.mobile = false; state.terminal.mockClear();
+  render(<WorkspaceTargetsProvider><OrchestrationPage /></WorkspaceTargetsProvider>);
+  expect(state.terminal).toHaveBeenLastCalledWith(expect.objectContaining({ registeredWindow: { id: 1 }, viewMode: 'terminal', onViewModeChange: expect.any(Function) }));
+  expect(screen.getByRole('tab', { name: 'terminal.viewMode.chat' })).toBeInTheDocument();
+  fireEvent.click(screen.getByRole('tab', { name: 'terminal.viewMode.chat' }));
+  expect(state.terminal).toHaveBeenLastCalledWith(expect.objectContaining({ viewMode: 'chat' }));
+  state.mobile = true;
+});
+
+it('does not show the tab row on mobile', () => {
+  state.mobile = true;
+  render(<WorkspaceTargetsProvider><OrchestrationPage /></WorkspaceTargetsProvider>);
+  expect(screen.queryByRole('tablist')).not.toBeInTheDocument();
 });
