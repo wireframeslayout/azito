@@ -1,4 +1,4 @@
-import { fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { expect, it, vi } from 'vitest';
 import { useState } from 'react';
 import { HotkeyProvider } from '../../hooks/useHotkeys';
@@ -94,3 +94,20 @@ it('makes the drawer inert while a modal is open and restores it afterwards', as
   await waitFor(() => expect(drawer).not.toHaveAttribute('inert'));
 });
 
+
+it('updates the relative time only while open and disables refresh during loading', () => {
+  vi.useFakeTimers();
+  vi.setSystemTime(new Date('2026-01-01T00:00:00Z'));
+  const sections = { attention: [], active: [], finished: [], counts: { attention: 0, active: 0, finished: 0, failed: 0 } };
+  const props = { onClose: () => {}, sections, onRetry: mocks.retry, onOpenItem: () => {}, snapshotUpdatedAt: Date.now() };
+  const { rerender, unmount } = render(<HotkeyProvider><LookoutDrawer {...props} open snapshotStatus="loading" /></HotkeyProvider>);
+  expect(screen.getByRole('button', { name: /refresh/i })).toBeDisabled();
+  expect(screen.getByText(/now/i)).toBeInTheDocument();
+  act(() => vi.advanceTimersByTime(60_000));
+  rerender(<HotkeyProvider><LookoutDrawer {...props} open snapshotStatus="ready" /></HotkeyProvider>);
+  expect(screen.getByText(/1m ago/i)).toBeInTheDocument();
+  rerender(<HotkeyProvider><LookoutDrawer {...props} open={false} snapshotStatus="ready" /></HotkeyProvider>);
+  expect(vi.getTimerCount()).toBe(0);
+  unmount();
+  vi.useRealTimers();
+});

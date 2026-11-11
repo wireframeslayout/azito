@@ -3,8 +3,8 @@ import { fireEvent, render, screen } from '@testing-library/react';
 import { expect, it, vi } from 'vitest';
 import { StatusBar } from './StatusBar';
 import { HotkeyProvider } from '../hooks/useHotkeys';
-const mocks = vi.hoisted(() => ({ open: vi.fn(), close: vi.fn(), openTask: vi.fn(), attention: 2, serverLoaded: true, focused: null as null | { serverName: string; label: string } }));
-vi.mock('../hooks/useServerStatuses', () => ({ useServerStatuses: () => ({ servers: [{ name: 'local', defaultMux: 'misao' }], serversLoaded: mocks.serverLoaded }) }));
+const mocks = vi.hoisted(() => ({ open: vi.fn(), close: vi.fn(), openTask: vi.fn(), attention: 2, serverLoaded: true, mux: 'misao' as 'misao' | 'tmux', statuses: {} as Record<string, unknown>, focused: null as null | { serverName: string; label: string } }));
+vi.mock('../hooks/useServerStatuses', () => ({ useServerStatuses: () => ({ servers: [{ name: 'local', defaultMux: mocks.mux }], serversLoaded: mocks.serverLoaded, statuses: mocks.statuses }) }));
 vi.mock('../hooks/useIsMobile', () => ({ useIsMobile: () => false }));
 vi.mock('../hooks/useAgentActivity', () => ({ useAgentActivity: () => ({ snapshotStatus: 'ready', retrySnapshot: vi.fn() }) }));
 vi.mock('../hooks/useCrossProjectNavigation', () => ({ useCrossProjectNavigation: () => ({ openTask: mocks.openTask, openTerminal: vi.fn() }) }));
@@ -46,4 +46,20 @@ it('shows a known default mux for the displayed server', () => {
   render(<HotkeyProvider><StatusBar servers={[{ serverName: 'local', type: 'local', measurement: null, unavailable: false } as never]} /></HotkeyProvider>);
   expect(screen.getByText(/misao/)).toBeInTheDocument();
   mocks.focused = null;
+});
+
+it('shows only the focused online misao daemon version', () => {
+  mocks.focused = { serverName: 'local', label: 'window' };
+  mocks.statuses = { local: { status: 'online', mux: { misao: { available: true, version: '0.3.0' } } } };
+  const { rerender } = render(<HotkeyProvider><StatusBar servers={[]} /></HotkeyProvider>);
+  expect(screen.getByText(/misao.*0.3.0/)).toBeInTheDocument();
+  mocks.mux = 'tmux';
+  rerender(<HotkeyProvider><StatusBar servers={[]} /></HotkeyProvider>);
+  expect(screen.queryByText(/0.3.0/)).not.toBeInTheDocument();
+  mocks.mux = 'misao';
+  mocks.statuses = { local: { status: 'error' } };
+  rerender(<HotkeyProvider><StatusBar servers={[]} /></HotkeyProvider>);
+  expect(screen.queryByText(/0.3.0/)).not.toBeInTheDocument();
+  mocks.focused = null;
+  mocks.statuses = {};
 });
