@@ -8,6 +8,7 @@ import type { LookoutSummary } from '../lookout/LookoutRow';
 import { useLookout } from '../../hooks/useLookout';
 import type { LookoutItem } from '../../lib/lookoutSummary';
 import { LookoutSection } from '../lookout/LookoutSection';
+import { LookoutCounts } from '../lookout/LookoutCounts';
 import { formatRelativeTime } from '../../utils/time';
 import { openLookoutItem } from '../../lib/lookoutOpen';
 import { useOpenTerminalTarget } from '../../hooks/useTerminalTargetOpener';
@@ -49,11 +50,8 @@ export default function HomeFeed({ allProjects, openTask, connectPane, onAddWind
     <div style={{ height: '100%', overflowY: 'auto', display: 'flex', justifyContent: 'center' }}>
       <div style={{ width: '100%', maxWidth: 720, padding: 'var(--space-4) var(--space-3)', display: 'flex', flexDirection: 'column', gap: 'var(--space-4)' }}>
         <section aria-label={t('lookout:title')}>
-          <div style={{ color: 'var(--text-dim)', fontSize: 'var(--font-xs)', fontWeight: 600 }}>{t('lookout:title')}</div>
-          <div style={{ display: 'flex', gap: 'var(--space-3)', marginTop: 'var(--space-2)', color: 'var(--text)', fontSize: 'var(--font-sm)' }}>
-            <span>{t('lookout:counts.attention')}: {sections.counts.attention}</span>
-            <span>{t('lookout:counts.active')}: {sections.counts.active}</span>
-          </div>
+          <h2 style={{ margin: 0, fontSize: 'var(--font-base)', fontWeight: 600 }}>{t('lookout:title')}</h2>
+          <LookoutCounts counts={sections.counts} />
         </section>
         <LookoutSection name="attention" items={attentionEntries} renderItem={(entry) => (
           <AttentionCard key={entry.key} entry={entry}

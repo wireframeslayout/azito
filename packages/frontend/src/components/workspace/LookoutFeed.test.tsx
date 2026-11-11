@@ -28,6 +28,18 @@ describe('Lookout workspace feeds', () => {
     fireEvent.click(screen.getByText('Review task'));
     expect(props.openTask).toHaveBeenCalledWith(1, 'Review task', 2);
   });
+  it('shows the summary counts and offers to add a window when empty', () => {
+    sections = buildLookoutSections({ rows: [], allTasks: [], lastSeenMs: 0 });
+    const onAddWindow = vi.fn();
+    render(<HomeFeed {...props} allProjects={[]} onAddWindow={onAddWindow} />);
+    for (const key of ['attention', 'active', 'finished', 'failed']) {
+      expect(screen.getByText(`counts.${key}`).previousElementSibling?.textContent).toBe('0');
+    }
+    expect(screen.getByText('workspace:home.noActive')).toBeTruthy();
+    fireEvent.click(screen.getByRole('button', { name: 'workspace:windows.addWindow' }));
+    expect(onAddWindow).toHaveBeenCalledOnce();
+    sections = buildLookoutSections({ rows: [row], allTasks: [task], lastSeenMs: 0 });
+  });
   it('selects the blocked task window when opened', () => {
     sections = buildLookoutSections({ rows: [{ ...row, activityStatus: 'blocked' }], allTasks: [task], lastSeenMs: 0 });
     render(<HomeFeed {...props} allProjects={[]} onAddWindow={vi.fn()} />);
