@@ -115,6 +115,8 @@
     }
   },
   "subagents": {
+    "detailsTitle": "サブエージェントの詳細",
+    "details": "詳細: {{name}}",
     "title": "サブエージェント",
     "parent": "親の会話",
     "loading": "サブエージェントを読み込み中…",

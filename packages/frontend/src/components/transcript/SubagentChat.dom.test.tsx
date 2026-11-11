@@ -1,6 +1,7 @@
 import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import SubagentChat from './SubagentChat';
+import { HotkeyProvider } from '../../hooks/useHotkeys';
 
 const api = vi.hoisted(() => vi.fn());
 vi.mock('../../api/client', () => ({ apiWithStatus: api }));
@@ -30,13 +31,16 @@ describe('subagent selection', () => {
     const longName = 'A very long agent name '.repeat(20);
     const description = 'A detailed description '.repeat(20);
     api.mockResolvedValue({ status: 200, body: { sessionId: 'first', subagents: [agent, { ...agent, id: 'long', name: longName, description, routingName: 'long' }] } });
-    render(<SubagentChat {...props} />);
+    render(<HotkeyProvider><SubagentChat {...props} /></HotkeyProvider>);
     const button = await screen.findByRole('button', { name: new RegExp('A very long agent name') });
     expect(button).toHaveAccessibleDescription(description.trim());
     expect(button).toHaveAttribute('title', expect.stringContaining(description));
     fireEvent.click(button);
     expect(button).toHaveAttribute('aria-pressed', 'true');
     expect(screen.getByText('view:long:relay')).toBeInTheDocument();
+    fireEvent.click(screen.getAllByRole('button', { name: 'subagents.details' })[1]);
+    expect(screen.getByRole('dialog')).toHaveTextContent(longName.trim());
+    expect(screen.getByRole('dialog')).toHaveTextContent(description.trim());
   });
   it('shows the empty state and allows retry after an error', async () => {
     api.mockRejectedValueOnce(new Error('offline')).mockResolvedValueOnce({ status: 200, body: { sessionId: 'first', subagents: [] } });
