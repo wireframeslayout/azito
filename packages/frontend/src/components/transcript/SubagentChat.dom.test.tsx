@@ -30,7 +30,7 @@ describe('subagent selection', () => {
   it('keeps long descriptions available and selects among multiple agents', async () => {
     const longName = 'A very long agent name '.repeat(20);
     const description = 'A detailed description '.repeat(20);
-    api.mockResolvedValue({ status: 200, body: { sessionId: 'first', subagents: [agent, { ...agent, id: 'long', name: longName, description, routingName: 'long' }] } });
+    api.mockResolvedValue({ status: 200, body: { sessionId: 'first', subagents: [agent, { ...agent, id: 'long', name: longName, description, model: 'test-model', routingName: 'long' }] } });
     render(<HotkeyProvider><SubagentChat {...props} /></HotkeyProvider>);
     const button = await screen.findByRole('button', { name: new RegExp('A very long agent name') });
     expect(button).toHaveAccessibleDescription(description.trim());
@@ -41,6 +41,9 @@ describe('subagent selection', () => {
     fireEvent.click(screen.getAllByRole('button', { name: 'subagents.details' })[1]);
     expect(screen.getByRole('dialog')).toHaveTextContent(longName.trim());
     expect(screen.getByRole('dialog')).toHaveTextContent(description.trim());
+    expect(screen.getByRole('dialog')).toHaveTextContent('Explore · test-model · subagents.status.unknown');
+    fireEvent.click(screen.getByRole('button', { name: 'actions.close' }));
+    expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
   });
   it('shows the empty state and allows retry after an error', async () => {
     api.mockRejectedValueOnce(new Error('offline')).mockResolvedValueOnce({ status: 200, body: { sessionId: 'first', subagents: [] } });
