@@ -1,6 +1,6 @@
 import { promises as fs } from 'fs';
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { findWindowsHeadlessCommand, windowsShimCommand } from './windowsHeadlessCommand';
+import { findWindowsHeadlessCommand, windowsShimCommand, windowsSystemCommand } from './windowsHeadlessCommand';
 
 describe('Windows headless command', () => {
   afterEach(() => { vi.restoreAllMocks(); });
@@ -29,6 +29,13 @@ describe('Windows headless command', () => {
   });
   it('uses defaults for an empty PATHEXT', async () => {
     expect((await findWindowsHeadlessCommand('codex', { PATHEXT: '' }, async () => false)).search.extensions).toEqual(['.COM', '.EXE', '.BAT', '.CMD']);
+  });
+  it('uses defaults when PATHEXT has no supported extensions', async () => {
+    expect((await findWindowsHeadlessCommand('codex', { PATHEXT: '.JS;.PS1' }, async () => false)).search.extensions).toEqual(['.COM', '.EXE', '.BAT', '.CMD']);
+  });
+  it('requires an absolute SystemRoot', () => {
+    expect(windowsSystemCommand('relative', 'taskkill.exe')).toBeUndefined();
+    expect(windowsSystemCommand('C:\\Windows', 'taskkill.exe')).toBe('C:\\Windows\\System32\\taskkill.exe');
   });
   it('quotes spaces and empty arguments', () => {
     expect(windowsShimCommand('C:\\Program Files\\codex.cmd', ['a b', ''], { SystemRoot: 'C:\\Windows' }).args[3]).toBe('""C:\\Program Files\\codex.cmd" "a b" """');

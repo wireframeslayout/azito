@@ -12,9 +12,11 @@ interface FakeProcess extends EventEmitter {
 }
 
 const spawnMock = vi.fn();
+const findMock = vi.fn();
 vi.mock('child_process', () => ({ spawn: (...args: unknown[]) => spawnMock(...args) }));
 vi.mock('./windowsHeadlessCommand', () => ({
-  findWindowsHeadlessCommand: async () => ({ file: 'C:\\tools\\codex.exe', search: { directories: [], extensions: [] } }),
+  findWindowsHeadlessCommand: (...args: unknown[]) => findMock(...args),
+  windowsSystemCommand: (root: string | undefined) => root === 'C:\\Windows' ? 'C:\\Windows\\System32\\taskkill.exe' : undefined,
   windowsShimCommand: () => { throw new Error('not a shim'); },
   UnsafeShimArgumentError: class extends Error {},
 }));
@@ -41,6 +43,8 @@ describe('runHeadlessCommand terminate on Windows', () => {
     process.env.SystemRoot = 'C:\\Windows';
     killers = [];
     child = fakeProcess(4242);
+    findMock.mockReset();
+    findMock.mockResolvedValue({ file: 'C:\\tools\\codex.exe', search: { directories: [], extensions: [] } });
     spawnMock.mockReset();
     spawnMock.mockImplementation((command: string) => {
       if (/taskkill\.exe$/i.test(command)) { const killer = fakeProcess(1); killers.push(killer); return killer; }
@@ -51,6 +55,39 @@ describe('runHeadlessCommand terminate on Windows', () => {
     Object.defineProperty(process, 'platform', { value: platform });
     if (systemRoot === undefined) delete process.env.SystemRoot; else process.env.SystemRoot = systemRoot;
     vi.useRealTimers();
+  });
+
+  it('times out during PATH search without spawning', async () => {
+    vi.useFakeTimers();
+    findMock.mockReturnValue(new Promise(() => {}));
+    const run = runHeadlessCommand('codex', [], 'C:\\work', '', 1_000);
+    const assertion = expect(run).rejects.toMatchObject({ reason: 'timeout' });
+    await vi.advanceTimersByTimeAsync(1_000);
+    await assertion;
+    expect(spawnMock).not.toHaveBeenCalled();
+  });
+
+  it('uses the remaining time after PATH search', async () => {
+    vi.useFakeTimers();
+    findMock.mockImplementation(() => new Promise(resolve => setTimeout(() => resolve({ file: 'C:\\tools\\codex.exe', search: { directories: [], extensions: [] } }), 600)));
+    const run = runHeadlessCommand('codex', [], 'C:\\work', '', 1_000);
+    await vi.advanceTimersByTimeAsync(600);
+    await vi.advanceTimersByTimeAsync(400);
+    expect(killers).toHaveLength(1);
+    child.emit('close', 1);
+    await expect(run).rejects.toMatchObject({ reason: 'timeout' });
+  });
+
+  it('kills directly when SystemRoot is relative', async () => {
+    vi.useFakeTimers();
+    process.env.SystemRoot = 'relative';
+    const run = runHeadlessCommand('codex', [], 'C:\\work', '', 100);
+    await flushMicrotasks();
+    vi.advanceTimersByTime(100);
+    expect(child.kill).toHaveBeenCalledWith('SIGKILL');
+    expect(killers).toHaveLength(0);
+    child.emit('close', 1);
+    await expect(run).rejects.toMatchObject({ reason: 'timeout' });
   });
 
   it('starts taskkill once when output keeps overflowing and the timer fires later', async () => {

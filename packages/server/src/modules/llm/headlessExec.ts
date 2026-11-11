@@ -1,7 +1,6 @@
 import { spawn } from 'child_process';
-import { win32 as winPath } from 'path';
 import { buildAllowedEnv } from './execEnv';
-import { findWindowsHeadlessCommand, windowsShimCommand, UnsafeShimArgumentError, type CliSearchDetails } from './windowsHeadlessCommand';
+import { findWindowsHeadlessCommand, windowsShimCommand, windowsSystemCommand, UnsafeShimArgumentError, type CliSearchDetails } from './windowsHeadlessCommand';
 
 export type CliFailureReason = 'cli_not_found' | 'not_logged_in' | 'timeout' | 'failed';
 export class HeadlessCliError extends Error {
@@ -16,6 +15,7 @@ const CLAUDE_ENV_KEYS = ['CLAUDE_CONFIG_DIR', 'ANTHROPIC_API_KEY', 'ANTHROPIC_AU
 const CODEX_ENV_KEYS = ['CODEX_HOME', 'CODEX_API_KEY', 'OPENAI_API_KEY', 'CODEX_ACCESS_TOKEN', 'CODEX_CA_CERTIFICATE'] as const;
 
 export async function runHeadlessCommand(binary: string, args: string[], cwd: string, input: string, timeoutMs = 120_000): Promise<string> {
+  const deadline = Date.now() + timeoutMs;
   const env = binary === 'claude'
       ? buildAllowedEnv([...PLATFORM_ENV_KEYS, ...CLAUDE_ENV_KEYS], CODEX_ENV_KEYS)
       : buildAllowedEnv(PLATFORM_ENV_KEYS);
@@ -23,7 +23,16 @@ export async function runHeadlessCommand(binary: string, args: string[], cwd: st
   let commandArgs = args;
   let verbatim = false;
   if (process.platform === 'win32') {
-    const result = await findWindowsHeadlessCommand(binary, env);
+    const controller = new AbortController();
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    let result: Awaited<ReturnType<typeof findWindowsHeadlessCommand>>;
+    try {
+      result = await Promise.race([
+        findWindowsHeadlessCommand(binary, env, undefined, controller.signal),
+        new Promise<never>((_, reject) => { timer = setTimeout(() => { controller.abort(); reject(new HeadlessCliError('timeout')); }, Math.max(0, deadline - Date.now())); }),
+      ]);
+    } finally { if (timer) clearTimeout(timer); }
+    if (Date.now() >= deadline) throw new HeadlessCliError('timeout');
     if (!result.file) throw new HeadlessCliError('cli_not_found', result.search);
     command = result.file;
     if (/\.(cmd|bat)$/i.test(command)) {
@@ -31,6 +40,8 @@ export async function runHeadlessCommand(binary: string, args: string[], cwd: st
       catch (error) { throw new HeadlessCliError('failed', undefined, error instanceof UnsafeShimArgumentError ? 'unsafe_argument' : undefined); }
     }
   }
+  const remaining = deadline - Date.now();
+  if (remaining <= 0) throw new HeadlessCliError('timeout');
   return new Promise((resolve, reject) => {
     const proc = spawn(command, commandArgs, { cwd, env, stdio: ['pipe', 'pipe', 'pipe'], detached: process.platform !== 'win32', windowsVerbatimArguments: verbatim });
     let stdout = '';
@@ -42,13 +53,13 @@ export async function runHeadlessCommand(binary: string, args: string[], cwd: st
       reason = cause;
       if (process.platform !== 'win32' && proc.pid) {
         try { process.kill(-proc.pid, 'SIGKILL'); } catch { proc.kill('SIGKILL'); }
-      } else if (proc.pid && env.SystemRoot) {
-        const killer = spawn(winPath.join(env.SystemRoot, 'System32', 'taskkill.exe'), ['/pid', String(proc.pid), '/t', '/f'], { stdio: 'ignore' });
+      } else if (proc.pid && windowsSystemCommand(env.SystemRoot, 'taskkill.exe')) {
+        const killer = spawn(windowsSystemCommand(env.SystemRoot, 'taskkill.exe')!, ['/pid', String(proc.pid), '/t', '/f'], { stdio: 'ignore' });
         killer.on('error', () => proc.kill('SIGKILL'));
         killer.on('close', code => { if (code !== 0) proc.kill('SIGKILL'); });
       } else proc.kill('SIGKILL');
     };
-    const timer = setTimeout(() => terminate('timeout'), timeoutMs);
+    const timer = setTimeout(() => terminate('timeout'), remaining);
     proc.stdout.on('data', (chunk: Buffer) => {
       if (stdout.length + chunk.length > 1_000_000) { terminate('failed'); return; }
       stdout += chunk.toString();

@@ -1,3 +1,4 @@
+import { CMD_SPECIAL } from '../../shared/exec/cmdSpecial';
 import { HostProfileError } from '../../shared/os/hostProfile';
 import type { ShellDialect } from '../../shared/os/shellDialect';
 import { CLAUDE_LAUNCH_ENV, isClaudeCommand } from './claude/suggestionEnv';
@@ -78,7 +79,6 @@ export function launchArgv(launch: WorkerLaunch): string[] {
   return argv;
 }
 
-const CMD_SPECIAL = /[%^&|<>"!()]/;
 
 // Characters a shell reads as more than text. A line containing one outside single quotes is not split: on a POSIX host it means
 // something, so the same text cannot be given to a program as arguments without changing what it says.
