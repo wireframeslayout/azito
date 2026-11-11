@@ -1,3 +1,4 @@
+import { isOperatorEnvFilename } from '../../shared/operatorEnv';
 import type { IHostBoundTransport, IServerTransport } from './transport/ServerTransport';
 import { shellQuote } from '../../shared/shellQuote';
 import { assertPosixHost } from '../../shared/os/hostProfile';
@@ -1067,12 +1068,12 @@ async function checkNoOperatorToken(transport: IServerTransport): Promise<Isolat
     return { id, status: 'unknown', detail: unrecognizedOutputDetail('~/.azito の一覧取得結果を解析できませんでした') };
   }
   const entries = rawLines.slice(statusIdx + 1, doneIdx).filter(Boolean);
-  const targets = entries.filter((name) => isAzitoctlEnvFilename(name) || name === 'operator.env');
+  const targets = entries.filter((name) => isAzitoctlEnvFilename(name) || isOperatorEnvFilename(name));
   if (targets.length === 0) {
-    return { id, status: 'pass', detail: '~/.azito に azitoctl*.env / operator.env が存在しません' };
+    return { id, status: 'pass', detail: '~/.azito に azitoctl*.env / operator*.env が存在しません' };
   }
 
-  // Each candidate name is validated (regex / exact literal) above, but is
+  // Each candidate name is validated (filename regex) above, but is
   // still attacker-influenced data from a remote `ls` — never interpolated
   // into the shell command unquoted. `probeFilesFramed`'s `key` is our own
   // numeric index (never remote data); `shellQuote` handles arbitrary
@@ -1082,7 +1083,7 @@ async function checkNoOperatorToken(transport: IServerTransport): Promise<Isolat
     targets.map((name, i) => ({ key: String(i), pathExpr: shellQuote(`${azitoDir}/${name}`) })),
   );
   if (!probed.ok) {
-    return { id, status: 'unknown', detail: `azitoctl*.env / operator.env の内容取得に失敗しました: ${probed.detail}` };
+    return { id, status: 'unknown', detail: `azitoctl*.env / operator*.env の内容取得に失敗しました: ${probed.detail}` };
   }
 
   const offenders: string[] = [];

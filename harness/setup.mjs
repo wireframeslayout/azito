@@ -111,7 +111,7 @@ export function runSetup(options, host, log) {
 
   log('\n=== operator.env ===');
   if (options.uiToken) {
-    const file = writeOperatorEnv(azitoDir, { azitoUrl: azitoUrlValue, uiToken: options.uiToken }, secrets);
+    const file = writeOperatorEnv(azitoDir, { prefix: options.prefix, azitoUrl: azitoUrlValue, uiToken: options.uiToken }, secrets);
     log(`  ${file}: 書き出しました`);
   } else {
     log('  スキップ (--ui-token が未指定)');

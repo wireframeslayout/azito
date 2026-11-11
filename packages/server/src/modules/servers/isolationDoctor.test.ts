@@ -796,6 +796,19 @@ describe('runIsolationDoctor', () => {
     expect(check.detail).toContain('azitoctl.env');
   });
 
+  it('no_operator_token: detects a dotted prefixed operator profile', async () => {
+    const transport = makeTransport((cmd) => {
+      if (cmd.startsWith('echo "$HOME"')) return { stdout: '/home/agent\n', stderr: '', code: 0 };
+      if (cmd.includes('ls -1')) return { stdout: 'AZT_LS_STATUS:listed\noperator-prod.eu.env\nAZT_LS_DONE\n', stderr: '', code: 0 };
+      if (cmd.includes('AZT_STATUS:0')) return { stdout: `AZT_STATUS:0:present\n${b64('AZITO_UI_TOKEN=secret\n')}\nAZT_STATUS_END:0\n`, stderr: '', code: 0 };
+      return cleanHandler(cmd);
+    });
+    const result = await runIsolationDoctor(transport, HUB);
+    const check = result.checks.find((c) => c.id === 'no_operator_token')!;
+    expect(check.status).toBe('fail');
+    expect(check.detail).toContain('operator-prod.eu.env');
+  });
+
   it('no_operator_token: passes when azitoctl*.env exists but has no AZITO_UI_TOKEN line', async () => {
     const transport = makeTransport((cmd) => {
       if (cmd.startsWith('echo "$HOME"')) return { stdout: '/home/agent\n', stderr: '', code: 0 };

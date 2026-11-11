@@ -1,4 +1,4 @@
-// ~/.azito/azitoctl[-<prefix>].env and ~/.azito/operator.env, in the Windows form: one `KEY="value"` per line, the value a JSON
+// ~/.azito/azitoctl[-<prefix>].env and ~/.azito/operator[-<prefix>].env, in the Windows form: one `KEY="value"` per line, the value a JSON
 // string (azito-hook.mjs reads it; the bash `printf %q` form of setup.sh is not written here). Files with the same names are
 // found by the hub the same way (packages/server/src/shared/azitoctlEnv.ts: `^azitoctl(?:-.+)?\.env$`).
 import fs from 'node:fs';
@@ -54,8 +54,8 @@ export function writeAzitoctlEnv(azitoDir, { prefix, azitoUrl, webhookToken, ser
   return file;
 }
 
-export function writeOperatorEnv(azitoDir, { azitoUrl, uiToken }, secrets) {
-  const file = path.join(azitoDir, 'operator.env');
+export function writeOperatorEnv(azitoDir, { prefix, azitoUrl, uiToken }, secrets) {
+  const file = path.join(azitoDir, `operator${prefix ? `-${prefix}` : ''}.env`);
   const lines = [
     '# AZITO operator credentials',
     '#',
