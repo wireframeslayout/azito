@@ -35,6 +35,11 @@ describe('TmuxClient.listSessionsForSecurityGate', () => {
     expect(result.map((s) => s.name).sort()).toEqual(['_azito_linked_1', 'normal']);
   });
 
+  it('fails closed for an SSH success status with an unknown error', async () => {
+    const client = makeClient(async () => ({ stdout: '', stderr: 'permission denied', code: 0 }));
+    await expect(client.listSessionsForSecurityGate(srv)).rejects.toThrow('permission denied');
+  });
+
   it('returns [] when the transport throws "no server running" (local: socket exists, server process gone)', async () => {
     const client = makeClient(async () => {
       throw new Error('no server running on /tmp/tmux-1000/default');

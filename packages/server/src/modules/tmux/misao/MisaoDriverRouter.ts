@@ -34,6 +34,7 @@ export class MisaoDriverRouter implements IMuxClient {
   async renameWindowByRef(server: ServerConfig, ref: MuxRef, name: string): Promise<ExecResult> { return this.to(server).renameWindowByRef(server, ref, name); }
   async renameWorkspace(server: ServerConfig, from: string, to: string): Promise<ExecResult> { return this.to(server).renameWorkspace(server, from, to); }
   async windowExists(server: ServerConfig, ref: MuxRef): Promise<boolean> { return this.to(server).windowExists(server, ref); }
+  async resolveWindowForRespawn(server: ServerConfig, ref: MuxRef): Promise<MuxRef | null> { return this.to(server).resolveWindowForRespawn(server, ref); }
   async focusWindow(server: ServerConfig, ref: MuxRef): Promise<ExecResult> { return this.to(server).focusWindow(server, ref); }
   async resolveRef(server: ServerConfig, target: string): Promise<MuxRef | null> { return this.to(server).resolveRef(server, target); }
   async labelWindowPanes(server: ServerConfig, ref: MuxRef, labels: PaneWindowLabels): Promise<void> { return this.to(server).labelWindowPanes(server, ref, labels); }

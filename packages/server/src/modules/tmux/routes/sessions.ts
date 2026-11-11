@@ -2,7 +2,7 @@ import { describeUnavailable } from '../RoutingMuxClient';
 import { tmuxErrorReason, tmuxFailureReason } from '../tmuxFailureReason';
 import { misaoFailureReason } from '../misao/misaoFailureReason';
 import { directionBody, nameBody, titleBody, keysBody, paneBody, refBody, workspaceRenameBody } from './actionBodies';
-import { persistRenamedWindowLabel } from '../windowIdentity';
+import { persistRenamedWindowLabel, renamedWindowUpdate, renameRefusalReason, tmuxRenameConflict } from '../windowIdentity';
 import type { FastifyPluginCallback, FastifyReply } from 'fastify';
 import { resourceCheckBody, type ResourceGuard, type ResourceUnavailable } from '../../servers/resources/ResourceGuard';
 import type { IServerRepository, ServerConfig } from '../../servers/Server';
@@ -830,29 +830,35 @@ const sessionsRoutes: FastifyPluginCallback<SessionsRouteOptions> = (fastify, op
   fastify.put<{ Params: { name: string; target: string } }>(
     '/api/servers/:name/windows/:target/rename',
     async (request, reply) => {
-      reply.header('Deprecation', 'true');
-      const srv = serverRepo.findByName(request.params.name);
-      if (!srv) return reply.status(404).send({ error: 'Server not found' });
-      if (!requireTmuxDriver(srv, reply)) return;
-      const parsedBody = parseStrictBody(nameBody, request.body);
-      if (!parsedBody.ok) return reply.status(400).send(parsedBody.body);
-      const { name } = parsedBody.data;
-      if (!name) return reply.status(400).send({ error: 'New name required' });
-      const target = decodeURIComponent(request.params.target);
-      const windowRow = opts.windowRepo?.findByServerAndTarget(request.params.name, target);
-      try {
-        const result = await tmux.renameWindow(srv, target, name);
-        const err = execResultError(result);
-        if (err) return reply.status(err.status).send({ error: err.error });
-        if (!persistRenamedWindowLabel(() => { if (windowRow) opts.windowRepo!.update(windowRow.id, { label: name, labelSource: 'user' }); }, () => notifySessionsChanged(request.params.name), request.log, windowRow?.id)) {
-          return reply.status(500).send({ error: 'Window renamed, but saving its label failed' });
+      return serverIsolationMutex.withLock(request.params.name, async () => {
+        reply.header('Deprecation', 'true');
+        const srv = serverRepo.findByName(request.params.name);
+        if (!srv) return reply.status(404).send({ error: 'Server not found' });
+        if (!requireTmuxDriver(srv, reply)) return;
+        const parsedBody = parseStrictBody(nameBody, request.body);
+        if (!parsedBody.ok) return reply.status(400).send(parsedBody.body);
+        const { name } = parsedBody.data;
+        if (!name) return reply.status(400).send({ error: 'New name required' });
+        const target = decodeURIComponent(request.params.target);
+        const windowRow = opts.windowRepo?.findByServerAndTarget(request.params.name, target);
+        const refusal = renameRefusalReason(windowRow ?? { muxRef: { kind: 'tmux', workspace: '', window: '' } }, name);
+        if (refusal) return reply.status(400).send({ error: refusal });
+        try {
+          const ref = muxRefFromTmuxTarget(target);
+          if (await tmuxRenameConflict(tmux, srv, ref, name)) return reply.status(409).send({ error: 'window_name_conflict' });
+          const result = await tmux.renameWindow(srv, target, name);
+          const err = execResultError(result);
+          if (err) return reply.status(err.status).send({ error: err.error });
+          if (!persistRenamedWindowLabel(() => { if (windowRow) windowRow.muxRef?.kind === 'misao' ? opts.windowRepo!.update(windowRow.id, renamedWindowUpdate(name)) : opts.windowRepo!.renameTmuxWindow(windowRow.id, name); }, () => notifySessionsChanged(request.params.name), request.log, windowRow?.id)) {
+            return reply.status(500).send({ error: 'Window renamed, but saving its label failed' });
+          }
+          notifySessionsChanged(request.params.name);
+          opts.notificationBus?.emit({ type: 'window:renamed', payload: { serverName: request.params.name, target, newName: name, windowId: windowRow?.id } });
+          return { ok: true };
+        } catch (err: unknown) {
+          return replyRouteError(reply, err);
         }
-        notifySessionsChanged(request.params.name);
-        opts.notificationBus?.emit({ type: 'window:renamed', payload: { serverName: request.params.name, target, newName: name, windowId: windowRow?.id } });
-        return { ok: true };
-      } catch (err: unknown) {
-        return replyRouteError(reply, err);
-      }
+      });
     },
   );
 
@@ -1001,24 +1007,29 @@ const sessionsRoutes: FastifyPluginCallback<SessionsRouteOptions> = (fastify, op
   fastify.put<{ Params: { name: string; ref: string } }>(
     '/api/servers/:name/mux/windows/:ref/rename',
     async (request, reply) => {
-      const srv = serverRepo.findByName(request.params.name);
-      if (!srv) return reply.status(404).send({ error: 'Server not found' });
-      const ref = resolveRefForServer(request.params.ref, srv);
-      const parsedBody = parseStrictBody(nameBody, request.body);
-      if (!parsedBody.ok) return reply.status(400).send(parsedBody.body);
-      const { name } = parsedBody.data;
-      if (!name) return reply.status(400).send({ error: 'New name required' });
-      const windowRow = opts.windowRepo?.findByServerAndRef(request.params.name, ref);
-      const muxClient = opts.muxDriverRegistry?.resolve(srv) ?? tmux;
-      const result = await muxClient.renameWindowByRef(srv, ref, name);
-      const err = execResultError(result);
-      if (err) return reply.status(err.status).send({ error: err.error });
-      if (!persistRenamedWindowLabel(() => { if (windowRow) opts.windowRepo!.update(windowRow.id, { label: name, labelSource: 'user' }); }, () => notifySessionsChanged(request.params.name), request.log, windowRow?.id)) {
-        return reply.status(500).send({ error: 'Window renamed, but saving its label failed' });
-      }
-      notifySessionsChanged(request.params.name);
-      opts.notificationBus?.emit({ type: 'window:renamed', payload: { serverName: request.params.name, target: muxWindowTarget(ref), newName: name, windowId: windowRow?.id } });
-      return { ok: true };
+      return serverIsolationMutex.withLock(request.params.name, async () => {
+        const srv = serverRepo.findByName(request.params.name);
+        if (!srv) return reply.status(404).send({ error: 'Server not found' });
+        const ref = resolveRefForServer(request.params.ref, srv);
+        const parsedBody = parseStrictBody(nameBody, request.body);
+        if (!parsedBody.ok) return reply.status(400).send(parsedBody.body);
+        const { name } = parsedBody.data;
+        if (!name) return reply.status(400).send({ error: 'New name required' });
+        const windowRow = opts.windowRepo?.findByServerAndRef(request.params.name, ref);
+        const refusal = renameRefusalReason(windowRow ?? { muxRef: ref }, name);
+        if (refusal) return reply.status(400).send({ error: refusal });
+        const muxClient = opts.muxDriverRegistry?.resolve(srv) ?? tmux;
+        if (await tmuxRenameConflict(muxClient, srv, ref, name)) return reply.status(409).send({ error: 'window_name_conflict' });
+        const result = await muxClient.renameWindowByRef(srv, ref, name);
+        const err = execResultError(result);
+        if (err) return reply.status(err.status).send({ error: err.error });
+        if (!persistRenamedWindowLabel(() => { if (windowRow) windowRow.muxRef?.kind === 'misao' ? opts.windowRepo!.update(windowRow.id, renamedWindowUpdate(name)) : opts.windowRepo!.renameTmuxWindow(windowRow.id, name); }, () => notifySessionsChanged(request.params.name), request.log, windowRow?.id)) {
+          return reply.status(500).send({ error: 'Window renamed, but saving its label failed' });
+        }
+        notifySessionsChanged(request.params.name);
+        opts.notificationBus?.emit({ type: 'window:renamed', payload: { serverName: request.params.name, target: muxWindowTarget(ref), newName: name, windowId: windowRow?.id } });
+        return { ok: true };
+      });
     },
   );
 

@@ -226,12 +226,25 @@ export class SqliteWindowRepository implements IWindowRepository {
     this.db.prepare("UPDATE windows SET owner_type = 'task', task_id = ? WHERE id = ?").run(taskId, id);
   }
 
+  renameTmuxWindow(id: number, name: string): void {
+    this.db.transaction(() => {
+      const row = this.findByIdStmt.get(id) as WindowRow | undefined;
+      if (!row || rowKind(row) !== 'tmux') throw new Error('tmux window not found');
+      const ref = muxRefFromTmuxTarget(row.tmux_target);
+      if (row.owner_type === 'task' && row.is_primary && row.task_id !== null) {
+        this.db.prepare("UPDATE tasks SET tmux_window = ?, updated_at = datetime('now') WHERE id = ? AND tmux_window = ?").run(name, row.task_id, ref.window);
+      }
+      this.update(id, { tmuxTarget: `${ref.workspace}:${name}`, label: name, labelSource: 'user' });
+    })();
+  }
+
   update(id: number, data: Partial<Pick<Window,
     'workerLaunch' | 'tmuxTarget' | 'muxRef' | 'label' | 'labelSource' | 'agentSessionId' | 'launchCommand' | 'paneLayout' | 'workerModel' | 'workingDirectory' | 'windowType' | 'workerType' | 'sleeping' | 'projectId'
   >>): void {
     this.db.transaction(() => {
     const fields: string[] = [];
     const values: unknown[] = [];
+
 
     if (data.projectId !== undefined) { fields.push('project_id = ?'); values.push(data.projectId); }
     if (data.tmuxTarget !== undefined && /\.\d+$/.test(data.tmuxTarget)) {

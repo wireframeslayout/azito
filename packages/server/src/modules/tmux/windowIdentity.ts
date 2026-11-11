@@ -1,3 +1,4 @@
+import { MuxWindowAmbiguousError } from './MuxCapabilityError';
 import { isMisaoWindowId, muxRefFromTmuxTarget, type MuxDriverKind, type MuxRef } from '@azito/shared';
 
 /** The fields of a window row these helpers read (structural, so this base module does not import the windows module). */
@@ -76,5 +77,34 @@ export function persistRenamedWindowLabel(update: () => void, notify: () => void
     log.error({ err, windowId }, 'Window renamed in mux but label update failed');
     notify();
     return false;
+  }
+}
+
+/** Misao keeps its window ID when its display name changes. */
+export function renamedWindowUpdate(name: string): { label: string; labelSource: 'user' } {
+  return { label: name, labelSource: 'user' };
+}
+
+/**
+ * Why a registered window cannot take `name`, checked before the mux is renamed so the row never falls behind.
+ * A tmux row keeps the name in `tmux_target` (`<session>:<name>`), and tmux reads that window part before it looks for
+ * a name: all digits = an index, a leading `@` / `%` = an id, `+` / `-` / `!` / `^` / `$` / `{` / `=` = a relative or
+ * special window, and a `.` starts the pane. Such a name would address another window (kill / send-keys / capture).
+ */
+export function renameRefusalReason(win: Pick<WindowRowIdentity, 'muxRef'>, name: string): string | null {
+  if (windowKindOf(win) !== 'tmux') return null;
+  return !name.trim() || name.includes(':') || /^\d+$/.test(name) || /^[@%+\-!^${=]/.test(name) || name.includes('.')
+    ? 'A tmux window name must not be only digits, start with one of @ % + - ! ^ $ { =, or contain "." or ":", and must not be blank'
+    : null;
+}
+
+/** Check the target name against the live tmux session before changing it. */
+export async function tmuxRenameConflict(driver: import('./IMuxClient').IMuxClient, server: import('../servers/Server').ServerConfig, ref: MuxRef, name: string): Promise<boolean> {
+  if (ref.kind !== 'tmux' || ref.window === name) return false;
+  try {
+    return (await driver.resolveWindowForRespawn(server, { ...ref, window: name })) !== null;
+  } catch (err) {
+    if (err instanceof MuxWindowAmbiguousError) return true;
+    throw err;
   }
 }
