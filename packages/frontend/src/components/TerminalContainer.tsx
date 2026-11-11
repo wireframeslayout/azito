@@ -178,7 +178,7 @@ export function TerminalContainer({ registeredWindow, serverName, target: rawTar
   );
   const isTaskOwnedPane = isTaskOwnedWindow(currentWindow);
   const dbWindow = currentWindow;
-  const windowId = dbWindow?.id ?? null;
+  const windowId = dbWindow?.id ?? registeredWindow?.id ?? null;
   // Callers without project / task data (the server detail page) name the registered window themselves.
   const respawnWindowId = dbWindow?.id ?? registeredWindow?.id ?? null;
   const canResume = resumableWindowId(dbWindow ?? registeredWindow) !== null;
