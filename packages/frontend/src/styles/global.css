@@ -42,6 +42,7 @@
 
   --text: #e6edf3;
   --text-dim: #8b949e;
+  --floating-text: color-mix(in srgb, var(--surface-fg) 70%, var(--surface-base));
 
   /* [3] 深さの語彙: 上端ハイライト + 影スケール */
   --edge-hi: color-mix(in srgb, var(--surface-fg) 9%, transparent);
@@ -1101,6 +1102,9 @@ input[aria-invalid="true"]:focus-visible { outline-color: var(--danger) !importa
   justify-content: center;
   z-index: 150;
   padding: var(--space-4);
+}
+.floating-surface, .overlay-panel, .lookout-toast {
+  --text-dim: var(--floating-text);
 }
 .overlay-panel {
   background: var(--bg-elevated);

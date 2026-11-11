@@ -48,7 +48,7 @@ export default function ContextMenu({ menu, onClose }: { menu: ContextMenuState;
   const ref = useClickOutside<HTMLDivElement>(onClose);
 
   return (
-    <div ref={ref} style={{
+    <div className="floating-surface" ref={ref} style={{
       position: 'fixed', top: menu.y, left: menu.x, zIndex: 310,
       background: 'var(--bg-elevated)', border: '1px solid var(--border)', borderRadius: 'var(--radius-md)',
       boxShadow: '0 4px 16px rgba(0,0,0,0.4)', padding: '4px 0', minWidth: 160,

@@ -4,6 +4,7 @@ import { loadStore, saveStore } from '../themes/defaults';
 import { PRESET_THEMES, findPreset } from '../themes/presets';
 import { buildGradientCss, buildOverlayCss } from '../themes/gradients';
 import { loadImage, saveImage, deleteImage } from '../lib/imageStore';
+import { floatingTextColor } from '../themes/floatingText';
 
 export interface BackdropRenderInfo {
   scope: 'terminal' | 'app';
@@ -157,7 +158,7 @@ export function TerminalThemeProvider({ children }: { children: React.ReactNode 
     // テーマドリブンで色が変わっても、面の相対関係（階層設計）は CSS が保証する。
     const clear = () => {
       delete root.dataset.bgScope;
-      for (const prop of ['--surface-base', '--surface-fg']) {
+      for (const prop of ['--surface-base', '--surface-fg', '--floating-text']) {
         root.style.removeProperty(prop);
       }
     };
@@ -170,6 +171,7 @@ export function TerminalThemeProvider({ children }: { children: React.ReactNode 
       root.dataset.bgScope = 'app';
       root.style.setProperty('--surface-base', resolvedTheme.palette.background);
       root.style.setProperty('--surface-fg', resolvedTheme.palette.foreground);
+      root.style.setProperty('--floating-text', floatingTextColor(resolvedTheme.palette.background, resolvedTheme.palette.foreground));
     } else {
       clear();
     }
