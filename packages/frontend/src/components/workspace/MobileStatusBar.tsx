@@ -214,12 +214,6 @@ export function MobileStatusBar({ openTask, connectPane }: MobileStatusBarProps)
               ))}
             </section>
           )}
-          {snapshotStatus === 'ready' && workingGroups.length === 0 && finishedRows.length === 0 && (
-            <div style={{ padding: '12px 8px', textAlign: 'center', color: 'var(--text-dim)', fontSize: 'var(--font-sm)' }}>
-              {t('workspace:activityPill.empty')}
-            </div>
-          )}
-
           {/* サーバーヘルス節。アイドル時（稼働0・未読完了0）でも表示する。 */}
           <section style={{ borderTop: '1px solid var(--border)', marginTop: 4, paddingTop: 6 }}>
             <div style={{ display: 'flex', alignItems: 'center', flexWrap: 'wrap', justifyContent: 'space-between', gap: 4, padding: '4px 8px 6px' }}>
