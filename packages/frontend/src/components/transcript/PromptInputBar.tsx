@@ -398,7 +398,7 @@ export default function PromptInputBar({ readOnlyReason, relay, windowId, paneId
       )}
 
       {readOnlyReason && <div role="note" style={{ color: 'var(--text-dim)', fontSize: 'var(--font-xs)', marginBottom: 'var(--space-1)' }}>{readOnlyReason}</div>}
-      <div style={{ display: 'flex', gap: 8, alignItems: 'flex-end' }}>
+      {!readOnlyReason && <div style={{ display: 'flex', gap: 8, alignItems: 'flex-end' }}>
         <textarea
           data-maximize-input
           ref={textareaRef}
@@ -495,9 +495,10 @@ export default function PromptInputBar({ readOnlyReason, relay, windowId, paneId
         >
           {sending ? <Spinner size={14} color={canSend ? 'var(--bg-solid)' : undefined} /> : <Icon name="arrow-up" size={16} />}
         </button>
-      </div>
+      </div>}
+      {readOnlyReason && viewMode !== undefined && onChangeViewMode && <StyleSwitcher value={style} onChange={setStyle} compact />}
 
-      {sendError && (
+      {!readOnlyReason && sendError && (
         <div role="alert" style={{ marginTop: 6, fontSize: 'var(--font-xs)', color: 'var(--danger)' }}>{sendError}</div>
       )}
     </div>
