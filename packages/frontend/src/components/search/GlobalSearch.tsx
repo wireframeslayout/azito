@@ -43,8 +43,14 @@ export function GlobalSearchProvider({ children }: { children: ReactNode }) {
   const [open, setOpen] = useState(false);
   const opener = useRef<HTMLElement | null>(null);
   const [fallbackFocusTo, setFallbackFocusTo] = useState<HTMLElement | null>(null);
-  useHotkey({ action: 'search.open', scope: 'global', when: 'not-editable', handler: () => { opener.current = document.activeElement instanceof HTMLElement ? document.activeElement : null; setFallbackFocusTo(null); setOpen(true); } });
-  return <Context.Provider value={fallback => { opener.current = document.activeElement instanceof HTMLElement ? document.activeElement : null; setFallbackFocusTo(fallback ?? null); setOpen(true); }}>{children}{open && <GlobalSearchPalette returnFocusTo={opener.current} fallbackFocusTo={fallbackFocusTo} onClose={() => setOpen(false)} />}</Context.Provider>;
+  const openPalette = (fallback?: HTMLElement | null) => {
+    const active = document.activeElement;
+    opener.current = active instanceof HTMLElement && active !== document.body ? active : null;
+    setFallbackFocusTo(fallback ?? null);
+    setOpen(true);
+  };
+  useHotkey({ action: 'search.open', scope: 'global', when: 'not-editable', handler: () => openPalette() });
+  return <Context.Provider value={openPalette}>{children}{open && <GlobalSearchPalette returnFocusTo={opener.current} fallbackFocusTo={fallbackFocusTo} onClose={() => setOpen(false)} />}</Context.Provider>;
 }
 
 function resolveWindowStatus(item: SearchItem, unreachable: readonly string[], sessions: Record<string, Session[]>): 'sleeping' | 'offline' | undefined {

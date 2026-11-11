@@ -79,7 +79,7 @@ describe('global search', () => {
   it('maximizes a window with Shift+Enter and leaves tasks unchanged', () => {
     mocks.withWindow = true;
     mocks.fetch.mockResolvedValue({ sessions: [], unavailable: [] });
-    setup(); fireEvent.click(screen.getByText('Open'));
+    setup(); screen.getByText('Open').focus(); fireEvent.click(screen.getByText('Open'));
     const input = screen.getByRole('combobox');
     fireEvent.change(input, { target: { value: '#371' } });
     fireEvent.keyDown(input, { key: 'Enter', shiftKey: true });
@@ -92,12 +92,23 @@ describe('global search', () => {
   it('maximizes an orchestrator with Shift+Enter', () => {
     mocks.standalone = true;
     mocks.fetch.mockResolvedValue({ sessions: [], unavailable: [] });
-    setup(); fireEvent.click(screen.getByText('Open'));
+    setup(); screen.getByText('Open').focus(); fireEvent.click(screen.getByText('Open'));
     const input = screen.getByRole('combobox');
     fireEvent.change(input, { target: { value: 'Independent' } });
     fireEvent.keyDown(input, { key: 'Enter', shiftKey: true });
     expect(mocks.maximize).toHaveBeenCalledWith(902, expect.objectContaining({ id: 902 }), expect.any(HTMLElement));
     expect(mocks.navigate).not.toHaveBeenCalled();
+  });
+  it('does not pass the document body as the maximize focus target', () => {
+    mocks.withWindow = true;
+    mocks.fetch.mockResolvedValue({ sessions: [], unavailable: [] });
+    setup();
+    fireEvent.keyDown(document.body, { key: ' ', code: 'Space' });
+    fireEvent.keyDown(document.body, { key: ' ', code: 'Space' });
+    const input = screen.getByRole('combobox');
+    fireEvent.change(input, { target: { value: '806' } });
+    fireEvent.keyDown(input, { key: 'Enter', shiftKey: true });
+    expect(mocks.maximize).toHaveBeenCalledWith(806, expect.objectContaining({ id: 806 }), null);
   });
   it('does not offer maximization on mobile', () => {
     mocks.mobile = true;
