@@ -60,7 +60,7 @@ describe('tracked Windows secrets', () => {
     expect(fs.existsSync(ownedSecretMarker(hub, path.basename(canary!.path)))).toBe(true);
   });
 
-  it('matches real paths whose spellings differ only in case', () => {
+  it.skipIf(process.platform === 'win32')('matches simulated real paths whose spellings differ only in case', () => {
     const { hub, bundle, paths, guard } = setup();
     const native = fs.realpathSync.native;
     let dataCalls = 0;
@@ -76,6 +76,16 @@ describe('tracked Windows secrets', () => {
       expect(fs.existsSync(ownedSecretMarker(hub, 'webhook-token'))).toBe(true);
       expect(dataCalls).toBeGreaterThanOrEqual(4);
     } finally { spy.mockRestore(); }
+  });
+
+  it.skipIf(process.platform !== 'win32')('tracks the same Windows data directory with a differently cased spelling', () => {
+    const { hub, bundle, paths, guard } = setup();
+    const alias = path.join(path.dirname(paths.dir), 'DATA');
+    const tracked = trackWindowsOwnedSecrets(guard, bundle, { ...paths, dir: alias }, 'win32');
+    expect(tracked).not.toBe(guard);
+    tracked.writeSecretFile(path.join(alias, 'webhook-token'), 'generated');
+    expect(fs.readFileSync(paths.webhookToken, 'utf8')).toBe('generated');
+    expect(fs.existsSync(ownedSecretMarker(hub, 'webhook-token'))).toBe(true);
   });
 
   it('does not track a linked alias of the data directory', () => {
@@ -111,8 +121,13 @@ describe('tracked Windows secrets', () => {
   });
 
   it('does not track an external data directory', () => {
-    const { bundle, paths, guard } = setup();
-    expect(trackWindowsOwnedSecrets(guard, bundle, { ...paths, dir: path.join(paths.dir, 'external') }, 'win32')).toBe(guard);
+    const { hub, bundle, paths, guard } = setup();
+    const external = path.join(paths.dir, 'external');
+    fs.mkdirSync(external);
+    const tracked = trackWindowsOwnedSecrets(guard, bundle, { ...paths, dir: external }, 'win32');
+    expect(tracked).toBe(guard);
+    tracked.writeSecretFile(path.join(external, 'webhook-token'), 'external');
+    expect(fs.existsSync(ownedSecretMarker(hub, 'webhook-token'))).toBe(false);
   });
 
   it('does not publish an empty secret or overwrite a file created concurrently', () => {
