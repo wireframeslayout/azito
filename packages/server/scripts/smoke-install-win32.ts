@@ -34,8 +34,9 @@ function assert(condition: boolean, message: string, detail = ''): void {
 }
 
 function powershell(args: string[], env: NodeJS.ProcessEnv = process.env): Result {
-  const r = spawnSync(POWERSHELL, ['-NoProfile', '-ExecutionPolicy', 'Bypass', ...args], { encoding: 'utf-8', timeout: 300_000, env });
-  return { status: r.status, output: `${r.stdout}${r.stderr}` };
+  const r = spawnSync(POWERSHELL, ['-NoProfile', '-ExecutionPolicy', 'Bypass', ...args], { encoding: 'utf-8', timeout: 900_000, maxBuffer: 16 * 1024 * 1024, env });
+  const output = `${r.stdout ?? ""}${r.stderr ?? ""}`;
+  return { status: r.status, output: r.status === 0 ? output : `stdout:\n${r.stdout ?? ""}\nstderr:\n${r.stderr ?? ""}\nexit status: ${r.status}, signal: ${r.signal ?? "none"}${r.error ? `, error: ${r.error.message}` : ""}` };
 }
 
 function install(installPs1: string, args: string[], env: NodeJS.ProcessEnv = process.env): Result {
@@ -123,6 +124,7 @@ function checkUninstall(installPs1: string, prefix: string, version: string): vo
   const extra = path.join(release, 'user-file');
   fs.writeFileSync(extra, 'leave this');
   const args = ['-Uninstall', '-Prefix', prefix, '-Yes'];
+  step('uninstall: refuse an unrecorded file');
   const refused = install(installPs1, args);
   assert(refused.status !== 0 && fs.existsSync(extra), 'an unrecorded file must prevent removal', refused.output);
   fs.unlinkSync(extra);
@@ -131,13 +133,16 @@ function checkUninstall(installPs1: string, prefix: string, version: string): vo
   fs.writeFileSync(path.join(target, 'keep'), 'outside');
   const junction = path.join(release, 'user-junction');
   fs.symlinkSync(target, junction, 'junction');
+  step('uninstall: refuse a junction without following it');
   const linked = install(installPs1, args);
   assert(linked.status !== 0 && fs.existsSync(path.join(target, 'keep')), 'a junction must be refused without entering it', linked.output);
   fs.rmdirSync(junction);
+  step('uninstall: remove the release while retaining data');
   const removed = install(installPs1, args);
   assert(removed.status === 0, 'uninstall failed', removed.output);
   assert(!fs.existsSync(release), 'the recorded release must be removed', removed.output);
   assert(fs.existsSync(path.join(prefix, 'data', 'data.db')), 'data must be retained by default', removed.output);
+  step('uninstall: repeat after successful removal');
   const again = install(installPs1, args);
   assert(again.status === 0 && /No installation record/.test(again.output), 'a repeat must report the retained files', again.output);
 }

@@ -103,12 +103,14 @@ async function runUninstall(host: HostEnv, context: ServiceCommandContext, remov
     });
     if (action !== 'remove') return;
     try {
+      console.error('Uninstall helper: checking tasks and running processes.');
       if ((await hub.client.query(HUB_SERVICE.windowsTaskName)).exists || (await hub.client.query(HUB_UPDATE_TASK)).exists) throw new Error('A hub or update task appeared while preparing removal; inspect it and retry manually.');
       if ((await findHubProcesses(run, hub.systemRoot, hub.hubRoots, context.pid)).length > 0) throw new Error('A hub process started while preparing removal; stop it and inspect the retained files.');
       const inUse = await findHubVersionsInUse(run, hub.systemRoot, hub.hubRoots, { rejectUnknownVersions: true, excludePid: context.pid });
       if ([...inUse].some((version) => version.toLowerCase() === record.release.toLowerCase())) throw new Error('A process is using the recorded release; stop it and inspect the retained files.');
       await assertNoHubLaunchers(hub.hubRoots, run, hub.systemRoot, process.ppid);
       await assertNoOtherHubProcesses(hub.layout.hubRoot, run, hub.systemRoot, context.pid);
+      console.error('Uninstall helper: removing verified data when selected.');
       if (data) {
         await prepareRecordedData(hub.layout.prefix, record, context.secretFileGuard, run, hub.systemRoot);
         await removeRecordedTree(hub.layout.prefix, 'data', run, hub.systemRoot);
@@ -123,6 +125,7 @@ async function runUninstall(host: HostEnv, context: ServiceCommandContext, remov
         }
         if (fs.readdirSync(dir).length === 0) fs.rmdirSync(dir);
       }
+      console.error('Uninstall helper: verifying and removing the recorded release.');
       await assertHubDirsOnlyOwnerWritable(run, hub.systemRoot, [release, ...record.inventory.directories.map((dir) => path.join(release, dir))]);
       verifyRecordedRelease(hub.layout.hubRoot, record);
       await removeRecordedTree(hub.layout.hubRoot, record.release, run, hub.systemRoot);
@@ -137,6 +140,7 @@ async function runUninstall(host: HostEnv, context: ServiceCommandContext, remov
           if ((err as NodeJS.ErrnoException).code !== 'ENOENT') retained.push(`hub\\.env could not be removed; retained: ${err instanceof Error ? err.message : String(err)}`);
         }
       }
+      console.error('Uninstall helper: removing recorded metadata.');
       const pointer = path.join(hub.layout.hubRoot, 'current.txt');
       const stat = fs.lstatSync(pointer);
       if (!stat.isFile() || stat.isSymbolicLink() || fs.readFileSync(pointer, 'utf8').trim() !== record.release) throw new Error(`The pointer ${pointer} changed and is retained.`);

@@ -456,6 +456,9 @@ function Invoke-Uninstall {
     $tempName = 'azito-uninstall-' + [Guid]::NewGuid().ToString('N')
     $tempRoot = Join-Path $tempParent $tempName
     $holder = $null
+    $stderrTask = $null
+    $line = $null
+    $resultLine = $null
     try {
         New-Item -ItemType Directory -Path $tempRoot | Out-Null
         Copy-Item -LiteralPath $release -Destination $tempRoot -Recurse -Force
@@ -472,9 +475,10 @@ function Invoke-Uninstall {
         $info.RedirectStandardError = $true
         $info.CreateNoWindow = $true
         $holder = [Diagnostics.Process]::Start($info)
+        $stderrTask = $holder.StandardError.ReadToEndAsync()
         $line = $holder.StandardOutput.ReadLine()
-        if (-not $line) { throw "Uninstall preparation failed (the verified task may already have been removed): $($holder.StandardError.ReadToEnd())" }
-        $prepared = $line | ConvertFrom-Json
+        if (-not $line) { throw "Uninstall preparation failed (the verified task may already have been removed): no JSON response from helper" }
+        $prepared = $line | ConvertFrom-Json -ErrorAction Stop
         if ($prepared.error) {
             if ($prepared.taskMayHaveBeenRemoved) { throw "Uninstall preparation failed (the verified task may already have been removed): $($prepared.error)" }
             throw "Nothing was removed: $($prepared.error)"
@@ -494,14 +498,29 @@ function Invoke-Uninstall {
         if ($holder.HasExited) { throw 'The uninstall lock holder exited; inspect retained files manually.' }
         $holder.StandardInput.WriteLine('remove')
         $holder.StandardInput.Flush()
+        $holder.StandardInput.Close()
         $resultLine = $holder.StandardOutput.ReadLine()
-        if (-not $resultLine) { throw "Uninstall stopped before reporting the result. Inspect remaining files manually: $($holder.StandardError.ReadToEnd())" }
-        $result = $resultLine | ConvertFrom-Json
+        if (-not $resultLine) { throw "Uninstall stopped before reporting the result. Inspect remaining files manually: no JSON response from helper" }
+        $result = $resultLine | ConvertFrom-Json -ErrorAction Stop
         if (-not $result.removed) { throw "Uninstall stopped after a partial removal: $($result.error)" }
+        if (-not $holder.WaitForExit(60000)) { throw 'The uninstall helper did not exit after reporting its result.' }
+        if ($holder.ExitCode -ne 0) { throw 'The uninstall helper reported success but exited with an error.' }
         foreach ($message in @($result.retained)) { if ($message) { Write-Warning $message } }
+    } catch {
+        $reason = $_.Exception.Message
+        if ($null -ne $holder) {
+            if (-not $holder.HasExited) {
+                try { $holder.StandardInput.Close() } catch { }
+                if (-not $holder.WaitForExit(60000)) { $holder.Kill(); $holder.WaitForExit() }
+            }
+            $stderr = if ($null -ne $stderrTask) { $stderrTask.GetAwaiter().GetResult() } else { '' }
+            $remainingOutput = $holder.StandardOutput.ReadToEnd()
+            throw "${reason}`nUninstall helper exit code: $($holder.ExitCode)`nHelper stdout: $line`n$resultLine`n$remainingOutput`nHelper stderr: $stderr"
+        }
+        throw $reason
     } finally {
         if ($null -ne $holder) {
-            if (-not $holder.HasExited) { $holder.StandardInput.Close() }
+            if (-not $holder.HasExited) { try { $holder.StandardInput.Close() } catch { } }
             if (-not $holder.WaitForExit(60000)) { $holder.Kill(); $holder.WaitForExit() }
             $holder.Dispose()
         }
