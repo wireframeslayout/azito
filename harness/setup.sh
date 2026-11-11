@@ -143,9 +143,9 @@ while [[ $# -gt 0 ]]; do
   esac
 done
 
-# A prefix is a filename component, never a path.
-if [[ "$AZITO_PREFIX" == */* || "$AZITO_PREFIX" == *$'\n'* || "$AZITO_PREFIX" == *$'\r'* ]]; then
-  echo "Error: --prefix must not contain / or line breaks" >&2
+# A prefix is a filename component, never a path. Same grammar as setup.mjs (PREFIX_PATTERN) and the hub's AZITO_HARNESS_PREFIX.
+if [[ -n "$AZITO_PREFIX" ]] && { [[ ! "$AZITO_PREFIX" =~ ^[A-Za-z0-9][A-Za-z0-9._-]*$ ]] || [[ "$AZITO_PREFIX" == *..* ]]; }; then
+  echo "Error: --prefix に使える文字は英数字と . _ - です（先頭は英数字、.. は不可）: $AZITO_PREFIX" >&2
   exit 1
 fi
 

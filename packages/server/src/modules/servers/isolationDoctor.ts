@@ -1072,7 +1072,7 @@ async function checkNoOperatorToken(transport: IServerTransport): Promise<Isolat
     return { id, status: 'pass', detail: '~/.azito に azitoctl*.env / operator*.env が存在しません' };
   }
 
-  // Each candidate name is validated (regex / exact literal) above, but is
+  // Each candidate name is validated (filename regex) above, but is
   // still attacker-influenced data from a remote `ls` — never interpolated
   // into the shell command unquoted. `probeFilesFramed`'s `key` is our own
   // numeric index (never remote data); `shellQuote` handles arbitrary

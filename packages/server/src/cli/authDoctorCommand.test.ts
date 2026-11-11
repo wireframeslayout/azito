@@ -227,7 +227,7 @@ describe('authDoctorCommand', () => {
     const { authDoctorCommand } = await import('./authDoctorCommand.js');
     await authDoctorCommand(doctorHostEnv(fakeHome), secretFileGuard, doctorTaskTempFiles);
 
-    expect(allLogLines()).toContain('[OK ] operator.env');
+    expect(allLogLines()).toContain('[OK ] operator*.env');
     expect(process.exitCode).toBe(3);
   });
 

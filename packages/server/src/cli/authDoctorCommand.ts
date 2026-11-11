@@ -114,7 +114,7 @@ function checkAzitoctlEnvNoUiToken(homeDir: string): CheckResult {
 
 // (b) operator.env のパーミッションが 0600 か
 function checkOperatorEnvPermissions(homeDir: string, guard: SecretFileGuard): CheckResult {
-  const label = `operator.env の${guard.policyDescription}`;
+  const label = `operator*.env の${guard.policyDescription}`;
   const files = findOperatorEnvFiles(homeDir);
   if (files.length === 0) {
     return { ok: true, label, detail: '~/.azito/operator*.env は存在しません' };

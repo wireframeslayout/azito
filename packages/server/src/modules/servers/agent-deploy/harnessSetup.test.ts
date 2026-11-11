@@ -161,6 +161,18 @@ describe('setup.mjs', () => {
     expect(fs.readFileSync(file, 'utf8')).toBe(original);
   });
 
+  it.skipIf(isWindows)('setup.sh refuses a prefix outside setup.mjs grammar, before writing anything', async () => {
+    const script = path.join(HARNESS_DIR, 'setup.sh');
+    for (const prefix of ['../evil', 'a/b', '.hidden', 'x..y', 'a b']) {
+      const result = await new Promise<{ code: number; stderr: string }>((resolve) => {
+        execFile('/bin/bash', [script, '--prefix', prefix, '--azito-url', 'http://x', '--ui-token', 't'], { env: { ...baseEnv(), PATH: process.env.PATH! }, timeout: 120_000 }, (err, _out, stderr) => resolve({ code: err ? 1 : 0, stderr }));
+      });
+      expect(result.code, prefix).toBe(1);
+      expect(result.stderr).toContain('--prefix');
+    }
+    expect(fs.existsSync(path.join(home, '.azito'))).toBe(false);
+  });
+
   it('refuses a prefix that could make a file name leave ~/.azito, before writing anything', async () => {
     for (const prefix of ['../evil', 'a/b', '.hidden', 'x..y']) {
       const result = await runSetup(['--prefix', prefix, '--azito-url', 'http://x', '--webhook-token', 't']);
