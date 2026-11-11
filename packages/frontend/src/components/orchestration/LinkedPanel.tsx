@@ -1,6 +1,6 @@
 import { formatWindowTitleLine, resolveWindowTitle } from '@azito/shared';
 import { windowTitleInput } from '../../lib/windowDisplay';
-import { useCallback, useEffect, useRef, useState, type ReactNode } from 'react';
+import { useCallback, useEffect, useImperativeHandle, useRef, useState, type ReactNode, type Ref } from 'react';
 import { useTranslation } from 'react-i18next';
 import { api } from '../../api/client';
 import { useToast } from '../../hooks/useToast';
@@ -25,9 +25,9 @@ import { formatRelativeTime } from '../../utils/time';
 import { ChildOrchestratorCard } from './ChildOrchestratorCard';
 import { LinkedWindowCard } from './LinkedWindowCard';
 
-interface Props { windowId: number; enabled: boolean; onOpen: (window: Window) => void; onExpand: (window: Window) => void; onProject: (id: number) => void; excludedWindowIds: number[]; children: OrchestratorNode[]; onEnter: (id: number) => void; onWindowOrder?: (windows: Window[]) => void }
+interface Props { addRef?: Ref<{ openAdd: () => void }>; showAddButton?: boolean; windowId: number; enabled: boolean; onOpen: (window: Window) => void; onExpand: (window: Window) => void; onProject: (id: number) => void; excludedWindowIds: number[]; children: OrchestratorNode[]; onEnter: (id: number) => void; onWindowOrder?: (windows: Window[]) => void }
 
-export function LinkedPanel({ windowId, enabled, onOpen, onExpand, onProject, excludedWindowIds, children, onEnter, onWindowOrder }: Props) {
+export function LinkedPanel({ addRef, showAddButton = true, windowId, enabled, onOpen, onExpand, onProject, excludedWindowIds, children, onEnter, onWindowOrder }: Props) {
   const { t } = useTranslation('workspace');
   const { showToast } = useToast();
   const { links, loading, error, refresh, add, unlink, undo } = useOrchestrationLinks(windowId);
@@ -59,6 +59,7 @@ export function LinkedPanel({ windowId, enabled, onOpen, onExpand, onProject, ex
       setSessionCandidates(responses.flatMap(response => response.status === 'fulfilled' && Array.isArray(response.value.sessions) ? response.value.sessions.flatMap(session => session.windows.flatMap(window => typeof window.windowId !== 'number' ? [] : [{ key: `window:${window.windowId}`, label: formatWindowTitleLine(resolveWindowTitle({ id: window.windowId, label: window.name })), target: { targetWindowId: window.windowId }, group: response.value.server.name }])) : []));
     }).catch(() => { if (version === candidateRequest.current) setCandidateError(true); });
   };
+  useImperativeHandle(addRef, () => ({ openAdd }));
   const [, setAcknowledgementVersion] = useState(0);
   const [operationError, setOperationError] = useState<{ code: string; kind: 'add' | 'unlink'; retry: () => void } | null>(null);
   const runAdd = (target: LinkTarget) => { setOperationError(null); void add(target).then(() => setAdding(false)).catch((error: Error) => setOperationError({ code: error.message, kind: 'add', retry: () => runAdd(target) })); };
@@ -115,7 +116,7 @@ export function LinkedPanel({ windowId, enabled, onOpen, onExpand, onProject, ex
   return <div style={{ display: 'flex', flexDirection: 'column', height: '100%', minHeight: 0 }}>
     <div style={{ display: 'flex', alignItems: 'flex-start', gap: 'var(--space-2)', padding: 'var(--space-3)', minWidth: 0 }}>
       <div style={{ flex: 1, minWidth: 0 }}><SegmentedToggle ariaLabel={t('linkedPanel.title')} wrap value={filter} onChange={setFilter} options={(['all', 'attention', 'running', 'completed'] as const).map(value => ({ value, label: `${t(`linkedPanel.${value}`)} ${value === 'all' ? items.length : items.filter(item => item.status === value).length}` }))} /></div>
-      <IconButton aria-label={t('linkedPanel.add')} title={t('linkedPanel.add')} onClick={openAdd}><Icon name="plus" size={16} /></IconButton>
+      {showAddButton && <IconButton aria-label={t('linkedPanel.add')} title={t('linkedPanel.add')} onClick={openAdd}><Icon name="plus" size={16} /></IconButton>}
     </div>
     <AddLinkPopover open={adding} onClose={() => { candidateRequest.current++; setAdding(false); }} candidates={candidates} searchLabel={t('linkedPanel.search')} emptyLabel={t('linkedPanel.empty')} error={operationError?.kind === 'add' ? t(`linkedPanel.${operationError.code}`, { defaultValue: t('linkedPanel.addError') }) : candidateError ? t('linkedPanel.candidateError') : null} excludedWindowIds={excludedWindowIds} linkedTargets={targets} onAdd={runAdd} />
     <span aria-live="polite" className="sr-only">{announcement}</span>

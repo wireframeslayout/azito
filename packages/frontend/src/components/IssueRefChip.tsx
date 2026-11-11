@@ -11,8 +11,9 @@ interface IssueRefChipProps {
 /** The task's linked issue as a chip, a link when the provider's URL can be built. Nothing for an unparseable reference. */
 export default function IssueRefChip({ source, sourceRef }: IssueRefChipProps): React.ReactElement | null {
   const { t } = useTranslation('tasks');
-  const parsed = sourceRef ? parseSourceRef(sourceRef) : null;
-  if (!parsed || !sourceRef) return null;
+  if (!sourceRef) return null;
+  const parsed = parseSourceRef(sourceRef);
+  if (!parsed) return null;
   const chip = <Chip tone="accent">{t('ref.issue', { number: parsed.number })}</Chip>;
   const issueUrl = source ? buildIssueUrl(source, sourceRef) : null;
   if (!issueUrl) return chip;
