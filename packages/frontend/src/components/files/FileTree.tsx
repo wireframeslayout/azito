@@ -1,9 +1,10 @@
 import React from 'react';
 import type { HostPathApi } from '@azito/shared';
 import { parentOrRoot } from '../../lib/serverPath';
-import { Icon, type IconName } from '../ui/Icon';
+import { Icon } from '../ui/Icon';
 import type { TreeNode } from './useFileTree';
 import type { PendingCreate, PendingRename } from './useFileCrud';
+import { fileIconFor } from './fileIconFor';
 import InlineNameInput from './InlineNameInput';
 
 interface CustomRowFileTreeProps {
@@ -35,11 +36,6 @@ interface DefaultFileTreeProps {
   };
 }
 
-function fileIconFor(name: string): { icon: IconName; color: string } {
-  if (/\.(png|jpe?g|gif|webp|svg)$/i.test(name)) return { icon: 'image', color: 'var(--purple)' };
-  if (/\.(tsx?|jsx?|json|css|html|py|rs|sh)$/i.test(name)) return { icon: 'file-code', color: 'var(--text-dim)' };
-  return { icon: 'file', color: 'var(--text-dim)' };
-}
 
 type FileTreeProps = DefaultFileTreeProps | CustomRowFileTreeProps;
 

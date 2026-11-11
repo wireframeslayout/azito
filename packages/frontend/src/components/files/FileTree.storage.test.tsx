@@ -37,8 +37,12 @@ describe('shared file navigation', () => {
   });
   it('keeps the existing breadcrumb copy control', () => {
     render(<PathBreadcrumb path="/home/project" />);
-    expect(screen.getByText('/home/project')).toBeTruthy();
+    expect(screen.getByText('project').closest('bdi')?.textContent).toBe('/home/project');
     expect(screen.getByTitle('rootSwitcher.copyPath')).toBeTruthy();
+  });
+  it('renders Windows drive and separators', () => {
+    render(<PathBreadcrumb path={'C:\\Users\\project'} separator={'\\'} />);
+    expect(screen.getByText('project').closest('bdi')?.textContent).toBe('C:\\Users\\project');
   });
   it('navigates relative storage breadcrumbs', () => {
     const navigate = vi.fn();

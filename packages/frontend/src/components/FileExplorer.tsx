@@ -4,7 +4,7 @@ import { useTranslation } from 'react-i18next';
 import { ServerFilesBackend } from './files/backend/ServerFilesBackend';
 import { useToast } from '../hooks/useToast';
 import { Icon } from './ui/Icon';
-import { LoadingState } from './ui';
+import { FormInput, LoadingState } from './ui';
 import { useContextMenu } from './ContextMenu';
 import ContextMenu from './ContextMenu';
 import type { ContextMenuItem } from './ContextMenu';
@@ -38,6 +38,7 @@ export default function FileExplorer(props: FileExplorerProps) {
 function FileExplorerTree({ serverName, rootPath, projectId, onFileSelect, onRefreshRef, pathApi }: FileExplorerProps & { pathApi: HostPathApi }) {
   const { t } = useTranslation('files');
   const { showToast } = useToast();
+  const [filter, setFilter] = useState('');
   const [selectedPath, setSelectedPath] = useState<string | null>(null);
   const backend = useMemo(() => new ServerFilesBackend(serverName, projectId), [serverName, projectId]);
   const { tree, loading, error, loadRoot, toggleDir, expandDir, refreshDir, getSiblingNames } = useFileTree(backend, rootPath);
@@ -110,10 +111,18 @@ function FileExplorerTree({ serverName, rootPath, projectId, onFileSelect, onRef
     onRefreshRef?.(loadRoot);
   }, [onRefreshRef, loadRoot]);
 
+  const filterNodes = (nodes: TreeNode[]): TreeNode[] => nodes.flatMap((node) => {
+    const children = node.expanded && node.children ? filterNodes(node.children) : [];
+    const matches = node.name.toLocaleLowerCase().includes(filter.toLocaleLowerCase());
+    const editing = crud.pendingRename?.path === node.path || crud.pendingCreate?.parentPath === node.path;
+    return matches || children.length || editing ? [{ ...node, children: matches ? node.children : children }] : [];
+  });
+  const visibleTree = filter ? filterNodes(tree) : tree;
   const areaLongPressHandlers = bindAreaLongPress((x, y) => showContextMenuAt(x, y, buildAreaMenuItems()));
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', flex: 1, overflow: 'hidden' }}>
+      <FormInput className="icon-btn" aria-label={t('explorer.filterLoaded')} placeholder={t('explorer.filterLoaded')} value={filter} onChange={(event) => setFilter(event.target.value)} style={{ margin: 'var(--space-2)', width: 'auto' }} />
       <div
         style={{ flex: 1, overflowY: 'auto', padding: '4px 0', ...longPressStyle }}
         onContextMenu={(e) => showContextMenu(e, buildAreaMenuItems())}
@@ -129,8 +138,9 @@ function FileExplorerTree({ serverName, rootPath, projectId, onFileSelect, onRef
         {!loading && !error && tree.length === 0 && (
           <div style={{ padding: 12, fontSize: 'var(--font-sm)', color: 'var(--text-dim)' }}>{t('explorer.emptyDirectory')}</div>
         )}
+        {!loading && !error && filter && !visibleTree.length && <div style={{ padding: 'var(--space-3)', color: 'var(--text)' }}>{t('explorer.noFiltered')}</div>}
         <FileTree
-          nodes={tree}
+          nodes={visibleTree}
           selectedPath={selectedPath}
           rootPath={rootPath}
           pathApi={pathApi}

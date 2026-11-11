@@ -13,6 +13,8 @@ export function useTextFileDocument(backend: FilesBackend, path: string, onDirty
   const [saved, setSaved] = useState(false);
   const [conflict, setConflict] = useState<FileReadResult | null | undefined>(undefined);
   const contentRef = useRef(content);
+  const documentRef = useRef(document);
+  documentRef.current = document;
   const generation = useRef(0);
   const savingRef = useRef<number | null>(null);
   const dirty = document !== null && content !== document.content;
@@ -53,5 +55,9 @@ export function useTextFileDocument(backend: FilesBackend, path: string, onDirty
       if (generation.current === current) setError(err instanceof Error ? err.message : String(err));
     } finally { if (savingRef.current === current) savingRef.current = null; if (generation.current === current) setSaving(false); }
   }, [path, document]);
-  return { document, content, loading, error, unavailable, saving, saved, dirty, conflict, change, save, reload: load };
+  const restore = useCallback(() => {
+    if (!document || documentRef.current !== document || savingRef.current !== null) return;
+    contentRef.current = document.content; setContent(document.content); setSaved(false);
+  }, [document]);
+  return { restore, document, content, loading, error, unavailable, saving, saved, dirty, conflict, change, save, reload: load };
 }

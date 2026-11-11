@@ -8,9 +8,10 @@ interface PathBreadcrumbProps {
   rootLabel?: string;
   navigationLabel?: string;
   mobile?: boolean;
+  separator?: string;
 }
 
-export function PathBreadcrumb({ path, onNavigate, rootLabel, navigationLabel, mobile = false }: PathBreadcrumbProps) {
+export function PathBreadcrumb({ path, onNavigate, rootLabel, navigationLabel, mobile = false, separator = '/' }: PathBreadcrumbProps) {
   const { t } = useTranslation('files');
   const { showToast } = useToast();
 
@@ -53,12 +54,13 @@ export function PathBreadcrumb({ path, onNavigate, rootLabel, navigationLabel, m
           textAlign: 'left',
         }}
       >
-        <bdi>{path}</bdi>
+        <bdi aria-label={path}>{path.split(separator).map((part, index) => <span key={index}>{index > 0 && <span aria-hidden="true">{separator}</span>}{part}</span>)}</bdi>
       </div>
       <button
         type="button"
         onClick={handleCopy}
         title={t('rootSwitcher.copyPath')}
+        aria-label={t('rootSwitcher.copyPath')}
         className="icon-btn"
         style={{
           border: 'none',

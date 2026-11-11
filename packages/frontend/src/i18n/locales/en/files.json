@@ -29,7 +29,9 @@
     "nameDuplicate": "A file or folder with this name already exists",
     "createFailed": "Failed to create",
     "deleteFailed": "Failed to delete",
-    "renameFailed": "Failed to rename"
+    "renameFailed": "Failed to rename",
+    "filterLoaded": "Filter visible names…",
+    "noFiltered": "No matching names"
   },
   "preview": {
     "downloadFile": "Download file",
@@ -56,8 +58,16 @@
     "includePlaceholder": "e.g. *.ts, src/**",
     "excludePlaceholder": "node_modules, .git, dist, .worktrees",
     "summary": "{{files}} files · {{hits}} hits ({{engine}}, {{time}}ms)",
-    "engine": { "rg": "ripgrep", "grep": "grep", "builtin": "built-in" },
-    "engineHint": { "rg": "Searched with ripgrep", "grep": "Searched with grep", "builtin": "Searched with the built-in search. Installing ripgrep (rg) on the host makes it faster." },
+    "engine": {
+      "rg": "ripgrep",
+      "grep": "grep",
+      "builtin": "built-in"
+    },
+    "engineHint": {
+      "rg": "Searched with ripgrep",
+      "grep": "Searched with grep",
+      "builtin": "Searched with the built-in search. Installing ripgrep (rg) on the host makes it faster."
+    },
     "truncated": "Showing top 200 results — refine your query",
     "noMatch": "No matches found",
     "noMatchHint": "Check excluded patterns",
@@ -107,6 +117,10 @@
       "invalid_utf8": "Files that are not UTF-8 cannot be edited.",
       "not_text": "This file is not text and cannot be edited.",
       "forbidden": "You do not have permission to read this file."
-    }
+    },
+    "restore": "Restore",
+    "restoreConfirm": "Discard edits and restore the last saved content?",
+    "lineCount_one": "{{count}} line",
+    "lineCount_other": "{{count}} lines"
   }
 }

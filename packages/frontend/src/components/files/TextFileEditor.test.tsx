@@ -15,6 +15,19 @@ vi.mock('../editor/CodeEditorView', () => ({ default: ({ value, onChange }: { va
 vi.mock('../editor/EditorStatusBar', () => ({ default: () => null }));
 
 describe('TextFileEditor', () => {
+  it('restores edited content after confirmation and shows metadata', async () => {
+    const backend: FilesBackend = { source: 'restore', read: vi.fn(async () => ({ kind: 'text' as const, content: 'base', version: 'v1', language: 'text' })), save: vi.fn(), list: vi.fn(), create: vi.fn(), rename: vi.fn(), delete: vi.fn(), download: vi.fn() };
+    render(<TextFileEditor backend={backend} path="file" name="file" />);
+    const editor = await screen.findByRole('textbox', { name: 'editor' });
+    const restore = screen.getByRole('button', { name: 'editor.restore' }) as HTMLButtonElement;
+    expect(restore.disabled).toBe(true);
+    expect(screen.getByText('UTF-8')).toBeTruthy();
+    fireEvent.change(editor, { target: { value: 'one\ntwo\n' } });
+    expect(restore.disabled).toBe(false);
+    fireEvent.click(restore);
+    await waitFor(() => expect((editor as HTMLTextAreaElement).value).toBe('base'));
+    expect(restore.disabled).toBe(true);
+  });
   it('retains local text and presents a comparison when saving conflicts', async () => {
     const backend: FilesBackend = {
       source: 'test',
