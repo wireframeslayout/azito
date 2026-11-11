@@ -147,7 +147,6 @@ export default function ActiveWindowsSection({ titleData, connectPane, openTask,
                   display: 'flex',
                   alignItems: 'center',
                   gap: 'var(--space-2)',
-                  minHeight: 'var(--space-6)',
                   padding: 'var(--space-2)',
                   borderRadius: 'var(--radius-sm)',
                   background: isBlocked ? 'var(--warning-a08)' : undefined,
@@ -209,7 +208,7 @@ export default function ActiveWindowsSection({ titleData, connectPane, openTask,
                     #{taskId}
                   </span>
                 )}
-                {row.seenAt != null && <IconButton size="sm" className="icon-btn aw-history-delete" type="button" aria-label={t('activeWindows.deleteHistory')} onClick={() => dismissFinished(row.serverName, row.target, row.windowId)}><Icon name="close" size={14} /></IconButton>}
+                {row.seenAt != null && <IconButton size="sm" style={{ marginBlock: 'calc(-1 * var(--space-1))' }} className="icon-btn aw-history-delete" type="button" aria-label={t('activeWindows.deleteHistory')} onClick={() => dismissFinished(row.serverName, row.target, row.windowId)}><Icon name="close" size={14} /></IconButton>}
               </div>
               </div>
             );
