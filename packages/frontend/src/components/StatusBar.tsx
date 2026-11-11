@@ -80,8 +80,8 @@ export function StatusBar({ servers }: StatusBarProps) {
 
   const focusedServer = focusedTargetDisplay?.serverName ?? null;
   const contextLabel = focusedTargetDisplay?.label ?? null;
-  const displayedServer = focusedServer;
-  const defaultMux = serversLoaded ? configuredServers.find((server) => server.name === displayedServer)?.defaultMux : undefined;
+  const focusedEntry = servers.find(server => server.serverName === focusedServer);
+  const defaultMux = serversLoaded ? configuredServers.find((server) => server.name === focusedServer)?.defaultMux : undefined;
 
   const handleStartUpdate = useCallback(async () => {
     const res = await startUpdate();
@@ -208,7 +208,7 @@ export function StatusBar({ servers }: StatusBarProps) {
           flexShrink: 0,
         }}
       >
-        {displayedServer && <span style={{ display: 'inline-flex', alignItems: 'center', gap: 'var(--space-1)', fontFamily: 'var(--font-mono)', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{servers.find(server => server.serverName === displayedServer) && <HealthDot level={getHealthLevel(servers.find(server => server.serverName === displayedServer)!.measurement)} />}{displayedServer}{defaultMux && ` · ${t('statusbar.defaultMux', { mux: defaultMux })}`}</span>}
+        {focusedServer && <span style={{ display: 'inline-flex', alignItems: 'center', gap: 'var(--space-1)', fontFamily: 'var(--font-mono)', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{focusedEntry && <HealthDot level={getHealthLevel(focusedEntry.measurement)} />}{focusedServer}{defaultMux && ` · ${t('statusbar.defaultMux', { mux: defaultMux })}`}</span>}
         {contextLabel && (
           <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
             ❯_ {contextLabel}
@@ -216,7 +216,7 @@ export function StatusBar({ servers }: StatusBarProps) {
         )}
         <span style={{ flex: 1 }} />
         <button type="button" aria-label={tn('globalSearch.title')} onClick={() => openSearch()} className="row-hover" style={{ padding: 'var(--space-1) var(--space-2)', borderRadius: 'var(--radius-sm)', color: 'var(--text)', border: '1px solid var(--border)', cursor: 'pointer', fontSize: 'var(--font-xs)' }}>{tn('globalSearch.title')} {bindings['search.open'] && <kbd>{formatKeySpec(bindings['search.open'])}</kbd>}</button>
-        <StatusBarItem bordered label={tl('title')} active={lookout.open} popup="dialog" badge={lookout.sections.counts.attention} badgeLabel={tl('attentionCount', { count: lookout.sections.counts.attention })} onClick={() => { setOpenItemId(null); if (lookout.open) lookout.closeDrawer(); else lookout.openDrawer(); }} />
+        <StatusBarItem mono bordered label={tl('title')} active={lookout.open} popup="dialog" badge={lookout.sections.counts.attention} badgeLabel={tl('attentionCount', { count: lookout.sections.counts.attention })} onClick={() => { setOpenItemId(null); if (lookout.open) lookout.closeDrawer(); else lookout.openDrawer(); }} />
         {registry.map((item) => (
           <StatusBarItem
             key={item.id}
