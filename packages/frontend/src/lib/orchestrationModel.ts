@@ -37,10 +37,11 @@ export function isAttentionTarget(target: AttentionTarget, ctx: AttentionContext
 
 export type ActivityClassification = 'attention' | 'running' | 'idle' | 'completed' | 'unknown';
 export function classifyActivity(input: { attention: boolean; working: boolean; completed: boolean; known: boolean }): ActivityClassification {
+  if (!input.known) return 'unknown';
   if (input.attention) return 'attention';
   if (input.working) return 'running';
   if (input.completed) return 'completed';
-  return input.known ? 'idle' : 'unknown';
+  return 'idle';
 }
 
 export function matchesActivityWindow(entry: { windowId?: number; serverName: string; target: string }, window: Window): boolean {
@@ -50,7 +51,7 @@ export function matchesActivityWindow(entry: { windowId?: number; serverName: st
 export function orchestratorStatus(w: Window, activity: Map<string, AgentActivityInfo>): OrchestratorStatus {
   if (w.sleeping) return 'sleeping';
   for (const entry of activity.values()) {
-    if (entry.running && (entry.windowId === w.id || (entry.serverName === w.serverName && isSameWindowTarget(entry.target, w.tmuxTarget)))) return 'active';
+    if (entry.running && matchesActivityWindow(entry, w)) return 'active';
   }
   return 'idle';
 }
