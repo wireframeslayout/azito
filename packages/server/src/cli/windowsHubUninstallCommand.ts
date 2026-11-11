@@ -23,8 +23,8 @@ export async function windowsHubUninstallCommand(host: HostEnv, context: Service
   const lock = createHubLock(hub.layout.hubRoot, context.secretFileGuard, hub.systemRoot);
   const run = (spec: Parameters<typeof runCommandSpec>[0]) => runCommandSpec(spec, hub.runHost);
   await underHubLock(lock, async () => {
-    await uninstallWindowsTask(created.manager, hub, context);
     const { record, release } = await prepareRecordedRelease(hub.layout.prefix, context.secretFileGuard, run, hub.systemRoot);
+    await uninstallWindowsTask(created.manager, hub, context);
     const retained: string[] = [];
     let data = false;
     let dataDb = false;
