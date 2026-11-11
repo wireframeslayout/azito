@@ -14,7 +14,7 @@ export interface MaximizeWorkspace {
 }
 interface MaximizeActions {
   setWorkspace: (workspace: MaximizeWorkspace | null) => void;
-  open: (windowId: number, window?: Window) => void;
+  open: (windowId: number, window?: Window, fallbackFocusTo?: HTMLElement | null) => void;
   rememberWindow: (window: Window) => void;
   forgetWindow: (id: number) => void;
   select: (windowId: number) => void;
@@ -25,6 +25,7 @@ interface MaximizeState {
   workspace: MaximizeWorkspace | null;
   extraWindows: ReadonlyMap<number, Window>;
   isMobile: boolean;
+  fallbackFocusTo: HTMLElement | null;
 }
 type ContextValue = MaximizeActions & MaximizeState;
 const ActionsContext = createContext<MaximizeActions | null>(null);
@@ -38,10 +39,11 @@ export function MaximizedWindowProvider({ children }: { children: ReactNode }) {
     if (!previous.has(id)) return previous;
     const next = new Map(previous); next.delete(id); return next;
   }), []);
+  const [fallbackFocusTo, setFallbackFocusTo] = useState<HTMLElement | null>(null);
   const [selectedWindowId, setSelectedWindowId] = useState<number | null>(null);
   const current = useRef({ isMobile, workspace });
   current.current = { isMobile, workspace };
-  const open = useCallback((id: number, window?: Window) => { if (!current.current.isMobile) { if (window && !current.current.workspace?.windows.has(id)) rememberWindow(window); setSelectedWindowId(id); } }, [rememberWindow]);
+  const open = useCallback((id: number, window?: Window, focusTarget?: HTMLElement | null) => { if (!current.current.isMobile) { setFallbackFocusTo(focusTarget ?? null); if (window && !current.current.workspace?.windows.has(id)) rememberWindow(window); setSelectedWindowId(id); } }, [rememberWindow]);
   useEffect(() => {
     if (!workspace) return;
     setExtraWindows(previous => {
@@ -53,7 +55,7 @@ export function MaximizedWindowProvider({ children }: { children: ReactNode }) {
   useEffect(() => { if (isMobile) close(); }, [isMobile, close]);
   useHotkey({ action: 'maximize.open', scope: 'global', when: 'always', handler: () => { if (workspace?.activeWindowId != null) open(workspace.activeWindowId); } }, !isMobile && selectedWindowId === null && workspace?.activeWindowId != null);
   const actions = useMemo<MaximizeActions>(() => ({ setWorkspace, open, rememberWindow, forgetWindow, select: setSelectedWindowId, close }), [open, rememberWindow, forgetWindow, close]);
-  const state = useMemo<MaximizeState>(() => ({ selectedWindowId, workspace, extraWindows, isMobile }), [selectedWindowId, workspace, extraWindows, isMobile]);
+  const state = useMemo<MaximizeState>(() => ({ selectedWindowId, workspace, extraWindows, isMobile, fallbackFocusTo }), [selectedWindowId, workspace, extraWindows, isMobile, fallbackFocusTo]);
   return <ActionsContext.Provider value={actions}><StateContext.Provider value={state}>{children}</StateContext.Provider></ActionsContext.Provider>;
 }
 export function useOptionalMaximizedWindow(): MaximizeActions | null { return useContext(ActionsContext); }

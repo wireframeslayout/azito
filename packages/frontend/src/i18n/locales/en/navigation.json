@@ -18,9 +18,12 @@
     "empty": "No recent items",
     "more": "{{count}} more (press Tab to filter)",
     "count": "{{count}} results",
-    "hint": "Tab: category · ↑↓: select · Enter: open",
     "sleeping": "Sleeping",
     "offline": "Offline",
-    "orchestrator": "Orchestrators"
+    "orchestrator": "Orchestrators",
+    "categoryHint": "category",
+    "selectHint": "select",
+    "openHint": "open",
+    "maximizeHint": "maximize windows and orchestrators"
   }
 }
