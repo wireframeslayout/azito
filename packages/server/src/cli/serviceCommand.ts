@@ -2,7 +2,7 @@ import { HUB_SERVICE, runCommand, type ServiceManager } from '../modules/system/
 import { createServiceManager, type ServiceHost } from '../modules/system/createServiceManager';
 import { createHubLock, underHubLock } from '../modules/system/hubLock';
 import { describeHubLauncherState, readHubLauncherState } from '../modules/system/hubLauncherState';
-import { installWindowsTask, resolveWindowsHub, runOnWindows, taskExists, uninstallWindowsTask, type ServiceCommandContext, type WindowsHub } from '../modules/system/windowsHubOperations';
+import { installWindowsTask, resolveWindowsHub, runOnWindows, taskExists, type ServiceCommandContext, type WindowsHub } from '../modules/system/windowsHubOperations';
 
 const USAGE = `Usage: azito service <command>
 
@@ -12,10 +12,9 @@ Commands (the hub's own service: systemd on Linux, launchd on macOS, a Task Sche
   stop      Stop the service
   restart   Restart the service
   reload    Make it run its current definition (systemd: daemon-reload + restart; launchd: bootout + bootstrap into the same domain)
-  install   Windows only: register the Task Scheduler task (it starts at your logon; --yes replaces a task registered for another install). Linux and macOS: install.sh sets the service up
-  uninstall Windows only: remove this install's stopped Task Scheduler task`;
+  install   Windows only: register the Task Scheduler task (it starts at your logon; --yes replaces a task registered for another install). Linux and macOS: install.sh sets the service up`;
 
-const COMMANDS = ['status', 'start', 'stop', 'restart', 'reload', 'install', 'uninstall'] as const;
+const COMMANDS = ['status', 'start', 'stop', 'restart', 'reload', 'install'] as const;
 type ServiceCommand = typeof COMMANDS[number];
 
 function isServiceCommand(value: string | undefined): value is ServiceCommand {
@@ -80,7 +79,7 @@ export async function serviceCommand(argv: string[], host: ServiceHost, context:
       await printStatus(manager, windowsHub);
       return;
     }
-    if ((command === 'install' || command === 'uninstall') && !windowsHub) {
+    if (command === 'install' && !windowsHub) {
       throw new Error(`\`azito service ${command}\` is for Windows. On Linux and macOS install.sh sets the service up.`);
     }
     if (windowsHub) {
@@ -88,7 +87,6 @@ export async function serviceCommand(argv: string[], host: ServiceHost, context:
       const lock = createHubLock(windowsHub.layout.hubRoot, context.secretFileGuard, windowsHub.systemRoot);
       await underHubLock(lock, () => {
         if (command === 'install') return installWindowsTask(manager, windowsHub, yes);
-        if (command === 'uninstall') return uninstallWindowsTask(manager, windowsHub, context);
         return runOnWindows(command, manager, windowsHub, context);
       });
     } else {

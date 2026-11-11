@@ -94,7 +94,7 @@ export async function assertHubDirsOnlyOwnerWritable(run: SpecRunner, systemRoot
       '  $acl = [IO.Directory]::GetAccessControl($dirs[$i])',
       '  Write-Output "me $([Security.Principal.WindowsIdentity]::GetCurrent().User.Value)"',
       '  Write-Output "owner $($acl.GetOwner([Security.Principal.SecurityIdentifier]).Value)"',
-      "  foreach ($r in $acl.GetAccessRules($true, $true, [Security.Principal.SecurityIdentifier])) { if ($r.AccessControlType -eq 'Allow') { Write-Output \"allow $($r.IdentityReference.Value) $([int]$r.FileSystemRights)\" } }",
+      "  foreach ($r in $acl.GetAccessRules($true, $true, [Security.Principal.SecurityIdentifier])) { if ($r.AccessControlType -eq 'Allow' -and -not ($r.PropagationFlags -band [Security.AccessControl.PropagationFlags]::InheritOnly)) { Write-Output \"allow $($r.IdentityReference.Value) $([int]$r.FileSystemRights)\" } }",
       '}',
     ].join('\n');
     const output = await powershell(run, systemRoot, script, 'Reading the access lists of the install folders');

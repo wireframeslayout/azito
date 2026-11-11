@@ -374,7 +374,7 @@ function Assert-ProtectedTree([string]$Root) {
     }
 }
 
-function Remove-RecordedPathEntry([string]$Dir) {
+function Remove-RecordedPathEntry([string]$Dir, [bool]$ValueCreated) {
     $key = [Microsoft.Win32.Registry]::CurrentUser.OpenSubKey('Environment', $true)
     if ($null -eq $key) { throw 'Could not open HKCU\Environment to update PATH.' }
     try {
@@ -387,7 +387,7 @@ function Remove-RecordedPathEntry([string]$Dir) {
         for ($i = $entries.Count - 1; $i -ge 0; $i--) {
             if ($entries[$i] -ieq $Dir) {
                 $entries.RemoveAt($i)
-                $key.SetValue('Path', ($entries -join ';'), $kind)
+                if ($ValueCreated -and ($entries -join ';') -eq '') { $key.DeleteValue('Path', $false) } else { $key.SetValue('Path', ($entries -join ';'), $kind) }
                 Send-EnvironmentChange
                 return
             }
@@ -444,7 +444,7 @@ function Invoke-Uninstall {
     Assert-RecordedTree $release $record.inventory
     Write-Host "Uninstalling the recorded AZITO installation at $Prefix."
     if ($RemoveData) { Write-Host 'The recorded database and unchanged recorded data are selected for removal when their identity can be verified.' } else { Write-Host 'Data will be retained.' }
-    Write-Host 'A recorded misao may be stopped (closing its panes) and removed only if no agent shares it; otherwise it is retained.'
+    Write-Host 'AzitoMisao and the misao folder are retained. To remove them manually, first verify that no agent uses them; see the Windows uninstall documentation.'
     Write-Host 'Unrecorded files will be retained.'
     if (-not $Yes) {
         if ([Console]::IsInputRedirected) { throw 'Confirmation requires an interactive terminal or -Yes.' }
@@ -478,7 +478,7 @@ function Invoke-Uninstall {
         if ($prepared.release -cne $record.release) { throw 'The uninstall preparation did not identify the recorded release.' }
         if ($holder.HasExited) { throw 'The uninstall lock holder exited; inspect retained files and PATH manually.' }
         foreach ($message in @($prepared.retained)) { if ($message) { Write-Warning $message } }
-        if ($prepared.pathAdded) { Remove-RecordedPathEntry (Join-Path $Prefix 'bin') }
+        if ($prepared.pathAdded) { Remove-RecordedPathEntry (Join-Path $Prefix 'bin') ([bool]$prepared.pathValueCreated) }
         else { Write-Host 'PATH was not recorded as added by this installer; inspect it manually.' }
         if ($prepared.wrapper) {
             if ($holder.HasExited) { throw 'The uninstall lock holder exited; inspect the CLI wrapper manually.' }
@@ -495,6 +495,7 @@ function Invoke-Uninstall {
         $result = $resultLine | ConvertFrom-Json
         if (-not $result.removed) { throw "Uninstall stopped after a partial removal: $($result.error). $($result.misaoNote)" }
         if ($result.misaoNote) { Write-Host $result.misaoNote }
+        foreach ($message in @($result.retained)) { if ($message) { Write-Warning $message } }
     } finally {
         if ($null -ne $holder) {
             if (-not $holder.HasExited) { $holder.StandardInput.Close() }
@@ -508,8 +509,23 @@ function Invoke-Uninstall {
             } catch { Write-Warning "The temporary copy remains at $tempRoot; inspect it and remove it manually: $($_.Exception.Message)" }
         }
     }
+    # Directory creation was not recorded; show what remains without entering reparse points.
+    foreach ($dir in @((Join-Path $Prefix 'bin'), (Join-Path $Prefix 'logs'), $hubRoot, $Prefix)) {
+        if (-not (Test-Path -LiteralPath $dir -PathType Container)) { continue }
+        try {
+            Assert-RealPathChain $dir
+            $remaining = @(Get-ChildItem -LiteralPath $dir -Force)
+            $key = if ($dir -eq $Prefix) { 'prefix' } elseif ($dir -eq $hubRoot) { 'hub' } else { Split-Path -Leaf $dir }
+            if ($remaining.Count -eq 0 -and @($result.emptyDirectoryCandidates) -contains $key) { [IO.Directory]::Delete($dir) }
+            elseif ($remaining.Count -eq 0) { Write-Host "Retained empty directory $dir (its creation was not recorded)." }
+            else { Write-Host ("Retained ${dir}: " + (($remaining | ForEach-Object { $_.Name }) -join ', ')) }
+        } catch { Write-Warning "Retained $dir; inspect manually: $($_.Exception.Message)" }
+    }
     Write-Host "Recorded release removed. Inspect retained files in $hubRoot, $Prefix\bin, $Prefix\data and $Prefix\logs in Explorer before any manual removal."
-    Write-Host 'Inspect the user PATH in Windows environment settings and AzitoMisao in Task Scheduler. If misao is shared with an agent or another hub, leave it installed.'
+    Write-Host 'Misao is retained. Before manual removal verify that no agent or other hub uses it.'
+    Write-Host 'Inspect: schtasks /Query /TN AzitoMisao /XML; set MISAO_SOCKET to its pipe and run the task release misao.exe stop (this closes all panes).'
+    Write-Host 'Then remove the task with schtasks /Delete /TN AzitoMisao /F and inspect the misao folder before deleting it.'
+    Write-Host 'Inspect the user PATH in Windows environment settings.'
 }
 
 function Invoke-Node([string]$Node, [string[]]$NodeArgs) {
@@ -679,6 +695,9 @@ function Invoke-Install {
             Assert-ZipSha256 $zip $sums
         }
 
+        $freshPrefix = -not (Test-Path -LiteralPath $Prefix)
+        $freshHub = -not (Test-Path -LiteralPath $hubRoot)
+        $freshBin = -not (Test-Path -LiteralPath (Join-Path $Prefix 'bin'))
         New-Item -ItemType Directory -Force -Path $hubRoot | Out-Null
         $installDir = Join-Path $hubRoot $tag
         $freshBundle = -not (Test-Path -LiteralPath $installDir)
@@ -689,16 +708,6 @@ function Invoke-Install {
             $freshData = $true
         }
         $freshWrapper = -not (Test-Path -LiteralPath (Join-Path $Prefix 'bin\azito.cmd'))
-        $freshMisao = $false
-        if (-not $NoService -and -not (Test-Path -LiteralPath (Join-Path $Prefix 'misao'))) {
-            try {
-                Assert-RealPathChain $Prefix
-                New-Item -ItemType Directory -Path (Join-Path $Prefix 'misao') | Out-Null
-                $freshMisao = $true
-            } catch {
-                Write-Warning "The misao folder could not be proven newly created: $($_.Exception.Message). Its files will be retained on uninstall."
-            }
-        }
         # No pointer means nothing uses this folder: it is what an interrupted earlier run left behind.
         if (Test-Path -LiteralPath $installDir) { Remove-Item -LiteralPath $installDir -Recurse -Force }
         $staging = Join-Path $hubRoot ".staging-$tag"
@@ -717,6 +726,7 @@ function Invoke-Install {
 
         # data\ and hub\.env hold secrets: the hub's own code creates them, so the owner-only access rules come from the
         # one SecretFileGuard instead of being written again here in PowerShell.
+        $freshEnv = -not (Test-Path -LiteralPath (Join-Path $hubRoot '.env'))
         $initArgs = @($hub, 'init-env', '--prefix', $Prefix, '--port', [string]$Port)
         if ($dns) { $initArgs += @('--tailscale-dns', $dns) }
         Invoke-Node $node $initArgs
@@ -759,6 +769,9 @@ function Invoke-Install {
         Write-Host "CLI installed at $bin\azito.cmd"
 
         $pathAdded = $false
+        $pathKey = [Microsoft.Win32.Registry]::CurrentUser.OpenSubKey('Environment', $false)
+        if ($null -eq $pathKey) { throw 'Could not read the user environment.' }
+        try { $pathValueMissing = $pathKey.GetValueNames() -notcontains 'Path' } finally { $pathKey.Close() }
         if ($NoPath) {
             Write-Host "Skipping the PATH change (-NoPath). Add $bin to your PATH to use azito from any folder."
         } elseif (Add-UserPathEntry $bin) {
@@ -771,7 +784,6 @@ function Invoke-Install {
         # Register the task before the pointer: a registration that fails leaves no pointer, so running the installer again
         # repairs the install. The task's definition is generated by the hub's own code (TypeScript), never written here, and it
         # reads current.txt each time it starts, so it does not name this version.
-        $misaoInstalled = $false
         if (-not $NoService) {
             Write-Host 'Registering the Task Scheduler task...'
             $installArgs = @($hub, 'service', 'install')
@@ -786,11 +798,9 @@ function Invoke-Install {
             Write-Host 'Installing the misao service...'
             try {
                 $misaoArgs = @($hub, 'misao', 'install', '--prefix', $Prefix)
-                if ($freshMisao) { $misaoArgs += '--record-install-ownership' }
                 Invoke-Node $node $misaoArgs
-                $misaoInstalled = $true
             } catch {
-                Write-Warning "The misao installation or ownership recording failed (see the error above): $($_.Exception.Message)"
+                Write-Warning "The misao installation failed (see the error above): $($_.Exception.Message)"
                 Write-Host '  Check azito misao status. If misao is not running, fix the problem and run: azito misao install'
             }
         }
@@ -800,15 +810,11 @@ function Invoke-Install {
             $recordArgs = @($hub, 'windows-install-record')
             if ($freshWrapper) { $recordArgs += '--wrapper-created' }
             if ($freshData) { $recordArgs += '--data-created' }
-            if ($pathAdded) { $recordArgs += '--path-added' }
-            if ($freshMisao -and $misaoInstalled) {
-                try {
-                    Assert-ProtectedTree (Join-Path $Prefix 'misao')
-                    $recordArgs += '--misao-created'
-                } catch {
-                    Write-Warning "The misao ownership could not be verified: $($_.Exception.Message). It will be retained on uninstall."
-                }
-            }
+            if ($pathAdded) { $recordArgs += '--path-added'; if ($pathValueMissing) { $recordArgs += '--path-value-created' } }
+            if ($freshEnv) { $recordArgs += '--env-created' }
+            if ($freshPrefix) { $recordArgs += '--prefix-created' }
+            if ($freshHub) { $recordArgs += '--hub-created' }
+            if ($freshBin) { $recordArgs += '--bin-created' }
             try {
                 Assert-ProtectedTree $installDir
                 if ($freshData) { Assert-ProtectedTree (Join-Path $Prefix 'data') }

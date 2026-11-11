@@ -127,7 +127,7 @@ powershell -NoProfile -ExecutionPolicy Bypass -File .\install.ps1 [-Version v0.1
 | `-Uninstall` | 所有を確認できた導入物を削除する。データは既定で保持する |
 | `-RemoveData` | `-Uninstall` と共に指定し、記録された識別情報を確認できるデータファイルも削除する |
 
-`irm | iex` では引数を渡せないので、各オプションは、コマンドの前に設定した環境変数でも指定できます: `AZITO_INSTALL_VERSION`・`AZITO_INSTALL_PREFIX`・`AZITO_INSTALL_PORT`・`AZITO_INSTALL_ZIPPATH`・`AZITO_INSTALL_SHA256SUMS`、および `AZITO_INSTALL_YES` / `AZITO_INSTALL_NOPATH` / `AZITO_INSTALL_NOSERVICE` / `AZITO_INSTALL_UNINSTALL` / `AZITO_INSTALL_REMOVEDATA`（`1` を設定）。引数と環境変数の両方があれば引数が優先されます。`AZITO_INSTALL_ZIPPATH` で指定した zip は、照合なしでは使われません。`-Sha256Sums` または `AZITO_INSTALL_SHA256SUMS` でチェックサムのファイルを指定しないと、何も書く前に止まります（セッションに残った変数のせいで、通常の導入が未検証の zip に切り替わらないようにするためです）。PowerShell の窓で実行し、終わったら変数を消して、セッションに残さないでください。例: `$env:AZITO_INSTALL_PORT = 3010; [Net.ServicePointManager]::SecurityProtocol = [Net.ServicePointManager]::SecurityProtocol -bor 3072; irm https://github.com/wireframeslayout/azito/releases/latest/download/install.ps1 | iex; Remove-Item Env:AZITO_INSTALL_PORT`。
+`irm | iex` では引数を渡せないので、各オプションは、コマンドの前に設定した環境変数でも指定できます: `AZITO_INSTALL_VERSION`・`AZITO_INSTALL_PREFIX`・`AZITO_INSTALL_PORT`・`AZITO_INSTALL_ZIPPATH`・`AZITO_INSTALL_SHA256SUMS`、および `AZITO_INSTALL_YES` / `AZITO_INSTALL_NOPATH` / `AZITO_INSTALL_NOSERVICE`（`1` を設定）。引数と環境変数の両方があれば引数が優先されます。`AZITO_INSTALL_ZIPPATH` で指定した zip は、照合なしでは使われません。`-Sha256Sums` または `AZITO_INSTALL_SHA256SUMS` でチェックサムのファイルを指定しないと、何も書く前に止まります（セッションに残った変数のせいで、通常の導入が未検証の zip に切り替わらないようにするためです）。PowerShell の窓で実行し、終わったら変数を消して、セッションに残さないでください。例: `$env:AZITO_INSTALL_PORT = 3010; [Net.ServicePointManager]::SecurityProtocol = [Net.ServicePointManager]::SecurityProtocol -bor 3072; irm https://github.com/wireframeslayout/azito/releases/latest/download/install.ps1 | iex; Remove-Item Env:AZITO_INSTALL_PORT`。
 
 zip と `SHA256SUMS` を取得し、チェックサムが合わなければ止まります。展開先のフォルダの外に出るエントリを含む zip も拒否します。配置:
 
@@ -167,13 +167,14 @@ CLI は `current.txt` を読んで同梱のハブを実行します:
 
 ```powershell
 powershell -NoProfile -ExecutionPolicy Bypass -File .\install.ps1 -Uninstall [-Prefix <dir>]
+# One-liner: & ([scriptblock]::Create((irm https://github.com/wireframeslayout/azito/releases/latest/download/install.ps1))) -Uninstall # add -RemoveData if desired
 # 記録された識別情報を確認できるデータファイルも削除する場合:
 powershell -NoProfile -ExecutionPolicy Bypass -File .\install.ps1 -Uninstall -RemoveData [-Prefix <dir>]
 ```
 
 先に `azito stop` でタスクを停止し、`azito run` の端末があればその端末で Ctrl+C を押してください。登録タスクの定義と実行アカウントを確認し、ハブや更新が動いている間は削除を拒否します。Windows のパスには複数の表記があるため、別のハブや識別できない Node プロセスが動いている場合も拒否します。内容を確認し、必要なら自分で停止してから再実行してください。`-Yes` は確認を省くための指定で、データ削除は選びません。データは `-RemoveData` を付けない限り保持します。指定した場合、導入時に作成したデータベースと記録済みの鍵・トークン・canary は、ファイルの識別情報が記録と一致すれば削除します。別のファイルに置き換わっている場合や、そのほかのデータの所有を確認できない場合は保持します。外部の `AZITO_DATA_DIR` は削除しません。
 
-インストーラーは自分が作成したファイルを記録します。アンインストール時には内容・リンク・アクセス権を確認し、未記録または変更されたファイルは保持します。記録のない旧導入、記録にない更新後のバージョン、リンク、安全性を確認できないアクセス権は手動確認が必要です。このインストーラーが作成した misao は、タスク・デーモン・ファイルを確認でき、Windows agent が使っていないと確認できた場合だけ停止してペインを閉じ、記録済みのタスクと release を削除します。agent の確認には管理者権限と完全なタスク一覧が必要ですが、アンインストーラーは自動で昇格しません。agent、完全でないタスク一覧、読み取れないプロセス、判定できないスケジュール済みタスクがある場合は削除を拒否し、既存または共有の misao は保持します。残ったものを手動で削除するか判断する前に `AzitoMisao` のタスクと利用者、Windows agent を確認してください。残った設定やログなどはコマンドに表示されます。手動で削除する前に、エクスプローラーでファイル、Windows の環境変数設定でユーザー PATH、タスクスケジューラでタスクを確認してください。削除を始めてから失敗すると記録が使用済みになり、再実行時には表示された退避先を含む残存物を保持します。内容を手動で確認してください。
+インストーラーは自分が作成したファイルを記録します。アンインストール時には内容・リンク・アクセス権を確認し、未記録または変更されたファイルは保持します。記録のない旧導入、記録にない更新後のバージョン、リンク、安全性を確認できないアクセス権は手動確認が必要です。アンインストーラーは `AzitoMisao` タスクと `<prefix>\misao` を残します。手動で消す前に agent が共有していないことを確認してください。`schtasks /Query /TN AzitoMisao /XML` でタスクを確認し、対象のパイプを `MISAO_SOCKET` に設定して対象の `misao.exe stop` を実行した後、`schtasks /Delete /TN AzitoMisao /F` でタスクを削除し、フォルダーを確認して削除します。停止するとすべてのペインが閉じます。残った設定やログなどはコマンドに表示されます。手動で削除する前に、エクスプローラーでファイル、Windows の環境変数設定でユーザー PATH、タスクスケジューラでタスクを確認してください。削除を始めてから失敗すると記録が使用済みになり、再実行時には表示された退避先を含む残存物を保持します。内容を手動で確認してください。
 
 Unix の `install.sh` にアンインストーラーはありません。`azito stop` でハブを停止し、`~/.config/systemd/user/azito.service`（Linux）または `~/Library/LaunchAgents/com.azito.hub.plist`（macOS）、`~/.local/bin/azito`、`<prefix>/hub` を確認してから、その導入物を手動で削除してください。Linux ではサービスを disable し、定義を削除したあとに `systemctl --user daemon-reload` を実行します。macOS では `azito stop` がサービスを解除します。PATH と misao のサービスは別に確認してください。`<prefix>/data` や外部のデータディレクトリは、削除したいと明示的に判断した場合を除き保持してください。アプリ内の更新は [Windows のハブのアプリ内更新](#windows-のハブのアプリ内更新) です。
 

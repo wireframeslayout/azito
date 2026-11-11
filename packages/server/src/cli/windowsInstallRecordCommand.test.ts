@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, describe, expect, it } from 'vitest';
 import fs from 'fs';
 import os from 'os';
 import path from 'path';
@@ -6,9 +6,7 @@ import Database from 'better-sqlite3';
 import { UnixSecretFileGuard } from '../shared/os/secretFileGuard';
 import { readInstallFileIdentity } from '../modules/system/windowsInstallInventory';
 import { windowsInstallRecordCommand } from './windowsInstallRecordCommand';
-import { writeHubBundle } from '../modules/system/misao/misaoBundleFixture';
-import { MISAO_RELEASE_FILE_NAMES, misaoFileNameOn } from '../modules/servers/transport/agentMisaoSocket';
-import { recordWindowsMisaoTask } from '../modules/system/misao/windowsMisaoTaskRecord';
+
 
 const roots: string[] = [];
 afterEach(() => { for (const root of roots.splice(0)) fs.rmSync(root, { recursive: true, force: true }); });
@@ -37,6 +35,24 @@ describe('Windows installation record', () => {
     expect(readInstallFileIdentity(path.join(root, 'data', 'data.db'))).toEqual(record.dbIdentity);
   });
 
+  it('records the identity of an installer-created hub env', () => {
+    const { root, bundle, guard } = setup();
+    const env = path.join(root, 'hub', '.env');
+    fs.writeFileSync(env, 'TOKEN=example');
+    windowsInstallRecordCommand(bundle, ['--env-created'], guard, 'win32');
+    const record = JSON.parse(fs.readFileSync(path.join(root, 'hub', '.install-record.json'), 'utf8'));
+    expect(record.envIdentity).toEqual(readInstallFileIdentity(env));
+  });
+
+  it('records only directory identities explicitly created by the installer', () => {
+    const { root, bundle, guard } = setup();
+    fs.mkdirSync(path.join(root, 'bin'));
+    windowsInstallRecordCommand(bundle, ['--hub-created', '--bin-created'], guard, 'win32');
+    const record = JSON.parse(fs.readFileSync(path.join(root, 'hub', '.install-record.json'), 'utf8'));
+    expect(record.directories).toEqual({ hub: readInstallFileIdentity(path.join(root, 'hub')), bin: readInstallFileIdentity(path.join(root, 'bin')) });
+    expect(record.directories.prefix).toBeUndefined();
+  });
+
   it('does not claim an existing database or overwrite an existing record', () => {
     const { root, bundle, guard } = setup();
     const db = path.join(root, 'data', 'data.db');
@@ -50,53 +66,4 @@ describe('Windows installation record', () => {
     expect(fs.readFileSync(db, 'utf8')).toBe('user data');
   });
 
-  it('records a newly created misao release and its pointer', () => {
-    const { root, bundle, guard } = setup();
-    writeHubBundle(bundle, '1.2.3', 'fake binary');
-    const misao = path.join(root, 'misao');
-    fs.mkdirSync(path.join(misao, '1.2.3'), { recursive: true });
-    fs.writeFileSync(path.join(misao, 'current'), '1.2.3\n');
-    for (const name of MISAO_RELEASE_FILE_NAMES) {
-      const file = misaoFileNameOn('win32', name);
-      fs.copyFileSync(path.join(bundle, 'misao', 'x86_64-pc-windows-msvc', file), path.join(misao, '1.2.3', file));
-    }
-    recordWindowsMisaoTask(misao, '1.2.3', '<Task />', guard);
-    windowsInstallRecordCommand(bundle, ['--misao-created'], guard, 'win32');
-    const record = JSON.parse(fs.readFileSync(path.join(root, 'hub', '.install-record.json'), 'utf8'));
-    expect(record.misao.version).toBe('1.2.3');
-    expect(record.misao.inventory.files.map((entry: { path: string }) => entry.path).sort()).toEqual(MISAO_RELEASE_FILE_NAMES.map((name) => misaoFileNameOn('win32', name)).sort());
-  });
-
-  it('records the hub but does not claim a misao release with user files', () => {
-    const { root, bundle, guard } = setup();
-    writeHubBundle(bundle, '1.2.3', 'fake binary');
-    const misao = path.join(root, 'misao');
-    fs.mkdirSync(path.join(misao, '1.2.3'), { recursive: true });
-    fs.writeFileSync(path.join(misao, 'current'), '1.2.3');
-    for (const name of MISAO_RELEASE_FILE_NAMES) {
-      const file = misaoFileNameOn('win32', name);
-      fs.copyFileSync(path.join(bundle, 'misao', 'x86_64-pc-windows-msvc', file), path.join(misao, '1.2.3', file));
-    }
-    recordWindowsMisaoTask(misao, '1.2.3', '<Task />', guard);
-    fs.writeFileSync(path.join(misao, '1.2.3', 'user-file'), 'keep');
-    const log = vi.spyOn(console, 'log').mockImplementation(() => undefined);
-    try {
-      windowsInstallRecordCommand(bundle, ['--misao-created'], guard, 'win32');
-      const record = JSON.parse(fs.readFileSync(path.join(root, 'hub', '.install-record.json'), 'utf8'));
-      expect(record.misao).toBeNull();
-      expect(log).toHaveBeenCalled();
-    } finally { log.mockRestore(); }
-  });
-
-  it('does not claim misao without a recorded task creation', () => {
-    const { root, bundle, guard } = setup();
-    fs.mkdirSync(path.join(root, 'misao'), { recursive: true });
-    fs.writeFileSync(path.join(root, 'misao', 'current'), '1.2.3');
-    const log = vi.spyOn(console, 'log').mockImplementation(() => undefined);
-    try {
-      windowsInstallRecordCommand(bundle, ['--misao-created'], guard, 'win32');
-      const record = JSON.parse(fs.readFileSync(path.join(root, 'hub', '.install-record.json'), 'utf8'));
-      expect(record.misao).toBeNull();
-    } finally { log.mockRestore(); }
-  });
 });

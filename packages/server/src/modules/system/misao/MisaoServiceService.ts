@@ -15,7 +15,6 @@ import { taskMisaoRoot, taskStartsMisaoOf, taskIsManagedMisao, type LocalMisaoWi
 import { isManagedMisaoDown } from './MisaoWindowsInstaller';
 import { underMisaoRootLock } from './misaoRootLock';
 import { FOREIGN_LOCK_PREFIX } from '../../../shared/recoveryBackoff';
-import { recordWindowsMisaoTask } from './windowsMisaoTaskRecord';
 
 export interface MisaoServiceDeps {
   /** Null when this hub is not a release install (no prefix): a source checkout never installs a service. */
@@ -186,11 +185,11 @@ export class MisaoServiceService {
    * moved to the bundled one (`current` and the unit), and put back if that fails. `replaceSocketSetting` lets it
    * overwrite a MISAO_SOCKET that points elsewhere.
    */
-  install(opts: { replaceSocketSetting?: boolean; recordInstallOwnership?: boolean } = {}): Promise<MisaoServiceStatus> {
+  install(opts: { replaceSocketSetting?: boolean } = {}): Promise<MisaoServiceStatus> {
     return this.exclusive(() => this.doInstall(opts));
   }
 
-  private async doInstall(opts: { replaceSocketSetting?: boolean; recordInstallOwnership?: boolean }): Promise<MisaoServiceStatus> {
+  private async doInstall(opts: { replaceSocketSetting?: boolean }): Promise<MisaoServiceStatus> {
     const { bundle, controller } = this.requireManaged();
     if (this.deps.windows) return this.installOnWindows(this.deps.windows, bundle, opts);
     await controller.loadedDomain();
@@ -226,24 +225,12 @@ export class MisaoServiceService {
    * running is left alone, a daemon AZITO did not install is refused. MISAO_SOCKET (the named pipe) is written once the daemon
    * answers, so a failed install leaves the hub's `.env` as it was.
    */
-  private async installOnWindows(windows: LocalMisaoWindows, bundle: MisaoBundle, opts: { replaceSocketSetting?: boolean; recordInstallOwnership?: boolean }): Promise<MisaoServiceStatus> {
+  private async installOnWindows(windows: LocalMisaoWindows, bundle: MisaoBundle, opts: { replaceSocketSetting?: boolean }): Promise<MisaoServiceStatus> {
     if (this.socketSetting() === 'custom' && !opts.replaceSocketSetting) {
       throw new MisaoServiceError('custom_socket', `MISAO_SOCKET in ${this.paths.hubEnvFile} points at another daemon (${readEnvValue(this.paths.hubEnvFile, 'MISAO_SOCKET')}). Installing the managed service would move the hub away from it; run \`azito misao install --replace-socket\` to do that on purpose.`);
     }
     await this.refuseTaskOfAnotherRoot(windows, opts.replaceSocketSetting === true);
-    const taskWasAbsent = opts.recordInstallOwnership === true && !(await windows.tasks.query(windows.taskName)).exists;
-    if (taskWasAbsent) await windows.installer.install(windows.target, bundle, () => undefined, { requireNewTask: true });
-    else await windows.installer.install(windows.target, bundle, () => undefined);
-    if (taskWasAbsent) {
-      try {
-        const xml = await windows.tasks.exportXml(windows.taskName);
-        const systemRoot = (await windows.target.fetchMisaoStatus()).host.windows?.systemRoot;
-        if (!systemRoot || !(await windows.installer.taskOwnedByCurrentUser(windows.target, xml)) || !taskIsManagedMisao(xml, this.paths.root, systemRoot, this.paths.socket, windows.taskName)) throw new Error('The registered misao task is not recognised.');
-        recordWindowsMisaoTask(this.paths.root, bundle.version, xml, this.deps.secretFileGuard);
-      } catch (err) {
-        throw new MisaoServiceError('update_failed', `The misao task was installed but its ownership could not be recorded; it will be retained on uninstall: ${err instanceof Error ? err.message : String(err)}`);
-      }
-    }
+    await windows.installer.install(windows.target, bundle, () => undefined);
     upsertEnvValue(this.paths.hubEnvFile, 'MISAO_SOCKET', this.paths.socket, this.deps.secretFileGuard);
     return this.status();
   }

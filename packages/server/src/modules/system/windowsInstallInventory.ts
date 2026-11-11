@@ -1,3 +1,4 @@
+import { z } from 'zod';
 import crypto from 'crypto';
 import fs from 'fs';
 import path from 'path';
@@ -11,6 +12,12 @@ export interface InstallFileIdentity {
   device: string;
   file: string;
   created: string;
+}
+
+export const installIdentitySchema = z.object({ device: z.string().regex(/^\d+$/), file: z.string().regex(/^\d+$/), created: z.string().regex(/^\d+$/) }).strict();
+
+export function sameInstallFileIdentity(a: InstallFileIdentity | null, b: InstallFileIdentity): boolean {
+  return a !== null && a.file !== '0' && a.created !== '0' && a.device === b.device && a.file === b.file && a.created === b.created;
 }
 
 /** Stable filesystem identity lets a recorded data file change without treating a replacement as the same file. */

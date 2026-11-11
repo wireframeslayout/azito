@@ -9,9 +9,6 @@ import { assertNoHubLaunchers, assertNoOtherHubProcesses } from '../src/modules/
 import { powershellDialect, powershellEncodedArgs } from '../src/shared/os/shellDialect';
 import { runCommandSpec, runHostOf } from '../src/shared/exec/runCommandSpec';
 import { resolveCurrentHostEnv } from '../src/shared/os/hostEnv';
-import { buildMisaoAgentGuardScript } from '../src/modules/system/misao/windowsMisaoAgentGuard';
-import { MISAO_RELEASE_FILE_NAMES, misaoFileNameOn } from '../src/modules/servers/transport/agentMisaoSocket';
-import { recordWindowsMisaoTask } from '../src/modules/system/misao/windowsMisaoTaskRecord';
 
 /**
  * End-to-end check of the Windows install path (install.ps1, the `azito` CLI, run.ps1) on a real Windows PowerShell 5.1:
@@ -142,7 +139,7 @@ function checkUninstall(installPs1: string, prefix: string, version: string): vo
   assert(!fs.existsSync(release), 'the recorded release must be removed', removed.output);
   assert(fs.existsSync(path.join(prefix, 'data', 'data.db')), 'data must be retained by default', removed.output);
   const again = install(installPs1, args);
-  assert(again.status === 0 && /already removed/.test(again.output), 'a repeat must report the retained files', again.output);
+  assert(again.status === 0 && /No installation record/.test(again.output), 'a repeat must report the retained files', again.output);
 }
 
 async function checkRemoveData(installPs1: string, zip: string, sums: string, prefix: string): Promise<void> {
@@ -152,6 +149,11 @@ async function checkRemoveData(installPs1: string, zip: string, sums: string, pr
   const removed = install(installPs1, ['-Uninstall', '-RemoveData', '-Prefix', prefix, '-Yes']);
   assert(removed.status === 0, 'uninstall with data removal failed', removed.output);
   assert(!fs.existsSync(path.join(prefix, 'data')), 'unchanged recorded data must be removed', removed.output);
+  assert(!fs.existsSync(path.join(prefix, 'hub', '.env')), 'recorded .env must be removed', removed.output);
+  const reinstalled = install(installPs1, ['-ZipPath', zip, '-Sha256Sums', sums, '-Prefix', prefix, '-Yes', '-NoPath', '-NoService']);
+  assert(reinstalled.status === 0, 'reinstall failed', reinstalled.output);
+  const removedAgain = install(installPs1, ['-Uninstall', '-RemoveData', '-Prefix', prefix, '-Yes']);
+  assert(removedAgain.status === 0 && !fs.existsSync(path.join(prefix, 'hub', 'current.txt')), 'uninstall after reinstall failed', removedAgain.output);
 
   const changedPrefix = `${prefix}-changed`;
   const changedInstall = install(installPs1, ['-ZipPath', zip, '-Sha256Sums', sums, '-Prefix', changedPrefix, '-Yes', '-NoPath', '-NoService']);
@@ -166,7 +168,8 @@ async function checkRemoveData(installPs1: string, zip: string, sums: string, pr
   assert(canary !== undefined && fs.existsSync(path.join(changedPrefix, 'hub', `.owned-data-${canary}.json`)), 'the generated canary must have an ownership record');
   const changedRemoval = install(installPs1, ['-Uninstall', '-RemoveData', '-Prefix', changedPrefix, '-Yes']);
   assert(changedRemoval.status === 0 && fs.existsSync(extra) && /Data retained/.test(changedRemoval.output), 'changed data must be retained and reported', changedRemoval.output);
-  assert(!fs.existsSync(database), 'the changed database with the recorded identity must be removed', changedRemoval.output);
+  if (fs.existsSync(`${database}-wal`) || fs.existsSync(`${database}-shm`)) assert(fs.existsSync(database), 'database must be kept with SQLite sidecars', changedRemoval.output);
+  else assert(!fs.existsSync(database), 'the recorded database must be removed without sidecars', changedRemoval.output);
   assert(!fs.existsSync(webhook), 'the recorded generated token must be removed', changedRemoval.output);
   assert(!fs.existsSync(path.join(changedPrefix, 'data', canary as string)), 'the recorded canary must be removed', changedRemoval.output);
 }
@@ -211,87 +214,6 @@ async function checkShortProcessPath(prefix: string): Promise<void> {
   }
 }
 
-function checkMisaoAgentGuard(work: string): void {
-  step('misao agent guard distinguishes empty, shared and unknown synthetic hosts');
-  const probe = (all: string, tasks: string, authority = true, complete = true): Result => {
-    const script = buildMisaoAgentGuardScript(SYSTEM_ROOT, 'C:\\fake\\misao', 'AzitoMisao', 123, 456)
-      .replace('$agent = ', `function All { ${all} }\nfunction Get-ScheduledTask { ${tasks} }\n$agent = `)
-      .replace('if (-not (Test-TaskEnumerationAuthority))', `function Test-TaskEnumerationAuthority { $${authority} }\nfunction Test-TaskListComplete { $${complete} }\nif (-not (Test-TaskEnumerationAuthority))`);
-    const r = spawnSync(POWERSHELL, powershellEncodedArgs(script), { encoding: 'utf8', timeout: 60_000 });
-    return { status: r.status, output: `${r.stdout}${r.stderr}` };
-  };
-  const clear = probe('@()', '@()');
-  assert(clear.status === 0 && clear.output.trim() === 'CLEAR', 'an empty synthetic host must be clear', clear.output);
-  const shared = probe("@([pscustomobject]@{Name='node.exe';ProcessId=42;CommandLine='node C:\\fake\\azito-agent.cjs'})", '@()');
-  assert(shared.status === 0 && /AGENT process 42/.test(shared.output), 'a synthetic agent process must be detected', shared.output);
-  const custom = probe("@([pscustomobject]@{Name='custom.exe';ProcessId=44;ExecutablePath='C:\\fake\\custom.exe';CommandLine='C:\\fake\\custom.exe'})", '@()');
-  assert(custom.status === 0 && /UNKNOWN process 44/.test(custom.output), 'an unrecognised custom process must be refused', custom.output);
-  const encoded = Buffer.from("$entry = 'C:\\fake\\azito-agent.cjs'", 'utf16le').toString('base64');
-  const task = probe('@()', `@([pscustomobject]@{TaskPath='\\';TaskName='custom-agent';Principal=[pscustomobject]@{UserId='PC\\me'};Actions=@([pscustomobject]@{Execute='conhost.exe';Arguments='--headless powershell.exe -EncodedCommand ${encoded}'})})`);
-  assert(task.status === 0 && /AGENT task custom-agent/.test(task.output), 'a synthetic encoded agent task must be detected', task.output);
-  const unknown = probe('@()', "@([pscustomobject]@{TaskPath='\\';TaskName='unknown';Principal=[pscustomobject]@{UserId='PC\\me'};Actions=@([pscustomobject]@{Execute='powershell.exe';Arguments='-File C:\\fake\\script.ps1'})})");
-  assert(unknown.status === 0 && /UNKNOWN task unknown/.test(unknown.output), 'an opaque synthetic task must be refused', unknown.output);
-  const incomplete = probe('@()', '@()', true, false);
-  assert(incomplete.status === 0 && /UNKNOWN task enumeration is incomplete/.test(incomplete.output), 'an incomplete task list must be refused', incomplete.output);
-  const noAuthority = probe('@()', '@()', false);
-  assert(noAuthority.status === 0 && /UNKNOWN task enumeration lacks administrator access/.test(noAuthority.output), 'unverified task access must be refused', noAuthority.output);
-
-  const fakeSystem = path.join(work, 'fake-system');
-  const tasksRoot = path.join(fakeSystem, 'System32', 'Tasks');
-  fs.mkdirSync(tasksRoot, { recursive: true });
-  fs.writeFileSync(path.join(tasksRoot, 'known'), 'fake');
-  const knownTask = `@([pscustomobject]@{TaskPath='\\';TaskName='known';Principal=[pscustomobject]@{UserId='SYSTEM'};Actions=@([pscustomobject]@{Execute=${powershellDialect.quote(path.join(fakeSystem, 'System32', 'defrag.exe'))};Arguments=''})})`;
-  const actualCheck = (): Result => {
-    const script = buildMisaoAgentGuardScript(fakeSystem, 'C:\\fake\\misao', 'AzitoMisao', 123, 456)
-      .replace('$agent = ', `function All { @() }\nfunction Get-ScheduledTask { ${knownTask} }\n$agent = `)
-      .replace('if (-not (Test-TaskEnumerationAuthority))', 'function Test-TaskEnumerationAuthority { $true }\nif (-not (Test-TaskEnumerationAuthority))');
-    const r = spawnSync(POWERSHELL, powershellEncodedArgs(script), { encoding: 'utf8', timeout: 60_000 });
-    return { status: r.status, output: `${r.stdout}${r.stderr}` };
-  };
-  const matched = actualCheck();
-  assert(matched.status === 0 && matched.output.trim() === 'CLEAR', 'matching synthetic task files must be accepted', matched.output);
-  fs.writeFileSync(path.join(tasksRoot, 'hidden'), 'fake');
-  const hidden = actualCheck();
-  assert(hidden.status === 0 && /UNKNOWN task enumeration is incomplete/.test(hidden.output), 'an omitted task file must be refused', hidden.output);
-  fs.unlinkSync(path.join(tasksRoot, 'hidden'));
-  fs.unlinkSync(path.join(tasksRoot, 'known'));
-  const missing = actualCheck();
-  assert(missing.status === 0 && /UNKNOWN task enumeration is incomplete/.test(missing.output), 'a task with no matching definition file must be refused', missing.output);
-  fs.writeFileSync(path.join(tasksRoot, 'known'), 'fake');
-  const target = path.join(fakeSystem, 'outside');
-  fs.mkdirSync(target);
-  fs.writeFileSync(path.join(target, 'keep'), 'fake');
-  const junction = path.join(tasksRoot, 'junction');
-  fs.symlinkSync(target, junction, 'junction');
-  const linked = actualCheck();
-  assert(linked.status === 0 && /UNKNOWN task enumeration is incomplete/.test(linked.output) && fs.existsSync(path.join(target, 'keep')), 'a task directory junction must be refused without following it', linked.output);
-  fs.rmdirSync(junction);
-}
-
-function checkMisaoRecord(installPs1: string, zip: string, sums: string, prefix: string, version: string): void {
-  step('record a newly created synthetic misao release using the bundled files');
-  const installed = install(installPs1, ['-ZipPath', zip, '-Sha256Sums', sums, '-Prefix', prefix, '-Yes', '-NoPath', '-NoService']);
-  assert(installed.status === 0, 'install for misao record failed', installed.output);
-  const release = path.join(prefix, 'hub', version);
-  const manifest = JSON.parse(fs.readFileSync(path.join(release, 'misao', 'manifest.json'), 'utf8')) as { version: string };
-  const misao = path.join(prefix, 'misao');
-  const target = path.join(misao, manifest.version);
-  fs.mkdirSync(target, { recursive: true });
-  fs.writeFileSync(path.join(misao, 'current'), manifest.version);
-  for (const name of MISAO_RELEASE_FILE_NAMES) {
-    const file = misaoFileNameOn('win32', name);
-    fs.copyFileSync(path.join(release, 'misao', 'x86_64-pc-windows-msvc', file), path.join(target, file));
-  }
-  recordWindowsMisaoTask(misao, manifest.version, '<Task />', createSecretFileGuard('win32', process.env));
-  fs.unlinkSync(path.join(prefix, 'hub', '.install-record.json'));
-  const r = spawnSync(path.join(release, 'node.exe'), [path.join(release, 'azito-hub.cjs'), 'windows-install-record', '--misao-created'], { encoding: 'utf8', timeout: 300_000 });
-  const output = `${r.stdout}${r.stderr}`;
-  assert(r.status === 0, 'recording synthetic misao failed', output);
-  const record = JSON.parse(fs.readFileSync(path.join(prefix, 'hub', '.install-record.json'), 'utf8')) as { misao: { version: string; fileIdentities: unknown[] } | null };
-  assert(record.misao?.version === manifest.version && record.misao.fileIdentities.length === MISAO_RELEASE_FILE_NAMES.length, 'misao files and identities must be recorded', output);
-}
-
-/** An install that stopped part-way (a version folder, no current.txt, no CLI) is repaired by running the installer again; the CLI refuses a bad pointer and survives `&` in the prefix. */
 function checkRepairAndDiagnostics(installPs1: string, zip: string, sums: string, prefix: string, version: string): void {
   step(`install into ${prefix} (a prefix with &), then repair a half-finished install`);
   const args = ['-ZipPath', zip, '-Sha256Sums', sums, '-Prefix', prefix, '-Yes', '-NoPath', '-NoService'];
@@ -462,8 +384,6 @@ async function main(): Promise<void> {
     checkCli(azitoCmd, prefix, version as string);
     await checkOrphanLauncher(prefix);
     await checkShortProcessPath(prefix);
-    checkMisaoAgentGuard(work);
-    checkMisaoRecord(installPs1, zip, sums, path.join(work, 'misao-record', '.azito'), version as string);
     checkRepairAndDiagnostics(installPs1, zip, sums, path.join(work, 'Amp&Co', '.azito'), version as string);
     await checkStart(installPs1, azitoCmd, prefix);
     checkAccessRules(prefix);

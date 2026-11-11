@@ -176,9 +176,9 @@ export class SchtasksClient {
   }
 
   /** Registers the task from an XML file that already exists on the host `run` executes on ({@link encodeTaskXml}'s UTF-16 form), replacing one of the same name. */
-  async registerFromFile(taskName: string, xmlFile: string, replace = true): Promise<void> {
+  async registerFromFile(taskName: string, xmlFile: string): Promise<void> {
     SchtasksClient.assertTaskName(taskName);
-    await this.mustSucceed('create', taskName, ['/Create', '/XML', xmlFile, '/TN', taskName, ...(replace ? ['/F'] : [])]);
+    await this.mustSucceed('create', taskName, ['/Create', '/XML', xmlFile, '/TN', taskName, '/F']);
   }
 
   /**

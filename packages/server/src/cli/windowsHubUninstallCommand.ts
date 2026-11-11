@@ -7,12 +7,11 @@ import { resolveWindowsHub, uninstallWindowsTask, type ServiceCommandContext } f
 import { assertNoHubLaunchers, assertNoOtherHubProcesses, consumeWindowsInstallRecord, prepareRecordedData, prepareRecordedRelease, removeRecordedTree, verifyRecordedDatabase, verifyRecordedRelease, verifyRecordedWrapper } from '../modules/system/windowsHubUninstall';
 import { assertHubDirsOnlyOwnerWritable, findHubVersionsInUse } from '../modules/system/windowsHubFolderOps';
 import { runCommandSpec } from '../shared/exec/runCommandSpec';
-import { listOwnedDataNames, readOwnedSecret } from '../modules/system/windowsOwnedSecrets';
+import { listOwnedDataNames, readOwnedSecret, removeOwnedDataMarkers } from '../modules/system/windowsOwnedSecrets';
 import { findHubProcesses } from '../modules/system/windowsHubService';
 import { HUB_UPDATE_TASK } from '../modules/system/windowsHubUpdateTask';
 import type { HostEnv } from '../shared/os/hostEnv';
-import { getBundleRoot } from '../shared/releaseInfo';
-import { uninstallRecordedMisao } from '../modules/system/misao/windowsMisaoUninstall';
+import { readInstallFileIdentity, sameInstallFileIdentity } from '../modules/system/windowsInstallInventory';
 
 /** Prepares the installer to remove only items proved by its record. */
 export async function windowsHubUninstallCommand(host: HostEnv, context: ServiceCommandContext, removeData: boolean): Promise<void> {
@@ -78,14 +77,14 @@ export async function windowsHubUninstallCommand(host: HostEnv, context: Service
     await assertNoOtherHubProcesses(hub.layout.hubRoot, run, hub.systemRoot, context.pid);
     await uninstallWindowsTask(created.manager, hub, context);
     consumeWindowsInstallRecord(hub.layout.hubRoot, record, context.secretFileGuard);
-    console.log(JSON.stringify({ release: path.basename(release), data, dataDb, dataFiles, wrapper, pathAdded: record.pathAdded, retained }));
+    console.log(JSON.stringify({ release: path.basename(release), data, dataDb, dataFiles, wrapper, pathAdded: record.pathAdded, pathValueCreated: record.pathValueCreated === true, retained }));
     const action = await new Promise<string>((resolve) => {
       process.stdin.once('data', (chunk: Buffer) => resolve(chunk.toString('utf8').trim()));
       process.stdin.once('end', () => resolve(''));
       process.stdin.resume();
     });
     if (action !== 'remove') return;
-    let misaoNote = 'Misao was not processed.';
+    const misaoNote = 'AzitoMisao and the misao folder were retained. Verify that no agent uses them before removing them manually; see the Windows uninstall documentation.';
     try {
       if ((await hub.client.query(HUB_SERVICE.windowsTaskName)).exists || (await hub.client.query(HUB_UPDATE_TASK)).exists) throw new Error('A hub or update task appeared while preparing removal; inspect it and retry manually.');
       if ((await findHubProcesses(run, hub.systemRoot, hub.hubRoots, context.pid)).length > 0) throw new Error('A hub process started while preparing removal; stop it and inspect the retained files.');
@@ -93,12 +92,6 @@ export async function windowsHubUninstallCommand(host: HostEnv, context: Service
       if ([...inUse].some((version) => version.toLowerCase() === record.release.toLowerCase())) throw new Error('A process is using the recorded release; stop it and inspect the retained files.');
       await assertNoHubLaunchers(hub.hubRoots, run, hub.systemRoot, process.ppid);
       await assertNoOtherHubProcesses(hub.layout.hubRoot, run, hub.systemRoot, context.pid);
-      try {
-        await uninstallRecordedMisao({ prefix: hub.layout.prefix, record, host, bundleRoot: getBundleRoot(), guard: context.secretFileGuard, run, systemRoot: hub.systemRoot, pid: context.pid });
-        misaoNote = 'The recorded misao task and release were removed; inspect retained files under the misao folder.';
-      } catch (err) {
-        misaoNote = `Misao cleanup was skipped or incomplete: ${err instanceof Error ? err.message : String(err)}. Inspect the task, daemon and files manually.`;
-      }
       if (data) {
         await prepareRecordedData(hub.layout.prefix, record, context.secretFileGuard, run, hub.systemRoot);
         await removeRecordedTree(hub.layout.prefix, 'data', run, hub.systemRoot);
@@ -113,6 +106,14 @@ export async function windowsHubUninstallCommand(host: HostEnv, context: Service
         }
         if (fs.readdirSync(dir).length === 0) fs.rmdirSync(dir);
       }
+      if (removeData && record.envIdentity) {
+        const env = path.join(hub.layout.hubRoot, '.env');
+        const stat = fs.lstatSync(env);
+        if (!stat.isFile() || stat.isSymbolicLink() || !sameInstallFileIdentity(record.envIdentity, readInstallFileIdentity(env)) || !context.secretFileGuard.inspect(env, 'file').ok) {
+          throw new Error('The hub .env is not the recorded protected file; it is retained.');
+        }
+        fs.unlinkSync(env);
+      }
       await assertHubDirsOnlyOwnerWritable(run, hub.systemRoot, [release, ...record.inventory.directories.map((dir) => path.join(release, dir))]);
       verifyRecordedRelease(hub.layout.hubRoot, record);
       await removeRecordedTree(hub.layout.hubRoot, record.release, run, hub.systemRoot);
@@ -120,7 +121,21 @@ export async function windowsHubUninstallCommand(host: HostEnv, context: Service
       const stat = fs.lstatSync(pointer);
       if (!stat.isFile() || stat.isSymbolicLink() || fs.readFileSync(pointer, 'utf8').trim() !== record.release) throw new Error(`The pointer ${pointer} changed and is retained.`);
       fs.unlinkSync(pointer);
-      console.log(JSON.stringify({ removed: true, misaoNote }));
+      const remainingMarkers = removeOwnedDataMarkers(hub.layout.hubRoot, record, context.secretFileGuard);
+      if (remainingMarkers.length) retained.push(`Ownership records retained: ${remainingMarkers.join(', ')}`);
+      const recordPath = path.join(hub.layout.hubRoot, '.install-record.json');
+      if (!context.secretFileGuard.inspect(recordPath, 'file').ok || fs.lstatSync(recordPath).isSymbolicLink()) throw new Error('The installation record changed; it is retained.');
+      fs.unlinkSync(recordPath);
+      const emptyDirectoryCandidates: string[] = [];
+      for (const [name, dir] of [['bin', path.join(hub.layout.prefix, 'bin')], ['logs', path.join(hub.layout.prefix, 'logs')], ['hub', hub.layout.hubRoot], ['prefix', hub.layout.prefix]] as const) {
+        const identity = record.directories?.[name];
+        if (!identity) continue;
+        try {
+          await assertHubDirsOnlyOwnerWritable(run, hub.systemRoot, [dir]);
+          if (sameInstallFileIdentity(identity, readInstallFileIdentity(dir))) emptyDirectoryCandidates.push(name);
+        } catch { retained.push(`Directory retained: ${dir} could not be verified.`); }
+      }
+      console.log(JSON.stringify({ removed: true, misaoNote, retained, emptyDirectoryCandidates }));
     } catch (err) {
       console.log(JSON.stringify({ error: err instanceof Error ? err.message : String(err), misaoNote }));
       process.exitCode = 1;

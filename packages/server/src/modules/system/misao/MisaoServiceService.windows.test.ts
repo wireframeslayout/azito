@@ -13,7 +13,6 @@ import { readEnvValue } from '../../../shared/envFile';
 import { ProcessLock, type HolderCheck } from '../../../shared/processLock';
 import { createSecretFileGuard } from '../../../shared/os/secretFileGuard';
 import type { ServiceManager } from '../serviceManager';
-import { readWindowsMisaoTaskRecord } from './windowsMisaoTaskRecord';
 
 /**
  * The Windows branch of the service (its steps are the agent installer's, tested in MisaoAgentInstaller.windows.test.ts and, on a
@@ -116,29 +115,6 @@ describe('MisaoServiceService on Windows (the hub\'s own misao)', () => {
   it('never writes a unit or a definition through the service manager (the installer registers the task itself)', async () => {
     await service().install();
     expect(controllerInstall).not.toHaveBeenCalled();
-  });
-
-  it('records only a task that was absent before this locked install', async () => {
-    install.mockImplementation(async () => { taskExists = true; fs.writeFileSync(paths.current, '0.3.0'); return RESULT; });
-    await service().install({ recordInstallOwnership: true });
-    const record = readWindowsMisaoTaskRecord(paths.root, createSecretFileGuard(process.platform, process.env));
-    expect(record.release).toBe('0.3.0');
-    expect(record.taskHash).toMatch(/^[a-f0-9]{64}$/);
-  });
-
-  it('does not claim a task that already existed', async () => {
-    taskExists = true;
-    fs.writeFileSync(paths.current, '0.3.0');
-    await service().install({ recordInstallOwnership: true });
-    expect(fs.existsSync(path.join(paths.root, '.install-task-owner.json'))).toBe(false);
-  });
-
-  it('fails ownership recording without replacing an existing marker', async () => {
-    const marker = path.join(paths.root, '.install-task-owner.json');
-    fs.writeFileSync(marker, 'user data');
-    install.mockImplementation(async () => { taskExists = true; fs.writeFileSync(paths.current, '0.3.0'); return RESULT; });
-    await expect(service().install({ recordInstallOwnership: true })).rejects.toThrow(/ownership could not be recorded/);
-    expect(fs.readFileSync(marker, 'utf8')).toBe('user data');
   });
 
   it('leaves the hub .env alone when the install fails', async () => {

@@ -5,7 +5,7 @@ import { z } from 'zod';
 import type { DataPaths } from '../../shared/dataDir';
 import type { SecretFileGuard } from '../../shared/os/secretFileGuard';
 import { readWindowsInstallRecord, type WindowsInstallRecord } from './windowsHubUninstall';
-import { assertRealDirectoryChain, readInstallFileIdentity, type InstallFileIdentity } from './windowsInstallInventory';
+import { assertRealDirectoryChain, readInstallFileIdentity, installIdentitySchema, sameInstallFileIdentity, type InstallFileIdentity } from './windowsInstallInventory';
 
 export const OWNED_SECRET_NAMES = ['master.key', 'vapid-keys.json', 'ui-token', 'webhook-token'] as const;
 export type OwnedSecretName = typeof OWNED_SECRET_NAMES[number];
@@ -17,16 +17,29 @@ export function ownedSecretMarker(hubDir: string, name: string): string {
   return path.join(hubDir, `.owned-data-${name}.json`);
 }
 
-function sameIdentity(a: InstallFileIdentity | null, b: InstallFileIdentity): boolean {
-  return a !== null && a.file !== '0' && a.created !== '0' && a.device === b.device && a.file === b.file && a.created === b.created;
-}
-
-const identitySchema = z.object({ device: z.string().regex(/^\d+$/), file: z.string().regex(/^\d+$/), created: z.string().regex(/^\d+$/) }).strict();
-const markerSchema = z.object({ version: z.literal(1), name: z.string().refine(isOwnedName), identity: identitySchema, root: identitySchema }).strict();
+const markerSchema = z.object({ version: z.literal(1), name: z.string().refine(isOwnedName), identity: installIdentitySchema, root: installIdentitySchema }).strict();
 
 export function listOwnedDataNames(hubDir: string): string[] {
   const canaries = fs.readdirSync(hubDir).map((entry) => /^\.owned-data-(\.azito-hub-canary-[a-f0-9]{32})\.json$/.exec(entry)?.[1]).filter((name): name is string => name !== undefined);
   return [...OWNED_SECRET_NAMES, ...canaries];
+}
+
+/** Remove only protected markers that name this installation's recorded data root. */
+export function removeOwnedDataMarkers(hubDir: string, record: WindowsInstallRecord, guard: SecretFileGuard): string[] {
+  const retained: string[] = [];
+  for (const name of listOwnedDataNames(hubDir)) {
+    const marker = ownedSecretMarker(hubDir, name);
+    try {
+      const stat = fs.lstatSync(marker);
+      if (!stat.isFile() || stat.isSymbolicLink() || !guard.inspect(marker, 'file').ok) throw new Error('not a protected regular file');
+      const saved = markerSchema.parse(JSON.parse(fs.readFileSync(marker, 'utf8')));
+      if (saved.name !== name || !sameInstallFileIdentity(record.dataRootIdentity, saved.root)) throw new Error('not the recorded data root');
+      fs.unlinkSync(marker);
+    } catch (err) {
+      if ((err as NodeJS.ErrnoException).code !== 'ENOENT') retained.push(path.basename(marker));
+    }
+  }
+  return retained;
 }
 
 /** A missing marker means no ownership claim; a malformed or replaced marker is an error. */
@@ -39,7 +52,7 @@ export function readOwnedSecret(prefix: string, hubDir: string, name: string, re
   const data = path.join(prefix, 'data');
   assertRealDirectoryChain(data);
   const file = path.join(data, name);
-  if (saved.name !== name || !sameIdentity(record.dataRootIdentity, saved.root) || !sameIdentity(saved.root, readInstallFileIdentity(data))) throw new Error(`The data directory for ${name} is not the recorded directory.`);
+  if (saved.name !== name || !sameInstallFileIdentity(record.dataRootIdentity, saved.root) || !sameInstallFileIdentity(saved.root, readInstallFileIdentity(data))) throw new Error(`The data directory for ${name} is not the recorded directory.`);
   let fileStat: fs.Stats;
   try {
     fileStat = fs.lstatSync(file);
@@ -47,7 +60,7 @@ export function readOwnedSecret(prefix: string, hubDir: string, name: string, re
     if (/^\.azito-hub-canary-[a-f0-9]{32}$/.test(name) && (err as NodeJS.ErrnoException).code === 'ENOENT') return undefined;
     throw err;
   }
-  if (!fileStat.isFile() || fileStat.isSymbolicLink() || !sameIdentity(saved.identity, readInstallFileIdentity(file)) || !guard.inspect(file, 'file').ok) throw new Error(`${name} is not the recorded protected file.`);
+  if (!fileStat.isFile() || fileStat.isSymbolicLink() || !sameInstallFileIdentity(saved.identity, readInstallFileIdentity(file)) || !guard.inspect(file, 'file').ok) throw new Error(`${name} is not the recorded protected file.`);
   return file;
 }
 
@@ -73,7 +86,7 @@ function resolveOwnedRoot(base: SecretFileGuard, bundleRoot: string | null, path
   try {
     const record = readWindowsInstallRecord(hubDir, base);
     const root = readInstallFileIdentity(dataDir);
-    if (record.consumed || !sameIdentity(record.dataRootIdentity, root) || !base.inspect(dataDir, 'dir').ok) return undefined;
+    if (record.consumed || !sameInstallFileIdentity(record.dataRootIdentity, root) || !base.inspect(dataDir, 'dir').ok) return undefined;
     return { hubDir, dataDir, root };
   } catch (err) {
     console.warn(`[azito] Cannot track newly created data files: ${err instanceof Error ? err.message : String(err)}`);
@@ -90,8 +103,8 @@ export function createOwnedCanaryRecorder(base: SecretFileGuard, bundleRoot: str
     if (!CANARY_NAME.test(name) || path.resolve(path.dirname(file)).toLowerCase() !== path.resolve(context.dataDir).toLowerCase()) return;
     try {
       const current = readWindowsInstallRecord(context.hubDir, base);
-      if (current.consumed || !sameIdentity(current.dataRootIdentity, context.root)) return;
-      if (!sameIdentity(context.root, readInstallFileIdentity(context.dataDir)) || !base.inspect(file, 'file').ok) throw new Error('The data directory or file is not protected.');
+      if (current.consumed || !sameInstallFileIdentity(current.dataRootIdentity, context.root)) return;
+      if (!sameInstallFileIdentity(context.root, readInstallFileIdentity(context.dataDir)) || !base.inspect(file, 'file').ok) throw new Error('The data directory or file is not protected.');
       writeMarker(context.hubDir, name, readInstallFileIdentity(file), context.root, base);
     } catch (err) {
       console.warn(`[azito] Could not record ownership of ${file}: ${err instanceof Error ? err.message : String(err)}`);
@@ -144,7 +157,7 @@ export function trackWindowsOwnedSecrets(base: SecretFileGuard, bundleRoot: stri
     if (!linked) return;
     try {
       const current = readWindowsInstallRecord(hubDir, base);
-      if (current.consumed || !sameIdentity(current.dataRootIdentity, root)) return;
+      if (current.consumed || !sameInstallFileIdentity(current.dataRootIdentity, root)) return;
       writeMarker(hubDir, name as OwnedSecretName, readInstallFileIdentity(file), root, base);
     } catch (err) {
       if ((err as NodeJS.ErrnoException).code !== 'EEXIST') console.warn(`[azito] Could not record ownership of ${file}: ${err instanceof Error ? err.message : String(err)}`);

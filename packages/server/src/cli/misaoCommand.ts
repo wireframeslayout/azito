@@ -32,11 +32,10 @@ interface ParsedArgs {
   prefix: string | undefined;
   replaceSocket: boolean;
   yes: boolean;
-  recordInstallOwnership: boolean;
 }
 
 function parseArgs(argv: string[]): ParsedArgs {
-  const parsed: ParsedArgs = { command: undefined, prefix: undefined, replaceSocket: false, yes: false, recordInstallOwnership: false };
+  const parsed: ParsedArgs = { command: undefined, prefix: undefined, replaceSocket: false, yes: false };
   for (let i = 0; i < argv.length; i++) {
     const arg = argv[i];
     if (arg === '--prefix') {
@@ -44,7 +43,6 @@ function parseArgs(argv: string[]): ParsedArgs {
       if (!value) throw new MisaoServiceError('usage', '--prefix needs a directory');
       parsed.prefix = value;
     } else if (arg === '--replace-socket') parsed.replaceSocket = true;
-    else if (arg === '--record-install-ownership') parsed.recordInstallOwnership = true;
     else if (arg === '--yes') parsed.yes = true;
     else if (arg.startsWith('-')) throw new MisaoServiceError('usage', `Unknown option: ${arg}`);
     else if (parsed.command === undefined) parsed.command = arg;
@@ -99,7 +97,6 @@ export async function misaoCommand(argv: string[], host: HostEnv, secretFileGuar
       if (args.command) process.exitCode = 1;
       return;
     }
-    if (args.recordInstallOwnership && (args.command !== 'install' || host.platform !== 'win32')) throw new MisaoServiceError('usage', 'Ownership recording is only available for Windows install.');
 
     const bundleRoot = getBundleRoot();
     const prefix = args.prefix ?? resolveInstallPrefix(bundleRoot);
@@ -132,7 +129,7 @@ export async function misaoCommand(argv: string[], host: HostEnv, secretFileGuar
     }
 
     const status = args.command === 'install'
-      ? await service.install({ replaceSocketSetting: args.replaceSocket, recordInstallOwnership: args.recordInstallOwnership })
+      ? await service.install({ replaceSocketSetting: args.replaceSocket })
       : args.command === 'update' ? await service.update() : await service.start();
     console.log(`misao ${args.command}: done`);
     printStatus(status);
