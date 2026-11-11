@@ -665,9 +665,12 @@ export class AgentInstaller {
 
     const expectedHash = readSha256FromSumsFile(this.bundler.getSha256sumsPath(), 'azito-agent.tar.gz');
 
-    const verifyCmd = buildSha256VerifyCommand(remoteTmp);
+    const verifyCmd = `set -o pipefail; ${buildSha256VerifyCommand(remoteTmp)}`;
     const shaResult = await this.execPosix(sshHost, verifyCmd);
-    if (shaResult.code !== 0) throw new Error(`SHA256 verification failed: ${shaResult.stderr}`);
+    if (shaResult.code !== 0) {
+      await this.execPosix(sshHost, `rm -f "${remoteTmp}"`);
+      throw new Error(`SHA256 verification failed: ${shaResult.stderr}`);
+    }
     const actualHash = shaResult.stdout.trim();
     if (actualHash !== expectedHash) {
       await this.execPosix(sshHost, `rm -f "${remoteTmp}"`);
@@ -701,7 +704,7 @@ export class AgentInstaller {
     try {
       return await this.startSystemd(sshHost, tailscaleIp, token, muxRuntime);
     } catch (error) {
-      if (error instanceof PosixRemoteProtocolError) throw error;
+      if (error instanceof PosixRemoteProtocolError || error instanceof LocalNetworkPermissionError) throw error;
       // Fall back to nohup
     }
 

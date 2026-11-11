@@ -294,7 +294,7 @@ describe('AgentInstaller', () => {
     const steps: InstallProgress[] = [];
     const result = await installer.install('user@host', (p) => steps.push(p));
     expect(result.success).toBe(false);
-    expect(result.error).toBe('Could not check the host for an existing agent: Remote command transport failed');
+    expect(result.error).toBe('Could not check the host for an existing agent: Remote command transport failed: connection reset');
     expect(steps.at(-1)).toEqual({ step: 'transfer', status: 'error', message: result.error });
     expect(commands.some((c) => c.includes('systemctl --user enable'))).toBe(false);
   });

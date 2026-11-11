@@ -1,4 +1,5 @@
 import { randomBytes } from 'node:crypto';
+import { LocalNetworkPermissionError } from '../localNetworkDiagnosis';
 import { shellQuote } from '../../../shared/shellQuote';
 import type { SshClient } from '../ssh/SshClient';
 
@@ -17,9 +18,10 @@ export async function execPosixRemote(ssh: Pick<SshClient, 'execIsolated'>, host
   try {
     result = await ssh.execIsolated(host, command, timeoutMs);
   } catch (cause) {
-    throw new PosixRemoteProtocolError('Remote command transport failed', { cause });
+    if (cause instanceof LocalNetworkPermissionError) throw cause;
+    throw new PosixRemoteProtocolError(`Remote command transport failed: ${cause instanceof Error ? cause.message : String(cause)}`, { cause });
   }
-  if (result.code !== 0) throw new PosixRemoteProtocolError('Remote command transport failed');
+  if (result.code !== 0) throw new PosixRemoteProtocolError(`Remote command transport failed (SSH exit ${result.code})`);
   const pattern = new RegExp(`\\n${marker}:(\\d+)\\n$`);
   const match = pattern.exec(result.stdout);
   if (!match || result.stdout.indexOf(marker) !== match.index + 1 || Number(match[1]) > 255) {

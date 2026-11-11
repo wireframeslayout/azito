@@ -1,6 +1,7 @@
 import { execFile, execFileSync } from 'node:child_process';
 import { promisify } from 'node:util';
 import { describe, expect, it } from 'vitest';
+import { LocalNetworkPermissionError } from '../localNetworkDiagnosis';
 import { execPosixRemote, posixRemoteCommand } from './posixRemoteCommand';
 
 const exec = promisify(execFile);
@@ -18,6 +19,12 @@ describe('execPosixRemote', () => {
     await execPosixRemote({ execIsolated: async (host: string, raw: string) => { command = raw; return ssh.execIsolated(host, raw); } } as never, 'host', 'exit 7');
     expect(command).toMatch(/^\/bin\/bash -c '/);
     expect(command.endsWith("'")).toBe(true);
+  });
+  it('preserves transport diagnostics and local network permission errors', async () => {
+    const denied = new LocalNetworkPermissionError('network denied');
+    const failed = (error: Error) => ({ execIsolated: async () => { throw error; } });
+    await expect(execPosixRemote(failed(denied) as never, 'host', 'true')).rejects.toBe(denied);
+    await expect(execPosixRemote(failed(new Error('connection reset')) as never, 'host', 'true')).rejects.toThrow('connection reset');
   });
   it('rejects missing or malformed markers', async () => {
     const broken = { execIsolated: async () => ({ stdout: 'no marker', stderr: '', code: 0 }) };
