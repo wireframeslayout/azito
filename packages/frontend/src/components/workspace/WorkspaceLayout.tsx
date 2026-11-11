@@ -292,7 +292,9 @@ export default function WorkspaceLayout({
                 display: 'flex', flexDirection: 'column', overflow: 'hidden', background: 'var(--ws-surface-card)',
                 borderRadius: 'var(--panel-radius) 0 0 var(--panel-radius)', boxShadow: 'inset 0 1px 0 var(--edge-hi), var(--panel-shadow)',
               }} className="ws-surface">
-                {sidebarContent}
+                <div style={{ flex: 1, minHeight: 0, minWidth: 0, display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
+                  {sidebarContent}
+                </div>
                 {activeWindowsSection}
               </div>
             </div>

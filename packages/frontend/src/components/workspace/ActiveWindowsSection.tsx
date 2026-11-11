@@ -70,8 +70,9 @@ export default function ActiveWindowsSection({ titleData, connectPane, openTask,
   return (
     <div
       style={{
-        height: collapsed ? HEADER_HEIGHT : '50%',
+        maxHeight: collapsed ? undefined : '50%',
         flexShrink: 0,
+        minHeight: 0,
         boxShadow: '0 -1px 0 var(--hairline)',
         display: 'flex',
         flexDirection: 'column',
@@ -118,7 +119,7 @@ export default function ActiveWindowsSection({ titleData, connectPane, openTask,
       </button>
 
       {!collapsed && (
-        <div style={{ flex: 1, overflowY: 'auto', padding: '0 4px 8px' }}>
+        <div style={{ minHeight: 0, overflowY: 'auto', padding: '0 var(--space-1) var(--space-2)' }}>
           {rows.map((row, index) => {
             const taskId = row.taskId ?? lookupWindowTask(windowTaskMap, row.serverName, row.target);
             const displayName = row.title;
@@ -139,14 +140,14 @@ export default function ActiveWindowsSection({ titleData, connectPane, openTask,
             const historyStart = row.seenAt != null && (index === 0 || rows[index - 1].seenAt == null);
             return (
               <div key={row.key}>
-              {historyStart && <div style={{ display: 'flex', alignItems: 'center', padding: 'var(--space-2)', color: 'var(--text-dim)', fontSize: 'var(--font-xs)' }}><span style={{ flex: 1 }}>{t('activeWindows.history', { count: historyCount, max: retention.maxCount })}</span><IconButton type="button" title={t('activeWindows.clearHistory')} aria-label={t('activeWindows.clearHistory')} onClick={clearSeenFinished}><Icon name="trash" size={14} /></IconButton></div>}
+              {historyStart && <div style={{ display: 'flex', alignItems: 'center', padding: 'var(--space-1) var(--space-2)', color: 'var(--text-dim)', fontSize: 'var(--font-xs)' }}><span style={{ flex: 1 }}>{t('activeWindows.history', { count: historyCount, max: retention.maxCount })}</span><IconButton type="button" title={t('activeWindows.clearHistory')} aria-label={t('activeWindows.clearHistory')} onClick={clearSeenFinished}><Icon name="trash" size={14} /></IconButton></div>}
               <div
                 className={`row-hover aw-history-row${!isFinished && !isBlocked ? ' aw-row-working' : ''}`}
                 style={{
                   display: 'flex',
                   alignItems: 'center',
                   gap: 6,
-                  padding: '6px 8px',
+                  padding: 'var(--space-2)',
                   borderRadius: 'var(--radius-sm)',
                   background: isBlocked ? 'var(--warning-a08)' : undefined,
                 }}
