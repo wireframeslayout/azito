@@ -396,7 +396,8 @@ function checkTailscaleDns(installPs1: string, work: string): void {
     'using System.Threading;',
     'public class FakeTailscale {',
     '  public static int Main() {',
-    '    Console.OutputEncoding = new System.Text.UTF8Encoding(false);',
+    // Raw UTF-8 bytes like the real Tailscale, without changing any console code page.
+    '    Console.SetOut(new System.IO.StreamWriter(Console.OpenStandardOutput(), new System.Text.UTF8Encoding(false)) { AutoFlush = true });',
     '    string mode = Environment.GetEnvironmentVariable("AZITO_TEST_TAILSCALE_MODE");',
     '    Console.Error.WriteLine("person@example.com fictional-peer 192.0.2.55");',
     '    if (mode == "timeout") { Thread.Sleep(30000); return 0; }',
@@ -410,19 +411,25 @@ function checkTailscaleDns(installPs1: string, work: string): void {
     '}',
     "'@",
     "if ($env:AZITO_TEST_TAILSCALE_MODE -eq 'start') { $fake = Join-Path $fake 'missing.exe' }",
-    '[Console]::OutputEncoding = [Text.Encoding]::GetEncoding(932)',
-    "if ($env:AZITO_TEST_TAILSCALE_MODE -eq 'success') {",
-    "  $expected = ([string][char]0x65e5) + ([string][char]0x672c) + '.example.ts.net'",
-    "  $old = $definition -replace '(?m)^.*\\$info\\.Standard(Output|Error)Encoding.*\\r?\\n', ''",
-    '  . ([scriptblock]::Create($old))',
-    '  $oldResult = @(Get-TailscaleDns $fake *>&1)',
-    "  if ($oldResult.Count -eq 1 -and $oldResult[0] -is [string] -and $oldResult[0] -ceq $expected) { throw 'the old decoder unexpectedly preserved UTF-8 under code page 932' }",
-    '  . ([scriptblock]::Create($definition))',
-    "  if ((Get-TailscaleDns $fake) -cne $expected) { throw 'the DNS name was not decoded as UTF-8' }",
-    "  Write-Output 'UTF-8 DNS verified'",
-    '  exit 0',
+    // The console may be shared with the caller, so its code page is put back before anything is written.
+    '$savedOutputEncoding = [Console]::OutputEncoding',
+    'try {',
+    '  [Console]::OutputEncoding = [Text.Encoding]::GetEncoding(932)',
+    "  if ($env:AZITO_TEST_TAILSCALE_MODE -eq 'success') {",
+    "    $expected = ([string][char]0x65e5) + ([string][char]0x672c) + '.example.ts.net'",
+    "    $old = $definition -replace '(?m)^.*\\$info\\.Standard(Output|Error)Encoding.*\\r?\\n', ''",
+    '    . ([scriptblock]::Create($old))',
+    '    $oldResult = @(Get-TailscaleDns $fake *>&1)',
+    "    if ($oldResult.Count -eq 1 -and $oldResult[0] -is [string] -and $oldResult[0] -ceq $expected) { throw 'the old decoder unexpectedly preserved UTF-8 under code page 932' }",
+    '    . ([scriptblock]::Create($definition))',
+    "    if ((Get-TailscaleDns $fake) -cne $expected) { throw 'the DNS name was not decoded as UTF-8' }",
+    "    $result = @('UTF-8 DNS verified')",
+    '  } else {',
+    '    $result = @(Get-TailscaleDns $fake *>&1)',
+    '  }',
+    '} finally {',
+    '  [Console]::OutputEncoding = $savedOutputEncoding',
     '}',
-    '$result = @(Get-TailscaleDns $fake *>&1)',
     '$result | Where-Object { $null -ne $_ } | ForEach-Object { Write-Output $_.ToString() }',
     '',
   ].join('\r\n'));
@@ -472,7 +479,8 @@ async function main(): Promise<void> {
     checkAccessRules(prefix);
     checkUserPath(installPs1, work);
     checkUninstall(installPs1, prefix, version as string);
-    // The helper returns directory paths as JSON; non-ASCII paths must survive the Node-to-PowerShell boundary.
+    // A non-ASCII prefix: install and -RemoveData uninstall must still complete and remove the recorded files.
+    // Only those outcomes are asserted; the helper's JSON values are not compared.
     await checkRemoveData(installPs1, zip, sums, path.join(work, 'remove-data-\u65e5\u672c', '.azito'));
   } finally {
     // A leftover file must not replace the failure that got us here.
