@@ -13,7 +13,7 @@ function runInspection(kind: 'sweep' | 'present' | 'records', state: 'exited' | 
     : kind === 'present' ? buildProcessPresentScript('powershell.exe', 'never-matches', ['never-matches']) : WINDOWS_PROCESS_RECORDS.join('\n') + '\n@(Read-Process $target).Count';
   body = body.replace('text.buffer == IntPtr.Zero ? null : Marshal.PtrToStringUni(text.buffer, text.length / 2)', 'null');
   if (state === 'owner_unknown') body = body.replace(/\[AzitoProcessList\]::Owner\([^)]*\)/g, '$null');
-  if (state === 'unknown') body = body.replace('GetExitCodeProcess(h, out code) ? (bool?)(code != 259) : null', 'null');
+  if (state === 'unknown') body = body.replace('uint code;\nbool? exited = GetExitCodeProcess(h, out code) ? (bool?)(code != 259) : null;', 'bool? exited = null;');
   const script = `
 $ErrorActionPreference = 'Stop'
 $child = Start-Process -FilePath powershell.exe -ArgumentList '-NoProfile -NonInteractive -Command Start-Sleep -Seconds 30' -PassThru
@@ -58,7 +58,7 @@ describe.skipIf(process.platform !== 'win32')('process inspections with real Win
     it(`${kind} retains or rejects an unknown exit state`, () => {
       const result = runInspection(kind, 'unknown');
       if (kind === 'records') expect(result).toBe('1');
-      else expect(result).toMatch(/^ERROR:/);
+      else expect(result).toContain(kind === 'sweep' ? 'Cannot identify process' : 'Cannot read process command line');
     });
     it(`${kind} retains or rejects an unknown owner`, () => {
       const result = runInspection(kind, 'owner_unknown');
