@@ -403,7 +403,8 @@ function checkTailscaleDns(installPs1: string, work: string): void {
     '    if (mode == "exit") { Console.WriteLine("person@example.com fictional-peer 192.0.2.55"); return 1; }',
     '    if (mode == "invalid") { Console.WriteLine("person@example.com fictional-peer 192.0.2.55 {"); return 0; }',
     '    if (mode == "missing") { Console.WriteLine("{\\"Self\\":{},\\"Peer\\":\\"fictional-peer\\"}"); return 0; }',
-    '    Console.WriteLine("{\\"Self\\":{\\"DNSName\\":\\"\\u65e5\\u672c.example.ts.net.\\"},\\"User\\":\\"person@example.com\\",\\"Peer\\":\\"fictional-peer 192.0.2.55\\"}");',
+    '    string dns = mode == "success" ? "\\u65e5\\u672c.example.ts.net." : "local.example.ts.net.";',
+    '    Console.WriteLine("{\\"Self\\":{\\"DNSName\\":\\"" + dns + "\\"},\\"User\\":{\\"DisplayName\\":\\"\\u65e5\\u672c\\",\\"LoginName\\":\\"person@example.com\\"},\\"Peer\\":\\"fictional-peer 192.0.2.55\\"}");',
     '    return 0;',
     '  }',
     '}',
@@ -414,7 +415,8 @@ function checkTailscaleDns(installPs1: string, work: string): void {
     "  $expected = ([string][char]0x65e5) + ([string][char]0x672c) + '.example.ts.net'",
     "  $old = $definition -replace '(?m)^.*\\$info\\.Standard(Output|Error)Encoding.*\\r?\\n', ''",
     '  . ([scriptblock]::Create($old))',
-    "  if ((Get-TailscaleDns $fake) -ceq $expected) { throw 'the old decoder unexpectedly preserved UTF-8 under code page 932' }",
+    '  $oldResult = @(Get-TailscaleDns $fake *>&1)',
+    "  if ($oldResult.Count -eq 1 -and $oldResult[0] -is [string] -and $oldResult[0] -ceq $expected) { throw 'the old decoder unexpectedly preserved UTF-8 under code page 932' }",
     '  . ([scriptblock]::Create($definition))',
     "  if ((Get-TailscaleDns $fake) -cne $expected) { throw 'the DNS name was not decoded as UTF-8' }",
     "  Write-Output 'UTF-8 DNS verified'",
@@ -427,6 +429,7 @@ function checkTailscaleDns(installPs1: string, work: string): void {
   // Each run compiles an isolated fake executable.
   const cases: Array<[string, string]> = [
     ['success', 'UTF-8 DNS verified'],
+    ['ascii', 'local.example.ts.net'],
     ['start', 'could not start Tailscale'],
     ['invalid', 'Tailscale status returned invalid JSON'],
     ['exit', 'Tailscale status failed'],
