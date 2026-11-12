@@ -238,6 +238,8 @@ function Get-TailscaleDns([string]$Tailscale) {
     $info.CreateNoWindow = $true
     $info.RedirectStandardOutput = $true
     $info.RedirectStandardError = $true
+    $info.StandardOutputEncoding = New-Object System.Text.UTF8Encoding($false)
+    $info.StandardErrorEncoding = New-Object System.Text.UTF8Encoding($false)
     $process = $null
     try {
         try { $process = [System.Diagnostics.Process]::Start($info) } catch { throw 'could not start Tailscale' }
@@ -492,6 +494,8 @@ function Invoke-Uninstall {
         $info.RedirectStandardInput = $true
         $info.RedirectStandardOutput = $true
         $info.RedirectStandardError = $true
+        $info.StandardOutputEncoding = New-Object System.Text.UTF8Encoding($false)
+        $info.StandardErrorEncoding = New-Object System.Text.UTF8Encoding($false)
         $info.CreateNoWindow = $true
         $holder = [Diagnostics.Process]::Start($info)
         $stderrTask = $holder.StandardError.ReadToEndAsync()
