@@ -20,7 +20,7 @@ describe('Windows process exit checks', () => {
     const present = buildProcessPresentScript('powershell.exe', '', ['launcher']);
     expect(sweep).toContain("if ($current.StartTime.ToUniversalTime() -ne $started) { throw 'Process changed while inspected' }; if ($owner -and $data[2] -eq $true) { return }");
     expect(sweep).toContain('if (-not $n.Owner -or -not $n.CommandLine) { throw');
-    expect(present.indexOf('if ($current.StartTime.ToUniversalTime() -ne $started)')).toBeLessThan(present.indexOf('if ($data[2] -eq $true)'));
+    expect(present.indexOf('if ($current.StartTime.ToUniversalTime() -ne $started)')).toBeLessThan(present.indexOf('if ($owner -and $data[2] -eq $true)'));
     expect(present).toContain('if (-not $data[1]) { throw "Cannot read process command line" }');
   });
 });

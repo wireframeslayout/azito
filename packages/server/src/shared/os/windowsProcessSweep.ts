@@ -95,7 +95,7 @@ export function buildProcessPresentScript(image: string, argument: string, decod
     '  $started = $p.StartTime.ToUniversalTime(); $data = [AzitoProcessList]::Read($p.Id)',
     '  $current = Get-Process -Id $p.Id -ErrorAction SilentlyContinue; if (-not $current) { continue }',
     '  if ($current.StartTime.ToUniversalTime() -ne $started) { throw "Process changed while inspected" }',
-    '  if ($data[2] -eq $true) { continue }',
+    '  if ($owner -and $data[2] -eq $true) { continue }',
     '  if (-not $data[1]) { throw "Cannot read process command line" }',
     ...(decodedScriptMentions ? [
       "  if ($data[1] -match $pattern) { try { $body = [Text.Encoding]::Unicode.GetString([Convert]::FromBase64String($Matches[1])) } catch { throw 'Cannot decode a PowerShell process command' }; foreach ($mention in $mentions) { if ($body.IndexOf($mention, [StringComparison]::OrdinalIgnoreCase) -ge 0) { Write-Output 'present'; exit 0 } }; if ($body.IndexOf('$hubRoot', [StringComparison]::OrdinalIgnoreCase) -ge 0 -and $body.IndexOf('run.ps1', [StringComparison]::OrdinalIgnoreCase) -ge 0 -and $body.IndexOf('current.txt', [StringComparison]::OrdinalIgnoreCase) -ge 0) { Write-Output 'present'; exit 0 } }",
