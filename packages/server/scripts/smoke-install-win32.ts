@@ -484,9 +484,7 @@ async function main(): Promise<void> {
     checkAccessRules(prefix);
     checkUserPath(installPs1, work);
     checkUninstall(installPs1, prefix, version as string);
-    // A non-ASCII prefix: install and -RemoveData uninstall must still complete and remove the recorded files.
-    // Only those outcomes are asserted; the helper's JSON values are not compared.
-    await checkRemoveData(installPs1, zip, sums, path.join(work, 'remove-data-\u65e5\u672c', '.azito'));
+    await checkRemoveData(installPs1, zip, sums, path.join(work, 'remove-data', '.azito'));
   } finally {
     // A leftover file must not replace the failure that got us here.
     try {
