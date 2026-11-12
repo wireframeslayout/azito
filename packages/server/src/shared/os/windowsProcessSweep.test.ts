@@ -12,6 +12,7 @@ describe('Windows process exit checks', () => {
   it('keeps the listener helper short and free of exit-state calls', () => {
     expect(WINDOWS_PROCESS_INFO_FOR_LISTENER).not.toContain('GetExitCodeProcess');
     expect(WINDOWS_PROCESS_INFO_FOR_LISTENER).toContain('static object[] Result(IntPtr h, long parent, string command) { return new object[] { parent, command }; }');
+    expect(WINDOWS_PROCESS_INFO_FOR_LISTENER).toContain('return new object[] { 0, null };');
     expect(WINDOWS_PROCESS_INFO_FOR_LISTENER.length).toBeLessThan(WINDOWS_PROCESS_INFO.length);
   });
 

@@ -1,11 +1,10 @@
-/** Windows process information helper, compiled within the PowerShell session. */
-export const WINDOWS_PROCESS_INFO = `Add-Type -TypeDefinition @'
+function buildWindowsProcessInfo(exitState: boolean): string {
+  return `Add-Type -TypeDefinition @'
 using System;
 using System.Runtime.InteropServices;
 public static class AzitoProcessList {
   [DllImport("kernel32.dll")] static extern IntPtr OpenProcess(uint access, bool inherit, int id);
-  [DllImport("kernel32.dll")] static extern bool CloseHandle(IntPtr h);
-  [DllImport("kernel32.dll")] static extern bool GetExitCodeProcess(IntPtr h, out uint code);
+  [DllImport("kernel32.dll")] static extern bool CloseHandle(IntPtr h);${exitState ? '\n  [DllImport("kernel32.dll")] static extern bool GetExitCodeProcess(IntPtr h, out uint code);' : ''}
   [DllImport("advapi32.dll")] static extern bool OpenProcessToken(IntPtr h, uint access, out IntPtr token);
   [DllImport("ntdll.dll")] static extern int NtQueryInformationProcess(IntPtr h, int cls, IntPtr data, int length, out int returned);
   [StructLayout(LayoutKind.Sequential)] struct Basic { public IntPtr reserved1, peb, reserved2a, reserved2b, id, parent; }
@@ -20,14 +19,14 @@ public static class AzitoProcessList {
       finally { CloseHandle(token); }
     } finally { CloseHandle(h); }
   }
-  static object[] Result(IntPtr h, long parent, string command) {
+${exitState ? `  static object[] Result(IntPtr h, long parent, string command) {
     uint code;
     bool? exited = GetExitCodeProcess(h, out code) ? (bool?)(code != 259) : null;
     return new object[] { parent, command, exited };
-  }
+  }` : '  static object[] Result(IntPtr h, long parent, string command) { return new object[] { parent, command }; }'}
   public static object[] Read(int id) {
     IntPtr h = OpenProcess(0x1000, false, id);
-    if (h == IntPtr.Zero) return new object[] { 0, null, null };
+    if (h == IntPtr.Zero) return new object[] { 0, null${exitState ? ", null" : ""} };
     try {
       int size = Marshal.SizeOf(typeof(Basic)), returned;
       IntPtr data = Marshal.AllocHGlobal(size);
@@ -46,6 +45,10 @@ public static class AzitoProcessList {
   }
 }
 '@`.replace(/^ +/gm, '');
+}
+
+/** Windows process information helper, compiled within the PowerShell session. */
+export const WINDOWS_PROCESS_INFO = buildWindowsProcessInfo(true);
 
 /** Enumerate processes with the field names consumed by Windows uninstall guards. */
 export const WINDOWS_PROCESS_RECORDS = [
@@ -64,6 +67,4 @@ export const WINDOWS_PROCESS_RECORDS = [
 ];
 
 /** The listener inspection does not use exit state and must fit a Windows command line. */
-export const WINDOWS_PROCESS_INFO_FOR_LISTENER = WINDOWS_PROCESS_INFO
-  .replace('  [DllImport("kernel32.dll")] static extern bool GetExitCodeProcess(IntPtr h, out uint code);\n'.trimStart(), '')
-  .replace(/static object\[\] Result\(IntPtr h, long parent, string command\) \{[\s\S]*?\n\}/, 'static object[] Result(IntPtr h, long parent, string command) { return new object[] { parent, command }; }');
+export const WINDOWS_PROCESS_INFO_FOR_LISTENER = buildWindowsProcessInfo(false);
