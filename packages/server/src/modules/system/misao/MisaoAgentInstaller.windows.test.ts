@@ -736,7 +736,9 @@ describe('MisaoAgentInstaller on a Windows agent', () => {
       agent.processPresent = true;
       expect(await installer().reviveWindowsDaemon(agent.asTarget(), true)).toBe('started');
       expect(agent.schtasks()).toContain('/End');
-      expect(agent.scripts.some((script) => script.includes("Get-Process -Name 'powershell'"))).toBe(true);
+      const launcherSweep = agent.scripts.find((script) => script.includes("Get-Process -Name 'powershell'") && script.includes('function Get-AgentNodes'));
+      expect(launcherSweep).toContain('if ($owner -and $data[2] -eq $true) { return }');
+      expect(launcherSweep).toContain('if (-not $n.Owner -or -not $n.CommandLine) { throw');
     });
 
     it('leaves a daemon alone when the agent relays to another pipe (MISAO_SOCKET): it is not the managed one, whatever its state', async () => {

@@ -10,7 +10,7 @@ import { buildTaskXml, encodeTaskXml, isTaskDefinitionDisabled } from '../../../
 import { redactSecretText } from '../../../shared/redactSecretText';
 import { createSshCommandSpecRunner } from './windowsSshRunner';
 import { checkFirewall, readFirewallDump, evaluateRecoveryFirewall, describeFirewallProblem, firewallRuleCommand, type FirewallResult } from './windowsFirewall';
-import { WINDOWS_PROCESS_INFO } from '../../../shared/os/windowsProcessInfo';
+import { WINDOWS_PROCESS_INFO_FOR_LISTENER } from '../../../shared/os/windowsProcessInfo';
 import { MISAO_WINDOWS_DIR, type WindowsAgentOptions } from './windowsAgentConfig';
 import type { WindowsPreflightInfo } from './windowsPreflight';
 import { agentTaskAction, agentTaskIdentity } from './windowsAgentTask';
@@ -280,7 +280,7 @@ export class WindowsAgentDeployer {
     if (!identity.launcher || !launcher) throw new Error('The managed launcher could not be identified');
     const launcherHash = createHash('sha256').update(launcher, 'ascii').digest('hex');
     const script = [
-      WINDOWS_PROCESS_INFO,
+      WINDOWS_PROCESS_INFO_FOR_LISTENER,
       `$address = ${q(address)}; $port = ${port}; $nodePath = ${q(identity.nodePath)}; $arg = ${q(`--env-file=${envFile}`)}; $entry = ${q(path.win32.join(root, identity.version, 'azito-agent.cjs'))}; $launcherHash = ${q(launcherHash)}`,
       "$me = [Security.Principal.WindowsIdentity]::GetCurrent().User.Value",
       "$pattern = '(^|[\\s\"])' + [regex]::Escape($arg) + '([\\s\"]|$)'",
@@ -467,6 +467,7 @@ export class WindowsAgentDeployer {
     }
     await this.endTask(client, this.options.taskName);
     if (launcherCommand) {
+      // This wrapped script is close to Windows' 8191-character command limit; shorten shared script text before adding to it.
       await this.script(sshHost, 'Ending the agent launcher', compressPowerShellScript(buildEndProcessesScript({ image: 'powershell.exe', argument: launcherCommand, label: 'agent launcher', endParentConhost: false, hashEncodedCommand: true })), QUICK_MS);
     }
     await this.endStrayProcesses(sshHost, envFile);

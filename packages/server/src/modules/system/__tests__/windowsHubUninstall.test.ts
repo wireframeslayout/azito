@@ -87,6 +87,8 @@ describe('recorded release verification', () => {
     expect(check).toContain("IndexOf('$hubRoot'");
     expect(check).toContain('if ($p.Id -eq 123) { continue }');
     expect(check).toContain('throw "Cannot identify process $($p.Id)"');
+    expect(check).toContain('if ($owner -and $data[2] -eq $true) { continue }');
+    expect(check).toContain('if (-not $data[1]) { throw "Cannot read process command line" }');
     expect(check).not.toContain('if ($owner -ne $me) { continue }');
   });
 

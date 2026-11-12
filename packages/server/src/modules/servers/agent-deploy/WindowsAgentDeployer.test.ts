@@ -98,6 +98,8 @@ describe('stopping a task launcher', () => {
     const sweeps = fake.calls.filter((call) => call.text.includes('function Get-AgentNodes')).map((call) => call.text);
     expect(sweeps).toHaveLength(2);
     expect(sweeps[0]).toContain("Get-Process -Name 'powershell'");
+    expect(sweeps[0]).toContain('if ($owner -and $data[2] -eq $true) { return }');
+    expect(sweeps[0]).toContain('if (-not $n.Owner -or -not $n.CommandLine) { throw');
     expect(sweeps[0]).toContain(createHash('sha256').update(action.args.at(-1)!, 'ascii').digest('hex'));
     expect(sweeps[0]).not.toContain(action.args.at(-1)!);
     expect(sweeps[1]).toContain("Get-Process -Name 'node'");
