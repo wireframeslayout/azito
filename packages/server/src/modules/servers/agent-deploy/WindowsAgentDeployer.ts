@@ -467,6 +467,7 @@ export class WindowsAgentDeployer {
     }
     await this.endTask(client, this.options.taskName);
     if (launcherCommand) {
+      // This wrapped script is close to Windows' 8191-character command limit; shorten shared script text before adding to it.
       await this.script(sshHost, 'Ending the agent launcher', compressPowerShellScript(buildEndProcessesScript({ image: 'powershell.exe', argument: launcherCommand, label: 'agent launcher', endParentConhost: false, hashEncodedCommand: true })), QUICK_MS);
     }
     await this.endStrayProcesses(sshHost, envFile);
