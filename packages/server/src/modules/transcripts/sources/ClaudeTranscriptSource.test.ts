@@ -68,7 +68,7 @@ describe('ClaudeTranscriptSource', () => {
   });
 
   it('filters a confirmed subagent hand-back in every reading window and tail state', async () => {
-    const content = 'Another Claude session sent a message:\n<agent-message from="a000000">\nFictional result.\n</agent-message>\n[Subagent hand-back]';
+    const content = 'Another Claude session sent a message:\n<agent-message from="a000000">\n[Subagent hand-back]\nFictional result.\n</agent-message>';
     const meta = { type: 'user', isMeta: true, uuid: 'handback', message: { role: 'user', content } };
     const file = writeSession(dir, 'proj-a', SID_A, [
       { type: 'assistant', uuid: 'a', message: { content: [{ type: 'text', text: 'done' }] } }, meta,
@@ -87,7 +87,7 @@ describe('ClaudeTranscriptSource', () => {
   });
 
   it('preserves unconfirmed subagent hand-back variants', () => {
-    const content = 'Another Claude session sent a message:\n<agent-message from="a000000">\nFictional result.\n</agent-message>\n[Subagent hand-back]';
+    const content = 'Another Claude session sent a message:\n<agent-message from="a000000">\n[Subagent hand-back]\nFictional result.\n</agent-message>';
     const user = (uuid: string, text: string) => ({ type: 'user', isMeta: true, uuid, message: { content: text } });
     writeSession(dir, 'proj-a', SID_A, [
       { type: 'user', uuid: 'literal', message: { content } },
@@ -95,12 +95,13 @@ describe('ClaudeTranscriptSource', () => {
       user('missing-prefix', content.replace('Another Claude session sent a message:', '')),
       user('missing-tag', content.replace('<agent-message from="a000000">', '')),
       user('missing-marker', content.replace('[Subagent hand-back]', '')),
+      user('marker-after-tag', content.replace('[Subagent hand-back]\n', '') + '\n[Subagent hand-back]'),
       user('other-meta', 'other metadata'),
       { type: 'user', isMeta: true, uuid: 'blocks', message: { content: [{ type: 'text', text: content }] } },
       { type: 'assistant', isMeta: true, uuid: 'assistant', message: { content: [{ type: 'text', text: content }] } },
     ]);
     expect(service.readSession(SID_A)!.entries.map((e) => e.uuid)).toEqual([
-      'literal', 'prefix', 'suffix', 'missing-prefix', 'missing-tag', 'missing-marker', 'other-meta', 'blocks', 'assistant',
+      'literal', 'prefix', 'suffix', 'missing-prefix', 'missing-tag', 'missing-marker', 'marker-after-tag', 'other-meta', 'blocks', 'assistant',
     ]);
   });
 

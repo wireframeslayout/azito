@@ -63,7 +63,7 @@ const LOCAL_COMMAND_CAVEAT_PREFIX = '<local-command-caveat>';
 // 実記録で isMeta: true・文字列1つ・タグ1組の形を確認した。
 // 混在の形は未確認のため、利用者の文を誤って消さないよう残す。
 const SYSTEM_REMINDER_PATTERN = /^<system-reminder>(?:(?!<\/?system-reminder>)[\s\S])*<\/system-reminder>\s*$/;
-const SUBAGENT_HAND_BACK_PATTERN = /^Another Claude session sent a message:\s*<agent-message from="[^"\r\n]+">(?:(?!<\/?agent-message\b)[\s\S])*<\/agent-message>\s*\[Subagent hand-back\]\s*$/;
+const SUBAGENT_HAND_BACK_PATTERN = /^Another Claude session sent a message:\s*<agent-message from="[^"\r\n]+">\s*\[Subagent hand-back\](?:(?!<\/?agent-message\b)[\s\S])*<\/agent-message>\s*$/;
 const COMMAND_NAME_PATTERN =
   /^<command-name>([^<]*)<\/command-name>\s*<command-message>[^<]*<\/command-message>\s*<command-args>([^<]*)<\/command-args>\s*$/;
 const LOCAL_COMMAND_STDOUT_PATTERN = /^<local-command-stdout>([\s\S]*)<\/local-command-stdout>\s*$/;
