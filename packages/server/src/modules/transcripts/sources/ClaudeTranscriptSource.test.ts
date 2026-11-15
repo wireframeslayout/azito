@@ -18,6 +18,7 @@ function writeSession(projectsDir: string, projectName: string, sessionId: strin
 
 const SID_A = '11111111-1111-1111-1111-111111111111';
 const SID_B = '22222222-2222-2222-2222-222222222222';
+const HAND_BACK_CONTENT = 'Another Claude session sent a message:\n<agent-message from="a000000">\n[Subagent hand-back]\nFictional result.\n</agent-message>';
 
 describe('ClaudeTranscriptSource', () => {
   let dir: string;
@@ -67,8 +68,8 @@ describe('ClaudeTranscriptSource', () => {
     expect(entries[3].blocks).toHaveLength(3);
   });
 
-  it('filters a confirmed subagent hand-back in every reading window and tail state', async () => {
-    const content = 'Another Claude session sent a message:\n<agent-message from="a000000">\n[Subagent hand-back]\nFictional result.\n</agent-message>';
+  it('filters a confirmed subagent hand-back from reading windows while retaining its tail state', async () => {
+    const content = HAND_BACK_CONTENT;
     const meta = { type: 'user', isMeta: true, uuid: 'handback', message: { role: 'user', content } };
     const file = writeSession(dir, 'proj-a', SID_A, [
       { type: 'assistant', uuid: 'a', message: { content: [{ type: 'text', text: 'done' }] } }, meta,
@@ -76,7 +77,7 @@ describe('ClaudeTranscriptSource', () => {
     const first = service.readSession(SID_A)!;
     expect(first.entries.map((e) => e.uuid)).toEqual(['a']);
     expect(first.nextOffset).toBe(fs.statSync(file).size);
-    expect((await service.getSessionTailState(SID_A)).state).toBe('terminal_final');
+    expect((await service.getSessionTailState(SID_A)).state).toBe('in_progress');
     fs.appendFileSync(file, JSON.stringify({ ...meta, uuid: 'later' }) + '\n');
     const next = service.readSession(SID_A, first.nextOffset)!;
     expect(next.entries).toEqual([]);
@@ -87,7 +88,7 @@ describe('ClaudeTranscriptSource', () => {
   });
 
   it('preserves unconfirmed subagent hand-back variants', () => {
-    const content = 'Another Claude session sent a message:\n<agent-message from="a000000">\n[Subagent hand-back]\nFictional result.\n</agent-message>';
+    const content = HAND_BACK_CONTENT;
     const user = (uuid: string, text: string) => ({ type: 'user', isMeta: true, uuid, message: { content: text } });
     writeSession(dir, 'proj-a', SID_A, [
       { type: 'user', uuid: 'literal', message: { content } },
