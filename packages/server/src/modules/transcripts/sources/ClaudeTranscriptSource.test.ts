@@ -87,6 +87,29 @@ describe('ClaudeTranscriptSource', () => {
     expect(before.prevOffset).toBe(0);
   });
 
+  it('filters hand-backs quoting agent-message tags while preserving identical user input', () => {
+    const content = HAND_BACK_CONTENT.replace('Fictional result.', 'Fictional <agent-message from="example"> and </agent-message> result.');
+    writeSession(dir, 'proj-a', SID_A, [
+      { type: 'user', isMeta: true, uuid: 'meta', message: { content } },
+      { type: 'user', uuid: 'literal', message: { content } },
+    ]);
+    const entries = service.readSession(SID_A)!.entries;
+    expect(entries.map((entry) => entry.uuid)).toEqual(['literal']);
+    expect(entries[0].blocks).toEqual([{ kind: 'text', text: content }]);
+  });
+
+  it('reads user and assistant entries after a filtered hand-back', () => {
+    writeSession(dir, 'proj-a', SID_A, [
+      { type: 'user', isMeta: true, uuid: 'meta', message: { content: HAND_BACK_CONTENT } },
+      { type: 'user', uuid: 'user', message: { content: 'Next question' } },
+      { type: 'assistant', uuid: 'assistant', message: { content: [{ type: 'text', text: 'Next answer' }] } },
+    ]);
+    const entries = service.readSession(SID_A)!.entries;
+    expect(entries.map((entry) => entry.uuid)).toEqual(['user', 'assistant']);
+    expect(entries[0].blocks).toEqual([{ kind: 'text', text: 'Next question' }]);
+    expect(entries[1].blocks).toEqual([{ kind: 'text', text: 'Next answer' }]);
+  });
+
   it('preserves unconfirmed subagent hand-back variants', () => {
     const content = HAND_BACK_CONTENT;
     const user = (uuid: string, text: string) => ({ type: 'user', isMeta: true, uuid, message: { content: text } });
