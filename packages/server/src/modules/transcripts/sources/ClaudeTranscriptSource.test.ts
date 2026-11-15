@@ -67,6 +67,43 @@ describe('ClaudeTranscriptSource', () => {
     expect(entries[3].blocks).toHaveLength(3);
   });
 
+  it('filters a confirmed subagent hand-back in every reading window and tail state', async () => {
+    const content = 'Another Claude session sent a message:\n<agent-message from="a000000">\nFictional result.\n</agent-message>\n[Subagent hand-back]';
+    const meta = { type: 'user', isMeta: true, uuid: 'handback', message: { role: 'user', content } };
+    const file = writeSession(dir, 'proj-a', SID_A, [
+      { type: 'assistant', uuid: 'a', message: { content: [{ type: 'text', text: 'done' }] } }, meta,
+    ]);
+    const first = service.readSession(SID_A)!;
+    expect(first.entries.map((e) => e.uuid)).toEqual(['a']);
+    expect(first.nextOffset).toBe(fs.statSync(file).size);
+    expect((await service.getSessionTailState(SID_A)).state).toBe('terminal_final');
+    fs.appendFileSync(file, JSON.stringify({ ...meta, uuid: 'later' }) + '\n');
+    const next = service.readSession(SID_A, first.nextOffset)!;
+    expect(next.entries).toEqual([]);
+    expect(next.nextOffset).toBe(fs.statSync(file).size);
+    const before = service.readSessionBefore(SID_A, next.nextOffset)!;
+    expect(before.entries.map((e) => e.uuid)).toEqual(['a']);
+    expect(before.prevOffset).toBe(0);
+  });
+
+  it('preserves unconfirmed subagent hand-back variants', () => {
+    const content = 'Another Claude session sent a message:\n<agent-message from="a000000">\nFictional result.\n</agent-message>\n[Subagent hand-back]';
+    const user = (uuid: string, text: string) => ({ type: 'user', isMeta: true, uuid, message: { content: text } });
+    writeSession(dir, 'proj-a', SID_A, [
+      { type: 'user', uuid: 'literal', message: { content } },
+      user('prefix', `hello ${content}`), user('suffix', `${content} hello`),
+      user('missing-prefix', content.replace('Another Claude session sent a message:', '')),
+      user('missing-tag', content.replace('<agent-message from="a000000">', '')),
+      user('missing-marker', content.replace('[Subagent hand-back]', '')),
+      user('other-meta', 'other metadata'),
+      { type: 'user', isMeta: true, uuid: 'blocks', message: { content: [{ type: 'text', text: content }] } },
+      { type: 'assistant', isMeta: true, uuid: 'assistant', message: { content: [{ type: 'text', text: content }] } },
+    ]);
+    expect(service.readSession(SID_A)!.entries.map((e) => e.uuid)).toEqual([
+      'literal', 'prefix', 'suffix', 'missing-prefix', 'missing-tag', 'missing-marker', 'other-meta', 'blocks', 'assistant',
+    ]);
+  });
+
   describe('sessionExists (#542)', () => {
     it('finds the id in any project folder and says false when it is in none, or when projects does not exist', () => {
       writeSession(dir, 'proj-a', SID_A, [{ type: 'user', uuid: 'u', message: { role: 'user', content: 'hi' } }]);
